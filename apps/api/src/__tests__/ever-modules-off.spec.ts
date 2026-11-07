@@ -399,6 +399,15 @@ describe('Ever modules off — 30 s boot without an outbound call', () => {
             jest.useRealTimers();
             await request(app.getHttpServer()).get('/api/ever-connect/status').expect(404);
             await request(app.getHttpServer()).get('/.well-known/ever-connect').expect(404);
+            // Install requests from apps.ever.co: no route either.
+            await request(app.getHttpServer())
+                .get('/api/ever-connect/install-requests')
+                .expect(404);
+            await request(app.getHttpServer())
+                .post('/api/ever-connect/install-requests/01JZ8Q3M4N5P6R7S8T9V0W1X2Y/approve')
+                .send({ addToAllowlist: true })
+                .expect(404);
+            expect(outbound()).toEqual([]);
         } finally {
             await app.close();
         }

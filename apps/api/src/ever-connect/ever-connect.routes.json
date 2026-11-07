@@ -45,6 +45,21 @@
             "method": "GET",
             "path": "/.well-known/ever-connect",
             "auth": "public"
+        },
+        {
+            "method": "GET",
+            "path": "/api/ever-connect/install-requests",
+            "auth": "platform-admin"
+        },
+        {
+            "method": "POST",
+            "path": "/api/ever-connect/install-requests/:installId/approve",
+            "auth": "platform-admin"
+        },
+        {
+            "method": "POST",
+            "path": "/api/ever-connect/install-requests/:installId/decline",
+            "auth": "platform-admin"
         }
     ]
 }

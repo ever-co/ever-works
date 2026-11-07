@@ -234,6 +234,7 @@ import { EverConnectLease } from '../entities/ever-connect-lease.entity';
 import { EverConnectProvisionIntent } from '../entities/ever-connect-provision-intent.entity';
 import { EverConnectProvisionRecord } from '../entities/ever-connect-provision-record.entity';
 import { EverConnectLink } from '../entities/ever-connect-link.entity';
+import { EverConnectInstallRequest } from '../entities/ever-connect-install-request.entity';
 import { OrganizationCompanyImport } from '../entities/organization-company-import.entity';
 
 import {
@@ -619,4 +620,7 @@ export const ENTITIES = [
     EverConnectProvisionRecord,
     EverConnectLink,
     OrganizationCompanyImport,
+    // Ever Connect — plugin installs requested from apps.ever.co, each waiting
+    // for a platform admin's answer, and the status owed to Ever Platform.
+    EverConnectInstallRequest,
 ];

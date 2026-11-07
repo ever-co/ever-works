@@ -96,10 +96,11 @@ describe('NotificationMatrixService', () => {
         expect(eventTypes.findAll).toHaveBeenCalledTimes(1);
     });
 
-    it('returns all 27 core events grouped in page order, with the shipped defaults selected', async () => {
+    it('returns all 28 core events grouped in page order, with the shipped defaults selected', async () => {
         const matrix = await build().getMatrix('u1');
-        // 24 → 27 in 5f9c3a5d5 (FL-05 P2): the three session events, asserted by name below.
-        expect(matrix.events).toHaveLength(27);
+        // 24 → 27 in 5f9c3a5d5 (FL-05 P2): the three session events, asserted by name below;
+        // 28 with Ever Connect's `ever_platform_install_request`.
+        expect(matrix.events).toHaveLength(28);
         const groups = matrix.events.map((e) => e.group);
         expect(groups.indexOf('signals')).toBeGreaterThan(groups.lastIndexOf('needsYou'));
         expect(groups.indexOf('routine')).toBeGreaterThan(groups.lastIndexOf('signals'));
@@ -194,8 +195,8 @@ describe('NotificationMatrixService', () => {
     it('still renders when the organisation default lookup fails', async () => {
         resolver.loadOrgDefaultMap.mockRejectedValue(new Error('db'));
         const matrix = await build().getMatrix('u1');
-        // 27 core events since 5f9c3a5d5 (FL-05 P2).
-        expect(matrix.events).toHaveLength(27);
+        // 27 core events since 5f9c3a5d5 (FL-05 P2), 28 with `ever_platform_install_request`.
+        expect(matrix.events).toHaveLength(28);
     });
 
     it('lists in-app, email, then the user’s channels newest first — disabled ones greyed, labels from the registry', async () => {

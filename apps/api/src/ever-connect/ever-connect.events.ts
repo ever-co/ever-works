@@ -9,11 +9,15 @@ export class EverConnectConnectionChangedEvent {
     constructor(readonly status: 'disconnected' | 'pending_approval' | 'active' | 'revoked') {}
 }
 
-/** An installation-wide integration was turned on or off at Ever Platform. */
+/**
+ * An integration was turned on or off at Ever Platform: an installation-wide
+ * one, or (with `linkId`) a per-link one for one tenant link.
+ */
 export class EverConnectIntegrationChangedEvent {
     static readonly EVENT_NAME = 'ever_connect.integration_changed';
     constructor(
         readonly integrationKey: string,
         readonly enabled: boolean,
+        readonly linkId?: string,
     ) {}
 }

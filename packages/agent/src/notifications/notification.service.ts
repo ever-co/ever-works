@@ -1154,6 +1154,68 @@ export class NotificationService {
     }
 
     /**
+     * Install requests from apps.ever.co (Ever Connect) — tell a platform admin
+     * that an organization owner asked for a plugin to be installed into this
+     * installation (`install`), or for one installed from such a request to be
+     * removed (`remove`). The notice installs and removes nothing: the admin
+     * answers in Settings → Ever Platform. One notice per request and kind
+     * (deduplicated on the install id); {@link clearEverPlatformInstallRequest}
+     * takes it back once the request is withdrawn or answered.
+     *
+     * Registered as `ever_platform_install_request` (in-app by default). The
+     * payload names the listing's slug and the install id only.
+     */
+    async notifyEverPlatformInstallRequest(args: {
+        userId: string;
+        installId: string;
+        listingSlug: string;
+        kind: 'install' | 'remove';
+    }): Promise<void> {
+        const listing = this.sanitizeLabel(args.listingSlug);
+        const title =
+            args.kind === 'install'
+                ? 'Install requested from apps.ever.co'
+                : 'Removal requested from apps.ever.co';
+        const message =
+            args.kind === 'install'
+                ? `Install requested from apps.ever.co: ${listing}. Nothing is installed until a platform admin approves it.`
+                : `apps.ever.co asked to remove ${listing}. Nothing is removed unless a platform admin uninstalls it.`;
+        const actionUrl = '/settings/ever-platform#install-requests';
+        const inApp = await this.writeInApp({
+            eventKey: 'ever_platform_install_request',
+            userId: args.userId,
+            type: NotificationType.INFO,
+            category: NotificationCategory.SYSTEM,
+            title,
+            message,
+            actionUrl,
+            actionLabel: 'Review',
+            metadata: { installId: args.installId, kind: args.kind },
+            deduplicationKey: `ever_platform_install_${args.kind}_${args.installId}`,
+        });
+        await this.dispatchFanout({
+            userId: args.userId,
+            eventKey: 'ever_platform_install_request',
+            deduplicated: !inApp.created,
+            title,
+            message,
+            actionUrl,
+            actionLabel: 'Review',
+            urgent: false,
+        });
+    }
+
+    /** Take back the notices of one install request (it was withdrawn or answered). */
+    async clearEverPlatformInstallRequest(userId: string, installId: string): Promise<void> {
+        for (const kind of ['install', 'remove'] as const) {
+            await this.repository.clearDeduplicationKey(
+                userId,
+                `ever_platform_install_${kind}_${installId}`,
+            );
+        }
+    }
+
+    /**
      * Shared view (AW-18) — the first time a freshly generated share link is
      * opened, tell the Workspace owner once. The caller has already claimed
      * the first view atomically, and the deduplication key carries the link's
