@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest';
 import {
     DEFAULT_REPO_URL,
     buildGitHubLinks,
+    buildLearnMoreLinks,
+    isEverHostedDeployment,
+    isEverOwnedUrl,
     compareBuilds,
     environmentFromBuildRef,
     environmentFromWebUrl,
@@ -185,5 +188,90 @@ describe('buildGitHubLinks', () => {
         expect(buildGitHubLinks('https://github.com/acme/works/').issues).toBe(
             'https://github.com/acme/works/issues',
         );
+    });
+});
+
+describe('isEverOwnedUrl', () => {
+    it.each([
+        'https://ever.works',
+        'https://docs.ever.works/docs',
+        'https://ever.co/contacts',
+        'https://app.gauzy.co',
+        'https://www.githands.com',
+    ])('%s is Ever-owned', (url) => {
+        expect(isEverOwnedUrl(url)).toBe(true);
+    });
+
+    it.each([
+        'https://github.com/ever-co/ever-works',
+        'https://notever.works',
+        'https://ever.works.example.com',
+        'not a url',
+        undefined,
+    ])('%s is not', (url) => {
+        expect(isEverOwnedUrl(url)).toBe(false);
+    });
+});
+
+describe('isEverHostedDeployment', () => {
+    it('is true only for ever.works and its subdomains', () => {
+        expect(isEverHostedDeployment('https://app.ever.works')).toBe(true);
+        expect(isEverHostedDeployment('https://app-dev.ever.works')).toBe(true);
+        expect(isEverHostedDeployment('http://ever-works-web:3000')).toBe(false);
+        expect(isEverHostedDeployment('http://localhost:3000')).toBe(false);
+        expect(isEverHostedDeployment('https://app.gauzy.co')).toBe(false);
+        expect(isEverHostedDeployment(undefined)).toBe(false);
+    });
+});
+
+describe('buildLearnMoreLinks', () => {
+    it("links to Ever's website, docs and company on Ever's hosted app", () => {
+        expect(buildLearnMoreLinks({ webUrl: 'https://app.ever.works' })).toEqual([
+            { id: 'website', href: 'https://ever.works' },
+            { id: 'docs', href: 'https://docs.ever.works' },
+            { id: 'company', href: 'https://ever.co' },
+        ]);
+    });
+
+    it('renders no Ever link on a self-hosted install, even with the default owner site', () => {
+        expect(
+            buildLearnMoreLinks({
+                webUrl: 'http://ever-works-web:3000',
+                companyOwnerWebsite: 'https://ever.works',
+                companyOwnerName: 'Ever Co. LTD',
+            }),
+        ).toEqual([]);
+        expect(buildLearnMoreLinks({ webUrl: 'http://localhost:3000' })).toEqual([]);
+    });
+
+    it("shows a self-hosted operator's own http(s) site, with its name when set", () => {
+        expect(
+            buildLearnMoreLinks({
+                webUrl: 'https://works.acme.test',
+                companyOwnerWebsite: ' https://acme.test ',
+                companyOwnerName: 'Acme Inc.',
+            }),
+        ).toEqual([{ id: 'company', href: 'https://acme.test', label: 'Acme Inc.' }]);
+        expect(
+            buildLearnMoreLinks({
+                webUrl: 'https://works.acme.test',
+                companyOwnerWebsite: 'https://acme.test',
+            }),
+        ).toEqual([{ id: 'company', href: 'https://acme.test' }]);
+    });
+
+    it('drops an operator site that is not an http(s) URL', () => {
+        expect(
+            buildLearnMoreLinks({
+                webUrl: 'https://works.acme.test',
+                companyOwnerWebsite: 'javascript:alert(1)',
+            }),
+        ).toEqual([]);
+        expect(
+            buildLearnMoreLinks({
+                webUrl: 'https://works.acme.test',
+                companyOwnerWebsite: 'acme.test',
+            }),
+        ).toEqual([]);
     });
 });

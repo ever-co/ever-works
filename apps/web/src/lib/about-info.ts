@@ -211,3 +211,85 @@ export function buildGitHubLinks(repoUrl: string | undefined | null): GitHubLink
         license: `${repository}/blob/develop/LICENSE`,
     };
 }
+
+/**
+ * Domains owned by Ever, each matching itself and every name under it. Mirrors
+ * the `ever_owned` list of the egress audit (`@ever-co/connect-tools`,
+ * `egress-audit/ever-hosts.json`).
+ */
+export const EVER_OWNED_DOMAINS: readonly string[] = [
+    'ever.co',
+    'ever.team',
+    'gauzy.co',
+    'ever.works',
+    'rec.so',
+    'traduora.co',
+    'everdemand.co',
+    'ever.sh',
+    'githands.com',
+];
+
+/** Whether a URL points at a domain Ever owns. */
+export function isEverOwnedUrl(url: string | undefined | null): boolean {
+    const host = hostOf(url);
+    if (!host) return false;
+    return EVER_OWNED_DOMAINS.some((domain) => host === domain || host.endsWith(`.${domain}`));
+}
+
+/** Whether this web app is Ever's own hosted Ever Works (`app.ever.works`, `app-dev.ever.works`, …). */
+export function isEverHostedDeployment(webUrl: string | undefined | null): boolean {
+    const host = hostOf(webUrl);
+    return host === 'ever.works' || (host?.endsWith('.ever.works') ?? false);
+}
+
+export const EVER_WORKS_WEBSITE_URL = 'https://ever.works';
+export const EVER_WORKS_DOCS_URL = 'https://docs.ever.works';
+export const EVER_CO_URL = 'https://ever.co';
+
+export interface LearnMoreLink {
+    id: 'website' | 'docs' | 'company';
+    href: string;
+    /** Shown instead of the translated label (an operator's own company name). */
+    label?: string;
+}
+
+export interface LearnMoreInputs {
+    /** The address this web app is served at (`WEB_URL`). */
+    webUrl?: string;
+    /** The operator's own site (`NEXT_PUBLIC_COMPANY_OWNER_WEBSITE`). */
+    companyOwnerWebsite?: string;
+    /** The operator's own name (`NEXT_PUBLIC_COMPANY_OWNER`). */
+    companyOwnerName?: string;
+}
+
+/**
+ * The "Learn more" links. Ever's own hosted app links to ever.works,
+ * docs.ever.works and Ever Co. A self-hosted installation renders NO link to
+ * an Ever host — the egress audit's browser leg fails on any new one
+ * (`tools/egress-audit/README.md`, "The DOM baseline") — so it shows only
+ * its operator's own site, when one is set; it may then have no links at all.
+ */
+export function buildLearnMoreLinks({
+    webUrl,
+    companyOwnerWebsite,
+    companyOwnerName,
+}: LearnMoreInputs): LearnMoreLink[] {
+    if (isEverHostedDeployment(webUrl)) {
+        return [
+            { id: 'website', href: EVER_WORKS_WEBSITE_URL },
+            { id: 'docs', href: EVER_WORKS_DOCS_URL },
+            { id: 'company', href: EVER_CO_URL },
+        ];
+    }
+    const ownerSite = companyOwnerWebsite?.trim();
+    if (
+        !ownerSite ||
+        !/^https?:\/\//i.test(ownerSite) ||
+        !hostOf(ownerSite) ||
+        isEverOwnedUrl(ownerSite)
+    ) {
+        return [];
+    }
+    const label = companyOwnerName?.trim();
+    return [{ id: 'company', href: ownerSite, ...(label ? { label } : {}) }];
+}

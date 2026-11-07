@@ -3,7 +3,7 @@ import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { NextIntlClientProvider } from 'next-intl';
 
 import messages from '../../../messages/en.json';
-import { buildGitHubLinks } from '@/lib/about-info';
+import { buildGitHubLinks, buildLearnMoreLinks, isEverOwnedUrl } from '@/lib/about-info';
 import { AboutView, type AboutViewProps } from './AboutView';
 
 vi.mock('@/components/logos', () => ({
@@ -28,11 +28,7 @@ function props(overrides: Partial<AboutViewProps> = {}): AboutViewProps {
         environment: 'dev',
         apiAddress: 'https://api-dev.ever.works/api',
         github: buildGitHubLinks(undefined),
-        learnMore: {
-            website: 'https://ever.works',
-            docs: 'https://docs.ever.works',
-            company: 'https://ever.co',
-        },
+        learnMore: buildLearnMoreLinks({ webUrl: 'https://app-dev.ever.works' }),
         ...overrides,
     };
 }
@@ -162,5 +158,45 @@ describe('AboutView', () => {
             expect(link).toHaveAttribute('target', '_blank');
             expect(link.getAttribute('aria-label')).toMatch(/\(opens in a new tab\)$/);
         }
+    });
+
+    it('renders no link to an Ever host on a self-hosted install (egress audit rule)', () => {
+        const { container } = renderView({
+            // The egress audit runs the self-hosting compose file at this address.
+            learnMore: buildLearnMoreLinks({
+                webUrl: 'http://ever-works-web:3000',
+                companyOwnerWebsite: 'https://ever.works',
+            }),
+            apiAddress: null,
+            environment: null,
+        });
+
+        expect(screen.queryByTestId('about-learn-more')).not.toBeInTheDocument();
+        const everHrefs = [...container.querySelectorAll('[href]')]
+            .map((element) => element.getAttribute('href'))
+            .filter((href) => isEverOwnedUrl(href));
+        expect(everHrefs).toEqual([]);
+        // Control: the hosted render does link to Ever hosts, so the filter above can see them.
+        const hosted = renderView();
+        const hostedEverHrefs = [...hosted.container.querySelectorAll('[href]')].filter((element) =>
+            isEverOwnedUrl(element.getAttribute('href')),
+        );
+        expect(hostedEverHrefs).toHaveLength(3);
+    });
+
+    it("shows a self-hosted operator's own site under its own name", () => {
+        renderView({
+            learnMore: buildLearnMoreLinks({
+                webUrl: 'https://works.acme.test',
+                companyOwnerWebsite: 'https://acme.test',
+                companyOwnerName: 'Acme Inc.',
+            }),
+        });
+
+        const link = screen.getByTestId('about-link-company');
+        expect(link).toHaveAttribute('href', 'https://acme.test');
+        expect(link).toHaveTextContent('Acme Inc.');
+        expect(screen.queryByTestId('about-link-website')).not.toBeInTheDocument();
+        expect(screen.queryByTestId('about-link-docs')).not.toBeInTheDocument();
     });
 });

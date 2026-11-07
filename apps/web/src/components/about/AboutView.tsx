@@ -22,7 +22,12 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils/cn';
 import { LogoEverWorkImage } from '@/components/logos';
-import type { BuildSyncState, DeploymentEnvironment, GitHubLinks } from '@/lib/about-info';
+import type {
+    BuildSyncState,
+    DeploymentEnvironment,
+    GitHubLinks,
+    LearnMoreLink,
+} from '@/lib/about-info';
 
 /** One build's coordinates, as the web bundle and `GET /api/version` both describe them. */
 export interface AboutBuild {
@@ -31,12 +36,6 @@ export interface AboutBuild {
     gitRef: string;
     buildTime: string;
     commitUrl: string | null;
-}
-
-export interface AboutLearnMoreLinks {
-    website: string;
-    docs: string;
-    company: string;
 }
 
 export interface AboutViewProps {
@@ -51,7 +50,8 @@ export interface AboutViewProps {
     /** The API address a reader can use; `null` when there is none to show. */
     apiAddress: string | null;
     github: GitHubLinks;
-    learnMore: AboutLearnMoreLinks;
+    /** Empty on a self-hosted install with no operator site: the card is then left out. */
+    learnMore: LearnMoreLink[];
 }
 
 /** How long the copy button shows its confirmation. */
@@ -397,8 +397,16 @@ function LinkList({ items }: { items: LinkItem[] }) {
     );
 }
 
-function LearnMoreCard({ links }: { links: AboutLearnMoreLinks }) {
+const LEARN_MORE_ICONS: Record<LearnMoreLink['id'], LinkItem['icon']> = {
+    website: Globe,
+    docs: BookOpen,
+    company: Building2,
+};
+
+/** Renders nothing when there is no link to show (a self-hosted install with no operator site). */
+function LearnMoreCard({ links }: { links: LearnMoreLink[] }) {
     const t = useTranslations('dashboard.about.learnMore');
+    if (links.length === 0) return null;
 
     return (
         <section className={CARD} data-testid="about-learn-more">
@@ -411,26 +419,12 @@ function LearnMoreCard({ links }: { links: AboutLearnMoreLinks }) {
                 {t('title')}
             </h2>
             <LinkList
-                items={[
-                    {
-                        href: links.website,
-                        label: t('website'),
-                        icon: Globe,
-                        testId: 'about-link-website',
-                    },
-                    {
-                        href: links.docs,
-                        label: t('docs'),
-                        icon: BookOpen,
-                        testId: 'about-link-docs',
-                    },
-                    {
-                        href: links.company,
-                        label: t('company'),
-                        icon: Building2,
-                        testId: 'about-link-company',
-                    },
-                ]}
+                items={links.map((link) => ({
+                    href: link.href,
+                    label: link.label ?? t(link.id),
+                    icon: LEARN_MORE_ICONS[link.id],
+                    testId: `about-link-${link.id}`,
+                }))}
             />
         </section>
     );

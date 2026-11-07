@@ -3,22 +3,19 @@ import { getTranslations } from 'next-intl/server';
 import { AboutView, type AboutBuild } from '@/components/about/AboutView';
 import {
     buildGitHubLinks,
+    buildLearnMoreLinks,
     compareBuilds,
     resolveDeploymentEnvironment,
     resolveDisplayApiAddress,
 } from '@/lib/about-info';
 import { getWebBuildInfo } from '@/lib/build-info';
 import { versionAPI } from '@/lib/api';
-import { API_URL, COMPANY_OWNER_WEBSITE, WEB_URL } from '@/lib/constants';
+import { API_URL, COMPANY_OWNER, COMPANY_OWNER_WEBSITE, WEB_URL } from '@/lib/constants';
 
 export async function generateMetadata(): Promise<Metadata> {
     const t = await getTranslations('metadata.pages');
     return { title: t('about') };
 }
-
-const WEBSITE_URL = 'https://ever.works';
-const DOCS_URL = 'https://docs.ever.works';
-const COMPANY_URL = 'https://ever.co';
 
 function toBuild(info: AboutBuild): AboutBuild {
     return {
@@ -60,13 +57,11 @@ export default async function AboutPage() {
                 webUrl: WEB_URL,
             })}
             github={buildGitHubLinks(process.env.NEXT_PUBLIC_GITHUB_REPO_URL)}
-            learnMore={{
-                website: WEBSITE_URL,
-                docs: DOCS_URL,
-                // A white-label install names its own owner site; Ever Works' own is ever.co.
-                company:
-                    COMPANY_OWNER_WEBSITE === WEBSITE_URL ? COMPANY_URL : COMPANY_OWNER_WEBSITE,
-            }}
+            learnMore={buildLearnMoreLinks({
+                webUrl: WEB_URL,
+                companyOwnerWebsite: COMPANY_OWNER_WEBSITE,
+                companyOwnerName: COMPANY_OWNER,
+            })}
         />
     );
 }

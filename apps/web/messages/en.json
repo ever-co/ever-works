@@ -13236,7 +13236,6 @@
                 "api": "API",
                 "inSync": "In sync",
                 "different": "Different builds",
-                "unknown": "Unknown",
                 "apiUnavailable": "The API did not report its version.",
                 "viewCommit": "View commit {sha} on GitHub",
                 "ref": "From {ref}",
