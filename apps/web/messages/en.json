@@ -11963,7 +11963,8 @@
                 "support": "Support",
                 "keyboardShortcuts": "Keyboard Shortcuts",
                 "billing": "Billing",
-                "usageCredits": "Usage & Credits"
+                "usageCredits": "Usage & Credits",
+                "about": "About Ever Works"
             },
             "signOut": "Sign Out",
             "signingOut": "Signing out..."
@@ -13222,6 +13223,61 @@
             "alsoSignOutEverId": "Also sign out of Ever ID",
             "cancel": "Cancel",
             "confirm": "Sign out"
+        },
+        "about": {
+            "title": "About",
+            "product": {
+                "description": "The Workshop for AI: an open-source, extensible, agentic runtime that researches, ships and maintains entire businesses, 24/7.",
+                "license": "Open source, released under the <license>AGPL-3.0</license>"
+            },
+            "version": {
+                "title": "Version details",
+                "web": "Web app",
+                "api": "API",
+                "inSync": "In sync",
+                "different": "Different builds",
+                "unknown": "Unknown",
+                "apiUnavailable": "The API did not report its version.",
+                "viewCommit": "View commit {sha} on GitHub",
+                "ref": "From {ref}",
+                "builtAt": "Built {time}"
+            },
+            "environment": {
+                "title": "Environment",
+                "build": "Build",
+                "name": "Environment",
+                "apiAddress": "API address",
+                "copyApiAddress": "Copy API address",
+                "copied": "Copied",
+                "notAvailable": "Not available",
+                "builds": {
+                    "development": "Development",
+                    "production": "Production"
+                },
+                "names": {
+                    "local": "Local",
+                    "dev": "Development (dev)",
+                    "stage": "Staging (stage)",
+                    "prod": "Production (prod)"
+                }
+            },
+            "learnMore": {
+                "title": "Learn more",
+                "website": "ever.works",
+                "docs": "docs.ever.works",
+                "company": "Ever Co. LTD"
+            },
+            "github": {
+                "title": "On GitHub",
+                "description": "Ever Works is developed in the open: follow the releases, report an issue or contribute.",
+                "repository": "Repository",
+                "releases": "Releases",
+                "issues": "Issues",
+                "pullRequests": "Pull requests",
+                "contributors": "Contributors",
+                "contributingGuide": "Contributing guide"
+            },
+            "opensInNewTab": "(opens in a new tab)"
         }
     },
     "layout": {
@@ -13319,7 +13375,8 @@
             "resendVerification": "Resend Verification Email",
             "help": "Help",
             "schedules": "Schedules",
-            "deleteAccount": "Delete your account"
+            "deleteAccount": "Delete your account",
+            "about": "About"
         }
     },
     "api": {
@@ -13512,7 +13569,8 @@
         "footer": {
             "build": "Build",
             "web": "Web",
-            "api": "API"
+            "api": "API",
+            "about": "About"
         }
     },
     "organizations": {
