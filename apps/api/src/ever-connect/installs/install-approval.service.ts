@@ -148,11 +148,16 @@ export class InstallApprovalService {
                     message: 'The package is not on the plugin allow-list.',
                 });
             }
-            await this.bridge.addToAllowlist({
-                packageName,
-                versionRange: row.version ?? '*',
-                integrity: row.integrity,
-            });
+            try {
+                await this.bridge.addToAllowlist({
+                    packageName,
+                    versionRange: row.version ?? '*',
+                    integrity: row.integrity,
+                });
+            } catch (error) {
+                // Another admin's approval added it a moment ago: it stands.
+                if ((await this.bridge.allowlistState(packageName)) !== 'allowed') throw error;
+            }
             allowlistAdded = true;
             await this.record(userId, {
                 actionType: ActivityActionType.SETTINGS_UPDATED,

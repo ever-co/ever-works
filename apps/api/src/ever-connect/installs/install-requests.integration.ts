@@ -50,8 +50,9 @@ export class InstallRequestsIntegration implements IntegrationHandler, OnModuleI
 
     async onDisabled(): Promise<void> {
         const dropped = await this.reporter.dropOwed('integration_not_enabled').catch(() => 0);
-        if (dropped > 0)
+        if (dropped > 0) {
             this.logger.warn(`install_request.report_dropped ${dropped} owed report(s)`);
+        }
     }
 
     /** One round of the Ever Connect worker. */

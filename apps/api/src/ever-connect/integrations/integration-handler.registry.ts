@@ -39,8 +39,9 @@ export class IntegrationHandlerRegistry {
             throw new Error(`Ever Works does not offer the integration ${handler.key}.`);
         }
         const existing = this.handlers.get(handler.key);
-        if (existing && existing !== handler)
+        if (existing && existing !== handler) {
             throw new IntegrationHandlerConflictError(handler.key);
+        }
         this.handlers.set(handler.key, handler);
     }
 
