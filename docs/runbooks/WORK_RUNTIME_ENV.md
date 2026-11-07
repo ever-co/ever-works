@@ -27,9 +27,13 @@ through this surface — the allow-list is the guard.
 ### `GH_TOKEN`: the site's data-repo credential
 
 The site uses `GH_TOKEN` to clone, pull and push **its own data repo** (items,
-categories, collections, moderation). `DeployService.resolveSiteGitToken`
-picks it, in this order:
+categories, collections, moderation). `DeployService` picks it, in this order:
 
+0. **The site git-token broker**, when `EVER_WORKS_SITE_GIT_TOKEN_BROKER_ENABLED=true`
+   and the data repo's owner is a managed org (below). The site gets no
+   long-lived git credential at all; see
+   [Per-site git tokens](#per-site-git-tokens-the-broker). Steps 1 and 2 below
+   are the fallback when the broker is off or does not apply.
 1. The platform site token for the data repo's owner:
    `EVER_WORKS_SITES_GIT_TOKEN` (`ever-works`),
    `EVER_WORKS_CUSTOMERS_SITES_GIT_TOKEN` (`ever-works-cloud`). Make it a
@@ -48,6 +52,92 @@ data clone on the workflow path). Image pulls use `EVER_WORKS_GHCR_PULL_TOKEN`
 / `EVER_WORKS_CUSTOMERS_GHCR_PULL_TOKEN` (classic, `read:packages` only) ahead
 of the broader `*_GITHUB_PAT_CLASSIC`. A running site picks up a changed token
 only on its next deploy (the Secret is read through `envFrom`).
+
+### Per-site git tokens (the broker)
+
+An org-wide site token (step 1) reaches **every** data repo in the org, so one
+compromised site pod can rewrite every other site's data; in
+`ever-works-cloud` (one repo per customer) that is cross-tenant. The broker
+gives each site a credential for its own data repo only.
+
+**How it works**
+
+- The platform's GitHub App mints an installation token narrowed at mint time
+  to `repositories: ["<data repo>"]` and `permissions: {"contents": "write"}`
+  (Metadata: read is implied). It can clone, pull, commit and push that one
+  repo and nothing else: no other repo, no workflows, no administration. It
+  expires after about one hour.
+- The site refreshes it from `POST /api/sites/<workId>/git-token` with
+  `Authorization: Bearer <EVER_WORKS_SITE_GIT_TOKEN_SECRET>`. The answer is
+  `{ token, expiresAt, repository }` (`Cache-Control: no-store`, 30 req/min
+  per IP). 401 = wrong secret or unknown Work (the same answer for both),
+  409 = the Work's data repo is not one the broker serves, 502 = GitHub
+  refused the mint, 503 = broker off or not configured.
+- The per-site secret is `ewsgt_` + HMAC-SHA256(`EVER_WORKS_SITE_GIT_TOKEN_KEY`,
+  Work id). It is derived, not stored: no column, no migration, and a **new
+  Work is covered on its first deploy** with no token edit anywhere. A leaked
+  site secret can only mint tokens for that one Work's data repo.
+- The repository comes from the Work row (`getRepoOwner('data')` +
+  `getDataRepo()`), never from the request.
+- On deploy the site gets `EVER_WORKS_SITE_GIT_TOKEN_URL`,
+  `EVER_WORKS_SITE_GIT_TOKEN_SECRET`, and `GH_TOKEN` = a first token minted at
+  deploy (one repo, about one hour) so a build or a site that cannot yet
+  refresh works at once. The website repo's Actions secrets get the same three
+  values. If that first mint fails, `GH_TOKEN` is left unset rather than
+  falling back to a broad token; the site fetches one at runtime.
+- The site template (`ever-works/directory-web-template`) reads the token
+  through its site-git-token resolver: the broker when both broker vars are
+  set (cached until 5 minutes before expiry, refreshed and retried once on a
+  401), else `GH_TOKEN`. A site on an older template keeps working only until
+  its bootstrap `GH_TOKEN` expires, so **update the sites' template before
+  turning the broker on**.
+
+**Platform env**
+
+| Variable                                   | Meaning                                                                                                                                                                                                                 |
+| ------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `EVER_WORKS_SITE_GIT_TOKEN_BROKER_ENABLED` | `true` turns the broker on. Default off.                                                                                                                                                                                |
+| `EVER_WORKS_SITE_GIT_TOKEN_KEY`            | HMAC key for the site secrets, at least 32 characters (`openssl rand -hex 32`). Rotating it rotates every site's secret; each site picks up its new one at its next deploy, so redeploy all sites after a rotation.     |
+| `EVER_WORKS_SITE_GIT_TOKEN_BROKER_URL`     | The API origin as a site reaches it (`https://api.ever.works`). Defaults to `PUBLIC_API_URL`, then `PLATFORM_API_URL`. https only (localhost may be http).                                                              |
+| `EVER_WORKS_SITE_GIT_TOKEN_ORGS`           | Managed orgs the broker serves. Default `ever-works,ever-works-cloud`. Use it to roll out one org at a time.                                                                                                            |
+| `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`  | The Ever Works App, already used elsewhere. It must be **installed on every managed org** with Contents: write. "All repositories" is fine and is what makes new Works automatic: every token is narrowed at mint time. |
+
+**Tenant clusters (k8s-works, k8s-works-shared, custom kubeconfig):** nothing
+new. No CronJob, RBAC or mounted Secret: the two broker keys ride in the
+existing `<slug>-runtime-env` Secret (server-side deploy, or `deploy_k8s.yaml`
+forwarding repo secrets), and the token itself lives only in the site
+process's memory. The one requirement is HTTPS egress from the site pod to the
+broker origin, which Directory site pods have today (they carry no egress
+NetworkPolicy). Any future egress fence on tenant namespaces (P0.1 or a
+per-namespace policy) must allow the broker origin alongside `github.com`.
+Vercel-hosted sites get the two keys through `deploy_vercel.yaml`.
+
+Enabled but missing the key, the URL or the App = the broker does not apply and
+the deploy keeps steps 1 and 2 (logged as a warning). A data repo outside the
+managed orgs, or an org with no App installation, also keeps steps 1 and 2
+(the latter logged as an error).
+
+**Rollout**
+
+1. Install the Ever Works GitHub App on every managed org that lacks it
+   (`ever-works-cloud` had none on 2026-11-07), repository access "All".
+2. Ship the template change to the sites (their website repos must carry the
+   resolver) and rebuild their images.
+3. Set `EVER_WORKS_SITE_GIT_TOKEN_KEY` (and `EVER_WORKS_SITE_GIT_TOKEN_BROKER_URL`
+   if `PUBLIC_API_URL` is not the public origin) in the API env, then
+   `EVER_WORKS_SITE_GIT_TOKEN_BROKER_ENABLED=true`. Optionally start with
+   `EVER_WORKS_SITE_GIT_TOKEN_ORGS=ever-works`.
+4. Redeploy the sites. Check one: its `<slug>-runtime-env` Secret has the two
+   broker keys and a `ghs_` `GH_TOKEN`; the API log shows
+   `site git token issued for <org>/<slug>-data` about every 40 minutes per
+   site process.
+5. Remove `EVER_WORKS_SITES_GIT_TOKEN` / `EVER_WORKS_CUSTOMERS_SITES_GIT_TOKEN`
+   from the API env and revoke those PATs, and set
+   `TENANT_USER_GIT_TOKEN_ENABLED=false`. Sites outside the managed orgs then
+   get no `GH_TOKEN` (logged loudly) instead of a broad one.
+
+Not covered yet: a data repo in a member's own account (the broker serves
+managed orgs only; those Works keep steps 1 and 2).
 
 ## The allow-list
 
