@@ -1,8 +1,9 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { EverConnectIntegrationService } from './ever-connect-integration.service';
 import { EverConnectService } from './ever-connect.service';
 import { PersonRequestsHandler } from './identity/person-requests.handler';
 import { describeFailure, platformFailure } from './identity/platform-answer';
+import { InstallRequestService } from './installs/install-request.service';
 
 /** One event of the installation's feed. */
 interface FeedEvent {
@@ -30,6 +31,9 @@ export interface FeedPass {
  * - `ever.registry.instance.disconnected|revoked`: the connection ends here too.
  * - `ever.registry.person.deletion_requested|export_requested`: answered by the
  *   person-request handler.
+ * - Install messages from apps.ever.co (`ever.listings.install.state_changed`
+ *   and the `install_requested` / `install_withdrawn` / `remove_requested`
+ *   commands): kept by the install-request service, which installs nothing.
  *
  * A handler that fails stops the pass at that event: it and the events after it
  * are read again on the next pass. Other event types are acknowledged unread.
@@ -42,6 +46,7 @@ export class EverConnectFeedService {
         private readonly connection: EverConnectService,
         private readonly integrations: EverConnectIntegrationService,
         private readonly requests: PersonRequestsHandler,
+        @Optional() private readonly installs?: InstallRequestService,
     ) {}
 
     async pollOnce(waitS = 0): Promise<FeedPass> {
@@ -106,6 +111,10 @@ export class EverConnectFeedService {
     private async dispatch(event: FeedEvent): Promise<boolean> {
         if (this.requests.handles(event.type)) {
             await this.requests.handle(event);
+            return false;
+        }
+        if (this.installs?.handles(event.type)) {
+            await this.installs.handle(event);
             return false;
         }
         if (event.type.startsWith('ever.consent.')) {

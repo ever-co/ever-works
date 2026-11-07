@@ -194,8 +194,9 @@ describe('core notification event catalogue', () => {
             'work_generation_finished',
         ]);
         expect(byGroup.get('digest')).toEqual(['digest_ready']);
-        // 12 since FL-05 P2 added `fleet_session_finished` and `fleet_session_failed`.
-        expect(byGroup.get('signals')).toHaveLength(12);
+        // 12 since FL-05 P2 added `fleet_session_finished` and `fleet_session_failed`;
+        // 13 since Ever Connect added `ever_platform_install_request`.
+        expect(byGroup.get('signals')).toHaveLength(13);
         expect(byGroup.get('signals')).toEqual(
             expect.arrayContaining(['fleet_session_finished', 'fleet_session_failed']),
         );

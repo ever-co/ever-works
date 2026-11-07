@@ -1,11 +1,4 @@
-import {
-    Column,
-    CreateDateColumn,
-    Entity,
-    Index,
-    PrimaryColumn,
-    UpdateDateColumn,
-} from 'typeorm';
+import { Column, CreateDateColumn, Entity, Index, PrimaryColumn, UpdateDateColumn } from 'typeorm';
 import { PortableDateColumn } from './_types';
 
 /**
