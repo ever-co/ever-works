@@ -234,6 +234,39 @@ describe('requestGitHubAppInstallationAccessTokenDetails', () => {
             },
         );
 
+        it('narrows to repository NAMES (GitHub `repositories`) when given', async () => {
+            fetchSpy = jest
+                .spyOn(globalThis, 'fetch')
+                .mockResolvedValue(makeResponse({ token: 'ghs_xxx' }));
+
+            await requestGitHubAppInstallationAccessTokenDetails('inst-77', credentials, {
+                repositoryNames: [' acme-data '],
+                permissions: { contents: 'write' },
+            });
+
+            const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+            expect(JSON.parse(String(init.body))).toEqual({
+                repositories: ['acme-data'],
+                permissions: { contents: 'write' },
+            });
+        });
+
+        it.each([[['owner/acme-data']], [['']], [['.']], [['..']], [['a b']], [['x'.repeat(101)]]])(
+            'refuses the repository name %s',
+            async (repositoryNames) => {
+                fetchSpy = jest
+                    .spyOn(globalThis, 'fetch')
+                    .mockResolvedValue(makeResponse({ token: 'ghs_xxx' }));
+
+                await expect(
+                    requestGitHubAppInstallationAccessTokenDetails('inst-77', credentials, {
+                        repositoryNames,
+                    }),
+                ).rejects.toThrow(/Invalid GitHub repository name/);
+                expect(fetchSpy).not.toHaveBeenCalled();
+            },
+        );
+
         it('treats an EMPTY scope as no scope, so an accidental [] cannot widen the token', async () => {
             // Reading `{ repository_ids: [] }` as "no narrowing" is
             // GitHub's behaviour; sending it would be a full-installation

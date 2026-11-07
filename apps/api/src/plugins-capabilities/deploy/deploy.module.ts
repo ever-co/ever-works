@@ -16,6 +16,8 @@ import { DeployController } from './deploy.controller';
 import { DeployService } from './deploy.service';
 import { DeploymentVerifierService } from './tasks/deployment-verifier.service';
 import { ManagedSubdomainService } from './managed-subdomain.service';
+import { SiteGitTokenController } from './site-git-token.controller';
+import { SiteGitTokenService } from './site-git-token.service';
 
 @Module({
     imports: [
@@ -31,9 +33,12 @@ import { ManagedSubdomainService } from './managed-subdomain.service';
         ActivityLogModule,
         forwardRef(() => AuthModule),
     ],
-    controllers: [DeployController],
+    controllers: [DeployController, SiteGitTokenController],
     providers: [
         DeployService,
+        // Per-site, one-repo git tokens for deployed directory sites (the
+        // broker behind `POST /api/sites/:workId/git-token`).
+        SiteGitTokenService,
         DeploymentVerifierService,
         EverWorksDnsService,
         // Task 10 / Path A — dedicated managed-deploy provider, registered so

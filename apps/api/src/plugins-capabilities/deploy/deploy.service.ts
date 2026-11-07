@@ -57,6 +57,13 @@ import type {
     SettingSource,
 } from '@ever-works/plugin';
 import type { BatchDeployItemDto, BatchDeployItemResultDto } from './dto/batch-deploy.dto';
+import {
+    SITE_GIT_TOKEN_PLACEHOLDER,
+    SITE_GIT_TOKEN_SECRET_ENV,
+    SITE_GIT_TOKEN_URL_ENV,
+    SiteGitTokenService,
+    type BrokeredSiteGitEnv,
+} from './site-git-token.service';
 
 const KUBERNETES_DEPLOY_PROVIDER_ID = 'k8s';
 const EVER_WORKS_DEPLOY_PROVIDER_ID = 'ever-works';
@@ -151,6 +158,10 @@ export class DeployService {
         // refusal rather than a silent fall-through to the website path, which
         // would push the member's App repository at a website provider.
         private readonly appDeployRequest?: AppDeployRequestService,
+        // Per-site, one-repo git tokens (security audit 2026-11-07). Optional
+        // in DI for the same reason as the three above; absent means "the
+        // broker does not apply" and every site keeps the env-token path.
+        private readonly siteGitTokenService?: SiteGitTokenService,
     ) {}
 
     /**
@@ -399,11 +410,21 @@ export class DeployService {
         // never the deploying user's broad OAuth token when a platform
         // site token exists. `gitToken` itself is still used above/below for
         // the platform's own repo operations.
+        //
+        // With the site git-token broker on, the site gets a broker URL + its
+        // own secret instead, and GH_TOKEN is only a one-hour token narrowed
+        // to its data repo (so the build right after this deploy can clone).
+        const brokeredSiteGit = await this.resolveBrokeredSiteGit(work);
         await this.setOptionalSecrets(
             ctx,
             options.teamScope,
-            this.resolveSiteGitToken(work, gitToken),
+            brokeredSiteGit
+                ? DeployService.brokeredGhToken(brokeredSiteGit)
+                : this.resolveSiteGitToken(work, gitToken),
         );
+        if (brokeredSiteGit) {
+            await this.setBrokeredSiteGitSecrets(ctx, work, brokeredSiteGit);
+        }
         await this.ensureCronSecret(ctx);
         await this.ensureWebhookSecret(ctx, work);
         await this.ensureRuntimeEnv(ctx, work, plugin);
@@ -1460,8 +1481,19 @@ export class DeployService {
         // platform-managed, contents-only token when one is configured for
         // the data repo's owner, never the deploying user's OAuth token
         // (which carries repo/workflow/delete_repo for every repo they own).
-        const siteGitToken = this.resolveSiteGitToken(work, gitToken);
-        if (siteGitToken) env.GH_TOKEN = siteGitToken;
+        //
+        // Broker on: the site refreshes a one-repo, one-hour token from the
+        // platform with its own secret, and GH_TOKEN is only the first such
+        // token (minted now). Broker off or not applicable: today's path.
+        const brokeredSiteGit = await this.resolveBrokeredSiteGit(work);
+        if (brokeredSiteGit) {
+            env[SITE_GIT_TOKEN_URL_ENV] = brokeredSiteGit.url;
+            env[SITE_GIT_TOKEN_SECRET_ENV] = brokeredSiteGit.secret;
+            env.GH_TOKEN = DeployService.brokeredGhToken(brokeredSiteGit);
+        } else {
+            const siteGitToken = this.resolveSiteGitToken(work, gitToken);
+            if (siteGitToken) env.GH_TOKEN = siteGitToken;
+        }
         if (primaryHost) env.COOKIE_DOMAIN = primaryHost;
         try {
             env.AUTH_SECRET = await this.workRuntimeEnvService.getOrGenerateAuthSecret(work.id);
@@ -1648,6 +1680,66 @@ export class DeployService {
             return '';
         }
         return gitToken ?? '';
+    }
+
+    /**
+     * The broker env for this Work's site when the site git-token broker
+     * applies (enabled, configured, data repo in a managed org with the App
+     * installed), else null and the caller keeps {@link resolveSiteGitToken}.
+     * Never throws: a broker problem must not fail a deploy.
+     */
+    private async resolveBrokeredSiteGit(work: Work): Promise<BrokeredSiteGitEnv | null> {
+        if (!this.siteGitTokenService) return null;
+        try {
+            return await this.siteGitTokenService.siteEnvFor(work);
+        } catch (error: unknown) {
+            this.logger.error(
+                `Work ${work.id}: site git token broker lookup threw; keeping the env-token path: ${
+                    error instanceof Error ? error.message : String(error)
+                }`,
+            );
+            return null;
+        }
+    }
+
+    /**
+     * `GH_TOKEN` when the broker applies: the deploy-time one-repo token, or
+     * {@link SITE_GIT_TOKEN_PLACEHOLDER} when that mint failed. ALWAYS a value,
+     * never omitted: an omitted key leaves whatever an earlier deploy wrote
+     * (the org-wide token, or the user's OAuth token) in the website repo
+     * secret and in the runtime-env Secret (server-side apply only prunes keys
+     * its own field manager wrote), and the site would fall back to it.
+     */
+    private static brokeredGhToken(brokered: BrokeredSiteGitEnv): string {
+        return brokered.bootstrap?.token || SITE_GIT_TOKEN_PLACEHOLDER;
+    }
+
+    /**
+     * Workflow path: the website repo's builds and `deploy_k8s.yaml` (which
+     * forwards repo secrets into the runtime-env Secret) and
+     * `deploy_vercel.yaml` read the broker URL + site secret from here.
+     */
+    private async setBrokeredSiteGitSecrets(
+        ctx: RepoContext,
+        work: Work,
+        brokered: BrokeredSiteGitEnv,
+    ): Promise<void> {
+        try {
+            await Promise.all([
+                this.setSecret(ctx, SITE_GIT_TOKEN_URL_ENV, brokered.url),
+                this.setSecret(ctx, SITE_GIT_TOKEN_SECRET_ENV, brokered.secret),
+            ]);
+        } catch (error: unknown) {
+            // Fails the deploy: without these the site has a one-hour token and
+            // no way to refresh it, which is a site that stops syncing an hour
+            // from now with nothing in the deploy record saying why.
+            this.logger.error(
+                `Work ${work.id}: failed to push site git token broker secrets to ${ctx.owner}/${ctx.repo}: ${
+                    error instanceof Error ? error.message : String(error)
+                }`,
+            );
+            throw error;
+        }
     }
 
     /**
