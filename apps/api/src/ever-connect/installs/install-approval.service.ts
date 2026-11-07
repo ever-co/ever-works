@@ -14,49 +14,26 @@ import {
     ActivityStatus,
     EverConnectInstallRequest,
 } from '@ever-works/agent/entities';
-import { EVER_INSTALLS_INTEGRATION_KEY, type EverInstallDetailToken } from '@ever-works/contracts';
+import {
+    EVER_INSTALLS_INTEGRATION_KEY,
+    type EverInstallDetailToken,
+    type EverInstallNotInstallableReason,
+    type EverInstallRequestView,
+    type EverInstallRequestsView,
+} from '@ever-works/contracts';
 import { EverConnectIntegrationService } from '../ever-connect-integration.service';
 import { InstallRequestService } from './install-request.service';
 import { InstallStatusReporter } from './install-status-reporter.service';
 import { type BridgeAllowlistState, PluginInstallerBridge } from './plugin-installer.bridge';
 
 /** Why a request cannot be installed on this installation, whatever the admin answers. */
-export type NotInstallableReason = 'source_not_supported' | 'plugin_unknown';
+export type NotInstallableReason = EverInstallNotInstallableReason;
 
 /** What the operator sees of one request. */
-export interface InstallRequestView {
-    readonly installId: string;
-    readonly listingSlug: string;
-    readonly packageName: string | null;
-    readonly registry: string | null;
-    readonly sourceRepo: string | null;
-    readonly sourceSha: string | null;
-    readonly version: string | null;
-    readonly versionIsExact: boolean;
-    readonly integrity: string | null;
-    readonly editionKey: string | null;
-    readonly state: EverConnectInstallRequest['state'];
-    readonly detail: string | null;
-    readonly pluginId: string | null;
-    readonly installedVersion: string | null;
-    readonly allowlistAdded: boolean;
-    readonly receivedAt: string;
-    readonly decidedAt: string | null;
-    readonly removalRequestedAt: string | null;
-    /** For an open request: the package's allow-list state. */
-    readonly allowlist: BridgeAllowlistState | null;
-    /** For an open request: why it cannot be installed here, or `null`. */
-    readonly notInstallable: NotInstallableReason | null;
-}
+export type InstallRequestView = EverInstallRequestView;
 
 /** `GET /api/ever-connect/install-requests`. */
-export interface InstallRequestsView {
-    /** Whether dynamic plugin installs run here (`PLUGIN_DISTRIBUTION_MODE=dynamic`). */
-    readonly installerEnabled: boolean;
-    /** Whether `marketplace_installs` is enabled for one of the installation's tenant links. */
-    readonly integrationEnabled: boolean;
-    readonly requests: InstallRequestView[];
-}
+export type InstallRequestsView = EverInstallRequestsView;
 
 /**
  * A platform admin's answer to an install request, in their own session.

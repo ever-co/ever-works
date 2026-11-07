@@ -375,3 +375,54 @@ export function installStatusReport(input: {
 	if (input.externalRef && input.externalRef.length <= 128) body.external_ref = input.externalRef;
 	return body;
 }
+
+/** Where an install request stands on this installation. */
+export type EverInstallRequestState =
+	| 'requested'
+	| 'installing'
+	| 'installed'
+	| 'failed'
+	| 'declined'
+	| 'withdrawn'
+	| 'removed';
+
+/** The package's place on the plugin allow-list (first-party packages are always allowed). */
+export type EverInstallAllowlistState = 'first_party' | 'allowed' | 'disabled' | 'absent';
+
+/** Why an open request cannot be installed on this installation. */
+export type EverInstallNotInstallableReason = 'source_not_supported' | 'plugin_unknown';
+
+/** One install request, as the platform admins see it (`GET /api/ever-connect/install-requests`). */
+export interface EverInstallRequestView {
+	readonly installId: string;
+	readonly listingSlug: string;
+	readonly packageName: string | null;
+	readonly registry: string | null;
+	readonly sourceRepo: string | null;
+	readonly sourceSha: string | null;
+	readonly version: string | null;
+	readonly versionIsExact: boolean;
+	readonly integrity: string | null;
+	readonly editionKey: string | null;
+	readonly state: EverInstallRequestState;
+	readonly detail: string | null;
+	readonly pluginId: string | null;
+	readonly installedVersion: string | null;
+	readonly allowlistAdded: boolean;
+	readonly receivedAt: string;
+	readonly decidedAt: string | null;
+	readonly removalRequestedAt: string | null;
+	/** For an open request: the package's allow-list state. */
+	readonly allowlist: EverInstallAllowlistState | null;
+	/** For an open request: why it cannot be installed here, or `null`. */
+	readonly notInstallable: EverInstallNotInstallableReason | null;
+}
+
+/** `GET /api/ever-connect/install-requests`. */
+export interface EverInstallRequestsView {
+	/** Whether dynamic plugin installs run on this installation (`PLUGIN_DISTRIBUTION_MODE=dynamic`). */
+	readonly installerEnabled: boolean;
+	/** Whether `marketplace_installs` is enabled for one of the installation's tenant links. */
+	readonly integrationEnabled: boolean;
+	readonly requests: EverInstallRequestView[];
+}

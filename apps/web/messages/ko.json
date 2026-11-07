@@ -4404,6 +4404,64 @@
                 }
             },
             "everPlatform": {
+                "installRequests": {
+                    "title": "Install requests",
+                    "description": "An organization owner can pick a plugin on apps.ever.co and ask for it to be installed into this installation. Nothing is installed until a platform admin approves the request here.",
+                    "docsLink": "How install requests work",
+                    "unavailable": "The install requests could not be read right now.",
+                    "integrationOff": "Install requests from apps.ever.co are not enabled for this installation. An organization owner enables them on Ever Platform.",
+                    "installerDisabled": "Dynamic plugin installs are turned off on this installation, so a request cannot be approved here. You can still decline it.",
+                    "installerDocs": "About plugin installs",
+                    "empty": "No install requests yet.",
+                    "integrity": "Integrity",
+                    "integrityNotDeclared": "Not declared",
+                    "copyIntegrity": "Copy the integrity",
+                    "integrityCopied": "Integrity copied",
+                    "edition": "Edition",
+                    "noEdition": "None",
+                    "received": "Received",
+                    "installedAs": "Installed as the plugin {plugin} {version}",
+                    "removalRequested": "apps.ever.co asked to remove this plugin. Nothing is removed unless a platform admin uninstalls it in Plugins.",
+                    "allowlistCheckbox": "Add {package} to the plugin allow-list",
+                    "allowlistNote": "Ever Platform never changes this list; only you do.",
+                    "approve": "Approve and install",
+                    "decline": "Decline",
+                    "working": "Working…",
+                    "toastApproved": "Install request answered",
+                    "toastDeclined": "Install request declined",
+                    "states": {
+                        "requested": "Requested",
+                        "installing": "Installing",
+                        "installed": "Installed",
+                        "failed": "Failed",
+                        "declined": "Declined",
+                        "withdrawn": "Withdrawn",
+                        "removed": "Removed"
+                    },
+                    "details": {
+                        "checksumMismatch": "The package did not match the integrity apps.ever.co declared, so it was not installed.",
+                        "incompatibleVersion": "The package is not a plugin this installation can run.",
+                        "installerDisabled": "Dynamic plugin installs are turned off on this installation.",
+                        "permissionDenied": "Not installed: declined here, or refused by the plugin allow-list.",
+                        "unknown": "The install did not complete. The API logs say why."
+                    },
+                    "notInstallable": {
+                        "sourceNotSupported": "This installation installs plugins from npm only, so this request cannot be installed here.",
+                        "pluginUnknown": "No plugin of this installation is published as this package, so this request cannot be installed here."
+                    },
+                    "errors": {
+                        "packageNotAllowlisted": "This package is not on the plugin allow-list. Tick the box to add it, or decline the request.",
+                        "packageAllowlistDisabled": "This package is turned off on the plugin allow-list. Turn it on there first, or decline the request.",
+                        "installerDisabled": "Dynamic plugin installs are turned off on this installation.",
+                        "notInstallable": "This request cannot be installed on this installation.",
+                        "notOpen": "This request was already answered or withdrawn. Reload the page.",
+                        "integrationNotEnabled": "Install requests from apps.ever.co are no longer enabled for this installation.",
+                        "forbidden": "Only a platform admin, signed in, can answer install requests.",
+                        "rateLimited": "Too many answers at once. Try again in a minute.",
+                        "unavailable": "This request is not available.",
+                        "failed": "The answer could not be sent. Try again."
+                    }
+                },
                 "title": "Ever Platform",
                 "statistics": {
                     "title": "Anonymous usage statistics",

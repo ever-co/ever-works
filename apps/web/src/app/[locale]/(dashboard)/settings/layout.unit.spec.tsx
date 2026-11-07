@@ -18,6 +18,7 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 
 const listForSettingsMenu = vi.fn();
 const isStatsAvailable = vi.fn();
+const isInstallRequestsAvailable = vi.fn();
 const isFleetEnabled = vi.fn();
 const isAppLauncherEnabled = vi.fn();
 const getAuthFromRequest = vi.fn();
@@ -30,6 +31,11 @@ vi.mock('@/lib/api/plugins', () => ({
 vi.mock('@/lib/api/instance-stats', () => ({
     instanceStatsAPI: {
         isAvailable: (...args: unknown[]) => isStatsAvailable(...args),
+    },
+}));
+vi.mock('@/lib/api/ever-connect-installs', () => ({
+    everConnectInstallsAPI: {
+        isAvailable: (...args: unknown[]) => isInstallRequestsAvailable(...args),
     },
 }));
 vi.mock('@/lib/fleet-flags', () => ({
@@ -53,6 +59,7 @@ import SettingsLayout from './layout';
 beforeEach(() => {
     listForSettingsMenu.mockReset().mockResolvedValue({ categories: [] });
     isStatsAvailable.mockReset().mockResolvedValue(true);
+    isInstallRequestsAvailable.mockReset().mockResolvedValue(false);
     isFleetEnabled.mockReset().mockReturnValue(true);
     isAppLauncherEnabled.mockReset().mockResolvedValue(true);
     getAuthFromRequest.mockReset().mockResolvedValue({
@@ -135,5 +142,14 @@ describe('SettingsLayout — the Ever Platform tab', () => {
         expect(tree.props.everPlatformEnabled).toBe(false);
         // Control: the other flags still travel.
         expect(tree.props.fleetEnabled).toBe(true);
+    });
+
+    it('passes everPlatformEnabled=true for a platform admin of a connected installation without statistics', async () => {
+        isStatsAvailable.mockResolvedValue(false);
+        isInstallRequestsAvailable.mockResolvedValue(true);
+        const tree = (await SettingsLayout({ children: null })) as React.ReactElement<{
+            everPlatformEnabled?: boolean;
+        }>;
+        expect(tree.props.everPlatformEnabled).toBe(true);
     });
 });
