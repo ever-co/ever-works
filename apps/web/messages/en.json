@@ -13248,6 +13248,7 @@
                 "apiAddress": "API address",
                 "copyApiAddress": "Copy API address",
                 "copied": "Copied",
+                "copyFailed": "Couldn't copy. Select the address to copy it.",
                 "notAvailable": "Not available",
                 "builds": {
                     "development": "Development",

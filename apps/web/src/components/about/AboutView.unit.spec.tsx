@@ -75,7 +75,9 @@ describe('AboutView', () => {
         expect(within(web).getByText('v0.1.0')).toBeInTheDocument();
         expect(within(web).getByText('From develop')).toBeInTheDocument();
         expect(
-            within(web).getByRole('link', { name: 'View commit 7e26619 on GitHub' }),
+            within(web).getByRole('link', {
+                name: 'View commit 7e26619 on GitHub (opens in a new tab)',
+            }),
         ).toHaveAttribute('href', WEB.commitUrl);
         expect(within(screen.getByTestId('about-build-api')).getByText('API')).toBeInTheDocument();
 
@@ -130,6 +132,40 @@ describe('AboutView', () => {
         });
         expect(writeText).toHaveBeenCalledWith('https://api-dev.ever.works/api');
         expect(button).toHaveAccessibleName('Copied');
+        const status = screen.getByTestId('about-copy-status');
+        expect(status).toHaveAttribute('role', 'status');
+        expect(status).toHaveTextContent('Copied');
+    });
+
+    it('says so when the browser refuses the copy', async () => {
+        const writeText = vi.fn().mockRejectedValue(new DOMException('denied', 'NotAllowedError'));
+        Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+        renderView();
+
+        const button = screen.getByTestId('about-copy-api-address');
+        await act(async () => {
+            fireEvent.click(button);
+        });
+        expect(button).toHaveAccessibleName("Couldn't copy. Select the address to copy it.");
+        expect(screen.getByTestId('about-copy-status')).toHaveTextContent("Couldn't copy");
+    });
+
+    it('offers no copy button where the Clipboard API is missing (plain-HTTP self-hosting)', () => {
+        Object.defineProperty(navigator, 'clipboard', { value: undefined, configurable: true });
+        renderView();
+
+        expect(screen.getByTestId('about-api-address')).toHaveTextContent(
+            'https://api-dev.ever.works/api',
+        );
+        expect(screen.queryByTestId('about-copy-api-address')).not.toBeInTheDocument();
+    });
+
+    it('tells screen readers that the licence link opens in a new tab', () => {
+        renderView();
+        const link = screen.getByTestId('about-link-license');
+        // jsdom's name computation trims each child's text; browsers keep the space.
+        expect(link).toHaveTextContent('AGPL-3.0 (opens in a new tab)');
+        expect(link).toHaveAccessibleName(/^AGPL-3\.0\s*\(opens in a new tab\)$/);
     });
 
     it('links to the website, docs, company and every GitHub page in a new tab', () => {

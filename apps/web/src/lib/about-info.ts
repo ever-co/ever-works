@@ -54,13 +54,32 @@ function hostOf(url: string | undefined | null): string | null {
     }
 }
 
+/** A loopback name or address: `localhost`, `*.localhost`, `127.0.0.0/8`, `::1`. */
 function isLocalHost(host: string): boolean {
     return (
         host === 'localhost' ||
-        host === '127.0.0.1' ||
+        host.endsWith('.localhost') ||
+        /^127(\.\d{1,3}){3}$/.test(host) ||
         host === '[::1]' ||
-        host.endsWith('.localhost')
+        host === '::1'
     );
+}
+
+/** A parsed `http:` / `https:` URL, or `null` for anything else. */
+function parseHttpUrl(value: string | undefined | null): URL | null {
+    const text = value?.trim();
+    if (!text) return null;
+    try {
+        const url = new URL(text);
+        return url.protocol === 'http:' || url.protocol === 'https:' ? url : null;
+    } catch {
+        return null;
+    }
+}
+
+/** `origin + path` without credentials, query, fragment or trailing slash. */
+function displayUrl(url: URL): string {
+    return `${url.origin}${url.pathname}`.replace(/\/+$/, '');
 }
 
 /**
@@ -106,24 +125,6 @@ export function resolveDeploymentEnvironment({
     );
 }
 
-function trimApiUrl(url: string): string {
-    return url.trim().replace(/\/+$/, '');
-}
-
-/**
- * A host only the server can reach: a bare Kubernetes service name
- * (`ever-works-api`) or a cluster-internal domain. Showing it to a reader
- * would be useless, and it describes the cluster's layout.
- */
-function isClusterInternalHost(host: string): boolean {
-    return (
-        (!host.includes('.') && !isLocalHost(host)) ||
-        host.endsWith('.svc') ||
-        host.endsWith('.cluster.local') ||
-        host.includes('.svc.')
-    );
-}
-
 export interface ApiAddressInputs {
     /** The browser-facing API URL (`NEXT_PUBLIC_API_URL`). */
     publicApiUrl?: string;
@@ -134,36 +135,82 @@ export interface ApiAddressInputs {
 }
 
 /**
- * The API address to show a reader. The browser-facing URL when one is set;
- * otherwise the server's own URL unless it is cluster-internal; otherwise the
- * `api` sibling of the web host (`app-dev.ever.works` → `api-dev.ever.works`),
- * which is how every Ever Works environment is laid out. `null` when none of
- * these yields a public address.
+ * The first label of an Ever-hosted web app (`app`, `app-dev`, `appstage`, …)
+ * and its API sibling (`api`, `api-dev`, `apistage`, …).
+ */
+const EVER_APP_LABEL = /^app(-[a-z0-9]+|dev|stage)?$/;
+
+/**
+ * The API address to show a reader, or `null` when there is none that is
+ * safe and meaningful to show:
+ *  1. the browser-facing URL (`NEXT_PUBLIC_API_URL`), when set;
+ *  2. on Ever's own hosted app, the `api` sibling of the web host
+ *     (`app-dev.ever.works` → `https://api-dev.ever.works/api`), which is how
+ *     every Ever Works environment is laid out;
+ *  3. the server's own URL only when it is a loopback address (local
+ *     development).
+ * The server's `API_URL` is otherwise never shown: in a cluster it is an
+ * internal address (`http://ever-works-api:3100`, a namespace-qualified
+ * service, a private IP) that describes the cluster's layout and that no
+ * reader can use. Whatever is shown carries no credentials, query or fragment.
  */
 export function resolveDisplayApiAddress({
     publicApiUrl,
     serverApiUrl,
     webUrl,
 }: ApiAddressInputs): string | null {
-    if (publicApiUrl?.trim()) return trimApiUrl(publicApiUrl);
+    const publicUrl = parseHttpUrl(publicApiUrl);
+    if (publicUrl) return displayUrl(publicUrl);
 
-    const serverHost = hostOf(serverApiUrl);
-    if (serverApiUrl && serverHost && !isClusterInternalHost(serverHost)) {
-        return trimApiUrl(serverApiUrl);
+    const web = parseHttpUrl(webUrl);
+    if (web && isEverHostedDeployment(web.href)) {
+        const [first, ...rest] = web.hostname.toLowerCase().split('.');
+        if (first && EVER_APP_LABEL.test(first)) {
+            return `https://${[first.replace(/^app/, 'api'), ...rest].join('.')}/api`;
+        }
     }
 
-    const webHost = hostOf(webUrl);
-    if (webUrl && webHost && /^app/.test(webHost) && !isLocalHost(webHost)) {
-        const url = new URL(webUrl);
-        url.hostname = webHost.replace(/^app/, 'api');
-        return `${url.origin}/api`;
-    }
+    const server = parseHttpUrl(serverApiUrl);
+    if (server && isLocalHost(server.hostname.toLowerCase())) return displayUrl(server);
     return null;
 }
 
 /** The build coordinates both sides report. */
 export interface BuildCoordinates {
     gitSha: string;
+}
+
+/** One build as the About page shows it: the web bundle's, or the API's from `GET /api/version`. */
+export interface AboutBuild {
+    version: string;
+    shortSha: string;
+    gitRef: string;
+    buildTime: string;
+    /** A link to the commit; only ever an `https:` URL. */
+    commitUrl: string | null;
+}
+
+function textField(value: unknown): string {
+    return typeof value === 'string' ? value.trim() : '';
+}
+
+/**
+ * Build info made safe to render. The API's answer is parsed JSON from
+ * another service, so every field is checked: non-strings become empty, and
+ * `commitUrl` survives only as an `https:` URL (it becomes a link). `null`
+ * for anything that is not an object.
+ */
+export function toAboutBuild(value: unknown): AboutBuild | null {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+    const info = value as Record<string, unknown>;
+    const commit = parseHttpUrl(textField(info.commitUrl));
+    return {
+        version: textField(info.version),
+        shortSha: textField(info.shortSha),
+        gitRef: textField(info.gitRef),
+        buildTime: textField(info.buildTime),
+        commitUrl: commit && commit.protocol === 'https:' ? commit.href : null,
+    };
 }
 
 function isRealSha(sha: string | undefined | null): sha is string {
@@ -198,9 +245,16 @@ export interface GitHubLinks {
     license: string;
 }
 
-/** The project's GitHub pages, built from the repository URL. */
+/**
+ * The project's GitHub pages, built from the repository URL. An override
+ * (`NEXT_PUBLIC_GITHUB_REPO_URL`, for forks) is used only when it is an
+ * http(s) URL that does not point at an Ever-owned host; anything else falls
+ * back to the canonical repository.
+ */
 export function buildGitHubLinks(repoUrl: string | undefined | null): GitHubLinks {
-    const repository = (repoUrl?.trim() || DEFAULT_REPO_URL).replace(/\/+$/, '');
+    const override = parseHttpUrl(repoUrl);
+    const repository =
+        override && !isEverOwnedUrl(override.href) ? displayUrl(override) : DEFAULT_REPO_URL;
     return {
         repository,
         releases: `${repository}/releases`,

@@ -11,6 +11,7 @@ import {
     normalizeEnvironmentName,
     resolveDeploymentEnvironment,
     resolveDisplayApiAddress,
+    toAboutBuild,
 } from './about-info';
 
 describe('normalizeEnvironmentName', () => {
@@ -112,16 +113,19 @@ describe('resolveDisplayApiAddress', () => {
         ).toBe('https://api.ever.works/api');
     });
 
-    it('shows a public server URL as is', () => {
-        expect(resolveDisplayApiAddress({ serverApiUrl: 'https://api.example.com/api' })).toBe(
-            'https://api.example.com/api',
-        );
-        expect(resolveDisplayApiAddress({ serverApiUrl: 'http://localhost:3100/api' })).toBe(
-            'http://localhost:3100/api',
-        );
+    it('strips credentials, query and fragment from the browser-facing URL', () => {
+        expect(
+            resolveDisplayApiAddress({
+                publicApiUrl: 'https://user:secret@api.acme.test/api/?x=1#y',
+            }),
+        ).toBe('https://api.acme.test/api');
     });
 
-    it('never shows a cluster-internal address; uses the api sibling of the web host instead', () => {
+    it('ignores a browser-facing URL that is not http(s)', () => {
+        expect(resolveDisplayApiAddress({ publicApiUrl: 'javascript:alert(1)' })).toBeNull();
+    });
+
+    it("uses the api sibling of Ever's hosted web app, never the cluster-internal server URL", () => {
         expect(
             resolveDisplayApiAddress({
                 serverApiUrl: 'http://ever-works-api:3100/api',
@@ -130,21 +134,83 @@ describe('resolveDisplayApiAddress', () => {
         ).toBe('https://api-dev.ever.works/api');
         expect(
             resolveDisplayApiAddress({
-                serverApiUrl:
-                    'http://ever-works-api.ever-works-app-prod.svc.cluster.local:3100/api',
-                webUrl: 'https://app.ever.works',
+                serverApiUrl: 'http://ever-works-api:3100/api',
+                webUrl: 'https://appstage.ever.works',
+            }),
+        ).toBe('https://apistage.ever.works/api');
+        expect(
+            resolveDisplayApiAddress({
+                serverApiUrl: 'http://ever-works-api.ever-works-app-prod:3100/api',
+                webUrl: 'https://app.ever.works:8443',
             }),
         ).toBe('https://api.ever.works/api');
     });
 
-    it('answers null when no public address can be derived', () => {
+    it('derives no sibling for a host that only starts with "app", or outside ever.works', () => {
+        expect(resolveDisplayApiAddress({ webUrl: 'https://application.ever.works' })).toBeNull();
+        expect(resolveDisplayApiAddress({ webUrl: 'https://app.acme.test' })).toBeNull();
+    });
+
+    it.each([
+        'http://ever-works-api:3100/api',
+        'http://ever-works-api.ever-works-app-prod:3100/api',
+        'http://ever-works-api.ever-works-app-prod.svc.cluster.local:3100/api',
+        'http://10.0.0.12:3100/api',
+        'http://192.168.1.183:3100/api',
+        'http://host.docker.internal:3100/api',
+        'http://0.0.0.0:3100/api',
+        'https://api.acme.test/api',
+    ])('never shows the server URL %s', (serverApiUrl) => {
         expect(
-            resolveDisplayApiAddress({
-                serverApiUrl: 'http://ever-works-api:3100/api',
-                webUrl: 'https://works.example.com',
-            }),
+            resolveDisplayApiAddress({ serverApiUrl, webUrl: 'https://works.acme.test' }),
         ).toBeNull();
+    });
+
+    it.each([
+        ['http://localhost:3100/api', 'http://localhost:3100/api'],
+        ['http://127.0.0.2:3100/api/', 'http://127.0.0.2:3100/api'],
+        ['http://[::1]:3100/api', 'http://[::1]:3100/api'],
+    ])('shows a loopback server URL for local development: %s', (serverApiUrl, expected) => {
+        expect(resolveDisplayApiAddress({ serverApiUrl })).toBe(expected);
+    });
+
+    it('answers null when nothing is given', () => {
         expect(resolveDisplayApiAddress({})).toBeNull();
+    });
+});
+
+describe('toAboutBuild', () => {
+    it('keeps the string fields and an https commit link', () => {
+        expect(
+            toAboutBuild({
+                name: 'api',
+                version: '0.1.0',
+                gitSha: 'a00305e99304bf3377adeebf5e38731fb703d247',
+                shortSha: 'a00305e',
+                gitRef: 'develop',
+                buildTime: '2026-11-07T21:00:00Z',
+                commitUrl: 'https://github.com/ever-co/ever-works/commit/a00305e',
+            }),
+        ).toEqual({
+            version: '0.1.0',
+            shortSha: 'a00305e',
+            gitRef: 'develop',
+            buildTime: '2026-11-07T21:00:00Z',
+            commitUrl: 'https://github.com/ever-co/ever-works/commit/a00305e',
+        });
+    });
+
+    it('drops a commit link that is not https, and blanks non-string fields', () => {
+        expect(
+            toAboutBuild({ version: 1, shortSha: null, commitUrl: 'javascript:alert(1)' }),
+        ).toEqual({ version: '', shortSha: '', gitRef: '', buildTime: '', commitUrl: null });
+        expect(toAboutBuild({ commitUrl: 'http://github.com/x' })?.commitUrl).toBeNull();
+    });
+
+    it('answers null for anything that is not an object', () => {
+        expect(toAboutBuild(null)).toBeNull();
+        expect(toAboutBuild('0.1.0')).toBeNull();
+        expect(toAboutBuild([])).toBeNull();
     });
 });
 
@@ -189,6 +255,13 @@ describe('buildGitHubLinks', () => {
             'https://github.com/acme/works/issues',
         );
     });
+
+    it.each(['javascript:alert(1)', 'github.com/acme/works', 'https://ever.co/works', '   '])(
+        'falls back to the canonical repository for the override %s',
+        (override) => {
+            expect(buildGitHubLinks(override).repository).toBe(DEFAULT_REPO_URL);
+        },
+    );
 });
 
 describe('isEverOwnedUrl', () => {

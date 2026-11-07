@@ -1,12 +1,14 @@
 import type { Metadata } from 'next';
 import { getTranslations } from 'next-intl/server';
-import { AboutView, type AboutBuild } from '@/components/about/AboutView';
+import { AboutView } from '@/components/about/AboutView';
 import {
     buildGitHubLinks,
     buildLearnMoreLinks,
     compareBuilds,
     resolveDeploymentEnvironment,
     resolveDisplayApiAddress,
+    toAboutBuild,
+    type AboutBuild,
 } from '@/lib/about-info';
 import { getWebBuildInfo } from '@/lib/build-info';
 import { versionAPI } from '@/lib/api';
@@ -17,15 +19,13 @@ export async function generateMetadata(): Promise<Metadata> {
     return { title: t('about') };
 }
 
-function toBuild(info: AboutBuild): AboutBuild {
-    return {
-        version: info.version,
-        shortSha: info.shortSha,
-        gitRef: info.gitRef,
-        buildTime: info.buildTime,
-        commitUrl: info.commitUrl,
-    };
-}
+const UNKNOWN_BUILD: AboutBuild = {
+    version: '0.0.0',
+    shortSha: 'dev',
+    gitRef: '',
+    buildTime: '',
+    commitUrl: null,
+};
 
 /**
  * About — `/about`, inside the dashboard shell and behind its session check:
@@ -42,8 +42,8 @@ export default async function AboutPage() {
 
     return (
         <AboutView
-            web={toBuild(web)}
-            api={api ? toBuild(api) : null}
+            web={toAboutBuild(web) ?? UNKNOWN_BUILD}
+            api={toAboutBuild(api)}
             sync={compareBuilds(web, api)}
             buildMode={process.env.NODE_ENV === 'production' ? 'production' : 'development'}
             environment={resolveDeploymentEnvironment({

@@ -22,21 +22,16 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils/cn';
 import { LogoEverWorkImage } from '@/components/logos';
+import { useMounted } from '@/lib/hooks/use-mounted';
 import type {
+    AboutBuild,
     BuildSyncState,
     DeploymentEnvironment,
     GitHubLinks,
     LearnMoreLink,
 } from '@/lib/about-info';
 
-/** One build's coordinates, as the web bundle and `GET /api/version` both describe them. */
-export interface AboutBuild {
-    version: string;
-    shortSha: string;
-    gitRef: string;
-    buildTime: string;
-    commitUrl: string | null;
-}
+export type { AboutBuild };
 
 export interface AboutViewProps {
     web: AboutBuild;
@@ -62,6 +57,8 @@ const CARD =
 const SECTION_TITLE =
     'text-xs font-semibold uppercase tracking-wide text-text-muted dark:text-text-muted-dark';
 const DIVIDE = 'divide-y divide-border dark:divide-border-dark';
+const FOCUS_RING =
+    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60 focus-visible:ring-inset';
 
 /**
  * About (`/about`) — the product, the versions of the web app and API that
@@ -96,6 +93,10 @@ export function AboutView(props: AboutViewProps) {
     );
 }
 
+/**
+ * A link that opens in a new tab and says so: appended to `label` when the
+ * link has one, otherwise as visually hidden text after its content.
+ */
 function ExternalAnchor({
     href,
     className,
@@ -109,16 +110,20 @@ function ExternalAnchor({
     label?: string;
     testId?: string;
 }) {
+    const t = useTranslations('dashboard.about');
+    const cue = t('opensInNewTab');
+
     return (
         <a
             href={href}
             target="_blank"
             rel="noopener noreferrer"
-            aria-label={label}
+            aria-label={label ? `${label} ${cue}` : undefined}
             data-testid={testId}
-            className={className}
+            className={cn(FOCUS_RING, className)}
         >
             {children}
+            {label ? null : <span className="sr-only"> {cue}</span>}
         </a>
     );
 }
@@ -257,43 +262,74 @@ function EnvironmentRow({ label, children }: { label: string; children: ReactNod
     );
 }
 
+/**
+ * Copies the API address. Rendered only where the Clipboard API exists — it
+ * does not on a plain-HTTP self-hosted install — and only after mount, so the
+ * server and first client render agree. The outcome — copied, or refused by
+ * the browser (a denied clipboard permission) — is announced through a
+ * polite live region, not only by the button's changed name.
+ */
 function CopyButton({ value }: { value: string }) {
     const t = useTranslations('dashboard.about.environment');
-    const [copied, setCopied] = useState(false);
+    const mounted = useMounted();
+    const [outcome, setOutcome] = useState<'idle' | 'copied' | 'failed'>('idle');
     const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const alive = useRef(true);
 
-    useEffect(
-        () => () => {
+    useEffect(() => {
+        alive.current = true;
+        return () => {
+            alive.current = false;
             if (timer.current) clearTimeout(timer.current);
-        },
-        [],
-    );
+        };
+    }, []);
+
+    if (!mounted || typeof navigator.clipboard?.writeText !== 'function') return null;
 
     const copy = async () => {
+        let next: 'copied' | 'failed' = 'copied';
         try {
             await navigator.clipboard.writeText(value);
         } catch {
-            return;
+            next = 'failed';
         }
-        setCopied(true);
+        // The write can settle after the page moved on.
+        if (!alive.current) return;
+        setOutcome(next);
         if (timer.current) clearTimeout(timer.current);
-        timer.current = setTimeout(() => setCopied(false), COPIED_CONFIRMATION_MS);
+        timer.current = setTimeout(() => setOutcome('idle'), COPIED_CONFIRMATION_MS);
     };
 
+    const copied = outcome === 'copied';
+    const message = copied ? t('copied') : outcome === 'failed' ? t('copyFailed') : '';
+
     return (
-        <button
-            type="button"
-            onClick={copy}
-            aria-label={copied ? t('copied') : t('copyApiAddress')}
-            data-testid="about-copy-api-address"
-            className="rounded-md p-1.5 text-text-secondary transition-colors hover:bg-surface-secondary hover:text-text dark:text-text-secondary-dark dark:hover:bg-surface-secondary-dark dark:hover:text-text-dark"
-        >
-            {copied ? (
-                <Check className="h-3.5 w-3.5 text-green-600" aria-hidden="true" />
-            ) : (
-                <Copy className="h-3.5 w-3.5" aria-hidden="true" />
-            )}
-        </button>
+        <>
+            <button
+                type="button"
+                onClick={copy}
+                aria-label={message || t('copyApiAddress')}
+                data-testid="about-copy-api-address"
+                className={cn(
+                    FOCUS_RING,
+                    'rounded-md p-1.5 text-text-secondary transition-colors hover:bg-surface-secondary hover:text-text dark:text-text-secondary-dark dark:hover:bg-surface-secondary-dark dark:hover:text-text-dark',
+                )}
+            >
+                {copied ? (
+                    <Check className="h-3.5 w-3.5 text-green-600" aria-hidden="true" />
+                ) : (
+                    <Copy className="h-3.5 w-3.5" aria-hidden="true" />
+                )}
+            </button>
+            <span
+                role="status"
+                aria-live="polite"
+                className="sr-only"
+                data-testid="about-copy-status"
+            >
+                {message}
+            </span>
+        </>
     );
 }
 
@@ -370,15 +406,13 @@ interface LinkItem {
 }
 
 function LinkList({ items }: { items: LinkItem[] }) {
-    const t = useTranslations('dashboard.about');
-
     return (
         <ul className={DIVIDE}>
             {items.map(({ href, label, icon: Icon, testId }) => (
                 <li key={testId}>
                     <ExternalAnchor
                         href={href}
-                        label={`${label} ${t('opensInNewTab')}`}
+                        label={label}
                         testId={testId}
                         className="group flex items-center gap-3 px-5 py-3 text-sm font-medium text-text transition-colors hover:bg-surface-secondary dark:text-text-dark dark:hover:bg-surface-secondary-dark"
                     >
@@ -387,7 +421,7 @@ function LinkList({ items }: { items: LinkItem[] }) {
                         </span>
                         <span className="min-w-0 flex-1 truncate">{label}</span>
                         <ExternalLink
-                            className="h-3.5 w-3.5 shrink-0 text-text-muted opacity-0 transition-opacity group-hover:opacity-100 dark:text-text-muted-dark"
+                            className="h-3.5 w-3.5 shrink-0 text-text-muted opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100 dark:text-text-muted-dark"
                             aria-hidden="true"
                         />
                     </ExternalAnchor>
