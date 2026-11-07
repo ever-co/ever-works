@@ -21,16 +21,16 @@ export const INSTALL_REQUESTS_DOCS_URL = 'https://docs.ever.works/ever-platform/
 /** The plugin system's page (dynamic plugin installs). */
 export const PLUGIN_DOCS_URL = 'https://docs.ever.works/plugin-system';
 
-/** Translation keys of the request states (leaf names are camelCase, never dotted). */
-const STATE_KEY: Record<EverInstallRequestState, string> = {
-    requested: 'requested',
-    installing: 'installing',
-    installed: 'installed',
-    failed: 'failed',
-    declined: 'declined',
-    withdrawn: 'withdrawn',
-    removed: 'removed',
-};
+/** The translation key of each request state (leaf names are camelCase, never dotted). */
+const STATE_KEY = {
+    requested: 'states.requested',
+    installing: 'states.installing',
+    installed: 'states.installed',
+    failed: 'states.failed',
+    declined: 'states.declined',
+    withdrawn: 'states.withdrawn',
+    removed: 'states.removed',
+} as const satisfies Record<EverInstallRequestState, string>;
 
 const STATE_TONE: Record<EverInstallRequestState, string> = {
     requested: 'bg-amber-100 text-amber-900 dark:bg-amber-900/40 dark:text-amber-100',
@@ -42,28 +42,34 @@ const STATE_TONE: Record<EverInstallRequestState, string> = {
     removed: 'bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300',
 };
 
-/** The detail tokens, as translation keys. */
-const DETAIL_KEY: Record<string, string> = {
-    checksum_mismatch: 'checksumMismatch',
-    incompatible_version: 'incompatibleVersion',
-    installer_disabled: 'installerDisabled',
-    permission_denied: 'permissionDenied',
-    unknown: 'unknown',
-};
+/** The translation key of each detail token. */
+const DETAIL_KEY = {
+    checksum_mismatch: 'details.checksumMismatch',
+    incompatible_version: 'details.incompatibleVersion',
+    installer_disabled: 'details.installerDisabled',
+    permission_denied: 'details.permissionDenied',
+    unknown: 'details.unknown',
+} as const;
 
-/** The action codes, as translation keys. */
-const ERROR_KEY: Record<InstallRequestActionCode, string> = {
-    package_not_allowlisted: 'packageNotAllowlisted',
-    package_allowlist_disabled: 'packageAllowlistDisabled',
-    installer_disabled: 'installerDisabled',
-    not_installable: 'notInstallable',
-    not_open: 'notOpen',
-    integration_not_enabled: 'integrationNotEnabled',
-    forbidden: 'forbidden',
-    rate_limited: 'rateLimited',
-    unavailable: 'unavailable',
-    failed: 'failed',
-};
+function detailKey(detail: string | null) {
+    return detail && Object.prototype.hasOwnProperty.call(DETAIL_KEY, detail)
+        ? DETAIL_KEY[detail as keyof typeof DETAIL_KEY]
+        : null;
+}
+
+/** The translation key of each action code. */
+const ERROR_KEY = {
+    package_not_allowlisted: 'errors.packageNotAllowlisted',
+    package_allowlist_disabled: 'errors.packageAllowlistDisabled',
+    installer_disabled: 'errors.installerDisabled',
+    not_installable: 'errors.notInstallable',
+    not_open: 'errors.notOpen',
+    integration_not_enabled: 'errors.integrationNotEnabled',
+    forbidden: 'errors.forbidden',
+    rate_limited: 'errors.rateLimited',
+    unavailable: 'errors.unavailable',
+    failed: 'errors.failed',
+} as const satisfies Record<InstallRequestActionCode, string>;
 
 interface InstallRequestsPanelProps {
     /** `unavailable`: the requests could not be read. */
@@ -195,6 +201,7 @@ function RequestRow({
     const [pending, startTransition] = useTransition();
 
     const open = request.state === 'requested';
+    const detail = detailKey(request.detail);
     const needsAllowlist = open && request.allowlist === 'absent';
     const packageLabel = request.packageName
         ? `${request.packageName}${request.version ? `@${request.version}` : ''}`
@@ -246,7 +253,7 @@ function RequestRow({
                     className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${STATE_TONE[request.state]}`}
                     data-testid="install-request-state"
                 >
-                    {t(`states.${STATE_KEY[request.state]}`)}
+                    {t(STATE_KEY[request.state])}
                 </span>
             </div>
 
@@ -299,9 +306,9 @@ function RequestRow({
                     })}
                 </p>
             )}
-            {request.detail && DETAIL_KEY[request.detail] && (
+            {detail && (
                 <p className="text-sm" data-testid="install-request-detail">
-                    {t(`details.${DETAIL_KEY[request.detail]}`)}
+                    {t(detail)}
                 </p>
             )}
             {request.removalRequestedAt && request.state === 'installed' && (
@@ -369,7 +376,7 @@ function RequestRow({
                     className="text-sm text-red-700 dark:text-red-300"
                     data-testid="install-request-error"
                 >
-                    {t(`errors.${ERROR_KEY[error]}`)}
+                    {t(ERROR_KEY[error])}
                 </p>
             )}
         </li>
