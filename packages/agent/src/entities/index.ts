@@ -301,4 +301,5 @@ export * from './ever-connect-lease.entity';
 export * from './ever-connect-provision-intent.entity';
 export * from './ever-connect-provision-record.entity';
 export * from './ever-connect-link.entity';
+export * from './ever-connect-install-request.entity';
 export * from './organization-company-import.entity';
