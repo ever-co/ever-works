@@ -12,6 +12,9 @@ const sidebars: SidebarsConfig = {
 		// sends, how to switch it off and how to verify it. Next to the
 		// environment reference because both are about running an installation.
 		'ever-platform/anonymous-statistics',
+		// Install requests from apps.ever.co — a plugin an organization owner picked,
+		// installed only once a platform admin approves it in Ever Works.
+		'ever-platform/install-requests',
 		'monorepo-structure',
 		{
 			type: 'category',
