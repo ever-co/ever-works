@@ -58,6 +58,7 @@ import type {
 } from '@ever-works/plugin';
 import type { BatchDeployItemDto, BatchDeployItemResultDto } from './dto/batch-deploy.dto';
 import {
+    SITE_GIT_TOKEN_PLACEHOLDER,
     SITE_GIT_TOKEN_SECRET_ENV,
     SITE_GIT_TOKEN_URL_ENV,
     SiteGitTokenService,
@@ -418,7 +419,7 @@ export class DeployService {
             ctx,
             options.teamScope,
             brokeredSiteGit
-                ? (brokeredSiteGit.bootstrap?.token ?? '')
+                ? DeployService.brokeredGhToken(brokeredSiteGit)
                 : this.resolveSiteGitToken(work, gitToken),
         );
         if (brokeredSiteGit) {
@@ -1488,7 +1489,7 @@ export class DeployService {
         if (brokeredSiteGit) {
             env[SITE_GIT_TOKEN_URL_ENV] = brokeredSiteGit.url;
             env[SITE_GIT_TOKEN_SECRET_ENV] = brokeredSiteGit.secret;
-            if (brokeredSiteGit.bootstrap) env.GH_TOKEN = brokeredSiteGit.bootstrap.token;
+            env.GH_TOKEN = DeployService.brokeredGhToken(brokeredSiteGit);
         } else {
             const siteGitToken = this.resolveSiteGitToken(work, gitToken);
             if (siteGitToken) env.GH_TOKEN = siteGitToken;
@@ -1702,6 +1703,18 @@ export class DeployService {
     }
 
     /**
+     * `GH_TOKEN` when the broker applies: the deploy-time one-repo token, or
+     * {@link SITE_GIT_TOKEN_PLACEHOLDER} when that mint failed. ALWAYS a value,
+     * never omitted: an omitted key leaves whatever an earlier deploy wrote
+     * (the org-wide token, or the user's OAuth token) in the website repo
+     * secret and in the runtime-env Secret (server-side apply only prunes keys
+     * its own field manager wrote), and the site would fall back to it.
+     */
+    private static brokeredGhToken(brokered: BrokeredSiteGitEnv): string {
+        return brokered.bootstrap?.token || SITE_GIT_TOKEN_PLACEHOLDER;
+    }
+
+    /**
      * Workflow path: the website repo's builds and `deploy_k8s.yaml` (which
      * forwards repo secrets into the runtime-env Secret) and
      * `deploy_vercel.yaml` read the broker URL + site secret from here.
@@ -1717,11 +1730,15 @@ export class DeployService {
                 this.setSecret(ctx, SITE_GIT_TOKEN_SECRET_ENV, brokered.secret),
             ]);
         } catch (error: unknown) {
-            this.logger.warn(
+            // Fails the deploy: without these the site has a one-hour token and
+            // no way to refresh it, which is a site that stops syncing an hour
+            // from now with nothing in the deploy record saying why.
+            this.logger.error(
                 `Work ${work.id}: failed to push site git token broker secrets to ${ctx.owner}/${ctx.repo}: ${
                     error instanceof Error ? error.message : String(error)
                 }`,
             );
+            throw error;
         }
     }
 

@@ -33,9 +33,21 @@ const ENV_KEYS = [
     'PLATFORM_API_URL',
 ];
 
-const makeWork = (overrides: { id?: string; owner?: string; dataRepo?: string } = {}) =>
+const makeWork = (
+    overrides: {
+        id?: string;
+        owner?: string;
+        dataRepo?: string;
+        storageProvider?: string;
+        isPlatformAdmin?: boolean;
+    } = {},
+) =>
     ({
         id: overrides.id ?? 'work-1',
+        // Platform-provisioned by default: a platform admin's Work, and
+        // `ever-works-git` storage for the customers org.
+        storageProvider: overrides.storageProvider ?? 'ever-works-git',
+        user: { isPlatformAdmin: overrides.isPlatformAdmin ?? true },
         getRepoOwner: () => overrides.owner ?? 'ever-works',
         getDataRepo: () => overrides.dataRepo ?? 'acme-data',
     }) as any;
@@ -193,6 +205,40 @@ describe('SiteGitTokenService', () => {
             expect(installations.findActiveByAccountLogin).not.toHaveBeenCalled();
         });
 
+        it('refuses an ever-works data repo on a Work a platform admin did not create', async () => {
+            enable();
+            const { service, installations } = build();
+            await expect(
+                service.resolveTarget(makeWork({ isPlatformAdmin: false })),
+            ).rejects.toMatchObject({ reason: 'not-provisioned' });
+            expect(installations.findActiveByAccountLogin).not.toHaveBeenCalled();
+        });
+
+        it('serves the customers org only for platform-provisioned (ever-works-git) storage', async () => {
+            enable();
+            const { service } = build();
+            // A member's Work pointed at a customer repo (e.g. a link_existing
+            // import of a URL they can read) is not that repo's site.
+            await expect(
+                service.resolveTarget(
+                    makeWork({
+                        owner: 'ever-works-cloud',
+                        storageProvider: 'user-github',
+                        isPlatformAdmin: true,
+                    }),
+                ),
+            ).rejects.toMatchObject({ reason: 'not-provisioned' });
+            await expect(
+                service.resolveTarget(
+                    makeWork({
+                        owner: 'ever-works-cloud',
+                        storageProvider: 'ever-works-git',
+                        isPlatformAdmin: false,
+                    }),
+                ),
+            ).resolves.toMatchObject({ owner: 'ever-works-cloud', repo: 'acme-data' });
+        });
+
         it.each([
             ['https://github.com/ever-works/acme-data', 'acme-data'],
             ['https://github.com/ever-works/acme-data.git', 'acme-data'],
@@ -325,10 +371,13 @@ describe('SiteGitTokenService', () => {
             await expect(service.siteEnvFor(makeWork())).resolves.toBeNull();
         });
 
-        it('is null for an unmanaged owner or a missing installation', async () => {
+        it('is null for an unmanaged owner, an unprovisioned Work or a missing installation', async () => {
             enable();
             const { service } = build();
             await expect(service.siteEnvFor(makeWork({ owner: 'acme' }))).resolves.toBeNull();
+            await expect(
+                service.siteEnvFor(makeWork({ isPlatformAdmin: false })),
+            ).resolves.toBeNull();
 
             const noInstall = build({ installation: null });
             fetchSpy = jest

@@ -509,14 +509,37 @@ describe('DeployService — server-side deploy for managed cluster tiers', () =>
                 expect([...pushed.values()]).not.toContain('org-wide-site-token');
             });
 
-            it('sets no GH_TOKEN at all when the bootstrap mint failed (never a broad fallback)', async () => {
+            it('overwrites GH_TOKEN with an inert placeholder when the bootstrap mint failed', async () => {
+                // Never omitted: an omitted key would leave an earlier deploy's
+                // broad token in the repo secret and the runtime-env Secret.
                 process.env.EVER_WORKS_SITES_GIT_TOKEN = 'org-wide-site-token';
 
                 const { runtimeEnv, pushed } = await deployEverWorksSite(brokered(null));
 
-                expect(runtimeEnv.GH_TOKEN).toBeUndefined();
+                expect(runtimeEnv.GH_TOKEN).toBe('ever-works-site-git-token-broker');
                 expect(runtimeEnv.EVER_WORKS_SITE_GIT_TOKEN_URL).toBe(BROKER_URL);
-                expect(pushed.has('GH_TOKEN')).toBe(false);
+                expect(pushed.get('GH_TOKEN')).toBe('ever-works-site-git-token-broker');
+                expect([...pushed.values()]).not.toContain('org-wide-site-token');
+            });
+
+            it('fails the deploy when the broker secrets cannot be pushed', async () => {
+                const plugin = managedPlugin();
+                const built = buildService({
+                    plugin,
+                    settings: { clusterSource: 'k8s-works', namespace: 'ever-works' },
+                    settingSources: { clusterSource: 'work', namespace: 'default' },
+                    websiteOwner: 'ever-works',
+                    isPlatformAdmin: true,
+                    siteGitTokenService: brokered({ token: 'ghs_one_repo' }),
+                });
+                built.githubPlugin.setActionSecret.mockImplementation(
+                    async (data: { key: string }) => {
+                        if (data.key === 'EVER_WORKS_SITE_GIT_TOKEN_SECRET') throw new Error('422');
+                    },
+                );
+
+                await expect(built.service.deploy('work-1', 'user-1')).rejects.toThrow('422');
+                expect(plugin.deploy).not.toHaveBeenCalled();
             });
 
             it('keeps the env-token path when the broker does not apply', async () => {

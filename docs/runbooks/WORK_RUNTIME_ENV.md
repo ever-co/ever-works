@@ -78,13 +78,22 @@ gives each site a credential for its own data repo only.
   Work is covered on its first deploy** with no token edit anywhere. A leaked
   site secret can only mint tokens for that one Work's data repo.
 - The repository comes from the Work row (`getRepoOwner('data')` +
-  `getDataRepo()`), never from the request.
+  `getDataRepo()`), never from the request. Because the row is the authority,
+  it must also show the platform put that repo there for this Work: in the
+  customers org (`EVER_WORKS_CUSTOMERS_GITHUB_ORG`, default `ever-works-cloud`)
+  only Works with `storageProvider = 'ever-works-git'`; in any other managed org
+  (`ever-works`) only Works created by a platform admin. Anything else
+  (`not-provisioned`, e.g. a member's `link_existing` import of a URL in a
+  managed org) keeps steps 1 and 2.
 - On deploy the site gets `EVER_WORKS_SITE_GIT_TOKEN_URL`,
   `EVER_WORKS_SITE_GIT_TOKEN_SECRET`, and `GH_TOKEN` = a first token minted at
   deploy (one repo, about one hour) so a build or a site that cannot yet
   refresh works at once. The website repo's Actions secrets get the same three
-  values. If that first mint fails, `GH_TOKEN` is left unset rather than
-  falling back to a broad token; the site fetches one at runtime.
+  values. If that first mint fails, `GH_TOKEN` is overwritten with the inert
+  placeholder `ever-works-site-git-token-broker` (never omitted, so no broad
+  token from an earlier deploy lingers in the repo secret or the runtime-env
+  Secret); the site fetches a real one at runtime. A failure to push the two
+  broker secrets fails the deploy.
 - The site template (`ever-works/directory-web-template`) reads the token
   through its site-git-token resolver: the broker when both broker vars are
   set (cached until 5 minutes before expiry, refreshed and retried once on a

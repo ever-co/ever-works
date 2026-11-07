@@ -14,6 +14,14 @@ export const SITE_GIT_TOKEN_URL_ENV = 'EVER_WORKS_SITE_GIT_TOKEN_URL';
 /** Runtime env key: the site's own broker credential (bearer). */
 export const SITE_GIT_TOKEN_SECRET_ENV = 'EVER_WORKS_SITE_GIT_TOKEN_SECRET';
 
+/**
+ * What `GH_TOKEN` is overwritten with when the broker applies but the deploy-time
+ * mint failed: not a credential (GitHub answers 401), and it replaces whatever
+ * broad token an earlier deploy left in the website repo secret or the
+ * runtime-env Secret, so that value cannot linger as the site's fallback.
+ */
+export const SITE_GIT_TOKEN_PLACEHOLDER = 'ever-works-site-git-token-broker';
+
 /** Prefix of a site broker secret, so a leaked one is recognisable in a scan. */
 const SITE_SECRET_PREFIX = 'ewsgt_';
 /** Domain separation for the HMAC: a derived value means nothing elsewhere. */
@@ -37,6 +45,7 @@ export type SiteGitTokenRefusal =
     | 'disabled'
     | 'not-configured'
     | 'unmanaged-owner'
+    | 'not-provisioned'
     | 'invalid-repository'
     | 'no-installation'
     | 'mint-failed';
@@ -206,6 +215,9 @@ export class SiteGitTokenService {
         if (!owner || !SiteGitTokenService.managedOrgs().includes(owner)) {
             throw new SiteGitTokenError('unmanaged-owner');
         }
+        if (!SiteGitTokenService.platformProvisioned(work, owner)) {
+            throw new SiteGitTokenError('not-provisioned');
+        }
         const repo = SiteGitTokenService.bareRepositoryName(work.getDataRepo(), owner);
         if (!repo) throw new SiteGitTokenError('invalid-repository');
         const installationId = await this.installationIdFor(owner);
@@ -258,7 +270,7 @@ export class SiteGitTokenService {
             await this.resolveTarget(work);
         } catch (error) {
             const reason = error instanceof SiteGitTokenError ? error.reason : 'mint-failed';
-            if (reason !== 'unmanaged-owner') {
+            if (reason !== 'unmanaged-owner' && reason !== 'not-provisioned') {
                 this.logger.error(
                     `Work ${work.id}: site git token broker cannot serve its data repo (${reason}); ` +
                         `keeping the env-token path`,
@@ -304,6 +316,28 @@ export class SiteGitTokenService {
             `Work ${workId}: site git token issued for ${minted.repository} (expires ${minted.expiresAt})`,
         );
         return minted;
+    }
+
+    /**
+     * The Work row is the authority for WHICH repo a site may write, so for a
+     * managed org it must also show the platform put that repo there for this
+     * Work. Otherwise a member could point a Work at another tenant's repo
+     * (a `link_existing` import takes the owner from any URL the member can
+     * read) and have the broker mint `contents: write` for it.
+     *
+     * - The customers org (`EVER_WORKS_CUSTOMERS_GITHUB_ORG`, default
+     *   `ever-works-cloud`): only Works whose storage is `ever-works-git`, i.e.
+     *   whose repos the platform created in that org.
+     * - Any other managed org (`ever-works`): only Works created by a platform
+     *   admin, the same rule that already gates deploys to the platform's own
+     *   cluster and org.
+     */
+    static platformProvisioned(work: Work, owner: string): boolean {
+        const customersOrg = (process.env.EVER_WORKS_CUSTOMERS_GITHUB_ORG || 'ever-works-cloud')
+            .trim()
+            .toLowerCase();
+        if (owner === customersOrg) return work.storageProvider === 'ever-works-git';
+        return work.user?.isPlatformAdmin === true;
     }
 
     /**
