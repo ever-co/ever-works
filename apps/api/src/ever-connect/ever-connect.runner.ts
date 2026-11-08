@@ -4,6 +4,7 @@ import {
     Logger,
     OnApplicationBootstrap,
     OnModuleDestroy,
+    Optional,
 } from '@nestjs/common';
 import { EVER_CONNECT_CONFIG, type EverConnectConfig } from './ever-connect.config';
 import { EverConnectFeedService } from './ever-connect-feed.service';
@@ -12,6 +13,7 @@ import { EverConnectLeaseService } from './ever-connect-lease.service';
 import { EverConnectOutboxWorker } from './ever-connect-outbox.service';
 import { EverConnectService } from './ever-connect.service';
 import { EverIdLoginHandler } from './identity/ever-id-login.handler';
+import { InstallRequestsIntegration } from './installs/install-requests.integration';
 
 /** The long-poll wait of one feed read (`longpoll` mode). */
 export const FEED_LONGPOLL_WAIT_S = 25;
@@ -31,7 +33,8 @@ export const FEED_PAGES_PER_ROUND = 10;
  * 2. When connected, the integration states are read and, with
  *    `ever_id_login` on, the Ever ID sign-in client is made sure of.
  * 3. On the replica holding the Ever Connect lease: the feed is read
- *    (long-poll, or every 15 minutes) and the outbox sent, every round.
+ *    (long-poll, or every 15 minutes) and the outbox sent, every round, with
+ *    the install status reports owed to Ever Platform.
  *
  * Nothing runs while the installation is not connected beyond reading the
  * local connection row.
@@ -51,6 +54,7 @@ export class EverConnectRunner implements OnApplicationBootstrap, OnModuleDestro
         private readonly lease: EverConnectLeaseService,
         private readonly feed: EverConnectFeedService,
         private readonly outbox: EverConnectOutboxWorker,
+        @Optional() private readonly installs?: InstallRequestsIntegration,
     ) {}
 
     onApplicationBootstrap(): void {
@@ -112,6 +116,15 @@ export class EverConnectRunner implements OnApplicationBootstrap, OnModuleDestro
             }
         }
         await this.outbox.drainOnce();
+        if (this.installs) {
+            // Install status reports owed to Ever Platform, and `removed` for a
+            // plugin installed from a request and uninstalled here since.
+            await this.installs
+                .round(new Date(now))
+                .catch((error) =>
+                    this.logger.warn(`Install status reports not sent: ${errorName(error)}`),
+                );
+        }
         return true;
     }
 

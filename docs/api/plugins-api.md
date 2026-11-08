@@ -9,6 +9,8 @@ sidebar_position: 10
 
 The plugins API exposes REST endpoints for managing plugins at two levels: **user-level** (global installation and settings) and **work-level** (per-work enablement and capability assignment). The controller is at `apps/api/src/plugins/plugins.controller.ts`, backed by `PluginOperationsService` from the agent package.
 
+With `PLUGIN_DISTRIBUTION_MODE=dynamic`, `POST /api/plugins/:pluginId/install` installs a distributable plugin (allow-list first, then the registry integrity). A connected installation can also receive install requests from apps.ever.co; a platform admin's approval runs this same installer path: see [Install requests from apps.ever.co](../ever-platform/install-requests.md).
+
 ## Architecture
 
 ```

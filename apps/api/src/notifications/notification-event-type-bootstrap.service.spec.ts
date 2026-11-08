@@ -18,7 +18,7 @@ describe('NotificationEventTypeBootstrap', () => {
         return service;
     }
 
-    it('upserts all 27 core events as core rows, idempotently', async () => {
+    it('upserts all 28 core events as core rows, idempotently', async () => {
         const rows = new Map<string, Record<string, unknown>>();
         const eventTypes = {
             upsert: jest.fn(async (row: Record<string, unknown>) => {
@@ -30,8 +30,9 @@ describe('NotificationEventTypeBootstrap', () => {
         await service.onApplicationBootstrap();
         await service.onApplicationBootstrap();
 
-        // 24 → 27 in 5f9c3a5d5 (FL-05 P2): the three session events, asserted by name below.
-        expect(rows.size).toBe(27);
+        // 24 → 27 in 5f9c3a5d5 (FL-05 P2): the three session events, asserted by name below;
+        // 28 with Ever Connect's `ever_platform_install_request`.
+        expect(rows.size).toBe(28);
         expect(rows.get('digest_ready')).toMatchObject({
             source: 'core',
             pluginId: null,
@@ -75,8 +76,8 @@ describe('NotificationEventTypeBootstrap', () => {
         };
         const service = quiet(new NotificationEventTypeBootstrap(undefined, eventTypes as never));
         await service.onApplicationBootstrap();
-        // 27 core events (5f9c3a5d5 added FL-05's three): one refused, every one still attempted.
-        expect(eventTypes.upsert).toHaveBeenCalledTimes(27);
+        // 28 core events (5f9c3a5d5 added FL-05's three, Ever Connect one): one refused, every one still attempted.
+        expect(eventTypes.upsert).toHaveBeenCalledTimes(28);
     });
 
     it('namespaces plugin-contributed events and leaves their defaults to the manifest', async () => {

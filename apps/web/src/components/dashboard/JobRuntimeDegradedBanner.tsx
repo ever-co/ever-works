@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { HelpLink } from '@/components/help/HelpLink';
 import { useTranslations } from 'next-intl';
 import { AlertTriangle, X } from 'lucide-react';
+import { EVER_WORKS_DOCS_URL, isEverHostedDeployment } from '@/lib/about-info';
 
 const DISMISS_KEY = 'ew-job-runtime-banner-dismissed';
 
@@ -19,12 +20,22 @@ const DISMISS_KEY = 'ew-job-runtime-banner-dismissed';
  * Same hydration-gating pattern as the header onboarding badge: render
  * nothing until localStorage has been consulted so previously-dismissed
  * users never see a one-frame flash.
+ *
+ * The external docs.ever.works link renders only on Ever's own hosted app
+ * (`*.ever.works`). A self-hosted install keeps the in-app help link, which
+ * opens the same job-runtime article, and renders no link to an Ever host:
+ * the egress audit's browser leg fails on a new one, and its DOM baseline
+ * may only shrink (`tools/egress-audit/README.md`, "The DOM baseline").
+ * The host is read after mount, like the dismissal, so the server and the
+ * first client render agree.
  */
 export function JobRuntimeDegradedBanner({ configured }: { configured: boolean | null }) {
     const t = useTranslations('dashboard.jobRuntimeBanner');
     const [dismissed, setDismissed] = useState(true);
+    const [everHosted, setEverHosted] = useState(false);
 
     useEffect(() => {
+        setEverHosted(isEverHostedDeployment(window.location.origin));
         try {
             setDismissed(window.localStorage.getItem(DISMISS_KEY) === '1');
         } catch {
@@ -57,14 +68,19 @@ export function JobRuntimeDegradedBanner({ configured }: { configured: boolean |
             <div className="min-w-0 flex-1">
                 <span className="font-medium">{t('title')}</span>{' '}
                 <span className="text-amber-800/90 dark:text-amber-200/80">{t('message')}</span>{' '}
-                <a
-                    href="https://docs.ever.works/"
-                    target="_blank"
-                    rel="noreferrer"
-                    className="underline underline-offset-2 hover:no-underline"
-                >
-                    {t('docsLink')}
-                </a>{' '}
+                {everHosted && (
+                    <>
+                        <a
+                            href={`${EVER_WORKS_DOCS_URL}/`}
+                            target="_blank"
+                            rel="noreferrer"
+                            data-testid="job-runtime-banner-docs-link"
+                            className="underline underline-offset-2 hover:no-underline"
+                        >
+                            {t('docsLink')}
+                        </a>{' '}
+                    </>
+                )}
                 <HelpLink
                     target="job-runtimes#settings--job-runtime"
                     variant="error"
