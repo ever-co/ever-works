@@ -18,6 +18,11 @@
 			"source": "router"
 		},
 		{
+			"path": "/:locale/about",
+			"file": "apps/web/src/app/[locale]/(dashboard)/about/page.tsx",
+			"source": "router"
+		},
+		{
 			"path": "/:locale/activity",
 			"file": "apps/web/src/app/[locale]/(dashboard)/activity/page.tsx",
 			"source": "router"

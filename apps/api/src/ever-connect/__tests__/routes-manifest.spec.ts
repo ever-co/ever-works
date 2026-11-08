@@ -8,6 +8,7 @@ import { IsPlatformAdminGuard } from '../../auth/guards/platform-admin.guard';
 import { EverConnectAdminController } from '../ever-connect-admin.controller';
 import { EverConnectModule } from '../ever-connect.module';
 import { EverConnectWellKnownController } from '../well-known.controller';
+import { InstallRequestsController } from '../installs/install-requests.controller';
 
 /**
  * The module's route manifest (`ever-connect.routes.json`) is the controllers'
@@ -84,7 +85,11 @@ describe('Ever Connect — route manifest', () => {
     const controllers: Type[] = Reflect.getMetadata('controllers', EverConnectModule) ?? [];
 
     it('is generated from every controller of the module', () => {
-        expect(controllers).toEqual([EverConnectAdminController, EverConnectWellKnownController]);
+        expect(controllers).toEqual([
+            EverConnectAdminController,
+            EverConnectWellKnownController,
+            InstallRequestsController,
+        ]);
         const generated = generate(controllers);
         if (process.env.UPDATE_ROUTES_MANIFEST === '1') {
             writeFileSync(

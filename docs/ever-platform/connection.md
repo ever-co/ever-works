@@ -3,7 +3,10 @@
 A self-hosted Ever Works installation can be connected to Ever Platform
 (app.ever.co). An organization on Ever Platform can then turn on integrations
 for it: today, **Sign in with Ever ID** through the installation's own sign-in
-client, and the answers to **people's export and deletion requests**.
+client, the answers to **people's export and deletion requests**, and
+**install requests from apps.ever.co** (a plugin an organization owner picked,
+installed only once a platform admin approves it: see
+[Install requests from apps.ever.co](./install-requests.md)).
 
 The connection is off by default and nothing is sent until you connect.
 
@@ -28,6 +31,9 @@ also need an interactive session, not an API key):
 | `POST /api/ever-connect/disconnect`                            | Disconnect (Ever Platform is told; the connection ends here in any case).  |
 | `POST /api/ever-connect/integrations/refresh`                  | Read the integration states from Ever Platform again.                      |
 | `POST /api/ever-connect/integrations/:key/accept` `{accepted}` | Accept or decline an installation-wide integration enabled in app.ever.co. |
+
+The install-request routes (`/api/ever-connect/install-requests`) are described in
+[Install requests from apps.ever.co](./install-requests.md).
 
 ## What connecting does
 
@@ -109,6 +115,7 @@ Every request goes to `EVER_PLATFORM_API_URL`, with the installation's token:
 | Linked accounts                  | `POST /v1/instances/me/person-links`, `DELETE /v1/instances/me/person-links/{ref}`     |
 | Answers to requests              | `POST /v1/instances/me/ack`                                                            |
 | Disconnect                       | `POST /v1/instances/me/disconnect`                                                     |
+| Install requests (when enabled)  | `POST /v1/installs/{install}/status`, after a platform admin answered a request        |
 
 ## Creating a company from Ever Platform
 

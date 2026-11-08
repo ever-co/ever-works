@@ -29,6 +29,7 @@ import {
 } from './ever-connect.config';
 import { EverConnectConnectionChangedEvent } from './ever-connect.events';
 import { EverConnectKeyService } from './ever-connect-key.service';
+import { installReportLinkFetch } from './ever-connect-link-header';
 import type { EverConnectPlatform } from './identity/ever-connect-identity.ports';
 import { describeFailure, platformFailure } from './identity/platform-answer';
 
@@ -278,6 +279,9 @@ export class EverConnectService implements EverConnectPlatform {
             },
             signer,
             registryInstanceId,
+            // `globalThis.fetch`, plus the tenant link of an install status
+            // report (see `ever-connect-link-header.ts`).
+            fetch: installReportLinkFetch(),
             onWarning: (message) => this.logger.warn(message),
         });
     }

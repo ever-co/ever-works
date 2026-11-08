@@ -101,6 +101,7 @@ export const AGENT_ENTITY_NAMES: ReadonlyArray<string> = [
     // Ever Connect — the connection, its integrations, the report outbox, the
     // worker lease and the answers to Ever Platform's person requests.
     'EverConnectConnection',
+    'EverConnectInstallRequest',
     'EverConnectIntegration',
     'EverConnectLease',
     'EverConnectLink',

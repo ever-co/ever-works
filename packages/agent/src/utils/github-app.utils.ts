@@ -84,9 +84,22 @@ export type GitHubAppInstallationTokenScope = {
      * is that the set is decided by platform state.
      */
     repositoryIds?: readonly (string | number)[];
+    /**
+     * Bare repository NAMES (no owner) inside the installation's own
+     * account, sent as GitHub's `repositories` field. For callers whose
+     * repository is decided by platform state but may be too new for the
+     * installation snapshot (a site's `<slug>-data` repo, created moments
+     * before its first deploy). GitHub resolves each name inside the
+     * installation's account only, so a name can never reach another
+     * account; one the installation cannot see is a 422, not a wider token.
+     */
+    repositoryNames?: readonly string[];
     /** e.g. `{ contents: 'write' }`. Anything omitted is NOT granted. */
     permissions?: Readonly<Record<string, string>>;
 };
+
+/** GitHub's repository-name alphabet (no owner, no slash, at most 100 chars). */
+const GITHUB_REPOSITORY_NAME = /^[A-Za-z0-9._-]{1,100}$/;
 
 export const requestGitHubAppInstallationAccessTokenDetails = async (
     installationId: string,
@@ -125,6 +138,17 @@ export const requestGitHubAppInstallationAccessTokenDetails = async (
             return numeric;
         });
         body.repository_ids = repositoryIds;
+    }
+    if (scope?.repositoryNames && scope.repositoryNames.length > 0) {
+        body.repositories = scope.repositoryNames.map((value) => {
+            const name = typeof value === 'string' ? value.trim() : '';
+            // Same posture as the ids: refuse, never drop. `.` and `..` are
+            // in the alphabet but are not repositories.
+            if (!GITHUB_REPOSITORY_NAME.test(name) || name === '.' || name === '..') {
+                throw new Error('Invalid GitHub repository name in installation token scope');
+            }
+            return name;
+        });
     }
     if (scope?.permissions && Object.keys(scope.permissions).length > 0) {
         body.permissions = { ...scope.permissions };

@@ -22,6 +22,13 @@ import { EverIdClientSettings } from './identity/ever-id-client.settings';
 import { EverIdLoginHandler } from './identity/ever-id-login.handler';
 import { PersonLinkReporter } from './identity/person-link.reporter';
 import { PersonRequestsHandler } from './identity/person-requests.handler';
+import { InstallApprovalService } from './installs/install-approval.service';
+import { InstallRequestService } from './installs/install-request.service';
+import { InstallRequestsController } from './installs/install-requests.controller';
+import { InstallRequestsIntegration } from './installs/install-requests.integration';
+import { InstallStatusReporter } from './installs/install-status-reporter.service';
+import { PluginInstallerBridge } from './installs/plugin-installer.bridge';
+import { IntegrationHandlerRegistry } from './integrations/integration-handler.registry';
 import {
     EVER_CONNECT_ADDRESS_CHECK,
     EverConnectWellKnownController,
@@ -46,12 +53,22 @@ import {
  *   deletion and export requests ({@link PersonRequestsHandler}).
  * - `GET /.well-known/ever-connect`: the address statement during a check
  *   (none is ever pending yet: 404).
+ * - Install requests from apps.ever.co (`marketplace_installs`,
+ *   {@link InstallRequestsIntegration}): a request on the feed is kept and
+ *   shown to the platform admins; it installs nothing until one of them
+ *   approves it in their own session, which runs the dynamic plugin installer
+ *   ({@link InstallApprovalService}); the outcome is reported to Ever Platform
+ *   ({@link InstallStatusReporter}).
  *
  * Imported only with `EVER_CONNECT_ENABLED=true` ({@link everConnectModuleImports}).
  */
 @Module({
     imports: [DatabaseModule, ActivityLogModule, EverInstanceModule],
-    controllers: [EverConnectAdminController, EverConnectWellKnownController],
+    controllers: [
+        EverConnectAdminController,
+        EverConnectWellKnownController,
+        InstallRequestsController,
+    ],
     providers: [
         { provide: EVER_CONNECT_CONFIG, useFactory: () => readEverConnectConfig(process.env) },
         IsPlatformAdminGuard,
@@ -72,6 +89,12 @@ import {
         PersonLinkReporter,
         EverIdLoginHandler,
         PersonRequestsHandler,
+        IntegrationHandlerRegistry,
+        PluginInstallerBridge,
+        InstallRequestService,
+        InstallStatusReporter,
+        InstallApprovalService,
+        InstallRequestsIntegration,
     ],
     exports: [
         EverConnectService,

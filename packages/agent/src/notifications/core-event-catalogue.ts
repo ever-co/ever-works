@@ -295,6 +295,15 @@ export const CORE_NOTIFICATION_EVENTS: readonly CoreNotificationEvent[] = [
         emailGovernedByProfile: true,
     },
     {
+        key: 'ever_platform_install_request',
+        category: 'system',
+        title: 'Install request from apps.ever.co',
+        description:
+            'An organization owner asked on apps.ever.co for a plugin to be installed into (or removed from) this installation. Nothing changes until a platform admin answers.',
+        urgent: false,
+        defaultChannels: IN_APP,
+    },
+    {
         key: 'memory_consolidation_ready',
         category: 'system',
         title: 'Memory ready for review',

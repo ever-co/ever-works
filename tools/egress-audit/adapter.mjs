@@ -24,6 +24,17 @@ const STATS_ROUTES = [
 ];
 
 /**
+ * The install-request routes of the Ever Connect module (install requests from apps.ever.co). The
+ * audit never sets `EVER_CONNECT_ENABLED`, so the module is not loaded in any mode and each must
+ * answer 404: no route, no outbound call (the sniffer proves the second).
+ */
+const EVER_CONNECT_INSTALL_ROUTES = [
+	['GET', '/api/ever-connect/install-requests'],
+	['POST', '/api/ever-connect/install-requests/01JZ8Q3M4N5P6R7S8T9V0W1X2Y/approve'],
+	['POST', '/api/ever-connect/install-requests/01JZ8Q3M4N5P6R7S8T9V0W1X2Y/decline']
+];
+
+/**
  * The modes in which the module is switched off by configuration — explicitly (`off`,
  * `off_env_file`) or by the default, with nothing configured (`default_off`).
  */
@@ -231,12 +242,30 @@ export default {
 	},
 
 	/**
-	 * Off modes only: what the settings page would call, with each route's own method. The
-	 * harness's route probe sends GET only, so the POST and PUT routes are checked here: every
-	 * one must answer 404 (a refusal here fails the run). Never in the other modes, where these
-	 * calls would switch statistics on or send.
+	 * Every mode: the Ever Connect install-request routes must answer 404 (the module is never
+	 * loaded in the audit). Off modes only: what the settings page would call, with each route's
+	 * own method. The harness's route probe sends GET only, so the POST and PUT routes are checked
+	 * here: every one must answer 404 (a refusal here fails the run). Never in the other modes,
+	 * where these calls would switch statistics on or send.
 	 */
 	async openSettings({ baseUrl, mode, fetch, log }) {
+		const connect = [];
+		for (const [method, path] of EVER_CONNECT_INSTALL_ROUTES) {
+			const response = await fetch(`${baseUrl}${path}`, {
+				method,
+				redirect: 'manual',
+				headers: method === 'GET' ? {} : { 'content-type': 'application/json' },
+				body: method === 'GET' ? undefined : JSON.stringify({ addToAllowlist: true })
+			});
+			connect.push({ route: `${method} ${path}`, status: response.status });
+		}
+		log(`adapter: ${connect.map((a) => `${a.route} ${a.status}`).join('; ')}`);
+		const served = connect.filter((a) => a.status !== 404);
+		if (served.length > 0) {
+			throw new Error(
+				`with Ever Connect off every install-request route must answer 404: ${served.map((a) => `${a.route} ${a.status}`).join('; ')}`
+			);
+		}
 		if (!OFF_MODES.has(mode)) return;
 		const answers = [];
 		for (const [method, path] of STATS_ROUTES) {

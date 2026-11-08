@@ -2,3 +2,6 @@
 // closed key lists of the published contract, the signed-report shape a
 // `stats-sink` provider receives, and the operator API's status shapes.
 export * from './stats.js';
+// Install requests from apps.ever.co: the feed messages a connected
+// installation receives under `marketplace_installs` and the status it reports.
+export * from './installs.js';

@@ -1,10 +1,12 @@
 'use client';
 
 import { useTranslations } from 'next-intl';
+import { Info } from 'lucide-react';
+import { Link } from '@/i18n/navigation';
 import { cn } from '@/lib/utils/cn';
 import { LanguageSelector } from './LanguageSelector';
 import { ThemeToggle } from './ThemeToggle';
-import { APP_NAME, COMPANY_OWNER, WEB_URL } from '@/lib/constants';
+import { APP_NAME, COMPANY_OWNER, ROUTES, WEB_URL } from '@/lib/constants';
 import { getWebBuildInfo } from '@/lib/build-info';
 import type { ApiVersion } from '@/lib/api/version';
 
@@ -34,11 +36,27 @@ export function Footer({ className, apiVersion }: FooterProps) {
                 <Copyright />
                 <BuildVersion apiVersion={apiVersion} />
                 <div className="flex items-center gap-4">
+                    <AboutLink />
                     <LanguageSelector />
                     <ThemeToggle />
                 </div>
             </div>
         </footer>
+    );
+}
+
+/** About — the page with build versions, environment and project links. */
+function AboutLink() {
+    const t = useTranslations('common.footer');
+    return (
+        <Link
+            href={ROUTES.DASHBOARD_ABOUT}
+            data-testid="footer-about-link"
+            className="inline-flex items-center gap-1 text-xs text-text-muted dark:text-text-muted-dark hover:text-text dark:hover:text-text-dark transition-colors"
+        >
+            <Info className="h-3.5 w-3.5" aria-hidden="true" />
+            {t('about')}
+        </Link>
     );
 }
 

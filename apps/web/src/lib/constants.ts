@@ -385,6 +385,8 @@ export const ROUTES = {
     // opens the same articles in place; these are the shareable addresses.
     DASHBOARD_HELP: '/help',
     DASHBOARD_HELP_ARTICLE: (slug: string) => `/help/${slug}`,
+    // About — product, build versions, environment and project links.
+    DASHBOARD_ABOUT: '/about',
 
     // Auth routes (these are under (auth) route group)
     AUTH_LOGIN: '/login',

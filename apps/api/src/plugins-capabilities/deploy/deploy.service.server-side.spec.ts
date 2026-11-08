@@ -88,6 +88,8 @@ describe('DeployService — server-side deploy for managed cluster tiers', () =>
         website?: string;
         /** Whether the Work owner is a platform admin — gates `k8s-works`. */
         isPlatformAdmin?: boolean;
+        /** Site git-token broker double (`siteEnvFor`). Absent = not wired. */
+        siteGitTokenService?: { siteEnvFor: jest.Mock };
     }) => {
         const websiteOwner = overrides.websiteOwner ?? 'acme';
         const work = {
@@ -230,6 +232,9 @@ describe('DeployService — server-side deploy for managed cluster tiers', () =>
             subdomainAllocator as any,
             funnel as any,
             customDomainRepository as any,
+            undefined,
+            undefined,
+            overrides.siteGitTokenService as any,
         );
 
         return {
@@ -398,6 +403,182 @@ describe('DeployService — server-side deploy for managed cluster tiers', () =>
         const runtimeEnv = config.options.runtimeEnv as Record<string, string>;
         expect(runtimeEnv.TENANT_ID).toBe('work-1');
         expect(runtimeEnv.STRIPE_SECRET_KEY).toBeUndefined();
+    });
+
+    describe('site GH_TOKEN and GHCR pull credential (least privilege)', () => {
+        const ENV_KEYS = [
+            'EVER_WORKS_SITES_GIT_TOKEN',
+            'EVER_WORKS_CUSTOMERS_SITES_GIT_TOKEN',
+            'TENANT_USER_GIT_TOKEN_ENABLED',
+            'EVER_WORKS_GHCR_PULL_TOKEN',
+            'EVER_WORKS_GITHUB_PAT_CLASSIC',
+        ];
+        afterEach(() => {
+            for (const key of ENV_KEYS) delete process.env[key];
+        });
+
+        const deployEverWorksSite = async (siteGitTokenService?: { siteEnvFor: jest.Mock }) => {
+            const plugin = managedPlugin();
+            const built = buildService({
+                plugin,
+                settings: { clusterSource: 'k8s-works', namespace: 'ever-works' },
+                settingSources: { clusterSource: 'work', namespace: 'default' },
+                websiteOwner: 'ever-works',
+                isPlatformAdmin: true,
+                siteGitTokenService,
+            });
+            await built.service.deploy('work-1', 'user-1');
+            const [config] = plugin.deploy.mock.calls[0];
+            const pushed = new Map<string, string>(
+                built.githubPlugin.setActionSecret.mock.calls.map((c: unknown[]) => {
+                    const s = c[0] as { key: string; value: string };
+                    return [s.key, s.value] as [string, string];
+                }),
+            );
+            return {
+                config,
+                runtimeEnv: config.options.runtimeEnv as Record<string, string>,
+                pushed,
+            };
+        };
+
+        it("uses the platform site token, not the user's OAuth token, for the data repo's org", async () => {
+            process.env.EVER_WORKS_SITES_GIT_TOKEN = 'site-contents-only-token';
+
+            const { runtimeEnv, pushed } = await deployEverWorksSite();
+
+            expect(runtimeEnv.GH_TOKEN).toBe('site-contents-only-token');
+            // The website repo's GH_TOKEN Actions secret gets the same token.
+            expect(pushed.get('GH_TOKEN')).toBe('site-contents-only-token');
+        });
+
+        it("keeps the user's token when no platform site token exists (default, unchanged)", async () => {
+            const { runtimeEnv } = await deployEverWorksSite();
+
+            expect(runtimeEnv.GH_TOKEN).toBe('gh-token');
+        });
+
+        it("TENANT_USER_GIT_TOKEN_ENABLED=false never hands the user's token to the site", async () => {
+            process.env.TENANT_USER_GIT_TOKEN_ENABLED = 'false';
+
+            const { runtimeEnv, pushed, config } = await deployEverWorksSite();
+
+            expect(runtimeEnv.GH_TOKEN).toBeUndefined();
+            expect(pushed.has('GH_TOKEN')).toBe(false);
+            // Nor as the GHCR pull-secret fallback.
+            expect(config.options.githubReadPackagesToken).not.toBe('gh-token');
+        });
+
+        it("a site token for another org does not apply to this Work's data repo", async () => {
+            process.env.EVER_WORKS_CUSTOMERS_SITES_GIT_TOKEN = 'customers-site-token';
+
+            const { runtimeEnv } = await deployEverWorksSite();
+
+            expect(runtimeEnv.GH_TOKEN).toBe('gh-token');
+        });
+
+        describe('site git-token broker (per-site, one-repo, short-lived)', () => {
+            const BROKER_URL = 'https://api.ever.works/api/sites/work-1/git-token';
+            const SITE_SECRET = 'ewsgt_' + 'a'.repeat(64);
+            const brokered = (bootstrap: { token: string } | null) => ({
+                siteEnvFor: jest.fn().mockResolvedValue({
+                    url: BROKER_URL,
+                    secret: SITE_SECRET,
+                    bootstrap: bootstrap && {
+                        ...bootstrap,
+                        expiresAt: '2026-11-07T12:00:00.000Z',
+                        repository: 'ever-works/my-site-data',
+                    },
+                }),
+            });
+
+            it('hands the site the broker URL, its secret and a one-repo bootstrap token', async () => {
+                // Even with the org-wide site token configured, the broker wins.
+                process.env.EVER_WORKS_SITES_GIT_TOKEN = 'org-wide-site-token';
+                const broker = brokered({ token: 'ghs_one_repo' });
+
+                const { runtimeEnv, pushed } = await deployEverWorksSite(broker);
+
+                expect(runtimeEnv.EVER_WORKS_SITE_GIT_TOKEN_URL).toBe(BROKER_URL);
+                expect(runtimeEnv.EVER_WORKS_SITE_GIT_TOKEN_SECRET).toBe(SITE_SECRET);
+                expect(runtimeEnv.GH_TOKEN).toBe('ghs_one_repo');
+                // The website repo's Actions secrets carry the same values.
+                expect(pushed.get('EVER_WORKS_SITE_GIT_TOKEN_URL')).toBe(BROKER_URL);
+                expect(pushed.get('EVER_WORKS_SITE_GIT_TOKEN_SECRET')).toBe(SITE_SECRET);
+                expect(pushed.get('GH_TOKEN')).toBe('ghs_one_repo');
+                expect([...pushed.values()]).not.toContain('org-wide-site-token');
+            });
+
+            it('overwrites GH_TOKEN with an inert placeholder when the bootstrap mint failed', async () => {
+                // Never omitted: an omitted key would leave an earlier deploy's
+                // broad token in the repo secret and the runtime-env Secret.
+                process.env.EVER_WORKS_SITES_GIT_TOKEN = 'org-wide-site-token';
+
+                const { runtimeEnv, pushed } = await deployEverWorksSite(brokered(null));
+
+                expect(runtimeEnv.GH_TOKEN).toBe('ever-works-site-git-token-broker');
+                expect(runtimeEnv.EVER_WORKS_SITE_GIT_TOKEN_URL).toBe(BROKER_URL);
+                expect(pushed.get('GH_TOKEN')).toBe('ever-works-site-git-token-broker');
+                expect([...pushed.values()]).not.toContain('org-wide-site-token');
+            });
+
+            it('fails the deploy when the broker secrets cannot be pushed', async () => {
+                const plugin = managedPlugin();
+                const built = buildService({
+                    plugin,
+                    settings: { clusterSource: 'k8s-works', namespace: 'ever-works' },
+                    settingSources: { clusterSource: 'work', namespace: 'default' },
+                    websiteOwner: 'ever-works',
+                    isPlatformAdmin: true,
+                    siteGitTokenService: brokered({ token: 'ghs_one_repo' }),
+                });
+                built.githubPlugin.setActionSecret.mockImplementation(
+                    async (data: { key: string }) => {
+                        if (data.key === 'EVER_WORKS_SITE_GIT_TOKEN_SECRET') throw new Error('422');
+                    },
+                );
+
+                await expect(built.service.deploy('work-1', 'user-1')).rejects.toThrow('422');
+                expect(plugin.deploy).not.toHaveBeenCalled();
+            });
+
+            it('keeps the env-token path when the broker does not apply', async () => {
+                process.env.EVER_WORKS_SITES_GIT_TOKEN = 'org-wide-site-token';
+                const broker = { siteEnvFor: jest.fn().mockResolvedValue(null) };
+
+                const { runtimeEnv, pushed } = await deployEverWorksSite(broker);
+
+                expect(runtimeEnv.GH_TOKEN).toBe('org-wide-site-token');
+                expect(runtimeEnv.EVER_WORKS_SITE_GIT_TOKEN_URL).toBeUndefined();
+                expect(pushed.has('EVER_WORKS_SITE_GIT_TOKEN_SECRET')).toBe(false);
+            });
+
+            it('keeps the env-token path when the broker throws (a deploy never fails on it)', async () => {
+                process.env.EVER_WORKS_SITES_GIT_TOKEN = 'org-wide-site-token';
+                const broker = { siteEnvFor: jest.fn().mockRejectedValue(new Error('db down')) };
+
+                const { runtimeEnv } = await deployEverWorksSite(broker);
+
+                expect(runtimeEnv.GH_TOKEN).toBe('org-wide-site-token');
+            });
+        });
+
+        it('prefers the read:packages-only GHCR pull token over the broad classic PAT', async () => {
+            process.env.EVER_WORKS_GITHUB_PAT_CLASSIC = 'ghp-repo-workflow-write-packages';
+            process.env.EVER_WORKS_GHCR_PULL_TOKEN = 'ghp-read-packages-only';
+
+            const { config } = await deployEverWorksSite();
+
+            expect(config.options.githubReadPackagesToken).toBe('ghp-read-packages-only');
+        });
+
+        it('falls back to the classic PAT for pulls when no pull token is configured', async () => {
+            process.env.EVER_WORKS_GITHUB_PAT_CLASSIC = 'ghp-repo-workflow-write-packages';
+
+            const { config } = await deployEverWorksSite();
+
+            expect(config.options.githubReadPackagesToken).toBe('ghp-repo-workflow-write-packages');
+        });
     });
 
     it('managed tier → branch alias image tag (main → prod)', async () => {
