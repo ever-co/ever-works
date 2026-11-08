@@ -42,6 +42,7 @@ import {
     Inbox,
     BookOpen,
     Server,
+    Info,
     type LucideIcon,
 } from 'lucide-react';
 import { useTranslations } from 'next-intl';
@@ -623,6 +624,18 @@ export function DashboardSidebar({
                                             strokeWidth={1.3}
                                         />
                                         {t('profileMenu.keyboardShortcuts')}
+                                    </DropdownMenuItem>
+                                    {/* About — versions, environment and project links. */}
+                                    <DropdownMenuItem
+                                        data-testid="profile-menu-about"
+                                        onClick={() => {
+                                            onInteraction?.();
+                                            router.push(ROUTES.DASHBOARD_ABOUT);
+                                        }}
+                                        className="cursor-pointer px-3 rounded-md hover:bg-surface-tertiary/50 dark:hover:bg-card-primary-dark"
+                                    >
+                                        <Info className="w-4 h-4 mr-2 shrink-0" strokeWidth={1.5} />
+                                        {t('profileMenu.about')}
                                     </DropdownMenuItem>
                                     {/* Wave 13 — Billing + Usage & Credits (billing/usage PRD §2):
                                         a new section ABOVE the final separator + Sign Out. */}
