@@ -23,7 +23,7 @@ describe('JobRuntimeDegradedBanner', () => {
     it('renders no link to an Ever host on a self-hosted install', async () => {
         // jsdom serves this suite from a non-Ever origin, like a self-hosted
         // install. The Ever-hosted case is JobRuntimeDegradedBanner.hosted.unit.spec.tsx.
-        expect(window.location.hostname).not.toMatch(/ever.works$/);
+        expect(window.location.hostname).not.toMatch(/(^|\.)ever\.works$/);
         const { container } = render(<JobRuntimeDegradedBanner configured={false} />);
         await waitFor(() =>
             expect(screen.getByTestId('job-runtime-degraded-banner')).toBeInTheDocument(),
