@@ -69,6 +69,15 @@ RUN pnpm exec turbo build --filter=ever-works-api...
 RUN pnpm exec turbo build --filter="./packages/plugins/*"
 RUN pnpm deploy --filter=ever-works-api --prod --legacy /app/deploy
 
+# Packaging gate: the DEPLOYED tree's TypeORM must load every compiled
+# migration. From 2026-11-07 (#3107) a minimatch override left TypeORM's glob
+# matching 0 files, so prod booted fine and silently applied no new migration;
+# stage (synchronize) and api-boot could not see it. This runs TypeORM's own
+# directory loader on /app/deploy/dist/migrations and fails the build unless
+# every compiled migration file loads (packages/agent/src/database/migration-globs.ts).
+COPY scripts/check-migrations-load.cjs scripts/check-migrations-load.cjs
+RUN cd /app/deploy && node /app/scripts/check-migrations-load.cjs
+
 # Packaging gate: the Handlebars email templates MUST reach the runtime image.
 #
 # They previously did not. `apps/api/nest-cli.json` declared

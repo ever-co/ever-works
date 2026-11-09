@@ -51,45 +51,12 @@ export interface DatabaseConfig extends Omit<TypeOrmModuleOptions, 'type'> {
 
 import { ENTITIES } from './_entities-inventory';
 import { RecordVisibilitySubscriber } from './record-visibility.subscriber';
+import { resolveMigrationGlobs } from './migration-globs';
 // Re-exported so existing importers of `database.config` keep working.
 export { ENTITIES };
 
-/**
- * Resolve TypeORM migration globs for the runtime path. TypeORM accepts
- * an array of globs and silently ignores any that don't match files, so
- * listing the candidate layouts is safe and idempotent.
- *
- * **Only `.js` patterns**, intentionally. TypeORM 0.3.x's
- * `DirectoryExportedClassesLoader` loads matched files via
- * `Promise.all(import(file))`. On Node ≥ 22, requiring `.ts` files (even
- * after Nest+SWC transpilation) goes through the ESM loader and
- * `Promise.all`-importing several at once trips Node's internal
- * "Unexpected module status 0" assertion (a known race between
- * `require()` and dynamic `import()` on the same module). Compiled JS
- * doesn't hit this path. The manual `pnpm typeorm migration:generate /
- * migration:run` commands keep their own `'.ts'` glob in
- * `apps/api/typeorm.config.ts` and run under `ts-node`, which loads
- * synchronously and is unaffected.
- *
- * Paths are absolute and use forward slashes (TypeORM's underlying glob
- * engine — `globby` / `fast-glob` — handles forward-slash absolute paths
- * correctly on Windows too).
- *
- *   - Docker / prod:        `/app/dist/migrations/*.js` (cwd = /app)
- *   - Local API workspace:  `apps/api/dist/migrations/*.js` (from repo root)
- *   - From apps/api cwd:    `dist/migrations/*.js`
- *
- * For local dev: run `pnpm build --filter ever-works-api` (or `pnpm dev`
- * which builds before watching) to populate `apps/api/dist/migrations/`,
- * then the API will pick up pending migrations on next boot. Authoring
- * a new migration still goes through `pnpm typeorm migration:generate`
- * (which produces `.ts` next to the existing ones) — the build step
- * compiles it to `.js` automatically.
- */
-function resolveMigrationGlobs(): string[] {
-    const cwd = process.cwd().replace(/\\/g, '/');
-    return [`${cwd}/dist/migrations/*.js`, `${cwd}/apps/api/dist/migrations/*.js`];
-}
+// `resolveMigrationGlobs()` lives in `./migration-globs` (see the 🛑 note there:
+// TypeORM's glob must stay compatible with the resolved minimatch).
 
 export const databaseConfig = registerAs('database', (): DatabaseConfig => {
     const environment = config.getEnvironment() || 'development';
