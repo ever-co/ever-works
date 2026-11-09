@@ -10,7 +10,7 @@ name: API boot
 # process exit during bootstrap, which fails the job with the log tail.
 # Before the boot it also loads the built migrations through TypeORM's own loader
 # (`scripts/check-migrations-load.cjs`): the boot runs on `synchronize`, so it cannot
-# see a loader that silently finds no migration (prod, round 15 → 17).
+# see a loader that silently finds no migration (prod from 2026-11-07, #3107).
 on:
   pull_request:
     branches: [develop, stage, main]
@@ -81,7 +81,7 @@ jobs:
         run: pnpm turbo run build --filter=ever-works-api...
 
       # Prod applies migrations at boot through TypeORM's directory loader. From
-      # round 15 a minimatch override made that loader find 0 files, and the boot
+      # 2026-11-07 (#3107) a minimatch override made that loader find 0 files, and the boot
       # below could not notice (it runs on `synchronize`). Load the BUILT
       # migrations the way prod does and require every compiled file to load.
       - name: TypeORM loads every built migration

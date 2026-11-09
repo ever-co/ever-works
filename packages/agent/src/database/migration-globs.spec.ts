@@ -8,11 +8,11 @@ import { resolveMigrationGlobs } from './migration-globs';
 /**
  * Prod applies migrations at boot through TypeORM's own directory loader
  * (`DataSource.initialize()` → `importClassesFromDirectories(migrations)`),
- * which matches the globs with the `glob` package TypeORM resolves, which in
- * turn matches with the `minimatch` the lockfile resolves.
+ * which matches the globs with the `glob` package TypeORM resolves (glob 10
+ * `require`d the lockfile's `minimatch`; glob 14 bundles its own matcher).
  *
- * In round 15 that chain broke without an error: a security override moved
- * `minimatch` to 11.x under TypeORM's `glob@10`, the globs matched 0 files,
+ * On 2026-11-07 (#3107) that chain broke without an error: a security override
+ * moved `minimatch` to 11.x under TypeORM's `glob@10`, the globs matched 0 files,
  * and prod skipped every new migration (the API booted fine). Unit specs that
  * mock the glob, and boots that use `synchronize`, cannot see this.
  *

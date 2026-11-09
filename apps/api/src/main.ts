@@ -90,11 +90,20 @@ async function bootstrap() {
     // to the default NestJS console logger (no PostHog traffic, no errors).
     app.useLogger(new PostHogLoggerService());
 
-    // Round 17: fail the boot when the API should apply migrations
-    // (`migrationsRun`, prod shape) but TypeORM loaded none. Since round 15 a
-    // glob/minimatch mismatch made the migration globs match nothing, so prod
+    // Fail the boot when the API should apply migrations (`migrationsRun`,
+    // prod shape) but TypeORM loaded none: from 2026-11-07 (#3107) a
+    // glob/minimatch mismatch made the migration globs match nothing, and prod
     // silently skipped every new migration. See `config/migrations-loaded.ts`.
-    assertMigrationsLoaded(app.get(DataSource, { strict: false }), new Logger('Migrations'));
+    // Exit explicitly: `initSentry()` above installs an `unhandledRejection`
+    // handler that only warns, so a rejected `bootstrap()` would leave a process
+    // that holds its DB/Redis connections but never listens.
+    const migrationsLogger = new Logger('Migrations');
+    try {
+        assertMigrationsLoaded(app.get(DataSource, { strict: false }), migrationsLogger);
+    } catch (error) {
+        migrationsLogger.error(error instanceof Error ? error.message : String(error));
+        process.exit(1);
+    }
 
     // EW-719: the API sits behind an nginx ingress. Without an explicit
     // `trust proxy`, Express treats the ingress socket address as `req.ip` for

@@ -18,13 +18,15 @@
  * Paths are absolute and use forward slashes, which TypeORM's glob engine
  * (the `glob` package, `glob.sync`) handles on Windows too.
  *
- * 🛑 That glob must stay compatible with the `minimatch` it resolves. In
- * round 15 a security override moved every `minimatch` onto 11.x while
- * TypeORM still used `glob@10`; glob 10 cannot read minimatch 11's compiled
- * patterns, so these globs matched **nothing**, without an error, and prod
- * skipped every new migration. The root `package.json` therefore pins
- * `typeorm>glob` to a glob built for minimatch 11, and two checks hold it:
+ * 🛑 TypeORM's glob must actually match. On 2026-11-07 a security override
+ * (#3107) moved every `minimatch` onto 11.x while TypeORM still used
+ * `glob@10`, which `require`s minimatch and cannot read minimatch 11's
+ * compiled patterns: these globs matched **nothing**, without an error, and
+ * prod skipped every new migration. The root `package.json` therefore pins
+ * `typeorm>glob` to glob 14, whose CommonJS build bundles its own matcher (so
+ * minimatch overrides no longer reach it). Three checks hold it:
  * `migration-globs.spec.ts` runs these globs through TypeORM's real loader,
+ * `scripts/check-migrations-load.cjs` loads the built migrations (api-boot CI),
  * and the API refuses to boot when `migrationsRun` is on and no migration
  * loaded (`apps/api/src/config/migrations-loaded.ts`).
  *

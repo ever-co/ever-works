@@ -14,8 +14,8 @@ export interface MigrationsLoadedLogger {
  * TypeORM treats migration globs that match nothing as "no migrations": with
  * `migrationsRun` on, `DataSource.initialize()` then applies nothing, logs
  * nothing and the API boots normally on an unmigrated schema. That happened in
- * prod from round 15 (2026-11-07): a `minimatch` override left TypeORM's
- * `glob@10` matching 0 files, and round 16's migration silently never ran.
+ * prod from 2026-11-07 (#3107): a `minimatch` override left TypeORM's
+ * `glob@10` matching 0 files, and the next migration silently never ran.
  * Stage runs `synchronize` (`DATABASE_AUTOMIGRATE=true`), where `migrationsRun`
  * is off, so only prod-shaped deploys reach this check.
  *
@@ -40,7 +40,7 @@ export function assertMigrationsLoaded(dataSource: MigrationsLoadedSource, logge
             `TypeORM loaded 0 migrations from ${JSON.stringify(options.migrations)} while migrationsRun is on, ` +
                 'so no pending migration would be applied. Refusing to start on a possibly unmigrated schema. ' +
                 'Check that the build produced dist/migrations/*.js in the working directory and that ' +
-                "TypeORM's glob can read the installed minimatch (packages/agent/src/database/migration-globs.ts). " +
+                "TypeORM's glob still matches (packages/agent/src/database/migration-globs.ts). " +
                 'Set RUN_MIGRATIONS=false only to boot a diagnostic instance.',
         );
     }
