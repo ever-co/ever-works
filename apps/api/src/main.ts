@@ -24,6 +24,8 @@ import { config as appConfig } from './config/constants';
 import { config as agentConfig } from '@ever-works/agent/config';
 import { resolveTrustProxyHops } from './config/trust-proxy';
 import { FleetPreviewHostHandler } from './fleet/ports/preview-host.handler';
+import { DataSource } from 'typeorm';
+import { assertMigrationsLoaded } from './config/migrations-loaded';
 
 async function bootstrap() {
     // The `.env` file is already loaded: `./load-env` (the first import above)
@@ -87,6 +89,21 @@ async function bootstrap() {
     // PostHogLoggerService fails open — without POSTHOG_API_KEY it degrades
     // to the default NestJS console logger (no PostHog traffic, no errors).
     app.useLogger(new PostHogLoggerService());
+
+    // Fail the boot when the API should apply migrations (`migrationsRun`,
+    // prod shape) but TypeORM loaded none: from 2026-11-07 (#3107) a
+    // glob/minimatch mismatch made the migration globs match nothing, and prod
+    // silently skipped every new migration. See `config/migrations-loaded.ts`.
+    // Exit explicitly: `initSentry()` above installs an `unhandledRejection`
+    // handler that only warns, so a rejected `bootstrap()` would leave a process
+    // that holds its DB/Redis connections but never listens.
+    const migrationsLogger = new Logger('Migrations');
+    try {
+        assertMigrationsLoaded(app.get(DataSource, { strict: false }), migrationsLogger);
+    } catch (error) {
+        migrationsLogger.error(error instanceof Error ? error.message : String(error));
+        process.exit(1);
+    }
 
     // EW-719: the API sits behind an nginx ingress. Without an explicit
     // `trust proxy`, Express treats the ingress socket address as `req.ip` for
