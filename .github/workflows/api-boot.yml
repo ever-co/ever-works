@@ -8,6 +8,9 @@ name: API boot
 # no `.env`), and asserts that
 # `GET /api/health` answers 200. A provider the container cannot resolve makes the
 # process exit during bootstrap, which fails the job with the log tail.
+# Before the boot it also loads the built migrations through TypeORM's own loader
+# (`scripts/check-migrations-load.cjs`): the boot runs on `synchronize`, so it cannot
+# see a loader that silently finds no migration (prod, round 15 → 17).
 on:
   pull_request:
     branches: [develop, stage, main]
@@ -17,6 +20,7 @@ on:
       - 'pnpm-lock.yaml'
       - 'turbo.json'
       - '.github/workflows/api-boot.yml'
+      - 'scripts/check-migrations-load.cjs'
   push:
     branches: [develop, stage, main]
     paths:
@@ -25,6 +29,7 @@ on:
       - 'pnpm-lock.yaml'
       - 'turbo.json'
       - '.github/workflows/api-boot.yml'
+      - 'scripts/check-migrations-load.cjs'
   workflow_dispatch:
 
 permissions:
@@ -74,6 +79,14 @@ jobs:
 
       - name: Build the API and its workspace dependencies
         run: pnpm turbo run build --filter=ever-works-api...
+
+      # Prod applies migrations at boot through TypeORM's directory loader. From
+      # round 15 a minimatch override made that loader find 0 files, and the boot
+      # below could not notice (it runs on `synchronize`). Load the BUILT
+      # migrations the way prod does and require every compiled file to load.
+      - name: TypeORM loads every built migration
+        working-directory: apps/api
+        run: node ../../scripts/check-migrations-load.cjs
 
       - name: Boot the API and wait for /api/health
         working-directory: apps/api
