@@ -59,7 +59,10 @@ describe('migration globs through TypeORM’s directory loader', () => {
 
     it('builds absolute forward-slash globs for the image and the workspace layouts', () => {
         const globs = resolveMigrationGlobs('C:\\app');
-        expect(globs).toEqual(['C:/app/dist/migrations/*.js', 'C:/app/apps/api/dist/migrations/*.js']);
+        expect(globs).toEqual([
+            'C:/app/dist/migrations/*.js',
+            'C:/app/apps/api/dist/migrations/*.js',
+        ]);
     });
 
     it('defaults to the process working directory', () => {
@@ -68,17 +71,22 @@ describe('migration globs through TypeORM’s directory loader', () => {
     });
 
     it('loads every compiled migration the globs point at', async () => {
-        const classes = await importClassesFromDirectories(silentLogger, resolveMigrationGlobs(root));
+        const classes = await importClassesFromDirectories(
+            silentLogger,
+            resolveMigrationGlobs(root),
+        );
 
-        expect(classes.map((migration) => (migration as { name: string }).name).sort()).toEqual(migrationNames);
+        expect(classes.map((migration) => (migration as { name: string }).name).sort()).toEqual(
+            migrationNames,
+        );
     });
 
     it('loads nothing (and does not throw) for a layout without compiled migrations', async () => {
         const empty = fs.mkdtempSync(path.join(os.tmpdir(), 'ew-migration-globs-empty-'));
         try {
-            await expect(importClassesFromDirectories(silentLogger, resolveMigrationGlobs(empty))).resolves.toEqual(
-                [],
-            );
+            await expect(
+                importClassesFromDirectories(silentLogger, resolveMigrationGlobs(empty)),
+            ).resolves.toEqual([]);
         } finally {
             fs.rmSync(empty, { recursive: true, force: true });
         }
