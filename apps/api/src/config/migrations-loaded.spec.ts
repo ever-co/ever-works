@@ -5,7 +5,10 @@ function migration(name: string): MigrationInterface {
     return { name, up: async () => undefined, down: async () => undefined };
 }
 
-function source(migrationsRun: boolean | undefined, migrations: MigrationInterface[]): MigrationsLoadedSource {
+function source(
+    migrationsRun: boolean | undefined,
+    migrations: MigrationInterface[],
+): MigrationsLoadedSource {
     return {
         options: { type: 'postgres', migrationsRun, migrations: ['/app/dist/migrations/*.js'] },
         migrations,
@@ -37,10 +40,13 @@ describe('assertMigrationsLoaded', () => {
         );
     });
 
-    it.each([false, undefined])('does nothing when migrationsRun is %s (synchronize, CLI, tests)', (run) => {
-        const logger = { log: jest.fn() };
+    it.each([false, undefined])(
+        'does nothing when migrationsRun is %s (synchronize, CLI, tests)',
+        (run) => {
+            const logger = { log: jest.fn() };
 
-        expect(() => assertMigrationsLoaded(source(run, []), logger)).not.toThrow();
-        expect(logger.log).not.toHaveBeenCalled();
-    });
+            expect(() => assertMigrationsLoaded(source(run, []), logger)).not.toThrow();
+            expect(logger.log).not.toHaveBeenCalled();
+        },
+    );
 });

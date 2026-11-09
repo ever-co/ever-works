@@ -28,7 +28,10 @@ export interface MigrationsLoadedLogger {
  * Call it from the API's `main.ts` only: Trigger.dev workers import the same
  * `DatabaseModule` with the API's defaults but ship no compiled migrations.
  */
-export function assertMigrationsLoaded(dataSource: MigrationsLoadedSource, logger: MigrationsLoadedLogger): void {
+export function assertMigrationsLoaded(
+    dataSource: MigrationsLoadedSource,
+    logger: MigrationsLoadedLogger,
+): void {
     const options = dataSource.options as { migrationsRun?: boolean; migrations?: unknown };
     if (!options.migrationsRun) {
         return;
@@ -54,6 +57,7 @@ export function assertMigrationsLoaded(dataSource: MigrationsLoadedSource, logge
         { name: '', timestamp: 0 },
     );
     logger.log(
-        `TypeORM loaded ${loaded} migrations (migrationsRun on)` + (newest.name ? `; newest: ${newest.name}` : ''),
+        `TypeORM loaded ${loaded} migrations (migrationsRun on)` +
+            (newest.name ? `; newest: ${newest.name}` : ''),
     );
 }
