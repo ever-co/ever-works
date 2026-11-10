@@ -355,6 +355,50 @@ describe('probeAgentAuth', () => {
 		});
 	});
 
+	it('reads a bounded head of any help output, with linear patterns: a megabyte of the worst returns at once (review N1, same class)', async () => {
+		// The runner buffers up to a megabyte of a CLI's output. The first help
+		// patterns were `Usage:[^\n]*\sauth\b`: on one long line of `Usage:`
+		// every start rescanned the rest of the line — quadratic.
+		const MEGABYTE = 1024 * 1024;
+		const fill = (unit: string) => unit.repeat(Math.ceil(MEGABYTE / unit.length)).slice(0, MEGABYTE);
+		for (const [provider, command] of [
+			['claude-code', 'claude auth --help'],
+			['codex', 'codex login --help']
+		] as const) {
+			for (const help of [fill('Usage:'), fill('Usage: '), `Usage: ${fill('a ')}`, fill('Usage:\t'), fill(' ')]) {
+				for (const stream of ['stdout', 'stderr'] as const) {
+					const { runner } = tableRunner({ [command]: { [stream]: help } });
+					let fastest = Number.POSITIVE_INFINITY;
+					let answer: AgentAuthProbe | null = null;
+					for (let attempt = 0; attempt < 3; attempt += 1) {
+						const started = performance.now();
+						answer = await probeAgentAuth(
+							runner,
+							provider,
+							provider === 'codex' ? 'codex' : 'claude',
+							POSIX_PROBE
+						);
+						fastest = Math.min(fastest, performance.now() - started);
+					}
+					expect(fastest).toBeLessThan(50);
+					// None of these is the subcommand's help: the status command is never run.
+					expect(answer?.state).not.toBe('answered');
+				}
+			}
+		}
+		// A real help page after a megabyte of noise is not read: only its head is.
+		const late = tableRunner({ 'claude auth --help': { stdout: `${fill('x')}\n${CLAUDE_AUTH_HELP}` } });
+		expect(await probeAgentAuth(late.runner, 'claude-code', 'claude', POSIX_PROBE)).toEqual({
+			state: 'unanswered'
+		});
+		// And the real one still reads.
+		const real = tableRunner({
+			'claude auth --help': { stdout: CLAUDE_AUTH_HELP },
+			'claude auth status --json': { stdout: JSON.stringify({ loggedIn: true, authMethod: 'claude.ai' }) }
+		});
+		expect((await probeAgentAuth(real.runner, 'claude-code', 'claude', POSIX_PROBE)).state).toBe('answered');
+	});
+
 	describe('a Windows path with a space', () => {
 		const spaced = 'C:\\Program Files\\Claude Code\\claude.cmd';
 
@@ -1788,6 +1832,48 @@ describe('buildAgentReadinessReport', () => {
 			lastFailureKind: 'not_signed_in',
 			lastFailureCode: 'session_expired'
 		});
+	});
+
+	it('carries WHEN the sign-in shown was read, which a cached reading keeps (the "before the latest sign-in check" line)', async () => {
+		// A run found the session expired; the CLI, asked in the same account,
+		// still says signed in. Whether that reading came AFTER the refusal is
+		// what the UI states — so the report says when it was taken, not when
+		// the report was built.
+		const runs = new AgentRunHistory({ now: () => NOW });
+		runs.observeAuth('claude-code', SIGNED_IN);
+		runs.note({ provider: 'claude-code', status: 'failed', cliError: { text: SESSION_EXPIRED } });
+		const readAt = (checkedAt: string | undefined) =>
+			buildAgentReadinessReport({
+				drivable: () => drivable,
+				auth: async () => ({ state: 'answered', reading: SIGNED_IN, ...(checkedAt ? { checkedAt } : {}) }),
+				history: runs,
+				now: () => NOW + 2 * 60_000
+			});
+
+		// Taken before the run (served from the cache): the report says so.
+		const cached = (await readAt(new Date(NOW - 60_000).toISOString())).agents[0];
+		expect(cached).toMatchObject({
+			status: 'not_signed_in',
+			reasonCode: 'session_expired',
+			signedIn: true,
+			checkedAt: new Date(NOW + 2 * 60_000).toISOString(),
+			signInCheckedAt: new Date(NOW - 60_000).toISOString(),
+			lastFailureAt: ISO
+		});
+		// Taken after it.
+		expect((await readAt(new Date(NOW + 60_000).toISOString())).agents[0]?.signInCheckedAt).toBe(
+			new Date(NOW + 60_000).toISOString()
+		);
+		// A probe that did not say when: no instant is invented.
+		expect((await readAt(undefined)).agents[0]).not.toHaveProperty('signInCheckedAt');
+		// No reading shown, no instant: unanswered, or "not signed in" heard in an assumed environment.
+		const noReading = await buildAgentReadinessReport({
+			drivable: () => drivable,
+			auth: async () => ({ state: 'answered', reading: SIGNED_OUT, environment: 'assumed', checkedAt: ISO }),
+			history: new AgentRunHistory({ now: () => NOW }),
+			now: () => NOW
+		});
+		expect(noReading.agents[0]).not.toHaveProperty('signInCheckedAt');
 	});
 
 	it('before the node knows which credentials a run gets, "not signed in" is reported as not known (review N4)', async () => {

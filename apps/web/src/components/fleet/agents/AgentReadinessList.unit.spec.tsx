@@ -126,6 +126,7 @@ describe('AgentReadinessList', () => {
                             // The status command, asked just now, says signed in.
                             signedIn: true,
                             checkedAt: new Date(NOW).toISOString(),
+                            signInCheckedAt: new Date(NOW).toISOString(),
                             lastFailureAt: new Date(NOW - 3 * 3_600_000).toISOString(),
                             lastFailureKind: 'not_signed_in',
                             lastFailureCode: 'session_expired',

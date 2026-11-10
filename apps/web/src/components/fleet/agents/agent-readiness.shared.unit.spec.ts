@@ -361,6 +361,7 @@ describe('agentFailureNote — a verdict carries its age (review item 6)', () =>
             reasonCode: 'session_expired',
             signedIn: true,
             checkedAt: new Date(NOW).toISOString(),
+            signInCheckedAt: new Date(NOW - HOUR).toISOString(),
             lastFailureAt: at,
             lastFailureKind: 'not_signed_in',
             lastFailureCode: 'session_expired',
@@ -371,9 +372,24 @@ describe('agentFailureNote — a verdict carries its age (review item 6)', () =>
         expect(agentFailureNote({ ...refused, signedIn: false })?.beforeSignInCheck).toBe(false);
         expect(agentFailureNote({ ...refused, signedIn: null })?.beforeSignInCheck).toBe(false);
         expect(
-            agentFailureNote({ ...refused, checkedAt: new Date(NOW - 4 * HOUR).toISOString() })
-                ?.beforeSignInCheck,
+            agentFailureNote({
+                ...refused,
+                signInCheckedAt: new Date(NOW - 4 * HOUR).toISOString(),
+            })?.beforeSignInCheck,
         ).toBe(false);
+        // A report built AFTER the refusal can carry a sign-in reading taken
+        // BEFORE it (the node caches the status command for minutes): the
+        // reading's own instant decides, never the report's.
+        expect(
+            agentFailureNote({
+                ...refused,
+                checkedAt: new Date(NOW).toISOString(),
+                signInCheckedAt: new Date(NOW - 3 * HOUR - 60_000).toISOString(),
+            })?.beforeSignInCheck,
+        ).toBe(false);
+        // A node that does not say when it read the sign-in: no claim about the order.
+        const { signInCheckedAt: _unsaid, ...fromAnOlderNode } = refused;
+        expect(agentFailureNote(fromAnOlderNode)?.beforeSignInCheck).toBe(false);
         // "Signed in" does not contradict an access refusal or a limit.
         expect(
             agentFailureNote({

@@ -1720,6 +1720,23 @@ describe('fleet agent readiness wiring', () => {
 			const beats = bodies.filter((entry) => entry.url.endsWith('/api/fleet/heartbeat'));
 			expect(beats).toHaveLength(3);
 			for (const beat of beats) expect(beat.body).toHaveProperty('agents');
+
+			// Each entry says when the sign-in it shows was READ: a beat served
+			// from the cache keeps the instant the status command answered, a
+			// fresh probe brings a new one — never the beat's own instant.
+			const claude = (beat: (typeof beats)[number]) =>
+				(beat.body.agents as { agents: Array<Record<string, unknown>> }).agents.find(
+					(agent) => agent.provider === 'claude-code'
+				);
+			const firstRead = new Date(READINESS_NOW).toISOString();
+			expect(claude(beats[0])).toMatchObject({ checkedAt: firstRead, signInCheckedAt: firstRead });
+			expect(claude(beats[1])).toMatchObject({
+				checkedAt: new Date(READINESS_NOW + 60_000).toISOString(),
+				signInCheckedAt: firstRead
+			});
+			expect(claude(beats[2])?.signInCheckedAt).toBe(
+				new Date(READINESS_NOW + 60_000 + SIX_MINUTES).toISOString()
+			);
 		});
 	});
 });

@@ -1579,11 +1579,17 @@ export function createNodeRuntime(config: NodeConfig, io: NodeIo, options: Creat
 		let probe = agentAuthProbes.get(key);
 		if (!probe) {
 			probe = cacheProbe(
-				() =>
-					probeAgentAuth(io.runner, provider, executable, {
+				async () => {
+					const answer = await probeAgentAuth(io.runner, provider, executable, {
 						platform: io.environment.platform,
 						env: environment.env
-					}),
+					});
+					// Stamped when the command ANSWERED, and cached with the reading:
+					// a reading served from the cache keeps the instant it was taken.
+					return answer.state === 'answered'
+						? { ...answer, checkedAt: new Date(readinessClock()).toISOString() }
+						: answer;
+				},
 				AGENT_AUTH_CACHE_TTL_MS,
 				readinessClock
 			);

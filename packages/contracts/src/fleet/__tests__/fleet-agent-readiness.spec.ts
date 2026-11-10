@@ -361,12 +361,32 @@ describe('normalizeFleetAgentReadinessReport', () => {
 			lastSuccessAt: '2026-11-10T10:00:00.000Z',
 			lastFailureAt: '2026-11-10T11:30:00.000Z',
 			lastFailureKind: 'limit_reached',
-			lastFailureCode: 'usage_limit'
+			lastFailureCode: 'usage_limit',
+			signInCheckedAt: '2026-11-10T11:57:00.000Z'
 		});
 		expect(normalizeFleetAgentReadinessReport({ checkedAt: full.checkedAt, agents: [full] })).toEqual({
 			checkedAt: full.checkedAt,
 			agents: [full]
 		});
+	});
+
+	it('keeps the instant of the sign-in reading only beside a reading, and only when it is one', () => {
+		const report = normalizeFleetAgentReadinessReport({
+			checkedAt: '2026-11-10T12:00:00.000Z',
+			agents: [
+				entry({ signInCheckedAt: '2026-11-10T11:57:00Z' }),
+				// No reading: nothing for the instant to date.
+				entry({ provider: 'codex', signedIn: null, signInCheckedAt: '2026-11-10T11:57:00.000Z' }),
+				entry({ provider: 'gemini', signInCheckedAt: 'a while ago' }),
+				entry({ provider: 'opencode', signInCheckedAt: 'x'.repeat(1024 * 1024) })
+			]
+		});
+		expect(report?.agents.map((agent) => agent.signInCheckedAt)).toEqual([
+			'2026-11-10T11:57:00.000Z',
+			undefined,
+			undefined,
+			undefined
+		]);
 	});
 
 	it('NEVER keeps a sentence a node sent: the reason is looked up by its code, or absent', () => {
@@ -994,6 +1014,7 @@ describe('masking and normalising are bounded for any input (review N1)', () => 
 						reasonCode: huge,
 						reason: huge,
 						checkedAt: huge,
+						signInCheckedAt: huge,
 						limitResetsAt: huge,
 						limitWindow: huge,
 						usage: [{ window: huge, usedPercent: 10, resetsAt: huge }],

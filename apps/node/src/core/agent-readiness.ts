@@ -90,7 +90,17 @@ export interface AgentAuthReading {
  *    node did not run it at all.
  */
 export type AgentAuthProbe =
-	| { state: 'answered'; reading: AgentAuthReading; environment?: AgentProbeEnvironmentSource }
+	| {
+			state: 'answered';
+			reading: AgentAuthReading;
+			environment?: AgentProbeEnvironmentSource;
+			/**
+			 * ISO instant the status command gave this reading (the node's clock).
+			 * A cached reading keeps the instant it was TAKEN, so a refusal a run
+			 * proved after it is never shown as older than the sign-in check.
+			 */
+			checkedAt?: string;
+	  }
 	| { state: 'unanswered' }
 	| { state: 'unavailable' };
 
@@ -231,13 +241,30 @@ interface AuthProbeSpec {
 	read: (stdout: string, stderr: string) => AgentAuthReading | null;
 }
 
+/**
+ * Most of a help page that is read, per stream. A real one is a few hundred
+ * bytes; the rest of a megabyte of output (what the runner buffers) is never
+ * looked at, so no pattern below ever sees more than this.
+ */
+const AGENT_AUTH_HELP_MAX_CHARS = 16 * 1024;
+
+/*
+ * The help patterns are linear: each starts at the literal `Usage:` and the
+ * run of the usage line after it is BOUNDED (a real one is under a hundred
+ * characters), so a line of `Usage:Usage:…` costs a bounded scan per start
+ * instead of a rescan of the rest of the line.
+ */
+const CLAUDE_AUTH_USAGE = /Usage:[^\n]{0,256}?\sauth\b/;
+const CODEX_LOGIN_USAGE = /Usage:[^\n]{0,256}?\slogin\b/;
+const STATUS_WORD = /\bstatus\b/;
+
 /** The status command of each CLI this node can run agent work with. */
 const AUTH_PROBES: Readonly<Record<string, AuthProbeSpec>> = {
 	'claude-code': {
 		helpArgs: ['auth', '--help'],
 		// `Usage: claude auth [options] [command]` + a `status` line. A CLI
 		// without the subcommand prints `Usage: claude [options] [command] [prompt]`.
-		helpListsStatus: (help) => /Usage:[^\n]*\sauth\b/.test(help) && /\bstatus\b/.test(help),
+		helpListsStatus: (help) => CLAUDE_AUTH_USAGE.test(help) && STATUS_WORD.test(help),
 		statusArgs: ['auth', 'status', '--json'],
 		// stdout alone: a warning on stderr beside a valid document must not
 		// make the document unreadable.
@@ -245,7 +272,7 @@ const AUTH_PROBES: Readonly<Record<string, AuthProbeSpec>> = {
 	},
 	codex: {
 		helpArgs: ['login', '--help'],
-		helpListsStatus: (help) => /Usage:[^\n]*\slogin\b/.test(help) && /\bstatus\b/.test(help),
+		helpListsStatus: (help) => CODEX_LOGIN_USAGE.test(help) && STATUS_WORD.test(help),
 		statusArgs: ['login', 'status'],
 		read: (stdout, stderr) => readCodexLoginStatus(`${stdout}\n${stderr}`)
 	}
@@ -306,7 +333,10 @@ export async function probeAgentAuth(
 	try {
 		const help = await runner.run(command, probe.helpArgs, run);
 		if (help.timedOut || help.spawnError) return { state: 'unanswered' };
-		const helpText = `${help.stdout ?? ''}\n${help.stderr ?? ''}`;
+		const helpText = `${(help.stdout ?? '').slice(0, AGENT_AUTH_HELP_MAX_CHARS)}\n${(help.stderr ?? '').slice(
+			0,
+			AGENT_AUTH_HELP_MAX_CHARS
+		)}`;
 		// Only a real help page says anything about the CLI. A shell's "not
 		// recognized", a crash or silence is "could not tell".
 		if (help.code !== 0 || !/\bUsage:/i.test(helpText)) return { state: 'unanswered' };
@@ -1246,6 +1276,11 @@ export async function buildAgentReadinessReport(sources: AgentReadinessSources):
 			reason: describeFleetAgentReason(verdict.reasonCode, { window: verdict.limitWindow ?? null }),
 			checkedAt
 		};
+		// When the sign-in shown was read: the UI tells "refused after the last
+		// sign-in check" from "refused, and the CLI has said signed in since".
+		if (installed && reading && auth?.state === 'answered' && auth.checkedAt) {
+			entry.signInCheckedAt = auth.checkedAt;
+		}
 		if (verdict.limitResetsAt) entry.limitResetsAt = verdict.limitResetsAt;
 		if (verdict.limitWindow) entry.limitWindow = verdict.limitWindow;
 		const usage = history.usage.filter((window) =>

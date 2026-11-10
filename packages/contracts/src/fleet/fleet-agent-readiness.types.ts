@@ -285,6 +285,13 @@ export interface FleetAgentReadinessEntry {
 	reason: string | null;
 	/** ISO instant the node last checked this CLI (the node's clock). */
 	checkedAt: string;
+	/**
+	 * ISO instant the CLI's own status command gave the sign-in reading this
+	 * entry carries (`signedIn`, `authMethod`, `account`) — the node's clock.
+	 * Older than {@link checkedAt} when the reading is a cached one. Absent
+	 * when the entry carries no reading, or from a node older than the field.
+	 */
+	signInCheckedAt?: string | null;
 	/** ISO instant a `limit_reached` status is expected to lift, or null. */
 	limitResetsAt?: string | null;
 	/** Which window ran out, for a usage limit. */
@@ -755,6 +762,9 @@ function sanitizeEntry(raw: unknown, fallbackCheckedAt: string): FleetAgentReadi
 		reason: describeFleetAgentReason(reasonCode, { window: limitWindow }),
 		checkedAt: isoOrNull(source.checkedAt) ?? fallbackCheckedAt
 	};
+	// Only beside a sign-in reading: an instant with nothing it dates is noise.
+	const signInCheckedAt = entry.signedIn !== null ? isoOrNull(source.signInCheckedAt) : null;
+	if (signInCheckedAt) entry.signInCheckedAt = signInCheckedAt;
 	const limitResetsAt = isoOrNull(source.limitResetsAt);
 	if (limitResetsAt) entry.limitResetsAt = limitResetsAt;
 	if (limitWindow) entry.limitWindow = limitWindow;

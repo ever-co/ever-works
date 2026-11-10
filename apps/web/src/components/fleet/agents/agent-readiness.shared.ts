@@ -273,10 +273,14 @@ export interface AgentFailureNote {
     code: FleetAgentReasonCode | null;
     /**
      * `seen` only: a run found the CLI not signed in, and the CLI's own
-     * status command has said "signed in" SINCE. The owner may well have
-     * signed in again with the same account — which looks identical to the
-     * node, so the verdict stands until a run succeeds — and the line says
-     * so: the refusal was seen before the latest sign-in check.
+     * status command has said "signed in" SINCE — the reading the entry
+     * carries was TAKEN after the refusal (`signInCheckedAt`; the report's
+     * own `checkedAt` is not that instant: a reading can be served from the
+     * node's cache). The owner may well have signed in again with the same
+     * account — which looks identical to the node, so the verdict stands
+     * until a run succeeds — and the line says so: the refusal was seen
+     * before the latest sign-in check. False when the node did not say when
+     * it read the sign-in (a node older than the field).
      */
     beforeSignInCheck: boolean;
 }
@@ -286,13 +290,15 @@ export function agentFailureNote(
         FleetAgentReadinessEntry,
         'status' | 'reasonCode' | 'lastFailureAt' | 'lastFailureKind' | 'lastFailureCode'
     > &
-        Partial<Pick<FleetAgentReadinessEntry, 'signedIn' | 'checkedAt'>>,
+        Partial<Pick<FleetAgentReadinessEntry, 'signedIn' | 'signInCheckedAt'>>,
 ): AgentFailureNote | null {
     const at = typeof agent.lastFailureAt === 'string' ? agent.lastFailureAt : '';
     const failedAt = at ? new Date(at).getTime() : Number.NaN;
     if (!Number.isFinite(failedAt)) return null;
     const checkedAt =
-        typeof agent.checkedAt === 'string' ? new Date(agent.checkedAt).getTime() : NaN;
+        typeof agent.signInCheckedAt === 'string'
+            ? new Date(agent.signInCheckedAt).getTime()
+            : Number.NaN;
     const note = (mode: AgentFailureNote['mode']): AgentFailureNote => ({
         mode,
         at,
