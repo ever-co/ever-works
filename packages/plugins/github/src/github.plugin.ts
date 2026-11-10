@@ -27,6 +27,8 @@ import type {
 	MergeResult,
 	ForkRepositoryOptions,
 	GitRepositoryWithPermissions,
+	GitRepositoryIdentity,
+	GitUserRepositoryPermission,
 	GitPullRequestFile,
 	ListRepositoriesOptions,
 	ListPullRequestsOptions,
@@ -263,6 +265,21 @@ export class GitHubPlugin implements IPlugin, IGitProviderPlugin, IOAuthPlugin, 
 	async hasRepositoryAccess(owner: string, repo: string, token: string): Promise<boolean> {
 		const settings = await this.getSettings();
 		return this.apiService.hasRepositoryAccess(owner, repo, token, settings.apiBaseUrl);
+	}
+
+	async getRepositoryIdentity(owner: string, repo: string, token: string): Promise<GitRepositoryIdentity | null> {
+		const settings = await this.getSettings();
+		return this.apiService.getRepositoryIdentity(owner, repo, token, settings.apiBaseUrl);
+	}
+
+	async getUserRepositoryPermission(
+		owner: string,
+		repo: string,
+		username: string,
+		token: string
+	): Promise<GitUserRepositoryPermission | null> {
+		const settings = await this.getSettings();
+		return this.apiService.getUserRepositoryPermission(owner, repo, username, token, settings.apiBaseUrl);
 	}
 
 	// IGitProviderPlugin - Fork & Template
