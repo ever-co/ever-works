@@ -10,6 +10,9 @@
  */
 
 export * from './api-base';
+// Fleet agent readiness — per-CLI sign-in state, run outcomes and usage
+// windows behind the heartbeat's `agents` field.
+export * from './agent-readiness';
 export * from './browser-probe';
 export * from './auth-client';
 export * from './capabilities';

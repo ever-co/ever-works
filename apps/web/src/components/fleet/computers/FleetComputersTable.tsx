@@ -7,6 +7,8 @@ import { describeFleetModelProvider } from '@ever-works/contracts';
 import { Button } from '@/components/ui/button';
 import type { FleetNodeKind, FleetNodeView } from '@/lib/api/fleet';
 import { formatBytes } from '@/components/dashboard/runner-status.shared';
+import { AgentReadinessList } from '@/components/fleet/agents/AgentReadinessList';
+import { summarizeNodeAgents } from '@/components/fleet/agents/agent-readiness.shared';
 
 /**
  * The machine table — the enrolled computers with their state, CLI, billing
@@ -83,6 +85,8 @@ export function FleetComputersTable({
     const t = useTranslations('dashboard.settings.fleet');
     // Cloud computers (FL-17, CONTRACTS R-36): why Remove is disabled for one.
     const tCloud = useTranslations('fleet.cloud');
+    // Fleet agent readiness: the Agents column.
+    const tAgents = useTranslations('fleet.agents');
     const kindLabel = (kind: FleetNodeKind): string => t(`kinds.${kind}` as never);
     const statusDotClass = fleetStatusDotClass;
     const formatLastSeen = formatFleetLastSeen;
@@ -111,6 +115,9 @@ export function FleetComputersTable({
                         </th>
                         <th className="px-4 py-2.5 font-medium text-text-muted dark:text-text-muted-dark">
                             {t('table.cliVersion')}
+                        </th>
+                        <th className="px-4 py-2.5 font-medium text-text-muted dark:text-text-muted-dark">
+                            {tAgents('title')}
                         </th>
                         <th className="px-4 py-2.5 font-medium text-text-muted dark:text-text-muted-dark">
                             {t('table.billingIdentity')}
@@ -197,6 +204,22 @@ export function FleetComputersTable({
                                 data-testid={`fleet-node-cli-${node.id}`}
                             >
                                 {node.cliVersion ?? t('table.cliNotInstalled')}
+                            </td>
+                            {/* Fleet agent readiness: whether any agent on
+                                this machine can actually work — the same
+                                list the sidebar popover shows. An installed
+                                CLI (the column before) is not that. */}
+                            <td
+                                className="px-4 py-3 align-top min-w-[14rem]"
+                                data-testid={`fleet-node-agents-${node.id}`}
+                            >
+                                {summarizeNodeAgents(node) === 'hidden' ? (
+                                    <span className="text-text-muted dark:text-text-muted-dark">
+                                        -
+                                    </span>
+                                ) : (
+                                    <AgentReadinessList node={node} compact />
+                                )}
                             </td>
                             {/* Fleet cost accounting (EW-777): which
                                 seat this machine's spend is billed

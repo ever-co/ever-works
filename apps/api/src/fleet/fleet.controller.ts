@@ -43,6 +43,7 @@ import type {
     FleetExecutionPreferenceView,
     FleetHeartbeatResponse,
     FleetNodeRotateCredentialResponse,
+    FleetNodeRunStats,
     FleetNodeView,
     FleetRunnerStatusView,
     NeedsALookItem,
@@ -72,6 +73,7 @@ import {
     isFailedNodeHistoryEntry,
     nodeHistoryRunIds,
 } from './fleet-node-history';
+import { readNodeRunStats } from './fleet-node-run-stats';
 import { Public } from '../auth/decorators/public.decorator';
 import { CurrentUser } from '../auth/decorators/user.decorator';
 import type { AuthenticatedUser } from '../auth/types/auth.types';
@@ -351,6 +353,10 @@ export class FleetController {
         } catch {
             load = {};
         }
+        // No `runStats` here: counting a node's failures means reading the
+        // RUN behind each of its jobs (see `fleet-node-run-stats.ts`), which is
+        // a per-node read. The list is polled by the sidebar; the figures are
+        // on the detail read, where the drawer shows them.
         return nodes.map((node) => ({
             ...this.withLink(node),
             // Cluster-sourced rows are never leased onto, so they stay null.
@@ -438,8 +444,17 @@ export class FleetController {
         // a settings endpoint has no reason to ship it.
         const history = buildNodeJobHistory(recentJobs, runs);
 
+        // Fleet agent readiness: what the run records say about this node
+        // (finished / failed / spend, 24 hours and 7 days), for the owner only
+        // — the ledger is the owner's. Failures are the outcome of the RUN
+        // each job carried, by the same rule as `failures` below.
+        const runStats = role === 'owner' ? await this.readRunStats(auth.userId, node) : null;
+
         return {
-            node: this.withLink(node),
+            node: {
+                ...this.withLink(node),
+                ...(runStats ? { runStats } : {}),
+            },
             recentJobs: history,
             // Reconciled-aware, so the subset agrees with the badge each
             // row renders: a job the node called `done` whose run failed
@@ -448,6 +463,32 @@ export class FleetController {
             failures: history.filter(isFailedNodeHistoryEntry),
             historyUnavailable,
         };
+    }
+
+    /**
+     * Fleet agent readiness — the run-record figures for ONE of the caller's
+     * own enrolled computers, or null when there are none to show: a cluster
+     * row, a read that failed, or jobs whose runs cannot be read (see
+     * `readNodeRunStats`: no number is better than a wrong one). Never
+     * throws: a job-runtime hiccup must not take the drawer down.
+     */
+    private async readRunStats(
+        userId: string,
+        node: FleetNodeView,
+    ): Promise<FleetNodeRunStats | null> {
+        if (!node.persisted) return null;
+        try {
+            return await readNodeRunStats({ jobs: this.jobs, runs: this.runs }, userId, node.id);
+        } catch (error) {
+            // `warn`, not `debug`: unlike an absent run store this is a read
+            // that should work, and a failure here hides the figures silently.
+            this.logger.warn(
+                `Node run stats skipped for node ${node.id}: ${
+                    error instanceof Error ? error.message : String(error)
+                }`,
+            );
+            return null;
+        }
     }
 
     /** Runs behind a page of node history, by id. Never throws. */
@@ -898,6 +939,9 @@ export class FleetController {
             displays: body.displays,
             desktopReasons: body.desktopReasons,
             helperEvents: body.helperEvents,
+            // Fleet agent readiness: never sent at enrol; forwarded like every
+            // declared field and normalised by the service.
+            agents: body.agents,
         });
         if (!result) {
             // One undifferentiated message — never say WHICH check failed.
@@ -962,6 +1006,8 @@ export class FleetController {
             displays: body.displays,
             desktopReasons: body.desktopReasons,
             helperEvents: body.helperEvents,
+            // Fleet agent readiness: the per-CLI report, normalised by the service.
+            agents: body.agents,
         });
         if (!result) {
             throw new UnauthorizedException('Invalid node credential');
@@ -1026,6 +1072,15 @@ export class FleetController {
         // version, only when the operator named one.
         if (result.recommendedNodeVersion) {
             response.recommendedNodeVersion = result.recommendedNodeVersion;
+        }
+        // Fleet agent readiness: the credential NAMES a run on a node is
+        // granted — the same list the planner writes into every agent-task
+        // job — so the node asks its CLIs how they are signed in under those
+        // names from its first beat, not only after its first run. Names of
+        // variables, never a value; an empty list is an answer too, so it is
+        // copied whenever the service gives one.
+        if (Array.isArray(result.agentEnvPassthrough)) {
+            response.agentEnvPassthrough = result.agentEnvPassthrough;
         }
         return response;
     }

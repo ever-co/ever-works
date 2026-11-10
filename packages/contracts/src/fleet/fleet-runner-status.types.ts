@@ -23,6 +23,7 @@
  */
 
 import type { FleetJobKind } from './fleet-jobs.types.js';
+import type { FleetNodeAgentReadinessView } from './fleet-agent-readiness.types.js';
 import type { FleetNodeKind, FleetNodeStatus, FleetNodeWorkerState } from './fleet-node.types.js';
 
 /**
@@ -84,6 +85,25 @@ export interface FleetRunnerNodeView {
 	workerState?: FleetNodeWorkerState | null;
 	/** Why the worker is in that state (quarantine / throttle reason), or null. */
 	workerStateReason?: string | null;
+	/**
+	 * Fleet agent readiness — the agent CLIs the node last reported, or null
+	 * when it never reported any (a daemon older than the field). Straight
+	 * off the node row: the pill polls every 30 seconds and this costs no
+	 * extra read.
+	 *
+	 * "Online" plus an installed CLI did not say whether any agent could
+	 * actually work: a signed-out or access-denied seat reads `online` and
+	 * fails every run. This is what the popover shows instead of guessing.
+	 */
+	agentReadiness?: FleetNodeAgentReadinessView | null;
+	/**
+	 * Three states: true when at least one agent on this node can work now;
+	 * false only when every agent it reported has a definite negative verdict;
+	 * null when it could not be determined — it never reported, or an agent's
+	 * state is unknown and none is ready (`agentReadiness` then holds the rows
+	 * that say why).
+	 */
+	anyAgentReady?: boolean | null;
 }
 
 /** `GET /api/fleet/runner-status` — the whole pill payload. */

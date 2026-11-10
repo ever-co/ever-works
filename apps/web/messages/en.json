@@ -17162,6 +17162,93 @@
                 "reinstalling": "Reinstalling {name}…",
                 "failed": "The runner could not be reinstalled."
             }
+        },
+        "agents": {
+            "title": "Agents",
+            "noneReady": "Online, but no agent can work on this computer right now.",
+            "noneInstalledOnline": "Online, but no agent CLI is installed on this computer.",
+            "noneInstalled": "No agent CLI is installed on this computer.",
+            "unknown": "Agent status unknown. Update the node on this computer to see it.",
+            "status": {
+                "ready": "Ready",
+                "not_signed_in": "Not signed in",
+                "access_denied": "Access denied",
+                "limit_reached": "Limit reached",
+                "not_installed": "Not installed",
+                "unsupported": "Not supported",
+                "unknown": "Unknown"
+            },
+            "authMethod": {
+                "subscription": "Subscription",
+                "api_key": "API key",
+                "access_token": "Access token",
+                "cloud_provider": "Cloud provider",
+                "none": "Not signed in",
+                "unknown": "Sign-in method unknown"
+            },
+            "resetsIn": {
+                "soon": "resets soon",
+                "minute": "resets in {value}m",
+                "hour": "resets in {value}h",
+                "day": "resets in {value}d"
+            },
+            "window": {
+                "five_hour": "5-hour limit",
+                "weekly": "Weekly limit",
+                "weekly_opus": "Weekly limit (Opus)",
+                "weekly_sonnet": "Weekly limit (Sonnet)",
+                "overage": "Extra usage",
+                "primary": "Primary limit",
+                "secondary": "Secondary limit",
+                "usage": "Usage limit"
+            },
+            "usage": "{window}: {percent}% used",
+            "usageLimited": "{window}: reached",
+            "lastSuccess": "Last successful run {when}",
+            "lastSuccessNever": "No successful run recorded yet",
+            "ago": {
+                "second": "{value}s ago",
+                "minute": "{value}m ago",
+                "hour": "{value}h ago",
+                "day": "{value}d ago"
+            },
+            "runs": {
+                "last24h": "Runs, last 24 hours",
+                "last7d": "Runs, last 7 days",
+                "counts": "{runs} finished, {failed} failed",
+                "cost": "{amount} spent",
+                "countsFloor": "{runs}+ finished, {failed}+ failed"
+            },
+            "undetermined": "Could not determine whether an agent can work on this computer.",
+            "reason": {
+                "org_access_disabled": "The organization has disabled subscription access for this CLI. Use an API key, or ask an admin to enable access.",
+                "permission_denied": "The API refused this account (403). It may not use this CLI or model.",
+                "not_logged_in": "The CLI is not signed in. Sign in on this computer.",
+                "session_expired": "The sign-in session expired or was revoked. Sign in again on this computer.",
+                "invalid_api_key": "The API key was rejected. Replace it on this computer.",
+                "unauthorized": "The API rejected the credential (401). Sign in again on this computer.",
+                "usage_limit": "The {window} is reached.",
+                "out_of_credit": "The credit balance or quota is exhausted. Add credit, or use another seat.",
+                "status_signed_out": "The CLI is not signed in on this computer.",
+                "status_unconfirmed": "The CLI reports no sign-in, but the node does not know yet which credentials a run is given.",
+                "status_unanswered": "The CLI did not answer its status command.",
+                "status_unavailable": "This CLI version cannot report its sign-in state. Update the CLI.",
+                "probe_timed_out": "The startup lookup for this CLI timed out. Restart the node when the computer is less busy.",
+                "cli_too_old": "This CLI version is too old for this node. Update the CLI.",
+                "no_executor": "This node version cannot run agent work with this CLI.",
+                "verdict_stale": "The last run was refused and none has run since, so the current state is not known."
+            },
+            "limitWindow": {
+                "weekly": "weekly limit",
+                "session": "5-hour limit",
+                "daily": "daily limit",
+                "rate": "rate limit",
+                "usage": "usage limit"
+            },
+            "lastSeen": "Last seen in a run {when}",
+            "lastSeenBeforeCheck": "Last seen in a run {when}, before the latest sign-in check",
+            "lastFailure": "Last refused run {when}: {what}",
+            "usageAsOf": "Usage as of {when}"
         }
     },
     "everConnect": {

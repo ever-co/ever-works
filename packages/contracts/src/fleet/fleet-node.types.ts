@@ -45,6 +45,11 @@ import type { FleetNodeOrigin, FleetNodeVirtualView } from './fleet-virtual.type
 import type { FleetNodeCloudView } from './fleet-cloud.types.js';
 import type { FleetDisplayView, FleetHelperTrust, FleetNodeDesktopView } from './fleet-desktop.types.js';
 import type { FleetHelperEvent } from './fleet-helper.types.js';
+import type {
+	FleetAgentReadinessReport,
+	FleetNodeAgentReadinessView,
+	FleetNodeRunStats
+} from './fleet-agent-readiness.types.js';
 
 /**
  * App shape of a fleet node.
@@ -443,6 +448,28 @@ export interface FleetNodeSelfDescription {
 	 * id and remembers the ids it has written.
 	 */
 	helperEvents?: FleetHelperEvent[];
+	/**
+	 * Fleet agent readiness — every agent CLI this node knows about, each with
+	 * whether it is installed, how it is signed in, whether it can take work
+	 * (`ready` · `not_signed_in` · `access_denied` · `limit_reached` · …),
+	 * the usage windows last observed and the last successful run
+	 * (`fleet-agent-readiness.types.ts`).
+	 *
+	 * Built from free sources only — the CLIs' own status commands and what
+	 * real runs on this node proved; the node never starts a model call to
+	 * find out. Carries display labels and the CLI's own error sentence, with
+	 * anything credential-shaped masked; NEVER a token, a key or a credential
+	 * file's content.
+	 *
+	 * Heartbeat only, in the node's NEWEST strip tier: a platform older than
+	 * the field 400s the beat once and the node retries without it. A wire
+	 * `object`, re-read by the platform with
+	 * `normalizeFleetAgentReadinessReport` (unknown statuses read `unknown`,
+	 * unknown keys are dropped) — never a 400 for its content. Absent leaves
+	 * the stored report alone; a daemon older than the field never sends it
+	 * and the platform shows "unknown — update the node".
+	 */
+	agents?: FleetAgentReadinessReport;
 }
 
 /** Wire view of one fleet node — never carries credentials or hashes. */
@@ -731,6 +758,39 @@ export interface FleetNodeView {
 	 * available. Null / absent when the machine never reported it.
 	 */
 	desktop?: FleetNodeDesktopView | null;
+	/**
+	 * Fleet agent readiness — the agent CLIs the node last reported
+	 * (installed, signed in, ready or why not, usage windows, last successful
+	 * run), stamped with the platform's receipt time, or null when the node
+	 * never reported any (a daemon older than the field: "unknown — update
+	 * the node"). An agent the platform is throttling reads `limit_reached`.
+	 * Owner views only: the account label is the owner's (`toSharedView` is
+	 * an allow-list that does not carry it). Every `reason` on it is a fixed
+	 * sentence built from the entry's `reasonCode`, never text out of a run.
+	 */
+	agentReadiness?: FleetNodeAgentReadinessView | null;
+	/**
+	 * Fleet agent readiness — the node-level answer, three states: `true`
+	 * when at least one agent on this node can work now; `false` ONLY when
+	 * every agent it reported has a definite negative verdict (not installed
+	 * for certain, not signed in, access denied, limit reached, a CLI this
+	 * node cannot run); `null` when it could not be determined — the node
+	 * never reported, or an agent's state is unknown and none is ready. Says
+	 * nothing about the machine being online or leasable — read `status` and
+	 * `workerState` for those.
+	 */
+	anyAgentReady?: boolean | null;
+	/**
+	 * Fleet agent readiness — what the platform's own run records say about
+	 * this node: agent-task jobs finished and failed, and the model spend it
+	 * reported, over the last 24 hours and 7 days. "Failed" is the outcome of
+	 * the RUN a job carried, by the node history's rule — a job the node
+	 * reports `done` whose run failed counts as failed. Composed at the API
+	 * edge on the owner's DETAIL read only (it reads the node's week of jobs
+	 * and their runs); absent on the list, when the ledger or the runs could
+	 * not be read, on cluster rows and on a shared view.
+	 */
+	runStats?: FleetNodeRunStats;
 }
 
 /**
@@ -863,6 +923,20 @@ export interface FleetHeartbeatResponse {
 	 * Optional and additive: omitted when unset, ignored by older daemons.
 	 */
 	recommendedNodeVersion?: string;
+	/**
+	 * Fleet agent readiness — the NAMES (never the values) of the environment
+	 * variables this platform grants an agent run on a node
+	 * (`FLEET_NODE_AGENT_TASK_ENV_PASSTHROUGH`; every `agent-task` job carries
+	 * the same list as `execution.envPassthrough`). Sent on every accepted
+	 * beat so a node can ask its agent CLIs how they are signed in with the
+	 * credentials a run will be given — before any run has told it. Without
+	 * it a node can only assume the default names, and an instance that
+	 * grants others would read a working node as "not signed in".
+	 *
+	 * Optional and additive: ignored by older daemons; a node that gets none
+	 * (an older platform) reports a signed-out answer as `unknown`.
+	 */
+	agentEnvPassthrough?: string[];
 }
 
 // ─── Node lifecycle: the daemon version floor (self-build slice AR) ─────────
