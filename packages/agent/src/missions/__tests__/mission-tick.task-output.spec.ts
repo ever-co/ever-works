@@ -1,5 +1,10 @@
 import type { Repository } from 'typeorm';
-import { combineBothOutcomes, MissionTickService } from '../mission-tick.service';
+import {
+    combineBothOutcomes,
+    describeMissionNothingToFile,
+    missionOpenTasksWhere,
+    MissionTickService,
+} from '../mission-tick.service';
 import { Mission, MissionStatus, MissionType } from '../../entities/mission.entity';
 import { ActivityActionType } from '../../entities/activity-log.types';
 
@@ -8,21 +13,33 @@ import { ActivityActionType } from '../../entities/activity-log.types';
  * `ideas` untouched; `tasks` / `both`; the open-Tasks cap and the per-tick count; duplicate open
  * titles dropped; Backlog when the Mission requires approval, otherwise To do and started; at most
  * five Works; the once-per-day "nothing to file" notice.
+ *
+ * Plus Repository Works: one with Task isolation on is filed on and started like an App Work; one
+ * with isolation off gets nothing and the Mission says so; every other kind is still left alone;
+ * the App-changes switch pauses App Works only; and a Task whose pull request was closed without
+ * merging does not hold a slot of the open-Tasks cap.
  */
 
 type Row = Record<string, unknown>;
 
 const NOW_DAY_1 = new Date('2026-10-31T10:00:00.000Z');
 
-function matches(row: Row, where: Row): boolean {
+/**
+ * A TypeORM `where`, evaluated the way SQL does: an array is OR-ed branches, and a comparison
+ * against NULL is never true — `Not(In([...]))` drops a NULL column, only `IsNull()` matches it.
+ */
+function matches(row: Row, where: Row | Row[]): boolean {
+    if (Array.isArray(where)) return where.some((branch) => matches(row, branch));
     return Object.entries(where).every(([key, expected]) => {
+        const value = row[key] ?? null;
         if (expected && typeof expected === 'object' && '_type' in (expected as object)) {
             const op = expected as { _type: string; _value: unknown };
+            if (op._type === 'isNull') return value === null;
             if (op._type === 'not') {
                 const inner = op._value as { _type: string; _value: unknown[] };
-                return !inner._value.includes(row[key]);
+                return value !== null && !inner._value.includes(value);
             }
-            if (op._type === 'in') return (op._value as unknown[]).includes(row[key]);
+            if (op._type === 'in') return (op._value as unknown[]).includes(value);
         }
         return row[key] === expected;
     });
@@ -35,6 +52,8 @@ function build(
         relation: string;
         workKind: string | null;
         workName?: string;
+        /** The Work's Task isolation setting (`worktree` = on); absent = off, the default. */
+        workTaskIsolation?: string | null;
     }> = [{ workId: 'w-1', relation: 'improves', workKind: 'app', workName: 'Bookings' }],
 ) {
     const mission = {
@@ -122,7 +141,7 @@ function build(
             throw new Error('the tick must not read Task rows past the visibility predicate');
         }),
         count: jest.fn(
-            async (opts: { where: Row }) =>
+            async (opts: { where: Row | Row[] }) =>
                 taskRows.filter((row) => matches(row, opts.where)).length,
         ),
     };
@@ -271,8 +290,13 @@ describe('MissionTickService — Task output (APW-08 T35)', () => {
     it('counts the Mission’s open Tasks on the Work in SQL, never by reading rows', async () => {
         const t = build();
         await t.service.runOnce('m1', 'u1');
+        // Two OR-ed branches (no pull-request state, or one that is not closed-unmerged), each
+        // scoped to this Mission's Tasks on this Work.
         expect(t.taskRepo.count).toHaveBeenCalledWith({
-            where: expect.objectContaining({ workId: 'w-1', missionId: 'm1' }),
+            where: [
+                expect.objectContaining({ workId: 'w-1', missionId: 'm1' }),
+                expect.objectContaining({ workId: 'w-1', missionId: 'm1' }),
+            ],
         });
         expect(t.taskRepo.find).not.toHaveBeenCalled();
     });
@@ -532,18 +556,19 @@ describe('MissionTickService — Task output (APW-08 T35)', () => {
         expect(t.mission.status).toBe(MissionStatus.ACTIVE);
     });
 
-    it('no App Work to file on: ONE notice per Mission per day, stamped on the Mission (FR-54, S27)', async () => {
+    it('no App or Repository Work to file on: ONE notice per Mission per day, stamped on the Mission (FR-54, S27)', async () => {
         const t = build({}, [{ workId: 'w-site', relation: 'improves', workKind: 'directory' }]);
         expect(await t.service.runOnce('m1', 'u1')).toMatchObject({
             outcome: 'no-tasks',
             tasksFiled: 0,
+            message: 'no-app-work',
         });
         await t.service.runOnce('m1', 'u1');
         expect(nothingToFile(t.activityLog)).toHaveLength(1);
         expect(nothingToFile(t.activityLog)[0][0]).toMatchObject({
             details: expect.objectContaining({
                 reason: 'no-app-work',
-                message: 'No attached App Work to file Tasks on.',
+                message: 'No attached App or Repository Work to file Tasks on.',
             }),
         });
         expect(t.mission.taskOutputNoticeAt).toEqual(NOW_DAY_1);
@@ -556,6 +581,456 @@ describe('MissionTickService — Task output (APW-08 T35)', () => {
                 ([, event]) => event === 'mission.task_output.nothing_to_file',
             ),
         ).toHaveLength(2);
+    });
+
+    // ── Repository Works ────────────────────────────────────────────────────────────────
+
+    it('a Repository Work with Task isolation on gets a Task and a run, like an App Work', async () => {
+        const t = build({}, [
+            {
+                workId: 'w-repo',
+                relation: 'improves',
+                workKind: 'repo',
+                workName: 'ever-works',
+                workTaskIsolation: 'worktree',
+            },
+        ]);
+        const result = await t.service.runOnce('m1', 'u1');
+        expect(result).toMatchObject({ outcome: 'tasks-filed', tasksFiled: 1 });
+        // The planner is told it plans for an existing repository.
+        expect(t.planner.plan).toHaveBeenCalledTimes(1);
+        expect(t.planner.plan.mock.calls[0][0]).toMatchObject({
+            relation: 'improves',
+            work: { id: 'w-repo', kind: 'repo' },
+        });
+        expect(t.tasksService.create).toHaveBeenCalledWith(
+            'u1',
+            expect.objectContaining({
+                missionId: 'm1',
+                workId: 'w-repo',
+                labels: ['mission-task'],
+                status: 'todo',
+            }),
+            undefined,
+            { ownershipStamp: { tenantId: null, organizationId: null } },
+        );
+        expect(t.tasksService.runTask).toHaveBeenCalledWith(
+            'u1',
+            't-1',
+            { agentId: null },
+            undefined,
+        );
+        expect(nothingToFile(t.activityLog)).toHaveLength(0);
+    });
+
+    it('an App Work is still planned as an app', async () => {
+        const t = build();
+        await t.service.runOnce('m1', 'u1');
+        expect(t.planner.plan.mock.calls[0][0]).toMatchObject({ work: { id: 'w-1', kind: 'app' } });
+    });
+
+    it('a Repository Work is filed on under the same caps, approval rule and duplicate check', async () => {
+        const t = build(
+            {
+                guardrailsOverride: { requireApprovalBeforeCreate: true },
+                taskOutput: { tasksPerTick: 3, openTasksCap: 2 },
+            } as Partial<Mission>,
+            [
+                {
+                    workId: 'w-repo',
+                    relation: 'operates',
+                    workKind: 'repo',
+                    workTaskIsolation: 'worktree',
+                },
+            ],
+        );
+        t.taskRows.push({
+            id: 'o1',
+            workId: 'w-repo',
+            missionId: null,
+            status: 'todo',
+            title: 'Update the lockfile',
+        });
+        t.planner.plan.mockResolvedValueOnce([
+            { title: 'update the LOCKFILE', description: '' },
+            { title: 'Bump the base image', description: '' },
+            { title: 'Fix the flaky spec', description: '' },
+        ]);
+        const result = await t.service.runOnce('m1', 'u1');
+        // openTasksCap 2 → the planner is asked for 2; one is a duplicate of an open title.
+        expect(t.planner.plan.mock.calls[0][0]).toMatchObject({ count: 2, relation: 'operates' });
+        expect(result.tasksFiled).toBe(2);
+        expect(t.tasksService.create.mock.calls.map(([, input]) => (input as Row).title)).toEqual([
+            'Bump the base image',
+            'Fix the flaky spec',
+        ]);
+        for (const [, input] of t.tasksService.create.mock.calls) {
+            expect((input as Row).status).toBe('backlog');
+        }
+        expect(t.tasksService.runTask).not.toHaveBeenCalled();
+    });
+
+    it('a Repository Work with Task isolation off gets no Task, no planner call, and the day’s notice says why', async () => {
+        const t = build({}, [
+            {
+                workId: 'w-repo',
+                relation: 'improves',
+                workKind: 'repo',
+                workName: 'ever-works',
+                workTaskIsolation: 'off',
+            },
+        ]);
+        const result = await t.service.runOnce('m1', 'u1');
+        expect(result).toMatchObject({
+            outcome: 'no-tasks',
+            tasksFiled: 0,
+            message: 'repo-isolation-off',
+        });
+        expect(t.planner.plan).not.toHaveBeenCalled();
+        expect(t.tasksService.create).not.toHaveBeenCalled();
+        expect(t.tasksService.runTask).not.toHaveBeenCalled();
+        // Once a day, like every "nothing to file" notice — and it names the Work and the fix.
+        await t.service.runOnce('m1', 'u1');
+        expect(nothingToFile(t.activityLog)).toHaveLength(1);
+        expect(nothingToFile(t.activityLog)[0][0]).toMatchObject({
+            details: expect.objectContaining({
+                reason: 'repo-isolation-off',
+                message:
+                    'Nothing filed. Task isolation is off on the attached Repository Work "ever-works", ' +
+                    "so no Tasks are filed there. Turn on Task isolation in the Work's settings to let " +
+                    'this Mission file Tasks on it.',
+            }),
+        });
+        expect(t.mission.taskOutputNoticeAt).toEqual(NOW_DAY_1);
+    });
+
+    it('a Repository Work whose isolation setting is missing is treated as off (nothing is forced on)', async () => {
+        const t = build({}, [{ workId: 'w-repo', relation: 'operates', workKind: 'repo' }]);
+        expect(await t.service.runOnce('m1', 'u1')).toMatchObject({
+            outcome: 'no-tasks',
+            message: 'repo-isolation-off',
+        });
+        expect(t.tasksService.create).not.toHaveBeenCalled();
+    });
+
+    it('files on the eligible Works and skips the Repository Work with isolation off', async () => {
+        const t = build({}, [
+            { workId: 'w-app', relation: 'improves', workKind: 'app' },
+            {
+                workId: 'w-off',
+                relation: 'improves',
+                workKind: 'repo',
+                workName: 'website',
+                workTaskIsolation: 'off',
+            },
+            {
+                workId: 'w-on',
+                relation: 'operates',
+                workKind: 'repo',
+                workTaskIsolation: 'worktree',
+            },
+        ]);
+        const result = await t.service.runOnce('m1', 'u1');
+        expect(
+            t.planner.plan.mock.calls.map(([input]) => (input as { work: { id: string } }).work.id),
+        ).toEqual(['w-app', 'w-on']);
+        expect(result).toMatchObject({ outcome: 'tasks-filed', tasksFiled: 2 });
+        expect(result.message).toContain('works=2');
+        expect(result.message).toContain('isolation-off=1');
+        expect(
+            t.tasksService.create.mock.calls.map(([, input]) => (input as Row).workId),
+        ).toEqual(['w-app', 'w-on']);
+    });
+
+    it('when nothing new is filed, the notice also names the Repository Work that was skipped', async () => {
+        const t = build({ taskOutput: { tasksPerTick: 1, openTasksCap: 1 } } as Partial<Mission>, [
+            { workId: 'w-app', relation: 'improves', workKind: 'app' },
+            {
+                workId: 'w-off',
+                relation: 'improves',
+                workKind: 'repo',
+                workName: 'website',
+                workTaskIsolation: 'off',
+            },
+        ]);
+        // The App Work is at its cap, so the tick files nothing.
+        t.taskRows.push({ id: 'o1', workId: 'w-app', missionId: 'm1', status: 'todo', title: 'A' });
+        const result = await t.service.runOnce('m1', 'u1');
+        expect(result).toMatchObject({ outcome: 'no-tasks', tasksFiled: 0 });
+        expect(nothingToFile(t.activityLog)[0][0]).toMatchObject({
+            details: expect.objectContaining({
+                reason: 'nothing-new',
+                message:
+                    'Nothing new to file on the attached App or Repository Works. Task isolation is off on ' +
+                    'the attached Repository Work "website", so no Tasks are filed there. Turn on Task ' +
+                    "isolation in the Work's settings to let this Mission file Tasks on it.",
+            }),
+        });
+    });
+
+    it('a Repository Work whose isolation was turned off while the planner ran gets no Task', async () => {
+        const relations = [
+            {
+                workId: 'w-repo',
+                relation: 'improves',
+                workKind: 'repo',
+                workTaskIsolation: 'worktree' as string,
+            },
+        ];
+        const t = build({}, relations);
+        t.planner.plan.mockImplementationOnce(async () => {
+            t.missionWorks.listForMissionWithWork.mockResolvedValue([
+                { ...relations[0], workTaskIsolation: 'off' },
+            ]);
+            return [{ title: 'Add a changelog', description: '' }];
+        });
+        await t.service.runOnce('m1', 'u1');
+        expect(t.tasksService.create).not.toHaveBeenCalled();
+    });
+
+    it('every other kind is still left alone, with Task isolation on or off', async () => {
+        const relations = [
+            'directory',
+            'default',
+            'website',
+            'landing-page',
+            'blog',
+            'awesome-repo',
+            'company',
+            'campaign',
+            'project',
+            'no-such-kind',
+        ].flatMap((workKind, index) => [
+            {
+                workId: `w-${index}-on`,
+                relation: 'improves',
+                workKind,
+                workTaskIsolation: 'worktree',
+            },
+            { workId: `w-${index}-off`, relation: 'operates', workKind, workTaskIsolation: 'off' },
+        ]);
+        const t = build({}, [
+            ...relations,
+            { workId: 'w-null', relation: 'improves', workKind: null },
+        ]);
+        expect(await t.service.runOnce('m1', 'u1')).toMatchObject({
+            outcome: 'no-tasks',
+            tasksFiled: 0,
+            message: 'no-app-work',
+        });
+        expect(t.planner.plan).not.toHaveBeenCalled();
+        expect(t.tasksService.create).not.toHaveBeenCalled();
+        expect(nothingToFile(t.activityLog)[0][0]).toMatchObject({
+            details: expect.objectContaining({ reason: 'no-app-work' }),
+        });
+    });
+
+    it('a Repository Work attached under another relation is not a target', async () => {
+        const t = build({}, [
+            {
+                workId: 'w-repo',
+                relation: 'researches',
+                workKind: 'repo',
+                workTaskIsolation: 'worktree',
+            },
+        ]);
+        expect(await t.service.runOnce('m1', 'u1')).toMatchObject({ message: 'no-app-work' });
+        expect(t.planner.plan).not.toHaveBeenCalled();
+    });
+
+    // ── The App-changes switch (T49) governs App Works only ─────────────────────────────
+
+    describe('while App changes are paused (EVER_WORKS_APP_CHANGES_ENABLED=false)', () => {
+        let previous: string | undefined;
+        beforeEach(() => {
+            previous = process.env.EVER_WORKS_APP_CHANGES_ENABLED;
+            process.env.EVER_WORKS_APP_CHANGES_ENABLED = 'false';
+        });
+        afterEach(() => {
+            if (previous === undefined) delete process.env.EVER_WORKS_APP_CHANGES_ENABLED;
+            else process.env.EVER_WORKS_APP_CHANGES_ENABLED = previous;
+        });
+
+        it('a Repository Work is still filed on and started', async () => {
+            const t = build({}, [
+                {
+                    workId: 'w-repo',
+                    relation: 'improves',
+                    workKind: 'repo',
+                    workTaskIsolation: 'worktree',
+                },
+            ]);
+            const result = await t.service.runOnce('m1', 'u1');
+            expect(result).toMatchObject({ outcome: 'tasks-filed', tasksFiled: 1 });
+            expect(t.tasksService.runTask).toHaveBeenCalledTimes(1);
+        });
+
+        it('with an App Work and a Repository Work attached, only the App Work is skipped', async () => {
+            const t = build({}, [
+                { workId: 'w-app', relation: 'improves', workKind: 'app' },
+                {
+                    workId: 'w-repo',
+                    relation: 'improves',
+                    workKind: 'repo',
+                    workTaskIsolation: 'worktree',
+                },
+            ]);
+            const result = await t.service.runOnce('m1', 'u1');
+            expect(
+                t.planner.plan.mock.calls.map(
+                    ([input]) => (input as { work: { id: string } }).work.id,
+                ),
+            ).toEqual(['w-repo']);
+            expect(result).toMatchObject({ outcome: 'tasks-filed', tasksFiled: 1 });
+            expect(result.message).toContain('app-paused=1');
+            expect(
+                t.tasksService.create.mock.calls.map(([, input]) => (input as Row).workId),
+            ).toEqual(['w-repo']);
+        });
+
+        it('an App Work beside a Repository Work with isolation off: nothing filed, and the notice is about the Repository Work', async () => {
+            const t = build({}, [
+                { workId: 'w-app', relation: 'improves', workKind: 'app' },
+                {
+                    workId: 'w-repo',
+                    relation: 'improves',
+                    workKind: 'repo',
+                    workName: 'ever-works',
+                    workTaskIsolation: 'off',
+                },
+            ]);
+            const result = await t.service.runOnce('m1', 'u1');
+            expect(result).toMatchObject({
+                outcome: 'no-tasks',
+                tasksFiled: 0,
+                message: 'app-changes-paused',
+            });
+            expect(t.planner.plan).not.toHaveBeenCalled();
+            expect(nothingToFile(t.activityLog)).toHaveLength(1);
+            expect(nothingToFile(t.activityLog)[0][0]).toMatchObject({
+                details: expect.objectContaining({ reason: 'repo-isolation-off' }),
+            });
+        });
+    });
+
+    // ── The open-Tasks cap counts only Tasks that are really open ───────────────────────
+
+    it('a Task whose pull request was closed without merging does not count against the cap', async () => {
+        const t = build({ taskOutput: { tasksPerTick: 3, openTasksCap: 2 } } as Partial<Mission>, [
+            {
+                workId: 'w-repo',
+                relation: 'improves',
+                workKind: 'repo',
+                workTaskIsolation: 'worktree',
+            },
+        ]);
+        t.taskRows.push(
+            // Rejected: the pull request was closed unmerged, and nothing ever completes the Task.
+            {
+                id: 'rejected-1',
+                workId: 'w-repo',
+                missionId: 'm1',
+                status: 'in_review',
+                prNumber: 11,
+                prState: 'closed',
+                title: 'Rejected one',
+            },
+            {
+                id: 'rejected-2',
+                workId: 'w-repo',
+                missionId: 'm1',
+                status: 'blocked',
+                prNumber: 12,
+                prState: 'closed',
+                title: 'Rejected two',
+            },
+            // Really open: in review with an open pull request.
+            {
+                id: 'open-1',
+                workId: 'w-repo',
+                missionId: 'm1',
+                status: 'in_review',
+                prNumber: 13,
+                prState: 'open',
+                title: 'Open one',
+            },
+        );
+        const result = await t.service.runOnce('m1', 'u1');
+        // Cap 2, one really open → headroom 1 (not 0, which three counted Tasks would give).
+        expect(t.planner.plan.mock.calls[0][0]).toMatchObject({ count: 1 });
+        expect(result).toMatchObject({ outcome: 'tasks-filed', tasksFiled: 1 });
+        // Their status is not touched.
+        expect(t.taskRows.find((row) => row.id === 'rejected-1')?.status).toBe('in_review');
+        expect(t.taskRows.find((row) => row.id === 'rejected-2')?.status).toBe('blocked');
+    });
+
+    it('every other pull-request state still counts: none yet, open, draft, and merged-but-not-done', async () => {
+        for (const prState of [null, undefined, 'open', 'draft', 'merged']) {
+            const t = build({ taskOutput: { tasksPerTick: 1, openTasksCap: 1 } } as Partial<Mission>);
+            t.taskRows.push({
+                id: 'o1',
+                workId: 'w-1',
+                missionId: 'm1',
+                status: 'in_review',
+                prNumber: prState ? 7 : null,
+                prState,
+                title: 'A',
+            });
+            expect((await t.service.runOnce('m1', 'u1')).tasksFiled).toBe(0);
+            expect(t.planner.plan).not.toHaveBeenCalled();
+        }
+    });
+
+    it('a Done or Cancelled Task never counts, whatever its pull-request state', async () => {
+        const t = build({ taskOutput: { tasksPerTick: 1, openTasksCap: 1 } } as Partial<Mission>);
+        t.taskRows.push(
+            {
+                id: 'd1',
+                workId: 'w-1',
+                missionId: 'm1',
+                status: 'done',
+                prState: 'merged',
+                title: 'A',
+            },
+            {
+                id: 'c1',
+                workId: 'w-1',
+                missionId: 'm1',
+                status: 'cancelled',
+                prState: 'open',
+                title: 'B',
+            },
+        );
+        expect((await t.service.runOnce('m1', 'u1')).tasksFiled).toBe(1);
+    });
+
+    it('missionOpenTasksWhere: not Done/Cancelled AND (no pull-request state OR one that is not closed)', () => {
+        const where = missionOpenTasksWhere({ workId: 'w-1', missionId: 'm1' });
+        expect(where).toHaveLength(2);
+        const row = (over: Row) => ({ workId: 'w-1', missionId: 'm1', status: 'todo', ...over });
+        expect(matches(row({}), where as unknown as Row[])).toBe(true);
+        expect(matches(row({ prState: 'open' }), where as unknown as Row[])).toBe(true);
+        expect(matches(row({ prState: 'closed' }), where as unknown as Row[])).toBe(false);
+        expect(matches(row({ status: 'done' }), where as unknown as Row[])).toBe(false);
+        expect(matches(row({ missionId: 'other' }), where as unknown as Row[])).toBe(false);
+        expect(matches(row({ workId: 'w-2' }), where as unknown as Row[])).toBe(false);
+    });
+
+    it('describeMissionNothingToFile: the three reasons, one Work or several, capped at three names', () => {
+        expect(describeMissionNothingToFile('no-app-work')).toBe(
+            'No attached App or Repository Work to file Tasks on.',
+        );
+        expect(describeMissionNothingToFile('nothing-new')).toBe(
+            'Nothing new to file on the attached App or Repository Works.',
+        );
+        expect(describeMissionNothingToFile('repo-isolation-off', ['a', 'b'])).toBe(
+            'Nothing filed. Task isolation is off on the attached Repository Works "a", "b", so no ' +
+                "Tasks are filed there. Turn on Task isolation in the Work's settings to let this " +
+                'Mission file Tasks on it.',
+        );
+        expect(describeMissionNothingToFile('repo-isolation-off', ['a', 'b', 'c', 'd', 'e'])).toContain(
+            'Repository Works "a", "b", "c" and 2 more, so no Tasks are filed there.',
+        );
     });
 
     it('a `both` Mission runs the Ideas branch, then files Tasks — and reports both halves', async () => {
