@@ -72,17 +72,20 @@ test.describe('Conversation send, failure and retry', () => {
                     button.click();
                 });
 
+            // The retried send is a real API round trip; on a loaded CI shard it can
+            // outlast the 5 s default, which every other wait in this test avoids.
             await expect
                 .poll(
                     async () =>
                         (await listMessagesViaAPI(request, token, conversationId)).filter(
                             (m) => m.content === body,
                         ).length,
+                    { timeout: 30_000 },
                 )
                 .toBe(1);
             await expect(
                 page.getByTestId('conversation-message').filter({ hasText: body }),
-            ).toHaveCount(1);
+            ).toHaveCount(1, { timeout: 15_000 });
             await expect(page.getByTestId('conversation-message-failed')).toHaveCount(0, {
                 timeout: 15_000,
             });
