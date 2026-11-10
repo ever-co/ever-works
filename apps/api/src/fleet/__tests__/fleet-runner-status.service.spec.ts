@@ -488,7 +488,8 @@ describe('FleetRunnerStatusService', () => {
                     authMethod: 'subscription' as const,
                     account: 'owner@example.com (Acme, max)',
                     status: 'access_denied' as const,
-                    reason: 'Your organization has disabled Claude subscription access for Claude Code',
+                    reasonCode: 'org_access_disabled',
+                    reason: 'The organization has disabled subscription access for this CLI. Use an API key, or ask an admin to enable access.',
                     checkedAt: '2026-11-10T12:00:00.000Z',
                 },
             ],
@@ -519,6 +520,36 @@ describe('FleetRunnerStatusService', () => {
 
             expect(row.agentReadiness).toBeNull();
             expect(row.anyAgentReady).toBeNull();
+        });
+
+        it('carries the third state with the rows that explain it: reported, and still not known', async () => {
+            const undetermined = {
+                ...readiness,
+                anyReady: null,
+                agents: [
+                    {
+                        ...readiness.agents[0],
+                        installed: null,
+                        signedIn: null,
+                        status: 'unknown' as const,
+                        reasonCode: 'probe_timed_out',
+                        reason: 'The startup lookup for this CLI timed out. Restart the node when the computer is less busy.',
+                    },
+                ],
+            };
+            fleet.listEnrolledForUser.mockResolvedValue([
+                node({
+                    id: 'a',
+                    status: 'online',
+                    agentReadiness: undetermined,
+                    anyAgentReady: null,
+                }),
+            ]);
+
+            const [row] = (await build().snapshot('user-1')).nodes;
+
+            expect(row.anyAgentReady).toBeNull();
+            expect(row.agentReadiness).toEqual(undetermined);
         });
 
         it('does not change the counts or the free runners: the pill and the router read what they did', async () => {

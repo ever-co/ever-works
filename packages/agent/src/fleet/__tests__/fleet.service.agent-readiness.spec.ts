@@ -14,9 +14,12 @@ const NODE_ID = '11111111-1111-4111-8111-111111111111';
 const SECRET = 'a'.repeat(43);
 const TOKEN = 't'.repeat(43);
 
-/** The sentence the production node failed every run with. */
+/** The sentence the production node failed every run with — text out of a run, which must never be stored. */
 const ORG_DISABLED =
     'Your organization has disabled Claude subscription access for Claude Code · Use an Anthropic API key instead, or ask your admin to enable access';
+/** What is stored and served instead: the fixed sentence for the code. */
+const ORG_DISABLED_REASON =
+    'The organization has disabled subscription access for this CLI. Use an API key, or ask an admin to enable access.';
 
 const node = (overrides: Partial<FleetNode> = {}): FleetNode =>
     ({
@@ -53,6 +56,7 @@ const agent = (overrides: Partial<FleetAgentReadinessEntry> = {}): FleetAgentRea
     authMethod: 'subscription',
     account: 'owner@example.com (Acme, max)',
     status: 'ready',
+    reasonCode: null,
     reason: null,
     checkedAt: '2026-11-10T12:00:00.000Z',
     ...overrides,
@@ -68,11 +72,13 @@ const report = (agents: FleetAgentReadinessEntry[]) => ({
  * and the node-level answer every surface reads.
  *
  * The properties: the stored report carries the PLATFORM's receipt time; it
- * holds only what the contract knows, with anything credential-shaped
- * masked; a beat without one (an older daemon) leaves the stored one alone
+ * holds only what the contract knows, the account label masked and every
+ * reason a fixed sentence rebuilt from its code (never a sentence the node
+ * sent); a beat without one (an older daemon) leaves the stored one alone
  * and a node that never reported reads "unknown", never "no agent can work";
- * and `anyAgentReady` is true exactly when one installed agent is `ready`
- * and the platform is not throttling it.
+ * and `anyAgentReady` has three states — true when one installed agent is
+ * `ready` and the platform is not throttling it, false only when every agent
+ * has a definite negative verdict, null when it could not be determined.
  */
 describe('FleetService — agent readiness on the heartbeat', () => {
     let repository: {
@@ -113,8 +119,12 @@ describe('FleetService — agent readiness on the heartbeat', () => {
             agents: report([
                 agent({
                     status: 'access_denied',
+                    reasonCode: 'org_access_disabled',
+                    // A node that put the CLI's own sentence here would not get it stored.
                     reason: ORG_DISABLED,
                     lastFailureAt: '2026-11-10T11:59:00.000Z',
+                    lastFailureKind: 'access_denied',
+                    lastFailureCode: 'org_access_disabled',
                 }),
                 agent({
                     provider: 'codex',
@@ -130,10 +140,49 @@ describe('FleetService — agent readiness on the heartbeat', () => {
 
         expect(result?.node.status).toBe('online');
         expect(result?.node.cliVersion).toBe('claude 2.1.319');
+        // Both verdicts are definite: this is "no agent can work", not "unknown".
         expect(result?.node.anyAgentReady).toBe(false);
         expect(result?.node.agentReadiness?.agents[0]).toMatchObject({
             status: 'access_denied',
-            reason: ORG_DISABLED,
+            reasonCode: 'org_access_disabled',
+            reason: ORG_DISABLED_REASON,
+            lastFailureKind: 'access_denied',
+            lastFailureCode: 'org_access_disabled',
+        });
+        expect(JSON.stringify(patchOf().agentReadiness)).not.toContain('Your organization');
+    });
+
+    it('an agent the node could not judge makes the answer unknown, not "no agent can work"', async () => {
+        const result = await build().heartbeat(NODE_ID, SECRET, {
+            agents: report([
+                agent({
+                    installed: null,
+                    version: null,
+                    signedIn: null,
+                    authMethod: 'unknown',
+                    account: null,
+                    status: 'unknown',
+                    reasonCode: 'probe_timed_out',
+                }),
+                agent({
+                    provider: 'codex',
+                    installed: false,
+                    version: null,
+                    signedIn: null,
+                    authMethod: 'unknown',
+                    account: null,
+                    status: 'not_installed',
+                }),
+            ]),
+        });
+        expect(result?.node.anyAgentReady).toBeNull();
+        expect(result?.node.agentReadiness?.anyReady).toBeNull();
+        // The row that explains it is stored with its three-state `installed`.
+        expect(result?.node.agentReadiness?.agents[0]).toMatchObject({
+            installed: null,
+            status: 'unknown',
+            reasonCode: 'probe_timed_out',
+            reason: 'The startup lookup for this CLI timed out. Restart the node when the computer is less busy.',
         });
     });
 
@@ -189,25 +238,42 @@ describe('FleetService — agent readiness on the heartbeat', () => {
         },
     );
 
-    it('stores only what the contract knows, with anything credential-shaped masked', async () => {
+    it('stores only what the contract knows: no sentence a node sent, the account label masked', async () => {
         // Credential-SHAPED fixtures, assembled at runtime from plainly fake
         // parts so no line here can be taken for a real key. Not credentials.
         const fakeApiKey = ['sk', 'ant', 'api03', 'FAKE'.repeat(8)].join('-');
         const fakeToken = ['sk', 'ant', 'oat01', 'FAKE'.repeat(4)].join('-');
+        const dbUrl = `postgres://app:${'hunter2'}${'Sup3rS3cret'}@db.internal:5432/prod`;
+        const basic = `Authorization: Basic ${Buffer.from('user:passw0rd-example').toString('base64')}`;
         await build().heartbeat(NODE_ID, SECRET, {
             agents: {
                 checkedAt: '2026-11-10T12:00:00.000Z',
                 agents: [
                     {
                         ...agent({
+                            account: `owner@example.com ${fakeToken}`,
                             status: 'not_signed_in',
-                            reason: `Invalid API key ${fakeApiKey} · Fix external API key`,
+                            reasonCode: 'invalid_api_key',
+                            // What the node version before this one sent: a line of run output.
+                            reason: `Invalid API key ${fakeApiKey} · Fix external API key ${dbUrl} ${basic}`,
                         }),
-                        status: 'not_signed_in',
                         credentials: { accessToken: fakeToken },
                         configDirectory: 'C:\\Users\\owner\\.claude',
                     },
-                    { provider: 'codex', installed: true, status: 'levitating' },
+                    {
+                        provider: 'codex',
+                        installed: true,
+                        status: 'levitating',
+                        // No code at all (an older node), or one this platform does not know.
+                        reason: `${dbUrl} ${basic}`,
+                    },
+                    {
+                        provider: 'gemini',
+                        installed: true,
+                        status: 'unsupported',
+                        reasonCode: 'a code from the future',
+                        reason: dbUrl,
+                    },
                 ],
             },
         });
@@ -215,10 +281,22 @@ describe('FleetService — agent readiness on the heartbeat', () => {
         const stored = patchOf().agentReadiness as FleetAgentReadinessStored;
         expect(stored.agents[0]).not.toHaveProperty('credentials');
         expect(stored.agents[0]).not.toHaveProperty('configDirectory');
-        expect(stored.agents[0]?.reason).toBe('Invalid API key [redacted] · Fix external API key');
+        expect(stored.agents[0]).toMatchObject({
+            reasonCode: 'invalid_api_key',
+            reason: 'The API key was rejected. Replace it on this computer.',
+            account: 'owner@example.com [redacted]',
+        });
         // A status a newer node invented is "unknown", never trusted verbatim.
-        expect(stored.agents[1]?.status).toBe('unknown');
-        expect(JSON.stringify(stored)).not.toContain('FAKE');
+        expect(stored.agents[1]).toMatchObject({
+            status: 'unknown',
+            reasonCode: null,
+            reason: null,
+        });
+        expect(stored.agents[2]).toMatchObject({ reasonCode: null, reason: null });
+        const written = JSON.stringify(stored);
+        for (const leaked of ['FAKE', 'hunter2', 'db.internal', 'Basic', 'Fix external']) {
+            expect(written).not.toContain(leaked);
+        }
     });
 
     it('enrolment stores a report the same way when one arrives (the DTO is shared with the beat)', async () => {
@@ -265,11 +343,16 @@ describe('agentReadinessView — the node-level answer', () => {
         ...report(agents),
     });
 
-    it('true when at least one installed agent is ready', () => {
+    it('true when at least one installed agent is ready — whatever the others are', () => {
         expect(
             agentReadinessView({
                 agentReadiness: stored([
-                    agent({ status: 'access_denied', reason: ORG_DISABLED }),
+                    agent({ status: 'access_denied', reasonCode: 'org_access_disabled' }),
+                    agent({
+                        provider: 'gemini',
+                        status: 'unknown',
+                        reasonCode: 'status_unanswered',
+                    }),
                     agent({ provider: 'codex', authMethod: 'api_key', account: null }),
                 ]),
                 modelThrottles: null,
@@ -283,14 +366,33 @@ describe('agentReadinessView — the node-level answer', () => {
         ['limit_reached'],
         ['not_installed'],
         ['unsupported'],
-        ['unknown'],
-    ] as const)('false when the only agent is %s', (status) => {
+    ] as const)('false when the only agent is %s — a definite negative verdict', (status) => {
         expect(
             agentReadinessView({
                 agentReadiness: stored([agent({ status })]),
                 modelThrottles: null,
             }).anyAgentReady,
         ).toBe(false);
+    });
+
+    it('null — unknown, never "cannot" — when no agent is ready and one could not be judged', () => {
+        const unknown = agent({ status: 'unknown', reasonCode: 'verdict_stale' });
+        for (const agents of [
+            [unknown],
+            [unknown, agent({ provider: 'codex', installed: false, status: 'not_installed' })],
+            [agent({ status: 'access_denied' }), { ...unknown, provider: 'codex' }],
+            // `ready` on a CLI the node could not confirm is installed is not an answer either.
+            [agent({ installed: null, status: 'unknown', reasonCode: 'probe_timed_out' })],
+        ]) {
+            const view = agentReadinessView({
+                agentReadiness: stored(agents),
+                modelThrottles: null,
+            });
+            expect(view.anyAgentReady).toBeNull();
+            expect(view.agentReadiness?.anyReady).toBeNull();
+            // Unknown is not "never reported": the rows that explain it are served.
+            expect(view.agentReadiness?.agents).toHaveLength(agents.length);
+        }
     });
 
     it('false when the node reported no agent at all; null when it never reported', () => {
@@ -320,9 +422,13 @@ describe('agentReadinessView — the node-level answer', () => {
         expect(throttled.anyAgentReady).toBe(false);
         expect(throttled.agentReadiness?.agents[0]).toMatchObject({
             status: 'limit_reached',
-            reason: "You've hit your weekly limit",
+            reasonCode: 'usage_limit',
+            // The fixed sentence for the window — not the throttle's stored sentence.
+            reason: 'The weekly limit is reached.',
+            limitWindow: 'weekly',
             limitResetsAt: row.modelThrottles[0].until,
         });
+        expect(JSON.stringify(throttled)).not.toContain("You've hit");
 
         // An expired throttle is not in force: the node's own word stands.
         const expired = agentReadinessView({

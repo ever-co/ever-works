@@ -764,14 +764,18 @@ export interface FleetNodeView {
 	 * run), stamped with the platform's receipt time, or null when the node
 	 * never reported any (a daemon older than the field: "unknown — update
 	 * the node"). An agent the platform is throttling reads `limit_reached`.
-	 * Owner views only: the account label and the CLI's own sentence are the
-	 * owner's (`toSharedView` is an allow-list that does not carry it).
+	 * Owner views only: the account label is the owner's (`toSharedView` is
+	 * an allow-list that does not carry it). Every `reason` on it is a fixed
+	 * sentence built from the entry's `reasonCode`, never text out of a run.
 	 */
 	agentReadiness?: FleetNodeAgentReadinessView | null;
 	/**
-	 * Fleet agent readiness — the node-level answer: `true` when at least one
-	 * agent on this node can work now, `false` when the node reported its
-	 * agents and none can, `null` when it never reported (unknown). Says
+	 * Fleet agent readiness — the node-level answer, three states: `true`
+	 * when at least one agent on this node can work now; `false` ONLY when
+	 * every agent it reported has a definite negative verdict (not installed
+	 * for certain, not signed in, access denied, limit reached, a CLI this
+	 * node cannot run); `null` when it could not be determined — the node
+	 * never reported, or an agent's state is unknown and none is ready. Says
 	 * nothing about the machine being online or leasable — read `status` and
 	 * `workerState` for those.
 	 */
@@ -779,9 +783,12 @@ export interface FleetNodeView {
 	/**
 	 * Fleet agent readiness — what the platform's own run records say about
 	 * this node: agent-task jobs finished and failed, and the model spend it
-	 * reported, over the last 24 hours and 7 days. Composed at the API edge on
-	 * the owner's list and detail reads; absent when the job ledger could not
-	 * be read, on cluster rows and on a shared view.
+	 * reported, over the last 24 hours and 7 days. "Failed" is the outcome of
+	 * the RUN a job carried, by the node history's rule — a job the node
+	 * reports `done` whose run failed counts as failed. Composed at the API
+	 * edge on the owner's DETAIL read only (it reads the node's week of jobs
+	 * and their runs); absent on the list, when the ledger or the runs could
+	 * not be read, on cluster rows and on a shared view.
 	 */
 	runStats?: FleetNodeRunStats;
 }

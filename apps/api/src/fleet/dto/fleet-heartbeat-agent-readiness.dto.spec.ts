@@ -40,7 +40,7 @@ const agent = (overrides: Record<string, unknown> = {}) => ({
     authMethod: 'subscription',
     account: 'owner@example.com (Acme, max)',
     status: 'ready',
-    reason: null,
+    reasonCode: null,
     checkedAt: '2026-11-10T12:00:00.000Z',
     ...overrides,
 });
@@ -73,21 +73,32 @@ describe('FleetHeartbeatDto — agent readiness', () => {
                 agents: [
                     agent({
                         status: 'limit_reached',
-                        reason: "You've hit your weekly limit · resets Nov 12, 3am",
+                        reasonCode: 'usage_limit',
+                        limitWindow: 'weekly',
                         limitResetsAt: '2026-11-12T02:00:00.000Z',
                         usage: [
                             {
                                 window: 'five_hour',
                                 usedPercent: 42.5,
                                 resetsAt: '2026-11-10T15:00:00.000Z',
+                                windowMinutes: 300,
                             },
                             { window: 'weekly', usedPercent: 100, resetsAt: null, limited: true },
                         ],
                         usageObservedAt: '2026-11-10T11:30:00.000Z',
                         lastSuccessAt: '2026-11-10T10:00:00.000Z',
                         lastFailureAt: '2026-11-10T11:30:00.000Z',
+                        lastFailureKind: 'limit_reached',
+                        lastFailureCode: 'usage_limit',
                     }),
                     agent({ provider: 'codex', installed: false, status: 'not_installed' }),
+                    // A lookup that timed out: not installed is not known either way.
+                    agent({
+                        provider: 'gemini',
+                        installed: null,
+                        status: 'unknown',
+                        reasonCode: 'probe_timed_out',
+                    }),
                 ],
             },
         });

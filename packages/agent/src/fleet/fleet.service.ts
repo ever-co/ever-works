@@ -2713,12 +2713,13 @@ function applyReportedConsents(
 /**
  * Fleet agent readiness — fold a beat's per-CLI report into the patch.
  *
- * Normalised (known fields, bounded, an unknown status reads `unknown`,
- * credential-shaped text masked) and stamped with the platform's receipt
- * time, never the machine's clock. Absent — or not a report at all — leaves
- * the stored one alone, the additive contract every telemetry field follows;
- * an EMPTY agent list is a real report ("no agent CLI on this machine") and
- * does overwrite.
+ * Normalised (known fields, bounded, an unknown status reads `unknown`, the
+ * account label masked, and every `reason` REBUILT from its `reasonCode`: a
+ * sentence the node sends is never stored) and stamped with the platform's
+ * receipt time, never the machine's clock. Absent — or not a report at all —
+ * leaves the stored one alone, the additive contract every telemetry field
+ * follows; an EMPTY agent list is a real report ("no agent CLI on this
+ * machine") and does overwrite.
  */
 export function applyReportedAgentReadiness(
     refresh: Pick<EnrollInput, 'agents'>,
@@ -2733,10 +2734,12 @@ export function applyReportedAgentReadiness(
 
 /**
  * Fleet agent readiness — the stored report as the owner's view serves it,
- * with the node-level answer beside it: `true` when at least one agent can
- * work now, `false` when the node reported its agents and none can, `null`
- * when it never reported. An agent the platform is throttling (an active
- * `modelThrottles` entry) reads `limit_reached` whatever the node last said.
+ * with the node-level answer beside it, three states: `true` when at least
+ * one agent can work now; `false` only when every reported agent has a
+ * definite negative verdict; `null` when it could not be determined (never
+ * reported, or an agent is `unknown` and none is ready). An agent the
+ * platform is throttling (an active `modelThrottles` entry) reads
+ * `limit_reached` whatever the node last said.
  * A report the node stopped refreshing while it kept beating (a downgrade to
  * a version older than the field) reads never reported, not last week's
  * `ready`.

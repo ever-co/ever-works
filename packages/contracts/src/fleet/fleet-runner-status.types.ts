@@ -97,8 +97,11 @@ export interface FleetRunnerNodeView {
 	 */
 	agentReadiness?: FleetNodeAgentReadinessView | null;
 	/**
-	 * True when at least one agent on this node can work now, false when the
-	 * node reported its agents and none can, null when it never reported.
+	 * Three states: true when at least one agent on this node can work now;
+	 * false only when every agent it reported has a definite negative verdict;
+	 * null when it could not be determined — it never reported, or an agent's
+	 * state is unknown and none is ready (`agentReadiness` then holds the rows
+	 * that say why).
 	 */
 	anyAgentReady?: boolean | null;
 }

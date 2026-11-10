@@ -192,6 +192,36 @@ export class AgentRunRepository {
     }
 
     /**
+     * Fleet node run statistics — the STATUS of some of one owner's runs,
+     * and nothing else of them (no summary, no error text, no logs): what
+     * decides whether the fleet job that carried a run counts as failed.
+     *
+     * Owner-scoped exactly like {@link findByIds} as the node history calls
+     * it, so a run id that travelled in a job payload can never read another
+     * account's run. Ids that are not UUIDs cannot name a run and are dropped
+     * before the query (Postgres would refuse the whole read for one of
+     * them). Chunked, so a busy node's week never builds one enormous `IN`.
+     */
+    async findStatusesByIds(ids: readonly string[], userId: string): Promise<Map<string, string>> {
+        const statuses = new Map<string, string>();
+        const unique = [...new Set(ids)].filter(
+            (id) =>
+                typeof id === 'string' &&
+                /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id),
+        );
+        for (let offset = 0; offset < unique.length; offset += 500) {
+            const rows = await this.repository.find({
+                where: ownershipWhereWith<AgentRun>(userId, undefined, {
+                    id: In(unique.slice(offset, offset + 500)),
+                }),
+                select: { id: true, status: true },
+            });
+            for (const row of rows) statuses.set(row.id, row.status);
+        }
+        return statuses;
+    }
+
+    /**
      * Kanban run cockpit (Wave 2) — worker-side telemetry feed. A single
      * `repository.update` so the worker can stream progress (current
      * activity line, token counter, changed-files count) without touching

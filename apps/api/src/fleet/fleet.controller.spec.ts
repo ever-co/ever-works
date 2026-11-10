@@ -62,11 +62,11 @@ describe('FleetController', () => {
     };
     let jobs: {
         loadByNodeForUser: jest.Mock;
-        runStatsByNodeForUser: jest.Mock;
+        agentTaskOutcomesForNode: jest.Mock;
         promoteWaitingForNode: jest.Mock;
         historyForNode: jest.Mock;
     };
-    let runs: { findByIds: jest.Mock };
+    let runs: { findByIds: jest.Mock; findStatusesByIds: jest.Mock };
     let controller: FleetController;
 
     // Appended constructor deps (runner status + execution preferences).
@@ -150,11 +150,18 @@ describe('FleetController', () => {
         };
         jobs = {
             loadByNodeForUser: jest.fn(async () => ({})),
-            runStatsByNodeForUser: jest.fn(async () => ({})),
+            // Unstubbed by default, so every test that is not about run stats
+            // sees the node exactly as the registry served it (no `runStats`).
+            agentTaskOutcomesForNode: jest.fn(async () => {
+                throw new Error('run stats are not stubbed in this test');
+            }),
             promoteWaitingForNode: jest.fn(async () => 0),
             historyForNode: jest.fn(async () => []),
         };
-        runs = { findByIds: jest.fn(async () => []) };
+        runs = {
+            findByIds: jest.fn(async () => []),
+            findStatusesByIds: jest.fn(async () => new Map<string, string>()),
+        };
         ceilingStub.describeForUser.mockClear();
         ceilingStub.setFleetCeilingForUser.mockClear();
         auditStub.recentForOwnerNode.mockClear();
@@ -460,60 +467,152 @@ describe('FleetController', () => {
     });
 
     describe('run stats — what the platform’s own run records say (fleet agent readiness)', () => {
-        const stats = {
-            last24h: { runs: 4, failed: 4, costCents: 0 },
-            last7d: { runs: 9, failed: 6, costCents: 310 },
-        };
-
-        it('list merges the stats into each of my enrolled computers, in ONE grouped read', async () => {
-            jobs.runStatsByNodeForUser.mockResolvedValue({ [nodeView.id]: stats });
-
-            const result = await controller.list(auth);
-
-            expect(jobs.runStatsByNodeForUser).toHaveBeenCalledTimes(1);
-            expect(jobs.runStatsByNodeForUser).toHaveBeenCalledWith('user-1', [nodeView.id]);
-            expect(result[0].runStats).toEqual(stats);
+        const RUN_A = 'aaaaaaaa-aaaa-4aaa-8aaa-000000000001';
+        const RUN_B = 'aaaaaaaa-aaaa-4aaa-8aaa-000000000002';
+        const TASK = 'bbbbbbbb-bbbb-4bbb-8bbb-000000000001';
+        const outcome = (over: Record<string, unknown> = {}) => ({
+            jobId: 'job-1',
+            status: 'done',
+            costCents: 0,
+            recent: true,
+            runId: RUN_A,
+            taskId: TASK,
+            ...over,
         });
 
-        it('list degrades to rows without stats when the ledger cannot be read', async () => {
-            jobs.runStatsByNodeForUser.mockRejectedValue(new Error('fleet_jobs unavailable'));
-
-            const result = await controller.list(auth);
-
-            expect(result).toEqual([{ ...nodeView, load: null }]);
-        });
-
-        it('never asks for a cluster row or a computer someone else owns', async () => {
-            const clusterNode = { ...nodeView, id: 'k8s:worker-1', persisted: false };
-            const shared = {
-                ...nodeView,
-                id: '22222222-2222-4222-8222-222222222222',
-                viewerRole: 'org-member',
-            };
-            service.listForUser.mockResolvedValue([clusterNode, shared]);
-
-            const result = await controller.list(auth);
-
-            expect(jobs.runStatsByNodeForUser).not.toHaveBeenCalled();
-            expect(result.every((row) => row.runStats === undefined)).toBe(true);
-        });
-
-        it('detail carries the stats on the node for its owner', async () => {
-            jobs.runStatsByNodeForUser.mockResolvedValue({ [nodeView.id]: stats });
+        it('a job the node reports `done` whose run FAILED counts as failed (the incident this is for)', async () => {
+            // Every run on the node was refused by the CLI: the node completed
+            // each job, and the reconciler failed each run.
+            jobs.agentTaskOutcomesForNode.mockResolvedValue({
+                outcomes: [
+                    outcome({ jobId: 'job-1', runId: RUN_A }),
+                    outcome({ jobId: 'job-2', runId: RUN_B, recent: false, costCents: 12 }),
+                ],
+                capped: false,
+            });
+            runs.findStatusesByIds.mockResolvedValue(
+                new Map([
+                    [RUN_A, 'failed'],
+                    [RUN_B, 'failed'],
+                ]),
+            );
 
             const result = await controller.detail(auth, nodeView.id);
 
-            expect(jobs.runStatsByNodeForUser).toHaveBeenCalledWith('user-1', [nodeView.id]);
-            expect(result.node.runStats).toEqual(stats);
+            expect(jobs.agentTaskOutcomesForNode).toHaveBeenCalledWith(
+                'user-1',
+                nodeView.id,
+                expect.any(Date),
+            );
+            // Owner-scoped: the run ids travelled in job payloads.
+            expect(runs.findStatusesByIds).toHaveBeenCalledWith([RUN_A, RUN_B], 'user-1');
+            expect(result.node.runStats).toEqual({
+                last24h: { runs: 1, failed: 1, costCents: 0 },
+                last7d: { runs: 2, failed: 2, costCents: 12 },
+            });
         });
 
-        it('detail still answers when the ledger cannot be read', async () => {
-            jobs.runStatsByNodeForUser.mockRejectedValue(new Error('fleet_jobs unavailable'));
+        it('agrees with the `failures` list beside it: one rule for both', async () => {
+            const job = {
+                id: 'job-1',
+                kind: 'agent-task',
+                status: 'done',
+                nodeId: nodeView.id,
+                targetNodeId: null,
+                requiredCapabilities: [],
+                payload: { runId: RUN_A, taskId: TASK },
+                leaseExpiresAt: null,
+                attempts: 1,
+                maxAttempts: 3,
+                createdAt: null,
+                startedAt: null,
+                completedAt: '2026-11-10T11:00:00.000Z',
+                error: null,
+            };
+            jobs.historyForNode.mockResolvedValue([job]);
+            runs.findByIds.mockResolvedValue([
+                { id: RUN_A, status: 'failed', errorMessage: 'refused' },
+            ]);
+            jobs.agentTaskOutcomesForNode.mockResolvedValue({
+                outcomes: [outcome()],
+                capped: false,
+            });
+            runs.findStatusesByIds.mockResolvedValue(new Map([[RUN_A, 'failed']]));
+
+            const result = await controller.detail(auth, nodeView.id);
+
+            expect(result.failures).toHaveLength(1);
+            expect(result.node.runStats?.last24h).toEqual({ runs: 1, failed: 1, costCents: 0 });
+        });
+
+        it('shows no numbers rather than wrong ones when the runs cannot be read', async () => {
+            jobs.agentTaskOutcomesForNode.mockResolvedValue({
+                outcomes: [outcome()],
+                capped: false,
+            });
+            runs.findStatusesByIds.mockRejectedValue(new Error('agent_runs unavailable'));
 
             const result = await controller.detail(auth, nodeView.id);
 
             expect(result.node.id).toBe(nodeView.id);
             expect(result.node.runStats).toBeUndefined();
+        });
+
+        it('detail still answers when the ledger cannot be read', async () => {
+            jobs.agentTaskOutcomesForNode.mockRejectedValue(new Error('fleet_jobs unavailable'));
+
+            const result = await controller.detail(auth, nodeView.id);
+
+            expect(result.node.id).toBe(nodeView.id);
+            expect(result.node.runStats).toBeUndefined();
+        });
+
+        it('a node that ran nothing reads zeros, and never asks for runs', async () => {
+            jobs.agentTaskOutcomesForNode.mockResolvedValue({ outcomes: [], capped: false });
+
+            const result = await controller.detail(auth, nodeView.id);
+
+            expect(result.node.runStats).toEqual({
+                last24h: { runs: 0, failed: 0, costCents: 0 },
+                last7d: { runs: 0, failed: 0, costCents: 0 },
+            });
+            expect(runs.findStatusesByIds).not.toHaveBeenCalled();
+        });
+
+        it('says when the figures are a floor', async () => {
+            jobs.agentTaskOutcomesForNode.mockResolvedValue({
+                outcomes: [outcome({ runId: null, taskId: null })],
+                capped: true,
+            });
+
+            const result = await controller.detail(auth, nodeView.id);
+
+            expect(result.node.runStats).toMatchObject({ capped: true });
+        });
+
+        it('is the owner`s ledger: someone the computer is shared with gets none, and no read is made', async () => {
+            service.getVisibleForUser.mockResolvedValue({
+                view: { ...nodeView, viewerRole: 'org-member' },
+                role: 'org-member',
+            });
+
+            const result = await controller.detail(auth, nodeView.id);
+
+            expect(jobs.agentTaskOutcomesForNode).not.toHaveBeenCalled();
+            expect(result.node.runStats).toBeUndefined();
+        });
+
+        it('the list carries none: counting failures is a per-node read, and the list is polled', async () => {
+            jobs.agentTaskOutcomesForNode.mockResolvedValue({
+                outcomes: [outcome()],
+                capped: false,
+            });
+
+            const result = await controller.list(auth);
+
+            expect(jobs.agentTaskOutcomesForNode).not.toHaveBeenCalled();
+            expect(runs.findStatusesByIds).not.toHaveBeenCalled();
+            expect(result).toEqual([{ ...nodeView, load: null }]);
         });
     });
 

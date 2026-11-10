@@ -14,14 +14,12 @@ import type {
     FleetJobView,
     FleetNodeJobHistoryEntry,
     FleetNodeLoadView,
-    FleetNodeRunStats,
 } from '@ever-works/contracts';
 import type { FleetModelUsageLimit } from '@ever-works/contracts';
 import {
     activeFleetNodeModelThrottles,
     clampLeaseTtlSec,
     clampMaxAttempts,
-    emptyFleetNodeRunStats,
     FLEET_JOB_MAX_USAGE_LIMIT_PARKS,
     FLEET_JOB_MODEL_USAGE_LIMIT_QUEUED_REASON,
     FLEET_JOB_KINDS,
@@ -239,6 +237,22 @@ export class FleetJobStaleLeaseError extends ConflictException {
 /** Fleet agent readiness — the two windows a node's run stats cover. */
 export const FLEET_NODE_RUN_STATS_DAY_MS = 24 * 60 * 60 * 1000;
 export const FLEET_NODE_RUN_STATS_WEEK_MS = 7 * FLEET_NODE_RUN_STATS_DAY_MS;
+/** Most finished jobs one read of a node's run stats looks at (newest first). */
+export const FLEET_NODE_RUN_STATS_MAX_JOBS = 2000;
+
+/** One finished `agent-task` job, as a node's run statistics read it. */
+export interface FleetNodeJobOutcome {
+    jobId: string;
+    /** The job's own terminal status: the NODE's verdict, not the run's outcome. */
+    status: string;
+    /** Model spend the node reported for it, in cents (0 when none). */
+    costCents: number;
+    /** True when it finished inside the last 24 hours. */
+    recent: boolean;
+    /** `payload.runId` / `payload.taskId` as stored; null when absent or purged. */
+    runId: string | null;
+    taskId: string | null;
+}
 
 @Injectable()
 export class FleetJobService {
@@ -1363,47 +1377,48 @@ export class FleetJobService {
     }
 
     /**
-     * Fleet agent readiness — what the platform's own run records say about
-     * some of this owner's nodes: `agent-task` jobs finished and failed, and
-     * the model spend they reported, over the last 24 hours and the last 7
-     * days. Keyed by node id; EVERY requested node gets an entry (zeros when
-     * it ran nothing), so "0 runs" and "the ledger could not be read" — a
-     * throw the caller turns into an absent field — stay different answers.
+     * Fleet agent readiness — the `agent-task` jobs one of this owner's nodes
+     * finished in the last 7 days, newest first, for its run statistics.
      *
-     * A run is a job that reached a terminal status (`done` or `failed`); a
-     * job parked for a usage limit goes back to the queue and is counted
-     * once, when it finally settles. Tokens are not summed — they live
-     * inside each job's result body, which a retention purge nulls; the cost
-     * column is the one figure the ledger keeps.
+     * Each row is the job's OWN verdict (`done` / `failed`) plus the run and
+     * task ids it carried, and deliberately not a count: a job the node
+     * reports `done` can sit in front of a run that failed (the node did its
+     * work; the agent run did not succeed), so only the caller that can read
+     * the runs may say how many failed. See `readNodeRunStats` at the API
+     * edge, which applies the node history's rule.
+     *
+     * A run is a job that reached a terminal status; a job parked for a usage
+     * limit goes back to the queue and is counted once, when it settles.
+     * Bounded by {@link FLEET_NODE_RUN_STATS_MAX_JOBS}: `capped` says the
+     * node finished more than that in the window, so the 7-day figures are a
+     * floor. Tokens are not summed — they live inside each job's result body,
+     * which a retention purge nulls; the cost column is the one figure the
+     * ledger keeps.
      */
-    async runStatsByNodeForUser(
+    async agentTaskOutcomesForNode(
         userId: string,
-        nodeIds: readonly string[],
+        nodeId: string,
         now: Date = new Date(),
-    ): Promise<Record<string, FleetNodeRunStats>> {
-        const ids = [...new Set(nodeIds)].filter((id) => typeof id === 'string' && id.length > 0);
-        const stats: Record<string, FleetNodeRunStats> = {};
-        for (const id of ids) stats[id] = emptyFleetNodeRunStats();
-        if (ids.length === 0) return stats;
-        const rows = await this.jobs.countAgentTaskOutcomesByNode(
+    ): Promise<{ outcomes: FleetNodeJobOutcome[]; capped: boolean }> {
+        const rows = await this.jobs.findAgentTaskOutcomesForNode(
             userId,
-            ids,
+            nodeId,
             new Date(now.getTime() - FLEET_NODE_RUN_STATS_WEEK_MS),
             new Date(now.getTime() - FLEET_NODE_RUN_STATS_DAY_MS),
+            FLEET_NODE_RUN_STATS_MAX_JOBS + 1,
         );
-        for (const row of rows) {
-            const entry = stats[row.nodeId];
-            if (!entry) continue;
-            entry.last7d.runs += row.runs;
-            entry.last7d.costCents += row.costCents;
-            entry.last24h.runs += row.recentRuns;
-            entry.last24h.costCents += row.recentCostCents;
-            if (row.status === 'failed') {
-                entry.last7d.failed += row.runs;
-                entry.last24h.failed += row.recentRuns;
-            }
-        }
-        return stats;
+        const capped = rows.length > FLEET_NODE_RUN_STATS_MAX_JOBS;
+        return {
+            outcomes: rows.slice(0, FLEET_NODE_RUN_STATS_MAX_JOBS).map((row) => ({
+                jobId: row.id,
+                status: row.status,
+                costCents: row.costCents,
+                recent: row.recent,
+                runId: row.runId,
+                taskId: row.taskId,
+            })),
+            capped,
+        };
     }
 
     /**

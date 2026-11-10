@@ -73,6 +73,7 @@ import {
     isFailedNodeHistoryEntry,
     nodeHistoryRunIds,
 } from './fleet-node-history';
+import { readNodeRunStats } from './fleet-node-run-stats';
 import { Public } from '../auth/decorators/public.decorator';
 import { CurrentUser } from '../auth/decorators/user.decorator';
 import type { AuthenticatedUser } from '../auth/types/auth.types';
@@ -352,19 +353,16 @@ export class FleetController {
         } catch {
             load = {};
         }
-        // Fleet agent readiness: what the platform's own run records say about
-        // each of the caller's computers (agent-task jobs finished / failed and
-        // the spend reported, last 24 hours and 7 days). One grouped read for
-        // the whole list, composed here for the reason `load` is, and just as
-        // best-effort: without it the rows simply carry no `runStats`.
-        const runStats = await this.readRunStats(auth.userId, nodes);
+        // No `runStats` here: counting a node's failures means reading the
+        // RUN behind each of its jobs (see `fleet-node-run-stats.ts`), which is
+        // a per-node read. The list is polled by the sidebar; the figures are
+        // on the detail read, where the drawer shows them.
         return nodes.map((node) => ({
             ...this.withLink(node),
             // Cluster-sourced rows are never leased onto, so they stay null.
             // A shared row is someone else's runner: its load is not in the
             // caller's job ledger, so it is not shown (null = idle/unknown).
             load: node.persisted ? (load[node.id] ?? null) : null,
-            ...(runStats[node.id] ? { runStats: runStats[node.id] } : {}),
         })) as FleetNodeView[];
     }
 
@@ -446,14 +444,16 @@ export class FleetController {
         // a settings endpoint has no reason to ship it.
         const history = buildNodeJobHistory(recentJobs, runs);
 
-        // Fleet agent readiness: the same run-record figures the list shows,
-        // for the owner only (the ledger is the owner's).
-        const runStats = role === 'owner' ? await this.readRunStats(auth.userId, [node]) : {};
+        // Fleet agent readiness: what the run records say about this node
+        // (finished / failed / spend, 24 hours and 7 days), for the owner only
+        // — the ledger is the owner's. Failures are the outcome of the RUN
+        // each job carried, by the same rule as `failures` below.
+        const runStats = role === 'owner' ? await this.readRunStats(auth.userId, node) : null;
 
         return {
             node: {
                 ...this.withLink(node),
-                ...(runStats[node.id] ? { runStats: runStats[node.id] } : {}),
+                ...(runStats ? { runStats } : {}),
             },
             recentJobs: history,
             // Reconciled-aware, so the subset agrees with the badge each
@@ -466,33 +466,26 @@ export class FleetController {
     }
 
     /**
-     * Fleet agent readiness — the run-record figures for the caller's OWN
-     * enrolled computers among `nodes`, keyed by node id. Cluster rows and
-     * rows someone else owns are left out (their jobs are not in the caller's
-     * ledger). Never throws: a job-runtime hiccup must not take the list
-     * down, exactly like `load`.
+     * Fleet agent readiness — the run-record figures for ONE of the caller's
+     * own enrolled computers, or null when there are none to show: a cluster
+     * row, a read that failed, or jobs whose runs cannot be read (see
+     * `readNodeRunStats`: no number is better than a wrong one). Never
+     * throws: a job-runtime hiccup must not take the drawer down.
      */
     private async readRunStats(
         userId: string,
-        nodes: readonly FleetNodeView[],
-    ): Promise<Record<string, FleetNodeRunStats>> {
-        const ids = nodes
-            .filter(
-                (node) =>
-                    node.persisted &&
-                    (node.viewerRole === undefined || node.viewerRole === 'owner'),
-            )
-            .map((node) => node.id);
-        if (ids.length === 0) return {};
+        node: FleetNodeView,
+    ): Promise<FleetNodeRunStats | null> {
+        if (!node.persisted) return null;
         try {
-            return await this.jobs.runStatsByNodeForUser(userId, ids);
+            return await readNodeRunStats({ jobs: this.jobs, runs: this.runs }, userId, node.id);
         } catch (error) {
             this.logger.debug(
-                `Node run stats skipped for user ${userId}: ${
+                `Node run stats skipped for node ${node.id}: ${
                     error instanceof Error ? error.message : String(error)
                 }`,
             );
-            return {};
+            return null;
         }
     }
 

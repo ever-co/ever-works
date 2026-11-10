@@ -7,6 +7,7 @@ import {
     FLEET_JOB_TERMINAL_STATUSES,
     QUEUED_REASON_WAITING_FOR_RUNNER,
 } from '@ever-works/contracts';
+import { isSqliteFamilyDriver } from '../database/insertion-order';
 import { FleetJob } from '../entities/fleet-job.entity';
 
 export interface CreateFleetJobData {
@@ -657,75 +658,118 @@ export class FleetJobRepository {
     }
 
     /**
-     * Fleet agent readiness — what the run records say about some of ONE
-     * owner's nodes: `agent-task` jobs that reached a terminal status since
-     * `since`, grouped by node and status, with how many of them completed at
-     * or after `recentSince` and the model spend they reported.
+     * Fleet agent readiness — the `agent-task` jobs ONE node finished since
+     * `since`, newest first, as the little its run statistics need: the job's
+     * own status, the cost it reported, whether it finished at or after
+     * `recentSince`, and the run and task ids its payload carries.
      *
-     * One grouped read for the whole node list (never one per node), owner-
-     * scoped in the WHERE clause like every read keyed by a node id, and
-     * portable: a `CASE` sum rather than `FILTER`, so better-sqlite3 (e2e /
-     * CI) and Postgres run the same statement. Rides
-     * `idx_fleet_jobs_node_completed` (`nodeId`, `completedAt`). A drained
-     * node's finished jobs keep their `nodeId`, so the figures survive a
-     * drain; queued and in-flight jobs have no `completedAt` and are not
-     * counted.
+     * Why per job and not a grouped count by status: the job's status is the
+     * NODE's verdict on the job, not the outcome of the run. A failed agent
+     * run is reported by a node that did its work properly, so the job
+     * settles `done` — and a count by job status read "N finished, 0 failed"
+     * during exactly the outage it was meant to show. The caller pairs each
+     * row with its run (`payload.runId`) and judges it the way the node
+     * history does.
+     *
+     * The payload itself is never read back (it is executor input, up to
+     * `FLEET_JOB_MAX_PAYLOAD_BYTES` a row): the two ids are taken out of it
+     * in SQL, by the driver's own JSON functions, and only when they are JSON
+     * STRINGS — the rule `correlateAgentTaskJob` applies to a loaded payload
+     * (a number or an object there is not an id). Owner-scoped in the WHERE
+     * clause like every read keyed by a node id; rides
+     * `idx_fleet_jobs_node_completed` (`nodeId`, `completedAt`); bounded by
+     * `limit`. A purged payload (`bodiesPurgedAt`) yields null ids, which the
+     * caller reads as "no run known" and judges by the job's own status.
      */
-    async countAgentTaskOutcomesByNode(
+    async findAgentTaskOutcomesForNode(
         userId: string,
-        nodeIds: readonly string[],
+        nodeId: string,
         since: Date,
         recentSince: Date,
+        limit: number,
     ): Promise<
         Array<{
-            nodeId: string;
+            id: string;
             status: string;
-            runs: number;
-            recentRuns: number;
             costCents: number;
-            recentCostCents: number;
+            recent: boolean;
+            runId: string | null;
+            taskId: string | null;
         }>
     > {
-        if (nodeIds.length === 0) return [];
-        const rows = await this.repository
+        const driver = this.repository.manager?.connection?.options?.type;
+        // `simple-json` is TEXT holding one JSON document on every driver.
+        const jsonString = (name: 'runId' | 'taskId'): string | null => {
+            if (driver === 'postgres') {
+                return `CASE WHEN json_typeof((j.payload)::json -> '${name}') = 'string' THEN (j.payload)::json ->> '${name}' END`;
+            }
+            if (isSqliteFamilyDriver(driver)) {
+                return `CASE WHEN json_type(j.payload, '$.${name}') = 'text' THEN json_extract(j.payload, '$.${name}') END`;
+            }
+            return null;
+        };
+        const runIdSql = jsonString('runId');
+        const taskIdSql = jsonString('taskId');
+        const query = this.repository
             .createQueryBuilder('j')
-            .select('j.nodeId', 'nodeId')
+            .select('j.id', 'id')
             .addSelect('j.status', 'status')
-            .addSelect('COUNT(*)', 'runs')
-            .addSelect(
-                'SUM(CASE WHEN j.completedAt >= :recentSince THEN 1 ELSE 0 END)',
-                'recentRuns',
-            )
-            .addSelect('COALESCE(SUM(j.costCents), 0)', 'costCents')
-            .addSelect(
-                'COALESCE(SUM(CASE WHEN j.completedAt >= :recentSince THEN j.costCents ELSE 0 END), 0)',
-                'recentCostCents',
-            )
+            .addSelect('COALESCE(j.costCents, 0)', 'costCents')
+            .addSelect('CASE WHEN j.completedAt >= :recentSince THEN 1 ELSE 0 END', 'recent')
             .where('j.userId = :userId', { userId })
-            .andWhere('j.nodeId IN (:...nodeIds)', { nodeIds: [...nodeIds] })
+            .andWhere('j.nodeId = :nodeId', { nodeId })
             .andWhere('j.kind = :kind', { kind: 'agent-task' })
             .andWhere('j.status IN (:...statuses)', { statuses: [...FLEET_JOB_TERMINAL_STATUSES] })
             .andWhere('j.completedAt >= :since', { since })
             .setParameter('recentSince', recentSince)
-            .groupBy('j.nodeId')
-            .addGroupBy('j.status')
-            .getRawMany<{
-                nodeId: string;
-                status: string;
-                runs: string | number | null;
-                recentRuns: string | number | null;
-                costCents: string | number | null;
-                recentCostCents: string | number | null;
-            }>();
-        // `COUNT` / `SUM` come back as strings on Postgres and numbers on sqlite.
-        return rows.map((row) => ({
-            nodeId: row.nodeId,
-            status: row.status,
-            runs: Number(row.runs ?? 0),
-            recentRuns: Number(row.recentRuns ?? 0),
-            costCents: Number(row.costCents ?? 0),
-            recentCostCents: Number(row.recentCostCents ?? 0),
-        }));
+            .orderBy('j.completedAt', 'DESC')
+            .limit(Math.max(1, Math.floor(limit)));
+        if (runIdSql && taskIdSql) {
+            query.addSelect(runIdSql, 'runId').addSelect(taskIdSql, 'taskId');
+        } else {
+            // A driver with no JSON function known here: read the document and
+            // take the ids out of it in process. Correct, just heavier.
+            query.addSelect('j.payload', 'payload');
+        }
+        const rows = await query.getRawMany<{
+            id: string;
+            status: string;
+            costCents: string | number | null;
+            recent: string | number | boolean | null;
+            runId?: unknown;
+            taskId?: unknown;
+            payload?: unknown;
+        }>();
+        const text = (value: unknown): string | null => (typeof value === 'string' ? value : null);
+        return rows.map((row) => {
+            let runId = text(row.runId);
+            let taskId = text(row.taskId);
+            if (!runIdSql || !taskIdSql) {
+                let payload: unknown = row.payload;
+                if (typeof payload === 'string') {
+                    try {
+                        payload = JSON.parse(payload);
+                    } catch {
+                        payload = null;
+                    }
+                }
+                const body =
+                    payload && typeof payload === 'object'
+                        ? (payload as Record<string, unknown>)
+                        : {};
+                runId = text(body.runId);
+                taskId = text(body.taskId);
+            }
+            return {
+                id: row.id,
+                status: row.status,
+                // `COALESCE` / `CASE` come back as strings on Postgres and numbers on sqlite.
+                costCents: Number(row.costCents ?? 0),
+                recent: Number(row.recent ?? 0) === 1 || row.recent === true,
+                runId,
+                taskId,
+            };
+        });
     }
 
     /** Cents every job of one owner reported since `since` — the FLEET-WIDE daily ceiling's input. */
