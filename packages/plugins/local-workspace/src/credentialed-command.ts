@@ -70,7 +70,7 @@ import { randomUUID } from 'node:crypto';
  * | `remote.<url>.vcs` | runs `git-remote-<vcs>` | dead: private remote name; helper transport not allowed | blocks |
  * | `remote.<url>.proxy` / `.proxyAuthMethod` | routes through a proxy — measured | dead: private remote name | blocks |
  * | `remote.<name>.mirror` / `.prune*` / `.fetch` / `.push` / `.tagOpt` | changes which refs move | dead for the URL: private remote name | plain-named remotes allowed |
- * | `remote.<private name>.proxy` / `.proxyAuthMethod` | the one remote key that OUTRANKS `http.<url>.proxy`; writable only by someone who read the name off the running command's argv | pinned on the private remote itself, to the value the `http.<url>.proxy` pin carries | blocks: the `ew-credentialed-` prefix is reserved, no file may hold a section for it |
+ * | `remote.<private name>.proxy` / `.proxyAuthMethod` | the one remote key that OUTRANKS `http.<url>.proxy` — measured against a recording proxy; writable only by someone who read the name off the running command's argv | pinned on the private remote itself, to the value the `http.<url>.proxy` pin carries — measured: planted as the fetch starts, the proxy sees nothing | blocks: the `ew-credentialed-` prefix is reserved (case-sensitive, as Git compares subsections), no file may hold a section for it |
  * | `url.<base>.insteadOf` / `.pushInsteadOf` | rewrites the URL Git connects to | other transports refused; the header is keyed to the ORIGINAL URL, so another https host is sent nothing — measured | blocks; in the OPERATOR's scopes it withholds / refuses with its own reason — see below |
  * | `protocol.*.allow` | re-allows a transport — measured to beat command-scope config | ignored: `GIT_ALLOW_PROTOCOL` | blocks |
  * | `core.sshCommand`, `ssh.variant` | program run by the ssh transport — measured | transport not allowed | blocks |
@@ -82,7 +82,7 @@ import { randomUUID } from 'node:crypto';
  * | `core.askPass`, `GIT_ASKPASS`, `SSH_ASKPASS` | program asked for a password after a rejected header | overridden to empty; variables removed | blocks |
  * | `credential.helper`, `credential.<url>.*` | program asked for a password | helper list reset | blocks |
  * | `gc.recentObjectsHook` | program run by the gc a fetch triggers (documented; not reproduced here) | no gc in the child: `maintenance.auto=false`, `gc.auto=0` | blocks |
- * | `gpg.program`, `gpg.<format>.program`, `gpg.ssh.defaultKeyCommand`, `push.gpgSign` | signing program on a signed push | `push.gpgSign=false`, so nothing is signed — measured | allowed |
+ * | `gpg.program`, `gpg.<format>.program`, `gpg.ssh.defaultKeyCommand`, `push.gpgSign` | signing program on a signed push | `push.gpgSign=false`, so nothing is signed — measured, one case per key | allowed |
  * | `push.negotiate` | the push starts `git fetch --negotiate-only <URL>` — BY URL, so `[remote "<url>"]` applies to that grandchild — measured: a planted `uploadpack` ran there with the header | overridden `false` | allowed |
  * | `fetch.recurseSubmodules`, `submodule.<n>.fetchRecurseSubmodules`, `push.recurseSubmodules` | a second fetch / push inside a repository under the pool | `--no-recurse-submodules` (fetch), `push.recurseSubmodules=no` | `submodule.*` allowed |
  * | `http.sslVerify` | accepts any certificate | pinned at the exact URL to the operator's value, else `true` — measured | blocks |
@@ -95,13 +95,15 @@ import { randomUUID } from 'node:crypto';
  * | `extensions.worktreeConfig`, `extensions.relativeWorktrees` | adds the per-worktree file; records how worktrees are linked | same overrides | allowed; that file is read too |
  * | `extensions.partialClone`, `remote.<name>.promisor`, `.partialCloneFilter` | a missing object makes the command start `git fetch <promisor remote>` — a grandchild that names a remote the config DOES describe — measured: a planted promisor remote ran `core.sshCommand` with the header | the grandchild inherits this environment: one transport, the header keyed to the original URL, every override — measured | allowed (Git writes them itself after `fetch --filter`) |
  * | `fetch.bundleURI`, `promisor.*` | downloads from another URI — never with our header | none needed | blocks |
- * | `core.editor`, `core.pager`, `pager.*`, `sequence.editor` | none: Git starts a pager only on a terminal and an editor only to edit — measured | n/a | allowed |
- * | `diff.<x>.textconv` / `.command`, `diff.external`, `merge.<x>.driver`, `filter.<x>.clean` / `.smudge` / `.process`, `mergetool.*`, `difftool.*` | none: a fetch or a push converts, merges and diffs no content — measured | n/a | allowed |
- * | `alias.*` | none: Git never lets an alias shadow `fetch` / `push` — measured | n/a | allowed |
+ * | `core.editor`, `core.pager`, `pager.*`, `sequence.editor` | none: Git starts a pager only on a terminal and an editor only to edit — measured, one case per key | n/a | allowed |
+ * | `diff.<x>.textconv` / `.command`, `diff.external`, `merge.<x>.driver`, `filter.<x>.clean` / `.smudge` / `.process`, `mergetool.*`, `difftool.*` | none: a fetch or a push converts, merges and diffs no content — measured, one case per key, with `info/attributes` selecting the driver | n/a | allowed |
+ * | `submodule.<x>.update` (`!command`), `lfs.customtransfer.<x>.path` | none: run by `git submodule update` and by git-lfs, and a credentialed fetch or push starts neither (no recursion, no hooks) — measured | n/a | allowed (`submodule.*`, `lfs.*`) |
+ * | `alias.*` | none: Git never lets an alias stand in for a command that exists — measured for every command a fetch or a push starts | n/a | allowed |
  * | `color.*`, `i18n.*` | none: they name no program | n/a | allowed |
- * | `GIT_TRACE*`, `GIT_CURL_VERBOSE` (environment) | Git writes the request, header included, to the file they name — measured with `GIT_TRACE2_EVENT` | removed from the child's environment | n/a: not config |
+ * | `GIT_TRACE*`, `GIT_CURL_VERBOSE` (environment) | Git writes the request, header included, to the file they name — measured: `GIT_TRACE2_EVENT`, and `GIT_TRACE_CURL` with `GIT_TRACE_REDACT=0` | removed from the child's environment | n/a: not config |
+ * | `trace2.eventTarget` / `.normalTarget` / `.perfTarget` (system / global config) | with `trace2.configParams` matching `http.*` the event stream records the command-scope config, header included — measured | `GIT_TRACE2`, `GIT_TRACE2_EVENT`, `GIT_TRACE2_PERF` = `0` in the child: Git reads these keys from system and global only, so command scope cannot turn them off; the variable can | n/a: the operator's scopes |
  * | `uploadpack.*`, `receive.*`, `uploadarchive.*` | server side of a local transport | transport not allowed (https) | blocks |
- * | `trace2.*`, `safe.*`, `uploadpack.packObjectsHook` | none: Git reads them from system / global config only | n/a | `safe.*` allowed |
+ * | `safe.*`, `uploadpack.packObjectsHook` | none: Git reads them from system / global config only | n/a | `safe.*` allowed |
  *
  * ## A rewrite in the operator's own config
  *
@@ -116,7 +118,9 @@ import { randomUUID } from 'node:crypto';
  * will really use, and a credential is armed only when that is still the
  * URL it was issued for. Otherwise a fetch WITHHOLDS and runs as it always
  * did, over whatever the rewrite points at; a push REFUSES, in one
- * sentence that names the rewrite's scope and not its value.
+ * sentence that names the rewrite's scope and not its value — also when a
+ * plain `insteadOf` already made `git remote get-url origin` disagree with
+ * the credential, which the push checks first.
  *
  * ## When the allowlist says no
  *
@@ -124,7 +128,9 @@ import { randomUUID } from 'node:crypto';
  * value) together with the commands that remove it ({@link recoveryHint}),
  * because the refusal lasts as long as the key does: the pool is shared by
  * every Task of that repository on that machine, and nothing else cleans
- * its config.
+ * its config. Where a key's subsection cannot be printed, the command
+ * lists the full names, and it lists exactly what the allowlist refuses —
+ * following it never removes `remote.origin.url`.
  *
  * This module does NOT remove the key itself, on purpose:
  *
@@ -141,6 +147,20 @@ import { randomUUID } from 'node:crypto';
  *  - nothing is lost by not doing it: layer 1 holds either way, a fetch
  *    still runs (without the credential), and a push says exactly what to
  *    remove.
+ *
+ * Some of what is still refused, layer 1 already makes harmless to the
+ * credentialed child: `core.sshCommand`, `ssh.variant`, `core.gitProxy`
+ * (no transport but the credential's own), `protocol.*.allow`
+ * (`GIT_ALLOW_PROTOCOL`), `credential.*` and `core.askPass` (reset),
+ * `core.alternateRefsCommand` (emptied), `remote.<url>.*` (private name).
+ * They stay refused on purpose: nothing a fleet node or common tooling
+ * does writes them into a pool, so finding one is the tamper signal this
+ * layer exists to give; and refusing them is the second wall should a
+ * layer-1 pin ever be lost. Mutation runs of
+ * `credentialed-command.attacks.spec.ts` show what that wall is worth:
+ * without the private name, `GIT_ALLOW_PROTOCOL` or the
+ * `core.alternateRefsCommand` override, the "planted between" cases go
+ * red while the "planted before" cases — this layer — still hold.
  *
  * Clearing a tampered pool is an operator's decision, taken with the key
  * still there to look at. The commands are in the message.
