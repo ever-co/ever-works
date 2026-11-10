@@ -469,6 +469,10 @@ describe('describeSelf', () => {
 		});
 
 		it('re-normalises at the wire boundary: unknown keys dropped, credentials masked', async () => {
+			// Credential-SHAPED fixtures, assembled at runtime from plainly fake
+			// parts so no line here can be taken for a real key. Not credentials.
+			const fakeApiKey = ['sk', 'ant', 'api03', 'FAKE'.repeat(8)].join('-');
+			const fakeToken = ['sk', 'ant', 'oat01', 'FAKE'.repeat(4)].join('-');
 			const description = await describeSelf(runnerWith([]), environment(), '0.1.0', null, {
 				agents: () =>
 					({
@@ -477,15 +481,15 @@ describe('describeSelf', () => {
 							{
 								...report.agents[0],
 								status: 'not_signed_in',
-								reason: 'Invalid API key sk-ant-api03-AbCdEfGhIjKlMnOpQrStUvWxYz · Fix external API key',
-								credentials: { accessToken: 'sk-ant-oat01-do-not-send' }
+								reason: `Invalid API key ${fakeApiKey} · Fix external API key`,
+								credentials: { accessToken: fakeToken }
 							}
 						]
 					}) as never
 			});
 			expect(description.agents?.agents[0]).not.toHaveProperty('credentials');
 			expect(description.agents?.agents[0]?.reason).toBe('Invalid API key [redacted] · Fix external API key');
-			expect(JSON.stringify(description)).not.toContain('sk-ant');
+			expect(JSON.stringify(description)).not.toContain('FAKE');
 		});
 
 		it('keeps an empty list (no agent CLI here) and omits the field when the probe has no answer', async () => {

@@ -22,6 +22,17 @@ import {
 
 const NOW = Date.parse('2026-11-10T12:00:00.000Z');
 
+/**
+ * Credential-SHAPED fixtures for the masking cases. Assembled at runtime from
+ * plainly fake parts, so no line of this file holds anything a secret scanner
+ * (or a reader) could take for a real key. None of them is a credential.
+ */
+const FAKE_API_KEY = ['sk', 'ant', 'api03', 'FAKE'.repeat(8)].join('-');
+const FAKE_PROJECT_KEY = ['sk', 'proj', 'FAKE'.repeat(4)].join('-');
+const FAKE_BEARER = ['Bearer', 'fake'.repeat(5)].join(' ');
+const FAKE_JWT = [`eyJ${'head'.repeat(3)}`, `eyJ${'body'.repeat(3)}`, 'sign'.repeat(3)].join('.');
+const FAKE_HEX = 'ab12'.repeat(9);
+
 function entry(overrides: Partial<FleetAgentReadinessEntry> = {}): FleetAgentReadinessEntry {
 	return {
 		provider: 'claude-code',
@@ -161,13 +172,12 @@ describe('classifyFleetAgentFailure', () => {
 	});
 
 	it('masks anything credential-shaped in the sentence it quotes', () => {
-		const failure = classifyFleetAgentFailure(
-			'Invalid API key sk-ant-api03-AbCdEfGhIjKlMnOpQrStUvWxYz0123456789 · Fix external API key',
-			{ now: NOW }
-		);
+		const failure = classifyFleetAgentFailure(`Invalid API key ${FAKE_API_KEY} · Fix external API key`, {
+			now: NOW
+		});
 		expect(failure?.kind).toBe('not_signed_in');
 		expect(failure?.reason).toBe('Invalid API key [redacted] · Fix external API key');
-		expect(JSON.stringify(failure)).not.toContain('AbCdEf');
+		expect(JSON.stringify(failure)).not.toContain('FAKE');
 	});
 
 	it('is pure: the same text and clock give the same answer', () => {
@@ -180,10 +190,10 @@ describe('classifyFleetAgentFailure', () => {
 
 describe('redaction', () => {
 	it.each([
-		['token sk-proj-1234567890abcdef rest', 'token [redacted] rest'],
-		['Authorization: Bearer abc.def-ghi_jkl123456', 'Authorization: [redacted]'],
-		['jwt eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.c2lnbmF0dXJl here', 'jwt [redacted] here'],
-		['hex 0123456789abcdef0123456789abcdef0123 end', 'hex [redacted] end'],
+		[`token ${FAKE_PROJECT_KEY} rest`, 'token [redacted] rest'],
+		[`Authorization: ${FAKE_BEARER}`, 'Authorization: [redacted]'],
+		[`jwt ${FAKE_JWT} here`, 'jwt [redacted] here'],
+		[`hex ${FAKE_HEX} end`, 'hex [redacted] end'],
 		['owner@example.com (Acme, max)', 'owner@example.com (Acme, max)']
 	])('redactFleetAgentText(%j)', (input, expected) => {
 		expect(redactFleetAgentText(input)).toBe(expected);
@@ -249,9 +259,9 @@ describe('normalizeFleetAgentReadinessReport', () => {
 					authMethod: 'carrier-pigeon',
 					account: `owner@example.com\n${'x'.repeat(40)}`,
 					status: 'levitating',
-					reason: 'Bearer abcdefghijklmnop was refused',
+					reason: `${FAKE_BEARER} was refused`,
 					checkedAt: 'not a date',
-					token: 'sk-ant-secret-secret-secret',
+					token: FAKE_API_KEY,
 					limitResetsAt: 'tomorrow',
 					usage: [
 						{ window: 'five_hour', usedPercent: 250, resetsAt: 'soon' },
@@ -285,7 +295,8 @@ describe('normalizeFleetAgentReadinessReport', () => {
 				}
 			]
 		});
-		expect(JSON.stringify(report)).not.toContain('sk-ant');
+		expect(JSON.stringify(report)).not.toContain('FAKE');
+		expect(JSON.stringify(report)).not.toContain('fakefake');
 	});
 
 	it('caps the agents and the windows', () => {

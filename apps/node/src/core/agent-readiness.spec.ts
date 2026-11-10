@@ -23,6 +23,16 @@ import {
 import type { CommandRunner } from './capabilities';
 
 const NOW = Date.parse('2026-11-10T12:00:00.000Z');
+
+/**
+ * Credential-SHAPED fixtures for the masking cases. Assembled at runtime from
+ * plainly fake parts, so no line of this file holds anything a secret scanner
+ * (or a reader) could take for a real key. None of them is a credential.
+ */
+const FAKE_API_KEY = ['sk', 'ant', 'api03', 'FAKE'.repeat(8)].join('-');
+const FAKE_TOKEN = ['sk', 'ant', 'oat01', 'FAKE'.repeat(4)].join('-');
+/** What `codex login status` prints beside "API key configured": a MASKED key. */
+const MASKED_KEY = ['sk', 'proj', '***ABCDE'].join('-');
 const ISO = '2026-11-10T12:00:00.000Z';
 
 /** The two sentences the production node actually failed with. */
@@ -109,11 +119,11 @@ describe('readClaudeAuthStatus (`claude auth status --json`)', () => {
 				loggedIn: true,
 				authMethod: 'oauth_token',
 				email: 'owner@example.com',
-				accessToken: 'sk-ant-oat01-must-never-leave',
+				accessToken: FAKE_TOKEN,
 				configDirectory: '/home/owner/.claude'
 			})
 		);
-		expect(JSON.stringify(reading)).not.toContain('must-never-leave');
+		expect(JSON.stringify(reading)).not.toContain('FAKE');
 		expect(JSON.stringify(reading)).not.toContain('/home/owner');
 	});
 
@@ -127,8 +137,8 @@ describe('readClaudeAuthStatus (`claude auth status --json`)', () => {
 describe('readCodexLoginStatus (`codex login status`)', () => {
 	it.each([
 		['Logged in using ChatGPT', true, 'subscription'],
-		['API key configured - sk-proj-***ABCDE', true, 'api_key'],
-		['Logged in using an API key - sk-proj-***ABCDE', true, 'api_key'],
+		[`API key configured - ${MASKED_KEY}`, true, 'api_key'],
+		[`Logged in using an API key - ${MASKED_KEY}`, true, 'api_key'],
 		['Logged in using access token', true, 'access_token'],
 		['Logged in using personal access token', true, 'access_token'],
 		['Logged in using workload identity', true, 'access_token'],
@@ -140,7 +150,7 @@ describe('readCodexLoginStatus (`codex login status`)', () => {
 	});
 
 	it('keeps nothing of the line itself — it carries a masked key', () => {
-		expect(JSON.stringify(readCodexLoginStatus('API key configured - sk-proj-***ABCDE'))).not.toContain('sk-proj');
+		expect(JSON.stringify(readCodexLoginStatus(`API key configured - ${MASKED_KEY}`))).not.toContain('sk-proj');
 	});
 
 	it('answers null when the output says neither', () => {
@@ -603,7 +613,7 @@ describe('parseAgentRunHistoryRecord', () => {
 							{ window: 'weekly', usedPercent: 5 }
 						],
 						usageObservedAt: ISO,
-						secret: 'sk-ant-nope'
+						secret: FAKE_TOKEN
 					},
 					'bad provider!': { lastSuccessAt: ISO }
 				}
@@ -867,7 +877,7 @@ describe('buildAgentReadinessReport', () => {
 		runs.note({
 			provider: 'claude-code',
 			status: 'failed',
-			summary: 'Invalid API key sk-ant-api03-AbCdEfGhIjKlMnOpQrStUvWxYz0123 · Fix external API key'
+			summary: `Invalid API key ${FAKE_API_KEY} · Fix external API key`
 		});
 		const report = await buildAgentReadinessReport({
 			drivable: () => drivable,
@@ -876,6 +886,7 @@ describe('buildAgentReadinessReport', () => {
 			now: () => NOW
 		});
 		expect(report.agents[0]?.status).toBe('not_signed_in');
-		expect(JSON.stringify(report)).not.toContain('AbCdEf');
+		expect(report.agents[0]?.reason).toBe('Invalid API key [redacted] · Fix external API key');
+		expect(JSON.stringify(report)).not.toContain('FAKE');
 	});
 });
