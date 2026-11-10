@@ -1,10 +1,13 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { execFile, execFileSync } from 'node:child_process';
 import { promises as fs } from 'node:fs';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { pathToFileURL } from 'node:url';
+import { promisify } from 'node:util';
 import { effectiveRemoteUrls, parseScopedConfigList } from '../credentialed-command.js';
 import { LocalWorkspacePlugin } from '../local-workspace.plugin.js';
 import type { WorkspaceHandle, WorkspaceProvisionSpec } from '@ever-works/plugin';
@@ -44,6 +47,7 @@ import type { WorkspaceHandle, WorkspaceProvisionSpec } from '@ever-works/plugin
 
 const git = (cwd: string, ...args: string[]): string =>
 	execFileSync('git', args, { cwd, encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+const execFileAsync = promisify(execFile);
 
 type Invocation = { args: string[]; env: NodeJS.ProcessEnv };
 
@@ -1368,6 +1372,57 @@ describe('a URL rewrite in the OPERATOR’s own config', () => {
 		expect(branchOn(originDir, handle.branch)).toBe('');
 	});
 
+	it('push, with an insteadOf: REFUSED in the same sentence — not as "origin is not the one it was issued for"', async () => {
+		// `git remote get-url origin` applies insteadOf, so the comparison of
+		// origin with the credential's URL fails before the gate is reached.
+		// The configured URL IS the credential's: what differs is the
+		// rewrite, and the refusal says whose.
+		const at = scene();
+		const handle = await withGlobalConfig(at, rewriteOf('insteadOf'), () =>
+			new LocalWorkspacePlugin().provision(provisionSpec(at.baseDir, HTTPS_REMOTE, 'push-insteadof'))
+		);
+		writeFileSync(join(handle.path, 'work.txt'), 'rewritten\n');
+		const invocations: Invocation[] = [];
+		const plugin = new LocalWorkspacePlugin({ execFile: recordingGit(invocations) });
+
+		const error = await withGlobalConfig(at, rewriteOf('insteadOf'), () =>
+			plugin
+				.finalize(handle, {
+					commitMessage: 'feat: work',
+					push: true,
+					pushCredential: { username: 'x-access-token', token: TOKEN, remoteUrl: HTTPS_REMOTE }
+				})
+				.then(
+					() => null,
+					(caught: Error) => caught
+				)
+		);
+
+		expect(error?.message).toBe(
+			"refusing to publish: this machine's Git config rewrites this remote's push URL (url.<…>.insteadof, global scope), and a scoped credential is used only for the URL it was issued for"
+		);
+		expect(error?.message).not.toContain(slash(originDir));
+		expect(invocations.some((entry) => entry.args[0] === 'push')).toBe(false);
+		expect(invocations.some(carriesHeader)).toBe(false);
+		expect(branchOn(originDir, handle.branch)).toBe('');
+	});
+
+	it('push: an origin that is simply another repository keeps its own refusal', async () => {
+		const at = scene();
+		const handle = await new LocalWorkspacePlugin().provision(provisionSpec(at.baseDir, originUrl, 'push-other'));
+		writeFileSync(join(handle.path, 'work.txt'), 'other\n');
+
+		await expect(
+			new LocalWorkspacePlugin().finalize(handle, {
+				commitMessage: 'feat: work',
+				push: true,
+				pushCredential: { username: 'x-access-token', token: TOKEN, remoteUrl: HTTPS_REMOTE }
+			})
+		).rejects.toThrow(
+			'scoped push credential does not cover this checkout: the origin remote is not the one it was issued for'
+		);
+	});
+
 	it.each([
 		['nothing rewrites it', '', []],
 		['insteadOf', `[url "ssh://git@host.invalid/"]\n\tinsteadOf = https://host.invalid/\n`, []],
@@ -1438,7 +1493,58 @@ describe('a traced daemon — git’s tracing variables do not reach a credentia
 	// would do that to every credentialed command.
 
 	const TRACING = /^(GIT_TRACE|GIT_CURL_VERBOSE$)/i;
+	/** What a credentialed child carries instead: trace2 off, whatever the operator's config says. */
+	const TRACE2_OFF = { GIT_TRACE2: '0', GIT_TRACE2_EVENT: '0', GIT_TRACE2_PERF: '0' };
 	const read = (file: string): string => (existsSync(file) ? readFileSync(file, 'utf8') : '');
+	/** Plain `git ls-remote <url>`, with the header keyed to it the way a credentialed child keys it. */
+	const lsRemoteWithHeader = (url: string, cwd: string, env: Record<string, string>): Promise<unknown> =>
+		execFileAsync('git', ['ls-remote', url], {
+			cwd,
+			windowsHide: true,
+			env: {
+				...process.env,
+				GIT_TERMINAL_PROMPT: '0',
+				GIT_CONFIG_COUNT: '1',
+				GIT_CONFIG_KEY_0: `http.${url}.extraheader`,
+				GIT_CONFIG_VALUE_0: HEADER,
+				...env
+			}
+		}).catch(() => undefined);
+
+	it('CONTROL: GIT_TRACE_CURL with GIT_TRACE_REDACT=0 writes the Authorization header of a request that is sent', async () => {
+		// Over plain http to a local server — the one way to have a request
+		// actually SENT in this suite.
+		const at = scene();
+		const received: string[] = [];
+		const server = createServer((request, response) => {
+			received.push(String(request.headers.authorization ?? ''));
+			response.statusCode = 404;
+			response.end();
+		});
+		await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+		const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/ever-works/traced.git`;
+		const curlTrace = slash(join(at.dir, 'curl-control.txt'));
+		try {
+			await lsRemoteWithHeader(url, at.dir, { GIT_TRACE_CURL: curlTrace, GIT_TRACE_REDACT: '0' });
+		} finally {
+			server.closeAllConnections();
+			await new Promise<void>((resolve) => server.close(() => resolve()));
+		}
+
+		expect(received).toContain(`Basic ${BASIC}`);
+		expect(read(curlTrace)).toContain(`Authorization: Basic ${BASIC}`);
+	});
+
+	it('CONTROL: a traced https attempt writes its trace file even when nothing answers', async () => {
+		// So the ABSENCE of that file, below, means the variable never reached
+		// the child — not that there was nothing to write.
+		const at = scene();
+		const curlTrace = slash(join(at.dir, 'curl-unanswered.txt'));
+
+		await lsRemoteWithHeader(HTTPS_REMOTE, at.dir, { GIT_TRACE_CURL: curlTrace, GIT_TRACE_REDACT: '0' });
+
+		expect(read(curlTrace).length).toBeGreaterThan(0);
+	});
 
 	it('CONTROL: with GIT_TRACE2_EVENT and a config pattern, git writes the header into the trace file', () => {
 		const at = scene();
@@ -1494,11 +1600,14 @@ describe('a traced daemon — git’s tracing variables do not reach a credentia
 		);
 
 		// The two fetches and the push carried the credential, and not one
-		// tracing variable.
+		// tracing variable of the daemon's — only the three trace2 targets,
+		// switched off.
 		const credentialed = invocations.filter(carriesHeader);
 		expect(credentialed.map((entry) => entry.args[0])).toEqual(['fetch', 'fetch', 'push']);
 		for (const entry of credentialed) {
-			expect(Object.keys(entry.env).filter((name) => TRACING.test(name))).toEqual([]);
+			expect(Object.fromEntries(Object.entries(entry.env).filter(([name]) => TRACING.test(name)))).toEqual(
+				TRACE2_OFF
+			);
 		}
 		// Every other child kept the operator's tracing — it is theirs, and
 		// none of those commands holds a token.
@@ -1551,5 +1660,45 @@ describe('a traced daemon — git’s tracing variables do not reach a credentia
 		expect(existsSync(curlTrace)).toBe(false);
 		expect(read(curlTrace)).not.toContain('Authorization');
 		expect(read(curlTrace)).not.toContain(BASIC);
+	});
+
+	it('the OPERATOR’s own trace2 config: a credentialed fetch and push write nothing of the header to its target', async () => {
+		// Not a variable this time: `trace2.eventTarget` and
+		// `trace2.configParams` in the machine's global config, which Git
+		// reads from the system and global files only — so no command-scope
+		// entry can switch them off, and removing variables does nothing.
+		const at = scene();
+		const target = slash(join(at.dir, 'operator-trace2.json'));
+		const operatorConfig = `[trace2]\n\teventTarget = ${target}\n\tconfigParams = http.*\n`;
+
+		// CONTROL: a plain git carrying the header writes it there.
+		const pool = scratchPool(at.dir, originUrl);
+		await withGlobalConfig(at, operatorConfig, async () => controlFetch(pool, originUrl));
+		expect(read(target)).toContain(BASIC);
+		rmSync(target);
+
+		const invocations: Invocation[] = [];
+		const plugin = new LocalWorkspacePlugin({ execFile: recordingGit(invocations) });
+		await withGlobalConfig(at, operatorConfig, async () => {
+			const handle = await plugin.provision(
+				provisionSpec(at.baseDir, originUrl, 'operator-traced', {
+					fetchCredential: { username: 'x-access-token', token: TOKEN, remoteUrl: originUrl }
+				})
+			);
+			writeFileSync(join(handle.path, 'work.txt'), 'operator-traced\n');
+			const result = await plugin.finalize(handle, {
+				commitMessage: 'feat: work',
+				push: true,
+				pushCredential: { username: 'x-access-token', token: TOKEN, remoteUrl: originUrl }
+			});
+			expect(result.pushed).toBe(true);
+		});
+
+		expect(invocations.filter(carriesHeader).map((entry) => entry.args[0])).toEqual(['fetch', 'fetch', 'push']);
+		// The operator's target still gets every other command…
+		expect(read(target).length).toBeGreaterThan(0);
+		// …and nothing of the credential.
+		expect(read(target)).not.toContain(BASIC);
+		expect(read(target)).not.toContain(TOKEN);
 	});
 });
