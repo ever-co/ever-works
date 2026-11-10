@@ -24,6 +24,8 @@ export interface MarkdownEditorProps {
     required?: boolean;
     disabled?: boolean;
     autoFocus?: boolean;
+    /** Keep the label for assistive tech only, when a heading above already names the field. */
+    hideLabel?: boolean;
     className?: string;
     'data-testid'?: string;
 }
@@ -60,6 +62,7 @@ export function MarkdownEditor({
     required,
     disabled,
     autoFocus,
+    hideLabel = false,
     className,
     'data-testid': testId,
 }: MarkdownEditorProps) {
@@ -100,8 +103,19 @@ export function MarkdownEditor({
 
     return (
         <div className={cn('space-y-2', className)} data-testid={testId}>
-            <div className="flex items-center justify-between gap-3 flex-wrap">
-                <label htmlFor={id} className="text-sm font-medium text-text dark:text-text-dark">
+            <div
+                className={cn(
+                    'flex items-center gap-3 flex-wrap',
+                    hideLabel ? 'justify-end' : 'justify-between',
+                )}
+            >
+                <label
+                    htmlFor={id}
+                    className={cn(
+                        'text-sm font-medium text-text dark:text-text-dark',
+                        hideLabel && 'sr-only',
+                    )}
+                >
                     {label}
                     {required ? (
                         <span aria-hidden="true" className="ml-0.5 text-danger">

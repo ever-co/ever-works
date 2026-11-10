@@ -14,6 +14,7 @@ import {
     formatDateTime,
 } from './goal-ui';
 import { DodProgressBar, DodRollup } from './goal-loop-ui';
+import { markdownExcerpt } from '@/lib/markdown/markdown-excerpt';
 
 /**
  * Goals & Metrics — PR-8. Read-only summary card for a single Goal in
@@ -53,7 +54,7 @@ export function GoalCard({ goal }: { goal: Goal }) {
                     </h3>
                     {goal.description ? (
                         <p className="mt-1 text-xs text-text-muted dark:text-text-muted-dark line-clamp-2">
-                            {goal.description}
+                            {markdownExcerpt(goal.description)}
                         </p>
                     ) : null}
                 </div>

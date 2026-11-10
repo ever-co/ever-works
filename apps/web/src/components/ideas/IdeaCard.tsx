@@ -12,6 +12,7 @@ import type { WorkProposal } from '@/lib/api/work-proposals';
 import { dismissProposalAction } from '@/app/actions/dashboard/work-proposals';
 import { BUILT_BADGE_STYLE, STATUS_STYLES, deriveIdeaBadge } from './idea-status';
 import { deriveIdeaBuiltState } from './idea-built';
+import { markdownExcerpt } from '@/lib/markdown/markdown-excerpt';
 
 /**
  * Phase 5 PR M — `IdeaCard` is the canonical name for what used
@@ -174,7 +175,7 @@ export function IdeaCard({ proposal, onDismissed, matchedWorkId = null }: IdeaCa
             </h3>
 
             <p className="text-xs leading-4.5 text-text-secondary dark:text-text-secondary-dark line-clamp-3 min-h-[3lh] mb-3">
-                {proposal.description}
+                {markdownExcerpt(proposal.description)}
             </p>
 
             {topCategories.length > 0 && (
