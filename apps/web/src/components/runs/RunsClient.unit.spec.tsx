@@ -444,6 +444,15 @@ describe('RunsClient', () => {
         );
         expect(screen.getByTestId('runs-clamped-notice')).toBeDefined();
 
+        // The label renders from the answer in the same commit that hands the
+        // keyboard handler its new `step`, but the handler is re-attached by an
+        // effect. Flush pending effects before the next key, or under load the
+        // arrow can reach the previous handler and step from the address bar
+        // (seen on stage CI 2026-11-10: got d=2026-09-07).
+        await act(async () => {
+            await Promise.resolve();
+        });
+
         // The next arrow steps from the anchor the server resolved, not from
         // the unreachable one in the address bar.
         fireEvent.keyDown(document.body, { key: 'ArrowRight' });
