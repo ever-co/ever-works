@@ -39,10 +39,19 @@ import { GitHubAppInstallationRepoRepository } from '@src/database/repositories/
  *
  *   - the path that existed before is byte-for-byte unchanged when the
  *     owner's own account reads the repository;
- *   - the fallback accepts exactly ONE situation (the caller's own, live,
- *     owner-matching installation that lists the repository and is confirmed
- *     by GitHub right now) and every near miss is refused with the SAME
- *     answer, with nothing persisted.
+ *   - the fallback is tried for exactly TWO probe outcomes (an answered
+ *     "no", and "no git credential connected") and accepts exactly ONE
+ *     situation: the caller's own, live installation whose snapshot lists the
+ *     repository, confirmed by GitHub right now. Every near miss is refused
+ *     with the SAME answer, with nothing persisted.
+ *
+ * What "confirmed by GitHub" means — the installation still covers the
+ * repository id, the name still means that id, and the caller's own linked
+ * GitHub account can read the repository — is the facade's
+ * `canInstallationStandInForUser`, pinned in
+ * `facades/__tests__/git.facade.installation-read-check.spec.ts`. Here it is
+ * the seam: these specs prove WHEN it is asked, with WHAT, and that only a
+ * strict `true` is accepted.
  */
 
 const baseUser = { id: 'u-1', email: 'u@example.com' } as User;
