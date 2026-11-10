@@ -85,7 +85,7 @@ import {
 import type { OnboardingWizardStateV2 } from '@ever-works/contracts/api';
 import { ZERO_FRICTION_FUNNEL_EVENTS } from '@ever-works/contracts/telemetry';
 import { ZeroFrictionFunnelService } from './zero-friction-funnel.service';
-import { GitFacadeService } from '@src/facades/git.facade';
+import { GitFacadeService, NoGitCredentialsError } from '@src/facades/git.facade';
 import {
     parseRepositoryWorkSource,
     type RepositoryWorkSource,
@@ -182,6 +182,13 @@ interface RepositoryWorkRegistration {
  * (`createdByUserId`), and the installation is neither deleted nor
  * suspended. Nothing wider — not the installation's organization, not its
  * tenant, not "an installation exists for that account".
+ *
+ * NECESSARY, NOT SUFFICIENT, for the Repository Work fallback. Ownership is
+ * a one-time claim: it outlives the owner's access to the account the App is
+ * installed on (an organization owner who claimed the installation and was
+ * later removed still owns the row). The fallback therefore also asks GitHub,
+ * live, whether this user's linked GitHub account can read the repository —
+ * `GitFacadeService.canInstallationStandInForUser`.
  */
 function isInstallationUsableBy(
     installation: Pick<GitHubAppInstallation, 'createdByUserId' | 'deletedAt' | 'suspendedAt'>,
@@ -204,14 +211,16 @@ function isInstallationUsableBy(
 
 /**
  * The two things a caller can do when a Repository Work's repository cannot
- * be verified. Appended to BOTH refusals (probe answered "no" / probe could
- * not run) and identical whatever the installation lookup found, so the
- * message says nothing about whether the repository exists, whether an
- * installation covers it, or whose installation that is.
+ * be verified. Appended to BOTH refusals for which the installation fallback
+ * was tried (probe answered "no" / nothing is connected) and identical
+ * whatever the installation lookup found, so the message says nothing about
+ * whether the repository exists, whether an installation covers it, whose
+ * installation that is, or what GitHub said about the caller.
  */
 const REPOSITORY_WORK_ACCESS_REMEDIES =
     'Connect a GitHub account that can read the repository, or install the Ever Works GitHub App ' +
-    'on the account that owns it (with access to this repository) and try again.';
+    'on the account that owns it (with access to this repository) and try again. With the App, ' +
+    'the GitHub account linked to your Ever Works user must itself be able to read the repository.';
 
 /**
  * Map a wizard "storage" choice onto the existing `gitProvider` field.
@@ -797,9 +806,10 @@ export class WorkLifecycleService {
      *      repeatedly instead of once, here. Same probe the import analyser
      *      runs before it registers anything.
      *
-     *      When that probe does not answer yes, ONE alternative is accepted:
-     *      a platform GitHub App installation the caller owns that covers the
-     *      repository and is proven, live, to read it (see
+     *      When that probe answers NO (or nothing is connected to probe
+     *      with), ONE alternative is accepted: a platform GitHub App
+     *      installation the caller owns that covers the repository, for a
+     *      caller GitHub itself says can read it (see
      *      `resolveRepositoryInstallationAuth`). The Work then records that
      *      installation in `sourceRepository.auth`, and every later
      *      operation runs with the installation token instead.
@@ -846,28 +856,37 @@ export class WorkLifecycleService {
      *      always been here. When it answers yes NOTHING else runs and `null`
      *      is returned, so the Work is persisted exactly as before (no
      *      `sourceRepository.auth`, owner's token for every later operation).
-     *   2. Only when (1) did not answer yes — it answered no, or it could not
-     *      run at all because nothing is connected — a GitHub App
-     *      installation the caller owns is accepted instead, and its
-     *      `sourceRepository.auth` shape is returned. An organization that
+     *   2. A GitHub App installation the caller owns is accepted instead, and
+     *      its `sourceRepository.auth` shape is returned. An organization that
      *      restricts OAuth app access hides its private repositories from the
      *      member's OAuth token while the installed App reads them, which is
      *      what (1) alone could never register.
      *
-     * Whether (2) is tried does not depend on WHY (1) failed, because (2)
-     * authorizes nothing from (1): it has its own complete rule (see
-     * `resolveRepositoryInstallationAuth`). An `HttpException` from the probe
-     * is still rethrown untouched, as before.
+     * (2) is tried in exactly TWO situations, because binding a Work to the
+     * App changes which credential every later operation runs with:
      *
-     * The two refusals keep their original wording and gain the same closing
-     * sentence, whatever the installation lookup found.
+     *   - the probe ANSWERED, and the answer was no (`false`);
+     *   - the probe could not run because no git credential is connected
+     *     (`NoGitCredentialsError`, and only that class).
+     *
+     * Every other probe failure — a network error, a rate limit, an expired
+     * token's 401, a provider plugin that is not installed — is not an answer
+     * about the repository. The caller's own account may well read it, so the
+     * create is refused as it always was ("Could not verify access …") and the
+     * fallback is NOT consulted: a transient failure must never silently bind
+     * a Work to the App. An `HttpException` from the probe is rethrown
+     * untouched, as before.
+     *
+     * When (2) was tried and refused, the two refusals keep their original
+     * wording and gain the same closing sentence, whatever the installation
+     * lookup found.
      */
     private async assertRepositoryAccessible(
         source: RepositoryWorkSource,
         user: User,
     ): Promise<RepositoryWorkInstallationAuth | null> {
         let accessible = false;
-        let probeFailure: string | null = null;
+        let noCredentialConnected: string | null = null;
         try {
             accessible = await this.gitFacade.hasRepositoryAccess(source.owner, source.repo, {
                 userId: user.id,
@@ -877,13 +896,22 @@ export class WorkLifecycleService {
             if (error instanceof HttpException) {
                 throw error;
             }
-            // `NoGitCredentialsError` (nothing connected), `GitProviderNotFoundError`
-            // (provider plugin not installed) or a provider outage. None of
-            // these means the URL is wrong, but all of them mean the platform
-            // cannot vouch for the repository through the caller's account —
-            // and registering it anyway would only move the same failure to
-            // the first fleet run.
-            probeFailure = error instanceof Error ? error.message : String(error);
+            const reason = error instanceof Error ? error.message : String(error);
+            if (!(error instanceof NoGitCredentialsError)) {
+                // `GitProviderNotFoundError` (provider plugin not installed), a
+                // provider outage, a rate limit, a rejected token. None of
+                // these means the URL is wrong, but all of them mean the
+                // platform cannot vouch for the repository — and registering
+                // it anyway would only move the same failure to the first
+                // fleet run. Say what was missing instead of persisting a Work
+                // nothing can clone. Unchanged from before the fallback, and
+                // deliberately WITHOUT trying it.
+                throw new BadRequestException({
+                    status: 'error',
+                    message: `Could not verify access to ${source.url} with your connected ${source.gitProvider} account: ${reason}`,
+                });
+            }
+            noCredentialConnected = reason;
         }
         if (accessible) {
             return null;
@@ -894,9 +922,8 @@ export class WorkLifecycleService {
             return installationAuth;
         }
 
-        if (probeFailure !== null) {
-            // Say what was missing instead of persisting a Work nothing can clone.
-            const reason = probeFailure.replace(/[.\s]+$/, '');
+        if (noCredentialConnected !== null) {
+            const reason = noCredentialConnected.replace(/[.\s]+$/, '');
             throw new BadRequestException({
                 status: 'error',
                 message:
@@ -929,14 +956,27 @@ export class WorkLifecycleService {
      *      `listByCreatedByUserId(user.id)`, the query behind
      *      `GET /api/github-app/installations`, and each row is re-checked
      *      here rather than trusted because of the query that returned it.
-     *   3. The installation's account login IS the repository's owner
-     *      (case-insensitive, as GitHub compares logins).
-     *   4. The repository is in THAT installation's snapshot
-     *      (`github_app_installation_repositories`), as selected.
-     *   5. GitHub confirms it right now: `GitFacadeService
-     *      .canInstallationReadRepository` mints a read-only installation
-     *      token narrowed to the snapshot's repository id and reads the
-     *      repository with it. A stale snapshot is therefore never enough.
+     *   3. The repository is in THAT installation's snapshot
+     *      (`github_app_installation_repositories`), as selected, under the
+     *      requested `owner/repo` (case-insensitive, as GitHub compares
+     *      names). The snapshot row decides, NOT the installation's
+     *      `accountLogin`: the snapshot is rewritten from GitHub by every
+     *      sync, while `accountLogin` is only refreshed by `installation`
+     *      webhooks and the setup flow. After an organization is renamed and
+     *      the installation re-synced, the new name is in the snapshot and
+     *      the old one is still in `accountLogin`, so requiring the two to
+     *      agree refused every repository of that organization while the
+     *      fleet and registry paths kept working. An installation only ever
+     *      lists repositories of its own account, so the row carries the
+     *      owner. `accountLogin` is used to choose which installation to look
+     *      at FIRST, and for nothing else.
+     *   4. GitHub confirms all of it right now, and confirms the CALLER:
+     *      `GitFacadeService.canInstallationStandInForUser` proves the
+     *      installation still covers the snapshot's repository id, that the
+     *      requested name still means that id, and that the caller's linked
+     *      GitHub account can itself read the repository. A stale snapshot is
+     *      therefore never enough, and neither is owning the installation: an
+     *      owner who has since lost access to the repository is refused.
      *
      * Nothing here is taken from the request except the repository
      * coordinates being asked about: the installation id, the snapshot row
@@ -964,26 +1004,30 @@ export class WorkLifecycleService {
         const wantedOwner = source.owner.toLowerCase();
         const wantedFullName = `${source.owner}/${source.repo}`.toLowerCase();
         // The furthest check any candidate reached, for the operator's log.
-        let stoppedAt: 'no-usable-installation-for-owner' | 'not-in-snapshot' | 'live-check' =
-            'no-usable-installation-for-owner';
+        let stoppedAt: 'no-usable-installation' | 'not-in-snapshot' | 'live-check' =
+            'no-usable-installation';
 
         try {
             const installations = await this.gitHubAppInstallations.listByCreatedByUserId(user.id);
+            const usable = (installations ?? []).filter(
+                (installation) =>
+                    isInstallationUsableBy(installation, user.id) &&
+                    Boolean(installation.id) &&
+                    Boolean(installation.installationId),
+            );
+            // A HINT, never a condition: an installation whose recorded
+            // account login is the repository's owner is looked at first, so
+            // the common case reads one snapshot. One whose login differs is
+            // still looked at — see (3) above. `sort` is stable, so the
+            // repository's newest-first order holds inside each group.
+            const loginIsOwner = (installation: GitHubAppInstallation): boolean =>
+                typeof installation.accountLogin === 'string' &&
+                installation.accountLogin.toLowerCase() === wantedOwner;
+            const ordered = [...usable].sort(
+                (left, right) => Number(loginIsOwner(right)) - Number(loginIsOwner(left)),
+            );
 
-            for (const installation of installations ?? []) {
-                if (!isInstallationUsableBy(installation, user.id)) {
-                    continue;
-                }
-                if (
-                    typeof installation.accountLogin !== 'string' ||
-                    installation.accountLogin.toLowerCase() !== wantedOwner
-                ) {
-                    continue;
-                }
-                if (!installation.id || !installation.installationId) {
-                    continue;
-                }
-
+            for (const installation of ordered) {
                 const snapshot = await this.gitHubAppInstallationRepos.listForInstallation(
                     installation.id,
                 );
@@ -995,21 +1039,21 @@ export class WorkLifecycleService {
                         row.fullName.toLowerCase() === wantedFullName,
                 );
                 if (!covered || !covered.id || !covered.githubRepoId) {
-                    if (stoppedAt === 'no-usable-installation-for-owner') {
+                    if (stoppedAt === 'no-usable-installation') {
                         stoppedAt = 'not-in-snapshot';
                     }
                     continue;
                 }
 
                 stoppedAt = 'live-check';
-                const readable = await this.gitFacade.canInstallationReadRepository({
+                const confirmed = await this.gitFacade.canInstallationStandInForUser({
                     installationId: installation.installationId,
                     githubRepoId: covered.githubRepoId,
                     owner: source.owner,
                     repo: source.repo,
                     userId: user.id,
                 });
-                if (readable !== true) {
+                if (confirmed !== true) {
                     continue;
                 }
 
@@ -1122,7 +1166,18 @@ export class WorkLifecycleService {
             workData.sourceRepository.auth = {
                 mode: 'github_app_installation',
                 providerId: 'github',
+                // The durable coordinates: GitHub's installation id and the
+                // repository's full name. These are what
+                // `getInstallationTokenForWork` and checkout matching read.
                 installationId: installationAuth.installationId,
+                // A POINT-IN-TIME reference, kept for parity with the other
+                // writer of this shape (`GitHubAppSyncService
+                // .onboardInstallationRepository`): the id of the snapshot row
+                // that proved coverage when the Work was created. Every sync
+                // deletes and re-creates the snapshot rows
+                // (`replaceForInstallation`), so this id stops resolving at
+                // the next sync. Nothing reads it today; never dereference it
+                // — look the row up by `installationId` + `repoFullName`.
                 installationRepositoryId: installationAuth.installationRepositoryId,
                 repoFullName: installationAuth.repoFullName,
             };

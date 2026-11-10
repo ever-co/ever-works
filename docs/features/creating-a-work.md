@@ -288,16 +288,26 @@ connected GitHub account: the repository must exist and be readable by that
 account, and a repository another account has already registered as a Work
 is refused — ask that Work's owner to add you as a member instead.
 
-When your connected account cannot read the repository — for example a
-private repository in an organization that restricts OAuth app access — the
-**Ever Works GitHub App** is accepted instead, provided all of this holds: you
-set up the installation yourself, it is active (not uninstalled or suspended),
-it is installed on the account that owns the repository, and it has access to
-that repository. The platform confirms the access with GitHub at that moment,
-and the Work then uses the installation for its later git operations. If
-neither works, the request is refused and the message names both options:
-connect a GitHub account that can read the repository, or install the GitHub
-App on it.
+When your connected account's token cannot read the repository — for example
+a private repository in an organization that restricts OAuth app access — or
+you have no GitHub account connected for git at all, the **Ever Works GitHub
+App** is accepted instead, provided all of this holds:
+
+- you set up the installation yourself, and it is active (not uninstalled or
+  suspended);
+- the installation has access to that repository (if you just added the
+  repository or renamed the organization, sync the installation first);
+- the GitHub account linked to your Ever Works user can itself read the
+  repository on GitHub. The App does not grant you access you do not have: it
+  only stands in for a token that the organization's policy blocks.
+
+The platform confirms all of this with GitHub at that moment, and the Work
+then uses the installation for its later git operations. If neither works,
+the request is refused and the message names both options: connect a GitHub
+account that can read the repository, or install the GitHub App on it. A
+temporary failure while checking your own account (GitHub unreachable, a rate
+limit, an expired token) is reported as such and does not switch the Work to
+the App — try again, or reconnect the account.
 
 What is different from every other kind:
 
