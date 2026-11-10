@@ -2350,9 +2350,9 @@
                     "no-ideas": "Tick ran but generated no Ideas",
                     "failed": "Run now failed",
                     "cron-no-match": "Tick ran (cron skipped)",
-                    "tasks-filed": "Đã ghi các tác vụ vào App Works của Nhiệm vụ.",
-                    "no-tasks": "Không có gì mới để ghi vào App Works của Nhiệm vụ.",
-                    "spawned-and-tasks-filed": "Đã tạo Ý tưởng mới và ghi các tác vụ vào App Works của Nhiệm vụ."
+                    "tasks-filed": "Đã ghi các tác vụ vào App Works hoặc Repository Works của Nhiệm vụ.",
+                    "no-tasks": "Không có gì mới để ghi vào App Works hoặc Repository Works của Nhiệm vụ.",
+                    "spawned-and-tasks-filed": "Đã tạo Ý tưởng mới và ghi các tác vụ vào App Works hoặc Repository Works của Nhiệm vụ."
                 }
             },
             "goals": {
@@ -2388,14 +2388,15 @@
             "output": {
                 "title": "Đầu ra",
                 "ideas": "Ý tưởng",
-                "tasks": "Tác vụ trên các App Works đính kèm",
+                "tasks": "Tác vụ trên các App Works hoặc Repository Works đính kèm",
                 "both": "Cả hai",
                 "tasksPerTick": "Tác vụ mỗi lượt",
                 "openCap": "Giới hạn tác vụ mở mỗi Work",
                 "appliesTo": "Áp dụng cho các Works được đính kèm dưới dạng “Cải thiện” hoặc “Vận hành”.",
-                "noAppWork": "Đính kèm một App Work dưới dạng “Cải thiện” hoặc “Vận hành” để ghi tác vụ vào đó.",
+                "noAppWork": "Đính kèm một App Work hoặc Repository Work dưới dạng “Cải thiện” hoặc “Vận hành” để ghi tác vụ vào đó.",
+                "repoIsolationOff": "“Task isolation” đang tắt trên một Repository Work đính kèm, nên không có tác vụ nào được ghi vào đó. Hãy bật “Task isolation” trong phần cài đặt của Work đó.",
                 "tasksOnWorks": "Tác vụ trên các Works đính kèm",
-                "nothingToFile": "Không có App Work đính kèm để ghi tác vụ.",
+                "nothingToFile": "Không có App Work hoặc Repository Work đính kèm để ghi tác vụ.",
                 "tasksOnWorksEmpty": "Chưa có tác vụ nào được ghi.",
                 "save": "Lưu",
                 "saved": "Đã lưu đầu ra",
@@ -2774,7 +2775,7 @@
         },
         "feed": {
             "narration": {
-                "missionNothingToFile": "<b>{actor}</b> hôm nay không tìm thấy gì mới để ghi vào App Works của một Nhiệm vụ"
+                "missionNothingToFile": "<b>{actor}</b> hôm nay không tìm thấy gì mới để ghi vào App Works hoặc Repository Works của một Nhiệm vụ"
             }
         },
         "works": {

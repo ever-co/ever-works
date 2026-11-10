@@ -2350,9 +2350,9 @@
                     "no-ideas": "Tick ran but generated no Ideas",
                     "failed": "Run now failed",
                     "cron-no-match": "Tick ran (cron skipped)",
-                    "tasks-filed": "ミッションの App Works にタスクを登録しました。",
-                    "no-tasks": "ミッションの App Works に登録する新しいものはありません。",
-                    "spawned-and-tasks-filed": "新しいアイデアを生成し、ミッションの App Works にタスクを登録しました。"
+                    "tasks-filed": "ミッションの App Works または Repository Works にタスクを登録しました。",
+                    "no-tasks": "ミッションの App Works または Repository Works に登録する新しいものはありません。",
+                    "spawned-and-tasks-filed": "新しいアイデアを生成し、ミッションの App Works または Repository Works にタスクを登録しました。"
                 }
             },
             "goals": {
@@ -2388,14 +2388,15 @@
             "output": {
                 "title": "出力",
                 "ideas": "アイデア",
-                "tasks": "添付された App Works のタスク",
+                "tasks": "添付された App Works または Repository Works のタスク",
                 "both": "両方",
                 "tasksPerTick": "1 回あたりのタスク数",
                 "openCap": "Work ごとの未完了タスク上限",
                 "appliesTo": "「改善」または「運用」として添付された Works に適用されます。",
-                "noAppWork": "タスクを登録するには、App Work を「改善」または「運用」として添付してください。",
+                "noAppWork": "タスクを登録するには、App Work または Repository Work を「改善」または「運用」として添付してください。",
+                "repoIsolationOff": "添付された Repository Work で「Task isolation」がオフになっているため、そこにはタスクが登録されません。その Work の設定で「Task isolation」をオンにしてください。",
                 "tasksOnWorks": "添付された Works のタスク",
-                "nothingToFile": "タスクを登録できる App Work が添付されていません。",
+                "nothingToFile": "タスクを登録できる App Work または Repository Work が添付されていません。",
                 "tasksOnWorksEmpty": "まだタスクは登録されていません。",
                 "save": "保存",
                 "saved": "出力を保存しました",
@@ -2774,7 +2775,7 @@
         },
         "feed": {
             "narration": {
-                "missionNothingToFile": "<b>{actor}</b> は今日、ミッションの App Works に登録する新しいものを見つけませんでした"
+                "missionNothingToFile": "<b>{actor}</b> は今日、ミッションの App Works または Repository Works に登録する新しいものを見つけませんでした"
             }
         },
         "works": {

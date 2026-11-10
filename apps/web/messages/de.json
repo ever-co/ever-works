@@ -2381,9 +2381,9 @@
                     "no-ideas": "Tick ran but generated no Ideas",
                     "failed": "Run now failed",
                     "cron-no-match": "Tick ran (cron skipped)",
-                    "tasks-filed": "Tasks in den App Works der Mission angelegt.",
-                    "no-tasks": "Nichts Neues für die App Works der Mission.",
-                    "spawned-and-tasks-filed": "Neue Ideen erzeugt und Tasks in den App Works der Mission angelegt."
+                    "tasks-filed": "Tasks in den App oder Repository Works der Mission angelegt.",
+                    "no-tasks": "Nichts Neues für die App oder Repository Works der Mission.",
+                    "spawned-and-tasks-filed": "Neue Ideen erzeugt und Tasks in den App oder Repository Works der Mission angelegt."
                 }
             },
             "goals": {
@@ -2419,14 +2419,15 @@
             "output": {
                 "title": "Ausgabe",
                 "ideas": "Ideen",
-                "tasks": "Tasks in angehängten App Works",
+                "tasks": "Tasks in angehängten App oder Repository Works",
                 "both": "Beides",
                 "tasksPerTick": "Tasks pro Durchlauf",
                 "openCap": "Max. offene Tasks pro Work",
                 "appliesTo": "Gilt für Works, die als „Verbessert“ oder „Betreibt“ angehängt sind.",
-                "noAppWork": "Hängen Sie ein App Work als „Verbessert“ oder „Betreibt“ an, um darin Tasks anzulegen.",
+                "noAppWork": "Hängen Sie ein App oder Repository Work als „Verbessert“ oder „Betreibt“ an, um darin Tasks anzulegen.",
+                "repoIsolationOff": "„Task isolation“ ist für ein angehängtes Repository Work ausgeschaltet, daher werden darin keine Tasks angelegt. Schalten Sie „Task isolation“ in den Einstellungen dieses Works ein.",
                 "tasksOnWorks": "Tasks in angehängten Works",
-                "nothingToFile": "Kein angehängtes App Work, in dem Tasks angelegt werden können.",
+                "nothingToFile": "Kein angehängtes App oder Repository Work, in dem Tasks angelegt werden können.",
                 "tasksOnWorksEmpty": "Noch keine Tasks angelegt.",
                 "save": "Speichern",
                 "saved": "Ausgabe gespeichert",
@@ -2843,7 +2844,7 @@
         },
         "feed": {
             "narration": {
-                "missionNothingToFile": "<b>{actor}</b> fand heute nichts Neues, das in den App Works einer Mission anzulegen wäre"
+                "missionNothingToFile": "<b>{actor}</b> fand heute nichts Neues, das in den App oder Repository Works einer Mission anzulegen wäre"
             }
         },
         "works": {

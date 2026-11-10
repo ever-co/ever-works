@@ -2350,9 +2350,9 @@
                     "no-ideas": "Tick ran but generated no Ideas",
                     "failed": "Run now failed",
                     "cron-no-match": "Tick ran (cron skipped)",
-                    "tasks-filed": "Tarefas registradas nos App Works da Missão.",
-                    "no-tasks": "Nada novo para registrar nos App Works da Missão.",
-                    "spawned-and-tasks-filed": "Novas Ideias geradas e Tarefas registradas nos App Works da Missão."
+                    "tasks-filed": "Tarefas registradas nos App Works ou Repository Works da Missão.",
+                    "no-tasks": "Nada novo para registrar nos App Works ou Repository Works da Missão.",
+                    "spawned-and-tasks-filed": "Novas Ideias geradas e Tarefas registradas nos App Works ou Repository Works da Missão."
                 }
             },
             "goals": {
@@ -2388,14 +2388,15 @@
             "output": {
                 "title": "Saída",
                 "ideas": "Ideias",
-                "tasks": "Tarefas nos App Works anexados",
+                "tasks": "Tarefas nos App Works ou Repository Works anexados",
                 "both": "Ambos",
                 "tasksPerTick": "Tarefas por ciclo",
                 "openCap": "Limite de tarefas abertas por Work",
                 "appliesTo": "Aplica-se a Works anexados como “Melhora” ou “Opera”.",
-                "noAppWork": "Anexe um App Work como “Melhora” ou “Opera” para registrar tarefas nele.",
+                "noAppWork": "Anexe um App Work ou um Repository Work como “Melhora” ou “Opera” para registrar tarefas nele.",
+                "repoIsolationOff": "“Task isolation” está desativado em um Repository Work anexado, portanto nenhuma tarefa é registrada nele. Ative “Task isolation” nas configurações desse Work.",
                 "tasksOnWorks": "Tarefas nos Works anexados",
-                "nothingToFile": "Nenhum App Work anexado para registrar tarefas.",
+                "nothingToFile": "Nenhum App Work ou Repository Work anexado para registrar tarefas.",
                 "tasksOnWorksEmpty": "Nenhuma tarefa registrada ainda.",
                 "save": "Salvar",
                 "saved": "Saída salva",
@@ -2774,7 +2775,7 @@
         },
         "feed": {
             "narration": {
-                "missionNothingToFile": "<b>{actor}</b> não encontrou hoje nada de novo para registrar nos App Works de uma Missão"
+                "missionNothingToFile": "<b>{actor}</b> não encontrou hoje nada de novo para registrar nos App Works ou Repository Works de uma Missão"
             }
         },
         "works": {

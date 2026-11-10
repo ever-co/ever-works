@@ -2350,9 +2350,9 @@
                     "no-ideas": "Tick ran but generated no Ideas",
                     "failed": "Run now failed",
                     "cron-no-match": "Tick ran (cron skipped)",
-                    "tasks-filed": "已在该任务的 App Works 上录入任务。",
-                    "no-tasks": "该任务的 App Works 上没有可录入的新内容。",
-                    "spawned-and-tasks-filed": "已生成新的创意，并在该任务的 App Works 上录入任务。"
+                    "tasks-filed": "已在该任务的 App Works 或 Repository Works 上录入任务。",
+                    "no-tasks": "该任务的 App Works 或 Repository Works 上没有可录入的新内容。",
+                    "spawned-and-tasks-filed": "已生成新的创意，并在该任务的 App Works 或 Repository Works 上录入任务。"
                 }
             },
             "goals": {
@@ -2388,14 +2388,15 @@
             "output": {
                 "title": "输出",
                 "ideas": "想法",
-                "tasks": "附加的 App Works 上的任务",
+                "tasks": "附加的 App Works 或 Repository Works 上的任务",
                 "both": "两者",
                 "tasksPerTick": "每轮任务数",
                 "openCap": "每个 Work 的未完成任务上限",
                 "appliesTo": "适用于以“改进”或“运营”关系附加的 Works。",
-                "noAppWork": "以“改进”或“运营”关系附加一个 App Work，才能在其上录入任务。",
+                "noAppWork": "以“改进”或“运营”关系附加一个 App Work 或 Repository Work，才能在其上录入任务。",
+                "repoIsolationOff": "某个附加的 Repository Work 已关闭“Task isolation”，因此不会在其上录入任务。请在该 Work 的设置中开启“Task isolation”。",
                 "tasksOnWorks": "附加的 Works 上的任务",
-                "nothingToFile": "没有可录入任务的附加 App Work。",
+                "nothingToFile": "没有可录入任务的附加 App Work 或 Repository Work。",
                 "tasksOnWorksEmpty": "尚未录入任何任务。",
                 "save": "保存",
                 "saved": "已保存输出",
@@ -2774,7 +2775,7 @@
         },
         "feed": {
             "narration": {
-                "missionNothingToFile": "<b>{actor}</b> 今天在某个任务的 App Works 上没有发现可录入的新内容"
+                "missionNothingToFile": "<b>{actor}</b> 今天在某个任务的 App Works 或 Repository Works 上没有发现可录入的新内容"
             }
         },
         "works": {

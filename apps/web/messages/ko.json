@@ -2350,9 +2350,9 @@
                     "no-ideas": "Tick ran but generated no Ideas",
                     "failed": "Run now failed",
                     "cron-no-match": "Tick ran (cron skipped)",
-                    "tasks-filed": "미션의 App Works에 작업을 등록했습니다.",
-                    "no-tasks": "미션의 App Works에 등록할 새 항목이 없습니다.",
-                    "spawned-and-tasks-filed": "새 아이디어를 생성하고 미션의 App Works에 작업을 등록했습니다."
+                    "tasks-filed": "미션의 App Works 또는 Repository Works에 작업을 등록했습니다.",
+                    "no-tasks": "미션의 App Works 또는 Repository Works에 등록할 새 항목이 없습니다.",
+                    "spawned-and-tasks-filed": "새 아이디어를 생성하고 미션의 App Works 또는 Repository Works에 작업을 등록했습니다."
                 }
             },
             "goals": {
@@ -2388,14 +2388,15 @@
             "output": {
                 "title": "출력",
                 "ideas": "아이디어",
-                "tasks": "첨부된 App Works의 작업",
+                "tasks": "첨부된 App Works 또는 Repository Works의 작업",
                 "both": "둘 다",
                 "tasksPerTick": "실행당 작업 수",
                 "openCap": "Work당 열린 작업 한도",
                 "appliesTo": "“개선” 또는 “운영”으로 첨부된 Works에 적용됩니다.",
-                "noAppWork": "작업을 등록하려면 App Work를 “개선” 또는 “운영”으로 첨부하세요.",
+                "noAppWork": "작업을 등록하려면 App Work 또는 Repository Work를 “개선” 또는 “운영”으로 첨부하세요.",
+                "repoIsolationOff": "첨부된 Repository Work에서 “Task isolation”이 꺼져 있어 해당 Work에는 작업이 등록되지 않습니다. 해당 Work의 설정에서 “Task isolation”을 켜세요.",
                 "tasksOnWorks": "첨부된 Works의 작업",
-                "nothingToFile": "작업을 등록할 App Work가 첨부되어 있지 않습니다.",
+                "nothingToFile": "작업을 등록할 App Work 또는 Repository Work가 첨부되어 있지 않습니다.",
                 "tasksOnWorksEmpty": "아직 등록된 작업이 없습니다.",
                 "save": "저장",
                 "saved": "출력이 저장되었습니다",
@@ -2774,7 +2775,7 @@
         },
         "feed": {
             "narration": {
-                "missionNothingToFile": "<b>{actor}</b>이(가) 오늘 미션의 App Works에 등록할 새 항목을 찾지 못했습니다"
+                "missionNothingToFile": "<b>{actor}</b>이(가) 오늘 미션의 App Works 또는 Repository Works에 등록할 새 항목을 찾지 못했습니다"
             }
         },
         "works": {

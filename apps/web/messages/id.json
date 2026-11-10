@@ -2350,9 +2350,9 @@
                     "no-ideas": "Tick ran but generated no Ideas",
                     "failed": "Run now failed",
                     "cron-no-match": "Tick ran (cron skipped)",
-                    "tasks-filed": "Tugas dicatat di App Works Misi.",
-                    "no-tasks": "Tidak ada hal baru untuk dicatat di App Works Misi.",
-                    "spawned-and-tasks-filed": "Ide baru dibuat dan Tugas dicatat di App Works Misi."
+                    "tasks-filed": "Tugas dicatat di App Works atau Repository Works Misi.",
+                    "no-tasks": "Tidak ada hal baru untuk dicatat di App Works atau Repository Works Misi.",
+                    "spawned-and-tasks-filed": "Ide baru dibuat dan Tugas dicatat di App Works atau Repository Works Misi."
                 }
             },
             "goals": {
@@ -2388,14 +2388,15 @@
             "output": {
                 "title": "Keluaran",
                 "ideas": "Ide",
-                "tasks": "Tugas di App Works terlampir",
+                "tasks": "Tugas di App Works atau Repository Works terlampir",
                 "both": "Keduanya",
                 "tasksPerTick": "Tugas per siklus",
                 "openCap": "Batas tugas terbuka per Work",
                 "appliesTo": "Berlaku untuk Works yang dilampirkan sebagai Meningkatkan atau Mengoperasikan.",
-                "noAppWork": "Lampirkan App Work sebagai Meningkatkan atau Mengoperasikan untuk mencatat tugas di sana.",
+                "noAppWork": "Lampirkan App Work atau Repository Work sebagai Meningkatkan atau Mengoperasikan untuk mencatat tugas di sana.",
+                "repoIsolationOff": "“Task isolation” nonaktif pada Repository Work yang terlampir, sehingga tidak ada tugas yang dicatat di sana. Aktifkan “Task isolation” di pengaturan Work tersebut.",
                 "tasksOnWorks": "Tugas di Works terlampir",
-                "nothingToFile": "Tidak ada App Work terlampir untuk mencatat tugas.",
+                "nothingToFile": "Tidak ada App Work atau Repository Work terlampir untuk mencatat tugas.",
                 "tasksOnWorksEmpty": "Belum ada tugas yang dicatat.",
                 "save": "Simpan",
                 "saved": "Keluaran disimpan",
@@ -2774,7 +2775,7 @@
         },
         "feed": {
             "narration": {
-                "missionNothingToFile": "<b>{actor}</b> tidak menemukan hal baru untuk dicatat di App Works sebuah Misi hari ini"
+                "missionNothingToFile": "<b>{actor}</b> tidak menemukan hal baru untuk dicatat di App Works atau Repository Works sebuah Misi hari ini"
             }
         },
         "works": {

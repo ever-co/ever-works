@@ -4,7 +4,9 @@ import type { Mission } from '@/lib/api/missions';
 
 /**
  * APW-08 T36 (FR-51…FR-53) — the Mission's Output card: the three modes, the Task-output limits
- * shown only when it files Tasks, the bounds the API enforces, and the no-App-Work notice.
+ * shown only when it files Tasks, the bounds the API enforces, the notice for a Mission with no
+ * App or Repository Work to file on, and the notice for an attached Repository Work whose Task
+ * isolation is off.
  */
 
 vi.mock('next-intl', () => ({
@@ -53,7 +55,7 @@ beforeEach(() => {
 
 describe('MissionOutputCard (APW-08 T36)', () => {
     it('an ideas Mission shows the three modes and no Task limits', () => {
-        render(<MissionOutputCard mission={mission()} hasAppWork onMissionChange={vi.fn()} />);
+        render(<MissionOutputCard mission={mission()} hasTaskWork onMissionChange={vi.fn()} />);
         expect(screen.getByTestId('mission-output-ideas')).toBeChecked();
         expect(screen.getByTestId('mission-output-tasks')).not.toBeChecked();
         expect(screen.queryByTestId('mission-output-limits')).toBeNull();
@@ -62,7 +64,7 @@ describe('MissionOutputCard (APW-08 T36)', () => {
     it('choosing Tasks shows the limits; Save sends the mode and the bounded output', async () => {
         const onMissionChange = vi.fn();
         render(
-            <MissionOutputCard mission={mission()} hasAppWork onMissionChange={onMissionChange} />,
+            <MissionOutputCard mission={mission()} hasTaskWork onMissionChange={onMissionChange} />,
         );
         fireEvent.click(screen.getByTestId('mission-output-tasks'));
         expect(screen.getByTestId('mission-output-limits')).toBeInTheDocument();
@@ -81,27 +83,87 @@ describe('MissionOutputCard (APW-08 T36)', () => {
         expect(toastSuccess).toHaveBeenCalledWith('saved');
     });
 
-    it('with no App Work attached, says what to attach — before saving, and after the API warns', async () => {
+    it('with no App or Repository Work attached, says what to attach — before saving, and after the API warns', async () => {
         const { unmount } = render(
             <MissionOutputCard
                 mission={mission({ outputMode: 'both' })}
-                hasAppWork={false}
+                hasTaskWork={false}
                 onMissionChange={vi.fn()}
             />,
         );
         expect(screen.getByTestId('mission-output-no-app-work')).toHaveTextContent('noAppWork');
+        // Nothing is attached, so there is no Repository Work to report either.
+        expect(screen.queryByTestId('mission-output-repo-isolation-off')).toBeNull();
         unmount();
 
         updateMissionAction.mockResolvedValueOnce(
             mission({ outputMode: 'tasks', warnings: ['noAppWorkRelation'] }),
         );
-        render(<MissionOutputCard mission={mission()} hasAppWork onMissionChange={vi.fn()} />);
+        render(<MissionOutputCard mission={mission()} hasTaskWork onMissionChange={vi.fn()} />);
         fireEvent.click(screen.getByTestId('mission-output-tasks'));
         expect(screen.queryByTestId('mission-output-no-app-work')).toBeNull();
         fireEvent.click(screen.getByTestId('mission-output-save'));
         await waitFor(() =>
             expect(screen.getByTestId('mission-output-no-app-work')).toBeInTheDocument(),
         );
+        expect(screen.queryByTestId('mission-output-repo-isolation-off')).toBeNull();
+    });
+
+    it('a Repository Work with Task isolation off: says so and links to that Work’s settings', () => {
+        render(
+            <MissionOutputCard
+                mission={mission({ outputMode: 'tasks' })}
+                hasTaskWork
+                isolationOffWorks={[
+                    { workId: 'w-repo', workName: 'ever-works' },
+                    { workId: 'w-site', workName: 'website' },
+                ]}
+                onMissionChange={vi.fn()}
+            />,
+        );
+        const notice = screen.getByTestId('mission-output-repo-isolation-off');
+        expect(notice).toHaveTextContent('repoIsolationOff');
+        expect(screen.getByRole('link', { name: 'ever-works' })).toHaveAttribute(
+            'href',
+            '/works/w-repo/settings',
+        );
+        expect(screen.getByRole('link', { name: 'website' })).toHaveAttribute(
+            'href',
+            '/works/w-site/settings',
+        );
+        // A Repository Work IS attached: this is not the "attach a Work" case.
+        expect(screen.queryByTestId('mission-output-no-app-work')).toBeNull();
+    });
+
+    it('the isolation notice is shown only while the Mission files Tasks', () => {
+        render(
+            <MissionOutputCard
+                mission={mission({ outputMode: 'ideas' })}
+                hasTaskWork
+                isolationOffWorks={[{ workId: 'w-repo', workName: 'ever-works' }]}
+                onMissionChange={vi.fn()}
+            />,
+        );
+        expect(screen.queryByTestId('mission-output-repo-isolation-off')).toBeNull();
+        fireEvent.click(screen.getByTestId('mission-output-both'));
+        expect(screen.getByTestId('mission-output-repo-isolation-off')).toBeInTheDocument();
+    });
+
+    it('shows the isolation notice once the API warns repoWorkTaskIsolationOff, even with no Work named', async () => {
+        updateMissionAction.mockResolvedValueOnce(
+            mission({ outputMode: 'tasks', warnings: ['repoWorkTaskIsolationOff'] }),
+        );
+        render(<MissionOutputCard mission={mission()} hasTaskWork onMissionChange={vi.fn()} />);
+        fireEvent.click(screen.getByTestId('mission-output-tasks'));
+        expect(screen.queryByTestId('mission-output-repo-isolation-off')).toBeNull();
+        fireEvent.click(screen.getByTestId('mission-output-save'));
+        await waitFor(() =>
+            expect(screen.getByTestId('mission-output-repo-isolation-off')).toHaveTextContent(
+                'repoIsolationOff',
+            ),
+        );
+        expect(screen.queryByRole('link')).toBeNull();
+        expect(screen.queryByTestId('mission-output-no-app-work')).toBeNull();
     });
 
     it('a refused save shows the error and leaves the Mission as it was', async () => {
@@ -110,7 +172,7 @@ describe('MissionOutputCard (APW-08 T36)', () => {
         );
         const onMissionChange = vi.fn();
         render(
-            <MissionOutputCard mission={mission()} hasAppWork onMissionChange={onMissionChange} />,
+            <MissionOutputCard mission={mission()} hasTaskWork onMissionChange={onMissionChange} />,
         );
         fireEvent.click(screen.getByTestId('mission-output-save'));
         await waitFor(() => expect(toastError).toHaveBeenCalled());

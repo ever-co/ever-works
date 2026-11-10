@@ -163,19 +163,70 @@ describe('APW-08 evolve copy (T28)', () => {
             'dashboard.missionDetail.output.tasksPerTick',
             'dashboard.missionDetail.output.openCap',
             'dashboard.missionDetail.output.noAppWork',
+            'dashboard.missionDetail.output.repoIsolationOff',
             'dashboard.missionDetail.output.tasksOnWorks',
         ]) {
             expect(enLeaves).toContain(path);
         }
         const en = bundle('en');
-        // Plan §6 copy, verbatim.
-        expect(at(en, 'dashboard.missionDetail.output.tasks')).toBe('Tasks on attached App Works');
+        // Plan §6 copy, widened from "App Works" to "App or Repository Works" when a Mission's
+        // Task output started filing on Repository Works too.
+        expect(at(en, 'dashboard.missionDetail.output.tasks')).toBe(
+            'Tasks on attached App or Repository Works',
+        );
+        expect(at(en, 'dashboard.missionDetail.output.noAppWork')).toBe(
+            'Attach an App or Repository Work as Improves or Operates to file Tasks on it.',
+        );
         expect(at(en, 'dashboard.missionDetail.output.nothingToFile')).toBe(
-            'No attached App Work to file Tasks on.',
+            'No attached App or Repository Work to file Tasks on.',
         );
         expect(at(en, 'dashboard.missionDetail.output.appliesTo')).toBe(
             'Applies to Works attached as Improves or Operates.',
         );
+    });
+
+    // A Mission's Task output files on Repository Works too: every sentence that named "App
+    // Works" for this feature now names both kinds, in all 21 bundles, and the notice for a
+    // Repository Work whose Task isolation is off is a real translation.
+    it('names App AND Repository Works for the Mission’s Task output in all 21 bundles', () => {
+        const paths = [
+            'dashboard.missionDetail.output.tasks',
+            'dashboard.missionDetail.output.noAppWork',
+            'dashboard.missionDetail.output.nothingToFile',
+            'dashboard.missionDetail.toasts.runNow.tasks-filed',
+            'dashboard.missionDetail.toasts.runNow.no-tasks',
+            'dashboard.missionDetail.toasts.runNow.spawned-and-tasks-filed',
+            'dashboard.feed.narration.missionNothingToFile',
+        ];
+        const en = bundle('en');
+        const problems: string[] = [];
+        for (const locale of locales()) {
+            const json = bundle(locale);
+            for (const path of paths) {
+                const value = at(json, path);
+                if (typeof value !== 'string' || value.trim().length === 0) {
+                    problems.push(`${locale}: ${path} missing`);
+                    continue;
+                }
+                // "Repository" stays a product term next to "App" everywhere but Arabic, which
+                // translates both ("مستودع" is its word for the Repository kind).
+                if (!/Repository|مستودع/.test(value)) {
+                    problems.push(`${locale}: ${path} still names App Works only`);
+                }
+            }
+            const notice = at(json, 'dashboard.missionDetail.output.repoIsolationOff');
+            if (typeof notice !== 'string' || !notice.includes('Task isolation')) {
+                // The setting is labelled "Task isolation" in every bundle, so the notice names it
+                // the way the settings page shows it.
+                problems.push(`${locale}: repoIsolationOff does not name the Task isolation setting`);
+            } else if (
+                locale !== 'en' &&
+                notice === at(en, 'dashboard.missionDetail.output.repoIsolationOff')
+            ) {
+                problems.push(`${locale}: repoIsolationOff is the English sentence`);
+            }
+        }
+        expect(problems).toEqual([]);
     });
 
     it('carries the APW-08 P3 copy: the Build on an open-source app template form (T40)', () => {

@@ -2350,9 +2350,9 @@
                     "no-ideas": "Tick ran but generated no Ideas",
                     "failed": "Run now failed",
                     "cron-no-match": "Tick ran (cron skipped)",
-                    "tasks-filed": "Task registrati sugli App Works della Missione.",
-                    "no-tasks": "Niente di nuovo da registrare sugli App Works della Missione.",
-                    "spawned-and-tasks-filed": "Nuove Idee generate e Task registrati sugli App Works della Missione."
+                    "tasks-filed": "Task registrati sugli App Works o Repository Works della Missione.",
+                    "no-tasks": "Niente di nuovo da registrare sugli App Works o Repository Works della Missione.",
+                    "spawned-and-tasks-filed": "Nuove Idee generate e Task registrati sugli App Works o Repository Works della Missione."
                 }
             },
             "goals": {
@@ -2388,14 +2388,15 @@
             "output": {
                 "title": "Output",
                 "ideas": "Idee",
-                "tasks": "Task sugli App Works allegati",
+                "tasks": "Task sugli App Works o Repository Works allegati",
                 "both": "Entrambi",
                 "tasksPerTick": "Task per ciclo",
                 "openCap": "Limite di task aperti per Work",
                 "appliesTo": "Si applica ai Works allegati come «Migliora» o «Gestisce».",
-                "noAppWork": "Allega un App Work come «Migliora» o «Gestisce» per registrarvi task.",
+                "noAppWork": "Allega un App Work o un Repository Work come «Migliora» o «Gestisce» per registrarvi task.",
+                "repoIsolationOff": "«Task isolation» è disattivato su un Repository Work allegato, quindi non vi vengono registrati task. Attiva «Task isolation» nelle impostazioni di quel Work.",
                 "tasksOnWorks": "Task sui Works allegati",
-                "nothingToFile": "Nessun App Work allegato su cui registrare task.",
+                "nothingToFile": "Nessun App Work o Repository Work allegato su cui registrare task.",
                 "tasksOnWorksEmpty": "Nessun task registrato finora.",
                 "save": "Salva",
                 "saved": "Output salvato",
@@ -2774,7 +2775,7 @@
         },
         "feed": {
             "narration": {
-                "missionNothingToFile": "<b>{actor}</b> non ha trovato oggi nulla di nuovo da registrare sugli App Works di una Missione"
+                "missionNothingToFile": "<b>{actor}</b> non ha trovato oggi nulla di nuovo da registrare sugli App Works o Repository Works di una Missione"
             }
         },
         "works": {
