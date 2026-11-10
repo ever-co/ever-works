@@ -180,9 +180,22 @@ describe('readLeadingJsonStringMembers', () => {
             `{"${'"'.repeat(size)}`,
         ];
         for (const head of worst) {
-            const started = performance.now();
             expect(ids(head)).toEqual({ runId: null, taskId: null });
-            expect(performance.now() - started).toBeLessThan(250);
+            // The fastest of three: a budget should not fail on one scheduler
+            // hiccup of a busy machine. A megabyte takes a few milliseconds.
+            let fastest = Number.POSITIVE_INFINITY;
+            for (let attempt = 0; attempt < 3; attempt += 1) {
+                const started = performance.now();
+                ids(head);
+                fastest = Math.min(fastest, performance.now() - started);
+            }
+            expect(fastest).toBeLessThan(250);
         }
+    });
+
+    it('a key written with an escape is still that key', () => {
+        // `JSON.stringify` never writes one, but a document may.
+        expect(ids('{"run\\u0049d":"x","t\\u0061skId":"y"}')).toEqual({ runId: 'x', taskId: 'y' });
+        expect(ids('{"run\\\\Id":"x"}')).toEqual({ runId: null, taskId: null });
     });
 });

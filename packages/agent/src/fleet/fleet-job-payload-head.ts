@@ -105,7 +105,11 @@ export function readLeadingJsonStringMembers<K extends string>(
         if (at >= end || text.charCodeAt(at) !== QUOTE) return found;
         const keyFrom = at;
         if (!skipString() || at > end) return found;
-        const key = decode(keyFrom, at);
+        // A key with no escape in it IS the text between its quotes; only one
+        // that has an escape needs decoding. (This is what keeps a document of
+        // very many members a plain scan.)
+        const keyText = text.slice(keyFrom + 1, at - 1);
+        const key = keyText.includes('\\') ? decode(keyFrom, at) : keyText;
         skipWhitespace();
         if (at >= end || text.charCodeAt(at) !== COLON) return found;
         at += 1;
