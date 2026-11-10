@@ -1777,6 +1777,37 @@ describe('readModelCliError — only what the CLI authored', () => {
 			expect(readModelCliError('codex', null, red('Not logged in'))?.text).toBe('Not logged in');
 		});
 
+		it('a run that REPORTED zero output tokens has its stderr read, whatever lines its stream holds', () => {
+			// The model wrote nothing in this run, so nothing in the stream can be
+			// its: an unflagged assistant line here is the CLI's own (an older CLI
+			// that did not mark its synthetic messages), not a reason to ignore the
+			// process's own words.
+			const stream = lines(
+				INIT,
+				assistant('No response requested.', { message: { model: '<synthetic>', content: [] } }),
+				assistant(NOT_LOGGED_IN),
+				{ type: 'result', subtype: 'success', is_error: true, result: '', usage: { output_tokens: 0 } }
+			);
+			const read = readModelCliError('claude-code', stream, red(ORG_DISABLED), { outputTokens: 0 });
+			expect(read?.text).toBe(ORG_DISABLED);
+			expect(verdict(read)).toBe('access_denied/org_access_disabled');
+			// Codex: items in the stream, and a reported zero.
+			const codex = readModelCliError(
+				'codex',
+				lines(
+					{ type: 'thread.started', thread_id: 't' },
+					{ type: 'item.started', item: { type: 'reasoning' } }
+				),
+				red('Error: Not logged in'),
+				{ outputTokens: 0 }
+			);
+			expect(verdict(codex)).toBe('not_signed_in/not_logged_in');
+			// No count reported at all: the stream decides, and these streams say the model spoke.
+			expect(readModelCliError('claude-code', stream, red(ORG_DISABLED), { outputTokens: null })).toBeNull();
+			// A run that succeeded is never read, zero tokens or not.
+			expect(readModelCliError('claude-code', stream, ok, { outputTokens: 0 })).toBeNull();
+		});
+
 		it('plain stdout is NOT read once any event exists', () => {
 			const mixed = `${JSON.stringify(INIT)}\n${NOT_LOGGED_IN}\n`;
 			expect(readModelCliError('claude-code', mixed, red(''), { outputTokens: 0 })).toBeNull();

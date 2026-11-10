@@ -1474,11 +1474,15 @@ export interface ModelCliErrorFacts {
  *    NOT an `error` item (a non-fatal error surfaced inside the turn, which
  *    can be a tool's), an `agent_message`, `reasoning` or a command's output;
  *  - either CLI's stderr, and stdout text that is not an event at all —
- *    when the model did not speak in this run: the run failed, it reported
- *    no output tokens, and the stream holds nothing the model wrote. A CLI
- *    that refuses to start prints its reason there, after its `init` line or
- *    before any line. Once the model has spoken, the authors of stderr can
- *    no longer be told apart and it is not read.
+ *    when the model did not speak in this run. The run failed and REPORTED
+ *    zero output tokens: then stderr is read whatever the stream holds (a
+ *    model that wrote nothing cannot have authored anything in it; a line
+ *    that looks like an assistant event is the CLI's own). When the run
+ *    reported no token count at all (it died before its result), the
+ *    stream decides: stderr is read only if it holds nothing the model
+ *    wrote. A CLI that refuses to start prints its reason there, after its
+ *    `init` line or before any line. Once the model has spoken, the authors
+ *    of stderr can no longer be told apart and it is not read.
  *
  * Null when those channels are empty: the caller then draws no verdict.
  * The text is for classification inside this process only — it is never
@@ -1569,8 +1573,11 @@ export function readModelCliError(
 			// Not a document either.
 		}
 	}
-	// The process's own words — only for a run in which the model said nothing.
-	if (step.status !== 'green' && !modelSpoke) {
+	// The process's own words — only for a run in which the model said nothing:
+	// it reported zero output tokens (whatever the stream holds), or reported
+	// no count and the stream shows nothing the model wrote.
+	const reportedNoOutput = facts.outputTokens === 0;
+	if (step.status !== 'green' && (reportedNoOutput || !modelSpoke)) {
 		push(step.logTail);
 		// Text on stdout that is no event: only when there is no event at all,
 		// i.e. the CLI died before it wrote its first one.
