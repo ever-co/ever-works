@@ -269,3 +269,23 @@ export class FleetJobPushCredentialDto extends FleetJobNodeCredentialDto {
     @Min(1)
     leaseGeneration: number;
 }
+
+/**
+ * Request body for the PUBLIC `POST /api/fleet/jobs/:id/fetch-credential`
+ * — the scoped READ credential a node fetches with.
+ *
+ * The push-credential body, field for field, and it inherits rather than
+ * re-declares it so the two cannot drift: the credential pair plus the
+ * `leaseGeneration` the claim was handed out with, and NO scope of any
+ * kind. Which repositories the token may read is decided from platform
+ * state, exactly as for a push.
+ *
+ * A SEPARATE ROUTE with the same body, never a `mode` field on the push
+ * route, and that is a compatibility decision as much as a naming one. The
+ * global `ValidationPipe` runs `whitelist` + `forbidNonWhitelisted`, so a
+ * new field sent to an API that predates it is a 400; and had an older API
+ * merely dropped the field, a node asking for a READ credential would have
+ * been handed a WRITE one. A route an older API does not have is a plain
+ * 404, which the node reads as "fetch the way you always did".
+ */
+export class FleetJobFetchCredentialDto extends FleetJobPushCredentialDto {}

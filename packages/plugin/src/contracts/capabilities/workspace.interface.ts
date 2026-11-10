@@ -74,6 +74,53 @@ export interface WorkspaceProvisionSpec {
 	 * that predates it ignores it.
 	 */
 	readonly hardenRepoHooks?: boolean;
+	/**
+	 * A short-lived, repository-scoped READ credential lent to this
+	 * provision's FETCHES and to nothing else; see
+	 * {@link WorkspaceFetchCredential}. Optional and additive: absent, the
+	 * provision is byte-for-byte what it was, and a provider that predates
+	 * the field ignores it and fetches as it always did.
+	 */
+	readonly fetchCredential?: WorkspaceFetchCredential;
+	/**
+	 * Told, at most once per provision, that {@link fetchCredential} was NOT
+	 * handed to Git and why — the fetch then ran exactly as it would have
+	 * without one. The text is the provider's own: at most it names a
+	 * FAMILY of config keys, never a key, a value or anything Git printed.
+	 */
+	readonly onFetchCredentialWithheld?: (reason: string) => void;
+}
+
+/**
+ * A short-lived, repository-scoped read credential lent to the fetches of
+ * exactly ONE provision — the read twin of {@link WorkspacePushCredential}.
+ *
+ * Installed the same way and for the same reasons: through the `git fetch`
+ * child's ENVIRONMENT (`http.<url>.extraheader`, with the helper list,
+ * askpass and hooks reset), so it never reaches argv, a config file or a
+ * remote URL, and dies with the child. Every other Git command of the
+ * provision (`init`, `remote add`, `worktree add`, the ownership probes)
+ * runs without it.
+ *
+ * THE DIFFERENCE FROM PUSH IS THE FALLBACK. A push credential that cannot
+ * be honoured refuses the push, because the alternative is the ambient
+ * helper that credential replaces. A fetch credential that cannot be
+ * honoured is WITHHELD and the fetch runs exactly as it would have without
+ * one: a fetch never needed a scoped credential to be correct (a public
+ * repository, or a machine whose operator configured a helper, works
+ * today), so "do what you did before" is the safe answer — and it is the
+ * only answer in which the token is never exposed. A provider withholds it
+ * when `remoteUrl` is not byte-identical to the URL it is about to fetch,
+ * or when the repository's own Git config could redirect, intercept or
+ * answer for the request.
+ */
+export interface WorkspaceFetchCredential {
+	/** Basic-auth username (a GitHub installation token uses `x-access-token`). */
+	readonly username: string;
+	/** The secret. Held in memory for the length of the fetches and nowhere else. */
+	readonly token: string;
+	/** The remote this credential was scoped to, verbatim; see the note above. */
+	readonly remoteUrl: string;
 }
 
 export interface WorkspaceHandle {
