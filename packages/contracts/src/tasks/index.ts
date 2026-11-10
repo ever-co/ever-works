@@ -6,3 +6,4 @@ export * from './task-board-stall.types.js';
 export * from './task-board-provenance.types.js';
 export * from './task-reserved-labels.types.js';
 export * from './check-env-host-credentials.types.js';
+export * from './run-pull-request-text.types.js';
