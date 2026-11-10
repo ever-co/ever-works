@@ -1702,3 +1702,119 @@ describe('a traced daemon — git’s tracing variables do not reach a credentia
 		expect(read(target)).not.toContain(TOKEN);
 	});
 });
+
+describe('remote.<private name>.proxy — the one remote key that outranks the pinned http.<url>.proxy', () => {
+	// A private remote's name is in its command's argv for as long as the
+	// command runs. A process that reads it there and writes `[remote "<that
+	// name>"] proxy` into the pool would route the request through a proxy of
+	// its choosing: Git takes a remote's own proxy over `http.<url>.proxy`.
+	// What stops it is the same value pinned on the private remote itself, in
+	// command scope. Planted here the moment the fetch's argv is known —
+	// earlier than any real reader could manage.
+
+	/** A local proxy that records every CONNECT it is asked for and refuses it. */
+	async function recordingProxy(): Promise<{ url: string; connects: string[]; close: () => Promise<void> }> {
+		const connects: string[] = [];
+		const server = createServer((_request, response) => {
+			response.statusCode = 502;
+			response.end();
+		});
+		server.on('connect', (request, socket) => {
+			connects.push(String(request.url));
+			socket.destroy();
+		});
+		await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+		return {
+			url: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
+			connects,
+			close: async () => {
+				server.closeAllConnections();
+				await new Promise<void>((resolve) => server.close(() => resolve()));
+			}
+		};
+	}
+
+	/** Proxy settings the daemon may have inherited would decide the case instead. */
+	const withoutProxyEnvironment = (env: NodeJS.ProcessEnv): NodeJS.ProcessEnv => {
+		const copy = { ...env };
+		for (const name of Object.keys(copy)) {
+			if (/^(https?|all|no)_proxy$/i.test(name)) delete copy[name];
+		}
+		return copy;
+	};
+
+	it('CONTROL: a remote’s own proxy in the pool beats an http.<url>.proxy given in command scope', async () => {
+		const at = scene();
+		const pool = scratchPool(at.dir, HTTPS_REMOTE);
+		const proxy = await recordingProxy();
+		try {
+			git(pool, 'config', 'remote.ew-control.proxy', proxy.url);
+			await execFileAsync('git', ['fetch', 'ew-control', '+refs/heads/main:refs/remotes/origin/main'], {
+				cwd: pool,
+				windowsHide: true,
+				env: {
+					...withoutProxyEnvironment(process.env),
+					GIT_TERMINAL_PROMPT: '0',
+					GIT_CONFIG_COUNT: '3',
+					GIT_CONFIG_KEY_0: 'remote.ew-control.url',
+					GIT_CONFIG_VALUE_0: HTTPS_REMOTE,
+					GIT_CONFIG_KEY_1: `http.${HTTPS_REMOTE}.proxy`,
+					GIT_CONFIG_VALUE_1: '',
+					GIT_CONFIG_KEY_2: `http.${HTTPS_REMOTE}.extraheader`,
+					GIT_CONFIG_VALUE_2: HEADER
+				}
+			}).catch(() => undefined);
+		} finally {
+			await proxy.close();
+		}
+
+		expect(proxy.connects).toEqual(['127.0.0.1:1']);
+	});
+
+	it('planted on the private name as the credentialed fetch starts: the request does not go through it', async () => {
+		const at = scene();
+		const httpsBase = join(at.dir, 'https-workspaces');
+		await new LocalWorkspacePlugin()
+			.provision(provisionSpec(httpsBase, HTTPS_REMOTE, 'seed'))
+			.catch(() => undefined);
+		const pool = poolOf(httpsBase);
+		const proxy = await recordingProxy();
+		const invocations: Invocation[] = [];
+		const recording = recordingGit(invocations) as unknown as (...rest: unknown[]) => unknown;
+		const planting = ((command: string, args: string[], ...rest: unknown[]) => {
+			const name = args[0] === 'fetch' ? args.find((arg) => arg.startsWith('ew-credentialed-')) : undefined;
+			if (name) git(pool, 'config', `remote.${name}.proxy`, proxy.url);
+			return recording(command, args, ...rest);
+		}) as unknown as typeof execFile;
+		const previous = { ...process.env };
+		for (const name of Object.keys(process.env)) {
+			if (/^(https?|all|no)_proxy$/i.test(name)) delete process.env[name];
+		}
+
+		let error: Error | null = null;
+		try {
+			error = await new LocalWorkspacePlugin({ execFile: planting })
+				.provision(
+					provisionSpec(httpsBase, HTTPS_REMOTE, 'proxied', {
+						fetchCredential: { username: 'x-access-token', token: TOKEN, remoteUrl: HTTPS_REMOTE }
+					})
+				)
+				.then(
+					() => null,
+					(caught: Error) => caught
+				);
+		} finally {
+			Object.assign(process.env, previous);
+			await proxy.close();
+		}
+
+		// The credentialed fetch ran, with the plant in place for its own name…
+		const fetch = invocations.find((entry) => entry.args[0] === 'fetch');
+		expect(fetch && carriesHeader(fetch)).toBe(true);
+		expect(git(pool, 'config', '--get-regexp', '^remote\.ew-credentialed-.*\.proxy$')).toContain(proxy.url);
+		// …and went straight to the remote (where nothing listens), not
+		// through the planted proxy.
+		expect(error?.message).toMatch(/fetch of base ref 'main' failed/);
+		expect(proxy.connects).toEqual([]);
+	});
+});
