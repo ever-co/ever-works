@@ -2645,6 +2645,90 @@ export class GitFacadeService implements IGitFacade {
         return this.createGitHubAppInstallationToken(installation.installationId);
     }
 
+    /**
+     * LIVE proof that ONE platform GitHub App installation can read ONE
+     * repository right now — the last step of the Repository Work create
+     * path's installation fallback (`WorkLifecycleService`).
+     *
+     * This method decides NOTHING about who may use the installation. The
+     * caller has already established that the installation belongs to the
+     * user, is not deleted or suspended, matches the repository's owner and
+     * lists the repository in its snapshot; `installationId` and
+     * `githubRepoId` must come from those platform rows, never from a
+     * request. What is added here is the part a database cannot answer: the
+     * snapshot may be stale (repository removed from the installation, App
+     * uninstalled with the webhook lost), so GitHub is asked twice —
+     *
+     *   1. mint an installation token narrowed to THIS repository id with
+     *      read-only permissions. GitHub refuses the mint (422) when the
+     *      installation no longer covers that repository, and (404) when the
+     *      installation is gone;
+     *   2. read `owner/repo` with that token.
+     *
+     * The token is the narrowest one that can answer the question, is NOT
+     * put in the shared installation-token cache (that cache holds the
+     * unscoped token and the two must never be handed out for each other),
+     * and never leaves this method.
+     *
+     * `false` — never a throw — on every failure: installation row missing,
+     * deleted or suspended, App credentials unset, GitHub refusing the mint,
+     * the read answering 404/403, the provider plugin unavailable, a
+     * transport error. The caller treats `false` as "not confirmed" and
+     * refuses; nothing here may turn an unknown into a yes.
+     */
+    async canInstallationReadRepository(input: {
+        /** GitHub's installation id, from the platform's own `github_app_installations` row. */
+        installationId: string;
+        /** GitHub's numeric repository id, from the installation snapshot row. */
+        githubRepoId: string;
+        owner: string;
+        repo: string;
+        /** Scopes the provider-plugin lookup, exactly as every other facade call does. */
+        userId: string;
+    }): Promise<boolean> {
+        try {
+            const installation = await this.gitHubAppInstallationRepository.findByInstallationId(
+                input.installationId,
+            );
+            if (!installation || installation.deletedAt || installation.suspendedAt) {
+                return false;
+            }
+
+            const appId = config.githubApp.getAppId();
+            const privateKey = config.githubApp.getPrivateKey();
+            if (!appId || !privateKey) {
+                return false;
+            }
+
+            const minted = await requestGitHubAppInstallationAccessTokenDetails(
+                installation.installationId,
+                { appId, privateKey },
+                {
+                    repositoryIds: [input.githubRepoId],
+                    // Read-only, and nothing else: anything omitted is not granted.
+                    permissions: { contents: 'read', metadata: 'read' },
+                },
+            );
+            if (!minted.token) {
+                return false;
+            }
+
+            return await this.hasRepositoryAccess(input.owner, input.repo, {
+                providerId: 'github',
+                userId: input.userId,
+                token: minted.token,
+            });
+        } catch (error) {
+            // Name only: GitHub's answer can name the installation; the token is never in it.
+            this.logger.warn(
+                `GitHub App installation read check failed for a repository Work source (${
+                    error instanceof Error ? error.name : 'unknown error'
+                }).`,
+            );
+            return false;
+        }
+    }
+
     private async getInstallationTokenForWork(options: GitFacadeOptions): Promise<string | null> {
         if (!options.workId || options.providerId !== 'github') {
             return null;

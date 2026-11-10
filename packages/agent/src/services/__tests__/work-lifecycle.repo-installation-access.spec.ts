@@ -1,0 +1,673 @@
+jest.mock('@src/generators/data-generator/data-generator.service', () => ({
+    DataGeneratorService: class DataGeneratorService {},
+}));
+jest.mock('@src/generators/markdown-generator/markdown-generator.service', () => ({
+    MarkdownGeneratorService: class MarkdownGeneratorService {},
+}));
+jest.mock('@src/generators/website-generator/website-generator.service', () => ({
+    WebsiteGeneratorService: class WebsiteGeneratorService {},
+}));
+jest.mock('@src/generators/website-generator/website-update.service', () => ({
+    WebsiteUpdateService: class WebsiteUpdateService {},
+}));
+
+import { ForbiddenException } from '@nestjs/common';
+import { WorkLifecycleService } from '../work-lifecycle.service';
+import { CreateWorkDto } from '@src/dto/create-work.dto';
+import type { User } from '@src/entities/user.entity';
+
+/**
+ * Repository Work — the GitHub App installation fallback of
+ * `WorkLifecycleService.createWork` (`kind: 'repo'`).
+ *
+ * An organization that restricts OAuth app access hides its private
+ * repositories from a member's OAuth token while the installed Ever Works
+ * GitHub App reads them. Before the fallback such a repository could not be
+ * registered at all (400, "not found or is not accessible").
+ *
+ * This is access-control code, so the suite pins both directions:
+ *
+ *   - the path that existed before is byte-for-byte unchanged when the
+ *     owner's own account reads the repository;
+ *   - the fallback accepts exactly ONE situation (the caller's own, live,
+ *     owner-matching installation that lists the repository and is confirmed
+ *     by GitHub right now) and every near miss is refused with the SAME
+ *     answer, with nothing persisted.
+ */
+
+const baseUser = { id: 'u-1', email: 'u@example.com' } as User;
+
+const repoDto: CreateWorkDto = {
+    slug: 'platform',
+    name: 'Platform',
+    description: 'A description',
+    organization: false,
+    gitProvider: 'github',
+    kind: 'repo',
+    repositoryUrl: 'https://github.com/ever-co/ever-works',
+} as CreateWorkDto;
+
+/** The caller's own, live installation on the repository's owner. */
+const OWN_INSTALLATION = {
+    id: 'inst-entity-1',
+    installationId: '4242',
+    accountLogin: 'ever-co',
+    accountType: 'Organization',
+    targetType: 'Organization',
+    createdByUserId: baseUser.id,
+    deletedAt: null,
+    suspendedAt: null,
+};
+
+/** The snapshot row that says the installation covers the repository. */
+const SNAPSHOT_ROW = {
+    id: 'inst-repo-row-1',
+    installationEntityId: OWN_INSTALLATION.id,
+    githubRepoId: '556677',
+    owner: 'ever-co',
+    repo: 'ever-works',
+    fullName: 'ever-co/ever-works',
+    isPrivate: true,
+    selected: true,
+};
+
+interface MockDeps {
+    workRepo: {
+        create: jest.Mock;
+        updateGenerateStatus: jest.Mock;
+        findRepositoryWorksWrapping: jest.Mock;
+    };
+    gitFacade: { hasRepositoryAccess: jest.Mock; canInstallationReadRepository: jest.Mock };
+    installations: { listByCreatedByUserId: jest.Mock };
+    installationRepos: { listForInstallation: jest.Mock };
+    eventEmitter: { emit: jest.Mock; emitAsync: jest.Mock };
+    dataGenerator: { getItems: jest.Mock };
+}
+
+/**
+ * Defaults model the gap: the owner's OAuth token CANNOT read the
+ * repository, and the owner has one live installation that covers it and
+ * that GitHub confirms. Each test changes exactly one of those facts.
+ */
+function makeService(options: { withInstallationRepositories?: boolean } = {}): {
+    service: WorkLifecycleService;
+    deps: MockDeps;
+} {
+    const workRepo = {
+        create: jest.fn(async (data: Record<string, unknown>) => ({
+            id: (data.id as string) ?? 'w-1',
+            ...data,
+            getRepoOwner: () => (data.owner as string) ?? 'evereq',
+        })),
+        updateGenerateStatus: jest.fn().mockResolvedValue(undefined),
+        findRepositoryWorksWrapping: jest.fn().mockResolvedValue([]),
+    };
+    const userRepo = {
+        findById: jest.fn().mockResolvedValue({ id: baseUser.id, onboardingState: null }),
+    };
+    const gitFacade = {
+        hasRepositoryAccess: jest.fn().mockResolvedValue(false),
+        canInstallationReadRepository: jest.fn().mockResolvedValue(true),
+    };
+    const installations = {
+        listByCreatedByUserId: jest.fn().mockResolvedValue([{ ...OWN_INSTALLATION }]),
+    };
+    const installationRepos = {
+        listForInstallation: jest.fn().mockResolvedValue([{ ...SNAPSHOT_ROW }]),
+    };
+    const dataGenerator = { getItems: jest.fn().mockResolvedValue([]) };
+    const templateCatalog = {
+        getVisibleTemplateForUser: jest.fn().mockResolvedValue(null),
+        getDefaultTemplateIdForUser: jest.fn().mockResolvedValue(null),
+        getWebsiteTemplateIdForNewWork: jest.fn().mockResolvedValue(null),
+    };
+    const quota = { assertWithinQuota: jest.fn().mockResolvedValue(undefined) };
+    const everWorksGit = {
+        isEnabled: jest.fn().mockReturnValue(false),
+        createRepository: jest.fn(),
+    };
+    const eventEmitter = { emit: jest.fn(), emitAsync: jest.fn().mockResolvedValue([]) };
+    const everWorksDns = {
+        getProvider: jest.fn().mockReturnValue(null),
+        ensureWorkSubdomain: jest.fn().mockResolvedValue(undefined),
+        removeWorkSubdomain: jest.fn().mockResolvedValue(undefined),
+        ingressHostFor: jest.fn((slug: string) => `${slug}.ever.works`),
+    };
+    const funnel = { emit: jest.fn() };
+
+    const withRepositories = options.withInstallationRepositories !== false;
+
+    const service = new WorkLifecycleService(
+        workRepo as never,
+        userRepo as never,
+        dataGenerator as never,
+        {} as never,
+        {} as never,
+        {} as never,
+        {} as never,
+        {} as never,
+        templateCatalog as never,
+        {} as never,
+        quota as never,
+        everWorksGit as never,
+        everWorksDns as never,
+        funnel as never,
+        eventEmitter as never,
+        // organizationRepository
+        {} as never,
+        gitFacade as never,
+        // activityLog, appWorkCreate, appWorkDeletion, appWorksTelemetry,
+        // domainEvents — all `@Optional()`, none read by the repo create path.
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        // The two repositories the installation fallback reads. Appended
+        // LAST and `@Optional()`; `withInstallationRepositories: false`
+        // models a construction that stops before them.
+        (withRepositories ? installations : undefined) as never,
+        (withRepositories ? installationRepos : undefined) as never,
+    );
+
+    return {
+        service,
+        deps: {
+            workRepo,
+            gitFacade,
+            installations,
+            installationRepos,
+            eventEmitter,
+            dataGenerator,
+        },
+    };
+}
+
+/** The single refusal every near miss must produce, with nothing persisted. */
+async function expectRefused(service: WorkLifecycleService, deps: MockDeps): Promise<string> {
+    let message = '';
+    await expect(
+        service.createWork(repoDto, baseUser).catch((error) => {
+            message = String(error?.response?.message ?? '');
+            throw error;
+        }),
+    ).rejects.toMatchObject({
+        status: 400,
+        response: expect.objectContaining({
+            message: expect.stringContaining('not found or is not accessible'),
+        }),
+    });
+    expect(deps.workRepo.create).not.toHaveBeenCalled();
+    expect(deps.eventEmitter.emitAsync).not.toHaveBeenCalled();
+    return message;
+}
+
+describe('WorkLifecycleService.createWork — repository kind, GitHub App installation fallback', () => {
+    // ─────────────────────────────────────────────────────────────────────
+    // 1. The path that existed before the fallback does not change at all.
+    // ─────────────────────────────────────────────────────────────────────
+    describe('when the owner’s own account reads the repository', () => {
+        it('never looks at installations and persists no `auth` — unchanged', async () => {
+            const { service, deps } = makeService();
+            deps.gitFacade.hasRepositoryAccess.mockResolvedValue(true);
+
+            const result = await service.createWork(repoDto, baseUser);
+
+            expect(result.status).toBe('success');
+            expect(deps.gitFacade.hasRepositoryAccess).toHaveBeenCalledTimes(1);
+            expect(deps.gitFacade.hasRepositoryAccess).toHaveBeenCalledWith(
+                'ever-co',
+                'ever-works',
+                { userId: baseUser.id, providerId: 'github' },
+            );
+            // The fallback did not run: no installation read, no GitHub call.
+            expect(deps.installations.listByCreatedByUserId).not.toHaveBeenCalled();
+            expect(deps.installationRepos.listForInstallation).not.toHaveBeenCalled();
+            expect(deps.gitFacade.canInstallationReadRepository).not.toHaveBeenCalled();
+
+            const persisted = deps.workRepo.create.mock.calls[0][0];
+            // Exactly the object the pre-fallback code wrote — `toEqual`, so an
+            // extra key (an `auth`, say) fails this.
+            expect(persisted.sourceRepository).toEqual({
+                url: 'https://github.com/ever-co/ever-works',
+                owner: 'ever-co',
+                repo: 'ever-works',
+                type: 'link_existing',
+                importedAt: expect.any(Date),
+                relatedRepositories: { data: { owner: 'ever-co', repo: 'ever-works' } },
+            });
+            expect('auth' in persisted.sourceRepository).toBe(false);
+            expect(persisted.owner).toBe('ever-co');
+            expect(persisted.gitProvider).toBe('github');
+            expect(persisted.storageProvider).toBe('user-github');
+            expect(persisted.deployProvider).toBeNull();
+            expect(persisted.syncIntervalMinutes).toBe(0);
+        });
+
+        it('still refuses (409) a repository another account already wraps', async () => {
+            const { service, deps } = makeService();
+            deps.gitFacade.hasRepositoryAccess.mockResolvedValue(true);
+            deps.workRepo.findRepositoryWorksWrapping.mockResolvedValue([
+                { id: 'w-other', userId: 'someone-else', slug: 'their-platform' },
+            ]);
+
+            await expect(service.createWork(repoDto, baseUser)).rejects.toMatchObject({
+                status: 409,
+            });
+            expect(deps.workRepo.create).not.toHaveBeenCalled();
+        });
+    });
+
+    // ─────────────────────────────────────────────────────────────────────
+    // 2. The fallback: accepted in exactly one situation.
+    // ─────────────────────────────────────────────────────────────────────
+    describe('when the owner’s own account cannot read the repository', () => {
+        it('accepts the caller’s own live installation that covers the repository, and persists the installation auth shape', async () => {
+            const { service, deps } = makeService();
+
+            const result = await service.createWork(repoDto, baseUser);
+
+            expect(result.status).toBe('success');
+            // Only the CALLER's installations were asked for.
+            expect(deps.installations.listByCreatedByUserId).toHaveBeenCalledTimes(1);
+            expect(deps.installations.listByCreatedByUserId).toHaveBeenCalledWith(baseUser.id);
+            // Only THAT installation's snapshot was read.
+            expect(deps.installationRepos.listForInstallation).toHaveBeenCalledTimes(1);
+            expect(deps.installationRepos.listForInstallation).toHaveBeenCalledWith(
+                OWN_INSTALLATION.id,
+            );
+            // The live check ran with ids taken from platform rows.
+            expect(deps.gitFacade.canInstallationReadRepository).toHaveBeenCalledTimes(1);
+            expect(deps.gitFacade.canInstallationReadRepository).toHaveBeenCalledWith({
+                installationId: '4242',
+                githubRepoId: '556677',
+                owner: 'ever-co',
+                repo: 'ever-works',
+                userId: baseUser.id,
+            });
+
+            expect(deps.workRepo.create).toHaveBeenCalledTimes(1);
+            const persisted = deps.workRepo.create.mock.calls[0][0];
+            expect(persisted.kind).toBe('repo');
+            expect(persisted.userId).toBe(baseUser.id);
+            expect(persisted.owner).toBe('ever-co');
+            expect(persisted.gitProvider).toBe('github');
+            expect(persisted.sourceRepository).toEqual({
+                url: 'https://github.com/ever-co/ever-works',
+                owner: 'ever-co',
+                repo: 'ever-works',
+                type: 'link_existing',
+                importedAt: expect.any(Date),
+                relatedRepositories: { data: { owner: 'ever-co', repo: 'ever-works' } },
+                // The shape `GitFacadeService.getInstallationTokenForWork`
+                // reads, so every later git operation uses the installation.
+                auth: {
+                    mode: 'github_app_installation',
+                    providerId: 'github',
+                    installationId: '4242',
+                    installationRepositoryId: 'inst-repo-row-1',
+                    repoFullName: 'ever-co/ever-works',
+                },
+            });
+            // Everything else about a Repository Work is unchanged.
+            expect(persisted.storageProvider).toBe('user-github');
+            expect(persisted.deployProvider).toBeNull();
+            expect(persisted.websiteTemplateId).toBeNull();
+            expect(persisted.generateStatus).toEqual({ status: 'generated', step: 'linked' });
+            expect(persisted.syncIntervalMinutes).toBe(0);
+            expect(deps.dataGenerator.getItems).not.toHaveBeenCalled();
+        });
+
+        it('falls back the same way when NO git credential is connected (the probe throws)', async () => {
+            const { service, deps } = makeService();
+            deps.gitFacade.hasRepositoryAccess.mockRejectedValue(
+                new Error('No connected account found for user u-1 with provider github'),
+            );
+
+            const result = await service.createWork(repoDto, baseUser);
+
+            expect(result.status).toBe('success');
+            const persisted = deps.workRepo.create.mock.calls[0][0];
+            expect(persisted.sourceRepository.auth).toEqual({
+                mode: 'github_app_installation',
+                providerId: 'github',
+                installationId: '4242',
+                installationRepositoryId: 'inst-repo-row-1',
+                repoFullName: 'ever-co/ever-works',
+            });
+        });
+
+        it('matches the installation account and the snapshot name case-insensitively, and records GitHub’s own casing', async () => {
+            const { service, deps } = makeService();
+            deps.installations.listByCreatedByUserId.mockResolvedValue([
+                { ...OWN_INSTALLATION, accountLogin: 'Ever-Co' },
+            ]);
+            deps.installationRepos.listForInstallation.mockResolvedValue([
+                { ...SNAPSHOT_ROW, fullName: 'Ever-Co/Ever-Works' },
+            ]);
+
+            await service.createWork(repoDto, baseUser);
+
+            const persisted = deps.workRepo.create.mock.calls[0][0];
+            expect(persisted.sourceRepository.auth.repoFullName).toBe('Ever-Co/Ever-Works');
+            // The coordinates stay the ones the user wrote.
+            expect(persisted.sourceRepository.owner).toBe('ever-co');
+            expect(persisted.sourceRepository.repo).toBe('ever-works');
+        });
+
+        it('skips an unusable installation and accepts a later one that passes every check', async () => {
+            const { service, deps } = makeService();
+            deps.installations.listByCreatedByUserId.mockResolvedValue([
+                // Same account, but suspended: never reaches the snapshot.
+                {
+                    ...OWN_INSTALLATION,
+                    id: 'inst-entity-0',
+                    installationId: '1111',
+                    suspendedAt: new Date(),
+                },
+                { ...OWN_INSTALLATION },
+            ]);
+
+            await service.createWork(repoDto, baseUser);
+
+            expect(deps.installationRepos.listForInstallation).toHaveBeenCalledTimes(1);
+            expect(deps.installationRepos.listForInstallation).toHaveBeenCalledWith(
+                OWN_INSTALLATION.id,
+            );
+            const persisted = deps.workRepo.create.mock.calls[0][0];
+            expect(persisted.sourceRepository.auth.installationId).toBe('4242');
+        });
+
+        // ─────────────────────────────────────────────────────────────────
+        // 3. Every near miss is refused — same answer, nothing persisted.
+        // ─────────────────────────────────────────────────────────────────
+        it('refuses when the caller has no installation at all', async () => {
+            const { service, deps } = makeService();
+            deps.installations.listByCreatedByUserId.mockResolvedValue([]);
+
+            await expectRefused(service, deps);
+            expect(deps.gitFacade.canInstallationReadRepository).not.toHaveBeenCalled();
+        });
+
+        it('refuses an installation owned by ANOTHER user, even if a query returned it', async () => {
+            const { service, deps } = makeService();
+            // The repository method filters by owner; this pins that the
+            // service does not rely on that and re-checks the row itself.
+            deps.installations.listByCreatedByUserId.mockResolvedValue([
+                { ...OWN_INSTALLATION, createdByUserId: 'someone-else' },
+            ]);
+
+            await expectRefused(service, deps);
+            expect(deps.installationRepos.listForInstallation).not.toHaveBeenCalled();
+            expect(deps.gitFacade.canInstallationReadRepository).not.toHaveBeenCalled();
+        });
+
+        it('refuses an installation nobody has claimed (no recorded platform owner)', async () => {
+            const { service, deps } = makeService();
+            deps.installations.listByCreatedByUserId.mockResolvedValue([
+                { ...OWN_INSTALLATION, createdByUserId: null },
+            ]);
+
+            await expectRefused(service, deps);
+            expect(deps.gitFacade.canInstallationReadRepository).not.toHaveBeenCalled();
+        });
+
+        it('refuses a DELETED installation', async () => {
+            const { service, deps } = makeService();
+            deps.installations.listByCreatedByUserId.mockResolvedValue([
+                { ...OWN_INSTALLATION, deletedAt: new Date() },
+            ]);
+
+            await expectRefused(service, deps);
+            expect(deps.installationRepos.listForInstallation).not.toHaveBeenCalled();
+            expect(deps.gitFacade.canInstallationReadRepository).not.toHaveBeenCalled();
+        });
+
+        it('refuses a SUSPENDED installation', async () => {
+            const { service, deps } = makeService();
+            deps.installations.listByCreatedByUserId.mockResolvedValue([
+                { ...OWN_INSTALLATION, suspendedAt: new Date() },
+            ]);
+
+            await expectRefused(service, deps);
+            expect(deps.installationRepos.listForInstallation).not.toHaveBeenCalled();
+            expect(deps.gitFacade.canInstallationReadRepository).not.toHaveBeenCalled();
+        });
+
+        it('refuses when the installation’s account is not the repository’s owner', async () => {
+            const { service, deps } = makeService();
+            deps.installations.listByCreatedByUserId.mockResolvedValue([
+                { ...OWN_INSTALLATION, accountLogin: 'ever-hust' },
+            ]);
+            // Even a snapshot row that names the repository cannot rescue it.
+            deps.installationRepos.listForInstallation.mockResolvedValue([{ ...SNAPSHOT_ROW }]);
+
+            await expectRefused(service, deps);
+            expect(deps.installationRepos.listForInstallation).not.toHaveBeenCalled();
+            expect(deps.gitFacade.canInstallationReadRepository).not.toHaveBeenCalled();
+        });
+
+        it('refuses an owner that merely STARTS WITH the installation account (no prefix match)', async () => {
+            const { service, deps } = makeService();
+            deps.installations.listByCreatedByUserId.mockResolvedValue([
+                { ...OWN_INSTALLATION, accountLogin: 'ever' },
+            ]);
+
+            await expectRefused(service, deps);
+            expect(deps.gitFacade.canInstallationReadRepository).not.toHaveBeenCalled();
+        });
+
+        it('refuses when the repository is missing from the installation snapshot', async () => {
+            const { service, deps } = makeService();
+            deps.installationRepos.listForInstallation.mockResolvedValue([
+                {
+                    ...SNAPSHOT_ROW,
+                    id: 'row-other',
+                    repo: 'ever-gauzy',
+                    fullName: 'ever-co/ever-gauzy',
+                },
+            ]);
+
+            await expectRefused(service, deps);
+            expect(deps.gitFacade.canInstallationReadRepository).not.toHaveBeenCalled();
+        });
+
+        it('refuses a snapshot row that is not selected', async () => {
+            const { service, deps } = makeService();
+            deps.installationRepos.listForInstallation.mockResolvedValue([
+                { ...SNAPSHOT_ROW, selected: false },
+            ]);
+
+            await expectRefused(service, deps);
+            expect(deps.gitFacade.canInstallationReadRepository).not.toHaveBeenCalled();
+        });
+
+        it('refuses a snapshot row that belongs to a DIFFERENT installation', async () => {
+            const { service, deps } = makeService();
+            deps.installationRepos.listForInstallation.mockResolvedValue([
+                { ...SNAPSHOT_ROW, installationEntityId: 'somebody-elses-installation' },
+            ]);
+
+            await expectRefused(service, deps);
+            expect(deps.gitFacade.canInstallationReadRepository).not.toHaveBeenCalled();
+        });
+
+        it('refuses when the LIVE check fails — a stale snapshot is not enough', async () => {
+            const { service, deps } = makeService();
+            deps.gitFacade.canInstallationReadRepository.mockResolvedValue(false);
+
+            await expectRefused(service, deps);
+            expect(deps.gitFacade.canInstallationReadRepository).toHaveBeenCalledTimes(1);
+        });
+
+        it('refuses when the live check does not answer a strict `true`', async () => {
+            const { service, deps } = makeService();
+            deps.gitFacade.canInstallationReadRepository.mockResolvedValue(undefined);
+
+            await expectRefused(service, deps);
+        });
+
+        it.each([
+            ['the installation list', 'installations'],
+            ['the snapshot', 'snapshot'],
+            ['the live check', 'live'],
+        ])('fails CLOSED when %s throws', async (_label, which) => {
+            const { service, deps } = makeService();
+            const boom = new Error('connection terminated: installation 4242 token ghs_secret');
+            if (which === 'installations') {
+                deps.installations.listByCreatedByUserId.mockRejectedValue(boom);
+            } else if (which === 'snapshot') {
+                deps.installationRepos.listForInstallation.mockRejectedValue(boom);
+            } else {
+                deps.gitFacade.canInstallationReadRepository.mockRejectedValue(boom);
+            }
+
+            const message = await expectRefused(service, deps);
+            // Nothing the failing dependency said reaches the caller.
+            expect(message).not.toContain('4242');
+            expect(message).not.toContain('ghs_secret');
+            expect(message).not.toContain('connection terminated');
+        });
+
+        it('has no fallback at all when the installation repositories are not wired (reduced module graph)', async () => {
+            const { service, deps } = makeService({ withInstallationRepositories: false });
+
+            await expectRefused(service, deps);
+            expect(deps.gitFacade.canInstallationReadRepository).not.toHaveBeenCalled();
+        });
+
+        // ─────────────────────────────────────────────────────────────────
+        // 4. The refusal names both remedies and discloses nothing new.
+        // ─────────────────────────────────────────────────────────────────
+        it('names both remedies in the refusal', async () => {
+            const { service, deps } = makeService();
+            deps.installations.listByCreatedByUserId.mockResolvedValue([]);
+
+            const message = await expectRefused(service, deps);
+
+            expect(message).toContain('https://github.com/ever-co/ever-works');
+            expect(message).toMatch(/connect a github account that can read the repository/i);
+            expect(message).toMatch(/install the ever works github app/i);
+        });
+
+        it('gives the SAME message whatever the installation lookup found', async () => {
+            const variants: Array<(deps: MockDeps) => void> = [
+                // no installation
+                (deps) => deps.installations.listByCreatedByUserId.mockResolvedValue([]),
+                // somebody else's installation on the right account
+                (deps) =>
+                    deps.installations.listByCreatedByUserId.mockResolvedValue([
+                        { ...OWN_INSTALLATION, createdByUserId: 'someone-else' },
+                    ]),
+                // own installation, deleted
+                (deps) =>
+                    deps.installations.listByCreatedByUserId.mockResolvedValue([
+                        { ...OWN_INSTALLATION, deletedAt: new Date() },
+                    ]),
+                // own installation, suspended
+                (deps) =>
+                    deps.installations.listByCreatedByUserId.mockResolvedValue([
+                        { ...OWN_INSTALLATION, suspendedAt: new Date() },
+                    ]),
+                // own installation on another account
+                (deps) =>
+                    deps.installations.listByCreatedByUserId.mockResolvedValue([
+                        { ...OWN_INSTALLATION, accountLogin: 'git-hands' },
+                    ]),
+                // repository not in the snapshot
+                (deps) => deps.installationRepos.listForInstallation.mockResolvedValue([]),
+                // snapshot says yes, GitHub says no
+                (deps) => deps.gitFacade.canInstallationReadRepository.mockResolvedValue(false),
+                // a dependency blew up
+                (deps) =>
+                    deps.installationRepos.listForInstallation.mockRejectedValue(new Error('boom')),
+            ];
+
+            const messages = new Set<string>();
+            for (const arrange of variants) {
+                const { service, deps } = makeService();
+                arrange(deps);
+                messages.add(await expectRefused(service, deps));
+            }
+
+            expect(messages.size).toBe(1);
+        });
+
+        it('keeps the "could not verify" 400 — with both remedies — when the probe threw and no installation qualifies', async () => {
+            const { service, deps } = makeService();
+            deps.gitFacade.hasRepositoryAccess.mockRejectedValue(
+                new Error('No connected account found for user u-1 with provider github'),
+            );
+            deps.installations.listByCreatedByUserId.mockResolvedValue([]);
+
+            await expect(service.createWork(repoDto, baseUser)).rejects.toMatchObject({
+                status: 400,
+                response: expect.objectContaining({
+                    message: expect.stringMatching(
+                        /^Could not verify access to https:\/\/github\.com\/ever-co\/ever-works .*No connected account found.*Connect a GitHub account that can read the repository, or install the Ever Works GitHub App/,
+                    ),
+                }),
+            });
+            expect(deps.workRepo.create).not.toHaveBeenCalled();
+        });
+
+        // ─────────────────────────────────────────────────────────────────
+        // 5. Every other check stays in force on the fallback path.
+        // ─────────────────────────────────────────────────────────────────
+        it('still refuses (409) a repository another account already wraps, AFTER the installation was accepted', async () => {
+            const { service, deps } = makeService();
+            deps.workRepo.findRepositoryWorksWrapping.mockResolvedValue([
+                { id: 'w-other', userId: 'someone-else', slug: 'their-platform' },
+            ]);
+
+            await expect(service.createWork(repoDto, baseUser)).rejects.toMatchObject({
+                status: 409,
+            });
+
+            expect(deps.gitFacade.canInstallationReadRepository).toHaveBeenCalledTimes(1);
+            expect(deps.workRepo.findRepositoryWorksWrapping).toHaveBeenCalledWith(
+                'ever-co',
+                'ever-works',
+            );
+            expect(deps.workRepo.create).not.toHaveBeenCalled();
+        });
+
+        it('still rethrows an HttpException from the probe untouched, without trying the fallback', async () => {
+            const { service, deps } = makeService();
+            deps.gitFacade.hasRepositoryAccess.mockRejectedValue(
+                new ForbiddenException('provider refused'),
+            );
+
+            await expect(service.createWork(repoDto, baseUser)).rejects.toMatchObject({
+                status: 403,
+            });
+            expect(deps.installations.listByCreatedByUserId).not.toHaveBeenCalled();
+            expect(deps.workRepo.create).not.toHaveBeenCalled();
+        });
+
+        it('still rejects a provider mismatch before probing anything', async () => {
+            const { service, deps } = makeService();
+
+            await expect(
+                service.createWork(
+                    { ...repoDto, gitProvider: 'gitlab' } as CreateWorkDto,
+                    baseUser,
+                ),
+            ).rejects.toMatchObject({ status: 400 });
+
+            expect(deps.gitFacade.hasRepositoryAccess).not.toHaveBeenCalled();
+            expect(deps.installations.listByCreatedByUserId).not.toHaveBeenCalled();
+        });
+
+        it('never runs for any other kind', async () => {
+            const { service, deps } = makeService();
+
+            await service.createWork({ ...repoDto, kind: 'directory' } as CreateWorkDto, baseUser);
+
+            expect(deps.gitFacade.hasRepositoryAccess).not.toHaveBeenCalled();
+            expect(deps.installations.listByCreatedByUserId).not.toHaveBeenCalled();
+            const persisted = deps.workRepo.create.mock.calls[0][0];
+            expect(persisted.sourceRepository).toBeUndefined();
+        });
+    });
+});
