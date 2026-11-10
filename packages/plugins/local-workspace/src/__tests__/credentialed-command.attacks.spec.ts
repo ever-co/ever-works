@@ -1018,9 +1018,13 @@ describe('a refusal says how to get out of it — and the commands work', () => 
 		const at = scene();
 		const pool = await seedPool(at.baseDir, originUrl);
 		git(pool, 'config', 'core.sshCommand', `${at.harvest} false`);
-		// Off the list, has a subsection, and does nothing to a plain fetch
-		// of a repository on disk — so that fetch still succeeds.
+		// Off the list, have a subsection, and do nothing to a plain fetch of
+		// a repository on disk — so that fetch still succeeds. `url` is also
+		// a key the pool's own `origin` carries: what the hint lists must not
+		// include it, or following it would unset `remote.origin.url` too.
 		git(pool, 'config', `remote.${originUrl}.proxy`, 'http://127.0.0.1:1');
+		git(pool, 'config', `remote.${originUrl}.url`, slash(originDir));
+		const origin = git(pool, 'config', 'remote.origin.url');
 		const reasons: string[] = [];
 		const withhold = (reason: string): number => reasons.push(reason);
 
@@ -1031,7 +1035,7 @@ describe('a refusal says how to get out of it — and the commands work', () => 
 			})
 		);
 		expect(reasons).toHaveLength(1);
-		expect(reasons[0]).toContain('(core.sshcommand, remote.<…>.proxy)');
+		expect(reasons[0]).toContain('(core.sshcommand, remote.<…>.proxy, remote.<…>.url)');
 		expect(reasons[0]).toMatch(UNSET);
 		expect(reasons[0]).toMatch(LISTING);
 		// The subsection (a URL) is not in the message; the command finds it.
@@ -1039,6 +1043,13 @@ describe('a refusal says how to get out of it — and the commands work', () => 
 
 		followTheHint(reasons[0]);
 
+		// Everything the hint named is gone, and nothing else: the pool's own
+		// remote is untouched.
+		expect(git(pool, 'config', 'remote.origin.url')).toBe(origin);
+		expect(git(pool, 'config', '--name-only', '--get-regexp', '^remote\\.').split(/\r?\n/).sort()).toEqual([
+			'remote.origin.fetch',
+			'remote.origin.url'
+		]);
 		const invocations: Invocation[] = [];
 		await new LocalWorkspacePlugin({ execFile: recordingGit(invocations) }).provision(
 			provisionSpec(at.baseDir, originUrl, 'recovered', {

@@ -525,12 +525,43 @@ describe('recoveryHint — the way out of a refusal', () => {
 	it('gives the command that LISTS the full names for a key whose subsection is not shown', () => {
 		// The subsection is never printed, so it cannot be in the command
 		// either: the operator lists the names on the machine and unsets those.
+		// For `url` (a variable a plain-named remote may carry) the listing
+		// is only the sections the allowlist refuses — not `remote.origin.url`.
 		expect(recoveryHint(['remote.<…>.uploadpack', 'remote.<…>.url'], '/srv/fleet/repos/abc.git')).toBe(
 			'To clear it on this machine: ' +
 				'git -C "/srv/fleet/repos/abc.git" config --show-origin --name-only --get-regexp ' +
-				'"^remote\\..*\\.uploadpack$|^remote\\..*\\.url$" ' +
+				'"^remote\\..*\\.uploadpack$|^remote\\.(([^A-Za-z0-9].*)?|.*[^A-Za-z0-9._-].*|ew-credentialed-.*)\\.url$" ' +
 				'(lists the full names; then git -C "/srv/fleet/repos/abc.git" config --unset-all <name> for each)'
 		);
+	});
+
+	it.each([
+		[
+			'remote.<…>.url',
+			['remote.https://evil.tld/o/r.git.url', 'remote.ew-credentialed-1.url', 'remote..url', 'remote.-x.url'],
+			['remote.origin.url', 'remote.up_stream-2.url', 'remote.EW-CREDENTIALED-1.url']
+		],
+		['remote.<…>.fetch', ['remote.file:///x.fetch'], ['remote.origin.fetch']],
+		[
+			'remote.<…>.uploadpack',
+			['remote.origin.uploadpack', 'remote.https://evil.tld/.uploadpack'],
+			['remote.origin.url']
+		],
+		['url.<…>.insteadof', ['url.ssh://x/.insteadof'], ['url.insteadof']],
+		['http.<…>.postbuffer', ['http.https://x/.postbuffer'], ['http.postbuffer']]
+	])('lists for %s exactly the keys the allowlist refuses', (name, listed, kept) => {
+		// The pattern is what an operator unsets every match of. Matched here
+		// with a POSIX-extended-compatible JavaScript RegExp, as `git config
+		// --get-regexp` matches it, and held to the allowlist both ways.
+		const pattern = /--get-regexp "([^"]+)"/.exec(recoveryHint([name], '/p.git'))?.[1] ?? '';
+		const regexp = new RegExp(pattern);
+		for (const key of listed) {
+			expect(regexp.test(key)).toBe(true);
+			expect(isAllowedRepositoryConfigKey(key)).toBe(false);
+		}
+		for (const key of kept) {
+			expect(regexp.test(key)).toBe(false);
+		}
 	});
 
 	it('gives both when both kinds are named', () => {

@@ -208,7 +208,9 @@ export function privateRemoteName(): string {
  * allowlist refuses any `[remote "ew-credentialed-…"]` section in a config
  * file, whatever it holds. A name is in its command's argv while that
  * command runs, so "nobody can know it" is true before the command and
- * not during it.
+ * not during it. Compared case-sensitively, as Git compares subsection
+ * names (measured: `remote.EW-X.proxy` is not `remote.ew-x.proxy`), and a
+ * minted name is always lower case.
  */
 export const RESERVED_REMOTE_PREFIX = 'ew-credentialed-';
 
@@ -543,7 +545,7 @@ export function isAllowedRepositoryConfigKey(key: string): boolean {
 			if (subsection === null) return variable === 'pushdefault';
 			// Reserved: a file that describes a private remote is describing a
 			// credentialed command, and nothing legitimate does.
-			if (subsection.toLowerCase().startsWith(RESERVED_REMOTE_PREFIX)) return false;
+			if (subsection.startsWith(RESERVED_REMOTE_PREFIX)) return false;
 			return PLAIN_REMOTE_NAME.test(subsection) && REMOTE_VARIABLES.has(variable);
 		case 'http':
 			return subsection === null && HTTP_TUNING_VARIABLES.has(variable);
@@ -609,6 +611,12 @@ export function displayConfigKey(key: string): string {
  * lives in another file — there the include is what is removed, and it is
  * on the list itself.
  *
+ * The listing matches exactly the keys the allowlist refuses, never one it
+ * allows: for the `remote` variables a plain-named remote may carry (`url`,
+ * `fetch`, …) only the subsections that are not a plain remote name, or
+ * that use the reserved prefix — so unsetting everything it lists for
+ * `remote.<…>.url` cannot take `remote.origin.url` with it.
+ *
  * `directory` is the shared repository the key was found in. It is a path
  * on the node, and the job result it lands in is the node operator's.
  */
@@ -624,7 +632,7 @@ export function recoveryHint(names: readonly string[], directory: string): strin
 		} else if (parts.length === 2 && !name.endsWith('<…>')) {
 			plain.push(name);
 		} else if (parts.length === 3 && parts[1] === '<…>' && parts[2] !== '<…>') {
-			patterns.push(`^${parts[0]}\\..*\\.${parts[2]}$`);
+			patterns.push(listingPattern(parts[0], parts[2]));
 		} else {
 			unprintable = true;
 		}
@@ -638,6 +646,23 @@ export function recoveryHint(names: readonly string[], directory: string): strin
 		steps.push(`${listing} (lists the full names; then ${git} --unset-all <name> for each)`);
 	}
 	return `To clear it on this machine: ${steps.join('; ')}`;
+}
+
+/**
+ * The `git config --get-regexp` pattern (POSIX extended, against the key as
+ * Git prints it) for every `section.<subsection>.variable` the allowlist
+ * refuses. Outside `remote` that is every subsection, because none of those
+ * decisions depends on it; inside `remote`, for the variables a plain-named
+ * remote may carry, it is the subsections that are empty, start with
+ * something other than a letter or digit, hold a character a plain name
+ * cannot, or use the reserved prefix — the negation of
+ * {@link PLAIN_REMOTE_NAME} plus {@link RESERVED_REMOTE_PREFIX}.
+ */
+function listingPattern(section: string, variable: string): string {
+	if (section === 'remote' && REMOTE_VARIABLES.has(variable)) {
+		return `^remote\\.(([^A-Za-z0-9].*)?|.*[^A-Za-z0-9._-].*|${RESERVED_REMOTE_PREFIX}.*)\\.${variable}$`;
+	}
+	return `^${section}\\..*\\.${variable}$`;
 }
 
 /**
