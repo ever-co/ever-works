@@ -376,8 +376,16 @@ describe('normalizeFleetAgentReadinessReport', () => {
 			agents: [
 				// A known code: the node's text is replaced by the table's.
 				entry({ status: 'access_denied', reasonCode: 'org_access_disabled', reason: leak }),
-				// A code a newer node invented: kept as a code, with no sentence.
+				// A token that is not on the closed list — a newer node's new code,
+				// or a secret that happens to look like one: dropped, not stored.
 				entry({ provider: 'codex', status: 'unknown', reasonCode: 'something_new', reason: leak }),
+				entry({
+					provider: 'cursor',
+					status: 'unknown',
+					reasonCode: 'deadbeefcafe0123456789abcdef0123456789ab',
+					lastFailureAt: '2026-11-10T11:00:00.000Z',
+					lastFailureCode: 'deadbeefcafe0123456789abcdef0123456789ab'
+				}),
 				// No code at all: no sentence.
 				entry({ provider: 'gemini', status: 'not_signed_in', reasonCode: null, reason: leak }),
 				// Not a code: dropped.
@@ -386,11 +394,14 @@ describe('normalizeFleetAgentReadinessReport', () => {
 		});
 		expect(report?.agents.map((agent) => [agent.reasonCode, agent.reason])).toEqual([
 			['org_access_disabled', describeFleetAgentReason('org_access_disabled')],
-			['something_new', null],
+			[null, null],
+			[null, null],
 			[null, null],
 			[null, null]
 		]);
 		const serialized = JSON.stringify(report);
+		expect(serialized).not.toContain('something_new');
+		expect(serialized).not.toContain('deadbeef');
 		expect(serialized).not.toContain('Run said');
 		expect(serialized).not.toContain('fakefakepass');
 		expect(serialized).not.toContain('ZmFrZQ');
@@ -735,5 +746,157 @@ describe('the node-level answer is three-state', () => {
 		});
 		stats.last24h.runs = 3;
 		expect(emptyFleetNodeRunStats().last24h.runs).toBe(0);
+	});
+});
+
+/**
+ * PR #3131 review, item 6(b), on the platform's side: a node that went
+ * offline leaves its last report behind. Its verdicts must age there too.
+ */
+describe('resolveFleetNodeAgentReadiness — a served verdict ages, even when the node has stopped beating', () => {
+	const RECEIVED = '2026-11-10T12:00:01.000Z';
+	const CHECKED = '2026-11-10T12:00:00.000Z';
+	const HOUR = 3_600_000;
+	const at = (ms: number) => Date.parse(RECEIVED) + ms;
+	const base = {
+		provider: 'claude-code',
+		installed: true,
+		version: '2.1.319',
+		signedIn: true,
+		authMethod: 'subscription',
+		account: null,
+		checkedAt: CHECKED
+	};
+	const stored = (agent: Record<string, unknown>) => ({
+		at: RECEIVED,
+		checkedAt: CHECKED,
+		agents: [{ ...base, ...agent }]
+	});
+	const refused = {
+		status: 'access_denied',
+		reasonCode: 'org_access_disabled',
+		lastFailureAt: '2026-11-10T11:00:00.000Z',
+		lastFailureKind: 'access_denied',
+		lastFailureCode: 'org_access_disabled'
+	};
+	const served = (agent: Record<string, unknown>, now: number) =>
+		resolveFleetNodeAgentReadiness(stored(agent), { now });
+
+	it('a refusal a run proved stands for 24 hours from the run, then reads unknown with the last failure kept', () => {
+		const fresh = served(refused, at(22 * HOUR));
+		expect(fresh?.agents[0]).toMatchObject({ status: 'access_denied', reasonCode: 'org_access_disabled' });
+		expect(fresh?.anyReady).toBe(false);
+
+		const aged = served(refused, at(24 * HOUR));
+		expect(aged?.agents[0]).toMatchObject({
+			status: 'unknown',
+			reasonCode: 'verdict_stale',
+			reason: describeFleetAgentReason('verdict_stale'),
+			lastFailureAt: '2026-11-10T11:00:00.000Z',
+			lastFailureKind: 'access_denied',
+			lastFailureCode: 'org_access_disabled'
+		});
+		// Not known is not "no agent can work" — and never "ready".
+		expect(aged?.anyReady).toBeNull();
+		expect(served(refused, at(30 * 24 * HOUR))?.agents[0]?.status).toBe('unknown');
+	});
+
+	it('an empty credit balance stands for its hour; a limit that named no reset likewise', () => {
+		const credit = {
+			status: 'limit_reached',
+			reasonCode: 'out_of_credit',
+			lastFailureAt: '2026-11-10T11:30:00.000Z',
+			lastFailureKind: 'limit_reached',
+			lastFailureCode: 'out_of_credit'
+		};
+		expect(served(credit, at(20 * 60_000))?.agents[0]?.status).toBe('limit_reached');
+		expect(served(credit, at(HOUR))?.agents[0]).toMatchObject({ status: 'unknown', reasonCode: 'verdict_stale' });
+
+		const noReset = { ...credit, reasonCode: 'usage_limit', lastFailureCode: 'usage_limit', limitWindow: 'rate' };
+		expect(served(noReset, at(20 * 60_000))?.agents[0]?.status).toBe('limit_reached');
+		expect(served(noReset, at(HOUR))?.agents[0]).toMatchObject({
+			status: 'unknown',
+			reasonCode: 'verdict_stale',
+			limitWindow: 'rate'
+		});
+	});
+
+	it('a usage limit is over once the reset it named has passed — unknown, not ready', () => {
+		const limit = {
+			status: 'limit_reached',
+			reasonCode: 'usage_limit',
+			limitWindow: 'weekly',
+			limitResetsAt: '2026-11-12T03:00:00.000Z'
+		};
+		expect(served(limit, Date.parse('2026-11-12T02:00:00.000Z'))?.agents[0]).toMatchObject({
+			status: 'limit_reached',
+			limitResetsAt: '2026-11-12T03:00:00.000Z'
+		});
+		const after = served(limit, Date.parse('2026-11-12T04:00:00.000Z'))?.agents[0];
+		expect(after).toMatchObject({ status: 'unknown', reasonCode: 'verdict_stale', limitWindow: 'weekly' });
+		expect(after).not.toHaveProperty('limitResetsAt');
+
+		// Unless the platform itself is still holding that CLI back: its throttle is the newer evidence.
+		const held = resolveFleetNodeAgentReadiness(stored(limit), {
+			now: Date.parse('2026-11-12T04:00:00.000Z'),
+			throttles: [
+				{
+					provider: 'claude-code',
+					window: 'weekly',
+					until: '2026-11-13T00:00:00.000Z',
+					reason: 'not shown',
+					since: '2026-11-12T03:30:00.000Z'
+				}
+			]
+		});
+		expect(held?.agents[0]).toMatchObject({
+			status: 'limit_reached',
+			reasonCode: 'usage_limit',
+			limitResetsAt: '2026-11-13T00:00:00.000Z'
+		});
+		expect(held?.anyReady).toBe(false);
+	});
+
+	it('what the status command said does not age: it is re-asked, not remembered', () => {
+		const signedOut = {
+			status: 'not_signed_in',
+			reasonCode: 'status_signed_out',
+			signedIn: false,
+			...{
+				lastFailureAt: refused.lastFailureAt,
+				lastFailureKind: 'not_signed_in',
+				lastFailureCode: 'session_expired'
+			}
+		};
+		expect(served(signedOut, at(30 * 24 * HOUR))?.agents[0]).toMatchObject({
+			status: 'not_signed_in',
+			reasonCode: 'status_signed_out'
+		});
+		expect(
+			served(
+				{ status: 'ready', reasonCode: null, ...{ lastFailureAt: refused.lastFailureAt } },
+				at(30 * 24 * HOUR)
+			)?.anyReady
+		).toBe(true);
+	});
+
+	it('ages by the NODE`s clock carried forward, so a machine whose clock is off is not aged early', () => {
+		// The node's clock runs 6 hours behind the platform's: its instants are
+		// 6 hours "older" than the platform's now, and must not count as age.
+		const skewed = {
+			at: RECEIVED,
+			checkedAt: '2026-11-10T06:00:00.000Z',
+			agents: [
+				{
+					...base,
+					...refused,
+					checkedAt: '2026-11-10T06:00:00.000Z',
+					lastFailureAt: '2026-11-10T05:00:00.000Z'
+				}
+			]
+		};
+		// 20 hours after receipt: the run is 21 hours old on the node's clock (27 on the platform's).
+		expect(resolveFleetNodeAgentReadiness(skewed, { now: at(20 * HOUR) })?.agents[0]?.status).toBe('access_denied');
+		expect(resolveFleetNodeAgentReadiness(skewed, { now: at(24 * HOUR) })?.agents[0]?.status).toBe('unknown');
 	});
 });

@@ -261,7 +261,11 @@ export interface FleetAgentReadinessEntry {
 	 */
 	account: string | null;
 	status: FleetAgentReadinessStatus;
-	/** Why — a {@link FleetAgentReasonCode}, or null when there is nothing to explain. */
+	/**
+	 * Why — a {@link FleetAgentReasonCode}, or null when there is nothing to
+	 * explain. The normaliser keeps only codes on that closed list; the type
+	 * is `string` so a view served by a newer platform still parses here.
+	 */
 	reasonCode: string | null;
 	/**
 	 * The sentence for {@link reasonCode}, from {@link describeFleetAgentReason}.
@@ -611,9 +615,16 @@ function token(value: unknown, max: number): string | null {
 	return /^[A-Za-z0-9._:+-]+$/.test(trimmed) && trimmed.length <= max ? trimmed : null;
 }
 
-/** A reason code off the wire: a known one, or a short lowercase token a newer node may have invented. */
-function reasonCodeOrNull(value: unknown): string | null {
-	return typeof value === 'string' && /^[a-z][a-z0-9_]{0,47}$/.test(value) ? value : null;
+/**
+ * A reason code off the wire: one of the closed list, or nothing. A token
+ * this build does not know is dropped rather than stored — the field is the
+ * one place a node names WHY, and it must not be able to carry anything but
+ * a name this platform already has a sentence for. (A newer node's new code
+ * reads as "no reason given" here until the platform learns it; its status
+ * is still shown.)
+ */
+function reasonCodeOrNull(value: unknown): FleetAgentReasonCode | null {
+	return isFleetAgentReasonCode(value) ? value : null;
 }
 
 function sanitizeUsageWindow(raw: unknown): FleetAgentUsageWindow | null {
@@ -827,8 +838,52 @@ export interface ResolveFleetNodeAgentReadinessOptions {
 	 * node has been beating without one. Absent: the report is served as is.
 	 */
 	lastHeartbeatAt?: string | Date | null;
-	/** "Now", for dropping usage readings that have rolled over. Defaults to the clock. */
+	/** "Now", for ageing verdicts and dropping usage readings that have rolled over. Defaults to the clock. */
 	now?: Date | number;
+}
+
+/**
+ * A verdict a run proved, re-aged when the report is SERVED.
+ *
+ * A node ages its own verdicts while it beats ({@link FLEET_AGENT_VERDICT_MAX_AGE_MS}).
+ * A node that has gone offline leaves its last report behind, and without
+ * this an "Access denied" it sent last month would read red for ever on the
+ * strength of one old run. Same thresholds as the node: 24 hours for a
+ * sign-in or access refusal, the fallback hour for an empty credit balance
+ * and for a limit that named no reset; a usage limit whose reset has passed
+ * is over. What it becomes is `unknown` (`verdict_stale`) with the last
+ * failure kept — never `ready`: the platform cannot ask the CLI.
+ *
+ * `nodeNowMs` is the node's own clock carried forward (its `checkedAt` plus
+ * the time since the platform received the report), so a machine whose clock
+ * is off does not have its verdicts aged early or late.
+ */
+function ageServedVerdict(entry: FleetAgentReadinessEntry, nodeNowMs: number): FleetAgentReadinessEntry {
+	const refused =
+		entry.status === 'not_signed_in' || entry.status === 'access_denied' || entry.status === 'limit_reached';
+	if (!refused) return entry;
+	const stale = (): FleetAgentReadinessEntry => {
+		const next: FleetAgentReadinessEntry = {
+			...entry,
+			status: 'unknown',
+			reasonCode: 'verdict_stale',
+			reason: describeFleetAgentReason('verdict_stale')
+		};
+		delete next.limitResetsAt;
+		return next;
+	};
+	if (entry.status === 'limit_reached' && entry.reasonCode === 'usage_limit') {
+		const resets = entry.limitResetsAt ? Date.parse(entry.limitResetsAt) : Number.NaN;
+		if (Number.isFinite(resets)) return resets <= nodeNowMs ? stale() : entry;
+	}
+	// Only a verdict that came from a run carries the run's own code; what the
+	// status command reported (`status_signed_out`) is re-asked every few
+	// minutes and does not age.
+	if (!entry.lastFailureAt || !entry.reasonCode || entry.reasonCode !== entry.lastFailureCode) return entry;
+	const at = Date.parse(entry.lastFailureAt);
+	const maxAgeMs =
+		entry.status === 'limit_reached' ? FLEET_AGENT_FAILURE_FALLBACK_MS : FLEET_AGENT_VERDICT_MAX_AGE_MS;
+	return Number.isFinite(at) && nodeNowMs - at <= maxAgeMs ? entry : stale();
 }
 
 /**
@@ -839,9 +894,11 @@ export interface ResolveFleetNodeAgentReadinessOptions {
  * build is served in THIS build's shape (and with THIS build's sentences).
  * An agent the node called `ready` that the platform is throttling reads
  * `limit_reached` until the throttle's own instant. A usage reading that has
- * rolled over since the node sent it is dropped. A report the node stopped
- * refreshing while it kept beating is not served at all (see
- * `lastHeartbeatAt`).
+ * rolled over since the node sent it is dropped. A refusal a run proved that
+ * has outlived its age reads `unknown` with the last failure kept (see
+ * {@link ageServedVerdict}) — which is what keeps an offline node from
+ * reading "Access denied" for ever. A report the node stopped refreshing
+ * while it kept beating is not served at all (see `lastHeartbeatAt`).
  */
 export function resolveFleetNodeAgentReadiness(
 	stored: unknown,
@@ -859,11 +916,16 @@ export function resolveFleetNodeAgentReadiness(
 				: Number.NaN;
 	if (Number.isFinite(lastBeat) && lastBeat - Date.parse(at) > FLEET_AGENT_READINESS_STALE_AFTER_MS) return null;
 	const nowMs = toEpochMs(options.now);
+	// The node's own clock, carried forward by the platform's.
+	const checkedAtMs = Date.parse(report.checkedAt);
+	const sinceReceiptMs = Math.max(0, nowMs - Date.parse(at));
+	const nodeNowMs = Number.isFinite(checkedAtMs) && checkedAtMs > 0 ? checkedAtMs + sinceReceiptMs : nowMs;
 	const throttles = new Map<string, FleetNodeModelThrottleView>();
 	for (const throttle of options.throttles ?? []) {
 		if (throttle && typeof throttle.provider === 'string') throttles.set(throttle.provider, throttle);
 	}
-	const agents = report.agents.map((entry): FleetAgentReadinessEntry => {
+	const agents = report.agents.map((reported): FleetAgentReadinessEntry => {
+		const entry = ageServedVerdict(reported, nodeNowMs);
 		const next: FleetAgentReadinessEntry = { ...entry };
 		if (entry.usage) {
 			const usage = entry.usage.filter((window) =>
@@ -877,7 +939,11 @@ export function resolveFleetNodeAgentReadiness(
 			}
 		}
 		const throttle = throttles.get(entry.provider);
-		if (!throttle || next.status !== 'ready') return next;
+		// The platform's own throttle speaks over `ready`, and over a verdict
+		// that has just aged out here: it is newer evidence than either.
+		const overridable =
+			next.status === 'ready' || (next.status === 'unknown' && next.reasonCode === 'verdict_stale');
+		if (!throttle || !overridable) return next;
 		const window = USAGE_LIMIT_WINDOWS.includes(throttle.window) ? throttle.window : 'usage';
 		return {
 			...next,

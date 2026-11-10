@@ -1,5 +1,5 @@
 import 'reflect-metadata';
-import { BadRequestException, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, Logger, UnauthorizedException } from '@nestjs/common';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
 import { FLEET_DEFAULT_MAX_CAPABILITY_TAGS } from '@ever-works/contracts';
@@ -97,7 +97,14 @@ describe('FleetController', () => {
         recent: jest.fn(async () => []),
     };
 
+    let warnSpy: jest.SpyInstance;
+    afterEach(() => {
+        // Only this spy: the stubs above are shared across the suite.
+        warnSpy.mockRestore();
+    });
+
     beforeEach(() => {
+        warnSpy = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
         service = {
             listForUser: jest.fn(async () => [nodeView]),
             createEnrollmentToken: jest.fn(async () => ({
@@ -152,6 +159,8 @@ describe('FleetController', () => {
             loadByNodeForUser: jest.fn(async () => ({})),
             // Unstubbed by default, so every test that is not about run stats
             // sees the node exactly as the registry served it (no `runStats`).
+            // The controller logs that as a warning; it is not this suite's
+            // subject, so the line is kept off the test output.
             agentTaskOutcomesForNode: jest.fn(async () => {
                 throw new Error('run stats are not stubbed in this test');
             }),
@@ -558,13 +567,16 @@ describe('FleetController', () => {
             expect(result.node.runStats).toBeUndefined();
         });
 
-        it('detail still answers when the ledger cannot be read', async () => {
+        it('detail still answers when the ledger cannot be read, and says so in the log', async () => {
             jobs.agentTaskOutcomesForNode.mockRejectedValue(new Error('fleet_jobs unavailable'));
 
             const result = await controller.detail(auth, nodeView.id);
 
             expect(result.node.id).toBe(nodeView.id);
             expect(result.node.runStats).toBeUndefined();
+            expect(warnSpy).toHaveBeenCalledWith(
+                `Node run stats skipped for node ${nodeView.id}: fleet_jobs unavailable`,
+            );
         });
 
         it('a node that ran nothing reads zeros, and never asks for runs', async () => {

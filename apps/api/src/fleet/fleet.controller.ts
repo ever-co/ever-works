@@ -480,7 +480,9 @@ export class FleetController {
         try {
             return await readNodeRunStats({ jobs: this.jobs, runs: this.runs }, userId, node.id);
         } catch (error) {
-            this.logger.debug(
+            // `warn`, not `debug`: unlike an absent run store this is a read
+            // that should work, and a failure here hides the figures silently.
+            this.logger.warn(
                 `Node run stats skipped for node ${node.id}: ${
                     error instanceof Error ? error.message : String(error)
                 }`,
