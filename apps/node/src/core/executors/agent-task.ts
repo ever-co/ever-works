@@ -2725,7 +2725,11 @@ async function invokeModelCliStep(input: {
 				provider: execution.provider,
 				status: parsed.status,
 				cliError:
-					parsed.status === 'succeeded' ? null : readModelCliError(execution.provider, rawOutput, result),
+					parsed.status === 'succeeded'
+						? null
+						: readModelCliError(execution.provider, rawOutput, result, {
+								outputTokens: parsed.outputTokens ?? null
+							}),
 				outputTokens: parsed.outputTokens ?? null,
 				...(usage.length > 0 ? { usage } : {}),
 				envPassthrough: [...(execution.envPassthrough ?? [])]

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { FleetJobView, FleetTaskWorkspaceDescriptor } from '@ever-works/contracts';
-import { mkdtempSync, promises as realFs } from 'node:fs';
+import { mkdtempSync, promises as realFs, readFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -605,6 +605,69 @@ describe('runAgentTaskJob — model-cli execution', () => {
 			});
 			expect(JSON.stringify(history.record())).not.toContain('organization');
 			expect(history.get('claude-code').lastSuccessAt).toBeNull();
+		});
+
+		it('a REAL signed-out Claude Code run (captured stream) reads not signed in, end to end', async () => {
+			// `__fixtures__/claude-code-signed-out.stream.jsonl`: what Claude Code
+			// 2.1.322 printed with no login, exit code 1. See `model-cli.spec.ts`.
+			const { spawnFn } = recordingSpawn([[CLAUDE, 1]]);
+			const stream = readFileSync(join(__dirname, '__fixtures__', 'claude-code-signed-out.stream.jsonl'), 'utf8');
+			const history = new AgentRunHistory({ now: () => READINESS_NOW });
+			const runs: AgentRunObservation[] = [];
+			const outcome = await runAgentTaskJob(
+				job(payload),
+				baseIo({
+					spawnFn,
+					scratchFs: scratchFs(stream),
+					onModelRun: (run) => {
+						runs.push(run);
+						history.note(run);
+					}
+				})
+			);
+
+			expect(outcome.status).toBe('failed');
+			expect(outcome.failureReason).toContain('Not logged in');
+			expect(runs[0]).toMatchObject({
+				status: 'failed',
+				outputTokens: 0,
+				cliError: { apiStatus: null, errorClass: 'authentication_failed' }
+			});
+			expect(history.get('claude-code').failure).toMatchObject({
+				kind: 'not_signed_in',
+				code: 'not_logged_in'
+			});
+		});
+
+		it('a tool layer`s "Failed to authenticate" in the result`s `errors` leaves no verdict (review N6b)', async () => {
+			const { spawnFn } = recordingSpawn([[CLAUDE, 1]]);
+			const stream = lines(
+				{ type: 'system', subtype: 'init', session_id: 'sess-1' },
+				{
+					type: 'result',
+					subtype: 'error_during_execution',
+					is_error: true,
+					errors: ['Error: MCP server "github": Failed to authenticate (HTTP 401)'],
+					usage: { input_tokens: 0, output_tokens: 0 },
+					session_id: 'sess-1'
+				}
+			);
+			const history = new AgentRunHistory({ now: () => READINESS_NOW });
+			const runs: AgentRunObservation[] = [];
+			await runAgentTaskJob(
+				job(payload),
+				baseIo({
+					spawnFn,
+					scratchFs: scratchFs(stream),
+					onModelRun: (run) => {
+						runs.push(run);
+						history.note(run);
+					}
+				})
+			);
+			expect(runs).toHaveLength(1);
+			expect(runs[0]?.cliError).toBeNull();
+			expect(history.get('claude-code').failure).toBeNull();
 		});
 
 		it('a failed Claude run whose ASSISTANT text mentions "not logged in" leaves no verdict (review S1)', async () => {
