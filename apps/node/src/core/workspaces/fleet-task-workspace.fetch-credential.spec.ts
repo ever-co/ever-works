@@ -126,8 +126,35 @@ describe(
 	() => {
 		let ownedRoot: string;
 		let workspaceRoot: string;
-		let configIndex: number;
+		/** `url.<bare repository on disk>.insteadOf <the GitHub URL>`, per stand-in. */
+		let standIns: Array<[string, string]> = [];
 		let taskCounter = 0;
+
+		/**
+		 * THE HARNESS PLAYS GITHUB — at the transport, and only there. A git
+		 * command that talks to a remote gets the GitHub URLs rewritten to the
+		 * bare repositories on disk, appended to its command-scope config; a
+		 * credentialed one (`GIT_ALLOW_PROTOCOL=https`, recorded exactly as the
+		 * provider produced it, and asserted on below) gets the stand-in's
+		 * transport let through as well. Nothing that READS config sees the
+		 * rewrite: in production there is none, and the provider's gate
+		 * withholds a credential from a remote this machine's own config
+		 * rewrites (second review of the fetch credential, item 2) — a rewrite
+		 * in `process.env`, as this suite used to set it, is exactly that. What
+		 * the https binding STOPS is proven, unassisted, in the provider's own
+		 * `credentialed-command.attacks.spec.ts`.
+		 */
+		const asGitHub = (args: string[], env: NodeJS.ProcessEnv | undefined): NodeJS.ProcessEnv | undefined => {
+			if (!env || !['fetch', 'push', 'ls-remote', 'clone'].includes(args[0])) return env;
+			const count = Number(env.GIT_CONFIG_COUNT ?? '0');
+			const rewritten: NodeJS.ProcessEnv = { ...env, GIT_CONFIG_COUNT: String(count + standIns.length) };
+			standIns.forEach(([key, value], offset) => {
+				rewritten[`GIT_CONFIG_KEY_${count + offset}`] = key;
+				rewritten[`GIT_CONFIG_VALUE_${count + offset}`] = value;
+			});
+			if (env.GIT_ALLOW_PROTOCOL === 'https') rewritten.GIT_ALLOW_PROTOCOL = 'https:file';
+			return rewritten;
+		};
 
 		const seed = (dir: string, origin: string, file: string): void => {
 			mkdirSync(dir, { recursive: true });
@@ -186,23 +213,12 @@ describe(
 					);
 					return { pid: 1 } as never;
 				}
-				// THE HARNESS PLAYS GITHUB. A credentialed child is bound to the
-				// https transport (`GIT_ALLOW_PROTOCOL=https`) — recorded above,
-				// exactly as the provider produced it, and asserted on below.
-				// This suite's "GitHub" is a bare repository on disk that the
-				// https URL is rewritten to, so for the real git underneath the
-				// stand-in's transport is let through as well. Nothing else of
-				// the child's environment is touched; what that binding STOPS is
-				// proven, unassisted, in the provider's own
-				// `credentialed-command.attacks.spec.ts`.
-				const env =
-					execOptions.env?.GIT_ALLOW_PROTOCOL === 'https'
-						? { ...execOptions.env, GIT_ALLOW_PROTOCOL: 'https:file' }
-						: execOptions.env;
+				// See `asGitHub`: recorded above as the provider produced it,
+				// handed to the real git with GitHub played by disk.
 				return (execFile as unknown as (...rest: unknown[]) => unknown)(
 					command,
 					args,
-					{ ...execOptions, env },
+					{ ...execOptions, env: asGitHub(args, execOptions.env) },
 					callback
 				) as never;
 			}) as never;
@@ -268,24 +284,16 @@ describe(
 
 			// The production https validator and real Git, with no network: the
 			// GitHub URLs a fleet job really carries are rewritten to test-owned
-			// bare repositories for child processes only (the same technique
-			// `fleet-task-workspace.spec.ts` uses). The credential is keyed to the
-			// https URL; git reads from disk.
-			configIndex = Number(process.env.GIT_CONFIG_COUNT ?? '0');
-			process.env.GIT_CONFIG_COUNT = String(configIndex + 2);
-			process.env[`GIT_CONFIG_KEY_${configIndex}`] = `url.${pathToFileURL(primaryOrigin).toString()}.insteadOf`;
-			process.env[`GIT_CONFIG_VALUE_${configIndex}`] = PRIMARY_URL;
-			process.env[`GIT_CONFIG_KEY_${configIndex + 1}`] = `url.${pathToFileURL(mountOrigin).toString()}.insteadOf`;
-			process.env[`GIT_CONFIG_VALUE_${configIndex + 1}`] = MOUNT_URL;
+			// bare repositories by the harness, for the commands that talk to a
+			// remote (`asGitHub`). The credential is keyed to the https URL; git
+			// reads from disk.
+			standIns = [
+				[`url.${pathToFileURL(primaryOrigin).toString()}.insteadOf`, PRIMARY_URL],
+				[`url.${pathToFileURL(mountOrigin).toString()}.insteadOf`, MOUNT_URL]
+			];
 		});
 
 		afterAll(async () => {
-			for (const offset of [0, 1]) {
-				delete process.env[`GIT_CONFIG_KEY_${configIndex + offset}`];
-				delete process.env[`GIT_CONFIG_VALUE_${configIndex + offset}`];
-			}
-			if (configIndex === 0) delete process.env.GIT_CONFIG_COUNT;
-			else process.env.GIT_CONFIG_COUNT = String(configIndex);
 			await fs.rm(ownedRoot, { recursive: true, force: true, maxRetries: 3 });
 		});
 
