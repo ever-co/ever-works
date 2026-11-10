@@ -1,11 +1,13 @@
-import type { Repository } from 'typeorm';
+import { DataSource, type Repository } from 'typeorm';
 import {
     combineBothOutcomes,
     describeMissionNothingToFile,
     missionOpenTasksWhere,
     MissionTickService,
 } from '../mission-tick.service';
+import { ENTITIES } from '../../database/_entities-inventory';
 import { Mission, MissionStatus, MissionType } from '../../entities/mission.entity';
+import { Task } from '../../entities/task.entity';
 import { ActivityActionType } from '../../entities/activity-log.types';
 
 /**
@@ -1019,6 +1021,41 @@ describe('MissionTickService — Task output (APW-08 T35)', () => {
         expect(matches(row({ workId: 'w-2' }), where as unknown as Row[])).toBe(false);
     });
 
+    // The same rule against the REAL Task entity: what the count asks the database.
+    it('missionOpenTasksWhere compiles to "open AND (prState IS NULL OR prState NOT IN (closed))"', async () => {
+        // The entity metadata is built against the real `Date` (a faked one is a different
+        // constructor from the one the column decorators recorded).
+        jest.useRealTimers();
+        const dataSource = new DataSource({
+            type: 'postgres',
+            host: '127.0.0.1',
+            username: 'unused',
+            password: 'unused',
+            database: 'unused',
+            entities: ENTITIES,
+        });
+        await (dataSource as unknown as { buildMetadatas(): Promise<void> }).buildMetadatas();
+        const query = dataSource
+            .getRepository(Task)
+            .createQueryBuilder('task')
+            .setFindOptions({ where: missionOpenTasksWhere({ workId: 'w-1', missionId: 'm1' }) });
+        const sql = query.getQuery().replace(/\s+/g, ' ');
+        const where = sql.slice(sql.indexOf(' WHERE ') + ' WHERE '.length);
+        // Two OR-ed branches, each scoped to the Work and the Mission and to an open status.
+        const branches = where.split(' OR ');
+        expect(branches).toHaveLength(2);
+        for (const branch of branches) {
+            expect(branch).toContain('"task"."workId" = ');
+            expect(branch).toContain('"task"."missionId" = ');
+            expect(branch).toContain('NOT("task"."status" IN (');
+        }
+        expect(branches[0]).toContain('"task"."prState" IS NULL');
+        expect(branches[1]).toContain('NOT("task"."prState" IN (');
+        expect(Object.values(query.getParameters())).toEqual(
+            expect.arrayContaining(['w-1', 'm1', 'done', 'cancelled', 'closed']),
+        );
+    });
+
     it('describeMissionNothingToFile: the three reasons, one Work or several, capped at three names', () => {
         expect(describeMissionNothingToFile('no-app-work')).toBe(
             'No attached App or Repository Work to file Tasks on.',
@@ -1034,6 +1071,9 @@ describe('MissionTickService — Task output (APW-08 T35)', () => {
         expect(
             describeMissionNothingToFile('repo-isolation-off', ['a', 'b', 'c', 'd', 'e']),
         ).toContain('Repository Works "a", "b", "c" and 2 more, so no Tasks are filed there.');
+        // A long Work name is cut, so the entry stays one readable line.
+        const long = describeMissionNothingToFile('repo-isolation-off', ['x'.repeat(500)]);
+        expect(long).toContain(`Repository Work "${'x'.repeat(80)}", so no Tasks`);
     });
 
     it('a `both` Mission runs the Ideas branch, then files Tasks — and reports both halves', async () => {

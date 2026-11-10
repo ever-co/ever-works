@@ -88,9 +88,13 @@ export type MissionNothingToFileReason = 'no-app-work' | 'repo-isolation-off' | 
 
 /** At most this many Work names are spelled out in a "nothing to file" Activity entry. */
 const MISSION_NOTICE_MAX_WORK_NAMES = 3;
+/** ...and at most this many characters of each, so the entry stays one readable line. */
+const MISSION_NOTICE_MAX_WORK_NAME_CHARS = 80;
 
 function quotedWorkNames(names: readonly string[]): string {
-    const shown = names.slice(0, MISSION_NOTICE_MAX_WORK_NAMES).map((name) => `"${name}"`);
+    const shown = names
+        .slice(0, MISSION_NOTICE_MAX_WORK_NAMES)
+        .map((name) => `"${name.trim().slice(0, MISSION_NOTICE_MAX_WORK_NAME_CHARS)}"`);
     const more = names.length - shown.length;
     return more > 0 ? `${shown.join(', ')} and ${more} more` : shown.join(', ');
 }
