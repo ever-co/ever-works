@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
-import { effectiveRemoteUrls, parseScopedConfigList } from '../credentialed-command.js';
+import { effectiveRemoteUrls, isAllowedRepositoryConfigKey, parseScopedConfigList } from '../credentialed-command.js';
 import { LocalWorkspacePlugin } from '../local-workspace.plugin.js';
 import type { WorkspaceHandle, WorkspaceProvisionSpec } from '@ever-works/plugin';
 
@@ -1769,6 +1769,27 @@ describe('remote.<private name>.proxy — the one remote key that outranks the p
 		}
 
 		expect(proxy.connects).toEqual(['127.0.0.1:1']);
+	});
+
+	it('the reserved prefix covers every spelling git matches a private name in — and only those', () => {
+		// The allowlist judges keys as `git config --list` prints them. A quoted
+		// `[remote "EW-…"]` header keeps its case and is a DIFFERENT remote to
+		// Git (subsections compare case-sensitively); the deprecated dotted
+		// `[remote.EW-…]` header is lower-cased by Git itself, so it is listed —
+		// and matched — as the lower-case name.
+		const at = scene();
+		const file = slash(join(at.dir, 'spellings.gitconfig'));
+		writeFileSync(
+			file,
+			'[remote "EW-CREDENTIALED-quoted"]\n\turl = a\n[remote.EW-CREDENTIALED-dotted]\n\turl = b\n'
+		);
+
+		const listed = git(at.dir, 'config', '--file', file, '--name-only', '--list').split(/\r?\n/);
+
+		expect(listed).toEqual(['remote.EW-CREDENTIALED-quoted.url', 'remote.ew-credentialed-dotted.url']);
+		expect(() => git(at.dir, 'config', '--file', file, '--get', 'remote.ew-credentialed-quoted.url')).toThrow();
+		expect(git(at.dir, 'config', '--file', file, '--get', 'remote.ew-credentialed-dotted.url')).toBe('b');
+		expect(listed.map((key) => isAllowedRepositoryConfigKey(key))).toEqual([true, false]);
 	});
 
 	it('planted on the private name as the credentialed fetch starts: the request does not go through it', async () => {

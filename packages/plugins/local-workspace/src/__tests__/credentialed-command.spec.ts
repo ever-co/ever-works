@@ -71,13 +71,18 @@ describe('privateRemoteName', () => {
 		// `remote.<plain name>.url` is allowed (people add remotes), and a
 		// private name is a plain name. Unguessable is true BEFORE the command
 		// runs; while it runs the name is in its argv. So the prefix itself is
-		// off limits, in any spelling Git would match.
+		// off limits, in every spelling Git would match it in.
 		const name = privateRemoteName();
 		expect(name.startsWith(RESERVED_REMOTE_PREFIX)).toBe(true);
 		for (const variable of ['url', 'pushurl', 'fetch', 'proxy', 'proxyauthmethod', 'promisor']) {
 			expect(isAllowedRepositoryConfigKey(`remote.${name}.${variable}`)).toBe(false);
 		}
-		expect(isAllowedRepositoryConfigKey('remote.EW-Credentialed-anything.url')).toBe(false);
+		// Git compares subsection names case-sensitively, and lower-cases the
+		// deprecated `[remote.EW-…]` header itself, so the keys are judged in
+		// the spelling Git lists them (held against real git in the attack
+		// spec): a differently-cased name is a different, ordinary remote.
+		expect(isAllowedRepositoryConfigKey('remote.ew-credentialed-anything.url')).toBe(false);
+		expect(isAllowedRepositoryConfigKey('remote.EW-Credentialed-anything.url')).toBe(true);
 		// The same variables on an ordinary remote are fine.
 		expect(isAllowedRepositoryConfigKey('remote.upstream.url')).toBe(true);
 	});
