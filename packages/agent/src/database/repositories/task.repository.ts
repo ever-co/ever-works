@@ -99,6 +99,23 @@ export interface ListTasksFilter {
     offset?: number;
 }
 
+/**
+ * One Task with a pull request, as {@link TaskRepository.findPullRequestsByWork}
+ * reads it: only the columns a one-line list entry needs.
+ */
+export type TaskPullRequestRow = Pick<
+    Task,
+    | 'id'
+    | 'slug'
+    | 'title'
+    | 'prNumber'
+    | 'prUrl'
+    | 'prState'
+    | 'branchState'
+    | 'latestRunId'
+    | 'updatedAt'
+>;
+
 /** Task statuses the board bounds to a recent window. */
 const TERMINAL_TASK_STATUSES: TaskStatus[] = [TaskStatus.DONE, TaskStatus.CANCELLED];
 
@@ -198,6 +215,72 @@ export class TaskRepository {
             where: { workId, branchRef },
             order: { updatedAt: 'DESC' },
         });
+    }
+
+    /**
+     * Work in flight — the Tasks of ONE Work whose branch carries a pull
+     * request that is still open (`state: 'open'`) or has landed
+     * (`state: 'merged'`), for the planner's "what is already being worked
+     * on here" section of a fleet run's instructions.
+     *
+     * Why this exists: every scheduled fire of a recurring Task is a NEW
+     * Task on a fresh checkout of the base branch, so a run cannot see the
+     * unmerged work of the runs before it and repeats or collides with it.
+     *
+     * - **Owner-scoped.** `userId` is a predicate, not a filter applied
+     *   afterwards: the caller is planning a run for that owner and learns
+     *   nothing about anyone else's Tasks. A Task's Work is always its
+     *   owner's (`TasksService.assertScopeReachable`), so this loses none of
+     *   the owner's own work.
+     * - **Open means open.** `branchState = 'pr-open'` stays set on a pull
+     *   request that was CLOSED without merging (only a merge moves it), so
+     *   the cached provider state is read too: never-synced (`NULL`), `open`
+     *   and `draft` count, `closed` and `merged` do not.
+     * - **Newest first.** Open pull requests by number, which only grows
+     *   inside one repository; merged ones by the row's last write, which is
+     *   the merge being recorded.
+     * - **Bounded and narrow.** At most `limit` rows (1–50) and only the
+     *   columns a list line needs — never the description, the checks or
+     *   the review memory. Served by `idx_tasks_branch_state`
+     *   (`workId`, `branchState`).
+     */
+    async findPullRequestsByWork(input: {
+        workId: string;
+        userId: string;
+        state: 'open' | 'merged';
+        limit: number;
+        /** The Task being planned: its own pull request is not "other work". */
+        excludeTaskId?: string | null;
+    }): Promise<TaskPullRequestRow[]> {
+        if (!input.workId || !input.userId) return [];
+        const take = Math.min(Math.max(Math.floor(input.limit) || 0, 1), 50);
+        const qb = this.repository
+            .createQueryBuilder('task')
+            .select([
+                'task.id',
+                'task.slug',
+                'task.title',
+                'task.prNumber',
+                'task.prUrl',
+                'task.prState',
+                'task.branchState',
+                'task.latestRunId',
+                'task.updatedAt',
+            ])
+            .where('task.workId = :workId', { workId: input.workId })
+            .andWhere('task.userId = :userId', { userId: input.userId })
+            .andWhere('task.prNumber IS NOT NULL');
+        if (input.state === 'open') {
+            qb.andWhere("task.branchState = 'pr-open'")
+                .andWhere("(task.prState IS NULL OR task.prState IN ('open', 'draft'))")
+                .orderBy('task.prNumber', 'DESC');
+        } else {
+            qb.andWhere("task.branchState = 'merged'").orderBy('task.updatedAt', 'DESC');
+        }
+        if (input.excludeTaskId) {
+            qb.andWhere('task.id != :excludeTaskId', { excludeTaskId: input.excludeTaskId });
+        }
+        return qb.take(take).getMany();
     }
 
     async findByUserIdFiltered(
