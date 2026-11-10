@@ -4,19 +4,23 @@ import {
 	FLEET_AGENT_AUTH_METHODS,
 	FLEET_AGENT_FAILURE_FALLBACK_MS,
 	FLEET_AGENT_READINESS_MAX_AGENTS,
-	FLEET_AGENT_READINESS_MAX_REASON_LENGTH,
 	FLEET_AGENT_READINESS_MAX_USAGE_WINDOWS,
 	FLEET_AGENT_READINESS_STALE_AFTER_MS,
 	FLEET_AGENT_READINESS_STATUSES,
+	FLEET_AGENT_REASON_CODES,
+	FLEET_AGENT_USAGE_DEFAULT_WINDOW_MINUTES,
 	anyFleetAgentReady,
 	classifyFleetAgentFailure,
+	describeFleetAgentReason,
 	emptyFleetNodeRunStats,
+	isFleetAgentDefinitelyUnavailable,
 	isFleetAgentReady,
+	isFleetAgentReasonCode,
+	isFleetAgentUsageWindowCurrent,
 	normalizeFleetAgentReadinessReport,
 	redactFleetAgentText,
 	resolveFleetNodeAgentReadiness,
 	sanitizeFleetAgentAccount,
-	sanitizeFleetAgentReason,
 	type FleetAgentReadinessEntry
 } from '../fleet-agent-readiness.types.js';
 
@@ -30,8 +34,16 @@ const NOW = Date.parse('2026-11-10T12:00:00.000Z');
 const FAKE_API_KEY = ['sk', 'ant', 'api03', 'FAKE'.repeat(8)].join('-');
 const FAKE_PROJECT_KEY = ['sk', 'proj', 'FAKE'.repeat(4)].join('-');
 const FAKE_BEARER = ['Bearer', 'fake'.repeat(5)].join(' ');
+const FAKE_BASIC = ['Basic', 'ZmFrZQ'.repeat(4)].join(' ');
 const FAKE_JWT = [`eyJ${'head'.repeat(3)}`, `eyJ${'body'.repeat(3)}`, 'sign'.repeat(3)].join('.');
 const FAKE_HEX = 'ab12'.repeat(9);
+const FAKE_DB_URL = ['postgres://app', 'fakefakepass@db.internal:5432/prod'].join(':');
+const FAKE_SLASHED = ['fakeFAKEfake1', 'FAKEfak', 'fakeFAKEfakeFAKEfa'].join('/');
+
+/** The two sentences the production node actually failed with. */
+const ORG_DISABLED =
+	'Your organization has disabled Claude subscription access for Claude Code · Use an Anthropic API key instead, or ask your admin to enable access';
+const SESSION_EXPIRED = 'Failed to authenticate: OAuth session expired and could not be refreshed';
 
 function entry(overrides: Partial<FleetAgentReadinessEntry> = {}): FleetAgentReadinessEntry {
 	return {
@@ -42,53 +54,67 @@ function entry(overrides: Partial<FleetAgentReadinessEntry> = {}): FleetAgentRea
 		authMethod: 'subscription',
 		account: 'owner@example.com (Acme, max)',
 		status: 'ready',
+		reasonCode: null,
 		reason: null,
 		checkedAt: '2026-11-10T11:59:00.000Z',
 		...overrides
 	};
 }
 
-describe('classifyFleetAgentFailure', () => {
-	// The two sentences the production node actually failed with.
-	it('reads the organization switch as access denied (prod, 2026-11)', () => {
-		const failure = classifyFleetAgentFailure(
-			'claude-code reported an error: Your organization has disabled Claude subscription access for Claude Code · Use an Anthropic API key instead, or ask your admin to enable access',
-			{ now: NOW }
-		);
+describe('classifyFleetAgentFailure — what the CLI itself reported', () => {
+	it('reads the organization switch as access denied (prod, 2026-11), as a CODE and nothing of the text', () => {
+		const failure = classifyFleetAgentFailure(ORG_DISABLED, { now: NOW });
 		expect(failure).toEqual({
 			kind: 'access_denied',
-			reason: 'claude-code reported an error: Your organization has disabled Claude subscription access for Claude Code · Use an Anthropic API key instead, or ask your admin to enable access',
+			code: 'org_access_disabled',
+			window: null,
 			resetsAt: null,
 			until: null,
 			usageLimit: false
 		});
 	});
 
+	it('reads the expired OAuth session as not signed in (prod, 2026-11)', () => {
+		expect(classifyFleetAgentFailure(SESSION_EXPIRED, { now: NOW })).toMatchObject({
+			kind: 'not_signed_in',
+			code: 'session_expired'
+		});
+	});
+
 	it.each([
-		['Failed to authenticate: OAuth session expired and could not be refreshed'],
-		['Login expired · Please run /login'],
-		['Not logged in · Please run /login'],
-		['OAuth token revoked · Please run /login'],
+		['Login expired · Please run /login', 'session_expired'],
+		['OAuth token revoked · Please run /login', 'session_expired'],
 		[
-			'Please run /login · API Error: 401 OAuth token has expired. Please obtain a new token or refresh your existing token.'
+			'Please run /login · API Error: 401 OAuth token has expired. Please obtain a new token or refresh your existing token.',
+			'session_expired'
 		],
-		['Please run /login · API Error: 401 Invalid authentication credentials'],
-		['Invalid API key · Fix external API key'],
-		['API Error: 401 {"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}'],
+		['Not logged in · Please run /login', 'not_logged_in'],
+		['Please run /login · API Error: 401 Invalid authentication credentials', 'not_logged_in'],
+		['Invalid API key · Fix external API key', 'invalid_api_key'],
+		[
+			'API Error: 401 {"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}',
+			'unauthorized'
+		],
 		// Codex.
-		['Not logged in'],
+		['Not logged in', 'not_logged_in'],
 		[
-			'Your access token could not be refreshed because your refresh token has expired. Please log out and sign in again.'
+			'Your access token could not be refreshed because your refresh token has expired. Please log out and sign in again.',
+			'session_expired'
 		],
 		[
-			'Your access token could not be refreshed because your refresh token was revoked. Please log out and sign in again.'
+			'Your access token could not be refreshed because your refresh token was revoked. Please log out and sign in again.',
+			'session_expired'
 		],
-		['unexpected status 401 Unauthorized: {"error":{"message":"Missing bearer"}}']
-	])('reads %j as not signed in', (sentence) => {
-		const failure = classifyFleetAgentFailure(sentence, { now: NOW, strict: true });
-		expect(failure?.kind).toBe('not_signed_in');
-		expect(failure?.until).toBeNull();
-		expect(failure?.usageLimit).toBe(false);
+		['unexpected status 401 Unauthorized: {"error":{"message":"Missing bearer"}}', 'unauthorized']
+	])('reads %j as not signed in (%s)', (sentence, code) => {
+		expect(classifyFleetAgentFailure(sentence, { now: NOW })).toEqual({
+			kind: 'not_signed_in',
+			code,
+			window: null,
+			resetsAt: null,
+			until: null,
+			usageLimit: false
+		});
 	});
 
 	it.each([
@@ -97,39 +123,76 @@ describe('classifyFleetAgentFailure', () => {
 		],
 		['unexpected status 403 Forbidden: {"detail":"Workspace is not allowed to use this model"}']
 	])('reads %j as access denied', (sentence) => {
-		expect(classifyFleetAgentFailure(sentence, { now: NOW, strict: true })?.kind).toBe('access_denied');
+		expect(classifyFleetAgentFailure(sentence, { now: NOW })).toMatchObject({
+			kind: 'access_denied',
+			code: 'permission_denied'
+		});
 	});
 
-	it('reads a usage limit with its reset, and marks it as the limit the worker throttles on', () => {
-		const failure = classifyFleetAgentFailure("You've hit your weekly limit · resets Nov 12, 3am (Europe/Paris)", {
-			now: NOW
+	it('reads the structured signals a CLI reports beside (or instead of) a sentence', () => {
+		// Claude Code's `api_error_status` on an `is_error` result (CLI ≥ 2.1.110).
+		expect(classifyFleetAgentFailure({ apiStatus: 401 }, { now: NOW })).toMatchObject({
+			kind: 'not_signed_in',
+			code: 'unauthorized'
 		});
-		expect(failure?.kind).toBe('limit_reached');
-		expect(failure?.usageLimit).toBe(true);
-		expect(failure?.resetsAt).toBe('2026-11-12T02:00:00.000Z');
-		// The reset plus the contract's one-minute slack.
-		expect(failure?.until).toBe('2026-11-12T02:01:00.000Z');
-		expect(failure?.reason).toBe("You've hit your weekly limit · resets Nov 12, 3am (Europe/Paris)");
+		expect(classifyFleetAgentFailure({ apiStatus: 403 }, { now: NOW })).toMatchObject({
+			kind: 'access_denied',
+			code: 'permission_denied'
+		});
+		expect(classifyFleetAgentFailure({ apiStatus: 429 }, { now: NOW })).toEqual({
+			kind: 'limit_reached',
+			code: 'usage_limit',
+			window: 'rate',
+			resetsAt: null,
+			until: new Date(NOW + FLEET_AGENT_FAILURE_FALLBACK_MS).toISOString(),
+			usageLimit: true
+		});
+		// The `error` class on a Claude Code assistant event.
+		expect(classifyFleetAgentFailure({ errorClass: 'authentication_failed' }, { now: NOW })?.code).toBe(
+			'unauthorized'
+		);
+		expect(classifyFleetAgentFailure({ errorClass: 'billing_error' }, { now: NOW })?.code).toBe('out_of_credit');
+		expect(classifyFleetAgentFailure({ errorClass: 'rate_limit' }, { now: NOW })?.code).toBe('usage_limit');
+		// A class that names none of the three conditions.
+		expect(classifyFleetAgentFailure({ errorClass: 'server_error', apiStatus: 529 }, { now: NOW })).toBeNull();
+		// The more specific sentence wins over the bare status.
+		expect(classifyFleetAgentFailure({ text: ORG_DISABLED, apiStatus: 403 }, { now: NOW })?.code).toBe(
+			'org_access_disabled'
+		);
+	});
+
+	it('reads a usage limit with its window and reset, and marks it as the limit the worker throttles on', () => {
+		expect(
+			classifyFleetAgentFailure("You've hit your weekly limit · resets Nov 12, 3am (Europe/Paris)", { now: NOW })
+		).toEqual({
+			kind: 'limit_reached',
+			code: 'usage_limit',
+			window: 'weekly',
+			resetsAt: '2026-11-12T02:00:00.000Z',
+			// The reset plus the contract's one-minute slack.
+			until: '2026-11-12T02:01:00.000Z',
+			usageLimit: true
+		});
 	});
 
 	it('reads a Codex usage limit that names a relative reset', () => {
-		const failure = classifyFleetAgentFailure(
-			'You’ve hit your usage limit. Upgrade to Pro or try again in 2 days 3 hours.',
-			{ provider: 'codex', now: NOW }
-		);
-		expect(failure?.kind).toBe('limit_reached');
-		expect(failure?.resetsAt).toBe('2026-11-12T15:00:00.000Z');
+		expect(
+			classifyFleetAgentFailure('You’ve hit your usage limit. Upgrade to Pro or try again in 2 days 3 hours.', {
+				provider: 'codex',
+				now: NOW
+			})
+		).toMatchObject({ kind: 'limit_reached', code: 'usage_limit', resetsAt: '2026-11-12T15:00:00.000Z' });
 	});
 
 	it.each([['Credit balance is too low'], ['Quota exceeded. Check your plan and billing details.']])(
-		'reads %j as a limit with no reset, trusted for the fallback hour',
+		'reads %j as out of credit: a limit no clock lifts (no reset, no hold-until)',
 		(sentence) => {
-			const failure = classifyFleetAgentFailure(sentence, { now: NOW, strict: true });
-			expect(failure).toEqual({
+			expect(classifyFleetAgentFailure(sentence, { now: NOW })).toEqual({
 				kind: 'limit_reached',
-				reason: sentence,
+				code: 'out_of_credit',
+				window: null,
 				resetsAt: null,
-				until: new Date(NOW + FLEET_AGENT_FAILURE_FALLBACK_MS).toISOString(),
+				until: null,
 				usageLimit: false
 			});
 		}
@@ -143,44 +206,71 @@ describe('classifyFleetAgentFailure', () => {
 		).toBe('access_denied');
 	});
 
-	it('quotes only the line that matched, on one line', () => {
-		const failure = classifyFleetAgentFailure(
-			['Starting…', 'Login expired · Please run /login', 'Stack: at main (cli.js:1:1)'].join('\n'),
-			{ now: NOW }
-		);
-		expect(failure?.reason).toBe('Login expired · Please run /login');
+	describe('a run that reached its model (modelReached)', () => {
+		it.each([
+			[ORG_DISABLED],
+			[SESSION_EXPIRED],
+			['Not logged in · Please run /login'],
+			['API Error: 403 forbidden']
+		])('never answers a sign-in or access verdict for %j', (sentence) => {
+			expect(classifyFleetAgentFailure(sentence, { now: NOW, modelReached: true })).toBeNull();
+			expect(
+				classifyFleetAgentFailure({ text: sentence, apiStatus: 401 }, { now: NOW, modelReached: true })
+			).toBeNull();
+		});
+
+		it('can still prove a limit, which a run can hit in the middle', () => {
+			expect(
+				classifyFleetAgentFailure('5-hour limit reached ∙ resets 3pm', {
+					now: NOW,
+					timeZone: 'UTC',
+					modelReached: true
+				})?.code
+			).toBe('usage_limit');
+			expect(classifyFleetAgentFailure('Credit balance is too low', { now: NOW, modelReached: true })?.code).toBe(
+				'out_of_credit'
+			);
+		});
 	});
 
 	it.each([
 		[null],
 		[undefined],
-		[42],
 		[''],
 		['   '],
+		[{}],
+		[{ text: null, apiStatus: null, errorClass: null }],
 		['The build failed: 3 tests are red.'],
 		['Error: max turns reached'],
-		// A Task about sign-in pages is not the CLI being signed out.
-		['I added the login page and a logout button; the session cookie is now cleared on sign out.']
-	])('answers null for %j', (text) => {
-		expect(classifyFleetAgentFailure(text, { now: NOW })).toBeNull();
+		// The loose phrases the first version matched are gone: only the CLIs'
+		// own sentences are read, whoever the caller is.
+		['The service account does not have access to the bucket.'],
+		['Network access is disabled in this sandbox, so I could not run npm install.'],
+		['I do not have permission to write outside the workspace.'],
+		['Please sign in again to continue.']
+	])('answers null for %j', (input) => {
+		expect(classifyFleetAgentFailure(input as never, { now: NOW })).toBeNull();
 	});
 
-	it('keeps the loose phrases out of strict mode (a model can write them)', () => {
-		const loose = 'The service account does not have access to the bucket.';
-		expect(classifyFleetAgentFailure(loose, { now: NOW })?.kind).toBe('access_denied');
-		expect(classifyFleetAgentFailure(loose, { now: NOW, strict: true })).toBeNull();
+	it('answers a code and structured facts only — never a character of the text it read', () => {
+		const text = `Invalid API key ${FAKE_API_KEY} · Fix external API key (see ${FAKE_DB_URL})`;
+		const failure = classifyFleetAgentFailure(text, { now: NOW });
+		expect(failure?.code).toBe('invalid_api_key');
+		const serialized = JSON.stringify(failure);
+		expect(serialized).not.toContain('FAKE');
+		expect(serialized).not.toContain('fakefakepass');
+		expect(serialized).not.toContain('Fix external');
+		expect(Object.keys(failure ?? {}).sort()).toEqual([
+			'code',
+			'kind',
+			'resetsAt',
+			'until',
+			'usageLimit',
+			'window'
+		]);
 	});
 
-	it('masks anything credential-shaped in the sentence it quotes', () => {
-		const failure = classifyFleetAgentFailure(`Invalid API key ${FAKE_API_KEY} · Fix external API key`, {
-			now: NOW
-		});
-		expect(failure?.kind).toBe('not_signed_in');
-		expect(failure?.reason).toBe('Invalid API key [redacted] · Fix external API key');
-		expect(JSON.stringify(failure)).not.toContain('FAKE');
-	});
-
-	it('is pure: the same text and clock give the same answer', () => {
+	it('is pure: the same input and clock give the same answer', () => {
 		const text = '5-hour limit reached ∙ resets 3pm';
 		expect(classifyFleetAgentFailure(text, { now: NOW, timeZone: 'UTC' })).toEqual(
 			classifyFleetAgentFailure(text, { now: NOW, timeZone: 'UTC' })
@@ -188,28 +278,57 @@ describe('classifyFleetAgentFailure', () => {
 	});
 });
 
-describe('redaction', () => {
+describe('reasons are a fixed table', () => {
+	it('has one sentence per code, and none for a code it does not know', () => {
+		for (const code of FLEET_AGENT_REASON_CODES) {
+			expect(isFleetAgentReasonCode(code)).toBe(true);
+			const sentence = describeFleetAgentReason(code);
+			expect(typeof sentence).toBe('string');
+			expect(sentence?.length).toBeGreaterThan(10);
+		}
+		expect(new Set(FLEET_AGENT_REASON_CODES.map((code) => describeFleetAgentReason(code))).size).toBe(
+			FLEET_AGENT_REASON_CODES.length
+		);
+		for (const unknown of ['made_up', '', null, undefined, 7, 'Your organization has disabled…']) {
+			expect(isFleetAgentReasonCode(unknown)).toBe(false);
+			expect(describeFleetAgentReason(unknown)).toBeNull();
+		}
+	});
+
+	it('names the window of a usage limit, from a closed set', () => {
+		expect(describeFleetAgentReason('usage_limit', { window: 'weekly' })).toBe('The weekly limit is reached.');
+		expect(describeFleetAgentReason('usage_limit', { window: 'session' })).toBe('The 5-hour limit is reached.');
+		expect(describeFleetAgentReason('usage_limit')).toBe('The usage limit is reached.');
+		expect(describeFleetAgentReason('usage_limit', { window: 'whenever' as never })).toBe(
+			'The usage limit is reached.'
+		);
+	});
+});
+
+describe('redaction (defence in depth for the labels that remain)', () => {
 	it.each([
 		[`token ${FAKE_PROJECT_KEY} rest`, 'token [redacted] rest'],
 		[`Authorization: ${FAKE_BEARER}`, 'Authorization: [redacted]'],
+		[`Authorization: ${FAKE_BASIC}`, 'Authorization: [redacted]'],
 		[`jwt ${FAKE_JWT} here`, 'jwt [redacted] here'],
 		[`hex ${FAKE_HEX} end`, 'hex [redacted] end'],
-		['owner@example.com (Acme, max)', 'owner@example.com (Acme, max)']
+		[`connect ${FAKE_DB_URL} failed`, 'connect postgres://[redacted]@db.internal:5432/prod failed'],
+		[`aws_secret_access_key=${FAKE_SLASHED} x`, 'aws_secret_access_key=[redacted] x'],
+		[`token=${'a1B2c3D4e5'.repeat(3)}Z x`, 'token=[redacted] x'],
+		[`key=${['fake1234fake1234', 'fake5678fake5678'].join('.')} x`, 'key=[redacted] x'],
+		['owner@example.com (Acme, max)', 'owner@example.com (Acme, max)'],
+		['2.1.319 (Claude Code)', '2.1.319 (Claude Code)']
 	])('redactFleetAgentText(%j)', (input, expected) => {
 		expect(redactFleetAgentText(input)).toBe(expected);
 	});
 
-	it('cuts a reason to one bounded line', () => {
-		const reason = sanitizeFleetAgentReason(`first\nsecond\t${'word '.repeat(200)}`);
-		expect(reason).not.toContain('\n');
-		expect(Array.from(reason ?? '').length).toBeLessThanOrEqual(FLEET_AGENT_READINESS_MAX_REASON_LENGTH);
-		expect(reason?.endsWith('…')).toBe(true);
-	});
-
-	it('answers null for an empty or non-string value', () => {
-		expect(sanitizeFleetAgentReason('  \n ')).toBeNull();
-		expect(sanitizeFleetAgentReason(7)).toBeNull();
-		expect(sanitizeFleetAgentAccount(null)).toBeNull();
+	it('cuts an account label to one bounded line', () => {
+		const label = sanitizeFleetAgentAccount(`owner@example.com\n(Acme,\tmax) ${'word '.repeat(100)}`);
+		expect(label).not.toContain('\n');
+		expect(Array.from(label ?? '').length).toBeLessThanOrEqual(200);
+		expect(label?.endsWith('…')).toBe(true);
+		expect(sanitizeFleetAgentAccount('  \n ')).toBeNull();
+		expect(sanitizeFleetAgentAccount(7)).toBeNull();
 	});
 });
 
@@ -227,23 +346,54 @@ describe('normalizeFleetAgentReadinessReport', () => {
 		});
 	});
 
-	it('round-trips a full entry', () => {
+	it('round-trips a full entry, rebuilding the sentence from the code', () => {
 		const full = entry({
 			status: 'limit_reached',
-			reason: "You've hit your weekly limit · resets Nov 12, 3am",
+			reasonCode: 'usage_limit',
+			reason: 'The weekly limit is reached.',
 			limitResetsAt: '2026-11-12T02:00:00.000Z',
+			limitWindow: 'weekly',
 			usage: [
-				{ window: 'five_hour', usedPercent: 42.5, resetsAt: '2026-11-10T15:00:00.000Z' },
+				{ window: 'five_hour', usedPercent: 42.5, resetsAt: '2026-11-10T15:00:00.000Z', windowMinutes: 300 },
 				{ window: 'weekly', usedPercent: 100, resetsAt: '2026-11-12T02:00:00.000Z', limited: true }
 			],
 			usageObservedAt: '2026-11-10T11:30:00.000Z',
 			lastSuccessAt: '2026-11-10T10:00:00.000Z',
-			lastFailureAt: '2026-11-10T11:30:00.000Z'
+			lastFailureAt: '2026-11-10T11:30:00.000Z',
+			lastFailureKind: 'limit_reached',
+			lastFailureCode: 'usage_limit'
 		});
 		expect(normalizeFleetAgentReadinessReport({ checkedAt: full.checkedAt, agents: [full] })).toEqual({
 			checkedAt: full.checkedAt,
 			agents: [full]
 		});
+	});
+
+	it('NEVER keeps a sentence a node sent: the reason is looked up by its code, or absent', () => {
+		const leak = `Run said: connect ${FAKE_DB_URL} failed, ${FAKE_BASIC}`;
+		const report = normalizeFleetAgentReadinessReport({
+			checkedAt: '2026-11-10T12:00:00.000Z',
+			agents: [
+				// A known code: the node's text is replaced by the table's.
+				entry({ status: 'access_denied', reasonCode: 'org_access_disabled', reason: leak }),
+				// A code a newer node invented: kept as a code, with no sentence.
+				entry({ provider: 'codex', status: 'unknown', reasonCode: 'something_new', reason: leak }),
+				// No code at all: no sentence.
+				entry({ provider: 'gemini', status: 'not_signed_in', reasonCode: null, reason: leak }),
+				// Not a code: dropped.
+				entry({ provider: 'opencode', status: 'unknown', reasonCode: leak, reason: leak })
+			]
+		});
+		expect(report?.agents.map((agent) => [agent.reasonCode, agent.reason])).toEqual([
+			['org_access_disabled', describeFleetAgentReason('org_access_disabled')],
+			['something_new', null],
+			[null, null],
+			[null, null]
+		]);
+		const serialized = JSON.stringify(report);
+		expect(serialized).not.toContain('Run said');
+		expect(serialized).not.toContain('fakefakepass');
+		expect(serialized).not.toContain('ZmFrZQ');
 	});
 
 	it('drops what it does not know and bounds what it keeps', () => {
@@ -257,20 +407,23 @@ describe('normalizeFleetAgentReadinessReport', () => {
 					version: 2,
 					signedIn: 'true',
 					authMethod: 'carrier-pigeon',
-					account: `owner@example.com\n${'x'.repeat(40)}`,
+					account: `owner@example.com\n${FAKE_BEARER}`,
 					status: 'levitating',
-					reason: `${FAKE_BEARER} was refused`,
+					reasonCode: 'NOT A CODE',
 					checkedAt: 'not a date',
 					token: FAKE_API_KEY,
 					limitResetsAt: 'tomorrow',
+					limitWindow: 'fortnightly',
 					usage: [
 						{ window: 'five_hour', usedPercent: 250, resetsAt: 'soon' },
-						{ window: 'weekly', usedPercent: 12.34 },
+						{ window: 'weekly', usedPercent: 12.34, windowMinutes: -5 },
 						{ window: 'has spaces', usedPercent: 1 },
 						'junk'
 					],
 					usageObservedAt: '2026-11-10T11:00:00.000Z',
-					lastSuccessAt: 'never'
+					lastSuccessAt: 'never',
+					lastFailureKind: 'access_denied',
+					lastFailureCode: 'org_access_disabled'
 				},
 				{ provider: '' },
 				{ provider: 'claude-code', installed: true, status: 'ready' },
@@ -282,21 +435,36 @@ describe('normalizeFleetAgentReadinessReport', () => {
 			agents: [
 				{
 					provider: 'claude-code',
-					installed: false,
+					// Neither true nor false: the node did not say.
+					installed: null,
 					version: null,
 					signedIn: null,
 					authMethod: 'unknown',
 					account: 'owner@example.com [redacted]',
 					status: 'unknown',
-					reason: '[redacted] was refused',
+					reasonCode: null,
+					reason: null,
 					checkedAt: '2026-11-10T12:00:00.000Z',
 					usage: [{ window: 'weekly', usedPercent: 12.3, resetsAt: null }],
 					usageObservedAt: '2026-11-10T11:00:00.000Z'
+					// No `lastFailureKind` / `lastFailureCode` without the instant they belong to.
 				}
 			]
 		});
 		expect(JSON.stringify(report)).not.toContain('FAKE');
 		expect(JSON.stringify(report)).not.toContain('fakefake');
+	});
+
+	it('keeps installed as three states', () => {
+		const report = normalizeFleetAgentReadinessReport({
+			checkedAt: '2026-11-10T12:00:00.000Z',
+			agents: [
+				{ provider: 'a', installed: true, status: 'ready' },
+				{ provider: 'b', installed: false, status: 'not_installed' },
+				{ provider: 'c', installed: null, status: 'unknown', reasonCode: 'probe_timed_out' }
+			]
+		});
+		expect(report?.agents.map((agent) => agent.installed)).toEqual([true, false, null]);
 	});
 
 	it('caps the agents and the windows', () => {
@@ -335,21 +503,95 @@ describe('normalizeFleetAgentReadinessReport', () => {
 	});
 });
 
-describe('the node-level answer', () => {
+describe('isFleetAgentUsageWindowCurrent', () => {
+	const observedAt = '2026-11-10T10:00:00.000Z';
+
+	it('a window that names its reset is current until that instant', () => {
+		const window = { window: 'weekly', resetsAt: '2026-11-10T12:30:00.000Z' };
+		expect(isFleetAgentUsageWindowCurrent(window, observedAt, NOW)).toBe(true);
+		expect(isFleetAgentUsageWindowCurrent(window, observedAt, NOW + 31 * 60_000)).toBe(false);
+		// A reset alone is enough: it needs no observation time.
+		expect(isFleetAgentUsageWindowCurrent(window, null, NOW)).toBe(true);
+	});
+
+	it('a window that names no reset expires after its own length', () => {
+		const fiveHour = { window: 'five_hour', resetsAt: null };
+		expect(isFleetAgentUsageWindowCurrent(fiveHour, observedAt, NOW)).toBe(true);
+		expect(isFleetAgentUsageWindowCurrent(fiveHour, observedAt, Date.parse(observedAt) + 5 * 3_600_000)).toBe(
+			false
+		);
+		const weekly = { window: 'weekly', resetsAt: null };
+		expect(isFleetAgentUsageWindowCurrent(weekly, observedAt, NOW + 6 * 86_400_000)).toBe(true);
+		expect(isFleetAgentUsageWindowCurrent(weekly, observedAt, NOW + 7 * 86_400_000)).toBe(false);
+	});
+
+	it('uses the length the CLI stated, then the default for a window it cannot size', () => {
+		const stated = { window: 'primary', resetsAt: null, windowMinutes: 60 };
+		expect(isFleetAgentUsageWindowCurrent(stated, observedAt, Date.parse(observedAt) + 59 * 60_000)).toBe(true);
+		expect(isFleetAgentUsageWindowCurrent(stated, observedAt, Date.parse(observedAt) + 60 * 60_000)).toBe(false);
+		const unsized = { window: 'secondary', resetsAt: null };
+		const limit = FLEET_AGENT_USAGE_DEFAULT_WINDOW_MINUTES * 60_000;
+		expect(isFleetAgentUsageWindowCurrent(unsized, observedAt, Date.parse(observedAt) + limit - 1)).toBe(true);
+		expect(isFleetAgentUsageWindowCurrent(unsized, observedAt, Date.parse(observedAt) + limit)).toBe(false);
+	});
+
+	it('a reading that cannot be dated at all is not current', () => {
+		expect(isFleetAgentUsageWindowCurrent({ window: 'weekly', resetsAt: null }, null, NOW)).toBe(false);
+		expect(isFleetAgentUsageWindowCurrent({ window: 'weekly', resetsAt: null }, 'whenever', NOW)).toBe(false);
+	});
+});
+
+describe('the node-level answer is three-state', () => {
 	it('an agent is ready only when it is installed AND ready', () => {
 		expect(isFleetAgentReady(entry())).toBe(true);
 		expect(isFleetAgentReady(entry({ installed: false }))).toBe(false);
+		expect(isFleetAgentReady(entry({ installed: null }))).toBe(false);
 		for (const status of FLEET_AGENT_READINESS_STATUSES.filter((value) => value !== 'ready')) {
 			expect(isFleetAgentReady(entry({ status }))).toBe(false);
 		}
 	});
 
-	it('one ready agent is enough; none, or no agent at all, is not', () => {
+	it('every status but ready and unknown is a definite negative', () => {
+		for (const status of FLEET_AGENT_READINESS_STATUSES) {
+			expect(isFleetAgentDefinitelyUnavailable(entry({ status }))).toBe(
+				status !== 'ready' && status !== 'unknown'
+			);
+		}
+	});
+
+	it('true: one ready agent is enough, whatever the others are', () => {
 		expect(anyFleetAgentReady([entry({ status: 'access_denied' }), entry({ provider: 'codex' })])).toBe(true);
+		expect(anyFleetAgentReady([entry({ status: 'unknown' }), entry({ provider: 'codex' })])).toBe(true);
+	});
+
+	it('false: only when EVERY agent has a definite negative verdict', () => {
 		expect(anyFleetAgentReady([entry({ status: 'access_denied' }), entry({ status: 'not_signed_in' })])).toBe(
 			false
 		);
+		expect(
+			anyFleetAgentReady([
+				entry({ status: 'limit_reached' }),
+				entry({ provider: 'codex', installed: false, status: 'not_installed' }),
+				entry({ provider: 'gemini', status: 'unsupported' })
+			])
+		).toBe(false);
+		// The node said it has no agent CLI at all.
 		expect(anyFleetAgentReady([])).toBe(false);
+	});
+
+	it('null: unknown is never shown as "cannot"', () => {
+		expect(anyFleetAgentReady([entry({ status: 'unknown' })])).toBeNull();
+		// One definite negative beside one unknown is still not an answer.
+		expect(
+			anyFleetAgentReady([entry({ status: 'access_denied' }), entry({ provider: 'codex', status: 'unknown' })])
+		).toBeNull();
+		// The startup lookup timed out for both CLIs (the reviewer's S5).
+		expect(
+			anyFleetAgentReady([
+				entry({ installed: null, status: 'unknown', reasonCode: 'probe_timed_out' }),
+				entry({ provider: 'codex', installed: null, status: 'unknown', reasonCode: 'probe_timed_out' })
+			])
+		).toBeNull();
 	});
 
 	it('serves the stored report with the answer, stamped with the receipt time', () => {
@@ -357,13 +599,26 @@ describe('the node-level answer', () => {
 			at: '2026-11-10T12:00:01.000Z',
 			checkedAt: '2026-11-10T12:00:00.000Z',
 			agents: [
-				entry({ status: 'access_denied', reason: 'Your organization has disabled Claude subscription access' }),
+				entry({ status: 'access_denied', reasonCode: 'org_access_disabled' }),
 				entry({ provider: 'codex', installed: false, status: 'not_installed', signedIn: null, account: null })
 			]
 		});
 		expect(view?.at).toBe('2026-11-10T12:00:01.000Z');
 		expect(view?.anyReady).toBe(false);
 		expect(view?.agents.map((agent) => agent.status)).toEqual(['access_denied', 'not_installed']);
+		expect(view?.agents[0]?.reason).toBe(describeFleetAgentReason('org_access_disabled'));
+	});
+
+	it('serves null — could not be determined — when the status command did not answer', () => {
+		const view = resolveFleetNodeAgentReadiness({
+			at: '2026-11-10T12:00:01.000Z',
+			checkedAt: '2026-11-10T12:00:00.000Z',
+			agents: [
+				entry({ signedIn: null, authMethod: 'unknown', status: 'unknown', reasonCode: 'status_unanswered' }),
+				entry({ provider: 'codex', installed: false, status: 'not_installed' })
+			]
+		});
+		expect(view?.anyReady).toBeNull();
 	});
 
 	it('answers null for a row that holds no report, a junk one, or one with no receipt time', () => {
@@ -373,7 +628,7 @@ describe('the node-level answer', () => {
 		expect(resolveFleetNodeAgentReadiness({ checkedAt: '2026-11-10T12:00:00.000Z', agents: [] })).toBeNull();
 	});
 
-	it('an agent the platform is throttling is not ready, whatever the node last said', () => {
+	it('an agent the platform is throttling is not ready — with the fixed sentence, never the throttle`s own text', () => {
 		const stored = { at: '2026-11-10T12:00:01.000Z', checkedAt: '2026-11-10T12:00:00.000Z', agents: [entry()] };
 		expect(resolveFleetNodeAgentReadiness(stored)?.anyReady).toBe(true);
 		const view = resolveFleetNodeAgentReadiness(stored, {
@@ -382,7 +637,8 @@ describe('the node-level answer', () => {
 					provider: 'claude-code',
 					window: 'weekly',
 					until: '2026-11-12T02:01:00.000Z',
-					reason: "You've hit your weekly limit · resets Nov 12, 3am",
+					// What a run reported, stored by the usage-limit feature: not ours to repeat.
+					reason: `You've hit your weekly limit · resets Nov 12, 3am ${FAKE_DB_URL}`,
 					since: '2026-11-10T11:59:30.000Z'
 				}
 			]
@@ -390,9 +646,13 @@ describe('the node-level answer', () => {
 		expect(view?.anyReady).toBe(false);
 		expect(view?.agents[0]).toMatchObject({
 			status: 'limit_reached',
-			reason: "You've hit your weekly limit · resets Nov 12, 3am",
+			reasonCode: 'usage_limit',
+			reason: 'The weekly limit is reached.',
+			limitWindow: 'weekly',
 			limitResetsAt: '2026-11-12T02:01:00.000Z'
 		});
+		expect(JSON.stringify(view)).not.toContain('fakefakepass');
+		expect(JSON.stringify(view)).not.toContain('resets Nov 12');
 	});
 
 	it('a throttle on one CLI leaves another ready, and never overrides a worse status', () => {
@@ -401,7 +661,7 @@ describe('the node-level answer', () => {
 				at: '2026-11-10T12:00:01.000Z',
 				checkedAt: '2026-11-10T12:00:00.000Z',
 				agents: [
-					entry({ status: 'not_signed_in', reason: 'Login expired · Please run /login' }),
+					entry({ status: 'not_signed_in', reasonCode: 'session_expired' }),
 					entry({ provider: 'codex' })
 				]
 			},
@@ -417,8 +677,33 @@ describe('the node-level answer', () => {
 				]
 			}
 		);
-		expect(view?.agents[0]).toMatchObject({ status: 'not_signed_in', reason: 'Login expired · Please run /login' });
+		expect(view?.agents[0]).toMatchObject({ status: 'not_signed_in', reasonCode: 'session_expired' });
 		expect(view?.anyReady).toBe(true);
+	});
+
+	it('drops a usage reading that has rolled over since the node sent it', () => {
+		const stored = {
+			at: '2026-11-10T12:00:01.000Z',
+			checkedAt: '2026-11-10T12:00:00.000Z',
+			agents: [
+				entry({
+					usage: [
+						{ window: 'five_hour', usedPercent: 90, resetsAt: '2026-11-10T13:00:00.000Z' },
+						{ window: 'weekly', usedPercent: 20, resetsAt: null }
+					],
+					usageObservedAt: '2026-11-10T11:00:00.000Z'
+				})
+			]
+		};
+		expect(resolveFleetNodeAgentReadiness(stored, { now: NOW })?.agents[0]?.usage).toHaveLength(2);
+		// After the 5-hour window's reset: only the weekly reading is left.
+		expect(resolveFleetNodeAgentReadiness(stored, { now: NOW + 2 * 3_600_000 })?.agents[0]?.usage).toEqual([
+			{ window: 'weekly', usedPercent: 20, resetsAt: null }
+		]);
+		// After a week: nothing, and no "as of" left dangling either.
+		const later = resolveFleetNodeAgentReadiness(stored, { now: NOW + 8 * 86_400_000 })?.agents[0];
+		expect(later).not.toHaveProperty('usage');
+		expect(later).not.toHaveProperty('usageObservedAt');
 	});
 
 	it('a report the node stopped sending while it kept beating is not served — unknown, not last week`s ready', () => {

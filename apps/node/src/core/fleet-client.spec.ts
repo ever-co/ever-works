@@ -290,6 +290,7 @@ describe('heartbeat', () => {
 					authMethod: 'none' as const,
 					account: null,
 					status: 'not_signed_in' as const,
+					reasonCode: 'status_signed_out',
 					reason: 'The CLI is not signed in on this computer.',
 					checkedAt: '2026-11-10T12:00:00.000Z'
 				}

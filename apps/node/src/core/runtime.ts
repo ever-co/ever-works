@@ -1,5 +1,5 @@
 import type { FleetJobKind } from '@ever-works/contracts';
-import { fleetHelperTarget } from '@ever-works/contracts';
+import { FLEET_AGENT_CREDENTIAL_ENV_NAMES, fleetHelperTarget } from '@ever-works/contracts';
 import { BAKED_HELPER_MANIFEST } from './screen/helper/helper-manifest';
 import { nodeHelperSignatureChecker } from './screen/helper/helper-signature';
 import { describeApiBase, resolveApiBase } from './api-base';
@@ -13,12 +13,13 @@ import {
 import { cacheProbe, detectAgentCliVersion, detectModelIdentity, type DiskProbeIo } from './telemetry-probe';
 import {
 	AGENT_AUTH_CACHE_TTL_MS,
+	AgentProbeEnvironments,
 	AgentRunHistory,
 	buildAgentReadinessReport,
 	detectUnsupportedAgentClis,
 	probeAgentAuth,
 	readNewestCodexRateLimits,
-	type AgentAuthReading,
+	type AgentAuthProbe,
 	type AgentRunHistoryRecord,
 	type AgentThrottle
 } from './agent-readiness';
@@ -61,7 +62,7 @@ import { defaultRunnerExec, type RunnerHostDeps } from './link/modules/runners/h
 import { listRunnerLogSources, newestRunnerDiagLog } from './link/modules/runners/logs';
 import { RunnerState } from './link/modules/runners/state';
 import type { WorkerSafetyGate } from './worker-safety-store';
-import { runAcceptanceChecksJob } from './executors/acceptance-checks';
+import { buildNodeCheckEnv, runAcceptanceChecksJob } from './executors/acceptance-checks';
 import { defaultSessionConfigFs, runAgentTaskJob } from './executors/agent-task';
 import { runAgentSessionJob } from './executors/agent-session';
 import { defaultRepositoryLayerFs } from './executors/codex-repository-layers';
@@ -925,6 +926,15 @@ export function createNodeRuntime(config: NodeConfig, io: NodeIo, options: Creat
 	});
 	// The worker's active model throttles, once the work lane exists (below).
 	let agentThrottles: (() => readonly AgentThrottle[]) | undefined;
+	// The status command of each CLI runs in the environment a RUN gets, not
+	// the daemon's: the same allow-list and the same exclusive credential
+	// choice (`buildNodeCheckEnv`), for the credential NAMES the last real run
+	// of that CLI was granted — before any run, the platform's default list.
+	// So the method it reports is the one runs actually use.
+	const agentProbeEnvironments = new AgentProbeEnvironments({
+		build: (names) => buildNodeCheckEnv(names, (options.env ?? process.env) as NodeJS.ProcessEnv),
+		defaultNames: FLEET_AGENT_CREDENTIAL_ENV_NAMES
+	});
 	let probeHealth: (() => Promise<FleetNodeHealthSnapshot | null>) | undefined;
 	if (io.health) {
 		const probe = createHealthProbe(io.health, {
@@ -1556,19 +1566,25 @@ export function createNodeRuntime(config: NodeConfig, io: NodeIo, options: Creat
 	// the rate-limit snapshot in Codex's newest session record. Nothing in it
 	// starts a model call.
 	const readinessClock = io.now ?? Date.now;
-	const agentAuthProbes = new Map<string, () => Promise<AgentAuthReading | null>>();
-	const agentAuth = (provider: string, executable: string): Promise<AgentAuthReading | null> => {
-		const key = `${provider}|${executable}`;
+	const agentAuthProbes = new Map<string, () => Promise<AgentAuthProbe | null>>();
+	const agentAuth = async (provider: string, executable: string): Promise<AgentAuthProbe> => {
+		// The environment a RUN of this CLI gets (see `AgentProbeEnvironments`).
+		const environment = agentProbeEnvironments.resolve(provider);
+		const key = `${provider}|${executable}|${environment.key}`;
 		let probe = agentAuthProbes.get(key);
 		if (!probe) {
 			probe = cacheProbe(
-				() => probeAgentAuth(io.runner, provider, executable),
+				() =>
+					probeAgentAuth(io.runner, provider, executable, {
+						platform: io.environment.platform,
+						env: environment.env
+					}),
 				AGENT_AUTH_CACHE_TTL_MS,
 				readinessClock
 			);
 			agentAuthProbes.set(key, probe);
 		}
-		return probe();
+		return (await probe()) ?? { state: 'unanswered' };
 	};
 	const unsupportedAgentClis = cacheProbe(
 		() => detectUnsupportedAgentClis(io.runner),
@@ -1927,7 +1943,12 @@ export function createNodeRuntime(config: NodeConfig, io: NodeIo, options: Creat
 		// Fleet agent readiness: a CLI the work lane is holding back is not
 		// ready, and one it stopped holding back (an owner's "Clear limit now")
 		// is ready again — read from the lane itself, so the two cannot disagree.
-		agentThrottles = () => worker.getState().modelThrottles ?? [];
+		agentThrottles = () =>
+			(worker.getState().modelThrottles ?? []).map((throttle) => ({
+				provider: throttle.provider,
+				until: throttle.until,
+				window: throttle.window
+			}));
 		// Fleet health signals (EW-776). Wired onto the SAME telemetry
 		// object `describe` already closed over above, so the heartbeat
 		// starts reporting worker state without the loop having to be
@@ -2119,7 +2140,10 @@ export function createNodeRuntime(config: NodeConfig, io: NodeIo, options: Creat
 						// Fleet agent readiness: every finished model-CLI invocation
 						// tells the node whether that agent just worked, or why it
 						// was refused — learned from the run that happened anyway.
-						onModelRun: (run) => agentHistory.note(run),
+						onModelRun: (run) => {
+							agentProbeEnvironments.noteRun(run.provider, run.envPassthrough);
+							agentHistory.note(run);
+						},
 						// The same read-only reader, for Claude Code's machine-wide
 						// `managed-mcp.json`: a machine that deploys one refuses
 						// every fleet Claude Code run with a reason instead of the

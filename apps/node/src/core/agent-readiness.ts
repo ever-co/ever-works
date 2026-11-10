@@ -1,14 +1,20 @@
 import {
+	FLEET_AGENT_FAILURE_FALLBACK_MS,
+	FLEET_AGENT_VERDICT_MAX_AGE_MS,
 	classifyFleetAgentFailure,
+	describeFleetAgentReason,
+	isFleetAgentUsageWindowCurrent,
 	normalizeFleetAgentReadinessReport,
 	sanitizeFleetAgentAccount,
-	sanitizeFleetAgentReason,
 	type FleetAgentAuthMethod,
+	type FleetAgentCliError,
 	type FleetAgentFailure,
 	type FleetAgentReadinessEntry,
 	type FleetAgentReadinessReport,
 	type FleetAgentReadinessStatus,
-	type FleetAgentUsageWindow
+	type FleetAgentReasonCode,
+	type FleetAgentUsageWindow,
+	type FleetModelUsageLimitWindow
 } from '@ever-works/contracts';
 import type { CommandRunner } from './capabilities';
 import { writeStateFile, type ConfigFileSystem, type StateFileSystem } from './config-store';
@@ -24,28 +30,41 @@ import { parseCliVersion } from './telemetry-probe';
  * run while the popup stayed green. This module is what the heartbeat's
  * `agents` field is built from.
  *
- * ## Sources, and the one hard rule
+ * ## Sources, and the hard rules
  *
  * **No probe here ever starts a model call.** Everything comes from:
  *
  *  1. the CLIs' own FREE status commands — `claude auth status --json`
  *     (signed in or not, the method, the account label) and `codex login
- *     status` (signed in or not, the method; Codex never names the account);
+ *     status` (signed in or not, the method; Codex never names the account).
+ *     A status command is run only after the CLI's own `--help` has shown
+ *     that the subcommand exists: a CLI too old to have it would read the
+ *     words as a prompt, and `--help` can never start a session;
  *  2. what REAL runs on this node proved — the last successful run, and the
- *     last failure classified from the CLI's own sentence
+ *     last failure classified from what the CLI ITSELF reported
  *     (`classifyFleetAgentFailure`, `@ever-works/contracts`);
  *  3. usage windows a real run's own output carried (Claude Code's
  *     `rate_limit_event` lines in its `stream-json` output), or — only under
  *     the owner's `--usage-scan` consent — the rate-limit snapshot Codex
  *     wrote into its newest session record.
  *
+ * **A verdict comes only from text the CLI authored.** The executor hands
+ * this module the CLI's error result, error events and stderr
+ * ({@link AgentRunObservation.cliError}) — never an assistant message, never
+ * a Codex `agent_message`. A run that produced model output reached its
+ * model, so it can never prove a missing or refused sign-in.
+ *
+ * **No line of run output leaves this process.** A verdict is kept, sent and
+ * persisted as a reason CODE plus the structured facts parsed from it (a
+ * window, a reset instant). The sentence a person reads is looked up by that
+ * code from a fixed table.
+ *
  * ## What never leaves the machine
  *
  * The status commands' raw output is never forwarded and never logged:
  * `codex login status` prints a masked API key, and a future CLI version
- * could print more. Only whitelisted fields are read, the account label is
- * the CLI's own display label, and every free-text field goes through the
- * contract's sanitiser, which masks anything credential-shaped. No
+ * could print more. Only whitelisted fields are read, and the account label
+ * is the CLI's own display label, masked for anything credential-shaped. No
  * credential file is ever opened.
  *
  * Everything is injected (the command runner, the clock, the filesystem), so
@@ -62,6 +81,18 @@ export interface AgentAuthReading {
 	/** The CLI's own display label for the account, or null. Never a credential. */
 	account: string | null;
 }
+
+/**
+ * What asking a CLI for its sign-in state came to:
+ *  - `answered`    — it said (see `reading`);
+ *  - `unanswered`  — it could not be run, timed out, or printed something else;
+ *  - `unavailable` — its own help does not list the status subcommand, so the
+ *    node did not run it at all.
+ */
+export type AgentAuthProbe =
+	| { state: 'answered'; reading: AgentAuthReading }
+	| { state: 'unanswered' }
+	| { state: 'unavailable' };
 
 /** How long one status command may run before it is abandoned. */
 export const AGENT_AUTH_PROBE_TIMEOUT_MS = 15_000;
@@ -104,7 +135,7 @@ const CLAUDE_AUTH_METHODS: Readonly<Record<string, FleetAgentAuthMethod>> = {
  * `subscriptionType` — for the reason `parseClaudeAuthStatus` gives: this is
  * a credential-adjacent document, and a field this function does not name is
  * a field that never reaches the wire. Null when the output is not that
- * document (an older CLI without the command prints a usage error).
+ * document.
  */
 export function readClaudeAuthStatus(stdout: string): AgentAuthReading | null {
 	let parsed: unknown;
@@ -156,41 +187,157 @@ export function readCodexLoginStatus(output: string): AgentAuthReading | null {
 	return null;
 }
 
+interface AuthProbeSpec {
+	/**
+	 * `--help` of the status command's PARENT. Run first: `--help` is handled
+	 * by the argument parser before any command runs, so it can never start a
+	 * session — and on a CLI that lacks the subcommand it prints the ROOT help.
+	 */
+	helpArgs: string[];
+	/** True when that help is the parent subcommand's own and lists `status`. */
+	helpListsStatus: (help: string) => boolean;
+	statusArgs: string[];
+	read: (stdout: string, stderr: string) => AgentAuthReading | null;
+}
+
 /** The status command of each CLI this node can run agent work with. */
-const AUTH_PROBES: Readonly<
-	Record<string, { args: string[]; read: (stdout: string, stderr: string) => AgentAuthReading | null }>
-> = {
-	// stdout alone first: a warning on stderr beside a valid document must
-	// not make the document unreadable.
+const AUTH_PROBES: Readonly<Record<string, AuthProbeSpec>> = {
 	'claude-code': {
-		args: ['auth', 'status', '--json'],
+		helpArgs: ['auth', '--help'],
+		// `Usage: claude auth [options] [command]` + a `status` line. A CLI
+		// without the subcommand prints `Usage: claude [options] [command] [prompt]`.
+		helpListsStatus: (help) => /Usage:[^\n]*\sauth\b/.test(help) && /\bstatus\b/.test(help),
+		statusArgs: ['auth', 'status', '--json'],
+		// stdout alone: a warning on stderr beside a valid document must not
+		// make the document unreadable.
 		read: (stdout) => readClaudeAuthStatus(stdout)
 	},
 	codex: {
-		args: ['login', 'status'],
+		helpArgs: ['login', '--help'],
+		helpListsStatus: (help) => /Usage:[^\n]*\slogin\b/.test(help) && /\bstatus\b/.test(help),
+		statusArgs: ['login', 'status'],
 		read: (stdout, stderr) => readCodexLoginStatus(`${stdout}\n${stderr}`)
 	}
 };
 
+export interface AgentAuthProbeOptions {
+	/** `process.platform` of the machine — decides how the executable is quoted. */
+	platform: string;
+	/**
+	 * The environment the CLI is started in: the SAME allow-listed one a run
+	 * gets, with the same credential choice, so the method reported is the
+	 * method runs actually use. Absent, the runner's own default applies.
+	 */
+	env?: Readonly<Record<string, string>>;
+}
+
 /**
- * Ask one CLI how it is signed in. The exit code is not the judge (both CLIs
- * exit 1 when signed out and still say so); the parser is. Null when the
- * command could not run, timed out or printed something else — "could not
- * tell", which the report shows as `unknown`, never as signed out.
+ * The runner on Windows goes through `cmd.exe` (`shell: true`), which splits
+ * an unquoted `C:\Program Files\…` at the space — the rule
+ * `ModelCliCompatibilityProbe.commandFor` already applies to `--version`.
+ */
+export function quoteProbeExecutable(executable: string, platform: string): string {
+	return platform === 'win32' && /\s/.test(executable) && !executable.startsWith('"')
+		? `"${executable}"`
+		: executable;
+}
+
+/**
+ * Ask one CLI how it is signed in — without ever being able to start a
+ * session or a model call:
+ *
+ *  1. `<cli> <parent> --help` first. Only when that help is the parent
+ *     subcommand's own and lists `status` is the status command run at all.
+ *     An older CLI without it answers with its ROOT help (it would have read
+ *     `auth status` as a prompt), and the answer is `unavailable`;
+ *  2. the status command runs with stdin closed, so nothing can wait for
+ *     input, under {@link AGENT_AUTH_PROBE_TIMEOUT_MS}, in the environment a
+ *     run gets.
+ *
+ * The exit code is not the judge (both CLIs exit 1 when signed out and still
+ * say so); the parser is. `unanswered` means "could not tell", which the
+ * report shows as `unknown`, never as signed out.
  */
 export async function probeAgentAuth(
 	runner: CommandRunner,
 	provider: string,
-	executable: string
-): Promise<AgentAuthReading | null> {
+	executable: string,
+	options: AgentAuthProbeOptions
+): Promise<AgentAuthProbe> {
 	const probe = AUTH_PROBES[provider];
-	if (!probe) return null;
+	if (!probe) return { state: 'unanswered' };
+	const command = quoteProbeExecutable(executable, options.platform);
+	const run = {
+		timeoutMs: AGENT_AUTH_PROBE_TIMEOUT_MS,
+		closeStdin: true,
+		...(options.env ? { env: options.env } : {})
+	};
 	try {
-		const result = await runner.run(executable, probe.args, { timeoutMs: AGENT_AUTH_PROBE_TIMEOUT_MS });
-		if (result.timedOut || result.spawnError) return null;
-		return probe.read(result.stdout ?? '', result.stderr ?? '');
+		const help = await runner.run(command, probe.helpArgs, run);
+		if (help.timedOut || help.spawnError) return { state: 'unanswered' };
+		const helpText = `${help.stdout ?? ''}\n${help.stderr ?? ''}`;
+		// Only a real help page says anything about the CLI. A shell's "not
+		// recognized", a crash or silence is "could not tell".
+		if (help.code !== 0 || !/\bUsage:/i.test(helpText)) return { state: 'unanswered' };
+		if (!probe.helpListsStatus(helpText)) return { state: 'unavailable' };
+		const result = await runner.run(command, probe.statusArgs, run);
+		if (result.timedOut || result.spawnError) return { state: 'unanswered' };
+		const reading = probe.read(result.stdout ?? '', result.stderr ?? '');
+		return reading ? { state: 'answered', reading } : { state: 'unanswered' };
 	} catch {
-		return null;
+		return { state: 'unanswered' };
+	}
+}
+
+/**
+ * The environment each CLI's status command is started in: the one a RUN of
+ * that CLI gets, not the daemon's.
+ *
+ * A run's environment is an allow-list plus the credential names the platform
+ * granted it, with one credential chosen per CLI (`buildNodeCheckEnv`). The
+ * daemon's own environment can hold more — a second key, a token for another
+ * product — and a status command started in it would report a sign-in no run
+ * ever uses. So the probe is given the names the LAST real run of that CLI
+ * was granted; before any run, the platform's default list. Names only: this
+ * class never sees a value it did not get from `build`.
+ */
+export class AgentProbeEnvironments {
+	private readonly lastRun = new Map<string, readonly string[]>();
+	private readonly built = new Map<string, Record<string, string>>();
+
+	constructor(
+		private readonly options: {
+			/** A run's environment for these credential NAMES (`buildNodeCheckEnv` over the daemon's). */
+			build: (names: readonly string[]) => Record<string, string>;
+			/** The names a run is granted when no run has said otherwise. */
+			defaultNames: readonly string[];
+		}
+	) {}
+
+	/** Remember the credential names a real run of this CLI was granted. An empty list is an answer too. */
+	noteRun(provider: string, names: readonly string[] | null | undefined): void {
+		if (!Array.isArray(names)) return;
+		this.lastRun.set(
+			provider,
+			names.filter((name): name is string => typeof name === 'string' && name.length > 0).slice(0, 64)
+		);
+	}
+
+	/**
+	 * The environment for this CLI's status command, and a key that changes
+	 * exactly when the environment does (so a cached reading is not reused
+	 * across a change of credential). Built once per distinct list of names:
+	 * a process's environment does not change under it.
+	 */
+	resolve(provider: string): { key: string; env: Record<string, string> } {
+		const names = this.lastRun.get(provider) ?? this.options.defaultNames;
+		const key = [...new Set(names.map((name) => name.toUpperCase()))].sort().join(',');
+		let env = this.built.get(key);
+		if (!env) {
+			env = this.options.build(names);
+			this.built.set(key, env);
+		}
+		return { key, env };
 	}
 }
 
@@ -208,7 +355,10 @@ export async function detectUnsupportedAgentClis(
 	const found: Array<{ provider: string; version: string | null }> = [];
 	for (const command of candidates) {
 		try {
-			const result = await runner.run(command, ['--version'], { timeoutMs: AGENT_AUTH_PROBE_TIMEOUT_MS });
+			const result = await runner.run(command, ['--version'], {
+				timeoutMs: AGENT_AUTH_PROBE_TIMEOUT_MS,
+				closeStdin: true
+			});
 			if (result.code !== 0) continue;
 			found.push({
 				provider: command,
@@ -223,14 +373,14 @@ export async function detectUnsupportedAgentClis(
 
 // ─── Usage windows a real run (or its record) carried ───────────────────────
 
-/** Claude Code's `rateLimitType` → the report's window token. */
-const CLAUDE_RATE_LIMIT_WINDOWS: Readonly<Record<string, string>> = {
-	five_hour: 'five_hour',
-	seven_day: 'weekly',
-	seven_day_overage_included: 'weekly',
-	seven_day_opus: 'weekly_opus',
-	seven_day_sonnet: 'weekly_sonnet',
-	overage: 'overage'
+/** Claude Code's `rateLimitType` → the report's window token and its length. */
+const CLAUDE_RATE_LIMIT_WINDOWS: Readonly<Record<string, { window: string; minutes?: number }>> = {
+	five_hour: { window: 'five_hour', minutes: 300 },
+	seven_day: { window: 'weekly', minutes: 10_080 },
+	seven_day_overage_included: { window: 'weekly', minutes: 10_080 },
+	seven_day_opus: { window: 'weekly_opus', minutes: 10_080 },
+	seven_day_sonnet: { window: 'weekly_sonnet', minutes: 10_080 },
+	overage: { window: 'overage' }
 };
 
 /** An epoch the CLIs print in seconds (or, defensively, milliseconds) → ISO, or null. */
@@ -246,11 +396,11 @@ function epochToIso(value: unknown): string | null {
  * seat, newest per window.
  *
  * Claude Code writes `{"type":"rate_limit_event","rate_limit_info":{status,
- * resetsAt, rateLimitType, utilization, …}}` lines into the stream of a run
- * on a subscription seat (Claude Agent SDK reference, `SDKRateLimitEvent`).
+ * resetsAt, rateLimitType, utilization, …}}` lines into the stream when a
+ * run's rate-limit status changes (Claude Agent SDK, `RateLimitEvent`).
  * Reading them costs nothing: the run happened anyway. `utilization` is a
- * 0-1 fraction; `resetsAt` is epoch seconds; `status: 'rejected'` means the
- * window is exhausted.
+ * 0-1 fraction; `resetsAt` is a Unix timestamp; `status: 'rejected'` means
+ * the window is exhausted.
  *
  * Only a line whose TOP-LEVEL `type` is `rate_limit_event` counts. The same
  * words inside a tool result (a file the model read) sit under a `user`
@@ -276,7 +426,8 @@ export function readClaudeRateLimitWindows(rawOutput: string | null | undefined)
 		if (!info || typeof info !== 'object' || Array.isArray(info)) continue;
 		const source = info as Record<string, unknown>;
 		const type = typeof source.rateLimitType === 'string' ? source.rateLimitType : '';
-		const window = CLAUDE_RATE_LIMIT_WINDOWS[type] ?? (type && /^[a-z0-9_]{1,32}$/.test(type) ? type : 'usage');
+		const known = CLAUDE_RATE_LIMIT_WINDOWS[type];
+		const window = known?.window ?? (type && /^[a-z0-9_]{1,32}$/.test(type) ? type : 'usage');
 		const utilization =
 			typeof source.utilization === 'number' && Number.isFinite(source.utilization) && source.utilization >= 0
 				? source.utilization
@@ -288,6 +439,7 @@ export function readClaudeRateLimitWindows(rawOutput: string | null | undefined)
 				: Math.min(100, Math.round((utilization <= 1 ? utilization * 100 : utilization) * 10) / 10);
 		const entry: FleetAgentUsageWindow = { window, usedPercent, resetsAt: epochToIso(source.resetsAt) };
 		if (source.status === 'rejected') entry.limited = true;
+		if (known?.minutes) entry.windowMinutes = known.minutes;
 		if (entry.usedPercent === null && entry.resetsAt === null && !entry.limited) continue;
 		byWindow.set(window, entry);
 	}
@@ -344,6 +496,9 @@ export function readCodexRateLimitLine(line: string): { windows: FleetAgentUsage
 			resetsAt
 		};
 		if (used !== null && used >= 100) window.limited = true;
+		if (typeof raw.window_minutes === 'number' && Number.isInteger(raw.window_minutes) && raw.window_minutes > 0) {
+			window.windowMinutes = raw.window_minutes;
+		}
 		windows.push(window);
 	}
 	if (windows.length === 0) return null;
@@ -444,14 +599,23 @@ export async function readNewestCodexRateLimits(
 export interface AgentRunObservation {
 	provider: string;
 	status: 'succeeded' | 'failed' | 'timeout' | 'error';
-	/** The CLI's own final message. */
-	summary?: string | null;
-	/** The CLI's output tail (may hold the model's words — read strictly). */
-	outputTail?: string | null;
+	/**
+	 * What the CLI ITSELF reported about the failure — its error result, its
+	 * error events, its stderr (`readModelCliError`). NEVER the model's words:
+	 * no assistant text, no Codex `agent_message`, no tool output. Null when
+	 * the executor has nothing from those channels; no verdict is then drawn.
+	 */
+	cliError?: FleetAgentCliError | null;
 	/** Output tokens the run reported: above zero, the CLI reached its model. */
 	outputTokens?: number | null;
 	/** Usage windows the run's own stream carried. */
 	usage?: FleetAgentUsageWindow[];
+	/**
+	 * The NAMES (never the values) of the credential env vars this run was
+	 * granted. The status probe is started with the same names, so it reports
+	 * on the credential runs actually use.
+	 */
+	envPassthrough?: readonly string[];
 }
 
 /** A classified failure, with when it happened and how the CLI was signed in at the time. */
@@ -461,7 +625,7 @@ export interface AgentRunFailure extends FleetAgentFailure {
 	 * The sign-in fingerprint in force when the run failed, or null when no
 	 * status reading existed yet. A DIFFERENT fingerprint later means the
 	 * owner signed in again (or switched method), which is what lifts a
-	 * `not_signed_in` / `access_denied` verdict short of a successful run.
+	 * verdict short of a successful run.
 	 */
 	authFingerprint: string | null;
 }
@@ -476,8 +640,8 @@ export interface AgentRunHistoryEntry {
 /**
  * Persisted beside the node config so a restart does not forget that the
  * last run was refused: the status command can keep saying "signed in" for
- * an organization that switched access off. NOT a secret — statuses, the
- * CLI's (masked) sentence and timestamps.
+ * an organization that switched access off. NOT a secret, and no run output:
+ * statuses, reason codes, usage figures and timestamps.
  */
 export interface AgentRunHistoryRecord {
 	version: 1;
@@ -495,6 +659,8 @@ function isoOrNull(value: unknown): string | null {
 	const ms = Date.parse(value);
 	return Number.isFinite(ms) ? new Date(ms).toISOString() : null;
 }
+
+const USAGE_LIMIT_WINDOWS: readonly FleetModelUsageLimitWindow[] = ['weekly', 'session', 'daily', 'rate', 'usage'];
 
 /** Defensive parse — a hand-edited or truncated file reads as "no record". */
 export function parseAgentRunHistoryRecord(raw: string | null | undefined): AgentRunHistoryRecord | null {
@@ -522,29 +688,41 @@ export function parseAgentRunHistoryRecord(raw: string | null | undefined): Agen
 				checkedAt: new Date(0).toISOString(),
 				agents: [{ provider, installed: true, status: 'unknown', usage: entry.usage }]
 			})?.agents[0]?.usage ?? [];
-		const failure = entry.failure;
-		const kind = failure?.kind;
-		const at = isoOrNull(failure?.at);
 		agents[provider] = {
 			lastSuccessAt: isoOrNull(entry.lastSuccessAt),
-			failure:
-				failure && at && (kind === 'not_signed_in' || kind === 'access_denied' || kind === 'limit_reached')
-					? {
-							kind,
-							reason: sanitizeFleetAgentReason(failure.reason) ?? kind,
-							resetsAt: isoOrNull(failure.resetsAt),
-							until: isoOrNull(failure.until),
-							usageLimit: failure.usageLimit === true,
-							at,
-							authFingerprint:
-								typeof failure.authFingerprint === 'string' ? failure.authFingerprint : null
-						}
-					: null,
+			failure: parseFailure(entry.failure),
 			usage,
 			usageObservedAt: usage.length > 0 ? isoOrNull(entry.usageObservedAt) : null
 		};
 	}
 	return { version: 1, recordedAt: isoOrNull(record.recordedAt) ?? new Date(0).toISOString(), agents };
+}
+
+/**
+ * A stored failure: a kind, a reason CODE this build knows and the instant it
+ * happened — anything else (free text included: nothing here reads a
+ * sentence back) reads as "no failure recorded".
+ */
+function parseFailure(value: unknown): AgentRunFailure | null {
+	if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+	const failure = value as Record<string, unknown>;
+	const kind = failure.kind;
+	const at = isoOrNull(failure.at);
+	if (!at || (kind !== 'not_signed_in' && kind !== 'access_denied' && kind !== 'limit_reached')) return null;
+	const code = failure.code;
+	if (describeFleetAgentReason(code) === null) return null;
+	return {
+		kind,
+		code: code as FleetAgentReasonCode,
+		window: USAGE_LIMIT_WINDOWS.includes(failure.window as FleetModelUsageLimitWindow)
+			? (failure.window as FleetModelUsageLimitWindow)
+			: null,
+		resetsAt: isoOrNull(failure.resetsAt),
+		until: isoOrNull(failure.until),
+		usageLimit: failure.usageLimit === true,
+		at,
+		authFingerprint: typeof failure.authFingerprint === 'string' ? failure.authFingerprint.slice(0, 300) : null
+	};
 }
 
 /** The record an earlier process left, or null when there is none or it is unreadable. Never throws. */
@@ -595,7 +773,7 @@ export function agentAuthFingerprint(auth: AgentAuthReading | null | undefined):
  * What the runs on this node proved about each agent CLI.
  *
  * Fed by the executor after every model-CLI invocation ({@link note}). It
- * never runs anything itself.
+ * never runs anything itself, and it keeps no text out of a run.
  */
 export class AgentRunHistory {
 	private readonly entries = new Map<string, AgentRunHistoryEntry>();
@@ -620,11 +798,12 @@ export class AgentRunHistory {
 	 *
 	 *  - a SUCCESS stamps `lastSuccessAt` and clears any failure: the agent
 	 *    just worked;
-	 *  - a FAILURE is classified from the CLI's own final message, then —
-	 *    strictly — from its output tail; a failure that names none of the
-	 *    conditions changes nothing, except that one which demonstrably
-	 *    reached the model (it produced output tokens) clears an earlier
-	 *    "not signed in" / "access denied", since that is no longer true;
+	 *  - a FAILURE is classified from `cliError` — what the CLI itself
+	 *    reported — and from nothing else. A run that produced model output
+	 *    reached its model, so it can prove a limit but never a missing or
+	 *    refused sign-in; and when it names no condition at all it CLEARS an
+	 *    earlier sign-in, access or credit verdict, which is no longer true;
+	 *  - a failure with nothing from the CLI's own channels changes nothing;
 	 *  - a TIMEOUT proves nothing either way.
 	 */
 	note(observation: AgentRunObservation): void {
@@ -644,19 +823,17 @@ export class AgentRunHistory {
 			entry.failure = null;
 			changed = true;
 		} else if (observation.status !== 'timeout') {
-			const classify = { provider, now: nowMs, timeZone: this.options.timeZone?.() };
-			const failure =
-				classifyFleetAgentFailure(observation.summary, classify) ??
-				classifyFleetAgentFailure(observation.outputTail, { ...classify, strict: true });
+			const modelReached = typeof observation.outputTokens === 'number' && observation.outputTokens > 0;
+			const failure = classifyFleetAgentFailure(observation.cliError, {
+				provider,
+				now: nowMs,
+				timeZone: this.options.timeZone?.(),
+				modelReached
+			});
 			if (failure) {
 				entry.failure = { ...failure, at, authFingerprint: this.fingerprints.get(provider) ?? null };
 				changed = true;
-			} else if (
-				entry.failure &&
-				entry.failure.kind !== 'limit_reached' &&
-				typeof observation.outputTokens === 'number' &&
-				observation.outputTokens > 0
-			) {
+			} else if (entry.failure && !entry.failure.usageLimit && modelReached) {
 				entry.failure = null;
 				changed = true;
 			}
@@ -682,9 +859,10 @@ export class AgentRunHistory {
 	/**
 	 * Tell the history how a CLI is signed in right now. A sign-in that
 	 * CHANGED since a run was refused lifts that verdict: the owner signed in
-	 * again or switched to another credential, and the old sentence no longer
+	 * again or switched to another credential, and the old verdict no longer
 	 * describes this seat. A failure recorded before any reading existed
-	 * adopts the first one, so a later change is still noticed.
+	 * adopts the first one, so a later change is still noticed. A usage limit
+	 * is not lifted this way: it ends at its own instant.
 	 */
 	observeAuth(provider: string, auth: AgentAuthReading | null): void {
 		const fingerprint = agentAuthFingerprint(auth);
@@ -692,7 +870,7 @@ export class AgentRunHistory {
 		this.fingerprints.set(provider, fingerprint);
 		const entry = this.entries.get(provider);
 		const failure = entry?.failure;
-		if (!entry || !failure || failure.kind === 'limit_reached') return;
+		if (!entry || !failure || failure.usageLimit) return;
 		if (failure.authFingerprint === null) {
 			this.entries.set(provider, { ...entry, failure: { ...failure, authFingerprint: fingerprint } });
 			this.save();
@@ -741,25 +919,35 @@ export class AgentRunHistory {
 export interface AgentThrottle {
 	provider: string;
 	until: string;
-	reason: string;
+	/** Which window ran out, when the worker knows. */
+	window?: FleetModelUsageLimitWindow;
 }
 
 export interface ResolveAgentStatusInput {
+	/** True = a pinned executable exists; anything else = there is none to run. */
 	installed: boolean;
 	/** The startup PATH lookup timed out: unknown, not missing. */
 	probeTimedOut?: boolean;
 	/** Always-passed flags this binary does not understand (non-empty = a run cannot start). */
 	missingRequiredFlags?: readonly string[];
-	auth: AgentAuthReading | null;
+	auth: AgentAuthProbe | null;
 	history: AgentRunHistoryEntry;
 	/** The worker's active throttle for this CLI, or null. */
 	throttle?: AgentThrottle | null;
 	/**
 	 * True when {@link throttle} comes from a worker loop (so "no throttle"
-	 * means the platform lifted it); false on a node without a worker.
+	 * means the worker lifted it); false on a node without a worker.
 	 */
 	throttlesKnown?: boolean;
 	nowMs: number;
+}
+
+/** A status with the code that explains it. */
+export interface AgentVerdict {
+	status: FleetAgentReadinessStatus;
+	reasonCode: FleetAgentReasonCode | null;
+	limitResetsAt?: string | null;
+	limitWindow?: FleetModelUsageLimitWindow;
 }
 
 /**
@@ -767,14 +955,22 @@ export interface ResolveAgentStatusInput {
  *
  * In order — the first that applies wins:
  *
- *  1. not installed → `not_installed` (`unknown` when the startup probe
- *     timed out: a busy machine is not a missing CLI);
+ *  1. not installed → `not_installed`; a startup lookup that TIMED OUT is
+ *     `unknown` (a busy machine is not a missing CLI);
  *  2. a binary too old to be started by this node → `unsupported`;
  *  3. the worker is throttling this CLI → `limit_reached` until its instant;
- *  4. the last classified failure still stands → its status, with the CLI's
- *     own sentence. A usage limit stands until its instant — and, on a node
- *     with a worker, only while the worker still holds the throttle (an
- *     owner's "Clear limit now" lifts both);
+ *  4. the last run was refused, and how old that is decides:
+ *       - a usage limit stands until its instant — and, on a node with a
+ *         worker, only while the worker still holds the throttle (an owner's
+ *         "Clear limit now" lifts both). Once a hold that named NO reset has
+ *         passed, nothing says the limit is gone: `unknown`, never `ready`;
+ *       - a sign-in or access verdict stands, shown with its age, for
+ *         {@link FLEET_AGENT_VERDICT_MAX_AGE_MS}. Older than that with no
+ *         newer run it is `unknown` with the last failure kept beside it —
+ *         not red for ever on one old run, and not `ready` on no evidence;
+ *       - an empty credit balance stands for
+ *         {@link FLEET_AGENT_FAILURE_FALLBACK_MS} (nothing says when it is
+ *         topped up), then it is `unknown` the same way — never `ready`;
  *  5. the status command says signed in → `ready`;
  *  6. a run succeeded within {@link AGENT_SUCCESS_TRUST_MS} → `ready` (the
  *     run is better evidence than a status command that cannot see a
@@ -782,53 +978,58 @@ export interface ResolveAgentStatusInput {
  *  7. the status command says signed out → `not_signed_in`;
  *  8. otherwise `unknown` — never `ready` on no evidence.
  */
-export function resolveAgentStatus(
-	input: ResolveAgentStatusInput
-): Pick<FleetAgentReadinessEntry, 'status' | 'reason'> & { limitResetsAt?: string | null } {
+export function resolveAgentStatus(input: ResolveAgentStatusInput): AgentVerdict {
 	if (!input.installed) {
 		return input.probeTimedOut
-			? {
-					status: 'unknown',
-					reason: 'The startup lookup for this CLI timed out; restart the node when the machine is less busy.'
-				}
-			: { status: 'not_installed', reason: null };
+			? { status: 'unknown', reasonCode: 'probe_timed_out' }
+			: { status: 'not_installed', reasonCode: null };
 	}
-	const missing = input.missingRequiredFlags ?? [];
-	if (missing.length > 0) {
-		return {
-			status: 'unsupported',
-			reason: `This CLI version is too old for this node (it lacks ${missing.slice(0, 4).join(', ')}); update the CLI.`
-		};
-	}
+	if ((input.missingRequiredFlags ?? []).length > 0) return { status: 'unsupported', reasonCode: 'cli_too_old' };
 	if (input.throttle) {
 		return {
 			status: 'limit_reached',
-			reason: sanitizeFleetAgentReason(input.throttle.reason),
-			limitResetsAt: isoOrNull(input.throttle.until)
+			reasonCode: 'usage_limit',
+			limitResetsAt: isoOrNull(input.throttle.until),
+			...(input.throttle.window && USAGE_LIMIT_WINDOWS.includes(input.throttle.window)
+				? { limitWindow: input.throttle.window }
+				: {})
 		};
 	}
 	const failure = input.history.failure;
 	if (failure) {
-		if (failure.kind !== 'limit_reached') return { status: failure.kind, reason: failure.reason };
-		const until = failure.until ? Date.parse(failure.until) : Number.NaN;
-		const lifted = failure.usageLimit && input.throttlesKnown === true;
-		if (!lifted && Number.isFinite(until) && until > input.nowMs) {
-			return {
-				status: 'limit_reached',
-				reason: failure.reason,
-				limitResetsAt: failure.resetsAt ?? failure.until
-			};
+		if (failure.usageLimit) {
+			const until = failure.until ? Date.parse(failure.until) : Number.NaN;
+			const held = Number.isFinite(until) && until > input.nowMs;
+			if (held && input.throttlesKnown !== true) {
+				return {
+					status: 'limit_reached',
+					reasonCode: 'usage_limit',
+					limitResetsAt: failure.resetsAt ?? failure.until,
+					...(failure.window ? { limitWindow: failure.window } : {})
+				};
+			}
+			// The hold is over (or, with a worker, lifted). When the CLI named its
+			// reset that is the evidence; when it named none, there is none.
+			if (!held && failure.resetsAt === null) return { status: 'unknown', reasonCode: 'verdict_stale' };
+		} else {
+			const at = Date.parse(failure.at);
+			const maxAgeMs =
+				failure.code === 'out_of_credit' ? FLEET_AGENT_FAILURE_FALLBACK_MS : FLEET_AGENT_VERDICT_MAX_AGE_MS;
+			const fresh = Number.isFinite(at) && input.nowMs - at <= maxAgeMs;
+			return fresh
+				? { status: failure.kind, reasonCode: failure.code }
+				: { status: 'unknown', reasonCode: 'verdict_stale' };
 		}
 	}
-	if (input.auth?.signedIn === true) return { status: 'ready', reason: null };
+	const reading = input.auth?.state === 'answered' ? input.auth.reading : null;
+	if (reading?.signedIn === true) return { status: 'ready', reasonCode: null };
 	const lastSuccess = input.history.lastSuccessAt ? Date.parse(input.history.lastSuccessAt) : Number.NaN;
 	if (Number.isFinite(lastSuccess) && input.nowMs - lastSuccess <= AGENT_SUCCESS_TRUST_MS) {
-		return { status: 'ready', reason: null };
+		return { status: 'ready', reasonCode: null };
 	}
-	if (input.auth?.signedIn === false) {
-		return { status: 'not_signed_in', reason: 'The CLI is not signed in on this computer.' };
-	}
-	return { status: 'unknown', reason: 'The CLI did not answer its status command.' };
+	if (reading?.signedIn === false) return { status: 'not_signed_in', reasonCode: 'status_signed_out' };
+	if (input.auth?.state === 'unavailable') return { status: 'unknown', reasonCode: 'status_unavailable' };
+	return { status: 'unknown', reasonCode: 'status_unanswered' };
 }
 
 /** One CLI the node can run agent work with, as the composition root describes it. */
@@ -845,21 +1046,13 @@ export interface AgentReadinessSources {
 	/** The CLIs this node has an executor for (`claude-code`, `codex`), installed or not. */
 	drivable: () => Promise<readonly DrivableAgentCli[]> | readonly DrivableAgentCli[];
 	/** How one installed CLI is signed in (the caller caches it). */
-	auth: (provider: string, executable: string) => Promise<AgentAuthReading | null>;
+	auth: (provider: string, executable: string) => Promise<AgentAuthProbe>;
 	/** Installed CLIs the node has no executor for (the caller caches it). */
 	unsupported?: () => Promise<ReadonlyArray<{ provider: string; version: string | null }>>;
 	history: AgentRunHistory;
 	/** The worker's active model throttles; absent on a node without a worker. */
 	throttles?: () => readonly AgentThrottle[];
 	now?: () => number;
-}
-
-/** Windows whose reset has passed describe an allowance that no longer exists. */
-function currentWindows(windows: readonly FleetAgentUsageWindow[], nowMs: number): FleetAgentUsageWindow[] {
-	return windows.filter((window) => {
-		const resetsAt = window.resetsAt ? Date.parse(window.resetsAt) : Number.NaN;
-		return !Number.isFinite(resetsAt) || resetsAt > nowMs;
-	});
 }
 
 /**
@@ -882,12 +1075,12 @@ export async function buildAgentReadinessReport(sources: AgentReadinessSources):
 		typeof cli.executable === 'string' && cli.executable.length > 0;
 	const [auths, others] = await Promise.all([
 		Promise.all(
-			drivable.map(async (cli): Promise<AgentAuthReading | null> => {
+			drivable.map(async (cli): Promise<AgentAuthProbe | null> => {
 				if (!isInstalled(cli)) return null;
 				try {
 					return await sources.auth(cli.provider, cli.executable as string);
 				} catch {
-					return null;
+					return { state: 'unanswered' };
 				}
 			})
 		),
@@ -904,7 +1097,8 @@ export async function buildAgentReadinessReport(sources: AgentReadinessSources):
 	for (const [index, cli] of drivable.entries()) {
 		const installed = isInstalled(cli);
 		const auth = auths[index] ?? null;
-		if (installed) sources.history.observeAuth(cli.provider, auth);
+		const reading = auth?.state === 'answered' ? auth.reading : null;
+		if (installed) sources.history.observeAuth(cli.provider, reading);
 		const history = sources.history.get(cli.provider);
 		const verdict = resolveAgentStatus({
 			installed,
@@ -918,23 +1112,34 @@ export async function buildAgentReadinessReport(sources: AgentReadinessSources):
 		});
 		const entry: FleetAgentReadinessEntry = {
 			provider: cli.provider,
-			installed,
+			// Three states: a lookup that timed out says nothing either way.
+			installed: installed ? true : cli.probeTimedOut === true ? null : false,
 			version: installed ? cli.version : null,
-			signedIn: installed ? (auth?.signedIn ?? null) : null,
-			authMethod: installed ? (auth?.method ?? 'unknown') : 'unknown',
-			account: installed ? (auth?.account ?? null) : null,
+			signedIn: installed ? (reading?.signedIn ?? null) : null,
+			authMethod: installed ? (reading?.method ?? 'unknown') : 'unknown',
+			account: installed ? (reading?.account ?? null) : null,
 			status: verdict.status,
-			reason: verdict.reason,
+			reasonCode: verdict.reasonCode,
+			reason: describeFleetAgentReason(verdict.reasonCode, { window: verdict.limitWindow ?? null }),
 			checkedAt
 		};
 		if (verdict.limitResetsAt) entry.limitResetsAt = verdict.limitResetsAt;
-		const usage = currentWindows(history.usage, nowMs);
+		if (verdict.limitWindow) entry.limitWindow = verdict.limitWindow;
+		const usage = history.usage.filter((window) =>
+			isFleetAgentUsageWindowCurrent(window, history.usageObservedAt, nowMs)
+		);
 		if (installed && usage.length > 0) {
 			entry.usage = usage;
 			entry.usageObservedAt = history.usageObservedAt;
 		}
 		if (history.lastSuccessAt) entry.lastSuccessAt = history.lastSuccessAt;
-		if (history.failure) entry.lastFailureAt = history.failure.at;
+		if (history.failure) {
+			// Kept beside the status even once it has aged to `unknown`: "last
+			// failure: access denied, 3 days ago" is still worth reading.
+			entry.lastFailureAt = history.failure.at;
+			entry.lastFailureKind = history.failure.kind;
+			entry.lastFailureCode = history.failure.code;
+		}
 		agents.push(entry);
 	}
 
@@ -947,8 +1152,9 @@ export async function buildAgentReadinessReport(sources: AgentReadinessSources):
 			signedIn: null,
 			authMethod: 'unknown',
 			account: null,
-			status: 'unsupported' satisfies FleetAgentReadinessStatus,
-			reason: 'This node version cannot run agent work with this CLI.',
+			status: 'unsupported',
+			reasonCode: 'no_executor',
+			reason: describeFleetAgentReason('no_executor'),
 			checkedAt
 		});
 	}

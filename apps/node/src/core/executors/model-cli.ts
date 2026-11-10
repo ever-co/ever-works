@@ -13,6 +13,7 @@ import {
 	isFleetAgentExecutionPermissionMode,
 	isFleetAgentModelSessionId
 } from '@ever-works/contracts';
+import type { FleetAgentCliError } from '@ever-works/contracts';
 import type { NodeCheckResult, NodeCommandEnvOverlay, WireCheck } from './acceptance-checks';
 
 /**
@@ -1432,6 +1433,112 @@ function claudeStreamTail(output: string, stderrTail: string | null | undefined)
 	}
 	if (streamEvents === 0) return null;
 	return tail([...said, stderrTail ?? ''].filter((part) => part.trim()).join('\n'));
+}
+
+/** Most of one CLI-authored error message that is read; a real one is a line or two. */
+const MODEL_CLI_ERROR_PART_MAX_CHARS = 2_000;
+/** Most CLI-authored error messages of one run that are read. */
+const MODEL_CLI_ERROR_MAX_PARTS = 8;
+
+/**
+ * Fleet agent readiness — what the CLI ITSELF reported about a failed run,
+ * and nothing the model wrote.
+ *
+ * A model run's output mixes two authors: the CLI (its error result, its
+ * error events, its stderr) and the model (assistant text, tool calls, tool
+ * output). Only the first says anything about the seat. A Task about login
+ * pages produces "returns 401 when the user is not logged in" in the model's
+ * voice, and reading that as the CLI's own state marked a working agent
+ * signed out. So this reads ONLY channels the CLI authors:
+ *
+ *  - Claude Code: a `result` envelope whose `is_error` is true — its `result`
+ *    text (what `describeModelFailure` reports as "claude-code reported an
+ *    error: …"), its `errors`, its `api_error_status`; and the `error` class
+ *    of an assistant event together with that event's text, which is the
+ *    CLI's own synthetic message. Never an assistant event without one;
+ *  - Codex: the `message` of `error` and `turn.failed` events and of `error`
+ *    items. Never an `agent_message`, `reasoning` or a command's output;
+ *  - either CLI's stderr — but only when it produced NO event at all: a
+ *    process that died before its first event had no model to speak for it.
+ *    Once events exist the two authors cannot be told apart on stderr, so it
+ *    is not read.
+ *
+ * Null when those channels are empty: the caller then draws no verdict.
+ * The text is for classification inside this process only — it is never
+ * stored, sent or logged.
+ */
+export function readModelCliError(
+	provider: FleetAgentExecutionProvider,
+	rawOutput: string | null,
+	step: Pick<NodeCheckResult, 'status' | 'logTail'>
+): FleetAgentCliError | null {
+	const parts: string[] = [];
+	const push = (value: unknown): void => {
+		if (typeof value !== 'string' || !value.trim() || parts.length >= MODEL_CLI_ERROR_MAX_PARTS) return;
+		parts.push(value.slice(0, MODEL_CLI_ERROR_PART_MAX_CHARS));
+	};
+	let apiStatus: number | null = null;
+	let errorClass: string | null = null;
+	let sawEvent = false;
+
+	const read = (event: Record<string, unknown>): void => {
+		sawEvent = true;
+		if (provider === 'claude-code') {
+			if (event.type === 'result' && event.is_error === true) {
+				push(event.result);
+				if (Array.isArray(event.errors)) for (const entry of event.errors) push(entry);
+				if (typeof event.api_error_status === 'number' && Number.isFinite(event.api_error_status)) {
+					apiStatus = event.api_error_status;
+				}
+			} else if (event.type === 'assistant' && typeof event.error === 'string' && event.error) {
+				errorClass = event.error.slice(0, 64);
+				const message = event.message as Record<string, unknown> | null | undefined;
+				const blocks = message && Array.isArray(message.content) ? message.content : [];
+				for (const block of blocks) {
+					const record = block as Record<string, unknown> | null;
+					if (record && record.type === 'text') push(record.text);
+				}
+			}
+			return;
+		}
+		if (event.type === 'error') {
+			push(event.message);
+		} else if (event.type === 'turn.failed') {
+			push((event.error as Record<string, unknown> | null | undefined)?.message);
+		} else if (event.type === 'item.completed') {
+			const item = event.item as Record<string, unknown> | null | undefined;
+			if (item && item.type === 'error') push(item.message);
+		}
+	};
+
+	const output = typeof rawOutput === 'string' ? rawOutput : '';
+	const asEvent = (value: unknown): Record<string, unknown> | null =>
+		value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+	for (const line of output.split(/\r?\n/)) {
+		if (!line.trim()) continue;
+		try {
+			const event = asEvent(JSON.parse(line));
+			if (event) read(event);
+		} catch {
+			// Not an event line.
+		}
+	}
+	// Claude Code's `json` mode prints ONE document, which may span lines.
+	if (!sawEvent && output.trim()) {
+		try {
+			const parsed = JSON.parse(output.trim()) as unknown;
+			for (const candidate of Array.isArray(parsed) ? parsed : [parsed]) {
+				const event = asEvent(candidate);
+				if (event) read(event);
+			}
+		} catch {
+			// Not a document either.
+		}
+	}
+	if (!sawEvent && step.status !== 'green') push(step.logTail);
+
+	if (parts.length === 0 && apiStatus === null && errorClass === null) return null;
+	return { text: parts.length > 0 ? parts.join('\n') : null, apiStatus, errorClass };
 }
 
 /** Claude Code `--output-format json` prints ONE JSON document; be tolerant of leading noise. */

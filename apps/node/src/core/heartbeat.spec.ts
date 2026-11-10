@@ -495,7 +495,8 @@ describe('HeartbeatLoop', () => {
 						authMethod: 'subscription' as const,
 						account: null,
 						status: 'access_denied' as const,
-						reason: 'Your organization has disabled Claude subscription access for Claude Code',
+						reasonCode: 'org_access_disabled',
+						reason: 'The organization has disabled subscription access for this CLI. Use an API key, or ask an admin to enable access.',
 						checkedAt: '2026-11-10T12:00:00.000Z'
 					}
 				]

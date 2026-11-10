@@ -1,7 +1,16 @@
-import { posix } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, posix } from 'node:path';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+	FLEET_AGENT_FAILURE_FALLBACK_MS,
+	FLEET_AGENT_VERDICT_MAX_AGE_MS,
+	describeFleetAgentReason
+} from '@ever-works/contracts';
+import {
+	AGENT_AUTH_PROBE_TIMEOUT_MS,
 	AGENT_SUCCESS_TRUST_MS,
+	AgentProbeEnvironments,
 	AgentRunHistory,
 	agentAuthFingerprint,
 	agentRunHistoryPath,
@@ -9,20 +18,27 @@ import {
 	detectUnsupportedAgentClis,
 	parseAgentRunHistoryRecord,
 	probeAgentAuth,
+	quoteProbeExecutable,
 	readClaudeAuthStatus,
 	readClaudeRateLimitWindows,
 	readCodexLoginStatus,
 	readCodexRateLimitLine,
 	readNewestCodexRateLimits,
 	resolveAgentStatus,
+	type AgentAuthProbe,
 	type AgentAuthReading,
 	type AgentRecordFs,
+	type AgentRunFailure,
 	type AgentRunHistoryEntry,
 	type AgentRunHistoryRecord
 } from './agent-readiness';
-import type { CommandRunner } from './capabilities';
+import type { CommandRunOptions, CommandRunner } from './capabilities';
+import { buildNodeCheckEnv } from './executors/acceptance-checks';
+import { createCommandRunner } from '../node-io';
 
 const NOW = Date.parse('2026-11-10T12:00:00.000Z');
+const HOUR = 60 * 60_000;
+const DAY = 24 * HOUR;
 
 /**
  * Credential-SHAPED fixtures for the masking cases. Assembled at runtime from
@@ -46,26 +62,89 @@ const SIGNED_IN: AgentAuthReading = {
 	account: 'owner@example.com (Acme, max)'
 };
 const SIGNED_OUT: AgentAuthReading = { signedIn: false, method: 'none', account: null };
+const answered = (reading: AgentAuthReading): AgentAuthProbe => ({ state: 'answered', reading });
+
+/** What the two CLIs print for the status command's parent, and what a CLI without it prints instead. */
+const CLAUDE_AUTH_HELP = [
+	'Usage: claude auth [options] [command]',
+	'',
+	'Manage authentication',
+	'',
+	'Commands:',
+	'  login [options]   Sign in to your Anthropic account',
+	'  logout            Log out from your Anthropic account',
+	'  status [options]  Show authentication status'
+].join('\n');
+const CLAUDE_ROOT_HELP = [
+	'Usage: claude [options] [command] [prompt]',
+	'',
+	'Claude Code - starts an interactive session by default, use -p/--print for non-interactive output',
+	'',
+	'Commands:',
+	'  mcp     Configure and manage MCP servers',
+	'  update  Check for updates and install if available'
+].join('\n');
+const CODEX_LOGIN_HELP = [
+	'Manage login',
+	'',
+	'Usage: codex login [OPTIONS] [COMMAND]',
+	'',
+	'Commands:',
+	'  status  Show login status',
+	'  help    Print this message or the help of the given subcommand(s)'
+].join('\n');
+const CODEX_ROOT_HELP = [
+	'Codex CLI',
+	'',
+	'Usage: codex [OPTIONS] [PROMPT]',
+	'       codex [OPTIONS] <COMMAND> [ARGS]'
+].join('\n');
 
 function emptyEntry(overrides: Partial<AgentRunHistoryEntry> = {}): AgentRunHistoryEntry {
 	return { lastSuccessAt: null, failure: null, usage: [], usageObservedAt: null, ...overrides };
 }
 
-/** A runner that answers from a table keyed by `"<command> <args>"`, recording every call. */
-function tableRunner(table: Record<string, { code?: number | null; stdout?: string; stderr?: string } | Error>) {
+function failure(overrides: Partial<AgentRunFailure> = {}): AgentRunFailure {
+	return {
+		kind: 'access_denied',
+		code: 'org_access_disabled',
+		window: null,
+		resetsAt: null,
+		until: null,
+		usageLimit: false,
+		at: ISO,
+		authFingerprint: null,
+		...overrides
+	};
+}
+
+type Answer = { code?: number | null; stdout?: string; stderr?: string; timedOut?: boolean; spawnError?: string };
+
+/** A runner that answers from a table keyed by `"<command> <args>"`, recording every call and its options. */
+function tableRunner(table: Record<string, Answer | Error>) {
 	const calls: string[] = [];
+	const options: Array<CommandRunOptions | undefined> = [];
 	const runner: CommandRunner = {
-		run: async (command, args) => {
+		run: async (command, args, runOptions) => {
 			const key = `${command} ${args.join(' ')}`;
 			calls.push(key);
+			options.push(runOptions);
 			const answer = table[key];
 			if (answer instanceof Error) throw answer;
 			if (!answer) return { code: 127, stdout: '', stderr: 'not found' };
-			return { code: answer.code ?? 0, stdout: answer.stdout ?? '', stderr: answer.stderr ?? '' };
+			return {
+				code: answer.code ?? 0,
+				stdout: answer.stdout ?? '',
+				stderr: answer.stderr ?? '',
+				...(answer.timedOut ? { timedOut: true } : {}),
+				...(answer.spawnError ? { spawnError: answer.spawnError } : {})
+			};
 		}
 	};
-	return { runner, calls };
+	return { runner, calls, options };
 }
+
+const POSIX_PROBE = { platform: 'linux' };
 
 describe('readClaudeAuthStatus (`claude auth status --json`)', () => {
 	it('reads a subscription login with its account label', () => {
@@ -160,46 +239,332 @@ describe('readCodexLoginStatus (`codex login status`)', () => {
 });
 
 describe('probeAgentAuth', () => {
-	it('asks the pinned binary its own free status command, never a model', async () => {
+	it('asks the pinned binary for its help, then its own free status command — never a model', async () => {
 		const { runner, calls } = tableRunner({
+			'/opt/claude auth --help': { stdout: CLAUDE_AUTH_HELP },
 			'/opt/claude auth status --json': { stdout: JSON.stringify({ loggedIn: true, authMethod: 'claude.ai' }) },
+			'/opt/codex login --help': { stdout: CODEX_LOGIN_HELP },
 			// Codex prints to stderr and exits 1 when signed out.
 			'/opt/codex login status': { code: 1, stderr: 'Not logged in\n' }
 		});
-		expect(await probeAgentAuth(runner, 'claude-code', '/opt/claude')).toEqual({
-			signedIn: true,
-			method: 'subscription',
-			account: null
-		});
-		expect(await probeAgentAuth(runner, 'codex', '/opt/codex')).toEqual(SIGNED_OUT);
-		expect(calls).toEqual(['/opt/claude auth status --json', '/opt/codex login status']);
+		expect(await probeAgentAuth(runner, 'claude-code', '/opt/claude', POSIX_PROBE)).toEqual(
+			answered({ signedIn: true, method: 'subscription', account: null })
+		);
+		expect(await probeAgentAuth(runner, 'codex', '/opt/codex', POSIX_PROBE)).toEqual(answered(SIGNED_OUT));
+		expect(calls).toEqual([
+			'/opt/claude auth --help',
+			'/opt/claude auth status --json',
+			'/opt/codex login --help',
+			'/opt/codex login status'
+		]);
 		// No prompt flag ever reaches a CLI from here.
 		expect(calls.join(' ')).not.toMatch(/(^| )(-p|--print|exec)( |$)/);
 	});
 
-	it('reads a signed-out Claude document even though the command exits 1', async () => {
-		const { runner } = tableRunner({
-			'claude auth status --json': { code: 1, stdout: JSON.stringify({ loggedIn: false, authMethod: 'none' }) }
+	it('runs every command with stdin closed, under the 15 s deadline, in the environment it was given', async () => {
+		const env = { PATH: '/usr/bin', CLAUDE_CODE_OAUTH_TOKEN: 'granted-to-runs' };
+		const { runner, options } = tableRunner({
+			'/opt/claude auth --help': { stdout: CLAUDE_AUTH_HELP },
+			'/opt/claude auth status --json': { stdout: JSON.stringify({ loggedIn: true, authMethod: 'oauth_token' }) }
 		});
-		expect(await probeAgentAuth(runner, 'claude-code', 'claude')).toEqual(SIGNED_OUT);
+		await probeAgentAuth(runner, 'claude-code', '/opt/claude', { platform: 'linux', env });
+		expect(AGENT_AUTH_PROBE_TIMEOUT_MS).toBe(15_000);
+		expect(options).toHaveLength(2);
+		for (const used of options) {
+			expect(used).toEqual({ timeoutMs: 15_000, closeStdin: true, env });
+		}
 	});
 
-	it('answers null — "could not tell" — when the command fails, times out or is not a known CLI', async () => {
-		const { runner } = tableRunner({ 'claude auth status --json': new Error('spawn ENOENT') });
-		expect(await probeAgentAuth(runner, 'claude-code', 'claude')).toBeNull();
-		expect(await probeAgentAuth(runner, 'gemini', 'gemini')).toBeNull();
-		const timedOut: CommandRunner = { run: async () => ({ code: null, stdout: '', stderr: '', timedOut: true }) };
-		expect(await probeAgentAuth(timedOut, 'codex', 'codex')).toBeNull();
+	it('reads a signed-out Claude document even though the command exits 1', async () => {
+		const { runner } = tableRunner({
+			'claude auth --help': { stdout: CLAUDE_AUTH_HELP },
+			'claude auth status --json': { code: 1, stdout: JSON.stringify({ loggedIn: false, authMethod: 'none' }) }
+		});
+		expect(await probeAgentAuth(runner, 'claude-code', 'claude', POSIX_PROBE)).toEqual(answered(SIGNED_OUT));
+	});
+
+	it('an OLD Claude Code without `auth` answers its root help: the status command is never run', async () => {
+		// `claude auth status --json` on such a CLI would be read as the PROMPT
+		// "auth status" — an interactive session, or a model call. The help
+		// request is parsed before any command runs, so it cannot start either.
+		const { runner, calls } = tableRunner({
+			'claude auth --help': { stdout: CLAUDE_ROOT_HELP },
+			'claude auth status --json': { stdout: 'A model wrote this.' }
+		});
+		expect(await probeAgentAuth(runner, 'claude-code', 'claude', POSIX_PROBE)).toEqual({ state: 'unavailable' });
+		expect(calls).toEqual(['claude auth --help']);
+	});
+
+	it('an OLD Codex without `login status` is not asked either', async () => {
+		const rootHelp = tableRunner({ 'codex login --help': { stdout: CODEX_ROOT_HELP } });
+		expect(await probeAgentAuth(rootHelp.runner, 'codex', 'codex', POSIX_PROBE)).toEqual({ state: 'unavailable' });
+		expect(rootHelp.calls).toEqual(['codex login --help']);
+		// `login` exists but has no `status`: `codex login status` could start a browser sign-in.
+		const noStatus = tableRunner({ 'codex login --help': { stdout: 'Usage: codex login [OPTIONS]\n' } });
+		expect(await probeAgentAuth(noStatus.runner, 'codex', 'codex', POSIX_PROBE)).toEqual({ state: 'unavailable' });
+		expect(noStatus.calls).toEqual(['codex login --help']);
+	});
+
+	it('answers "unanswered" — could not tell — when a command fails, times out, says nothing or is not a known CLI', async () => {
+		const throws = tableRunner({ 'claude auth --help': new Error('spawn ENOENT') });
+		expect(await probeAgentAuth(throws.runner, 'claude-code', 'claude', POSIX_PROBE)).toEqual({
+			state: 'unanswered'
+		});
+		expect(await probeAgentAuth(throws.runner, 'gemini', 'gemini', POSIX_PROBE)).toEqual({ state: 'unanswered' });
+
+		const helpTimedOut = tableRunner({ 'codex login --help': { code: null, timedOut: true } });
+		expect(await probeAgentAuth(helpTimedOut.runner, 'codex', 'codex', POSIX_PROBE)).toEqual({
+			state: 'unanswered'
+		});
+		expect(helpTimedOut.calls).toEqual(['codex login --help']);
+
+		const silentHelp = tableRunner({ 'claude auth --help': { stdout: '' } });
+		expect(await probeAgentAuth(silentHelp.runner, 'claude-code', 'claude', POSIX_PROBE)).toEqual({
+			state: 'unanswered'
+		});
+
+		// What cmd.exe answers for a command it cannot find: exit 1 and a sentence, no help page.
+		const notRecognized = tableRunner({
+			'codex login --help': { code: 1, stderr: "'codex' is not recognized as an internal or external command" }
+		});
+		expect(await probeAgentAuth(notRecognized.runner, 'codex', 'codex', POSIX_PROBE)).toEqual({
+			state: 'unanswered'
+		});
+		expect(notRecognized.calls).toEqual(['codex login --help']);
+
+		const notInstalled = tableRunner({ 'claude auth --help': { code: 1, spawnError: 'ENOENT' } });
+		expect(await probeAgentAuth(notInstalled.runner, 'claude-code', 'claude', POSIX_PROBE)).toEqual({
+			state: 'unanswered'
+		});
+
+		const statusTimedOut = tableRunner({
+			'claude auth --help': { stdout: CLAUDE_AUTH_HELP },
+			'claude auth status --json': { code: null, timedOut: true, stdout: '{"loggedIn":tr' }
+		});
+		expect(await probeAgentAuth(statusTimedOut.runner, 'claude-code', 'claude', POSIX_PROBE)).toEqual({
+			state: 'unanswered'
+		});
+
+		const garbage = tableRunner({
+			'claude auth --help': { stdout: CLAUDE_AUTH_HELP },
+			'claude auth status --json': { stdout: 'Welcome to Claude Code!' }
+		});
+		expect(await probeAgentAuth(garbage.runner, 'claude-code', 'claude', POSIX_PROBE)).toEqual({
+			state: 'unanswered'
+		});
+	});
+
+	describe('a Windows path with a space', () => {
+		const spaced = 'C:\\Program Files\\Claude Code\\claude.cmd';
+
+		it('is quoted for cmd.exe, exactly once, and left alone elsewhere', () => {
+			expect(quoteProbeExecutable(spaced, 'win32')).toBe(`"${spaced}"`);
+			expect(quoteProbeExecutable(`"${spaced}"`, 'win32')).toBe(`"${spaced}"`);
+			expect(quoteProbeExecutable('C:\\Tools\\claude.cmd', 'win32')).toBe('C:\\Tools\\claude.cmd');
+			// No shell on POSIX: the path is one argv entry and quotes would become part of the name.
+			expect(quoteProbeExecutable('/opt/claude code/claude', 'linux')).toBe('/opt/claude code/claude');
+		});
+
+		it('reaches the runner quoted, for the help and for the status command', async () => {
+			const { runner, calls } = tableRunner({
+				[`"${spaced}" auth --help`]: { stdout: CLAUDE_AUTH_HELP },
+				[`"${spaced}" auth status --json`]: {
+					stdout: JSON.stringify({ loggedIn: true, authMethod: 'claude.ai' })
+				}
+			});
+			expect(await probeAgentAuth(runner, 'claude-code', spaced, { platform: 'win32' })).toEqual(
+				answered({ signedIn: true, method: 'subscription', account: null })
+			);
+			expect(calls).toEqual([`"${spaced}" auth --help`, `"${spaced}" auth status --json`]);
+		});
+	});
+});
+
+/**
+ * The same probe against REAL processes, through the daemon's real command
+ * runner: stub CLIs written into a temporary directory whose name has a
+ * space in it. Runs on every OS (a `.cmd` shim on Windows, a shell script
+ * elsewhere).
+ */
+describe('probeAgentAuth through the real command runner', () => {
+	const windows = process.platform === 'win32';
+	const dirs: string[] = [];
+	afterAll(() => {
+		for (const dir of dirs) rmSync(dir, { recursive: true, force: true });
+	});
+
+	function stubCli(script: { cmd: string[]; sh: string[] }): { executable: string; dir: string } {
+		const dir = mkdtempSync(join(tmpdir(), 'ever works probe '));
+		dirs.push(dir);
+		const executable = join(dir, windows ? 'claude.cmd' : 'claude');
+		writeFileSync(executable, windows ? `${script.cmd.join('\r\n')}\r\n` : `${script.sh.join('\n')}\n`);
+		if (!windows) chmodSync(executable, 0o755);
+		return { executable, dir };
+	}
+
+	const DOCUMENT = (org: string) =>
+		`{"loggedIn":true,"authMethod":"claude.ai","email":"owner@example.com","orgName":"${org}","subscriptionType":"max"}`;
+
+	it('a directory with a space, the allow-listed environment and a closed stdin', async () => {
+		// The stub's status command first READS A LINE from stdin — with stdin
+		// left open it would sit there until the deadline — and then names in
+		// `orgName` whether a variable only the daemon has reached it.
+		const { executable } = stubCli({
+			cmd: [
+				'@echo off',
+				'if "%2"=="--help" (',
+				'  echo Usage: claude auth [options] [command]',
+				'  echo   status  Show authentication status',
+				'  exit /b 0',
+				')',
+				'set /p LINE=',
+				'if defined EVER_PROBE_DAEMON_ONLY (set ORG=leaked) else (set ORG=clean)',
+				`echo ${DOCUMENT('%ORG%')}`
+			],
+			sh: [
+				'#!/bin/sh',
+				'if [ "$2" = "--help" ]; then',
+				'  echo "Usage: claude auth [options] [command]"',
+				'  echo "  status  Show authentication status"',
+				'  exit 0',
+				'fi',
+				'read LINE',
+				'ORG=clean',
+				'if [ -n "$EVER_PROBE_DAEMON_ONLY" ]; then ORG=leaked; fi',
+				`echo '${DOCUMENT('\'"$ORG"\'')}'`
+			]
+		});
+		expect(executable).toMatch(/\s/);
+		const daemonEnv = { ...process.env, EVER_PROBE_DAEMON_ONLY: 'only-the-daemon-has-this' };
+		const env = buildNodeCheckEnv([], daemonEnv);
+		expect(Object.keys(env)).not.toContain('EVER_PROBE_DAEMON_ONLY');
+
+		const startedAt = Date.now();
+		const probe = await probeAgentAuth(createCommandRunner(), 'claude-code', executable, {
+			platform: process.platform,
+			env
+		});
+		expect(probe).toEqual(
+			answered({ signedIn: true, method: 'subscription', account: 'owner@example.com (clean, max)' })
+		);
+		// Answered on end-of-file, not at the 15 s deadline.
+		expect(Date.now() - startedAt).toBeLessThan(10_000);
+	}, 30_000);
+
+	it('a CLI without the status subcommand is never started with it', async () => {
+		// The stub records a marker file if it is ever run with `auth status`.
+		const { executable, dir } = stubCli({
+			cmd: [
+				'@echo off',
+				'if "%2"=="status" echo ran> "%~dp0status-was-run"',
+				'echo Usage: claude [options] [command] [prompt]'
+			],
+			sh: [
+				'#!/bin/sh',
+				'if [ "$2" = "status" ]; then echo ran > "$(dirname "$0")/status-was-run"; fi',
+				'echo "Usage: claude [options] [command] [prompt]"'
+			]
+		});
+		const probe = await probeAgentAuth(createCommandRunner(), 'claude-code', executable, {
+			platform: process.platform,
+			env: buildNodeCheckEnv([], process.env)
+		});
+		expect(probe).toEqual({ state: 'unavailable' });
+		expect(existsSync(join(dir, 'status-was-run'))).toBe(false);
+	}, 30_000);
+});
+
+describe('AgentProbeEnvironments — the status command sees what a run sees (review item 7)', () => {
+	// Plainly fake values: the point is which NAMES survive, never what they hold.
+	const daemonEnv = {
+		PATH: '/usr/bin',
+		HOME: '/home/owner',
+		CLAUDE_CODE_OAUTH_TOKEN: 'fake-subscription-token',
+		ANTHROPIC_API_KEY: 'fake-console-key',
+		OPENAI_API_KEY: 'fake-openai-key',
+		DATABASE_URL: 'fake-daemon-only-value',
+		EVER_WORKS_NODE_SECRET: 'fake-node-secret'
+	};
+	const DEFAULT_NAMES = ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'OPENAI_API_KEY'];
+
+	// `buildNodeCheckEnv` says which credential it chose on the console; not this suite's subject.
+	beforeEach(() => {
+		vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+	});
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
+
+	function environments() {
+		const builds: string[][] = [];
+		const probeEnvironments = new AgentProbeEnvironments({
+			build: (names) => {
+				builds.push([...names]);
+				return buildNodeCheckEnv(names, daemonEnv);
+			},
+			defaultNames: DEFAULT_NAMES
+		});
+		return { probeEnvironments, builds };
+	}
+
+	it('before any run: the default names, one credential per CLI, and nothing else of the daemon`s', () => {
+		const { probeEnvironments } = environments();
+		const { env } = probeEnvironments.resolve('claude-code');
+		// The same exclusive choice a run gets: the subscription token wins over the Console key.
+		expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBe('fake-subscription-token');
+		expect(env).not.toHaveProperty('ANTHROPIC_API_KEY');
+		expect(env).not.toHaveProperty('DATABASE_URL');
+		expect(env).not.toHaveProperty('EVER_WORKS_NODE_SECRET');
+		expect(env.PATH).toBe('/usr/bin');
+		// Headless, like a run.
+		expect(env.CI).toBe('1');
+	});
+
+	it('after a run: the names THAT run was granted — the credential the next run will use', () => {
+		const { probeEnvironments } = environments();
+		const before = probeEnvironments.resolve('claude-code');
+		probeEnvironments.noteRun('claude-code', ['ANTHROPIC_API_KEY']);
+		const after = probeEnvironments.resolve('claude-code');
+		expect(after.env.ANTHROPIC_API_KEY).toBe('fake-console-key');
+		expect(after.env).not.toHaveProperty('CLAUDE_CODE_OAUTH_TOKEN');
+		// A different key: a reading cached for the old environment is not reused.
+		expect(after.key).not.toBe(before.key);
+		// The other CLI is unaffected.
+		expect(probeEnvironments.resolve('codex').key).toBe(before.key);
+	});
+
+	it('a run granted NO credential name means the CLI`s own login: the probe gets none either', () => {
+		const { probeEnvironments } = environments();
+		probeEnvironments.noteRun('claude-code', []);
+		const { env } = probeEnvironments.resolve('claude-code');
+		expect(env).not.toHaveProperty('CLAUDE_CODE_OAUTH_TOKEN');
+		expect(env).not.toHaveProperty('ANTHROPIC_API_KEY');
+		expect(env.HOME).toBe('/home/owner');
+	});
+
+	it('builds one environment per distinct list of names, and ignores a run that names none at all', () => {
+		const { probeEnvironments, builds } = environments();
+		probeEnvironments.resolve('claude-code');
+		probeEnvironments.resolve('codex');
+		probeEnvironments.noteRun('claude-code', undefined);
+		probeEnvironments.noteRun('claude-code', null);
+		probeEnvironments.resolve('claude-code');
+		expect(builds).toEqual([DEFAULT_NAMES]);
+		probeEnvironments.noteRun('codex', ['openai_api_key', 'OPENAI_API_KEY']);
+		probeEnvironments.resolve('codex');
+		probeEnvironments.resolve('codex');
+		expect(builds).toHaveLength(2);
 	});
 });
 
 describe('detectUnsupportedAgentClis', () => {
 	it('lists the CLIs that answer --version and skips the rest', async () => {
-		const { runner } = tableRunner({
+		const { runner, options } = tableRunner({
 			'gemini --version': { stdout: '0.9.1\n' },
 			'opencode --version': new Error('spawn ENOENT')
 		});
 		expect(await detectUnsupportedAgentClis(runner)).toEqual([{ provider: 'gemini', version: '0.9.1' }]);
+		expect(options[0]).toMatchObject({ closeStdin: true });
 	});
 });
 
@@ -207,7 +572,7 @@ describe('readClaudeRateLimitWindows (a real run`s own stream)', () => {
 	const event = (info: Record<string, unknown>) =>
 		JSON.stringify({ type: 'rate_limit_event', rate_limit_info: info, uuid: 'u', session_id: 's' });
 
-	it('reads utilisation and reset per window, newest event per window', () => {
+	it('reads utilisation, reset and length per window, newest event per window', () => {
 		const output = [
 			JSON.stringify({ type: 'system', subtype: 'init' }),
 			event({ status: 'allowed', rateLimitType: 'five_hour', utilization: 0.1, resetsAt: 1_794_000_000 }),
@@ -221,8 +586,18 @@ describe('readClaudeRateLimitWindows (a real run`s own stream)', () => {
 			JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: 'done' })
 		].join('\n');
 		expect(readClaudeRateLimitWindows(output)).toEqual([
-			{ window: 'five_hour', usedPercent: 82.5, resetsAt: new Date(1_794_000_000_000).toISOString() },
-			{ window: 'weekly', usedPercent: 40, resetsAt: new Date(1_794_400_000_000).toISOString() }
+			{
+				window: 'five_hour',
+				usedPercent: 82.5,
+				resetsAt: new Date(1_794_000_000_000).toISOString(),
+				windowMinutes: 300
+			},
+			{
+				window: 'weekly',
+				usedPercent: 40,
+				resetsAt: new Date(1_794_400_000_000).toISOString(),
+				windowMinutes: 10_080
+			}
 		]);
 	});
 
@@ -239,9 +614,15 @@ describe('readClaudeRateLimitWindows (a real run`s own stream)', () => {
 				window: 'weekly_opus',
 				usedPercent: null,
 				resetsAt: new Date(1_794_400_000_000).toISOString(),
-				limited: true
+				limited: true,
+				windowMinutes: 10_080
 			},
-			{ window: 'five_hour', usedPercent: null, resetsAt: new Date(1_794_000_000_000).toISOString() }
+			{
+				window: 'five_hour',
+				usedPercent: null,
+				resetsAt: new Date(1_794_000_000_000).toISOString(),
+				windowMinutes: 300
+			}
 		]);
 	});
 
@@ -294,12 +675,18 @@ describe('readCodexRateLimitLine (a session record`s token_count)', () => {
 		).toEqual({
 			at: '2026-11-10T11:30:00.000Z',
 			windows: [
-				{ window: 'five_hour', usedPercent: 12.3, resetsAt: new Date(1_794_000_000_000).toISOString() },
+				{
+					window: 'five_hour',
+					usedPercent: 12.3,
+					resetsAt: new Date(1_794_000_000_000).toISOString(),
+					windowMinutes: 300
+				},
 				{
 					window: 'weekly',
 					usedPercent: 100,
 					resetsAt: new Date(1_794_400_000_000).toISOString(),
-					limited: true
+					limited: true,
+					windowMinutes: 10_080
 				}
 			]
 		});
@@ -308,6 +695,9 @@ describe('readCodexRateLimitLine (a session record`s token_count)', () => {
 	it('names a window by its slot when its length is not one it knows', () => {
 		expect(readCodexRateLimitLine(line({ primary: { used_percent: 10 } }))?.windows).toEqual([
 			{ window: 'primary', usedPercent: 10, resetsAt: null }
+		]);
+		expect(readCodexRateLimitLine(line({ primary: { used_percent: 10, window_minutes: 60 } }))?.windows).toEqual([
+			{ window: 'primary', usedPercent: 10, resetsAt: null, windowMinutes: 60 }
 		]);
 	});
 
@@ -394,7 +784,9 @@ describe('readNewestCodexRateLimits', () => {
 			].join('\n')
 		});
 		const reading = await readNewestCodexRateLimits(fs, '/home/u/.codex/sessions', posix.join);
-		expect(reading?.windows).toEqual([{ window: 'five_hour', usedPercent: 71, resetsAt: null }]);
+		expect(reading?.windows).toEqual([
+			{ window: 'five_hour', usedPercent: 71, resetsAt: null, windowMinutes: 300 }
+		]);
 		expect(opened).toEqual(['/home/u/.codex/sessions/2026/11/10/rollout-2026-11-10T11-00-00-d.jsonl']);
 		expect(JSON.stringify(reading)).not.toContain('PROMPT-secret');
 	});
@@ -437,74 +829,138 @@ describe('AgentRunHistory (what real runs proved)', () => {
 
 	it('a successful run stamps lastSuccessAt', () => {
 		const { runs } = history();
-		runs.note({ provider: 'claude-code', status: 'succeeded', summary: 'Done.' });
+		runs.note({ provider: 'claude-code', status: 'succeeded' });
 		expect(runs.get('claude-code')).toEqual(emptyEntry({ lastSuccessAt: ISO }));
 	});
 
-	it('classifies the organization switch from the CLI`s final message (prod, 2026-11)', () => {
+	it('classifies the organization switch from the CLI`s own error (prod, 2026-11) — a code, no text', () => {
 		const { runs } = history();
-		runs.note({ provider: 'claude-code', status: 'failed', summary: ORG_DISABLED });
+		runs.note({ provider: 'claude-code', status: 'failed', cliError: { text: ORG_DISABLED } });
 		expect(runs.get('claude-code').failure).toEqual({
 			kind: 'access_denied',
-			reason: ORG_DISABLED,
+			code: 'org_access_disabled',
+			window: null,
 			resetsAt: null,
 			until: null,
 			usageLimit: false,
 			at: ISO,
 			authFingerprint: null
 		});
+		expect(JSON.stringify(runs.record())).not.toContain('organization');
 	});
 
-	it('classifies an expired session from the output tail when there is no final message', () => {
+	it('classifies an expired session, and the API status when the CLI gave no sentence', () => {
 		const { runs } = history();
-		runs.note({ provider: 'claude-code', status: 'error', summary: null, outputTail: `\n${SESSION_EXPIRED}\n` });
-		expect(runs.get('claude-code').failure).toMatchObject({ kind: 'not_signed_in', reason: SESSION_EXPIRED });
+		runs.note({ provider: 'claude-code', status: 'error', cliError: { text: SESSION_EXPIRED } });
+		expect(runs.get('claude-code').failure).toMatchObject({ kind: 'not_signed_in', code: 'session_expired' });
+		runs.note({ provider: 'codex', status: 'failed', cliError: { apiStatus: 403 } });
+		expect(runs.get('codex').failure).toMatchObject({ kind: 'access_denied', code: 'permission_denied' });
 	});
 
-	it('reads the output tail strictly — the model`s own words never sign the CLI out', () => {
+	it('a failure with nothing from the CLI`s own channels records no verdict (review S1)', () => {
+		// The executor passes ONLY what the CLI authored. A failed run whose
+		// assistant text talks about "401 when the user is not logged in", or a
+		// Codex agent message about its sandbox, arrives here with no cliError.
+		const { runs, saved } = history();
+		runs.note({ provider: 'claude-code', status: 'failed', cliError: null, outputTokens: 5321 });
+		runs.note({ provider: 'codex', status: 'failed', outputTokens: 900 });
+		runs.note({ provider: 'codex', status: 'error', outputTokens: 10 });
+		expect(runs.get('claude-code').failure).toBeNull();
+		expect(runs.get('codex').failure).toBeNull();
+		expect(saved).toEqual([]);
+	});
+
+	it('a run that produced model output can never create a sign-in or access verdict (review S1)', () => {
+		// Even if such words DID arrive on a CLI channel: the CLI reached its
+		// model, so it was signed in and allowed.
+		const { runs } = history();
+		for (const text of [
+			'The handler now returns 401 when the user is not logged in, but two tests still fail.',
+			'Not logged in · Please run /login',
+			ORG_DISABLED,
+			'API Error: 403 permission_error',
+			'The test expects "Invalid API key" for a malformed header.',
+			'Added a guard: if the session is missing we throw authentication_error.',
+			'Failed to authenticate against the staging database, so the migration step failed.',
+			'curl printed API Error: 401 from the mock server'
+		]) {
+			runs.note({ provider: 'claude-code', status: 'failed', cliError: { text }, outputTokens: 5321 });
+			expect(runs.get('claude-code').failure).toBeNull();
+		}
+		runs.note({
+			provider: 'codex',
+			status: 'failed',
+			cliError: {
+				text: 'unexpected status 401 Unauthorized',
+				apiStatus: 401,
+				errorClass: 'authentication_failed'
+			},
+			outputTokens: 900
+		});
+		expect(runs.get('codex').failure).toBeNull();
+	});
+
+	it('a run that produced model output can still prove a limit — one is hit mid-run', () => {
 		const { runs } = history();
 		runs.note({
 			provider: 'claude-code',
 			status: 'failed',
-			summary: null,
-			outputTail: 'The deploy user does not have access to the bucket, so the upload step failed.'
+			cliError: { text: "You've hit your weekly limit · resets Nov 12, 3am" },
+			outputTokens: 5321
 		});
-		expect(runs.get('claude-code').failure).toBeNull();
+		expect(runs.get('claude-code').failure).toMatchObject({ kind: 'limit_reached', code: 'usage_limit' });
 	});
 
 	it('a later success clears the failure; a timeout proves nothing either way', () => {
 		const { runs, advance } = history();
-		runs.note({ provider: 'claude-code', status: 'failed', summary: ORG_DISABLED });
+		runs.note({ provider: 'claude-code', status: 'failed', cliError: { text: ORG_DISABLED } });
 		advance(60_000);
-		runs.note({ provider: 'claude-code', status: 'timeout', summary: null });
+		runs.note({ provider: 'claude-code', status: 'timeout', cliError: { text: 'Not logged in' } });
 		expect(runs.get('claude-code').failure?.kind).toBe('access_denied');
-		runs.note({ provider: 'claude-code', status: 'succeeded', summary: 'Done.' });
+		runs.note({ provider: 'claude-code', status: 'succeeded' });
 		expect(runs.get('claude-code')).toEqual(emptyEntry({ lastSuccessAt: '2026-11-10T12:01:00.000Z' }));
 	});
 
 	it('an unclassified failure changes nothing — unless the run demonstrably reached the model', () => {
 		const { runs } = history();
-		runs.note({ provider: 'claude-code', status: 'failed', summary: SESSION_EXPIRED });
-		runs.note({ provider: 'claude-code', status: 'failed', summary: 'Tests are red.', outputTokens: 0 });
+		runs.note({ provider: 'claude-code', status: 'failed', cliError: { text: SESSION_EXPIRED } });
+		runs.note({ provider: 'claude-code', status: 'failed', cliError: { text: 'Tests are red.' }, outputTokens: 0 });
+		runs.note({ provider: 'claude-code', status: 'failed', cliError: null });
 		expect(runs.get('claude-code').failure?.kind).toBe('not_signed_in');
-		runs.note({ provider: 'claude-code', status: 'failed', summary: 'Tests are red.', outputTokens: 812 });
+		runs.note({ provider: 'claude-code', status: 'failed', cliError: null, outputTokens: 812 });
 		expect(runs.get('claude-code').failure).toBeNull();
 		// Not a success: nothing is stamped.
 		expect(runs.get('claude-code').lastSuccessAt).toBeNull();
 	});
 
-	it('records a usage limit with the instant it lifts', () => {
+	it('records a usage limit with its window and the instant it lifts', () => {
 		const { runs } = history();
 		runs.note({
 			provider: 'claude-code',
 			status: 'failed',
-			summary: "You've hit your weekly limit · resets Nov 12, 3am"
+			cliError: { text: "You've hit your weekly limit · resets Nov 12, 3am" }
 		});
-		expect(runs.get('claude-code').failure).toMatchObject({
+		expect(runs.get('claude-code').failure).toEqual({
 			kind: 'limit_reached',
+			code: 'usage_limit',
+			window: 'weekly',
 			usageLimit: true,
 			resetsAt: '2026-11-12T03:00:00.000Z',
-			until: '2026-11-12T03:01:00.000Z'
+			until: '2026-11-12T03:01:00.000Z',
+			at: ISO,
+			authFingerprint: null
+		});
+	});
+
+	it('records an empty credit balance as its own code, with no instant: no clock lifts it', () => {
+		const { runs } = history();
+		runs.note({ provider: 'claude-code', status: 'failed', cliError: { text: 'Credit balance is too low' } });
+		expect(runs.get('claude-code').failure).toMatchObject({
+			kind: 'limit_reached',
+			code: 'out_of_credit',
+			usageLimit: false,
+			resetsAt: null,
+			until: null
 		});
 	});
 
@@ -528,7 +984,7 @@ describe('AgentRunHistory (what real runs proved)', () => {
 	it('a sign-in that CHANGED since the refusal lifts it; the same sign-in does not', () => {
 		const { runs } = history();
 		runs.observeAuth('claude-code', SIGNED_IN);
-		runs.note({ provider: 'claude-code', status: 'failed', summary: ORG_DISABLED });
+		runs.note({ provider: 'claude-code', status: 'failed', cliError: { text: ORG_DISABLED } });
 		expect(runs.get('claude-code').failure?.authFingerprint).toBe(agentAuthFingerprint(SIGNED_IN));
 		runs.observeAuth('claude-code', SIGNED_IN);
 		runs.observeAuth('claude-code', null);
@@ -540,37 +996,62 @@ describe('AgentRunHistory (what real runs proved)', () => {
 
 	it('a refusal recorded before any status reading adopts the first one, so a later change is noticed', () => {
 		const { runs } = history();
-		runs.note({ provider: 'claude-code', status: 'failed', summary: SESSION_EXPIRED });
+		runs.note({ provider: 'claude-code', status: 'failed', cliError: { text: SESSION_EXPIRED } });
 		runs.observeAuth('claude-code', SIGNED_OUT);
 		expect(runs.get('claude-code').failure?.authFingerprint).toBe(agentAuthFingerprint(SIGNED_OUT));
 		runs.observeAuth('claude-code', SIGNED_IN);
 		expect(runs.get('claude-code').failure).toBeNull();
 	});
 
-	it('a sign-in change does not lift a usage limit', () => {
+	it('a sign-in change lifts an empty credit balance, and does not lift a usage limit', () => {
 		const { runs } = history();
-		runs.observeAuth('claude-code', SIGNED_IN);
-		runs.note({ provider: 'claude-code', status: 'failed', summary: '5-hour limit reached ∙ resets 3pm' });
 		runs.observeAuth('claude-code', { signedIn: true, method: 'api_key', account: null });
-		expect(runs.get('claude-code').failure?.kind).toBe('limit_reached');
+		runs.note({ provider: 'claude-code', status: 'failed', cliError: { text: 'Credit balance is too low' } });
+		runs.observeAuth('claude-code', SIGNED_IN);
+		expect(runs.get('claude-code').failure).toBeNull();
+
+		runs.note({
+			provider: 'claude-code',
+			status: 'failed',
+			cliError: { text: '5-hour limit reached ∙ resets 3pm' }
+		});
+		runs.observeAuth('claude-code', { signedIn: true, method: 'api_key', account: null });
+		expect(runs.get('claude-code').failure).toMatchObject({ kind: 'limit_reached', window: 'session' });
 	});
 
 	it('persists every change in order, and a restart restores it', async () => {
 		const first = history();
-		first.runs.note({ provider: 'claude-code', status: 'succeeded', summary: 'Done.' });
+		first.runs.note({ provider: 'claude-code', status: 'succeeded' });
 		first.advance(1000);
-		first.runs.note({ provider: 'claude-code', status: 'failed', summary: ORG_DISABLED });
+		first.runs.note({ provider: 'claude-code', status: 'failed', cliError: { text: ORG_DISABLED } });
 		await first.runs.settled();
 		expect(first.saved).toHaveLength(2);
 		const stored = parseAgentRunHistoryRecord(JSON.stringify(first.saved.at(-1)));
 		expect(stored?.agents['claude-code']).toMatchObject({
 			lastSuccessAt: ISO,
-			failure: { kind: 'access_denied', reason: ORG_DISABLED }
+			failure: { kind: 'access_denied', code: 'org_access_disabled' }
 		});
 
 		const restarted = history(stored);
 		expect(restarted.runs.get('claude-code').failure?.kind).toBe('access_denied');
 		expect(restarted.runs.get('claude-code').lastSuccessAt).toBe(ISO);
+	});
+
+	it('the persisted record holds no line of run output — a secret in an error never reaches the disk', async () => {
+		const { runs, saved } = history();
+		const dbUrl = `postgres://app:${'hunter2'}${'Sup3rS3cret'}@db.internal:5432/prod`;
+		const basic = `Authorization: Basic ${Buffer.from('user:passw0rd-example').toString('base64')}`;
+		runs.note({
+			provider: 'claude-code',
+			status: 'failed',
+			cliError: { text: `Invalid API key ${FAKE_API_KEY} · Fix external API key\n${dbUrl}\n${basic}` }
+		});
+		await runs.settled();
+		const written = JSON.stringify(saved);
+		expect(runs.get('claude-code').failure).toMatchObject({ kind: 'not_signed_in', code: 'invalid_api_key' });
+		for (const leaked of ['FAKE', 'hunter2', 'db.internal', 'Basic', 'Invalid API key', 'Fix external']) {
+			expect(written).not.toContain(leaked);
+		}
 	});
 
 	it('a failing persist is logged and never wedges the next write', async () => {
@@ -585,7 +1066,7 @@ describe('AgentRunHistory (what real runs proved)', () => {
 			logger: { warn: (message: string) => void warnings.push(message) }
 		});
 		runs.note({ provider: 'codex', status: 'succeeded' });
-		runs.note({ provider: 'codex', status: 'failed', summary: 'Not logged in' });
+		runs.note({ provider: 'codex', status: 'failed', cliError: { text: 'Not logged in' } });
 		await runs.settled();
 		expect(calls).toBe(2);
 		expect(warnings).toEqual(['Could not record agent readiness: disk full']);
@@ -607,7 +1088,7 @@ describe('parseAgentRunHistoryRecord', () => {
 				agents: {
 					'claude-code': {
 						lastSuccessAt: 'yesterday',
-						failure: { kind: 'on_fire', reason: 'x', at: ISO },
+						failure: { kind: 'on_fire', code: 'org_access_disabled', at: ISO },
 						usage: [
 							{ window: 'five_hour', usedPercent: 500 },
 							{ window: 'weekly', usedPercent: 5 }
@@ -629,6 +1110,43 @@ describe('parseAgentRunHistoryRecord', () => {
 		});
 	});
 
+	it('a failure is a kind, a KNOWN code and an instant — free text is never read back', () => {
+		const parse = (stored: Record<string, unknown>) =>
+			parseAgentRunHistoryRecord(
+				JSON.stringify({ version: 1, recordedAt: ISO, agents: { 'claude-code': { failure: stored } } })
+			)?.agents['claude-code']?.failure;
+
+		expect(
+			parse({
+				kind: 'limit_reached',
+				code: 'usage_limit',
+				window: 'weekly',
+				resetsAt: '2026-11-12T03:00:00.000Z',
+				until: '2026-11-12T03:01:00.000Z',
+				usageLimit: true,
+				at: ISO,
+				authFingerprint: 'in|subscription|',
+				reason: 'a sentence somebody typed into the file'
+			})
+		).toEqual({
+			kind: 'limit_reached',
+			code: 'usage_limit',
+			window: 'weekly',
+			resetsAt: '2026-11-12T03:00:00.000Z',
+			until: '2026-11-12T03:01:00.000Z',
+			usageLimit: true,
+			at: ISO,
+			authFingerprint: 'in|subscription|'
+		});
+		// What the build before this one wrote: a sentence out of a run, and no code.
+		expect(parse({ kind: 'access_denied', reason: ORG_DISABLED, at: ISO, usageLimit: false })).toBeNull();
+		expect(parse({ kind: 'access_denied', code: 'made_up_code', at: ISO })).toBeNull();
+		expect(parse({ kind: 'access_denied', code: 'org_access_disabled' })).toBeNull();
+		expect(parse({ kind: 'access_denied', code: 'org_access_disabled', at: ISO, window: 'forever' })).toMatchObject(
+			{ window: null }
+		);
+	});
+
 	it('sits beside the config', () => {
 		expect(agentRunHistoryPath('/etc/ever-works/node-config.json')).toBe(
 			'/etc/ever-works/node-config.json.agent-readiness.json'
@@ -637,68 +1155,105 @@ describe('parseAgentRunHistoryRecord', () => {
 });
 
 describe('resolveAgentStatus', () => {
-	const base = { installed: true, auth: SIGNED_IN, history: emptyEntry(), nowMs: NOW };
+	const base = { installed: true, auth: answered(SIGNED_IN), history: emptyEntry(), nowMs: NOW };
 
 	it('signed in and nothing against it → ready', () => {
-		expect(resolveAgentStatus(base)).toEqual({ status: 'ready', reason: null });
+		expect(resolveAgentStatus(base)).toEqual({ status: 'ready', reasonCode: null });
 	});
 
-	it('not installed → not_installed; a startup lookup that timed out → unknown', () => {
-		expect(resolveAgentStatus({ ...base, installed: false }).status).toBe('not_installed');
-		expect(resolveAgentStatus({ ...base, installed: false, probeTimedOut: true }).status).toBe('unknown');
+	it('not installed → not_installed; a startup lookup that timed out → unknown, with why', () => {
+		expect(resolveAgentStatus({ ...base, installed: false })).toEqual({
+			status: 'not_installed',
+			reasonCode: null
+		});
+		expect(resolveAgentStatus({ ...base, installed: false, probeTimedOut: true })).toEqual({
+			status: 'unknown',
+			reasonCode: 'probe_timed_out'
+		});
 	});
 
-	it('a binary this node cannot start → unsupported, naming what it lacks', () => {
-		const verdict = resolveAgentStatus({ ...base, missingRequiredFlags: ['--output-format'] });
-		expect(verdict.status).toBe('unsupported');
-		expect(verdict.reason).toContain('--output-format');
+	it('a binary this node cannot start → unsupported', () => {
+		expect(resolveAgentStatus({ ...base, missingRequiredFlags: ['--output-format'] })).toEqual({
+			status: 'unsupported',
+			reasonCode: 'cli_too_old'
+		});
 	});
 
 	it('"signed in" does not outrank what the last run proved (the production case)', () => {
-		const failure = {
-			kind: 'access_denied' as const,
-			reason: ORG_DISABLED,
-			resetsAt: null,
-			until: null,
-			usageLimit: false,
-			at: ISO,
-			authFingerprint: agentAuthFingerprint(SIGNED_IN)
-		};
-		expect(resolveAgentStatus({ ...base, history: emptyEntry({ failure }) })).toEqual({
+		const refused = failure({ authFingerprint: agentAuthFingerprint(SIGNED_IN) });
+		expect(resolveAgentStatus({ ...base, history: emptyEntry({ failure: refused }) })).toEqual({
 			status: 'access_denied',
-			reason: ORG_DISABLED
+			reasonCode: 'org_access_disabled'
 		});
 	});
 
-	it('the worker`s throttle → limit_reached until its instant', () => {
+	it('a refusal a run proved stands for 24 h, then is unknown — not red for ever, never ready (review S2)', () => {
+		expect(FLEET_AGENT_VERDICT_MAX_AGE_MS).toBe(DAY);
+		// The owner signed in again with the SAME account: the fingerprint did
+		// not change, so only a run — or time — can retire the verdict.
+		const expired = failure({
+			kind: 'not_signed_in',
+			code: 'session_expired',
+			authFingerprint: agentAuthFingerprint(SIGNED_IN)
+		});
+		const history = emptyEntry({ failure: expired });
+		expect(resolveAgentStatus({ ...base, history, nowMs: NOW + DAY })).toEqual({
+			status: 'not_signed_in',
+			reasonCode: 'session_expired'
+		});
+		for (const later of [NOW + DAY + 1, NOW + 30 * DAY]) {
+			expect(resolveAgentStatus({ ...base, history, nowMs: later, throttlesKnown: true })).toEqual({
+				status: 'unknown',
+				reasonCode: 'verdict_stale'
+			});
+		}
+		// An old success does not outvote the refusal that came after it.
+		const withOldSuccess = emptyEntry({ failure: expired, lastSuccessAt: '2026-11-10T11:00:00.000Z' });
+		expect(resolveAgentStatus({ ...base, history: withOldSuccess, nowMs: NOW + 2 * DAY }).status).toBe('unknown');
+	});
+
+	it('an unreadable failure instant is not treated as fresh', () => {
+		const history = emptyEntry({ failure: failure({ at: 'not a date' }) });
+		expect(resolveAgentStatus({ ...base, history })).toEqual({ status: 'unknown', reasonCode: 'verdict_stale' });
+	});
+
+	it('the worker`s throttle → limit_reached until its instant, naming the window', () => {
 		expect(
 			resolveAgentStatus({
 				...base,
-				throttle: { provider: 'claude-code', until: '2026-11-12T03:01:00.000Z', reason: 'weekly limit' },
+				throttle: { provider: 'claude-code', until: '2026-11-12T03:01:00.000Z', window: 'weekly' },
 				throttlesKnown: true
 			})
-		).toEqual({ status: 'limit_reached', reason: 'weekly limit', limitResetsAt: '2026-11-12T03:01:00.000Z' });
+		).toEqual({
+			status: 'limit_reached',
+			reasonCode: 'usage_limit',
+			limitResetsAt: '2026-11-12T03:01:00.000Z',
+			limitWindow: 'weekly'
+		});
 	});
 
-	const usageLimit = {
-		kind: 'limit_reached' as const,
-		reason: "You've hit your weekly limit",
+	const usageLimit = failure({
+		kind: 'limit_reached',
+		code: 'usage_limit',
+		window: 'weekly',
 		resetsAt: '2026-11-12T03:00:00.000Z',
 		until: '2026-11-12T03:01:00.000Z',
-		usageLimit: true,
-		at: ISO,
-		authFingerprint: null
-	};
+		usageLimit: true
+	});
 
-	it('a usage limit stands until its instant on a node without a worker', () => {
+	it('a usage limit that named its reset stands until then on a node without a worker, then ready', () => {
 		const history = emptyEntry({ failure: usageLimit });
-		expect(resolveAgentStatus({ ...base, history })).toMatchObject({
+		expect(resolveAgentStatus({ ...base, history })).toEqual({
 			status: 'limit_reached',
-			limitResetsAt: '2026-11-12T03:00:00.000Z'
+			reasonCode: 'usage_limit',
+			limitResetsAt: '2026-11-12T03:00:00.000Z',
+			limitWindow: 'weekly'
 		});
-		expect(resolveAgentStatus({ ...base, history, nowMs: Date.parse('2026-11-12T03:02:00.000Z') }).status).toBe(
-			'ready'
-		);
+		// The reset the CLI named has passed: that IS the evidence.
+		expect(resolveAgentStatus({ ...base, history, nowMs: Date.parse('2026-11-12T03:02:00.000Z') })).toEqual({
+			status: 'ready',
+			reasonCode: null
+		});
 	});
 
 	it('a usage limit the worker no longer holds was lifted ("Clear limit now") → ready', () => {
@@ -709,44 +1264,85 @@ describe('resolveAgentStatus', () => {
 				throttle: null,
 				throttlesKnown: true
 			})
-		).toEqual({ status: 'ready', reason: null });
+		).toEqual({ status: 'ready', reasonCode: null });
 	});
 
-	it('out of credit is not the worker`s throttle: it stands for its hour even with a worker', () => {
-		const credit = {
-			...usageLimit,
-			usageLimit: false,
+	it('a usage limit that named NO reset is unknown once its hold is over — never ready on no evidence', () => {
+		const noReset = failure({
+			kind: 'limit_reached',
+			code: 'usage_limit',
+			window: 'rate',
 			resetsAt: null,
-			until: '2026-11-10T13:00:00.000Z',
-			reason: 'Credit balance is too low'
-		};
-		expect(
-			resolveAgentStatus({
-				...base,
-				history: emptyEntry({ failure: credit }),
-				throttle: null,
-				throttlesKnown: true
-			})
-		).toEqual({
-			status: 'limit_reached',
-			reason: 'Credit balance is too low',
-			limitResetsAt: '2026-11-10T13:00:00.000Z'
+			until: new Date(NOW + FLEET_AGENT_FAILURE_FALLBACK_MS).toISOString(),
+			usageLimit: true
 		});
+		const history = emptyEntry({ failure: noReset });
+		expect(resolveAgentStatus({ ...base, history, nowMs: NOW + 59 * 60_000 })).toMatchObject({
+			status: 'limit_reached',
+			reasonCode: 'usage_limit',
+			limitWindow: 'rate'
+		});
+		for (const throttlesKnown of [false, true]) {
+			expect(resolveAgentStatus({ ...base, history, nowMs: NOW + 61 * 60_000, throttlesKnown })).toEqual({
+				status: 'unknown',
+				reasonCode: 'verdict_stale'
+			});
+		}
+	});
+
+	it('"credit balance too low" never flips back to ready by the clock: after its hour it is unknown (review 6a)', () => {
+		expect(FLEET_AGENT_FAILURE_FALLBACK_MS).toBe(HOUR);
+		const credit = failure({ kind: 'limit_reached', code: 'out_of_credit' });
+		const history = emptyEntry({ failure: credit });
+		// Not the worker's throttle: it stands with or without a worker.
+		for (const throttlesKnown of [false, true]) {
+			expect(resolveAgentStatus({ ...base, history, throttle: null, throttlesKnown, nowMs: NOW + HOUR })).toEqual(
+				{
+					status: 'limit_reached',
+					reasonCode: 'out_of_credit'
+				}
+			);
+			for (const later of [NOW + HOUR + 1, NOW + 3 * HOUR, NOW + 30 * DAY]) {
+				expect(resolveAgentStatus({ ...base, history, throttle: null, throttlesKnown, nowMs: later })).toEqual({
+					status: 'unknown',
+					reasonCode: 'verdict_stale'
+				});
+			}
+		}
 	});
 
 	it('signed out → not_signed_in, unless a run succeeded recently (a per-run credential)', () => {
-		expect(resolveAgentStatus({ ...base, auth: SIGNED_OUT }).status).toBe('not_signed_in');
+		expect(resolveAgentStatus({ ...base, auth: answered(SIGNED_OUT) })).toEqual({
+			status: 'not_signed_in',
+			reasonCode: 'status_signed_out'
+		});
 		const recent = emptyEntry({ lastSuccessAt: new Date(NOW - AGENT_SUCCESS_TRUST_MS + 1000).toISOString() });
-		expect(resolveAgentStatus({ ...base, auth: SIGNED_OUT, history: recent }).status).toBe('ready');
+		expect(resolveAgentStatus({ ...base, auth: answered(SIGNED_OUT), history: recent }).status).toBe('ready');
 		const stale = emptyEntry({ lastSuccessAt: new Date(NOW - AGENT_SUCCESS_TRUST_MS - 1000).toISOString() });
-		expect(resolveAgentStatus({ ...base, auth: SIGNED_OUT, history: stale }).status).toBe('not_signed_in');
+		expect(resolveAgentStatus({ ...base, auth: answered(SIGNED_OUT), history: stale }).status).toBe(
+			'not_signed_in'
+		);
 	});
 
-	it('no status reading and no recent success → unknown, never ready', () => {
-		expect(resolveAgentStatus({ ...base, auth: null }).status).toBe('unknown');
-		expect(resolveAgentStatus({ ...base, auth: { signedIn: null, method: 'unknown', account: null } }).status).toBe(
-			'unknown'
-		);
+	it('no status reading and no recent success → unknown with why, never ready', () => {
+		expect(resolveAgentStatus({ ...base, auth: null })).toEqual({
+			status: 'unknown',
+			reasonCode: 'status_unanswered'
+		});
+		expect(resolveAgentStatus({ ...base, auth: { state: 'unanswered' } })).toEqual({
+			status: 'unknown',
+			reasonCode: 'status_unanswered'
+		});
+		expect(resolveAgentStatus({ ...base, auth: { state: 'unavailable' } })).toEqual({
+			status: 'unknown',
+			reasonCode: 'status_unavailable'
+		});
+		expect(
+			resolveAgentStatus({ ...base, auth: answered({ signedIn: null, method: 'unknown', account: null }) })
+		).toEqual({ status: 'unknown', reasonCode: 'status_unanswered' });
+		// A CLI that cannot report its sign-in but ran a Task an hour ago is ready.
+		const recent = emptyEntry({ lastSuccessAt: new Date(NOW - HOUR).toISOString() });
+		expect(resolveAgentStatus({ ...base, auth: { state: 'unavailable' }, history: recent }).status).toBe('ready');
 	});
 });
 
@@ -765,7 +1361,7 @@ describe('buildAgentReadinessReport', () => {
 		});
 		const report = await buildAgentReadinessReport({
 			drivable: () => drivable,
-			auth: async () => SIGNED_IN,
+			auth: async () => answered(SIGNED_IN),
 			unsupported: async () => [{ provider: 'gemini', version: '0.9.1' }],
 			history: runs,
 			now: () => NOW
@@ -781,6 +1377,7 @@ describe('buildAgentReadinessReport', () => {
 					authMethod: 'subscription',
 					account: 'owner@example.com (Acme, max)',
 					status: 'ready',
+					reasonCode: null,
 					reason: null,
 					checkedAt: ISO,
 					usage: [{ window: 'five_hour', usedPercent: 42, resetsAt: '2026-11-10T15:00:00.000Z' }],
@@ -795,6 +1392,7 @@ describe('buildAgentReadinessReport', () => {
 					authMethod: 'unknown',
 					account: null,
 					status: 'not_installed',
+					reasonCode: null,
 					reason: null,
 					checkedAt: ISO
 				},
@@ -806,6 +1404,7 @@ describe('buildAgentReadinessReport', () => {
 					authMethod: 'unknown',
 					account: null,
 					status: 'unsupported',
+					reasonCode: 'no_executor',
 					reason: 'This node version cannot run agent work with this CLI.',
 					checkedAt: ISO
 				}
@@ -815,10 +1414,10 @@ describe('buildAgentReadinessReport', () => {
 
 	it('online, CLI installed, signed in — and not ready: the run that was refused decides', async () => {
 		const runs = new AgentRunHistory({ now: () => NOW });
-		runs.note({ provider: 'claude-code', status: 'failed', summary: ORG_DISABLED });
+		runs.note({ provider: 'claude-code', status: 'failed', cliError: { text: ORG_DISABLED } });
 		const report = await buildAgentReadinessReport({
 			drivable: () => drivable,
-			auth: async () => SIGNED_IN,
+			auth: async () => answered(SIGNED_IN),
 			history: runs,
 			throttles: () => [],
 			now: () => NOW
@@ -827,10 +1426,102 @@ describe('buildAgentReadinessReport', () => {
 			installed: true,
 			signedIn: true,
 			status: 'access_denied',
-			reason: ORG_DISABLED,
-			lastFailureAt: ISO
+			reasonCode: 'org_access_disabled',
+			reason: describeFleetAgentReason('org_access_disabled'),
+			lastFailureAt: ISO,
+			lastFailureKind: 'access_denied',
+			lastFailureCode: 'org_access_disabled'
 		});
 		expect(report.agents.some((agent) => agent.status === 'ready')).toBe(false);
+	});
+
+	it('the reason is a fixed sentence: no word of the run`s output is in the report (review item 2)', async () => {
+		const runs = new AgentRunHistory({ now: () => NOW });
+		const dbUrl = `postgres://app:${'hunter2'}${'Sup3rS3cret'}@db.internal:5432/prod`;
+		runs.note({
+			provider: 'claude-code',
+			status: 'failed',
+			cliError: { text: `Invalid API key ${FAKE_API_KEY} · Fix external API key (${dbUrl})` }
+		});
+		const report = await buildAgentReadinessReport({
+			drivable: () => drivable,
+			auth: async () => answered({ signedIn: true, method: 'api_key', account: null }),
+			history: runs,
+			now: () => NOW
+		});
+		expect(report.agents[0]).toMatchObject({
+			status: 'not_signed_in',
+			reasonCode: 'invalid_api_key',
+			reason: 'The API key was rejected. Replace it on this computer.'
+		});
+		const wire = JSON.stringify(report);
+		for (const leaked of ['FAKE', 'hunter2', 'db.internal', 'Fix external']) expect(wire).not.toContain(leaked);
+	});
+
+	it('an aged refusal reads unknown and keeps the last failure beside it (review 6b)', async () => {
+		const runs = new AgentRunHistory({ now: () => NOW });
+		runs.observeAuth('claude-code', SIGNED_IN);
+		runs.note({ provider: 'claude-code', status: 'failed', cliError: { text: SESSION_EXPIRED } });
+		const report = await buildAgentReadinessReport({
+			drivable: () => drivable,
+			auth: async () => answered(SIGNED_IN),
+			history: runs,
+			now: () => NOW + 3 * DAY
+		});
+		expect(report.agents[0]).toMatchObject({
+			status: 'unknown',
+			reasonCode: 'verdict_stale',
+			reason: 'The last run was refused and none has run since, so the current state is not known.',
+			lastFailureAt: ISO,
+			lastFailureKind: 'not_signed_in',
+			lastFailureCode: 'session_expired'
+		});
+	});
+
+	it('a startup lookup that timed out is unknown, not "not installed" (review S5)', async () => {
+		const report = await buildAgentReadinessReport({
+			drivable: () => [
+				{ provider: 'claude-code', executable: null, version: null, probeTimedOut: true },
+				{ provider: 'codex', executable: null, version: null, probeTimedOut: true }
+			],
+			auth: async () => ({ state: 'unanswered' }),
+			history: new AgentRunHistory({ now: () => NOW }),
+			now: () => NOW
+		});
+		expect(report.agents).toHaveLength(2);
+		for (const agent of report.agents) {
+			expect(agent).toMatchObject({
+				installed: null,
+				status: 'unknown',
+				reasonCode: 'probe_timed_out',
+				reason: describeFleetAgentReason('probe_timed_out')
+			});
+		}
+	});
+
+	it('a status command that did not answer, with the last success 3 days old, is unknown (review S5)', async () => {
+		const report = await buildAgentReadinessReport({
+			drivable: () => [{ provider: 'claude-code', executable: '/opt/claude', version: '2.0.1' }],
+			auth: async () => ({ state: 'unanswered' }),
+			history: new AgentRunHistory({
+				now: () => NOW,
+				initial: {
+					version: 1,
+					recordedAt: '2026-11-07T12:00:00.000Z',
+					agents: {
+						'claude-code': emptyEntry({ lastSuccessAt: '2026-11-07T12:00:00.000Z' })
+					}
+				}
+			}),
+			now: () => NOW
+		});
+		expect(report.agents[0]).toMatchObject({
+			installed: true,
+			signedIn: null,
+			status: 'unknown',
+			reasonCode: 'status_unanswered',
+			lastSuccessAt: '2026-11-07T12:00:00.000Z'
+		});
 	});
 
 	it('never asks a CLI that is not installed, and a status command that throws is that CLI`s unknown', async () => {
@@ -863,7 +1554,7 @@ describe('buildAgentReadinessReport', () => {
 		});
 		const report = await buildAgentReadinessReport({
 			drivable: () => drivable,
-			auth: async () => SIGNED_IN,
+			auth: async () => answered(SIGNED_IN),
 			history: runs,
 			now: () => NOW
 		});
@@ -872,21 +1563,32 @@ describe('buildAgentReadinessReport', () => {
 		]);
 	});
 
-	it('carries no credential: the report is built from labels, statuses and timestamps only', async () => {
+	it('a window with no reset time expires after its own length (review item 8)', async () => {
 		const runs = new AgentRunHistory({ now: () => NOW });
 		runs.note({
 			provider: 'claude-code',
-			status: 'failed',
-			summary: `Invalid API key ${FAKE_API_KEY} · Fix external API key`
+			status: 'succeeded',
+			usage: [
+				{ window: 'five_hour', usedPercent: 90, resetsAt: null, windowMinutes: 300 },
+				{ window: 'weekly', usedPercent: 20, resetsAt: null, windowMinutes: 10_080 }
+			]
 		});
-		const report = await buildAgentReadinessReport({
-			drivable: () => drivable,
-			auth: async () => ({ signedIn: true, method: 'api_key', account: null }),
-			history: runs,
-			now: () => NOW
-		});
-		expect(report.agents[0]?.status).toBe('not_signed_in');
-		expect(report.agents[0]?.reason).toBe('Invalid API key [redacted] · Fix external API key');
-		expect(JSON.stringify(report)).not.toContain('FAKE');
+		const at = async (nowMs: number) =>
+			(
+				await buildAgentReadinessReport({
+					drivable: () => drivable,
+					auth: async () => answered(SIGNED_IN),
+					history: runs,
+					now: () => nowMs
+				})
+			).agents[0];
+		expect((await at(NOW + 4 * HOUR))?.usage?.map((window) => window.window)).toEqual(['five_hour', 'weekly']);
+		const later = await at(NOW + 6 * HOUR);
+		expect(later?.usage).toEqual([{ window: 'weekly', usedPercent: 20, resetsAt: null, windowMinutes: 10_080 }]);
+		// The age the popup shows the bars with.
+		expect(later?.usageObservedAt).toBe(ISO);
+		const muchLater = await at(NOW + 8 * DAY);
+		expect(muchLater?.usage).toBeUndefined();
+		expect(muchLater?.usageObservedAt).toBeUndefined();
 	});
 });

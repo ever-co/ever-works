@@ -73,6 +73,18 @@ export interface CommandRunOptions {
 	 * vendor tool is reaped at the deadline rather than lingering.
 	 */
 	timeoutMs?: number;
+	/**
+	 * Start the process in EXACTLY this environment instead of the runner's
+	 * default (the daemon's own). Fleet agent readiness passes the
+	 * allow-listed environment a run gets (`buildNodeCheckEnv`), so a CLI's
+	 * status command sees the credentials runs see — no more and no less.
+	 */
+	env?: Readonly<Record<string, string>>;
+	/**
+	 * Close the child's stdin at once, so nothing can wait for input. A
+	 * status command must never be able to sit at a prompt.
+	 */
+	closeStdin?: boolean;
 }
 
 export interface CommandRunner {

@@ -520,6 +520,9 @@ describe('runAgentTaskJob — model-cli execution', () => {
 	});
 
 	describe('fleet agent readiness — what a real run proves, reported to onModelRun', () => {
+		const READINESS_NOW = Date.parse('2026-11-10T12:00:00.000Z');
+		const lines = (...events: unknown[]) => events.map((event) => JSON.stringify(event)).join('\n');
+
 		it('reports a success with the usage windows the CLI`s own stream carried', async () => {
 			const { spawnFn } = recordingSpawn([]);
 			const stream = [
@@ -542,16 +545,23 @@ describe('runAgentTaskJob — model-cli execution', () => {
 			);
 
 			expect(outcome.status).toBe('succeeded');
+			// Exactly this: no summary, no output tail — nothing the model wrote —
+			// and the NAMES of the credentials the run was granted, never a value.
 			expect(runs).toEqual([
 				{
 					provider: 'claude-code',
 					status: 'succeeded',
-					summary: 'Implemented the change.',
-					outputTail: null,
+					cliError: null,
 					outputTokens: null,
 					usage: [
-						{ window: 'five_hour', usedPercent: 42, resetsAt: new Date(1_794_000_000_000).toISOString() }
-					]
+						{
+							window: 'five_hour',
+							usedPercent: 42,
+							resetsAt: new Date(1_794_000_000_000).toISOString(),
+							windowMinutes: 300
+						}
+					],
+					envPassthrough: ['CLAUDE_CODE_OAUTH_TOKEN']
 				}
 			]);
 		});
@@ -560,7 +570,8 @@ describe('runAgentTaskJob — model-cli execution', () => {
 			const { spawnFn } = recordingSpawn([]);
 			const sentence =
 				'Your organization has disabled Claude subscription access for Claude Code · Use an Anthropic API key instead, or ask your admin to enable access';
-			const history = new AgentRunHistory({ now: () => Date.parse('2026-11-10T12:00:00.000Z') });
+			const history = new AgentRunHistory({ now: () => READINESS_NOW });
+			const runs: AgentRunObservation[] = [];
 			const outcome = await runAgentTaskJob(
 				job(payload),
 				baseIo({
@@ -568,7 +579,10 @@ describe('runAgentTaskJob — model-cli execution', () => {
 					scratchFs: scratchFs(
 						JSON.stringify({ type: 'result', is_error: true, subtype: 'success', result: sentence })
 					),
-					onModelRun: (run) => history.note(run)
+					onModelRun: (run) => {
+						runs.push(run);
+						history.note(run);
+					}
 				})
 			);
 
@@ -576,8 +590,136 @@ describe('runAgentTaskJob — model-cli execution', () => {
 			expect(outcome.status).toBe('failed');
 			expect(outcome.failureKind).toBeUndefined();
 			expect(outcome.failureReason).toContain(`claude-code reported an error: ${sentence}`);
-			expect(history.get('claude-code').failure).toMatchObject({ kind: 'access_denied', reason: sentence });
+			// The observation carries the CLI's own error — the same channel as that reason.
+			expect(runs[0]?.cliError).toEqual({ text: sentence, apiStatus: null, errorClass: null });
+			// What is KEPT of it is a code: no word of the sentence.
+			expect(history.get('claude-code').failure).toEqual({
+				kind: 'access_denied',
+				code: 'org_access_disabled',
+				window: null,
+				resetsAt: null,
+				until: null,
+				usageLimit: false,
+				at: '2026-11-10T12:00:00.000Z',
+				authFingerprint: null
+			});
+			expect(JSON.stringify(history.record())).not.toContain('organization');
 			expect(history.get('claude-code').lastSuccessAt).toBeNull();
+		});
+
+		it('a failed Claude run whose ASSISTANT text mentions "not logged in" leaves no verdict (review S1)', async () => {
+			const { spawnFn } = recordingSpawn([]);
+			const stream = lines(
+				{ type: 'system', subtype: 'init', session_id: 'sess-1' },
+				{
+					type: 'assistant',
+					message: {
+						role: 'assistant',
+						content: [
+							{
+								type: 'text',
+								text: 'I updated the middleware.\nThe handler now returns 401 when the user is not logged in, but two tests still fail.'
+							}
+						]
+					}
+				},
+				{
+					type: 'result',
+					subtype: 'error_max_turns',
+					is_error: true,
+					errors: ['Reached maximum number of turns (3)'],
+					usage: { input_tokens: 100, output_tokens: 5321 },
+					session_id: 'sess-1'
+				}
+			);
+			const history = new AgentRunHistory({ now: () => READINESS_NOW });
+			const runs: AgentRunObservation[] = [];
+			const outcome = await runAgentTaskJob(
+				job(payload),
+				baseIo({
+					spawnFn,
+					scratchFs: scratchFs(stream),
+					onModelRun: (run) => {
+						runs.push(run);
+						history.note(run);
+					}
+				})
+			);
+
+			expect(outcome.status).toBe('failed');
+			expect(runs).toHaveLength(1);
+			expect(JSON.stringify(runs[0])).not.toContain('logged in');
+			expect(runs[0]?.outputTokens).toBe(5321);
+			expect(history.get('claude-code').failure).toBeNull();
+		});
+
+		it('a failed Codex run whose AGENT MESSAGE talks about its sandbox leaves no verdict (review S1)', async () => {
+			// The model step exits 1; the last agent message is the model's own.
+			const { spawnFn } = recordingSpawn([[CLAUDE, 1]]);
+			const stream = lines(
+				{ type: 'thread.started', thread_id: 'thread-1' },
+				{
+					type: 'item.completed',
+					item: {
+						id: 'i1',
+						type: 'agent_message',
+						text: 'Network access is disabled in this sandbox, so I could not run npm install.'
+					}
+				},
+				{ type: 'turn.completed', usage: { input_tokens: 10, cached_input_tokens: 0, output_tokens: 900 } }
+			);
+			const history = new AgentRunHistory({ now: () => READINESS_NOW });
+			const runs: AgentRunObservation[] = [];
+			const outcome = await runAgentTaskJob(
+				job({
+					...payload,
+					execution: { ...payload.execution, provider: 'codex', envPassthrough: ['CODEX_ACCESS_TOKEN'] }
+				}),
+				baseIo({
+					spawnFn,
+					modelCli: { 'claude-code': null, codex: CLAUDE },
+					scratchFs: scratchFs(stream),
+					onModelRun: (run) => {
+						runs.push(run);
+						history.note(run);
+					}
+				})
+			);
+
+			expect(outcome.status).toBe('failed');
+			expect(runs).toEqual([
+				{
+					provider: 'codex',
+					status: expect.stringMatching(/^(failed|error)$/),
+					cliError: null,
+					outputTokens: 900,
+					envPassthrough: ['CODEX_ACCESS_TOKEN']
+				}
+			]);
+			expect(history.get('codex').failure).toBeNull();
+		});
+
+		it('a Codex run the CLI itself refused IS a verdict — from its `error` event, not from a message', async () => {
+			const { spawnFn } = recordingSpawn([[CLAUDE, 1]]);
+			const stream = lines(
+				{ type: 'thread.started', thread_id: 'thread-1' },
+				{ type: 'error', message: 'unexpected status 401 Unauthorized: Your authentication token has expired' },
+				{ type: 'turn.failed', error: { message: 'unexpected status 401 Unauthorized' } }
+			);
+			const history = new AgentRunHistory({ now: () => READINESS_NOW });
+			await runAgentTaskJob(
+				job({
+					...payload,
+					execution: { ...payload.execution, provider: 'codex', envPassthrough: ['CODEX_ACCESS_TOKEN'] }
+				}),
+				baseIo({
+					spawnFn,
+					modelCli: { 'claude-code': null, codex: CLAUDE },
+					scratchFs: scratchFs(stream),
+					onModelRun: (run) => history.note(run)
+				})
+			);
+			expect(history.get('codex').failure).toMatchObject({ kind: 'not_signed_in', code: 'unauthorized' });
 		});
 
 		it('an observer that throws never changes the run', async () => {

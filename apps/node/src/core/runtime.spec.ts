@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { CapabilityEnvironment, CommandRunner } from './capabilities';
+import type { CapabilityEnvironment, CommandRunOptions, CommandRunner } from './capabilities';
 import type { FetchLike } from './fleet-client';
 import type { HealthProbeIo } from './health-probe';
 import { createLogger, type LogEntry } from './logger';
@@ -1298,16 +1298,30 @@ describe('fleet agent readiness wiring', () => {
 		heartbeatIntervalMs: 30_000,
 		enrolledAt: '2026-11-10T09:00:00.000Z'
 	};
+	const READINESS_NOW = Date.parse('2026-11-10T12:00:00.000Z');
+
+	interface Spawned {
+		call: string;
+		options: CommandRunOptions | undefined;
+	}
 
 	/** A machine with a signed-in Claude Code pinned at /opt/claude and nothing else. */
-	function cliRunner(calls: string[] = []): CommandRunner {
+	function cliRunner(spawned: Spawned[] = []): CommandRunner {
 		return {
-			run: async (command, args) => {
-				calls.push(`${command} ${args.join(' ')}`);
+			run: async (command, args, options) => {
+				const call = `${command} ${args.join(' ')}`;
+				spawned.push({ call, options });
 				if (command === '/opt/claude' && args[0] === '--version') {
 					return { code: 0, stdout: '2.1.319 (Claude Code)', stderr: '' };
 				}
-				if (command === '/opt/claude' && args.join(' ') === 'auth status --json') {
+				if (call === '/opt/claude auth --help') {
+					return {
+						code: 0,
+						stdout: 'Usage: claude auth [options] [command]\n\nCommands:\n  status  Show authentication status\n',
+						stderr: ''
+					};
+				}
+				if (call === '/opt/claude auth status --json') {
 					return {
 						code: 0,
 						stdout: JSON.stringify({
@@ -1346,18 +1360,27 @@ describe('fleet agent readiness wiring', () => {
 		};
 	}
 
-	function deps(fetchFn: FetchLike, calls: string[] = []) {
+	function deps(fetchFn: FetchLike, spawned: Spawned[] = [], now?: () => number) {
 		return {
 			...io(fetchFn).io,
-			runner: cliRunner(calls),
-			environment: { ...environment, modelCli: { 'claude-code': '/opt/claude', codex: null } }
+			runner: cliRunner(spawned),
+			environment: { ...environment, modelCli: { 'claude-code': '/opt/claude', codex: null } },
+			...(now ? { now } : {})
 		};
 	}
 
+	/**
+	 * `auth --help` is spawned by the readiness probe and by nothing else (the
+	 * older model-identity probe asks `auth status --json` directly), so its
+	 * count is the number of times the readiness probe really ran.
+	 */
+	const readinessProbes = (spawned: Spawned[]) =>
+		spawned.filter((entry) => entry.call.endsWith('auth --help')).length;
+
 	it('the heartbeat carries every agent CLI with whether it can work, from free status commands only', async () => {
 		const bodies: Array<{ url: string; body: Record<string, unknown> }> = [];
-		const calls: string[] = [];
-		const runtime = createNodeRuntime(config, deps(recordingFetch(bodies), calls), { env: {} });
+		const spawned: Spawned[] = [];
+		const runtime = createNodeRuntime(config, deps(recordingFetch(bodies), spawned), { env: {} });
 		await runtime.loop.start();
 		runtime.loop.stop();
 
@@ -1372,42 +1395,84 @@ describe('fleet agent readiness wiring', () => {
 				authMethod: 'subscription',
 				account: 'owner@example.com (Acme, max)',
 				status: 'ready',
+				reasonCode: null,
 				reason: null
 			}),
 			expect.objectContaining({ provider: 'codex', installed: false, status: 'not_installed' })
 		]);
-		// Nothing the node spawned for this could start a model call.
-		const spawned = calls.filter((call) => call.startsWith('/opt/claude'));
-		expect(spawned).toContain('/opt/claude auth status --json');
-		expect(spawned.some((call) => / (-p|--print)( |$)/.test(call))).toBe(false);
+		// Nothing the node spawned for this could start a model call: the help
+		// first, then the status command, and never a prompt flag.
+		const calls = spawned.map((entry) => entry.call).filter((call) => call.startsWith('/opt/claude'));
+		expect(calls.indexOf('/opt/claude auth --help')).toBeGreaterThanOrEqual(0);
+		expect(calls.some((call) => / (-p|--print)( |$)/.test(call))).toBe(false);
+		expect(readinessProbes(spawned)).toBe(1);
+	});
+
+	it('asks the CLI in the environment a RUN gets: one credential, stdin closed, nothing else of the daemon`s', async () => {
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+		try {
+			const spawned: Spawned[] = [];
+			// Plainly fake values: the test is about which NAMES reach the status command.
+			const daemonEnv = {
+				PATH: '/usr/bin',
+				HOME: '/home/owner',
+				CLAUDE_CODE_OAUTH_TOKEN: 'fake-subscription-token',
+				ANTHROPIC_API_KEY: 'fake-console-key',
+				DATABASE_URL: 'fake-daemon-only-value'
+			};
+			const runtime = createNodeRuntime(config, deps(recordingFetch([]), spawned), { env: daemonEnv });
+			await runtime.loop.start();
+			runtime.loop.stop();
+
+			const help = spawned.find((entry) => entry.call === '/opt/claude auth --help');
+			const helpIndex = spawned.findIndex((entry) => entry.call === '/opt/claude auth --help');
+			const status = spawned
+				.slice(helpIndex + 1)
+				.find((entry) => entry.call === '/opt/claude auth status --json');
+			for (const probe of [help, status]) {
+				expect(probe?.options).toMatchObject({ timeoutMs: 15_000, closeStdin: true });
+				const env = probe?.options?.env ?? {};
+				// The exclusive choice a run gets: the subscription token, not the Console key.
+				expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBe('fake-subscription-token');
+				expect(env).not.toHaveProperty('ANTHROPIC_API_KEY');
+				expect(env).not.toHaveProperty('DATABASE_URL');
+				expect(env.PATH).toBe('/usr/bin');
+			}
+		} finally {
+			warn.mockRestore();
+		}
 	});
 
 	it('a restart restores what the last run proved: signed in, and still access denied', async () => {
 		const bodies: Array<{ url: string; body: Record<string, unknown> }> = [];
-		const sentence = 'Your organization has disabled Claude subscription access for Claude Code';
-		const runtime = createNodeRuntime(config, deps(recordingFetch(bodies)), {
-			env: {},
-			agentRunHistory: {
-				version: 1,
-				recordedAt: '2026-11-10T08:00:00.000Z',
-				agents: {
-					'claude-code': {
-						lastSuccessAt: '2026-11-08T10:00:00.000Z',
-						failure: {
-							kind: 'access_denied',
-							reason: sentence,
-							resetsAt: null,
-							until: null,
-							usageLimit: false,
-							at: '2026-11-10T08:00:00.000Z',
-							authFingerprint: 'in|subscription|owner@example.com (Acme, max)'
-						},
-						usage: [],
-						usageObservedAt: null
+		const runtime = createNodeRuntime(
+			config,
+			deps(recordingFetch(bodies), [], () => READINESS_NOW),
+			{
+				env: {},
+				agentRunHistory: {
+					version: 1,
+					recordedAt: '2026-11-10T08:00:00.000Z',
+					agents: {
+						'claude-code': {
+							lastSuccessAt: '2026-11-08T10:00:00.000Z',
+							failure: {
+								kind: 'access_denied',
+								code: 'org_access_disabled',
+								window: null,
+								resetsAt: null,
+								until: null,
+								usageLimit: false,
+								at: '2026-11-10T08:00:00.000Z',
+								authFingerprint: 'in|subscription|owner@example.com (Acme, max)'
+							},
+							usage: [],
+							usageObservedAt: null
+						}
 					}
 				}
 			}
-		});
+		);
 		await runtime.loop.start();
 		runtime.loop.stop();
 
@@ -1416,9 +1481,11 @@ describe('fleet agent readiness wiring', () => {
 		expect(claude).toMatchObject({
 			signedIn: true,
 			status: 'access_denied',
-			reason: sentence,
+			reasonCode: 'org_access_disabled',
+			reason: 'The organization has disabled subscription access for this CLI. Use an API key, or ask an admin to enable access.',
 			lastSuccessAt: '2026-11-08T10:00:00.000Z',
-			lastFailureAt: '2026-11-10T08:00:00.000Z'
+			lastFailureAt: '2026-11-10T08:00:00.000Z',
+			lastFailureKind: 'access_denied'
 		});
 	});
 
@@ -1434,28 +1501,72 @@ describe('fleet agent readiness wiring', () => {
 		expect(bodies[0].body).not.toHaveProperty('agents');
 	});
 
-	it('against a platform that predates the field: one 400, then beats without it and stops asking the CLIs', async () => {
-		const bodies: Array<{ url: string; body: Record<string, unknown> }> = [];
-		const calls: string[] = [];
-		const runtime = createNodeRuntime(config, deps(recordingFetch(bodies, true), calls), { env: {} });
-		await runtime.loop.start();
+	describe('a platform that predates the field', () => {
+		// Six minutes: past the readiness probe's five-minute cache, so on the
+		// second beat ONLY the `acceptsField('agents')` gate stands between the
+		// node and another round of status commands.
+		const SIX_MINUTES = 6 * 60_000;
 
-		expect(runtime.loop.getState().state).toBe('connected');
-		expect(runtime.loop.acceptsField('agents')).toBe(false);
-		const beats = () => bodies.filter((entry) => entry.url.endsWith('/api/fleet/heartbeat'));
-		expect(beats()).toHaveLength(2);
-		expect(beats()[0].body).toHaveProperty('agents');
-		expect(beats()[1].body).not.toHaveProperty('agents');
-		// Everything the older platform does understand still went.
-		expect(beats()[1].body).toMatchObject({ platform: 'linux/x64', version: '0.1.0' });
+		it('one 400, then beats without it and stops asking the CLIs — even once the probe cache has expired', async () => {
+			const bodies: Array<{ url: string; body: Record<string, unknown> }> = [];
+			const spawned: Spawned[] = [];
+			let clock = READINESS_NOW;
+			const runtime = createNodeRuntime(
+				config,
+				deps(recordingFetch(bodies, true), spawned, () => clock),
+				{
+					env: {}
+				}
+			);
+			await runtime.loop.start();
 
-		const statusCalls = () => calls.filter((call) => call.endsWith('auth status --json')).length;
-		const before = statusCalls();
-		await runtime.loop.tick();
-		runtime.loop.stop();
-		expect(beats()).toHaveLength(3);
-		expect(beats()[2].body).not.toHaveProperty('agents');
-		// The model-identity probe (older, cached) may still ask; the readiness probe does not run at all.
-		expect(statusCalls()).toBe(before);
+			expect(runtime.loop.getState().state).toBe('connected');
+			expect(runtime.loop.acceptsField('agents')).toBe(false);
+			const beats = () => bodies.filter((entry) => entry.url.endsWith('/api/fleet/heartbeat'));
+			expect(beats()).toHaveLength(2);
+			expect(beats()[0].body).toHaveProperty('agents');
+			expect(beats()[1].body).not.toHaveProperty('agents');
+			// Everything the older platform does understand still went.
+			expect(beats()[1].body).toMatchObject({ platform: 'linux/x64', version: '0.1.0' });
+			expect(readinessProbes(spawned)).toBe(1);
+
+			clock += SIX_MINUTES;
+			await runtime.loop.tick();
+			clock += SIX_MINUTES;
+			await runtime.loop.tick();
+			runtime.loop.stop();
+			expect(beats()).toHaveLength(4);
+			expect(beats()[2].body).not.toHaveProperty('agents');
+			expect(beats()[3].body).not.toHaveProperty('agents');
+			// The gate, not the cache: the readiness probe did not run again.
+			expect(readinessProbes(spawned)).toBe(1);
+		});
+
+		it('control: against a platform that accepts the field, the same six minutes DO bring a fresh probe', async () => {
+			const bodies: Array<{ url: string; body: Record<string, unknown> }> = [];
+			const spawned: Spawned[] = [];
+			let clock = READINESS_NOW;
+			const runtime = createNodeRuntime(
+				config,
+				deps(recordingFetch(bodies), spawned, () => clock),
+				{ env: {} }
+			);
+			await runtime.loop.start();
+			expect(runtime.loop.acceptsField('agents')).toBe(true);
+			expect(readinessProbes(spawned)).toBe(1);
+
+			// Inside the cache: a beat, and no new status command.
+			clock += 60_000;
+			await runtime.loop.tick();
+			expect(readinessProbes(spawned)).toBe(1);
+
+			clock += SIX_MINUTES;
+			await runtime.loop.tick();
+			runtime.loop.stop();
+			expect(readinessProbes(spawned)).toBe(2);
+			const beats = bodies.filter((entry) => entry.url.endsWith('/api/fleet/heartbeat'));
+			expect(beats).toHaveLength(3);
+			for (const beat of beats) expect(beat.body).toHaveProperty('agents');
+		});
 	});
 });

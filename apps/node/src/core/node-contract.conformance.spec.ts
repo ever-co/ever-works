@@ -301,6 +301,7 @@ describe('what the node actually puts on the wire', () => {
 						authMethod: 'subscription',
 						account: null,
 						status: 'ready',
+						reasonCode: null,
 						reason: null,
 						checkedAt: '2026-11-10T12:00:00.000Z'
 					}

@@ -85,6 +85,7 @@ import {
 	ModelCliCommandError,
 	modelCliMcpIsolationEnv,
 	parseModelCliResult,
+	readModelCliError,
 	readCodexUserSettings,
 	type CodexUserSettings,
 	redactCommandResult,
@@ -256,7 +257,8 @@ export interface AgentTaskIo extends AcceptanceChecksIo {
 	/**
 	 * Fleet agent readiness — told about EVERY finished model-CLI invocation:
 	 * the parsed verdict, plus the usage windows the CLI's own stream carried
-	 * about its seat. How the node learns, from real runs and at no cost,
+	 * about its seat, and what the CLI ITSELF reported when it failed (never
+	 * the model's words). How the node learns, from real runs and at no cost,
 	 * that an agent just worked or why it was refused (`AgentRunHistory`).
 	 * A report about the run, never a verdict on it: a throwing observer is
 	 * swallowed and can never fail or alter the run.
@@ -2712,18 +2714,21 @@ async function invokeModelCliStep(input: {
 		input.runSecretValues
 	);
 	// Fleet agent readiness: what this invocation proved about the CLI's seat.
-	// From the REDACTED verdict (never the raw text), and only the seat's own
-	// usage events out of the raw stream.
+	// ONLY what the CLI itself reported (`readModelCliError`) — never the
+	// summary or the output tail, which carry the model's words — plus the
+	// seat's own usage events out of the raw stream, and the names (never the
+	// values) of the credentials this run was granted.
 	if (io.onModelRun) {
 		try {
 			const usage = execution.provider === 'claude-code' ? readClaudeRateLimitWindows(rawOutput) : [];
 			io.onModelRun({
 				provider: execution.provider,
 				status: parsed.status,
-				summary: parsed.summary,
-				outputTail: parsed.outputTail ?? null,
+				cliError:
+					parsed.status === 'succeeded' ? null : readModelCliError(execution.provider, rawOutput, result),
 				outputTokens: parsed.outputTokens ?? null,
-				...(usage.length > 0 ? { usage } : {})
+				...(usage.length > 0 ? { usage } : {}),
+				envPassthrough: [...(execution.envPassthrough ?? [])]
 			});
 		} catch {
 			// Readiness is a report about the run, never a reason to fail it.
