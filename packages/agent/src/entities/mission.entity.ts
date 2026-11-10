@@ -304,7 +304,7 @@ export class Mission {
 
     /**
      * APW-08 T34 (FR-51) — what the Mission's tick files: `ideas` (every Mission before P2),
-     * `tasks` (Tasks on its attached App Works) or `both`. Read through
+     * `tasks` (Tasks on its attached App or Repository Works) or `both`. Read through
      * `normalizeMissionOutputMode` (`missions/mission-task-output.ts`); migration
      * 1792360000000-AddMissionTaskOutput.
      */
@@ -320,8 +320,9 @@ export class Mission {
     taskOutput?: { tasksPerTick?: number; openTasksCap?: number; agentId?: string } | null;
 
     /**
-     * APW-08 T34 (FR-54, APW08-G21) — when the once-per-day "No attached App Work to file Tasks
-     * on." notice was last recorded. NULL = never.
+     * APW-08 T34 (FR-54, APW08-G21) — when the once-per-day "nothing to file" notice (no
+     * attached App or Repository Work to file Tasks on, or nothing new on them) was last
+     * recorded. NULL = never.
      */
     @PortableDateColumn({ nullable: true })
     taskOutputNoticeAt?: Date | null;

@@ -215,7 +215,7 @@ export class CreateMissionDto {
         required: false,
         enum: ['ideas', 'tasks', 'both'],
         description:
-            'APW-08 T34 (FR-51) — what the tick files: Ideas, Tasks on attached App Works, or both.',
+            'APW-08 T34 (FR-51) — what the tick files: Ideas, Tasks on attached App or Repository Works (a Repository Work only while its Task isolation is on), or both.',
     })
     @IsOptional()
     @IsIn(['ideas', 'tasks', 'both'])
@@ -330,7 +330,7 @@ export class UpdateMissionDto {
         required: false,
         enum: ['ideas', 'tasks', 'both'],
         description:
-            'APW-08 T34 (FR-51) — what the tick files: Ideas, Tasks on attached App Works, or both.',
+            'APW-08 T34 (FR-51) — what the tick files: Ideas, Tasks on attached App or Repository Works (a Repository Work only while its Task isolation is on), or both.',
     })
     @IsOptional()
     @IsIn(['ideas', 'tasks', 'both'])

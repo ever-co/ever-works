@@ -1,6 +1,6 @@
 import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Not, Repository } from 'typeorm';
+import { In, IsNull, Not, Repository, type FindOptionsWhere } from 'typeorm';
 import { ModuleRef } from '@nestjs/core';
 import { ActivityLogService } from '../activity-log/activity-log.service';
 import { ActivityActionType, ActivityStatus } from '../entities/activity-log.types';
@@ -21,7 +21,7 @@ import {
     DomainEventPublisher,
     recordAfterWrite,
 } from '../domain-events/domain-event-publisher.service';
-import { isAppWorkKind } from '@ever-works/contracts';
+import { isRepositoryWorkKind } from '@ever-works/contracts';
 import { Task, TaskStatus } from '../entities/task.entity';
 import { TasksService } from '../tasks-domain/tasks.service';
 import { MissionWorkRepository } from '../database/repositories/mission-work.repository';
@@ -40,7 +40,8 @@ import {
     type AppWorksTelemetrySink,
 } from '../app-works/app-works-telemetry.service';
 import {
-    MISSION_TASK_OUTPUT_RELATIONS,
+    missionTaskOutputEligibility,
+    missionTaskOutputPausedBySwitch,
     normalizeMissionOutputMode,
     normalizeMissionTaskOutput,
     type MissionTaskOutput,
@@ -51,8 +52,72 @@ import {
     normalizeTaskTitle,
 } from './mission-task-planner.service';
 
-/** APW-08 T35 — at most this many App Works get Tasks per tick (plan §2.7). */
+/** APW-08 T35 — at most this many App or Repository Works get Tasks per tick (plan §2.7). */
 export const MISSION_TASK_OUTPUT_MAX_WORKS = 5;
+
+/** A Task's cached pull-request state once the pull request was closed WITHOUT merging. */
+export const MISSION_CLOSED_UNMERGED_PR_STATE = 'closed';
+
+/**
+ * The Mission's Tasks on one Work that count against `openTasksCap`: not Done or Cancelled, and
+ * not one whose pull request was closed without merging.
+ *
+ * A Task whose pull request is closed unmerged is not open work: nothing completes it (only a
+ * MERGE moves a Task to Done), so it would sit in review and hold a slot until a person cancelled
+ * it, and a Mission with a few rejected pull requests would stop filing for good. It is left
+ * out of the count here; its status is not touched.
+ *
+ * `prState` is nullable and SQL's `<>` drops NULLs, so the rule is two OR-ed branches: no
+ * pull-request state yet (no pull request, or one the status sweep has not read), or a state
+ * other than `closed` (`open`, `draft`, and `merged` — a merged Task that is not Done yet is
+ * still waiting on its delivery or an approver, so it still counts).
+ */
+export function missionOpenTasksWhere(base: {
+    workId: string;
+    missionId: string;
+}): FindOptionsWhere<Task>[] {
+    const open = { ...base, status: Not(In([TaskStatus.DONE, TaskStatus.CANCELLED])) };
+    return [
+        { ...open, prState: IsNull() },
+        { ...open, prState: Not(In([MISSION_CLOSED_UNMERGED_PR_STATE])) },
+    ];
+}
+
+/** Why a Task-output tick filed nothing, as the day's Activity entry records it. */
+export type MissionNothingToFileReason = 'no-app-work' | 'repo-isolation-off' | 'nothing-new';
+
+/** At most this many Work names are spelled out in a "nothing to file" Activity entry. */
+const MISSION_NOTICE_MAX_WORK_NAMES = 3;
+
+function quotedWorkNames(names: readonly string[]): string {
+    const shown = names.slice(0, MISSION_NOTICE_MAX_WORK_NAMES).map((name) => `"${name}"`);
+    const more = names.length - shown.length;
+    return more > 0 ? `${shown.join(', ')} and ${more} more` : shown.join(', ');
+}
+
+/**
+ * The text of the once-a-day "nothing to file" Activity entry (FR-54). `isolationOffWorkNames`
+ * are the attached Repository Works the tick skipped because their Task isolation is off: the
+ * entry names them and the setting, because that — not "nothing new" — is what the owner can act
+ * on. `no-app-work` keeps its code (stored on earlier entries) and now means "no App or
+ * Repository Work".
+ */
+export function describeMissionNothingToFile(
+    reason: MissionNothingToFileReason,
+    isolationOffWorkNames: readonly string[] = [],
+): string {
+    const isolationOff =
+        isolationOffWorkNames.length > 0
+            ? `Task isolation is off on the attached Repository Work${
+                  isolationOffWorkNames.length === 1 ? '' : 's'
+              } ${quotedWorkNames(isolationOffWorkNames)}, so no Tasks are filed there. ` +
+              "Turn on Task isolation in the Work's settings to let this Mission file Tasks on it."
+            : '';
+    if (reason === 'repo-isolation-off') return `Nothing filed. ${isolationOff}`;
+    if (reason === 'no-app-work') return 'No attached App or Repository Work to file Tasks on.';
+    const nothingNew = 'Nothing new to file on the attached App or Repository Works.';
+    return isolationOff ? `${nothingNew} ${isolationOff}` : nothingNew;
+}
 
 /** APW-08 T35 (FR-52) — the label every Mission-filed Task carries. */
 export const MISSION_TASK_LABEL = 'mission-task';
@@ -87,6 +152,15 @@ export function combineBothOutcomes(
     return { ...ideas, outcome, tasksFiled, message };
 }
 
+/** One Work a tick files Tasks on (see `MissionTickService.fileTaskOutput`). */
+interface MissionTaskOutputTarget {
+    workId: string;
+    workName: string;
+    /** `app` or `repo` — what the planner is told it plans for. */
+    workKind: 'app' | 'repo';
+    relation: 'improves' | 'operates';
+}
+
 /**
  * Review of #3061 — the lease one tick holds on a Mission's Task branch: the instant it holds it
  * until, kept current by every renewal so the release clears exactly what this tick last set.
@@ -114,7 +188,7 @@ export interface MissionTickOutcome {
         | 'cap-hit' // outstanding-Ideas cap reached
         | 'no-ideas' // generator returned 0 proposals
         | 'spawned' // 1+ Ideas created
-        | 'tasks-filed' // APW-08 T35 — 1+ Tasks filed on the Mission's App Works
+        | 'tasks-filed' // APW-08 T35 — 1+ Tasks filed on the Mission's App or Repository Works
         | 'no-tasks' // APW-08 T35 — the Task branch ran and filed nothing
         | 'failed'; // generator threw
     message?: string;
@@ -126,7 +200,7 @@ export interface MissionTickOutcome {
     outstanding?: number;
     /** Effective cap that was enforced (null = unlimited). */
     cap?: number | null;
-    /** APW-08 T35 — Tasks filed on the Mission's App Works this tick. */
+    /** APW-08 T35 — Tasks filed on the Mission's App or Repository Works this tick. */
     tasksFiled?: number;
 }
 
@@ -673,18 +747,24 @@ export class MissionTickService {
 
     /** PR-3 - best-effort activity write; no-ops when unwired. */
     /**
-     * APW-08 T35 (FR-51…FR-54) — the Task branch: for each App Work attached as Improves or
-     * Operates (at most {@link MISSION_TASK_OUTPUT_MAX_WORKS}), propose Tasks, drop a duplicate of
-     * an open Task's title, file the rest on the Work (Backlog when the Mission requires approval
-     * before creating, otherwise To do and started), within `tasksPerTick` and `openTasksCap`.
-     * Best-effort per Work: one Work's failure never stops the others or fails the Mission.
+     * APW-08 T35 (FR-51…FR-54) — the Task branch: for each App or Repository Work attached as
+     * Improves or Operates (at most {@link MISSION_TASK_OUTPUT_MAX_WORKS}), propose Tasks, drop a
+     * duplicate of an open Task's title, file the rest on the Work (Backlog when the Mission
+     * requires approval before creating, otherwise To do and started), within `tasksPerTick` and
+     * `openTasksCap`. Best-effort per Work: one Work's failure never stops the others or fails
+     * the Mission.
+     *
+     * Which Works count is {@link missionTaskOutputEligibility}: the kinds whose Tasks are
+     * delivered as pull requests (`workKindDeliversTasksAsPullRequests`), and — for a Repository
+     * Work — only while its Task isolation is on, because a Task there only becomes a branch and
+     * a pull request then. The tick never turns the setting on; it files nothing on that Work
+     * and says so (the Mission's `repoWorkTaskIsolationOff` warning, the day's Activity entry).
+     *
+     * APW-08 T49 (R-30) — the operator's App-changes switch is read per Work in
+     * {@link fileTaskOutput}, not here: it pauses App Work changes only, so a Mission with a
+     * Repository Work keeps filing on it while App changes are paused.
      */
     private async runTaskOutput(mission: Mission, now: Date): Promise<MissionTickOutcome> {
-        // APW-08 T49 (R-30, review of #3061) — while the operator has paused App changes, the
-        // Task branch neither pays for a planner call nor files anything. Read now, never cached.
-        if (!readAppWorkSwitches().changesEnabled) {
-            return { outcome: 'no-tasks', tasksFiled: 0, message: 'app-changes-paused' };
-        }
         const tasksService = this.tasksService();
         if (!this.taskPlanner || !this.missionWorks || !this.taskRows || !tasksService) {
             this.logger.warn(
@@ -816,26 +896,64 @@ export class MissionTickService {
             this.logger.warn(`Mission ${mission.id}: its Works could not be read (${err}).`);
             return { outcome: 'no-tasks', tasksFiled: 0, message: 'works-unreadable' };
         }
-        const eligible: Array<{
-            workId: string;
-            workName: string;
-            relation: 'improves' | 'operates';
-        }> = [];
+        // APW-08 T49 (R-30, review of #3061) — `EVER_WORKS_APP_CHANGES_ENABLED` pauses App Work
+        // changes, and only those (every other reader of it asks "is this an App Work?" first).
+        // Read now, never cached: while it is off an App Work is not a target this tick — no
+        // planner call is paid for it and nothing is filed on it — and a Repository Work is
+        // untouched by it.
+        const appChangesEnabled = readAppWorkSwitches().changesEnabled;
+        const eligible: MissionTaskOutputTarget[] = [];
+        const seen = new Set<string>();
+        const isolationOffWorkNames: string[] = [];
+        let pausedAppWorks = 0;
         for (const row of relations) {
-            if (eligible.length >= MISSION_TASK_OUTPUT_MAX_WORKS) break;
-            if (!(MISSION_TASK_OUTPUT_RELATIONS as readonly string[]).includes(row.relation))
+            const eligibility = missionTaskOutputEligibility(row);
+            // One verdict per Work: the first applicable row wins, as before (a Work attached
+            // both as Improves and as Operates is planned once).
+            if (eligibility === 'not-applicable' || seen.has(row.workId)) continue;
+            seen.add(row.workId);
+            const repository = isRepositoryWorkKind(row.workKind ?? null);
+            const workName = row.workName ?? (repository ? 'Repository' : 'App');
+            if (eligibility === 'isolation-off') {
+                isolationOffWorkNames.push(workName);
                 continue;
-            if (!isAppWorkKind(row.workKind ?? null)) continue;
-            if (eligible.some((entry) => entry.workId === row.workId)) continue;
+            }
+            if (missionTaskOutputPausedBySwitch(row, appChangesEnabled)) {
+                pausedAppWorks += 1;
+                continue;
+            }
+            if (eligible.length >= MISSION_TASK_OUTPUT_MAX_WORKS) continue;
             eligible.push({
                 workId: row.workId,
-                workName: row.workName ?? 'App',
+                workName,
+                workKind: repository ? 'repo' : 'app',
                 relation: row.relation as 'improves' | 'operates',
             });
         }
         if (eligible.length === 0) {
-            await this.recordNothingToFile(mission, now, 'no-app-work');
-            return { outcome: 'no-tasks', tasksFiled: 0, message: 'no-app-work' };
+            // A Repository Work the Mission cannot file on is the owner's to fix, so the day's
+            // entry says so even while App changes are paused. A pause alone records nothing,
+            // as before: it is the operator's doing, and the Mission is not misconfigured.
+            if (isolationOffWorkNames.length > 0) {
+                await this.recordNothingToFile(
+                    mission,
+                    now,
+                    'repo-isolation-off',
+                    isolationOffWorkNames,
+                );
+            } else if (pausedAppWorks === 0) {
+                await this.recordNothingToFile(mission, now, 'no-app-work');
+            }
+            return {
+                outcome: 'no-tasks',
+                tasksFiled: 0,
+                message:
+                    pausedAppWorks > 0
+                        ? 'app-changes-paused'
+                        : isolationOffWorkNames.length > 0
+                          ? 'repo-isolation-off'
+                          : 'no-app-work',
+            };
         }
 
         const output = await this.withReachableAgent(
@@ -889,12 +1007,16 @@ export class MissionTickService {
             mission.userId,
         );
         if (tasksFiled === 0 && !leaseLost) {
-            await this.recordNothingToFile(mission, now, 'nothing-new');
+            await this.recordNothingToFile(mission, now, 'nothing-new', isolationOffWorkNames);
         }
         return {
             outcome: tasksFiled > 0 ? 'tasks-filed' : 'no-tasks',
             tasksFiled,
             message: `works=${eligible.length} filed=${tasksFiled} capped=${skippedCap} duplicates=${skippedDuplicate}${
+                isolationOffWorkNames.length > 0
+                    ? ` isolation-off=${isolationOffWorkNames.length}`
+                    : ''
+            }${pausedAppWorks > 0 ? ` app-paused=${pausedAppWorks}` : ''}${
                 leaseLost ? ' lease-lost' : ''
             }`,
         };
@@ -938,7 +1060,12 @@ export class MissionTickService {
         return { tasksPerTick: output.tasksPerTick, openTasksCap: output.openTasksCap };
     }
 
-    /** Is the Work still attached to the Mission as Improves or Operates (review of #3061)? */
+    /**
+     * Is the Work still one this Mission files Tasks on (review of #3061)? Still attached as
+     * Improves or Operates and — the same question the tick asked before the planner ran —
+     * still {@link missionTaskOutputEligibility eligible}: a Repository Work whose Task isolation
+     * was turned off while the planner ran gets nothing filed either.
+     */
     private async stillAttached(
         mission: Mission,
         workId: string,
@@ -951,9 +1078,7 @@ export class MissionTickService {
                 scope,
             );
             return relations.some(
-                (row) =>
-                    row.workId === workId &&
-                    (MISSION_TASK_OUTPUT_RELATIONS as readonly string[]).includes(row.relation),
+                (row) => row.workId === workId && missionTaskOutputEligibility(row) === 'eligible',
             );
         } catch {
             return false;
@@ -963,7 +1088,7 @@ export class MissionTickService {
     /** One Work's share of a tick (see {@link runTaskOutput}). */
     private async fileOnWork(
         mission: Mission,
-        target: { workId: string; workName: string; relation: 'improves' | 'operates' },
+        target: MissionTaskOutputTarget,
         output: MissionTaskOutput,
         requireApproval: boolean,
         scope: OwnershipScope | undefined,
@@ -976,13 +1101,11 @@ export class MissionTickService {
             return { filed: 0, cappedOut: false, duplicates: 0, leaseLost: true };
         }
         // Review of #3061 — the cap counts this Mission's open Tasks on the Work in SQL (a count
-        // carries no title, so it needs no visibility filter).
+        // carries no title, so it needs no visibility filter). "Open" leaves out a Task whose
+        // pull request was closed without merging ({@link missionOpenTasksWhere}): nothing ever
+        // completes that Task, so it must not hold a slot until a person cancels it.
         const openForMission = await this.taskRows!.count({
-            where: {
-                workId: target.workId,
-                missionId: mission.id,
-                status: Not(In([TaskStatus.DONE, TaskStatus.CANCELLED])),
-            },
+            where: missionOpenTasksWhere({ workId: target.workId, missionId: mission.id }),
         });
         if (openForMission >= output.openTasksCap) {
             return { filed: 0, cappedOut: true, duplicates: 0 };
@@ -1010,6 +1133,7 @@ export class MissionTickService {
                 id: target.workId,
                 name: work?.name ?? target.workName,
                 description: (work as { description?: string | null } | null)?.description ?? null,
+                kind: target.workKind,
             },
             recentTaskTitles: recent.map((task) => task.title),
             count,
@@ -1021,7 +1145,7 @@ export class MissionTickService {
         }
         if (!(await this.stillAttached(mission, target.workId, scope))) {
             this.logger.warn(
-                `Mission ${mission.id}: Work ${target.workId} was detached while the planner ran; nothing filed on it.`,
+                `Mission ${mission.id}: Work ${target.workId} was detached (or stopped taking Tasks) while the planner ran; nothing filed on it.`,
             );
             return { filed: 0, cappedOut: false, duplicates: 0 };
         }
@@ -1100,7 +1224,8 @@ export class MissionTickService {
     private async recordNothingToFile(
         mission: Mission,
         now: Date,
-        reason: 'no-app-work' | 'nothing-new',
+        reason: MissionNothingToFileReason,
+        isolationOffWorkNames: readonly string[] = [],
     ): Promise<void> {
         const last = mission.taskOutputNoticeAt ? new Date(mission.taskOutputNoticeAt) : null;
         if (last && last.toISOString().slice(0, 10) === now.toISOString().slice(0, 10)) return;
@@ -1114,10 +1239,7 @@ export class MissionTickService {
             'nothing-to-file',
             {
                 reason,
-                message:
-                    reason === 'no-app-work'
-                        ? 'No attached App Work to file Tasks on.'
-                        : 'Nothing new to file on the attached App Works.',
+                message: describeMissionNothingToFile(reason, isolationOffWorkNames),
             },
         );
         if (!written) return;
