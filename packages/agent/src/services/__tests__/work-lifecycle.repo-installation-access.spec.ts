@@ -11,10 +11,19 @@ jest.mock('@src/generators/website-generator/website-update.service', () => ({
     WebsiteUpdateService: class WebsiteUpdateService {},
 }));
 
-import { ForbiddenException } from '@nestjs/common';
+import 'reflect-metadata';
+import { ForbiddenException, Module } from '@nestjs/common';
+import {
+    OPTIONAL_DEPS_METADATA,
+    PARAMTYPES_METADATA,
+    SELF_DECLARED_DEPS_METADATA,
+} from '@nestjs/common/constants';
+import { Test } from '@nestjs/testing';
 import { WorkLifecycleService } from '../work-lifecycle.service';
 import { CreateWorkDto } from '@src/dto/create-work.dto';
 import type { User } from '@src/entities/user.entity';
+import { GitHubAppInstallationRepository } from '@src/database/repositories/github-app-installation.repository';
+import { GitHubAppInstallationRepoRepository } from '@src/database/repositories/github-app-installation-repository.repository';
 
 /**
  * Repository Work — the GitHub App installation fallback of
@@ -389,6 +398,21 @@ describe('WorkLifecycleService.createWork — repository kind, GitHub App instal
             expect(deps.gitFacade.canInstallationReadRepository).not.toHaveBeenCalled();
         });
 
+        it('never queries installations for a caller with no id (an undefined filter would match every row)', async () => {
+            const { service, deps } = makeService();
+            // TypeORM drops an `undefined` where-value, so `listByCreatedByUserId(undefined)`
+            // would return every installation in the deployment.
+            const anonymous = { email: 'nobody@example.com' } as User;
+
+            await expect(service.createWork(repoDto, anonymous)).rejects.toMatchObject({
+                status: 400,
+            });
+
+            expect(deps.installations.listByCreatedByUserId).not.toHaveBeenCalled();
+            expect(deps.gitFacade.canInstallationReadRepository).not.toHaveBeenCalled();
+            expect(deps.workRepo.create).not.toHaveBeenCalled();
+        });
+
         it('refuses an installation owned by ANOTHER user, even if a query returned it', async () => {
             const { service, deps } = makeService();
             // The repository method filters by owner; this pins that the
@@ -669,5 +693,135 @@ describe('WorkLifecycleService.createWork — repository kind, GitHub App instal
             const persisted = deps.workRepo.create.mock.calls[0][0];
             expect(persisted.sourceRepository).toBeUndefined();
         });
+    });
+});
+
+/**
+ * The two installation repositories are `@Optional()` constructor
+ * parameters, so a token Nest cannot resolve is not a boot failure: the
+ * service is built with `undefined` and the fallback silently does not exist.
+ * These pin that the tokens are the repository CLASSES, declared explicitly
+ * (`@Inject`), so that cannot happen through an import or compiler change —
+ * the defect `agent-templates.git-token.spec.ts` records for another service.
+ */
+describe('WorkLifecycleService — the installation repositories are injected by token', () => {
+    /** Where the two repositories sit in the constructor, read from the declared tokens. */
+    function slots(): { installations: number; installationRepos: number } {
+        const declared = (Reflect.getMetadata(SELF_DECLARED_DEPS_METADATA, WorkLifecycleService) ??
+            []) as { index: number; param: unknown }[];
+        const installations = declared.find(
+            (entry) => entry.param === GitHubAppInstallationRepository,
+        );
+        const installationRepos = declared.find(
+            (entry) => entry.param === GitHubAppInstallationRepoRepository,
+        );
+        return {
+            installations: installations?.index ?? -1,
+            installationRepos: installationRepos?.index ?? -1,
+        };
+    }
+
+    it('self-declares both repository classes as tokens, and both are optional', () => {
+        const { installations, installationRepos } = slots();
+        const optional = (Reflect.getMetadata(OPTIONAL_DEPS_METADATA, WorkLifecycleService) ??
+            []) as number[];
+
+        expect(installations).toBeGreaterThanOrEqual(0);
+        expect(installationRepos).toBe(installations + 1);
+        expect(optional).toEqual(expect.arrayContaining([installations, installationRepos]));
+    });
+
+    /**
+     * Build the service through Nest with every REQUIRED dependency stubbed
+     * (the tokens are read from the service's own metadata) and the two
+     * installation repositories either provided or not.
+     */
+    async function buildThroughNest(options: {
+        provideInstallationRepositories: boolean;
+        degradeEmittedTypes: boolean;
+    }): Promise<{ gitHubAppInstallations?: unknown; gitHubAppInstallationRepos?: unknown }> {
+        const { installations, installationRepos } = slots();
+        const emitted = (Reflect.getMetadata(PARAMTYPES_METADATA, WorkLifecycleService) ??
+            []) as unknown[];
+        const optional = new Set(
+            (Reflect.getMetadata(OPTIONAL_DEPS_METADATA, WorkLifecycleService) ?? []) as number[],
+        );
+        const required = emitted.filter((_token, index) => !optional.has(index));
+
+        if (options.degradeEmittedTypes) {
+            // What a type-only import or an import cycle ships: `Object`.
+            const shipped = [...emitted];
+            shipped[installations] = Object;
+            shipped[installationRepos] = Object;
+            Reflect.defineMetadata(PARAMTYPES_METADATA, shipped, WorkLifecycleService);
+        }
+
+        const installationsStub = { marker: 'installations' };
+        const installationReposStub = { marker: 'installation-repos' };
+
+        @Module({
+            providers: [
+                WorkLifecycleService,
+                ...required.map((token) => ({ provide: token as never, useValue: {} })),
+                ...(options.provideInstallationRepositories
+                    ? [
+                          { provide: GitHubAppInstallationRepository, useValue: installationsStub },
+                          {
+                              provide: GitHubAppInstallationRepoRepository,
+                              useValue: installationReposStub,
+                          },
+                      ]
+                    : []),
+            ],
+        })
+        class LifecycleHost {}
+
+        try {
+            const moduleRef = await Test.createTestingModule({
+                imports: [LifecycleHost],
+            }).compile();
+            const service = moduleRef.get(WorkLifecycleService) as unknown as {
+                gitHubAppInstallations?: unknown;
+                gitHubAppInstallationRepos?: unknown;
+            };
+            const seen = {
+                gitHubAppInstallations: service.gitHubAppInstallations,
+                gitHubAppInstallationRepos: service.gitHubAppInstallationRepos,
+            };
+            await moduleRef.close();
+            return seen;
+        } finally {
+            Reflect.defineMetadata(PARAMTYPES_METADATA, emitted, WorkLifecycleService);
+        }
+    }
+
+    it('receives the repositories its module provides', async () => {
+        const seen = await buildThroughNest({
+            provideInstallationRepositories: true,
+            degradeEmittedTypes: false,
+        });
+
+        expect(seen.gitHubAppInstallations).toEqual({ marker: 'installations' });
+        expect(seen.gitHubAppInstallationRepos).toEqual({ marker: 'installation-repos' });
+    });
+
+    it('still receives them when design:paramtypes says Object for both slots', async () => {
+        const seen = await buildThroughNest({
+            provideInstallationRepositories: true,
+            degradeEmittedTypes: true,
+        });
+
+        expect(seen.gitHubAppInstallations).toEqual({ marker: 'installations' });
+        expect(seen.gitHubAppInstallationRepos).toEqual({ marker: 'installation-repos' });
+    });
+
+    it('still builds without them — the fallback is simply absent', async () => {
+        const seen = await buildThroughNest({
+            provideInstallationRepositories: false,
+            degradeEmittedTypes: false,
+        });
+
+        expect(seen.gitHubAppInstallations).toBeUndefined();
+        expect(seen.gitHubAppInstallationRepos).toBeUndefined();
     });
 });

@@ -317,9 +317,19 @@ export class WorkLifecycleService {
         // repository the owner's own account cannot read is refused exactly
         // as before — the absence can never ACCEPT anything. Only
         // `kind: 'repo'` ever reads them.
+        //
+        // The tokens are SELF-DECLARED (`@Inject(Class)`, value imports) so
+        // they do not depend on the compiler's `design:paramtypes`: an
+        // `@Optional()` parameter whose emitted type degrades to `Object`
+        // (a type-only import, an import cycle) is silently built as
+        // `undefined`, and here that would switch the fallback off in
+        // production with no error anywhere — the defect
+        // `agent-templates.git-token.spec.ts` records.
         @Optional()
+        @Inject(GitHubAppInstallationRepository)
         private readonly gitHubAppInstallations?: GitHubAppInstallationRepository,
         @Optional()
+        @Inject(GitHubAppInstallationRepoRepository)
         private readonly gitHubAppInstallationRepos?: GitHubAppInstallationRepoRepository,
     ) {}
 
@@ -935,7 +945,10 @@ export class WorkLifecycleService {
      * Fails CLOSED. A missing dependency, a database error, a GitHub error
      * or anything unexpected is `null`, which the caller turns into the same
      * 400 it gives when no installation exists at all — so the answer never
-     * tells a caller which of these it was.
+     * tells a caller which of these it was. WHICH check stopped it is written
+     * to the server log only, as a fixed reason code beside the user id (no
+     * repository name, nothing a provider said), so an operator can tell a
+     * stale snapshot from a missing installation.
      */
     private async resolveRepositoryInstallationAuth(
         source: RepositoryWorkSource,
@@ -950,6 +963,9 @@ export class WorkLifecycleService {
 
         const wantedOwner = source.owner.toLowerCase();
         const wantedFullName = `${source.owner}/${source.repo}`.toLowerCase();
+        // The furthest check any candidate reached, for the operator's log.
+        let stoppedAt: 'no-usable-installation-for-owner' | 'not-in-snapshot' | 'live-check' =
+            'no-usable-installation-for-owner';
 
         try {
             const installations = await this.gitHubAppInstallations.listByCreatedByUserId(user.id);
@@ -979,9 +995,13 @@ export class WorkLifecycleService {
                         row.fullName.toLowerCase() === wantedFullName,
                 );
                 if (!covered || !covered.id || !covered.githubRepoId) {
+                    if (stoppedAt === 'no-usable-installation-for-owner') {
+                        stoppedAt = 'not-in-snapshot';
+                    }
                     continue;
                 }
 
+                stoppedAt = 'live-check';
                 const readable = await this.gitFacade.canInstallationReadRepository({
                     installationId: installation.installationId,
                     githubRepoId: covered.githubRepoId,
@@ -993,6 +1013,13 @@ export class WorkLifecycleService {
                     continue;
                 }
 
+                // The audit record of an access decision: who, and through
+                // which installation row. No token exists in this process to
+                // log — the live check never hands one back.
+                this.logger.log(
+                    `Repository Work: user ${user.id} verified a repository through their GitHub App ` +
+                        `installation ${installation.id} (the owner's own account could not read it).`,
+                );
                 return {
                     mode: 'github_app_installation',
                     providerId: 'github',
@@ -1002,6 +1029,10 @@ export class WorkLifecycleService {
                 };
             }
 
+            this.logger.log(
+                `Repository Work: no GitHub App installation of user ${user.id} could stand in for ` +
+                    `their own account (${stoppedAt}); refusing.`,
+            );
             return null;
         } catch (error) {
             // Name only: nothing a provider or a driver said reaches the log

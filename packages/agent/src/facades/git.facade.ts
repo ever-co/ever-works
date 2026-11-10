@@ -2719,11 +2719,20 @@ export class GitFacadeService implements IGitFacade {
                 token: minted.token,
             });
         } catch (error) {
-            // Name only: GitHub's answer can name the installation; the token is never in it.
+            // Error name and HTTP status only: GitHub's answer can name the
+            // installation and the repository; the token is never in it.
+            const status = (error as { status?: unknown } | null)?.status;
+            const mintStatus =
+                error instanceof Error
+                    ? /^Failed to create GitHub App installation token: (\d{3})\b/.exec(
+                          error.message,
+                      )?.[1]
+                    : undefined;
+            const detail = typeof status === 'number' ? `, status ${status}` : '';
             this.logger.warn(
                 `GitHub App installation read check failed for a repository Work source (${
                     error instanceof Error ? error.name : 'unknown error'
-                }).`,
+                }${mintStatus ? `, token mint status ${mintStatus}` : detail}).`,
             );
             return false;
         }

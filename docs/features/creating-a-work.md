@@ -288,6 +288,17 @@ connected GitHub account: the repository must exist and be readable by that
 account, and a repository another account has already registered as a Work
 is refused — ask that Work's owner to add you as a member instead.
 
+When your connected account cannot read the repository — for example a
+private repository in an organization that restricts OAuth app access — the
+**Ever Works GitHub App** is accepted instead, provided all of this holds: you
+set up the installation yourself, it is active (not uninstalled or suspended),
+it is installed on the account that owns the repository, and it has access to
+that repository. The platform confirms the access with GitHub at that moment,
+and the Work then uses the installation for its later git operations. If
+neither works, the request is refused and the message names both options:
+connect a GitHub account that can read the repository, or install the GitHub
+App on it.
+
 What is different from every other kind:
 
 - **The data repository IS the code repository.** The URL you enter is
@@ -300,7 +311,8 @@ What is different from every other kind:
   knowledge base stays available for the repository's conventions and
   runbooks.
 - **You need access to the repository.** Connect the git provider that hosts
-  it so agents can clone it. The Work's git provider is taken from the URL.
+  it so agents can clone it, or install the Ever Works GitHub App on it (see
+  above). The Work's git provider is taken from the URL.
 
 The API equivalent is `POST /api/works` with `kind: "repo"` and
 `repositoryUrl`; the call is rejected when the URL is missing or is not a
