@@ -11,6 +11,7 @@ import {
     Gauge,
     MessageSquarePlus,
     Pause,
+    Pencil,
     Play,
     RefreshCw,
     SlidersHorizontal,
@@ -25,6 +26,7 @@ import { StatusPill } from '@/components/work-agent';
 import { Select } from '@/components/ui/select';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils/cn';
+import { CollapsibleMarkdown } from '@/components/markdown/CollapsibleMarkdown';
 // Runtime value from the client-safe module — see GoalLimitsDialog.tsx.
 import { MAX_NUDGE_CHARS } from '@/lib/api/goals.shared';
 import {
@@ -49,6 +51,7 @@ import { GoalOrchestratorLog } from './GoalOrchestratorLog';
 import { GoalWorkSection } from './GoalWorkSection';
 import { GoalSessionsPanel } from './GoalSessionsPanel';
 import { GoalResultsPanel } from './GoalResultsPanel';
+import { GoalEditDialog } from './GoalEditDialog';
 import {
     activateGoalAction,
     advanceGoalAction,
@@ -76,6 +79,12 @@ export interface GoalDetailClientProps {
      * slice AG), so an empty pool now means the scope really has no agent.
      */
     agents?: GoalAgentOption[];
+    /**
+     * Whether the viewer may change this Goal (the owner — the API's
+     * record-visibility answer). Gates the Edit action; defaults to `true`
+     * so the API stays the one that refuses when the answer is unknown.
+     */
+    canEdit?: boolean;
 }
 
 const OUTCOMES: GoalOutcome[] = ['achieved', 'missed', 'abandoned'];
@@ -139,6 +148,7 @@ export function GoalDetailClient({
     events,
     sessions,
     agents = [],
+    canEdit = true,
 }: GoalDetailClientProps) {
     const t = useTranslations('dashboard.goalDetail');
     const router = useRouter();
@@ -161,6 +171,7 @@ export function GoalDetailClient({
     }, []);
     const [tab, setTab] = useState<GoalTab>('dod');
     const [limitsOpen, setLimitsOpen] = useState(false);
+    const [editOpen, setEditOpen] = useState(false);
     const [nudgeOpen, setNudgeOpen] = useState(false);
     const [nudgeText, setNudgeText] = useState('');
     const [pendingLifecycle, startLifecycle] = useTransition();
@@ -319,15 +330,28 @@ export function GoalDetailClient({
                                 <DodRollup summary={goal.dodSummary} />
                             </div>
                             {goal.description ? (
-                                <p className="mt-2.5 text-sm text-text-secondary dark:text-text-secondary-dark max-w-3xl leading-relaxed">
-                                    {goal.description}
-                                </p>
+                                <CollapsibleMarkdown
+                                    content={goal.description}
+                                    className="mt-2.5 max-w-3xl"
+                                    data-testid="goal-description"
+                                />
                             ) : null}
                         </div>
                     </div>
 
                     {/* Actions */}
                     <div className="flex flex-wrap items-center gap-2 shrink-0">
+                        {canEdit ? (
+                            <button
+                                type="button"
+                                data-testid="goal-edit-button"
+                                onClick={() => setEditOpen(true)}
+                                className={btn}
+                            >
+                                <Pencil className="w-3.5 h-3.5" />
+                                {t('actions.edit')}
+                            </button>
+                        ) : null}
                         {loopStartable ? (
                             <button
                                 type="button"
@@ -772,6 +796,14 @@ export function GoalDetailClient({
             {tab === 'orchestrator' ? <GoalOrchestratorLog events={events} /> : null}
             {tab === 'results' ? <GoalResultsPanel sessions={sessions} /> : null}
 
+            {canEdit ? (
+                <GoalEditDialog
+                    goal={goal}
+                    open={editOpen}
+                    onOpenChange={setEditOpen}
+                    onSaved={setGoal}
+                />
+            ) : null}
             <GoalLimitsDialog
                 goal={goal}
                 open={limitsOpen}

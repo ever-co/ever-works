@@ -5,6 +5,7 @@ import { redirect } from 'next/navigation';
 import {
     goalsAPI,
     type CreateGoalInput,
+    type Goal,
     type GoalDoDCriterion,
     type PatchGoalDodCriterionInput,
     type UpdateGoalInput,
@@ -173,4 +174,33 @@ export async function unarchiveGoalAction(id: string) {
     revalidatePath(GOALS_LIST_PATH, 'page');
     revalidateGoalDetail(id);
     return goal;
+}
+
+/**
+ * What the Goal detail page's Edit dialog gets back. A value, not a throw: a
+ * production build replaces the message of an error THROWN out of a Server Action
+ * with a generic text, and the dialog must show the API's own reason.
+ */
+export type GoalDetailsResult = { success: true; goal: Goal } | { success: false; error: string };
+
+/**
+ * Edit a Goal's title and Markdown description (`PATCH /api/me/goals/:id`). An
+ * empty description clears it (`null`), which the API accepts.
+ */
+export async function updateGoalDetailsAction(
+    id: string,
+    input: { title: string; description: string },
+): Promise<GoalDetailsResult> {
+    await requireGoalAuth();
+    try {
+        const goal = await goalsAPI.update(id, {
+            title: input.title,
+            description: input.description.length > 0 ? input.description : null,
+        });
+        revalidatePath(GOALS_LIST_PATH, 'page');
+        revalidateGoalDetail(id);
+        return { success: true, goal };
+    } catch (err) {
+        return { success: false, error: err instanceof Error ? err.message : '' };
+    }
 }

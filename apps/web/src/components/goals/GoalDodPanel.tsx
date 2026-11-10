@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useTransition } from 'react';
-import { Check, CircleSlash, Plus, RotateCcw, Trash2 } from 'lucide-react';
+import { Check, CircleSlash, Pencil, Plus, RotateCcw, Trash2 } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
@@ -14,6 +14,8 @@ import {
 } from '@/lib/api/goals.shared';
 import { type Goal, type GoalDoDCriterion } from '@/lib/api/goals';
 import { cn } from '@/lib/utils/cn';
+import { MarkdownInline } from '@/components/markdown/MarkdownContent';
+import { markdownToPlainText } from '@/lib/markdown/markdown-excerpt';
 import { DodProgressBar, DodRollup } from './goal-loop-ui';
 import { approveGoalDodAction, patchGoalDodCriterionAction, setGoalDodAction } from './actions';
 
@@ -67,6 +69,9 @@ export function GoalDodPanel({ goal, onGoalChange }: GoalDodPanelProps) {
     const [draft, setDraft] = useState('');
     const [waivingId, setWaivingId] = useState<string | null>(null);
     const [waiveNote, setWaiveNote] = useState('');
+    // Editing one criterion's text in place (PATCH /me/goals/:id/dod/:criterionId).
+    const [editingId, setEditingId] = useState<string | null>(null);
+    const [editText, setEditText] = useState('');
 
     const criteria = goal.dodCriteria ?? [];
     const summary = goal.dodSummary;
@@ -110,6 +115,24 @@ export function GoalDodPanel({ goal, onGoalChange }: GoalDodPanelProps) {
     const setStatus = (criterion: GoalDoDCriterion, status: GoalDoDCriterion['status']) => {
         run(
             () => patchGoalDodCriterionAction(goal.id, criterion.id, { status }),
+            'toasts.statusSaved',
+        );
+    };
+
+    const startEdit = (criterion: GoalDoDCriterion) => {
+        setWaivingId(null);
+        setEditingId(criterion.id);
+        setEditText(criterion.text);
+    };
+
+    const saveText = (criterion: GoalDoDCriterion) => {
+        const text = editText.trim();
+        if (!text || text.length > MAX_DOD_TEXT_CHARS) return;
+        setEditingId(null);
+        setEditText('');
+        if (text === criterion.text.trim()) return;
+        run(
+            () => patchGoalDodCriterionAction(goal.id, criterion.id, { text }),
             'toasts.statusSaved',
         );
     };
@@ -197,15 +220,54 @@ export function GoalDodPanel({ goal, onGoalChange }: GoalDodPanelProps) {
                                     {criterion.status === 'waived' ? '–' : null}
                                 </span>
                                 <div className="min-w-0 flex-1">
-                                    <p
-                                        className={cn(
-                                            'text-sm text-text dark:text-text-dark',
-                                            criterion.status !== 'open' &&
-                                                'text-text-muted dark:text-text-muted-dark',
-                                        )}
-                                    >
-                                        {criterion.text}
-                                    </p>
+                                    {editingId === criterion.id ? (
+                                        <div className="flex flex-wrap items-center gap-2">
+                                            <Input
+                                                value={editText}
+                                                maxLength={MAX_DOD_TEXT_CHARS}
+                                                aria-label={t('editLabel')}
+                                                autoFocus
+                                                onChange={(e) => setEditText(e.target.value)}
+                                                onKeyDown={(e) => {
+                                                    if (e.key === 'Enter') {
+                                                        e.preventDefault();
+                                                        saveText(criterion);
+                                                    } else if (e.key === 'Escape') {
+                                                        e.preventDefault();
+                                                        setEditingId(null);
+                                                    }
+                                                }}
+                                                className="max-w-xl"
+                                                data-testid="goal-dod-edit-input"
+                                            />
+                                            <Button
+                                                size="sm"
+                                                disabled={pending || editText.trim().length === 0}
+                                                onClick={() => saveText(criterion)}
+                                            >
+                                                {t('save')}
+                                            </Button>
+                                            <Button
+                                                size="sm"
+                                                variant="ghost"
+                                                onClick={() => setEditingId(null)}
+                                            >
+                                                {t('cancel')}
+                                            </Button>
+                                        </div>
+                                    ) : (
+                                        // Criteria are one line of Markdown: **bold**,
+                                        // `code` and links render, block syntax reads as text.
+                                        <p
+                                            className={cn(
+                                                'text-sm text-text dark:text-text-dark break-words',
+                                                criterion.status !== 'open' &&
+                                                    'text-text-muted dark:text-text-muted-dark',
+                                            )}
+                                        >
+                                            <MarkdownInline content={criterion.text} />
+                                        </p>
+                                    )}
                                     <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-text-muted dark:text-text-muted-dark">
                                         <span>{t(`statuses.${criterion.status}`)}</span>
                                         {criterion.source === 'planner' ? (
@@ -214,12 +276,14 @@ export function GoalDodPanel({ goal, onGoalChange }: GoalDodPanelProps) {
                                         {isProposed ? <span>· {t('awaitingApproval')}</span> : null}
                                         {criterion.evidence ? (
                                             <span className="truncate">
-                                                · {t('evidenceLabel')}: {criterion.evidence}
+                                                · {t('evidenceLabel')}:{' '}
+                                                {markdownToPlainText(criterion.evidence)}
                                             </span>
                                         ) : null}
                                         {criterion.note ? (
                                             <span className="truncate">
-                                                · {t('noteLabel')}: {criterion.note}
+                                                · {t('noteLabel')}:{' '}
+                                                {markdownToPlainText(criterion.note)}
                                             </span>
                                         ) : null}
                                     </div>
@@ -270,6 +334,17 @@ export function GoalDodPanel({ goal, onGoalChange }: GoalDodPanelProps) {
                                             {t('approve')}
                                         </Button>
                                     ) : null}
+                                    <Button
+                                        size="icon"
+                                        variant="ghost"
+                                        aria-label={t('edit')}
+                                        title={t('edit')}
+                                        disabled={pending}
+                                        onClick={() => startEdit(criterion)}
+                                        data-testid="goal-dod-edit"
+                                    >
+                                        <Pencil className="h-4 w-4" />
+                                    </Button>
                                     {criterion.status !== 'done' ? (
                                         <Button
                                             size="icon"
