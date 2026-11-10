@@ -602,6 +602,32 @@ describe('FleetJobClient scoped fetch credential', () => {
 		expect(result.uncovered).toEqual([]);
 	});
 
+	it('lets through only an uncovered entry that LOOKS like a repository and a reason token', async () => {
+		// These two strings are the one piece of server-written text the
+		// method returns, and they end up in a node log line. Anything
+		// free-form is dropped rather than relayed.
+		const client = clientWith(
+			response(
+				200,
+				answer({
+					uncovered: [
+						{ repository: 'ever-works/template', reason: 'push-scope-unresolved', extra: 'dropped' },
+						{ repository: 'ever-works/x', reason: `Free text${String.fromCharCode(10)}with a second line` },
+						{
+							repository: `not a repository${String.fromCharCode(10)}Injected: line`,
+							reason: 'push-scope-unresolved'
+						},
+						{ repository: 'ever-works/y', reason: 'x'.repeat(200) }
+					]
+				})
+			)
+		);
+
+		const result = await client.mintFetchCredential(JOB, 7);
+
+		expect(result.uncovered).toEqual([{ repository: 'ever-works/template', reason: 'push-scope-unresolved' }]);
+	});
+
 	it.each([
 		['no credential list at all', { uncovered: [] }],
 		['a credential with no token', answer({ credentials: [{ username: 'x-access-token', repositories: [] }] })],

@@ -85,6 +85,10 @@ export interface FleetJobClientOptions {
 
 export const DEFAULT_JOB_REQUEST_TIMEOUT_MS = 30_000;
 
+/** What an "uncovered repository" entry of a fetch-credential answer may look like; see `mintFetchCredential`. */
+const FETCH_UNCOVERED_REPOSITORY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$/;
+const FETCH_UNCOVERED_REASON_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
+
 /**
  * One lease poll, with the platform's reason when it refused it (node
  * lifecycle, self-build slice AR). `upgradeRequired` is true ONLY when the
@@ -497,10 +501,21 @@ export class FleetJobClient {
 			})),
 			// For log lines only, so a missing or odd list degrades to "no
 			// reasons known" rather than failing a response whose
-			// credentials are perfectly usable.
-			uncovered: (Array.isArray(payload.uncovered) ? payload.uncovered : []).filter(
-				(entry) => entry && typeof entry.repository === 'string' && typeof entry.reason === 'string'
-			)
+			// credentials are perfectly usable. And SHAPED, not merely typed:
+			// these two strings are the one piece of server-written text this
+			// method lets through, so each must look like what it claims to
+			// be — a repository identity and a short machine token — or the
+			// entry is dropped. Nothing free-form reaches a node log line.
+			uncovered: (Array.isArray(payload.uncovered) ? payload.uncovered : [])
+				.filter(
+					(entry) =>
+						entry &&
+						typeof entry.repository === 'string' &&
+						typeof entry.reason === 'string' &&
+						FETCH_UNCOVERED_REPOSITORY_PATTERN.test(entry.repository) &&
+						FETCH_UNCOVERED_REASON_PATTERN.test(entry.reason)
+				)
+				.map((entry) => ({ repository: entry.repository, reason: entry.reason }))
 		};
 	}
 

@@ -285,14 +285,21 @@ before. A quarantine caused by timeouts says `probe timed out` in the reason Fle
 
 A `model-cli` job is only offered to nodes advertising the CLI it needs. On such a job the node:
 
-- provisions the Task worktree (bare cache + `git worktree`, per-Task binding, root-confined);
+- provisions the Task worktree (bare cache + `git worktree`, per-Task binding, root-confined). It first
+  asks the platform for a repository-scoped **read** credential for this job (a GitHub App installation
+  token, one per repository, `contents: read` only). A repository the Ever Works app covers is fetched
+  with it — in the `git fetch` child's environment only, never on disk, in argv or in a remote URL, and
+  revoked before the model starts — so a node with no Git credential of its own can clone a private
+  repository. A repository it does not cover, or a platform that predates the call, is fetched with the
+  machine's own Git configuration exactly as before;
 - writes the platform's instructions to a scratch file and runs the CLI **through the same command
   runner every check uses** — env scrub, timeout, cancellation, whole-tree kill — with the
   instructions on stdin (`claude -p --output-format json …` / `codex exec --json … -`) and the CLI's
   structured output captured to a scratch file. Nothing free-form ever reaches argv;
 - runs the acceptance checks in the worktree;
-- `git add -A && git commit && git push HEAD:refs/heads/<task-branch>` via the node's own Git
-  credential helper (token-free, like the fetch);
+- `git add -A && git commit && git push HEAD:refs/heads/<task-branch>` with a repository-scoped push
+  credential the platform mints for this job. Unlike the fetch, the push has no fallback: without that
+  credential nothing is published, and the machine's own Git credential helper is never used;
 - reports one `FleetAgentTaskResult`: model summary / cost / turns / session id, check verdicts,
   gate status, branch + head SHA + changed-file count, and a one-sentence `failureReason` when any
   required part did not pass.

@@ -152,10 +152,16 @@ interface CheckoutHardeningScope {
  * `hooksPath` absent is the push's value, `''`, exactly as before this type
  * existed. A FETCH sets it to an empty directory: a provision is hardened
  * with `core.hooksPath` → an empty directory already, and the credential
- * entries are appended AFTER that overlay, so resetting to `''` here would
- * take the hardening's value away from the one child that now carries a
- * token. `git fetch` runs `reference-transaction` and (through auto-gc)
- * `pre-auto-gc`, and a hook inherits the child's whole environment.
+ * entries are appended AFTER that overlay, so `''` here would REPLACE the
+ * hardening's value for the one child that now carries a token —
+ * `git-hardening` chose a directory over `''` deliberately.
+ *
+ * It matters because a fetch runs hooks: `reference-transaction` whenever
+ * it moves a ref (and `pre-auto-gc` when it triggers a gc), and a hook
+ * inherits the child's whole environment. Measured with git 2.52 in this
+ * plugin's layout, with the entry disabled: a `reference-transaction` hook
+ * in the bare pool fired on the fetch and read
+ * `GIT_CONFIG_VALUE_<n>=Authorization: Basic …` (the spec keeps that case).
  */
 type ChildCredential = WorkspacePushCredential & { readonly hooksPath?: string };
 

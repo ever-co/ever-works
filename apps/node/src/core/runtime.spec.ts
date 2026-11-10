@@ -575,7 +575,16 @@ describe('createNodeRuntime', () => {
 		await runtime.worker?.drained();
 		await runtime.worker?.stop();
 
-		expect(provisionWorkspace).toHaveBeenCalledWith('task-1', repositoryWorkspace, expect.any(AbortSignal));
+		expect(provisionWorkspace).toHaveBeenCalledWith(
+			'task-1',
+			repositoryWorkspace,
+			expect.any(AbortSignal),
+			// Scoped fetch credentials: a LEASED run hands the provisioner a
+			// provider. It is asked lazily, per repository, and this double
+			// never asks — so no request is made here (the `fetchFn` above
+			// would throw on one) and the run completes exactly as before.
+			{ fetchCredentials: expect.objectContaining({ credentialFor: expect.any(Function) }) }
+		);
 		expect(completedBodies).toHaveLength(1);
 		expect(completedBodies[0]).toMatchObject({ success: true, result: { workspace: descriptor } });
 	});
