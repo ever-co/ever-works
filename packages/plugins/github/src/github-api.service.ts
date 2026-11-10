@@ -21,6 +21,8 @@ import type {
 	MergeResult,
 	ForkRepositoryOptions,
 	GitRepositoryWithPermissions,
+	GitRepositoryIdentity,
+	GitUserRepositoryPermission,
 	ListRepositoriesOptions,
 	ListPullRequestsOptions,
 	TransferRepoOptions,
@@ -2840,6 +2842,24 @@ export class GitHubApiService {
 		return repository !== null;
 	}
 
+	/**
+	 * Is this 403 GitHub refusing because a RATE LIMIT is spent (the primary
+	 * budget, or a secondary limit)?
+	 *
+	 * Such a response says nothing about the resource that was asked for. The
+	 * two reads below answer "the token cannot see this repository" for a 403,
+	 * and a rate limit must never be reported as that: a caller that acts on
+	 * "no" (the Repository Work create path falls back to a GitHub App
+	 * installation on it) would act on a failure that is gone a minute later.
+	 * `toGitProviderError` is the one place that reads GitHub's rate-limit
+	 * signals (the headers and its wording), so it decides.
+	 */
+	private isRateLimitRefusal(err: unknown): boolean {
+		if (!(err instanceof RequestError) || err.status !== 403) return false;
+		const reason = toGitProviderError(err).reason;
+		return reason === 'rate_limited' || reason === 'secondary_rate_limited';
+	}
+
 	async hasRepositoryAccess(owner: string, repo: string, token: string, baseUrl?: string): Promise<boolean> {
 		try {
 			const octokit = this.createOctokit(token, baseUrl);
@@ -2847,7 +2867,90 @@ export class GitHubApiService {
 			return true;
 		} catch (err) {
 			if (err instanceof RequestError && (err.status === 404 || err.status === 403)) {
+				// A rate-limited 403 is not an answer about the repository: it
+				// throws, exactly as a 429 and a 5xx already do.
+				if (this.isRateLimitRefusal(err)) throw err;
 				return false;
+			}
+			throw err;
+		}
+	}
+
+	/**
+	 * GitHub's own identity of `owner/repo`: its numeric `id` and its CURRENT
+	 * `full_name` (`GET /repos/{owner}/{repo}`, Metadata: read).
+	 *
+	 * Octokit follows GitHub's 301 for a renamed or transferred repository, so
+	 * `fullName` is the RESOLVED name: a caller compares it with what it asked
+	 * for to learn the request was redirected, and compares `id` with an id it
+	 * already holds to learn the name still means the same repository.
+	 *
+	 * `null` for 404 and 403, exactly as `hasRepositoryAccess` answers `false`
+	 * for them: the token cannot see the repository. Anything else throws —
+	 * including a 403 that is a rate limit, which is not an answer.
+	 */
+	async getRepositoryIdentity(
+		owner: string,
+		repo: string,
+		token: string,
+		baseUrl?: string
+	): Promise<GitRepositoryIdentity | null> {
+		try {
+			const octokit = this.createOctokit(token, baseUrl);
+			const { data } = await octokit.rest.repos.get({ owner, repo });
+			if (typeof data.id !== 'number' || typeof data.full_name !== 'string' || !data.full_name) {
+				return null;
+			}
+			return { id: String(data.id), fullName: data.full_name };
+		} catch (err) {
+			if (err instanceof RequestError && (err.status === 404 || err.status === 403)) {
+				if (this.isRateLimitRefusal(err)) throw err;
+				return null;
+			}
+			throw err;
+		}
+	}
+
+	/**
+	 * The permission GitHub calculates for `username` on `owner/repo`
+	 * (`GET /repos/{owner}/{repo}/collaborators/{username}/permission`).
+	 *
+	 * GitHub documents the value as "the highest role assigned to the
+	 * collaborator after considering all sources of grants, including: repo,
+	 * teams, organization, and enterprise", reported as the legacy base roles
+	 * `admin`, `write`, `read` and `none` (`maintain` is mapped to `write`,
+	 * `triage` to `read`). The endpoint needs the Metadata repository permission
+	 * (read) and accepts a GitHub App installation access token, so `token` is
+	 * the credential the question is ASKED with — never the user's own.
+	 *
+	 * Anything GitHub reports that is not one of the three positive levels is
+	 * `none`. `userId` is the id of the user GitHub answered ABOUT; a caller
+	 * that knows the user's id must compare it, because a login can be renamed
+	 * and re-registered by somebody else.
+	 *
+	 * `null` when GitHub answers 404 for that user or repository. Anything else
+	 * throws.
+	 */
+	async getUserRepositoryPermission(
+		owner: string,
+		repo: string,
+		username: string,
+		token: string,
+		baseUrl?: string
+	): Promise<GitUserRepositoryPermission | null> {
+		try {
+			const octokit = this.createOctokit(token, baseUrl);
+			const { data } = await octokit.rest.repos.getCollaboratorPermissionLevel({ owner, repo, username });
+			const level = data.permission;
+			const user = data.user;
+			return {
+				permission: level === 'admin' || level === 'write' || level === 'read' ? level : 'none',
+				userId: user && typeof user.id === 'number' ? String(user.id) : null,
+				login: user && typeof user.login === 'string' && user.login ? user.login : null
+			};
+		} catch (err) {
+			if (err instanceof RequestError && err.status === 404) {
+				return null;
 			}
 			throw err;
 		}
