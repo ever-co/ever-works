@@ -13,6 +13,7 @@ import {
 import { enforceAcceptanceChecksExecutionPolicy } from '../execution-policy';
 import type { NodeExecutionPolicy } from '../types';
 import { isMissingToolExit, MISSING_TOOL_REASON, type MissingToolReason } from './acceptance-checks.missing-tool';
+import { isZombieProcess, processGroupHasLiveMember } from './process-liveness';
 
 /**
  * The `acceptance-checks` executor — the node's v1 job kind.
@@ -801,19 +802,24 @@ async function waitForGone(isAlive: () => boolean, message: string): Promise<voi
 function isProcessAlive(pid: number): boolean {
 	try {
 		process.kill(pid, 0);
-		return true;
 	} catch (error) {
 		return (error as NodeJS.ErrnoException).code !== 'ESRCH';
 	}
+	// kill(2) also answers for a zombie (exited, not yet reaped); it runs nothing.
+	return !isZombieProcess(pid);
 }
 
 function isProcessGroupAlive(pid: number): boolean {
 	try {
 		process.kill(-pid, 0);
-		return true;
 	} catch (error) {
 		return (error as NodeJS.ErrnoException).code !== 'ESRCH';
 	}
+	// A group can be left holding only zombies: a grandchild whose parent died
+	// in the same SIGKILL is re-parented to PID 1, and a PID 1 that does not
+	// reap (a container without an init, like the CI runner pod) keeps it Z
+	// forever. `undefined` (no /proc on this OS) keeps the kill(2) answer.
+	return processGroupHasLiveMember(pid) !== false;
 }
 
 function errorDetail(error: unknown): string {
