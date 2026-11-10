@@ -1163,8 +1163,8 @@ importers:
         specifier: ^2.0.0
         version: 2.0.0
       isomorphic-git:
-        specifier: ^1.36.3
-        version: 1.37.1
+        specifier: ^1.44.12
+        version: 1.44.12
       jszip:
         specifier: ^3.10.1
         version: 3.10.1
@@ -1586,8 +1586,8 @@ importers:
         specifier: ^2.0.3
         version: 2.0.3
       isomorphic-git:
-        specifier: ^1.36.3
-        version: 1.37.1
+        specifier: ^1.44.12
+        version: 1.44.12
       stopword:
         specifier: ^3.1.5
         version: 3.1.5
@@ -2232,8 +2232,8 @@ importers:
         specifier: ^26.6.4
         version: 26.6.4
       isomorphic-git:
-        specifier: ^1.27.0
-        version: 1.37.1
+        specifier: ^1.44.12
+        version: 1.44.12
       tsup:
         specifier: ^8.4.0
         version: 8.5.1(@swc/core@1.15.33(@swc/helpers@0.5.23))(jiti@2.6.1)(postcss@8.5.32)(typescript@5.9.3)(yaml@2.9.1)
@@ -16786,10 +16786,6 @@ packages:
     resolution: {integrity: sha512-/8UvqAPU9DGTI9k4mxtf49U37Isfwr8Uts96+SBHIkFxPJnHS0Ew4f00sM4Scd8V8EjM0jUNtVDdv1kPdt35lg==}
     engines: {node: '>= 4'}
 
-  ignore@7.0.6:
-    resolution: {integrity: sha512-BAg6QkE8W+TuQLrrw0Ugr7HegXduRuuj8/ti2kSOc+jz1dmx8/WNcjr6XGnq5YpDWxFwwaavqD0+jIUOKelTsw==}
-    engines: {node: '>= 4'}
-
   image-size@2.0.4:
     resolution: {integrity: sha512-QRUkFFsRV/6fuESxb9Vkq+a0LkSrgKXuc2NEqfikiXxxN/G3tjWt5EVUlMaImRBZRZK/jRBEbYvpPYZL8t08Zw==}
     engines: {node: '>=18'}
@@ -17322,8 +17318,8 @@ packages:
     resolution: {integrity: sha512-WhB9zCku7EGTj/HQQRz5aUQEUeoQZH2bWcltRErOpymJ4boYE6wL9Tbr23krRPSZ+C5zqNSrSw+Cc7sZZ4b7vg==}
     engines: {node: '>=0.10.0'}
 
-  isomorphic-git@1.37.1:
-    resolution: {integrity: sha512-3r98kY+X24i6za2zwoNnISGobykIdc4aP7ScJGHpN3wbWSCbJZ2Kp/8WIsHJwvOCVUBjUHNkcB+4ty5iNv6RQA==}
+  isomorphic-git@1.44.12:
+    resolution: {integrity: sha512-Qfu5/YMcN1YyGqT3ZUmgFIlbj/bFwbwMbF4zlitrRGGyujyqtgMCOTy07mfca/iugH1ECpF6rlebFDceRs+MNg==}
     engines: {node: '>=14.17'}
     hasBin: true
 
@@ -20309,10 +20305,6 @@ packages:
   process-nextick-args@2.0.1:
     resolution: {integrity: sha512-3ouUOpQhtgrbOa17J7+uxOTpITYWaGP7/AhoR3+A+/1e9skrzelGi/dXzEYyvbxubEF6Wn2ypscTKiKJFFn1ag==}
 
-  process@0.11.10:
-    resolution: {integrity: sha512-cdGef/drWFoydD1JsMzuFf8100nZl+GT+yacc2bEced5f9Rjk4z+WtFUTBu9PhOi9j/jfmBPu0mMEY4wIdAF8A==}
-    engines: {node: '>= 0.6.0'}
-
   progress@2.0.3:
     resolution: {integrity: sha512-7PiHtLll5LdnKIMw100I+8xJXR5gW2QwWYkT6iJva0bXitZKa/XMrSbdmg3r2Xnaidz9Qumd0VPaMrZlF9V9sA==}
     engines: {node: '>=0.4.0'}
@@ -20665,10 +20657,6 @@ packages:
   readable-stream@3.6.2:
     resolution: {integrity: sha512-9u/sniCrY3D5WdsERHzHE4G2YCXqoG5FTHUiCC4SIbr6XcLZBY05ya9EKjYek9O5xOAwjGq+1JdGBAS7Q9ScoA==}
     engines: {node: '>= 6'}
-
-  readable-stream@4.7.0:
-    resolution: {integrity: sha512-oIGGmcpTLwPga8Bn6/Z75SVaH1z5dUut2ibSyAMVhmUggWpmDn2dapB0n7f8nwaSiRtepAsfJyfXIO5DCVAODg==}
-    engines: {node: ^12.22.0 || ^14.17.0 || >=16.0.0}
 
   readdir-glob@1.1.3:
     resolution: {integrity: sha512-v05I2k7xN8zXvPD9N+z/uhXPaj0sUFCe2rcWZIpBsqxfP7xXFQ0tipAd/wjj1YxWyWtUS5IDJpOG82JKt2EAVA==}
@@ -33317,7 +33305,7 @@ snapshots:
       '@typescript-eslint/utils': 8.53.1(eslint@9.39.2(jiti@2.6.1))(typescript@5.9.3)
       '@typescript-eslint/visitor-keys': 8.53.1
       eslint: 9.39.2(jiti@2.6.1)
-      ignore: 7.0.6
+      ignore: 7.0.12
       natural-compare: 1.4.0
       ts-api-utils: 2.5.0(typescript@5.9.3)
       typescript: 5.9.3
@@ -38493,8 +38481,6 @@ snapshots:
 
   ignore@7.0.12: {}
 
-  ignore@7.0.6: {}
-
   image-size@2.0.4: {}
 
   immediate@3.0.6: {}
@@ -38971,7 +38957,7 @@ snapshots:
 
   isobject@3.0.1: {}
 
-  isomorphic-git@1.37.1:
+  isomorphic-git@1.44.12:
     dependencies:
       async-lock: 1.4.1
       clean-git-ref: 2.0.1
@@ -38981,7 +38967,6 @@ snapshots:
       minimisted: 2.0.1
       pako: 1.0.11
       pify: 4.0.1
-      readable-stream: 4.7.0
       sha.js: 2.4.12
       simple-get: 4.0.1
 
@@ -42676,8 +42661,6 @@ snapshots:
 
   process-nextick-args@2.0.1: {}
 
-  process@0.11.10: {}
-
   progress@2.0.3: {}
 
   prom-client@15.1.3:
@@ -43271,14 +43254,6 @@ snapshots:
       inherits: 2.0.4
       string_decoder: 1.3.0
       util-deprecate: 1.0.2
-
-  readable-stream@4.7.0:
-    dependencies:
-      abort-controller: 3.0.0
-      buffer: 6.0.3
-      events: 3.3.0
-      process: 0.11.10
-      string_decoder: 1.3.0
 
   readdir-glob@1.1.3:
     dependencies:
