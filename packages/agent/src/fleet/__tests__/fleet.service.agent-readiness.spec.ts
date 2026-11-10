@@ -1,5 +1,9 @@
 import { createHash } from 'crypto';
-import type { FleetAgentReadinessEntry, FleetAgentReadinessStored } from '@ever-works/contracts';
+import {
+    FLEET_AGENT_CREDENTIAL_ENV_NAMES,
+    type FleetAgentReadinessEntry,
+    type FleetAgentReadinessStored,
+} from '@ever-works/contracts';
 import { FleetNode } from '../../entities/fleet-node.entity';
 import {
     FLEET_SHARED_VIEW_FIELDS,
@@ -297,6 +301,48 @@ describe('FleetService — agent readiness on the heartbeat', () => {
         for (const leaked of ['FAKE', 'hunter2', 'db.internal', 'Basic', 'Fix external']) {
             expect(written).not.toContain(leaked);
         }
+    });
+
+    describe('the beat`s answer names the credentials a run is granted (review N4)', () => {
+        // The same list the planner writes into every agent-task job
+        // (`config.fleetNode.getAgentTaskEnvPassthrough`). The node needs it
+        // BEFORE its first run, to ask its agent CLIs how they are signed in
+        // with the credentials a run will be given.
+        const original = process.env.FLEET_NODE_AGENT_TASK_ENV_PASSTHROUGH;
+        afterEach(() => {
+            if (original === undefined) delete process.env.FLEET_NODE_AGENT_TASK_ENV_PASSTHROUGH;
+            else process.env.FLEET_NODE_AGENT_TASK_ENV_PASSTHROUGH = original;
+        });
+        const names = async () =>
+            (await build().heartbeat(NODE_ID, SECRET, { version: '0.2.10' }))?.agentEnvPassthrough;
+
+        it('the default credential names when the instance configures none', async () => {
+            delete process.env.FLEET_NODE_AGENT_TASK_ENV_PASSTHROUGH;
+            expect(await names()).toEqual([...FLEET_AGENT_CREDENTIAL_ENV_NAMES]);
+        });
+
+        it('the instance`s own list when it grants other names', async () => {
+            process.env.FLEET_NODE_AGENT_TASK_ENV_PASSTHROUGH =
+                'ANTHROPIC_AUTH_TOKEN, ANTHROPIC_BASE_URL';
+            expect(await names()).toEqual(['ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL']);
+        });
+
+        it('an empty list when the instance grants nothing — an answer, not an absence', async () => {
+            process.env.FLEET_NODE_AGENT_TASK_ENV_PASSTHROUGH = '';
+            expect(await names()).toEqual([]);
+        });
+
+        it('names only: no value of this process`s environment travels', async () => {
+            process.env.FLEET_NODE_AGENT_TASK_ENV_PASSTHROUGH = 'EVER_WORKS_TEST_ONLY_NAME';
+            process.env.EVER_WORKS_TEST_ONLY_NAME = 'a-value-that-must-not-travel';
+            try {
+                const result = await build().heartbeat(NODE_ID, SECRET, { version: '0.2.10' });
+                expect(result?.agentEnvPassthrough).toEqual(['EVER_WORKS_TEST_ONLY_NAME']);
+                expect(JSON.stringify(result)).not.toContain('a-value-that-must-not-travel');
+            } finally {
+                delete process.env.EVER_WORKS_TEST_ONLY_NAME;
+            }
+        });
     });
 
     it('enrolment stores a report the same way when one arrives (the DTO is shared with the beat)', async () => {

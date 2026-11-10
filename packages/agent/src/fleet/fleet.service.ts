@@ -363,6 +363,15 @@ export interface FleetHeartbeatResult {
     consents: FleetConsents | null;
     /** Fleet node link (FL-02, CONTRACTS §1.1) — `FLEET_RECOMMENDED_NODE_VERSION`, or null when unset. */
     recommendedNodeVersion: string | null;
+    /**
+     * Fleet agent readiness — the NAMES of the environment variables this
+     * platform grants an agent run on a node
+     * (`FLEET_NODE_AGENT_TASK_ENV_PASSTHROUGH`, the list the planner writes
+     * into every agent-task job). On every accepted beat, so a node asks its
+     * agent CLIs how they are signed in with the credentials a run will be
+     * given from its first beat, not only after its first run. Names only.
+     */
+    agentEnvPassthrough: string[];
 }
 
 export interface EnrollResult {
@@ -896,6 +905,7 @@ export class FleetService {
             limitCeiling: toLimitCeiling(node),
             consents: normalizeFleetConsents(refresh.consents),
             recommendedNodeVersion: config.fleet.getRecommendedNodeVersion(),
+            agentEnvPassthrough: config.fleetNode.getAgentTaskEnvPassthrough(),
         };
     }
 

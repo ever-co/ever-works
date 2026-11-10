@@ -2,7 +2,10 @@ import 'reflect-metadata';
 import { BadRequestException, Logger, UnauthorizedException } from '@nestjs/common';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
-import { FLEET_DEFAULT_MAX_CAPABILITY_TAGS } from '@ever-works/contracts';
+import {
+    FLEET_AGENT_CREDENTIAL_ENV_NAMES,
+    FLEET_DEFAULT_MAX_CAPABILITY_TAGS,
+} from '@ever-works/contracts';
 import type { AuthenticatedUser } from '../auth/types/auth.types';
 import { IS_PUBLIC_KEY } from '../auth/decorators/public.decorator';
 import { FleetController } from './fleet.controller';
@@ -1032,6 +1035,43 @@ describe('FleetController', () => {
                 secret: 'x'.repeat(43),
             } as FleetHeartbeatDto);
             expect(result).toEqual({ ok: true, node: nodeView });
+        });
+
+        describe('names the credentials a run is granted (fleet agent readiness, review N4)', () => {
+            // A node asks its agent CLIs how they are signed in with the
+            // credentials a RUN is given. Those names are this platform's
+            // configuration; the service reads it and the beat's answer
+            // carries it (`fleet.service.agent-readiness.spec.ts` pins which
+            // list that is).
+            const beat = async (agentEnvPassthrough?: unknown) => {
+                service.heartbeat.mockResolvedValue({
+                    node: nodeView,
+                    ...(agentEnvPassthrough !== undefined ? { agentEnvPassthrough } : {}),
+                });
+                return controller.heartbeat({
+                    nodeId: nodeView.id,
+                    secret: 'x'.repeat(43),
+                } as FleetHeartbeatDto);
+            };
+
+            it('carries the names the service gives, on the accepted beat', async () => {
+                expect(
+                    (await beat([...FLEET_AGENT_CREDENTIAL_ENV_NAMES])).agentEnvPassthrough,
+                ).toEqual([...FLEET_AGENT_CREDENTIAL_ENV_NAMES]);
+                expect(
+                    (await beat(['ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL']))
+                        .agentEnvPassthrough,
+                ).toEqual(['ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL']);
+            });
+
+            it('carries an EMPTY list too: "grant nothing" is an answer, not an absence', async () => {
+                const answer = await beat([]);
+                expect(answer).toHaveProperty('agentEnvPassthrough', []);
+            });
+
+            it('leaves the answer exactly as it was when the service gives none', async () => {
+                expect(await beat()).toEqual({ ok: true, node: nodeView });
+            });
         });
 
         it('promotes waiting jobs after a beat that leaves the node online, and never otherwise (slice S)', async () => {

@@ -17230,6 +17230,7 @@
                 "usage_limit": "The {window} is reached.",
                 "out_of_credit": "The credit balance or quota is exhausted. Add credit, or use another seat.",
                 "status_signed_out": "The CLI is not signed in on this computer.",
+                "status_unconfirmed": "The CLI reports no sign-in, but the node does not know yet which credentials a run is given.",
                 "status_unanswered": "The CLI did not answer its status command.",
                 "status_unavailable": "This CLI version cannot report its sign-in state. Update the CLI.",
                 "probe_timed_out": "The startup lookup for this CLI timed out. Restart the node when the computer is less busy.",
@@ -17245,6 +17246,7 @@
                 "usage": "usage limit"
             },
             "lastSeen": "Last seen in a run {when}",
+            "lastSeenBeforeCheck": "Last seen in a run {when}, before the latest sign-in check",
             "lastFailure": "Last refused run {when}: {what}",
             "usageAsOf": "Usage as of {when}"
         }

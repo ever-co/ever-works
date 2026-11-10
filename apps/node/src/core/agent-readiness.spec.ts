@@ -16,6 +16,7 @@ import {
 	agentRunHistoryPath,
 	buildAgentReadinessReport,
 	detectUnsupportedAgentClis,
+	normalizeAgentEnvNames,
 	parseAgentRunHistoryRecord,
 	probeAgentAuth,
 	quoteProbeExecutable,
@@ -542,6 +543,75 @@ describe('AgentProbeEnvironments — the status command sees what a run sees (re
 		expect(env.HOME).toBe('/home/owner');
 	});
 
+	describe('where the names come from, and what is only an assumption (review N4)', () => {
+		// An instance that grants a gateway token instead of the default names.
+		const gatewayEnv = {
+			...daemonEnv,
+			ANTHROPIC_AUTH_TOKEN: 'fake-gateway-token',
+			ANTHROPIC_BASE_URL: 'https://llm.internal'
+		};
+		const GATEWAY_NAMES = ['ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL'];
+		const gateway = () =>
+			new AgentProbeEnvironments({
+				build: (names) => buildNodeCheckEnv(names, gatewayEnv),
+				defaultNames: DEFAULT_NAMES
+			});
+
+		it('before the platform or a run has said: the default names, and it says they are ASSUMED', () => {
+			const resolved = gateway().resolve('claude-code');
+			expect(resolved.source).toBe('assumed');
+			expect(resolved.env).not.toHaveProperty('ANTHROPIC_AUTH_TOKEN');
+		});
+
+		it('from the platform`s first answer: the names this instance grants a run', () => {
+			const environments = gateway();
+			const assumed = environments.resolve('claude-code');
+			environments.notePlatform(GATEWAY_NAMES);
+			const told = environments.resolve('claude-code');
+			expect(told.source).toBe('platform');
+			expect(told.env.ANTHROPIC_AUTH_TOKEN).toBe('fake-gateway-token');
+			expect(told.env.ANTHROPIC_BASE_URL).toBe('https://llm.internal');
+			// The default names are not granted on this instance, so they are not passed.
+			expect(told.env).not.toHaveProperty('CLAUDE_CODE_OAUTH_TOKEN');
+			// A reading cached under the assumption is not reused.
+			expect(told.key).not.toBe(assumed.key);
+			expect(environments.resolve('codex').source).toBe('platform');
+		});
+
+		it('the same names, once the platform confirms them, stop being an assumption without a new environment', () => {
+			const { probeEnvironments, builds } = environments();
+			const assumed = probeEnvironments.resolve('claude-code');
+			probeEnvironments.notePlatform([...DEFAULT_NAMES].reverse());
+			const told = probeEnvironments.resolve('claude-code');
+			expect([assumed.source, told.source]).toEqual(['assumed', 'platform']);
+			expect(told.key).toBe(assumed.key);
+			expect(builds).toHaveLength(1);
+		});
+
+		it('a real run`s names outrank the platform`s list; an EMPTY platform list is an answer too', () => {
+			const environments = gateway();
+			environments.notePlatform([]);
+			const none = environments.resolve('claude-code');
+			expect(none.source).toBe('platform');
+			expect(none.env).not.toHaveProperty('CLAUDE_CODE_OAUTH_TOKEN');
+			expect(none.env).not.toHaveProperty('ANTHROPIC_AUTH_TOKEN');
+
+			environments.noteRun('claude-code', GATEWAY_NAMES);
+			expect(environments.resolve('claude-code')).toMatchObject({
+				source: 'run',
+				env: { ANTHROPIC_AUTH_TOKEN: 'fake-gateway-token' }
+			});
+			expect(environments.resolve('codex').source).toBe('platform');
+		});
+
+		it('a platform that says nothing (an older one) leaves the assumption standing', () => {
+			const environments = gateway();
+			environments.notePlatform(undefined);
+			environments.notePlatform(null);
+			expect(environments.resolve('claude-code').source).toBe('assumed');
+		});
+	});
+
 	it('builds one environment per distinct list of names, and ignores a run that names none at all', () => {
 		const { probeEnvironments, builds } = environments();
 		probeEnvironments.resolve('claude-code');
@@ -554,6 +624,34 @@ describe('AgentProbeEnvironments — the status command sees what a run sees (re
 		probeEnvironments.resolve('codex');
 		probeEnvironments.resolve('codex');
 		expect(builds).toHaveLength(2);
+	});
+});
+
+describe('normalizeAgentEnvNames', () => {
+	it('keeps well-formed variable names, once each, and nothing else', () => {
+		expect(
+			normalizeAgentEnvNames([
+				'ANTHROPIC_API_KEY',
+				'anthropic_api_key',
+				'_private',
+				'OPENAI_API_KEY',
+				'9STARTS_WITH_DIGIT',
+				'HAS SPACE',
+				'HAS=EQUALS',
+				'',
+				42,
+				null,
+				'X'.repeat(200)
+			])
+		).toEqual(['ANTHROPIC_API_KEY', '_private', 'OPENAI_API_KEY']);
+	});
+
+	it('is bounded, and reads anything that is not a list as none', () => {
+		const many = Array.from({ length: 5_000 }, (_, index) => `NAME_${index}`);
+		expect(normalizeAgentEnvNames(many)).toHaveLength(64);
+		for (const value of [null, undefined, 'ANTHROPIC_API_KEY', { 0: 'A' }, 7]) {
+			expect(normalizeAgentEnvNames(value)).toEqual([]);
+		}
 	});
 });
 
@@ -1072,6 +1170,45 @@ describe('AgentRunHistory (what real runs proved)', () => {
 		});
 	});
 
+	it('remembers the credential NAMES the last run was granted, so a restart probes with them (review N4)', async () => {
+		const first = history();
+		first.runs.note({
+			provider: 'claude-code',
+			status: 'timeout',
+			envPassthrough: ['ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL', 'not a name', 'anthropic_auth_token']
+		});
+		// The same names again are not a change worth a write.
+		first.runs.note({
+			provider: 'claude-code',
+			status: 'timeout',
+			envPassthrough: ['ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL']
+		});
+		await first.runs.settled();
+		expect(first.saved).toHaveLength(1);
+		expect(first.runs.get('claude-code').envPassthrough).toEqual(['ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL']);
+
+		const stored = parseAgentRunHistoryRecord(JSON.stringify(first.saved.at(-1)));
+		expect(stored?.agents['claude-code']?.envPassthrough).toEqual(['ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL']);
+		// Names only: nothing a value could hide in.
+		expect(
+			parseAgentRunHistoryRecord(
+				JSON.stringify({
+					version: 1,
+					recordedAt: ISO,
+					agents: { codex: { envPassthrough: ['OPENAI_API_KEY', `OPENAI_API_KEY=${FAKE_API_KEY}`, 7] } }
+				})
+			)?.agents.codex?.envPassthrough
+		).toEqual(['OPENAI_API_KEY']);
+		// A run that granted NO name is remembered as that, not as "unknown".
+		first.runs.note({ provider: 'codex', status: 'succeeded', envPassthrough: [] });
+		expect(first.runs.get('codex').envPassthrough).toEqual([]);
+		// A record from before the field has none.
+		expect(restoredNames(null)).toBeUndefined();
+		function restoredNames(initial: AgentRunHistoryRecord | null) {
+			return history(initial).runs.get('claude-code').envPassthrough;
+		}
+	});
+
 	it('persists every change in order, and a restart restores it', async () => {
 		const first = history();
 		first.runs.note({ provider: 'claude-code', status: 'succeeded' });
@@ -1441,6 +1578,30 @@ describe('resolveAgentStatus', () => {
 		);
 	});
 
+	it('"not signed in" heard in an ASSUMED environment is unknown, never a definite negative (review N4)', () => {
+		const signedOut = (environment?: 'run' | 'platform' | 'assumed') => ({
+			...base,
+			auth: { state: 'answered' as const, reading: SIGNED_OUT, ...(environment ? { environment } : {}) }
+		});
+		expect(resolveAgentStatus(signedOut('assumed'))).toEqual({
+			status: 'unknown',
+			reasonCode: 'status_unconfirmed'
+		});
+		// Once the environment is the platform's or a run's, it is an answer.
+		for (const environment of ['platform', 'run', undefined] as const) {
+			expect(resolveAgentStatus(signedOut(environment))).toEqual({
+				status: 'not_signed_in',
+				reasonCode: 'status_signed_out'
+			});
+		}
+		// "Signed in" is evidence wherever it was heard, and so is a recent run.
+		expect(
+			resolveAgentStatus({ ...base, auth: { state: 'answered', reading: SIGNED_IN, environment: 'assumed' } })
+		).toEqual({ status: 'ready', reasonCode: null });
+		const recent = emptyEntry({ lastSuccessAt: new Date(NOW - HOUR).toISOString() });
+		expect(resolveAgentStatus({ ...signedOut('assumed'), history: recent }).status).toBe('ready');
+	});
+
 	it('no status reading and no recent success → unknown with why, never ready', () => {
 		expect(resolveAgentStatus({ ...base, auth: null })).toEqual({
 			status: 'unknown',
@@ -1627,6 +1788,56 @@ describe('buildAgentReadinessReport', () => {
 			lastFailureKind: 'not_signed_in',
 			lastFailureCode: 'session_expired'
 		});
+	});
+
+	it('before the node knows which credentials a run gets, "not signed in" is reported as not known (review N4)', async () => {
+		const runs = new AgentRunHistory({ now: () => NOW });
+		const report = async (environment: 'assumed' | 'platform') =>
+			(
+				await buildAgentReadinessReport({
+					drivable: () => drivable,
+					auth: async () => ({ state: 'answered', reading: SIGNED_OUT, environment }),
+					history: runs,
+					now: () => NOW
+				})
+			).agents[0];
+
+		expect(await report('assumed')).toMatchObject({
+			installed: true,
+			// Not repeated as a fact: the node could not tell.
+			signedIn: null,
+			authMethod: 'unknown',
+			status: 'unknown',
+			reasonCode: 'status_unconfirmed',
+			reason: describeFleetAgentReason('status_unconfirmed')
+		});
+		expect(await report('platform')).toMatchObject({
+			signedIn: false,
+			authMethod: 'none',
+			status: 'not_signed_in',
+			reasonCode: 'status_signed_out'
+		});
+	});
+
+	it('a reading from an assumed environment never lifts a refusal a run proved', async () => {
+		// The refusal was recorded while the CLI read "signed in as owner@…".
+		const runs = new AgentRunHistory({ now: () => NOW });
+		runs.observeAuth('claude-code', SIGNED_IN);
+		runs.note({ provider: 'claude-code', status: 'failed', cliError: { text: ORG_DISABLED } });
+		// After a restart the first status answer comes from the assumed
+		// environment and looks different. That is not a changed sign-in.
+		for (const reading of [SIGNED_OUT, { signedIn: true, method: 'api_key' as const, account: null }]) {
+			const agent = (
+				await buildAgentReadinessReport({
+					drivable: () => drivable,
+					auth: async () => ({ state: 'answered', reading, environment: 'assumed' }),
+					history: runs,
+					now: () => NOW + 60_000
+				})
+			).agents[0];
+			expect(agent).toMatchObject({ status: 'access_denied', reasonCode: 'org_access_disabled' });
+		}
+		expect(runs.get('claude-code').failure?.kind).toBe('access_denied');
 	});
 
 	it('a startup lookup that timed out is unknown, not "not installed" (review S5)', async () => {

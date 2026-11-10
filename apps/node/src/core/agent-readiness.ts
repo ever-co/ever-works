@@ -90,9 +90,40 @@ export interface AgentAuthReading {
  *    node did not run it at all.
  */
 export type AgentAuthProbe =
-	| { state: 'answered'; reading: AgentAuthReading }
+	| { state: 'answered'; reading: AgentAuthReading; environment?: AgentProbeEnvironmentSource }
 	| { state: 'unanswered' }
 	| { state: 'unavailable' };
+
+/**
+ * Where the environment a status command ran in came from:
+ *  - `run`      — the credential names the last real run of that CLI was granted;
+ *  - `platform` — the names the platform says it grants a run (told on the heartbeat);
+ *  - `assumed`  — neither is known yet, so the built-in default names were used.
+ *
+ * Under `assumed`, "not signed in" proves nothing: the platform may grant a
+ * run names the node has not been told about. It is reported as `unknown`.
+ */
+export type AgentProbeEnvironmentSource = 'run' | 'platform' | 'assumed';
+
+/** Most credential names kept for one CLI, and what a name may look like. */
+const MAX_AGENT_ENV_NAMES = 64;
+const AGENT_ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
+
+/** A list of environment-variable NAMES off the wire or a file: well-formed ones only, deduplicated, capped. */
+export function normalizeAgentEnvNames(value: unknown): string[] {
+	if (!Array.isArray(value)) return [];
+	const names: string[] = [];
+	const seen = new Set<string>();
+	for (const entry of value.slice(0, MAX_AGENT_ENV_NAMES * 4)) {
+		if (typeof entry !== 'string' || entry.length > 128 || !AGENT_ENV_NAME.test(entry)) continue;
+		const upper = entry.toUpperCase();
+		if (seen.has(upper)) continue;
+		seen.add(upper);
+		names.push(entry);
+		if (names.length >= MAX_AGENT_ENV_NAMES) break;
+	}
+	return names;
+}
 
 /** How long one status command may run before it is abandoned. */
 export const AGENT_AUTH_PROBE_TIMEOUT_MS = 15_000;
@@ -297,19 +328,33 @@ export async function probeAgentAuth(
  * granted it, with one credential chosen per CLI (`buildNodeCheckEnv`). The
  * daemon's own environment can hold more — a second key, a token for another
  * product — and a status command started in it would report a sign-in no run
- * ever uses. So the probe is given the names the LAST real run of that CLI
- * was granted; before any run, the platform's default list. Names only: this
- * class never sees a value it did not get from `build`.
+ * ever uses. So the probe is given, in this order:
+ *
+ *  1. the names the LAST real run of that CLI was granted (kept in the run
+ *     history file, so a restart does not forget them);
+ *  2. the names the PLATFORM says it grants a run — its own configuration,
+ *     told on every heartbeat answer, so a node knows them from its first
+ *     beat and not only after its first run;
+ *  3. the built-in default names — an ASSUMPTION, used only until one of the
+ *     two above is known (the very first beat; an older platform).
+ *
+ * Under (3) a "not signed in" answer is not evidence: an instance may grant
+ * a run names this build has never heard of, and the node would call a
+ * working agent signed out. {@link resolve} says which of the three applied,
+ * and the report turns an assumed "not signed in" into `unknown`.
+ *
+ * Names only: this class never sees a value it did not get from `build`.
  */
 export class AgentProbeEnvironments {
 	private readonly lastRun = new Map<string, readonly string[]>();
+	private platformNames: readonly string[] | null = null;
 	private readonly built = new Map<string, Record<string, string>>();
 
 	constructor(
 		private readonly options: {
 			/** A run's environment for these credential NAMES (`buildNodeCheckEnv` over the daemon's). */
 			build: (names: readonly string[]) => Record<string, string>;
-			/** The names a run is granted when no run has said otherwise. */
+			/** The names assumed while neither a run nor the platform has said. */
 			defaultNames: readonly string[];
 		}
 	) {}
@@ -317,27 +362,33 @@ export class AgentProbeEnvironments {
 	/** Remember the credential names a real run of this CLI was granted. An empty list is an answer too. */
 	noteRun(provider: string, names: readonly string[] | null | undefined): void {
 		if (!Array.isArray(names)) return;
-		this.lastRun.set(
-			provider,
-			names.filter((name): name is string => typeof name === 'string' && name.length > 0).slice(0, 64)
-		);
+		this.lastRun.set(provider, normalizeAgentEnvNames(names));
+	}
+
+	/** Remember the names the platform grants a run (its heartbeat answer). Null / absent = it did not say. */
+	notePlatform(names: readonly string[] | null | undefined): void {
+		if (!Array.isArray(names)) return;
+		this.platformNames = normalizeAgentEnvNames(names);
 	}
 
 	/**
-	 * The environment for this CLI's status command, and a key that changes
-	 * exactly when the environment does (so a cached reading is not reused
-	 * across a change of credential). Built once per distinct list of names:
-	 * a process's environment does not change under it.
+	 * The environment for this CLI's status command, where its names came
+	 * from, and a key that changes exactly when the environment does (so a
+	 * cached reading is not reused across a change of credential). Built once
+	 * per distinct list of names: a process's environment does not change
+	 * under it.
 	 */
-	resolve(provider: string): { key: string; env: Record<string, string> } {
-		const names = this.lastRun.get(provider) ?? this.options.defaultNames;
+	resolve(provider: string): { key: string; env: Record<string, string>; source: AgentProbeEnvironmentSource } {
+		const fromRun = this.lastRun.get(provider);
+		const source: AgentProbeEnvironmentSource = fromRun ? 'run' : this.platformNames ? 'platform' : 'assumed';
+		const names = fromRun ?? this.platformNames ?? this.options.defaultNames;
 		const key = [...new Set(names.map((name) => name.toUpperCase()))].sort().join(',');
 		let env = this.built.get(key);
 		if (!env) {
 			env = this.options.build(names);
 			this.built.set(key, env);
 		}
-		return { key, env };
+		return { key, env, source };
 	}
 }
 
@@ -641,6 +692,12 @@ export interface AgentRunFailure extends FleetAgentFailure {
 export interface AgentRunHistoryEntry {
 	lastSuccessAt: string | null;
 	failure: AgentRunFailure | null;
+	/**
+	 * The NAMES (never the values) of the credential env vars the last real
+	 * run of this CLI was granted. Kept so the status probe is started with
+	 * them from the first beat after a restart, not only after the next run.
+	 */
+	envPassthrough?: string[];
 	usage: FleetAgentUsageWindow[];
 	usageObservedAt: string | null;
 }
@@ -699,6 +756,9 @@ export function parseAgentRunHistoryRecord(raw: string | null | undefined): Agen
 		agents[provider] = {
 			lastSuccessAt: isoOrNull(entry.lastSuccessAt),
 			failure: parseFailure(entry.failure),
+			...(Array.isArray(entry.envPassthrough)
+				? { envPassthrough: normalizeAgentEnvNames(entry.envPassthrough) }
+				: {}),
 			usage,
 			usageObservedAt: usage.length > 0 ? isoOrNull(entry.usageObservedAt) : null
 		};
@@ -822,6 +882,15 @@ export class AgentRunHistory {
 		const at = new Date(nowMs).toISOString();
 		const entry = { ...this.get(provider) };
 		let changed = false;
+		// Any finished invocation tells which credential names a run is given
+		// here — a timeout included.
+		if (Array.isArray(observation.envPassthrough)) {
+			const names = normalizeAgentEnvNames(observation.envPassthrough);
+			if (entry.envPassthrough === undefined || names.join(',') !== entry.envPassthrough.join(',')) {
+				entry.envPassthrough = names;
+				changed = true;
+			}
+		}
 		if (observation.usage && observation.usage.length > 0) {
 			entry.usage = observation.usage.slice(0, 6);
 			entry.usageObservedAt = at;
@@ -1011,7 +1080,9 @@ export interface AgentVerdict {
  *  6. a run succeeded within {@link AGENT_SUCCESS_TRUST_MS} → `ready` (the
  *     run is better evidence than a status command that cannot see a
  *     per-run credential);
- *  7. the status command says signed out → `not_signed_in`;
+ *  7. the status command says signed out → `not_signed_in` — unless it was
+ *     asked in an environment the node only ASSUMED (it does not know yet
+ *     which credentials a run is given): then `unknown`;
  *  8. otherwise `unknown` — never `ready` on no evidence.
  */
 export function resolveAgentStatus(input: ResolveAgentStatusInput): AgentVerdict {
@@ -1065,7 +1136,14 @@ export function resolveAgentStatus(input: ResolveAgentStatusInput): AgentVerdict
 	if (Number.isFinite(lastSuccess) && input.nowMs - lastSuccess <= AGENT_SUCCESS_TRUST_MS) {
 		return { status: 'ready', reasonCode: null };
 	}
-	if (reading?.signedIn === false) return { status: 'not_signed_in', reasonCode: 'status_signed_out' };
+	if (reading?.signedIn === false) {
+		// Asked in an environment the node only assumed, "not signed in" is not
+		// an answer about the credentials a run is given: unknown, never a
+		// definite negative.
+		return input.auth?.state === 'answered' && input.auth.environment === 'assumed'
+			? { status: 'unknown', reasonCode: 'status_unconfirmed' }
+			: { status: 'not_signed_in', reasonCode: 'status_signed_out' };
+	}
 	if (input.auth?.state === 'unavailable') return { status: 'unknown', reasonCode: 'status_unavailable' };
 	return { status: 'unknown', reasonCode: 'status_unanswered' };
 }
@@ -1135,8 +1213,14 @@ export async function buildAgentReadinessReport(sources: AgentReadinessSources):
 	for (const [index, cli] of drivable.entries()) {
 		const installed = isInstalled(cli);
 		const auth = auths[index] ?? null;
-		const reading = auth?.state === 'answered' ? auth.reading : null;
-		if (installed) sources.history.observeAuth(cli.provider, reading);
+		const assumed = auth?.state === 'answered' && auth.environment === 'assumed';
+		// What the status command said — except a "not signed in" heard in an
+		// assumed environment, which says nothing the report may repeat.
+		const reading =
+			auth?.state === 'answered' && !(assumed && auth.reading.signedIn === false) ? auth.reading : null;
+		// A sign-in fingerprint lifts a refusal when it CHANGES; one read in an
+		// assumed environment is not comparable with one read in a run's.
+		if (installed && !assumed) sources.history.observeAuth(cli.provider, reading);
 		sources.history.observeThrottle(cli.provider, throttles.has(cli.provider), throttlesKnown);
 		const history = sources.history.get(cli.provider);
 		const verdict = resolveAgentStatus({

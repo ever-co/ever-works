@@ -114,6 +114,34 @@ describe('AgentReadinessList', () => {
         expect(seen).toHaveTextContent('lastSeen:ago.hour:3');
     });
 
+    it('a sign-in refusal that the status command has since contradicted says so (same-account re-login)', () => {
+        render(
+            <AgentReadinessList
+                node={node({
+                    agentReadiness: report([
+                        agent({
+                            status: 'not_signed_in',
+                            reasonCode: 'session_expired',
+                            reason: 'The sign-in session expired or was revoked. Sign in again on this computer.',
+                            // The status command, asked just now, says signed in.
+                            signedIn: true,
+                            checkedAt: new Date(NOW).toISOString(),
+                            lastFailureAt: new Date(NOW - 3 * 3_600_000).toISOString(),
+                            lastFailureKind: 'not_signed_in',
+                            lastFailureCode: 'session_expired',
+                        }),
+                    ]),
+                    anyAgentReady: false,
+                })}
+                compact
+            />,
+        );
+        const seen = screen.getByTestId('agent-readiness-failure-n1-claude-code');
+        expect(seen).toHaveAttribute('data-failure-mode', 'seen');
+        expect(seen).toHaveAttribute('data-before-sign-in-check', 'true');
+        expect(seen).toHaveTextContent('lastSeenBeforeCheck:ago.hour:3');
+    });
+
     it('falls back to the platform’s own sentence for a reason code this build has no words for', () => {
         render(
             <AgentReadinessList

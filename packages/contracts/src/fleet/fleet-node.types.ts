@@ -923,6 +923,20 @@ export interface FleetHeartbeatResponse {
 	 * Optional and additive: omitted when unset, ignored by older daemons.
 	 */
 	recommendedNodeVersion?: string;
+	/**
+	 * Fleet agent readiness — the NAMES (never the values) of the environment
+	 * variables this platform grants an agent run on a node
+	 * (`FLEET_NODE_AGENT_TASK_ENV_PASSTHROUGH`; every `agent-task` job carries
+	 * the same list as `execution.envPassthrough`). Sent on every accepted
+	 * beat so a node can ask its agent CLIs how they are signed in with the
+	 * credentials a run will be given — before any run has told it. Without
+	 * it a node can only assume the default names, and an instance that
+	 * grants others would read a working node as "not signed in".
+	 *
+	 * Optional and additive: ignored by older daemons; a node that gets none
+	 * (an older platform) reports a signed-out answer as `unknown`.
+	 */
+	agentEnvPassthrough?: string[];
 }
 
 // ─── Node lifecycle: the daemon version floor (self-build slice AR) ─────────

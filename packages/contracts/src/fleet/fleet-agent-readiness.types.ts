@@ -156,6 +156,8 @@ export const FLEET_AGENT_USAGE_DEFAULT_WINDOW_MINUTES = 300;
  * - `usage_limit`         — a usage or rate limit (see the entry's `limitWindow` / `limitResetsAt`);
  * - `out_of_credit`       — the balance or quota is exhausted;
  * - `status_signed_out`   — the CLI's status command says it is not signed in;
+ * - `status_unconfirmed`  — the status command says "not signed in", asked in an environment the node
+ *                           only ASSUMED (it does not know yet which credentials a run is given);
  * - `status_unanswered`   — the CLI's status command did not answer;
  * - `status_unavailable`  — this CLI version has no status command the node may run;
  * - `probe_timed_out`     — the startup lookup for the CLI timed out (a busy machine, not a missing CLI);
@@ -173,6 +175,7 @@ export const FLEET_AGENT_REASON_CODES = [
 	'usage_limit',
 	'out_of_credit',
 	'status_signed_out',
+	'status_unconfirmed',
 	'status_unanswered',
 	'status_unavailable',
 	'probe_timed_out',
@@ -199,6 +202,7 @@ const REASON_SENTENCES: Readonly<Record<Exclude<FleetAgentReasonCode, 'usage_lim
 	unauthorized: 'The API rejected the credential (401). Sign in again on this computer.',
 	out_of_credit: 'The credit balance or quota is exhausted. Add credit, or use another seat.',
 	status_signed_out: 'The CLI is not signed in on this computer.',
+	status_unconfirmed: 'The CLI reports no sign-in, but the node does not know yet which credentials a run is given.',
 	status_unanswered: 'The CLI did not answer its status command.',
 	status_unavailable: 'This CLI version cannot report its sign-in state. Update the CLI.',
 	probe_timed_out: 'The startup lookup for this CLI timed out. Restart the node when the computer is less busy.',

@@ -266,9 +266,12 @@ function AgentRow({
                     className={cn(small, 'pl-3', compact ? 'line-clamp-2' : 'break-words')}
                     data-testid={`agent-readiness-failure-${nodeId}-${agent.provider}`}
                     data-failure-mode={failure.mode}
+                    data-before-sign-in-check={failure.beforeSignInCheck ? 'true' : undefined}
                 >
                     {failure.mode === 'seen'
-                        ? t('lastSeen', { when: failureWhen })
+                        ? failure.beforeSignInCheck
+                            ? t('lastSeenBeforeCheck', { when: failureWhen })
+                            : t('lastSeen', { when: failureWhen })
                         : t('lastFailure', {
                               when: failureWhen,
                               what:

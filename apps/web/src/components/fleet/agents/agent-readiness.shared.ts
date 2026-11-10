@@ -271,21 +271,39 @@ export interface AgentFailureNote {
     at: string;
     kind: FleetAgentFailureKind | null;
     code: FleetAgentReasonCode | null;
+    /**
+     * `seen` only: a run found the CLI not signed in, and the CLI's own
+     * status command has said "signed in" SINCE. The owner may well have
+     * signed in again with the same account — which looks identical to the
+     * node, so the verdict stands until a run succeeds — and the line says
+     * so: the refusal was seen before the latest sign-in check.
+     */
+    beforeSignInCheck: boolean;
 }
 
 export function agentFailureNote(
     agent: Pick<
         FleetAgentReadinessEntry,
         'status' | 'reasonCode' | 'lastFailureAt' | 'lastFailureKind' | 'lastFailureCode'
-    >,
+    > &
+        Partial<Pick<FleetAgentReadinessEntry, 'signedIn' | 'checkedAt'>>,
 ): AgentFailureNote | null {
     const at = typeof agent.lastFailureAt === 'string' ? agent.lastFailureAt : '';
-    if (!at || !Number.isFinite(new Date(at).getTime())) return null;
+    const failedAt = at ? new Date(at).getTime() : Number.NaN;
+    if (!Number.isFinite(failedAt)) return null;
+    const checkedAt =
+        typeof agent.checkedAt === 'string' ? new Date(agent.checkedAt).getTime() : NaN;
     const note = (mode: AgentFailureNote['mode']): AgentFailureNote => ({
         mode,
         at,
         kind: agent.lastFailureKind ?? null,
         code: agentReasonKey(agent.lastFailureCode),
+        beforeSignInCheck:
+            mode === 'seen' &&
+            agent.status === 'not_signed_in' &&
+            agent.signedIn === true &&
+            Number.isFinite(checkedAt) &&
+            checkedAt > failedAt,
     });
     const refused =
         agent.status === 'not_signed_in' ||

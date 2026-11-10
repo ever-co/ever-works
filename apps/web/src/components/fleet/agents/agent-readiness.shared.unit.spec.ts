@@ -342,7 +342,48 @@ describe('agentFailureNote — a verdict carries its age (review item 6)', () =>
                     lastFailureCode: 'org_access_disabled',
                 }),
             ),
-        ).toEqual({ mode: 'seen', at, kind: 'access_denied', code: 'org_access_disabled' });
+        ).toEqual({
+            mode: 'seen',
+            at,
+            kind: 'access_denied',
+            code: 'org_access_disabled',
+            beforeSignInCheck: false,
+        });
+    });
+
+    it('a sign-in refusal the status command has contradicted since is "seen before the latest sign-in check"', () => {
+        // A run found the session expired; the owner signed in again with the
+        // SAME account. The node cannot tell that from "nothing changed", so
+        // the verdict stands until a run succeeds — and the line says when it
+        // was seen relative to the check.
+        const refused = agent({
+            status: 'not_signed_in',
+            reasonCode: 'session_expired',
+            signedIn: true,
+            checkedAt: new Date(NOW).toISOString(),
+            lastFailureAt: at,
+            lastFailureKind: 'not_signed_in',
+            lastFailureCode: 'session_expired',
+        });
+        expect(agentFailureNote(refused)).toMatchObject({ mode: 'seen', beforeSignInCheck: true });
+
+        // Not when the status command agrees with the run, could not tell, or was asked before the run.
+        expect(agentFailureNote({ ...refused, signedIn: false })?.beforeSignInCheck).toBe(false);
+        expect(agentFailureNote({ ...refused, signedIn: null })?.beforeSignInCheck).toBe(false);
+        expect(
+            agentFailureNote({ ...refused, checkedAt: new Date(NOW - 4 * HOUR).toISOString() })
+                ?.beforeSignInCheck,
+        ).toBe(false);
+        // "Signed in" does not contradict an access refusal or a limit.
+        expect(
+            agentFailureNote({
+                ...refused,
+                status: 'access_denied',
+                reasonCode: 'org_access_disabled',
+                lastFailureKind: 'access_denied',
+                lastFailureCode: 'org_access_disabled',
+            })?.beforeSignInCheck,
+        ).toBe(false);
     });
 
     it('a status that aged to unknown keeps the last failure in view', () => {
@@ -356,7 +397,13 @@ describe('agentFailureNote — a verdict carries its age (review item 6)', () =>
                     lastFailureCode: 'out_of_credit',
                 }),
             ),
-        ).toEqual({ mode: 'last', at, kind: 'limit_reached', code: 'out_of_credit' });
+        ).toEqual({
+            mode: 'last',
+            at,
+            kind: 'limit_reached',
+            code: 'out_of_credit',
+            beforeSignInCheck: false,
+        });
     });
 
     it('says nothing when the status is not that run’s: ready again, or the status command’s own word', () => {
@@ -400,7 +447,7 @@ describe('agentFailureNote — a verdict carries its age (review item 6)', () =>
                     lastFailureCode: 'a_code_from_the_future',
                 }),
             ),
-        ).toEqual({ mode: 'last', at, kind: null, code: null });
+        ).toEqual({ mode: 'last', at, kind: null, code: null, beforeSignInCheck: false });
     });
 });
 
@@ -571,6 +618,7 @@ describe('fleet.agents messages (en.json)', () => {
             'lastSuccess',
             'lastSuccessNever',
             'lastSeen',
+            'lastSeenBeforeCheck',
             'lastFailure',
         ]) {
             expect(typeof messages[key]).toBe('string');

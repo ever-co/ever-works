@@ -929,12 +929,17 @@ export function createNodeRuntime(config: NodeConfig, io: NodeIo, options: Creat
 	// The status command of each CLI runs in the environment a RUN gets, not
 	// the daemon's: the same allow-list and the same exclusive credential
 	// choice (`buildNodeCheckEnv`), for the credential NAMES the last real run
-	// of that CLI was granted — before any run, the platform's default list.
-	// So the method it reports is the one runs actually use.
+	// of that CLI was granted (restored from the history file), else the
+	// names the platform says it grants a run (its heartbeat answer), else —
+	// until one of those is known — an assumed default, under which "not
+	// signed in" is reported as unknown. See `AgentProbeEnvironments`.
 	const agentProbeEnvironments = new AgentProbeEnvironments({
 		build: (names) => buildNodeCheckEnv(names, (options.env ?? process.env) as NodeJS.ProcessEnv),
 		defaultNames: FLEET_AGENT_CREDENTIAL_ENV_NAMES
 	});
+	for (const [provider, entry] of Object.entries(options.agentRunHistory?.agents ?? {})) {
+		agentProbeEnvironments.noteRun(provider, entry.envPassthrough);
+	}
 	let probeHealth: (() => Promise<FleetNodeHealthSnapshot | null>) | undefined;
 	if (io.health) {
 		const probe = createHealthProbe(io.health, {
@@ -1584,7 +1589,11 @@ export function createNodeRuntime(config: NodeConfig, io: NodeIo, options: Creat
 			);
 			agentAuthProbes.set(key, probe);
 		}
-		return (await probe()) ?? { state: 'unanswered' };
+		const answer = (await probe()) ?? { state: 'unanswered' };
+		// Where the environment came from is a fact about NOW, not about the
+		// cached reading: the same names can stop being an assumption once
+		// the platform confirms them.
+		return answer.state === 'answered' ? { ...answer, environment: environment.source } : answer;
 	};
 	const unsupportedAgentClis = cacheProbe(
 		() => detectUnsupportedAgentClis(io.runner),
@@ -1746,10 +1755,13 @@ export function createNodeRuntime(config: NodeConfig, io: NodeIo, options: Creat
 			limitCeiling?: NodeLimitCeiling;
 			node?: { modelThrottles?: unknown };
 			recommendedNodeVersion?: string;
+			agentEnvPassthrough?: string[];
 		}) => {
 			attendedWake?.(response.pendingComputerSessions);
 			lifecycle.applyHeartbeat(response);
 			throttleTarget?.(response.node?.modelThrottles);
+			// Fleet agent readiness: the credential names a run is granted here.
+			agentProbeEnvironments.notePlatform(response.agentEnvPassthrough);
 			// Fleet node link (FL-02): the first accepted beat opens it (FR-1).
 			startLink?.();
 			// Fleet node link (FL-02 T-25): the self-update decides on the verdict.

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CapabilityEnvironment, CommandRunOptions, CommandRunner } from './capabilities';
 import type { FetchLike } from './fleet-client';
 import type { HealthProbeIo } from './health-probe';
@@ -1341,7 +1341,9 @@ describe('fleet agent readiness wiring', () => {
 
 	function recordingFetch(
 		bodies: Array<{ url: string; body: Record<string, unknown> }>,
-		rejectAgents = false
+		rejectAgents = false,
+		/** Extra fields on every accepted heartbeat answer. */
+		answer: Record<string, unknown> = {}
 	): FetchLike {
 		return async (url, init) => {
 			const body = JSON.parse(init.body || '{}') as Record<string, unknown>;
@@ -1351,7 +1353,7 @@ describe('fleet agent readiness wiring', () => {
 			}
 			const payload = url.endsWith('/api/fleet/enroll')
 				? { nodeId: NODE_ID, secret: SECRET, node: nodeFromApi }
-				: { ok: true, node: nodeFromApi };
+				: { ok: true, node: nodeFromApi, ...answer };
 			return {
 				ok: true,
 				status: url.endsWith('/api/fleet/enroll') ? 201 : 200,
@@ -1441,6 +1443,157 @@ describe('fleet agent readiness wiring', () => {
 		} finally {
 			warn.mockRestore();
 		}
+	});
+
+	describe('an instance that grants a run other credential names than the default (review N4)', () => {
+		// This machine holds only a gateway token: the default names find nothing.
+		const GATEWAY_NAMES = ['ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL'];
+		const daemonEnv = {
+			PATH: '/usr/bin',
+			HOME: '/home/owner',
+			ANTHROPIC_AUTH_TOKEN: 'fake-gateway-token',
+			ANTHROPIC_BASE_URL: 'https://llm.internal'
+		};
+		/** Claude Code that is signed in exactly when the gateway token reaches it. */
+		function gatewayRunner(spawned: Spawned[]): CommandRunner {
+			return {
+				run: async (command, args, options) => {
+					const call = `${command} ${args.join(' ')}`;
+					spawned.push({ call, options });
+					if (command === '/opt/claude' && args[0] === '--version') {
+						return { code: 0, stdout: '2.1.319 (Claude Code)', stderr: '' };
+					}
+					if (call === '/opt/claude auth --help') {
+						return {
+							code: 0,
+							stdout: 'Usage: claude auth [options] [command]\n\nCommands:\n  status  Show authentication status\n',
+							stderr: ''
+						};
+					}
+					if (call === '/opt/claude auth status --json') {
+						const signedIn = Boolean(options?.env?.ANTHROPIC_AUTH_TOKEN);
+						return {
+							code: signedIn ? 0 : 1,
+							stdout: JSON.stringify(
+								signedIn
+									? { loggedIn: true, authMethod: 'api_key' }
+									: { loggedIn: false, authMethod: 'none' }
+							),
+							stderr: ''
+						};
+					}
+					return { code: 127, stdout: '', stderr: 'not found' };
+				}
+			};
+		}
+		const gatewayDeps = (fetchFn: FetchLike, spawned: Spawned[], now: () => number) => ({
+			...io(fetchFn).io,
+			runner: gatewayRunner(spawned),
+			environment: { ...environment, modelCli: { 'claude-code': '/opt/claude', codex: null } },
+			now
+		});
+		const claudeOf = (beat: { body: Record<string, unknown> }) =>
+			(beat.body.agents as { agents: Array<Record<string, unknown>> }).agents[0];
+		const beatsOf = (bodies: Array<{ url: string; body: Record<string, unknown> }>) =>
+			bodies.filter((entry) => entry.url.endsWith('/api/fleet/heartbeat'));
+
+		let warn: ReturnType<typeof vi.spyOn>;
+		beforeEach(() => {
+			warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+		});
+		afterEach(() => {
+			warn.mockRestore();
+		});
+
+		it('first beat: not known (never "not signed in"); from the platform`s answer on: its names, and ready', async () => {
+			const bodies: Array<{ url: string; body: Record<string, unknown> }> = [];
+			const spawned: Spawned[] = [];
+			let clock = READINESS_NOW;
+			const runtime = createNodeRuntime(
+				config,
+				gatewayDeps(
+					recordingFetch(bodies, false, { agentEnvPassthrough: GATEWAY_NAMES }),
+					spawned,
+					() => clock
+				),
+				{ env: daemonEnv }
+			);
+			await runtime.loop.start();
+
+			// Asked under the default names, which this instance does not grant:
+			// "not signed in" there is an assumption's answer, so it is not repeated.
+			expect(claudeOf(beatsOf(bodies)[0])).toMatchObject({
+				installed: true,
+				signedIn: null,
+				status: 'unknown',
+				reasonCode: 'status_unconfirmed'
+			});
+
+			clock += 60_000;
+			await runtime.loop.tick();
+			runtime.loop.stop();
+			expect(claudeOf(beatsOf(bodies)[1])).toMatchObject({
+				signedIn: true,
+				authMethod: 'api_key',
+				status: 'ready',
+				reasonCode: null
+			});
+			// The second status command ran with the names the platform named.
+			const statusCalls = spawned.filter(
+				(entry) => entry.call === '/opt/claude auth status --json' && entry.options?.closeStdin === true
+			);
+			expect(statusCalls.map((entry) => Boolean(entry.options?.env?.ANTHROPIC_AUTH_TOKEN))).toEqual([
+				false,
+				true
+			]);
+		});
+
+		it('after a restart the names of the last run are known from the first beat, whatever the platform says', async () => {
+			const bodies: Array<{ url: string; body: Record<string, unknown> }> = [];
+			// An older platform: it does not name the credentials it grants.
+			const runtime = createNodeRuntime(
+				config,
+				gatewayDeps(recordingFetch(bodies), [], () => READINESS_NOW),
+				{
+					env: daemonEnv,
+					agentRunHistory: {
+						version: 1,
+						recordedAt: '2026-11-10T08:00:00.000Z',
+						agents: {
+							'claude-code': {
+								lastSuccessAt: null,
+								failure: null,
+								envPassthrough: GATEWAY_NAMES,
+								usage: [],
+								usageObservedAt: null
+							}
+						}
+					}
+				}
+			);
+			await runtime.loop.start();
+			runtime.loop.stop();
+			expect(claudeOf(beatsOf(bodies)[0])).toMatchObject({ signedIn: true, status: 'ready' });
+		});
+
+		it('an older platform and no run yet: the assumption stands, and the answer stays "not known"', async () => {
+			const bodies: Array<{ url: string; body: Record<string, unknown> }> = [];
+			let clock = READINESS_NOW;
+			const runtime = createNodeRuntime(
+				config,
+				gatewayDeps(recordingFetch(bodies), [], () => clock),
+				{
+					env: daemonEnv
+				}
+			);
+			await runtime.loop.start();
+			clock += 60_000;
+			await runtime.loop.tick();
+			runtime.loop.stop();
+			for (const beat of beatsOf(bodies)) {
+				expect(claudeOf(beat)).toMatchObject({ status: 'unknown', reasonCode: 'status_unconfirmed' });
+			}
+		});
 	});
 
 	it('a restart restores what the last run proved: signed in, and still access denied', async () => {

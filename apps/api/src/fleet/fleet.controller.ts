@@ -1073,6 +1073,15 @@ export class FleetController {
         if (result.recommendedNodeVersion) {
             response.recommendedNodeVersion = result.recommendedNodeVersion;
         }
+        // Fleet agent readiness: the credential NAMES a run on a node is
+        // granted — the same list the planner writes into every agent-task
+        // job — so the node asks its CLIs how they are signed in under those
+        // names from its first beat, not only after its first run. Names of
+        // variables, never a value; an empty list is an answer too, so it is
+        // copied whenever the service gives one.
+        if (Array.isArray(result.agentEnvPassthrough)) {
+            response.agentEnvPassthrough = result.agentEnvPassthrough;
+        }
         return response;
     }
 

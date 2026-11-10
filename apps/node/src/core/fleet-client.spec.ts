@@ -304,6 +304,32 @@ describe('heartbeat', () => {
 		expect(JSON.parse(calls[1].init.body)).not.toHaveProperty('agents');
 	});
 
+	it('reads the credential names the platform grants a run off the heartbeat answer (review N4)', async () => {
+		const answer = (extra: Record<string, unknown>) =>
+			fakeFetch(() => ({ status: 200, body: { ok: true, node: nodeView, ...extra } }));
+		const beat = (fetchFn: FetchLike) => client(fetchFn).heartbeat({ nodeId: NODE_ID, secret: SECRET });
+
+		const told = await beat(
+			answer({
+				agentEnvPassthrough: [
+					'ANTHROPIC_AUTH_TOKEN',
+					'ANTHROPIC_BASE_URL',
+					'not a name',
+					7,
+					'anthropic_auth_token'
+				]
+			}).fetchFn
+		);
+		expect(told.agentEnvPassthrough).toEqual(['ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL']);
+
+		// "Grant nothing" is an answer; it is not the same as not being told.
+		expect((await beat(answer({ agentEnvPassthrough: [] }).fetchFn)).agentEnvPassthrough).toEqual([]);
+		// An older platform, or junk: the field is simply not there.
+		for (const extra of [{}, { agentEnvPassthrough: 'ANTHROPIC_API_KEY' }, { agentEnvPassthrough: null }]) {
+			expect(await beat(answer(extra).fetchFn)).not.toHaveProperty('agentEnvPassthrough');
+		}
+	});
+
 	it('carries the worker state and reason, and omits both when absent', async () => {
 		// Fleet health signals (EW-776), same whitelist trap as above: a
 		// worker state the loop computes and the client never sends is a
