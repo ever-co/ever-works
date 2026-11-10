@@ -7,7 +7,10 @@ import {
     FLEET_JOB_TERMINAL_STATUSES,
     QUEUED_REASON_WAITING_FOR_RUNNER,
 } from '@ever-works/contracts';
-import { isSqliteFamilyDriver } from '../database/insertion-order';
+import {
+    FLEET_JOB_PAYLOAD_HEAD_CHARS,
+    readLeadingJsonStringMembers,
+} from './fleet-job-payload-head';
 import { FleetJob } from '../entities/fleet-job.entity';
 
 export interface CreateFleetJobData {
@@ -671,15 +674,25 @@ export class FleetJobRepository {
      * row with its run (`payload.runId`) and judges it the way the node
      * history does.
      *
-     * The payload itself is never read back (it is executor input, up to
-     * `FLEET_JOB_MAX_PAYLOAD_BYTES` a row): the two ids are taken out of it
-     * in SQL, by the driver's own JSON functions, and only when they are JSON
-     * STRINGS — the rule `correlateAgentTaskJob` applies to a loaded payload
-     * (a number or an object there is not an id). Owner-scoped in the WHERE
-     * clause like every read keyed by a node id; rides
-     * `idx_fleet_jobs_node_completed` (`nodeId`, `completedAt`); bounded by
-     * `limit`. A purged payload (`bodiesPurgedAt`) yields null ids, which the
-     * caller reads as "no run known" and judges by the job's own status.
+     * The payload is NOT parsed here, and never read whole. Only its first
+     * `FLEET_JOB_PAYLOAD_HEAD_CHARS` characters leave the database, and the
+     * two ids are read out of that head in process
+     * (`readLeadingJsonStringMembers`, which says why the head is enough):
+     *
+     *  - the cost does not grow with the size of the payloads. Casting each
+     *    one to JSON in SQL did — four casts a row, 11 to 13 seconds a read
+     *    for a busy node with 128 KB payloads on Postgres;
+     *  - one stored value that is not a JSON document, or holds an escape
+     *    Postgres' JSON type refuses (`\u0000`, a lone surrogate), is that
+     *    one row's "no id", not a failed read for the whole node;
+     *  - the statement is the same on every driver (`SUBSTR`).
+     *
+     * Owner-scoped in the WHERE clause like every read keyed by a node id;
+     * bounded to the window in SQL (`completedAt >= since`, on
+     * `idx_fleet_jobs_node_completed`), so older rows are never read; and
+     * bounded by `limit`. A purged payload (`bodiesPurgedAt`) yields null ids,
+     * which the caller reads as "no run known" and judges by the job's own
+     * status.
      */
     async findAgentTaskOutcomesForNode(
         userId: string,
@@ -697,25 +710,14 @@ export class FleetJobRepository {
             taskId: string | null;
         }>
     > {
-        const driver = this.repository.manager?.connection?.options?.type;
-        // `simple-json` is TEXT holding one JSON document on every driver.
-        const jsonString = (name: 'runId' | 'taskId'): string | null => {
-            if (driver === 'postgres') {
-                return `CASE WHEN json_typeof((j.payload)::json -> '${name}') = 'string' THEN (j.payload)::json ->> '${name}' END`;
-            }
-            if (isSqliteFamilyDriver(driver)) {
-                return `CASE WHEN json_type(j.payload, '$.${name}') = 'text' THEN json_extract(j.payload, '$.${name}') END`;
-            }
-            return null;
-        };
-        const runIdSql = jsonString('runId');
-        const taskIdSql = jsonString('taskId');
-        const query = this.repository
+        const rows = await this.repository
             .createQueryBuilder('j')
             .select('j.id', 'id')
             .addSelect('j.status', 'status')
             .addSelect('COALESCE(j.costCents, 0)', 'costCents')
             .addSelect('CASE WHEN j.completedAt >= :recentSince THEN 1 ELSE 0 END', 'recent')
+            // A constant of this module, never a caller's value.
+            .addSelect(`SUBSTR(j.payload, 1, ${FLEET_JOB_PAYLOAD_HEAD_CHARS})`, 'payloadHead')
             .where('j.userId = :userId', { userId })
             .andWhere('j.nodeId = :nodeId', { nodeId })
             .andWhere('j.kind = :kind', { kind: 'agent-task' })
@@ -723,42 +725,24 @@ export class FleetJobRepository {
             .andWhere('j.completedAt >= :since', { since })
             .setParameter('recentSince', recentSince)
             .orderBy('j.completedAt', 'DESC')
-            .limit(Math.max(1, Math.floor(limit)));
-        if (runIdSql && taskIdSql) {
-            query.addSelect(runIdSql, 'runId').addSelect(taskIdSql, 'taskId');
-        } else {
-            // A driver with no JSON function known here: read the document and
-            // take the ids out of it in process. Correct, just heavier.
-            query.addSelect('j.payload', 'payload');
-        }
-        const rows = await query.getRawMany<{
-            id: string;
-            status: string;
-            costCents: string | number | null;
-            recent: string | number | boolean | null;
-            runId?: unknown;
-            taskId?: unknown;
-            payload?: unknown;
-        }>();
-        const text = (value: unknown): string | null => (typeof value === 'string' ? value : null);
+            .limit(Math.max(1, Math.floor(limit)))
+            .getRawMany<{
+                id: string;
+                status: string;
+                costCents: string | number | null;
+                recent: string | number | boolean | null;
+                payloadHead: unknown;
+            }>();
         return rows.map((row) => {
-            let runId = text(row.runId);
-            let taskId = text(row.taskId);
-            if (!runIdSql || !taskIdSql) {
-                let payload: unknown = row.payload;
-                if (typeof payload === 'string') {
-                    try {
-                        payload = JSON.parse(payload);
-                    } catch {
-                        payload = null;
-                    }
-                }
-                const body =
-                    payload && typeof payload === 'object'
-                        ? (payload as Record<string, unknown>)
-                        : {};
-                runId = text(body.runId);
-                taskId = text(body.taskId);
+            let ids: { runId: string | null; taskId: string | null } = {
+                runId: null,
+                taskId: null,
+            };
+            try {
+                ids = readLeadingJsonStringMembers(row.payloadHead, ['runId', 'taskId']);
+            } catch {
+                // One unreadable row is that row's "no run known" — never the
+                // whole node's statistics.
             }
             return {
                 id: row.id,
@@ -766,8 +750,8 @@ export class FleetJobRepository {
                 // `COALESCE` / `CASE` come back as strings on Postgres and numbers on sqlite.
                 costCents: Number(row.costCents ?? 0),
                 recent: Number(row.recent ?? 0) === 1 || row.recent === true,
-                runId,
-                taskId,
+                runId: ids.runId,
+                taskId: ids.taskId,
             };
         });
     }

@@ -5,6 +5,7 @@ import { AgentRun } from '../../entities/agent-run.entity';
 import { FleetJob } from '../../entities/fleet-job.entity';
 import { FleetNode } from '../../entities/fleet-node.entity';
 import type { FleetAgentReadinessStored } from '@ever-works/contracts';
+import { FLEET_JOB_PAYLOAD_HEAD_CHARS } from '../fleet-job-payload-head';
 import { FleetJobRepository } from '../fleet-job.repository';
 import { FLEET_NODE_RUN_STATS_MAX_JOBS, FleetJobService } from '../fleet-job.service';
 import { sha256Hex } from '../fleet-node-credential';
@@ -24,10 +25,16 @@ import { FleetNodeRepository } from '../fleet-node.repository';
  * (`readNodeRunStats` at the API edge, pinned end to end in
  * `apps/api/src/fleet/__tests__/fleet-node-run-stats.integration.spec.ts`).
  *
- * What only a real database can prove here: the ids come out of the stored
- * JSON document through the driver's own JSON function, the `CASE` binds its
- * instant, a NULL cost reads zero, only terminal `agent-task` jobs of this
- * owner are read, and the cap holds.
+ * What only a real database can prove here: the head of the stored document
+ * comes back through `SUBSTR` and the ids are read out of it, the `CASE`
+ * binds its instant, a NULL cost reads zero, only terminal `agent-task` jobs
+ * of this owner inside the window are read, a stored value that is not a
+ * document fails nothing, and the cap holds.
+ *
+ * The same cases run against a real Postgres when
+ * `EVER_WORKS_FLEET_RUN_STATS_POSTGRES_URL` names one (a dedicated,
+ * DISPOSABLE database: its schema is dropped), with the cost of a busy
+ * node's read measured — see the block at the end.
  */
 describe('fleet node run stats — repository integration (better-sqlite3)', () => {
     const OWNER = '11111111-1111-4111-8111-111111111111';
@@ -339,11 +346,93 @@ describe('fleet node run stats — repository integration (better-sqlite3)', () 
         });
     });
 
-    it('on Postgres the same two ids come out through json_typeof / ->> (the emitted statement, pinned)', async () => {
-        // No Postgres runs in this suite, so the statement cannot be EXECUTED
-        // here; what can be pinned is exactly what TypeORM emits for that
-        // driver, with the two things that matter: the ids are read only
-        // when they are JSON strings, and every column is quoted by TypeORM.
+    it('a stored payload that is not a document fails nothing: it is that row`s "no run known" (review N5)', async () => {
+        const node = await seedNode();
+        const good = await seedJob({
+            nodeId: node.id,
+            completedAt: ago(1),
+            payload: agentTaskPayload(uuid(1)),
+        });
+        // Written past the entity, as text: what `simple-json` would never
+        // write, but a purge, a manual fix or an older build might leave.
+        const raw = async (hoursAgo: number, payload: string) => {
+            const job = await seedJob({
+                nodeId: node.id,
+                completedAt: ago(hoursAgo),
+                payload: null,
+            });
+            await dataSource.query('UPDATE fleet_jobs SET payload = ? WHERE id = ?', [
+                payload,
+                job.id,
+            ]);
+            return job.id;
+        };
+        const empty = await raw(2, '');
+        const truncated = await raw(3, '{"runId": "truncated');
+        const notJson = await raw(4, 'not json at all');
+        // Valid JSON that Postgres' JSON type refuses: a NUL escape, a lone surrogate.
+        const nul = await raw(5, `{"taskId":"${TASK}","runId":"${uuid(5)}","note":"a \\u0000 b"}`);
+        const surrogate = await raw(
+            6,
+            `{"taskId":"${TASK}","runId":"${uuid(6)}","note":"\\ud83d"}`,
+        );
+
+        const { outcomes } = await service.agentTaskOutcomesForNode(OWNER, node.id, NOW);
+        const read = Object.fromEntries(outcomes.map((entry) => [entry.jobId, entry.runId]));
+        expect(read).toEqual({
+            [good.id]: uuid(1),
+            [empty]: null,
+            [truncated]: null,
+            [notJson]: null,
+            [nul]: uuid(5),
+            [surrogate]: uuid(6),
+        });
+    });
+
+    it('reads the ids of a production-shaped payload however much it weighs, and nothing but its head', async () => {
+        const node = await seedNode();
+        const heavy = {
+            ...agentTaskPayload(uuid(1)),
+            execution: {
+                provider: 'claude-code',
+                // 128 KB of instructions, with a decoy id inside the text.
+                instructions: 'Lorem ipsum "quoted" {"runId":"decoy"} \\n '.repeat(3_200),
+            },
+        };
+        const job = await seedJob({ nodeId: node.id, completedAt: ago(1), payload: heavy });
+        expect(JSON.stringify(heavy).length).toBeGreaterThan(128_000);
+
+        // What leaves the database for that row is the head, not the document.
+        const selected: string[] = [];
+        const spy = jest
+            .spyOn(SelectQueryBuilder.prototype, 'getRawMany')
+            .mockImplementation(async function (this: SelectQueryBuilder<FleetJob>) {
+                const rows = (await this.execute()) as Array<Record<string, unknown>>;
+                for (const row of rows) selected.push(String(row.payloadHead ?? ''));
+                return rows;
+            });
+        try {
+            await expect(service.agentTaskOutcomesForNode(OWNER, node.id, NOW)).resolves.toEqual({
+                capped: false,
+                outcomes: [
+                    {
+                        jobId: job.id,
+                        status: 'done',
+                        costCents: 0,
+                        recent: true,
+                        runId: uuid(1),
+                        taskId: TASK,
+                    },
+                ],
+            });
+        } finally {
+            spy.mockRestore();
+        }
+        expect(selected).toHaveLength(1);
+        expect(selected[0].length).toBe(FLEET_JOB_PAYLOAD_HEAD_CHARS);
+    });
+
+    it('emits the same statement on Postgres: a bounded head of the payload, no JSON cast (pinned)', async () => {
         const postgres = new DataSource({
             type: 'postgres',
             host: '127.0.0.1',
@@ -369,17 +458,19 @@ describe('fleet node run stats — repository integration (better-sqlite3)', () 
         }
         expect(emitted).toHaveLength(1);
         const sql = emitted[0];
-        for (const name of ['runId', 'taskId']) {
-            expect(sql).toContain(
-                `CASE WHEN json_typeof(("j"."payload")::json -> '${name}') = 'string' THEN ("j"."payload")::json ->> '${name}' END AS "${name}"`,
-            );
-        }
+        expect(sql).toContain(
+            `SUBSTR("j"."payload", 1, ${FLEET_JOB_PAYLOAD_HEAD_CHARS}) AS "payloadHead"`,
+        );
+        // The payload appears nowhere else: not cast, not parsed, not selected whole.
+        expect(sql.split('"j"."payload"')).toHaveLength(2);
+        expect(sql).not.toMatch(/json|->/i);
         expect(sql).toContain(
             'CASE WHEN "j"."completedAt" >= :recentSince THEN 1 ELSE 0 END AS "recent"',
         );
         expect(sql).toContain('"j"."userId" = :userId AND "j"."nodeId" = :nodeId');
+        // The window is bounded in SQL: rows older than `since` are never read.
+        expect(sql).toContain('"j"."completedAt" >= :since');
         expect(sql).toContain('ORDER BY "j"."completedAt" DESC LIMIT 10');
-        expect(sql).not.toContain('json_extract');
     });
 
     describe('AgentRunRepository.findStatusesByIds — the status of some runs, nothing else', () => {
@@ -465,4 +556,285 @@ describe('fleet node run stats — repository integration (better-sqlite3)', () 
         await nodeRows.update(node.id, { agentReadiness: report });
         expect((await nodeRows.findOneByOrFail({ id: node.id })).agentReadiness).toEqual(report);
     });
+});
+
+/**
+ * The same read against a REAL Postgres — opt-in, because this repository's
+ * suites run on better-sqlite3 (PR #3131 second review, N2 and N5).
+ *
+ * Set `EVER_WORKS_FLEET_RUN_STATS_POSTGRES_URL` to a dedicated, DISPOSABLE
+ * database (its `fleet_jobs` table is dropped and recreated), for instance a
+ * throwaway container:
+ *
+ *   docker run --rm -d --name <yours> -e POSTGRES_PASSWORD=<pw> -p <port>:5432 \
+ *     --tmpfs /var/lib/postgresql/data postgres:17-alpine
+ *
+ * What it proves that sqlite cannot: the statement is valid Postgres; a
+ * payload holding a `\u0000` escape, a lone surrogate or no document at all
+ * fails nothing (casting it to JSON, as the first version did, threw for
+ * every one of them); and the cost of a busy node's read does not grow with
+ * the size of its payloads (2001 rows of 128 KB took 11 to 13 seconds when
+ * each payload was cast to JSON four times).
+ */
+const POSTGRES_URL = process.env.EVER_WORKS_FLEET_RUN_STATS_POSTGRES_URL;
+const describePostgres = POSTGRES_URL ? describe : describe.skip;
+
+describePostgres('fleet node run stats — the read on a real Postgres (opt-in)', () => {
+    const OWNER = '11111111-1111-4111-8111-111111111111';
+    const STRANGER = '22222222-2222-4222-8222-222222222222';
+    const NODE = '33333333-3333-4333-8333-333333333333';
+    const OTHER_NODE = '44444444-4444-4444-8444-444444444444';
+    const TASK = '55555555-5555-4555-8555-555555555555';
+    const run = (n: number) => `aaaaaaaa-aaaa-4aaa-8aaa-${String(n).padStart(12, '0')}`;
+    const NOW = new Date();
+    const ago = (hours: number) => new Date(NOW.getTime() - hours * 3_600_000);
+
+    let dataSource: DataSource;
+    let repository: FleetJobRepository;
+
+    beforeAll(async () => {
+        dataSource = new DataSource({
+            type: 'postgres',
+            url: POSTGRES_URL,
+            entities: [FleetJob],
+            synchronize: false,
+            logging: false,
+        });
+        await dataSource.initialize();
+        // Only the columns the read touches, with the types the migrations give
+        // them (`payload` is `text`: `simple-json`).
+        await dataSource.query('DROP TABLE IF EXISTS fleet_jobs');
+        await dataSource.query(`
+            CREATE TABLE fleet_jobs (
+                "id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+                "userId" uuid NOT NULL,
+                "nodeId" uuid,
+                "kind" varchar(32) NOT NULL,
+                "status" varchar(16) NOT NULL,
+                "payload" text,
+                "costCents" int,
+                "completedAt" timestamp
+            )`);
+        await dataSource.query(
+            'CREATE INDEX idx_fleet_jobs_node_completed ON fleet_jobs ("nodeId", "completedAt")',
+        );
+        repository = new FleetJobRepository(dataSource.getRepository(FleetJob));
+    }, 60_000);
+
+    afterAll(async () => {
+        if (dataSource?.isInitialized) {
+            await dataSource.query('DROP TABLE IF EXISTS fleet_jobs');
+            await dataSource.destroy();
+        }
+    });
+
+    beforeEach(async () => {
+        await dataSource.query('DELETE FROM fleet_jobs');
+    });
+
+    const insert = async (row: {
+        userId?: string;
+        nodeId?: string | null;
+        kind?: string;
+        status: string;
+        payload: string | null;
+        costCents?: number | null;
+        completedAt: Date | null;
+    }): Promise<string> => {
+        const [{ id }] = (await dataSource.query(
+            `INSERT INTO fleet_jobs ("userId","nodeId","kind","status","payload","costCents","completedAt")
+             VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
+            [
+                row.userId ?? OWNER,
+                row.nodeId === undefined ? NODE : row.nodeId,
+                row.kind ?? 'agent-task',
+                row.status,
+                row.payload,
+                row.costCents ?? null,
+                row.completedAt,
+            ],
+        )) as Array<{ id: string }>;
+        return id;
+    };
+    const stored = (value: unknown) => JSON.stringify(value); // what `simple-json` writes
+    const read = () =>
+        repository.findAgentTaskOutcomesForNode(OWNER, NODE, ago(7 * 24), ago(24), 2001);
+
+    it('is valid Postgres and reads the ids exactly as sqlite does', async () => {
+        const first = await insert({
+            status: 'done',
+            payload: stored({ taskId: TASK, runId: run(1), execution: { instructions: 'x' } }),
+            costCents: 120,
+            completedAt: ago(1),
+        });
+        const purged = await insert({ status: 'failed', payload: null, completedAt: ago(2) });
+        const numeric = await insert({
+            status: 'done',
+            payload: stored({ taskId: TASK, runId: 12345 }),
+            completedAt: ago(3),
+        });
+        const arrayDocument = await insert({
+            status: 'done',
+            payload: stored([{ runId: run(5) }]),
+            completedAt: ago(4),
+        });
+        const nullDocument = await insert({ status: 'done', payload: 'null', completedAt: ago(5) });
+        const odd = await insert({
+            status: 'done',
+            payload: stored({ taskId: { nested: true }, runId: '' }),
+            completedAt: ago(6),
+        });
+        const older = await insert({
+            status: 'done',
+            payload: stored({
+                taskId: TASK,
+                runId: run(4),
+                execution: { instructions: 'emoji \u{1F600} accents é ü quote " back\\slash' },
+            }),
+            completedAt: ago(30),
+        });
+        // Rows the read must not return.
+        await insert({
+            userId: STRANGER,
+            status: 'done',
+            payload: stored({ taskId: TASK, runId: run(90) }),
+            completedAt: ago(1),
+        });
+        await insert({
+            nodeId: OTHER_NODE,
+            status: 'done',
+            payload: stored({ taskId: TASK, runId: run(91) }),
+            completedAt: ago(1),
+        });
+        await insert({
+            kind: 'acceptance-checks',
+            status: 'done',
+            payload: stored({ taskId: TASK, runId: run(92) }),
+            completedAt: ago(1),
+        });
+        await insert({
+            status: 'running',
+            payload: stored({ taskId: TASK, runId: run(93) }),
+            completedAt: null,
+        });
+        await insert({
+            status: 'done',
+            payload: stored({ taskId: TASK, runId: run(94) }),
+            completedAt: ago(8 * 24),
+        });
+
+        expect(await read()).toEqual([
+            {
+                id: first,
+                status: 'done',
+                costCents: 120,
+                recent: true,
+                runId: run(1),
+                taskId: TASK,
+            },
+            { id: purged, status: 'failed', costCents: 0, recent: true, runId: null, taskId: null },
+            { id: numeric, status: 'done', costCents: 0, recent: true, runId: null, taskId: TASK },
+            {
+                id: arrayDocument,
+                status: 'done',
+                costCents: 0,
+                recent: true,
+                runId: null,
+                taskId: null,
+            },
+            {
+                id: nullDocument,
+                status: 'done',
+                costCents: 0,
+                recent: true,
+                runId: null,
+                taskId: null,
+            },
+            { id: odd, status: 'done', costCents: 0, recent: true, runId: '', taskId: null },
+            { id: older, status: 'done', costCents: 0, recent: false, runId: run(4), taskId: TASK },
+        ]);
+    });
+
+    it('one stored payload that Postgres` JSON type refuses, or that is no document, fails nothing (N5)', async () => {
+        const good = await insert({
+            status: 'done',
+            payload: stored({ taskId: TASK, runId: run(1) }),
+            completedAt: ago(1),
+        });
+        const bad: Array<[string, string, string | null]> = [
+            ['empty', '', null],
+            ['truncated', '{"runId": "truncated', null],
+            ['not json', 'not json at all', null],
+            [
+                'a NUL escape',
+                `{"taskId":"${TASK}","runId":"${run(5)}","note":"a \\u0000 b"}`,
+                run(5),
+            ],
+            [
+                'a lone surrogate',
+                `{"taskId":"${TASK}","runId":"${run(6)}","note":"\\ud83d"}`,
+                run(6),
+            ],
+        ];
+        const ids = new Map<string, string | null>();
+        let hours = 2;
+        for (const [, payload, expected] of bad) {
+            ids.set(
+                await insert({ status: 'done', payload, completedAt: ago((hours += 1)) }),
+                expected,
+            );
+        }
+        // Each of these makes `payload::json` throw on Postgres — the first version's read.
+        for (const payload of ['', '{"runId": "truncated', '{"note":"a \\u0000 b"}']) {
+            await expect(
+                dataSource.query(`SELECT ($1::text)::json ->> 'runId' AS "runId"`, [payload]),
+            ).rejects.toThrow();
+        }
+
+        const rows = await read();
+        expect(rows).toHaveLength(1 + bad.length);
+        expect(rows.find((row) => row.id === good)?.runId).toBe(run(1));
+        for (const [id, expected] of ids)
+            expect(rows.find((row) => row.id === id)?.runId).toBe(expected);
+    });
+
+    it.each([4, 32, 128])(
+        'a busy node: 2001 finished jobs of %i KB each are read in well under a second (N2)',
+        async (kilobytes) => {
+            const filler = 'Lorem ipsum dolor sit amet, "quoted" \\n consectetur. '.repeat(
+                Math.ceil((kilobytes * 1024) / 52),
+            );
+            // The order production writes: ids first, the instructions after.
+            const payload = stored({
+                taskId: TASK,
+                agentId: TASK,
+                userId: OWNER,
+                runId: run(7),
+                workspace: { repoUrl: 'https://example.invalid/r.git' },
+                execution: { provider: 'claude-code', instructions: filler },
+            });
+            await dataSource.query(
+                `INSERT INTO fleet_jobs ("userId","nodeId","kind","status","payload","costCents","completedAt")
+                 SELECT $1::uuid, $2::uuid, 'agent-task', 'done', $3, 5, now() - (g || ' minutes')::interval
+                 FROM generate_series(1, 2100) g`,
+                [OWNER, NODE, payload],
+            );
+            await dataSource.query('ANALYZE fleet_jobs');
+
+            const times: number[] = [];
+            for (let attempt = 0; attempt < 3; attempt += 1) {
+                const started = Date.now();
+                const rows = await read();
+                times.push(Date.now() - started);
+                expect(rows).toHaveLength(2001);
+                expect(rows.every((row) => row.runId === run(7) && row.taskId === TASK)).toBe(true);
+            }
+            // eslint-disable-next-line no-console
+            console.log(
+                `fleet run stats on Postgres: 2001 rows × ${kilobytes} KB (${payload.length} chars): ${JSON.stringify(times)} ms`,
+            );
+            expect(Math.min(...times)).toBeLessThan(1_000);
+        },
+        120_000,
+    );
 });
