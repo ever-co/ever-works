@@ -1287,3 +1287,175 @@ describe('computer health wiring (FL-03)', () => {
 		expect(bodies.find((entry) => entry.url.endsWith('/api/fleet/heartbeat'))?.body).not.toHaveProperty('health');
 	});
 });
+
+describe('fleet agent readiness wiring', () => {
+	const config: NodeConfig = {
+		apiUrl: 'https://api.ever.works',
+		nodeId: NODE_ID,
+		secret: SECRET,
+		kind: 'node',
+		capabilities: ['os:linux'],
+		heartbeatIntervalMs: 30_000,
+		enrolledAt: '2026-11-10T09:00:00.000Z'
+	};
+
+	/** A machine with a signed-in Claude Code pinned at /opt/claude and nothing else. */
+	function cliRunner(calls: string[] = []): CommandRunner {
+		return {
+			run: async (command, args) => {
+				calls.push(`${command} ${args.join(' ')}`);
+				if (command === '/opt/claude' && args[0] === '--version') {
+					return { code: 0, stdout: '2.1.319 (Claude Code)', stderr: '' };
+				}
+				if (command === '/opt/claude' && args.join(' ') === 'auth status --json') {
+					return {
+						code: 0,
+						stdout: JSON.stringify({
+							loggedIn: true,
+							authMethod: 'claude.ai',
+							email: 'owner@example.com',
+							orgName: 'Acme',
+							subscriptionType: 'max'
+						}),
+						stderr: ''
+					};
+				}
+				return { code: 127, stdout: '', stderr: 'not found' };
+			}
+		};
+	}
+
+	function recordingFetch(
+		bodies: Array<{ url: string; body: Record<string, unknown> }>,
+		rejectAgents = false
+	): FetchLike {
+		return async (url, init) => {
+			const body = JSON.parse(init.body || '{}') as Record<string, unknown>;
+			bodies.push({ url, body });
+			if (rejectAgents && url.endsWith('/api/fleet/heartbeat') && 'agents' in body) {
+				return { ok: false, status: 400, text: async () => '{"message":"property agents should not exist"}' };
+			}
+			const payload = url.endsWith('/api/fleet/enroll')
+				? { nodeId: NODE_ID, secret: SECRET, node: nodeFromApi }
+				: { ok: true, node: nodeFromApi };
+			return {
+				ok: true,
+				status: url.endsWith('/api/fleet/enroll') ? 201 : 200,
+				text: async () => JSON.stringify(payload)
+			};
+		};
+	}
+
+	function deps(fetchFn: FetchLike, calls: string[] = []) {
+		return {
+			...io(fetchFn).io,
+			runner: cliRunner(calls),
+			environment: { ...environment, modelCli: { 'claude-code': '/opt/claude', codex: null } }
+		};
+	}
+
+	it('the heartbeat carries every agent CLI with whether it can work, from free status commands only', async () => {
+		const bodies: Array<{ url: string; body: Record<string, unknown> }> = [];
+		const calls: string[] = [];
+		const runtime = createNodeRuntime(config, deps(recordingFetch(bodies), calls), { env: {} });
+		await runtime.loop.start();
+		runtime.loop.stop();
+
+		const beat = bodies.find((entry) => entry.url.endsWith('/api/fleet/heartbeat'));
+		const report = beat?.body.agents as { agents: Array<Record<string, unknown>> };
+		expect(report.agents).toEqual([
+			expect.objectContaining({
+				provider: 'claude-code',
+				installed: true,
+				version: '2.1.319',
+				signedIn: true,
+				authMethod: 'subscription',
+				account: 'owner@example.com (Acme, max)',
+				status: 'ready',
+				reason: null
+			}),
+			expect.objectContaining({ provider: 'codex', installed: false, status: 'not_installed' })
+		]);
+		// Nothing the node spawned for this could start a model call.
+		const spawned = calls.filter((call) => call.startsWith('/opt/claude'));
+		expect(spawned).toContain('/opt/claude auth status --json');
+		expect(spawned.some((call) => / (-p|--print)( |$)/.test(call))).toBe(false);
+	});
+
+	it('a restart restores what the last run proved: signed in, and still access denied', async () => {
+		const bodies: Array<{ url: string; body: Record<string, unknown> }> = [];
+		const sentence = 'Your organization has disabled Claude subscription access for Claude Code';
+		const runtime = createNodeRuntime(config, deps(recordingFetch(bodies)), {
+			env: {},
+			agentRunHistory: {
+				version: 1,
+				recordedAt: '2026-11-10T08:00:00.000Z',
+				agents: {
+					'claude-code': {
+						lastSuccessAt: '2026-11-08T10:00:00.000Z',
+						failure: {
+							kind: 'access_denied',
+							reason: sentence,
+							resetsAt: null,
+							until: null,
+							usageLimit: false,
+							at: '2026-11-10T08:00:00.000Z',
+							authFingerprint: 'in|subscription|owner@example.com (Acme, max)'
+						},
+						usage: [],
+						usageObservedAt: null
+					}
+				}
+			}
+		});
+		await runtime.loop.start();
+		runtime.loop.stop();
+
+		const beat = bodies.find((entry) => entry.url.endsWith('/api/fleet/heartbeat'));
+		const [claude] = (beat?.body.agents as { agents: Array<Record<string, unknown>> }).agents;
+		expect(claude).toMatchObject({
+			signedIn: true,
+			status: 'access_denied',
+			reason: sentence,
+			lastSuccessAt: '2026-11-08T10:00:00.000Z',
+			lastFailureAt: '2026-11-10T08:00:00.000Z'
+		});
+	});
+
+	it('enrolment never carries it — enrolment has no strip-and-retry fallback', async () => {
+		const bodies: Array<{ url: string; body: Record<string, unknown> }> = [];
+		await enrollNode({
+			...deps(recordingFetch(bodies)),
+			apiUrl: 'https://api.ever.works',
+			token: TOKEN,
+			kind: 'node'
+		});
+		expect(bodies).toHaveLength(1);
+		expect(bodies[0].body).not.toHaveProperty('agents');
+	});
+
+	it('against a platform that predates the field: one 400, then beats without it and stops asking the CLIs', async () => {
+		const bodies: Array<{ url: string; body: Record<string, unknown> }> = [];
+		const calls: string[] = [];
+		const runtime = createNodeRuntime(config, deps(recordingFetch(bodies, true), calls), { env: {} });
+		await runtime.loop.start();
+
+		expect(runtime.loop.getState().state).toBe('connected');
+		expect(runtime.loop.acceptsField('agents')).toBe(false);
+		const beats = () => bodies.filter((entry) => entry.url.endsWith('/api/fleet/heartbeat'));
+		expect(beats()).toHaveLength(2);
+		expect(beats()[0].body).toHaveProperty('agents');
+		expect(beats()[1].body).not.toHaveProperty('agents');
+		// Everything the older platform does understand still went.
+		expect(beats()[1].body).toMatchObject({ platform: 'linux/x64', version: '0.1.0' });
+
+		const statusCalls = () => calls.filter((call) => call.endsWith('auth status --json')).length;
+		const before = statusCalls();
+		await runtime.loop.tick();
+		runtime.loop.stop();
+		expect(beats()).toHaveLength(3);
+		expect(beats()[2].body).not.toHaveProperty('agents');
+		// The model-identity probe (older, cached) may still ask; the readiness probe does not run at all.
+		expect(statusCalls()).toBe(before);
+	});
+});

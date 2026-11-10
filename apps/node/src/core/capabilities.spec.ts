@@ -442,6 +442,76 @@ describe('describeSelf', () => {
 			}
 		});
 	});
+
+	describe('agent readiness', () => {
+		const report = {
+			checkedAt: '2026-11-10T12:00:00.000Z',
+			agents: [
+				{
+					provider: 'claude-code',
+					installed: true,
+					version: '2.1.319',
+					signedIn: true,
+					authMethod: 'subscription' as const,
+					account: 'owner@example.com (Acme, max)',
+					status: 'ready' as const,
+					reason: null,
+					checkedAt: '2026-11-10T12:00:00.000Z'
+				}
+			]
+		};
+
+		it('carries the report the probe returns', async () => {
+			const description = await describeSelf(runnerWith([]), environment(), '0.1.0', null, {
+				agents: () => report
+			});
+			expect(description.agents).toEqual(report);
+		});
+
+		it('re-normalises at the wire boundary: unknown keys dropped, credentials masked', async () => {
+			const description = await describeSelf(runnerWith([]), environment(), '0.1.0', null, {
+				agents: () =>
+					({
+						checkedAt: '2026-11-10T12:00:00.000Z',
+						agents: [
+							{
+								...report.agents[0],
+								status: 'not_signed_in',
+								reason: 'Invalid API key sk-ant-api03-AbCdEfGhIjKlMnOpQrStUvWxYz · Fix external API key',
+								credentials: { accessToken: 'sk-ant-oat01-do-not-send' }
+							}
+						]
+					}) as never
+			});
+			expect(description.agents?.agents[0]).not.toHaveProperty('credentials');
+			expect(description.agents?.agents[0]?.reason).toBe('Invalid API key [redacted] · Fix external API key');
+			expect(JSON.stringify(description)).not.toContain('sk-ant');
+		});
+
+		it('keeps an empty list (no agent CLI here) and omits the field when the probe has no answer', async () => {
+			const empty = await describeSelf(runnerWith([]), environment(), '0.1.0', null, {
+				agents: () => ({ checkedAt: '2026-11-10T12:00:00.000Z', agents: [] })
+			});
+			expect(empty.agents).toEqual({ checkedAt: '2026-11-10T12:00:00.000Z', agents: [] });
+
+			for (const agents of [
+				() => null,
+				() => {
+					throw new Error('probe bug');
+				},
+				() => Promise.reject(new Error('probe bug'))
+			]) {
+				const description = await describeSelf(runnerWith(['git']), environment(), '0.1.0', null, { agents });
+				expect('agents' in description).toBe(false);
+				expect(description.capabilities).toContain('git');
+			}
+		});
+
+		it('is absent from a description built without the probe (enrolment, an older embedder)', async () => {
+			const description = await describeSelf(runnerWith([]), environment(), '0.1.0');
+			expect('agents' in description).toBe(false);
+		});
+	});
 });
 
 /**

@@ -1661,7 +1661,32 @@ const CLOUD_P3_EXPORTS = [
 
 const MODEL_LIST_PRICES_EXPORTS = ['MODEL_TOKEN_CLASSES', 'findModelListPriceEntry', 'priceModelTokensCents'] as const;
 
+// Fleet agent readiness — `fleet-agent-readiness.types.ts`, pinned in
+// `fleet-agent-readiness.spec.ts`.
+const AGENT_READINESS_EXPORTS = [
+	'FLEET_AGENT_READINESS_STATUSES',
+	'FLEET_AGENT_AUTH_METHODS',
+	'FLEET_AGENT_READINESS_MAX_AGENTS',
+	'FLEET_AGENT_READINESS_MAX_PROVIDER_LENGTH',
+	'FLEET_AGENT_READINESS_MAX_VERSION_LENGTH',
+	'FLEET_AGENT_READINESS_MAX_ACCOUNT_LENGTH',
+	'FLEET_AGENT_READINESS_MAX_REASON_LENGTH',
+	'FLEET_AGENT_READINESS_MAX_USAGE_WINDOWS',
+	'FLEET_AGENT_READINESS_MAX_WINDOW_LENGTH',
+	'FLEET_AGENT_FAILURE_FALLBACK_MS',
+	'classifyFleetAgentFailure',
+	'redactFleetAgentText',
+	'sanitizeFleetAgentReason',
+	'sanitizeFleetAgentAccount',
+	'normalizeFleetAgentReadinessReport',
+	'isFleetAgentReady',
+	'anyFleetAgentReady',
+	'resolveFleetNodeAgentReadiness',
+	'emptyFleetNodeRunStats'
+] as const;
+
 const ALL_EXPORTS = [
+	...AGENT_READINESS_EXPORTS,
 	...HEALTH_EXPORTS,
 	...CREDENTIAL_EXPORTS,
 	...EXECUTION_PREFERENCE_EXPORTS,
@@ -1716,6 +1741,15 @@ const ALL_EXPORTS = [
 ];
 
 const FUNCTION_EXPORTS = [
+	'classifyFleetAgentFailure',
+	'redactFleetAgentText',
+	'sanitizeFleetAgentReason',
+	'sanitizeFleetAgentAccount',
+	'normalizeFleetAgentReadinessReport',
+	'isFleetAgentReady',
+	'anyFleetAgentReady',
+	'resolveFleetNodeAgentReadiness',
+	'emptyFleetNodeRunStats',
 	'isFleetCheckoutSharedFolder',
 	'isFleetCheckoutDeleteMode',
 	'isFleetCheckoutCredentialAccess',
@@ -2300,7 +2334,7 @@ describe('fleet barrel', () => {
 		expect(typeof bag[name]).toBe('function');
 	});
 
-	it('exposes exactly these 1401 runtime symbols', () => {
+	it('exposes exactly these 1420 runtime symbols', () => {
 		// Regression guard in BOTH directions: an `export *` line deleted from
 		// index.ts fails here, and a NEW runtime export added without a spec
 		// also fails here — which forces the author back to cover it.
@@ -2408,11 +2442,14 @@ describe('fleet barrel', () => {
 		// → +5 with FL-18 P3 (Docker-isolated runners, versions): same module.
 		// → +23 with desktop control (FL-07 P2): `fleet-desktop-control.types.ts`, a NEW module.
 		// → +16 with desktop recordings (FL-07 P2.C): `fleet-desktop-recording.types.ts`, a NEW module.
-		expect(Object.keys(fleet)).toHaveLength(1175 + 37 + 5 + 1 + 2 + 52 + 11 + 4 + 70 + 5 + 23 + 16);
+		// → +19 with fleet agent readiness: ten constants and nine helpers of
+		// `fleet-agent-readiness.types.ts`, a NEW module, one row below.
+		expect(Object.keys(fleet)).toHaveLength(1175 + 37 + 5 + 1 + 2 + 52 + 11 + 4 + 70 + 5 + 23 + 16 + 19);
 	});
 
 	it.each([
 		['fleet-agent-credentials.types.js', 'FLEET_AGENT_CREDENTIAL_FAMILIES'],
+		['fleet-agent-readiness.types.js', 'FLEET_AGENT_READINESS_STATUSES'],
 		['fleet-execution-preference.types.js', 'FLEET_EXECUTION_MODES'],
 		['fleet-jobs.types.js', 'FLEET_JOB_STATUSES'],
 		['fleet-node.types.js', 'FLEET_NODE_KINDS'],

@@ -275,6 +275,34 @@ describe('heartbeat', () => {
 		expect(JSON.parse(calls[1].init.body)).not.toHaveProperty('modelIdentity');
 	});
 
+	it('carries the agent readiness report onto the wire, and omits it when there is none', async () => {
+		// `selfDescription` is an explicit whitelist: a field it does not name
+		// is computed and never sent.
+		const { fetchFn, calls } = fakeFetch(() => ({ status: 200, body: { ok: true, node: nodeView } }));
+		const agents = {
+			checkedAt: '2026-11-10T12:00:00.000Z',
+			agents: [
+				{
+					provider: 'codex',
+					installed: true,
+					version: '0.50.0',
+					signedIn: false,
+					authMethod: 'none' as const,
+					account: null,
+					status: 'not_signed_in' as const,
+					reason: 'The CLI is not signed in on this computer.',
+					checkedAt: '2026-11-10T12:00:00.000Z'
+				}
+			]
+		};
+
+		await client(fetchFn).heartbeat({ nodeId: NODE_ID, secret: SECRET, agents });
+		expect(JSON.parse(calls[0].init.body).agents).toEqual(agents);
+
+		await client(fetchFn).heartbeat({ nodeId: NODE_ID, secret: SECRET });
+		expect(JSON.parse(calls[1].init.body)).not.toHaveProperty('agents');
+	});
+
 	it('carries the worker state and reason, and omits both when absent', async () => {
 		// Fleet health signals (EW-776), same whitelist trap as above: a
 		// worker state the loop computes and the client never sends is a

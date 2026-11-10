@@ -18,6 +18,7 @@ import {
 	ISOLATED_HOME_RESIDUAL_ENV_NAMES
 } from '../model-execution/isolated-home';
 import { ownerQuestionPath, type AgentTaskQuestionFs } from './agent-task-question';
+import { AgentRunHistory, type AgentRunObservation } from '../agent-readiness';
 import { MODEL_CLI_MAX_OUTPUT_BYTES } from './model-cli';
 
 /**
@@ -516,6 +517,83 @@ describe('runAgentTaskJob — model-cli execution', () => {
 			message: sentence
 		});
 		expect(outcome.failureReason).toContain('usage limit, retry after 2026-10-19T01:01:00.000Z');
+	});
+
+	describe('fleet agent readiness — what a real run proves, reported to onModelRun', () => {
+		it('reports a success with the usage windows the CLI`s own stream carried', async () => {
+			const { spawnFn } = recordingSpawn([]);
+			const stream = [
+				JSON.stringify({ type: 'system', subtype: 'init', session_id: 'sess-1' }),
+				JSON.stringify({
+					type: 'rate_limit_event',
+					rate_limit_info: {
+						status: 'allowed',
+						rateLimitType: 'five_hour',
+						utilization: 0.42,
+						resetsAt: 1_794_000_000
+					}
+				}),
+				claudeEnvelope
+			].join('\n');
+			const runs: AgentRunObservation[] = [];
+			const outcome = await runAgentTaskJob(
+				job(payload),
+				baseIo({ spawnFn, scratchFs: scratchFs(stream), onModelRun: (run) => runs.push(run) })
+			);
+
+			expect(outcome.status).toBe('succeeded');
+			expect(runs).toEqual([
+				{
+					provider: 'claude-code',
+					status: 'succeeded',
+					summary: 'Implemented the change.',
+					outputTail: null,
+					outputTokens: null,
+					usage: [
+						{ window: 'five_hour', usedPercent: 42, resetsAt: new Date(1_794_000_000_000).toISOString() }
+					]
+				}
+			]);
+		});
+
+		it('reports the refusal the production node hit, so the history reads access denied', async () => {
+			const { spawnFn } = recordingSpawn([]);
+			const sentence =
+				'Your organization has disabled Claude subscription access for Claude Code · Use an Anthropic API key instead, or ask your admin to enable access';
+			const history = new AgentRunHistory({ now: () => Date.parse('2026-11-10T12:00:00.000Z') });
+			const outcome = await runAgentTaskJob(
+				job(payload),
+				baseIo({
+					spawnFn,
+					scratchFs: scratchFs(
+						JSON.stringify({ type: 'result', is_error: true, subtype: 'success', result: sentence })
+					),
+					onModelRun: (run) => history.note(run)
+				})
+			);
+
+			// The run itself is reported exactly as before: an ordinary failure.
+			expect(outcome.status).toBe('failed');
+			expect(outcome.failureKind).toBeUndefined();
+			expect(outcome.failureReason).toContain(`claude-code reported an error: ${sentence}`);
+			expect(history.get('claude-code').failure).toMatchObject({ kind: 'access_denied', reason: sentence });
+			expect(history.get('claude-code').lastSuccessAt).toBeNull();
+		});
+
+		it('an observer that throws never changes the run', async () => {
+			const { spawnFn } = recordingSpawn([]);
+			const outcome = await runAgentTaskJob(
+				job(payload),
+				baseIo({
+					spawnFn,
+					onModelRun: () => {
+						throw new Error('observer bug');
+					}
+				})
+			);
+			expect(outcome.status).toBe('succeeded');
+			expect(outcome.model?.summary).toBe('Implemented the change.');
+		});
 	});
 
 	it('fails the job on a red required check even when the model succeeded', async () => {

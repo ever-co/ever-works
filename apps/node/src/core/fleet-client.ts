@@ -510,6 +510,11 @@ function selfDescription(source: NodeSelfDescription): NodeSelfDescription {
 	if (Array.isArray(source.helperEvents)) {
 		out.helperEvents = source.helperEvents;
 	}
+	// Fleet agent readiness: the per-CLI report, already normalised by
+	// `describeSelf`; copied as is. Heartbeat-only in practice.
+	if (source.agents !== undefined) {
+		out.agents = source.agents;
+	}
 	return out;
 }
 
