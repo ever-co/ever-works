@@ -74,7 +74,7 @@ import { randomUUID } from 'node:crypto';
  * | `protocol.*.allow` | re-allows a transport — measured to beat command-scope config | ignored: `GIT_ALLOW_PROTOCOL` | blocks |
  * | `core.sshCommand`, `ssh.variant` | program run by the ssh transport — measured | transport not allowed | blocks |
  * | `core.gitProxy` | program run by the `git://` transport | transport not allowed | blocks |
- * | `core.hooksPath` (+ the hooks themselves) | `reference-transaction` on fetch — measured; `pre-push` | overridden (empty directory; `--no-verify`) | allowed (husky writes it) |
+ * | `core.hooksPath` (+ the hooks themselves) | `reference-transaction` on fetch — measured; `pre-push` | overridden: an empty directory for a fetch; for a push the empty value it always had (measured: hooks then resolve under the filesystem root, not the repository) plus `--no-verify` | allowed (husky writes it) |
  * | `core.fsmonitor` | hook program on index reads | overridden `false` | allowed |
  * | `core.alternateRefsCommand` | program run during fetch negotiation when the pool has alternates — measured | overridden to empty | blocks |
  * | `core.unsetEnvVars` (Git for Windows) | strips named environment variables from Git's children — measured to remove `GIT_ALLOW_PROTOCOL` | pinned to the operator's value, else the default | blocks |
@@ -107,6 +107,13 @@ import { randomUUID } from 'node:crypto';
  * config written between the allowlist read and the command is not seen.
  * With the proxy and the resolutions pinned, a planted CA additionally
  * needs an interception position on the network path.
+ *
+ * And one assumption, also stated: the `system` and `global` scopes are
+ * taken to be the operator's. "Pin the operator's posture" re-asserts what
+ * they say, so a process able to write the node account's own
+ * `~/.gitconfig` is outside what this module defends against — as is one
+ * able to read another process's environment, which is where the
+ * credential lives while its command runs.
  */
 
 /** The transports a credentialed child may speak. */
