@@ -881,59 +881,155 @@ const branchOn = (repository: string, branch: string): string =>
 describe('keys that name a program a fetch or a push never starts', () => {
 	// The other half of an allowlist. These keys DO name programs, and a run
 	// that sets one (`git config core.editor true` is an everyday thing for
-	// an agent to do) must not cost the repository its fetch credential, or
-	// every later publish. They are allowed because no fetch and no push can
-	// reach the code that would start them — which is what this proves, with
-	// every one of them planted at once and each program recording its key.
+	// an agent to do; bun's documented lockfile recipe is a
+	// `diff.<x>.textconv`) must not cost the repository its fetch
+	// credential, or every later publish. They are allowed because neither
+	// command can reach the code that would start them. Each one is proved
+	// on its own: planted in the pool with a harvester, together with what
+	// would make Git reach for it (the attributes that select a driver,
+	// `push.gpgSign`, `gpg.format`, …); then a credentialed fetch AND a
+	// credentialed push are run, and the harvester must not have run at all.
 
-	/** Keys Git runs through a shell. */
-	const shellKeys = [
-		'core.editor',
-		'core.pager',
-		'sequence.editor',
-		'pager.fetch',
-		'pager.push',
-		'diff.external',
-		'diff.ewplanted.textconv',
-		'diff.ewplanted.command',
-		'merge.ewplanted.driver',
-		'filter.ewplanted.clean',
-		'filter.ewplanted.smudge',
-		'filter.ewplanted.process',
-		'mergetool.ewplanted.cmd',
-		'difftool.ewplanted.cmd'
+	/** How Git starts the program a key names. */
+	type Form = 'shell' | 'exec' | 'bang';
+	interface ProgramKey {
+		readonly key: string;
+		readonly form: Form;
+		/** What else would make Git reach for it, were it reachable. */
+		readonly with?: ReadonlyArray<readonly [string, string]>;
+	}
+	const signedPush: ReadonlyArray<readonly [string, string]> = [['push.gpgSign', 'true']];
+	const programKeys: readonly ProgramKey[] = [
+		{ key: 'core.editor', form: 'shell' },
+		{ key: 'core.pager', form: 'shell' },
+		{ key: 'pager.fetch', form: 'shell' },
+		{ key: 'pager.push', form: 'shell' },
+		{ key: 'sequence.editor', form: 'shell' },
+		{ key: 'diff.external', form: 'shell' },
+		{ key: 'diff.ewplanted.textconv', form: 'shell' },
+		{ key: 'diff.ewplanted.command', form: 'shell' },
+		{ key: 'merge.ewplanted.driver', form: 'shell' },
+		{ key: 'filter.ewplanted.clean', form: 'shell' },
+		{ key: 'filter.ewplanted.smudge', form: 'shell' },
+		{ key: 'filter.ewplanted.process', form: 'shell' },
+		{ key: 'mergetool.ewplanted.cmd', form: 'shell', with: [['merge.tool', 'ewplanted']] },
+		{ key: 'difftool.ewplanted.cmd', form: 'shell', with: [['diff.tool', 'ewplanted']] },
+		{ key: 'gpg.program', form: 'exec', with: signedPush },
+		{ key: 'gpg.openpgp.program', form: 'exec', with: [...signedPush, ['gpg.format', 'openpgp']] },
+		{ key: 'gpg.x509.program', form: 'exec', with: [...signedPush, ['gpg.format', 'x509']] },
+		{
+			key: 'gpg.ssh.program',
+			form: 'exec',
+			with: [...signedPush, ['gpg.format', 'ssh'], ['user.signingKey', 'key::ssh-ed25519 AAAAewplanted']]
+		},
+		{ key: 'gpg.ssh.defaultKeyCommand', form: 'exec', with: [...signedPush, ['gpg.format', 'ssh']] },
+		{ key: 'submodule.ewplanted.update', form: 'bang' },
+		{ key: 'lfs.customtransfer.ewplanted.path', form: 'exec', with: [['lfs.standalonetransferagent', 'ewplanted']] }
 	];
-	/** Keys Git executes directly. */
-	const execKeys = ['gpg.program', 'gpg.ssh.program', 'gpg.x509.program', 'gpg.ssh.defaultKeyCommand'];
-	/** An alias cannot take the place of a command that exists. */
-	const aliasKeys = ['alias.fetch', 'alias.push', 'alias.maintenance'];
+	/**
+	 * `alias.*` as one family: an alias of every command a credentialed fetch
+	 * or push starts, and of the maintenance that follows. Git never lets an
+	 * alias stand in for a command that exists.
+	 */
+	const aliasedCommands = [
+		'fetch',
+		'push',
+		'fetch-pack',
+		'send-pack',
+		'index-pack',
+		'unpack-objects',
+		'rev-list',
+		'pack-objects',
+		'upload-pack',
+		'receive-pack',
+		'remote-https',
+		'maintenance',
+		'gc'
+	];
 
-	function plantEveryProgram(repository: string, at: Scene): void {
-		for (const key of shellKeys) git(repository, 'config', key, `'${at.program(key)}'`);
-		for (const key of execKeys) git(repository, 'config', key, at.program(key));
-		for (const key of aliasKeys) git(repository, 'config', key, `!'${at.program(key)}'`);
-		// The settings that would make a push reach for two of them, were
-		// they not overridden for the credentialed child.
-		git(repository, 'config', 'push.gpgSign', 'true');
-		git(repository, 'config', 'push.negotiate', 'true');
-		git(repository, 'config', 'gpg.format', 'ssh');
-		// And the ones that name nothing at all.
-		git(repository, 'config', 'color.pager', 'true');
-		git(repository, 'config', 'i18n.commitEncoding', 'UTF-8');
+	const valueFor = (form: Form, program: string): string =>
+		form === 'shell' ? `'${program}'` : form === 'bang' ? `!'${program}'` : program;
+
+	/** Every key, value and supporting setting of `keys`, each program recording its key. */
+	function plantings(keys: readonly ProgramKey[], at: Scene): Array<readonly [string, string]> {
+		const planted: Array<readonly [string, string]> = [];
+		for (const { key, form, with: supports = [] } of keys) {
+			planted.push([key, valueFor(form, at.program(key))]);
+			for (const support of supports) {
+				if (!planted.some(([name]) => name === support[0])) planted.push(support);
+			}
+		}
+		return planted;
 	}
 
-	it('CONTROL: these are live programs — git starts each for the command it belongs to', () => {
-		// Without this the case below could pass because a planted value was
-		// one git cannot run at all. One of each kind: an alias, a program run
-		// through a shell (the editor of a commit), one executed directly (the
-		// signing program of a signed commit).
+	/** Provision with a fetch credential, then publish with a push credential — and require both used. */
+	async function fetchAndPush(baseDir: string, bindingKey: string): Promise<void> {
+		const invocations: Invocation[] = [];
+		const reasons: string[] = [];
+		const plugin = new LocalWorkspacePlugin({ execFile: recordingGit(invocations) });
+
+		const handle = await plugin.provision(
+			provisionSpec(baseDir, originUrl, bindingKey, {
+				fetchCredential: { username: 'x-access-token', token: TOKEN, remoteUrl: originUrl },
+				onFetchCredentialWithheld: (reason) => reasons.push(reason)
+			})
+		);
+		writeFileSync(join(handle.path, 'work.txt'), `${bindingKey}\n`);
+		const result = await plugin.finalize(handle, {
+			commitMessage: 'feat: work',
+			push: true,
+			// As the fleet node publishes (`fleet-task-workspace.ts`). Without it
+			// the node's own `git add -A` — a child with no credential — runs a
+			// clean filter the pool defines, which is slice AL's business, not
+			// this file's.
+			hardenRepoHooks: true,
+			pushCredential: { username: 'x-access-token', token: TOKEN, remoteUrl: originUrl }
+		});
+
+		// Neither credential was withheld or refused for it…
+		expect(reasons).toEqual([]);
+		const fetches = invocations.filter((entry) => entry.args[0] === 'fetch');
+		expect(fetches).toHaveLength(2);
+		expect(fetches.every(carriesHeader)).toBe(true);
+		expect(handle.baseSha).toBe(originHead);
+		const push = invocations.find((entry) => entry.args[0] === 'push');
+		expect(push && carriesHeader(push)).toBe(true);
+		expect(result.pushed).toBe(true);
+		expect(branchOn(originDir, handle.branch)).not.toBe('');
+	}
+
+	it('CONTROL: these are live programs — git starts each one for the command it belongs to', () => {
+		// Without this a case below could pass because a planted value was one
+		// git cannot run at all. Every key that can be started without a
+		// terminal or extra tooling is started here, by its own command, in
+		// the form it is planted in below. Not here: the pagers (Git starts
+		// one only on a terminal — which is the whole argument for them),
+		// `submodule.<x>.update` (needs a submodule) and git-lfs's transfer
+		// agent (needs git-lfs); those are the shell, `!` and direct forms
+		// shown live here.
 		const at = scene();
 		const repository = join(at.dir, 'control');
 		mkdirSync(repository, { recursive: true });
-		git(repository, 'init', '--initial-branch', 'main');
-		const env = { ...process.env };
-		for (const name of ['GIT_EDITOR', 'VISUAL', 'EDITOR']) delete env[name];
-		const attempt = (...args: string[]): void => {
+		const emptyGlobal = join(at.dir, 'empty.gitconfig');
+		writeFileSync(emptyGlobal, '');
+		// Only what this case sets: no machine signing key, editor or pager.
+		const env: NodeJS.ProcessEnv = {
+			...process.env,
+			GIT_CONFIG_NOSYSTEM: '1',
+			GIT_CONFIG_GLOBAL: slash(emptyGlobal)
+		};
+		for (const name of [
+			'GIT_EDITOR',
+			'VISUAL',
+			'EDITOR',
+			'GIT_SEQUENCE_EDITOR',
+			'GIT_EXTERNAL_DIFF',
+			'GIT_PAGER',
+			'PAGER'
+		]) {
+			delete env[name];
+		}
+		const run = (...args: string[]): void => {
 			try {
 				execFileSync('git', ['-c', 'user.name=T', '-c', 'user.email=t@test.local', ...args], {
 					cwd: repository,
@@ -945,47 +1041,146 @@ describe('keys that name a program a fetch or a push never starts', () => {
 				// Each program exits 1 on purpose; whether it RAN is the verdict.
 			}
 		};
+		const planted = (key: string, form: Form = 'shell'): string => `${key}=${valueFor(form, at.program(key))}`;
+		const write = (text: string): void => writeFileSync(join(repository, 'a.txt'), text);
+		const signed = ['commit', '--allow-empty', '-S', '-m', 'signed'];
 
-		attempt('-c', `alias.ewcontrol=!'${at.program('alias')}'`, 'ewcontrol');
-		attempt('-c', `core.editor='${at.program('core.editor')}'`, 'commit', '--allow-empty');
-		attempt('-c', `gpg.program=${at.program('gpg.program')}`, 'commit', '--allow-empty', '-S', '-m', 'signed');
+		run('init', '--initial-branch', 'main');
+		writeFileSync(join(repository, '.gitattributes'), '*.txt diff=ewplanted merge=ewplanted filter=ewplanted\n');
+		write('base\n');
+		run('add', '-A');
+		run('commit', '-m', 'base');
+		run('branch', 'side');
+		// Content into the index runs a clean filter, or a process filter.
+		write('main\n');
+		run('-c', planted('filter.ewplanted.clean'), 'add', 'a.txt');
+		run('-c', planted('filter.ewplanted.process'), 'add', '--renormalize', 'a.txt');
+		run('commit', '-m', 'main');
+		// Showing a change runs the diff drivers and the difftool.
+		write('changed\n');
+		run('-c', planted('diff.external'), 'diff');
+		run('-c', planted('diff.ewplanted.command'), 'diff');
+		run('-c', planted('diff.ewplanted.textconv'), 'diff');
+		run('-c', 'diff.tool=ewplanted', '-c', planted('difftool.ewplanted.cmd'), 'difftool', '-y');
+		// Checking content out runs a smudge filter.
+		run('-c', planted('filter.ewplanted.smudge'), 'checkout', '--', 'a.txt');
+		// A three-way merge of the file runs its merge driver, and a conflict
+		// left behind runs the mergetool.
+		run('checkout', 'side');
+		write('side\n');
+		run('commit', '-am', 'side');
+		run('-c', planted('merge.ewplanted.driver'), 'merge', 'main');
+		run('-c', 'merge.tool=ewplanted', '-c', planted('mergetool.ewplanted.cmd'), 'mergetool', '-y');
+		run('merge', '--abort');
+		// An interactive rebase runs the sequence editor; a commit with no
+		// message runs the editor.
+		run('-c', planted('sequence.editor'), 'rebase', '-i', 'HEAD~1');
+		run('rebase', '--abort');
+		run('-c', planted('core.editor'), 'commit', '--allow-empty');
+		// A signed commit runs the signing program of its format.
+		run('-c', planted('gpg.program', 'exec'), ...signed);
+		run('-c', 'gpg.format=openpgp', '-c', planted('gpg.openpgp.program', 'exec'), ...signed);
+		run('-c', 'gpg.format=x509', '-c', planted('gpg.x509.program', 'exec'), ...signed);
+		run(
+			'-c',
+			'gpg.format=ssh',
+			'-c',
+			'user.signingKey=key::ssh-ed25519 AAAAewplanted',
+			'-c',
+			planted('gpg.ssh.program', 'exec'),
+			...signed
+		);
+		run('-c', 'gpg.format=ssh', '-c', planted('gpg.ssh.defaultKeyCommand', 'exec'), ...signed);
+		// An alias of a command that does not exist runs.
+		run('-c', planted('alias.ewcontrol', 'bang'), 'ewcontrol');
 
-		expect(at.ranBy().split(/\r?\n/).filter(Boolean)).toEqual(['alias', 'core.editor', 'gpg.program']);
+		expect([...new Set(at.ranBy().split(/\r?\n/).filter(Boolean))].sort()).toEqual(
+			[
+				'filter.ewplanted.clean',
+				'filter.ewplanted.process',
+				'diff.external',
+				'diff.ewplanted.command',
+				'diff.ewplanted.textconv',
+				'difftool.ewplanted.cmd',
+				'filter.ewplanted.smudge',
+				'merge.ewplanted.driver',
+				'mergetool.ewplanted.cmd',
+				'sequence.editor',
+				'core.editor',
+				'gpg.program',
+				'gpg.openpgp.program',
+				'gpg.x509.program',
+				'gpg.ssh.program',
+				'gpg.ssh.defaultKeyCommand',
+				'alias.ewcontrol'
+			].sort()
+		);
 	});
 
-	it('planted in the pool, all at once: the fetch keeps its credential, the push publishes, and none runs', async () => {
-		const at = scene();
-		const pool = await seedPool(at.baseDir, originUrl);
-		plantEveryProgram(pool, at);
-		const invocations: Invocation[] = [];
-		const reasons: string[] = [];
-		const plugin = new LocalWorkspacePlugin({ execFile: recordingGit(invocations) });
+	describe('each one, planted alone in the pool', () => {
+		let pool: string;
+		let baseDir: string;
 
-		const handle = await plugin.provision(
-			provisionSpec(at.baseDir, originUrl, 'programs', {
-				fetchCredential: { username: 'x-access-token', token: TOKEN, remoteUrl: originUrl },
-				onFetchCredentialWithheld: (reason) => reasons.push(reason)
-			})
-		);
-		writeFileSync(join(handle.path, 'work.txt'), 'programs\n');
-		const result = await plugin.finalize(handle, {
-			commitMessage: 'feat: work',
-			push: true,
-			pushCredential: { username: 'x-access-token', token: TOKEN, remoteUrl: originUrl }
+		beforeAll(async () => {
+			const at = scene();
+			baseDir = at.baseDir;
+			pool = await seedPool(baseDir, originUrl);
+			// Selects the planted drivers for every path of every worktree of
+			// the pool: `info/attributes` is read from the common directory.
+			mkdirSync(join(pool, 'info'), { recursive: true });
+			writeFileSync(join(pool, 'info', 'attributes'), '* diff=ewplanted merge=ewplanted filter=ewplanted\n');
 		});
 
-		// Neither credential was withheld or refused for any of it…
-		expect(reasons).toEqual([]);
-		const fetches = invocations.filter((entry) => entry.args[0] === 'fetch');
-		expect(fetches).toHaveLength(2);
-		expect(fetches.every(carriesHeader)).toBe(true);
-		expect(handle.baseSha).toBe(originHead);
-		const push = invocations.find((entry) => entry.args[0] === 'push');
-		expect(push && carriesHeader(push)).toBe(true);
-		expect(result.pushed).toBe(true);
-		expect(branchOn(originDir, handle.branch)).not.toBe('');
-		// …and not one of the planted programs ran, in any command of the
-		// provision or the publish. `ranBy` would name it.
+		/** Plant, run the credentialed fetch and push, and take it all out again. */
+		async function provePlanted(planted: ReadonlyArray<readonly [string, string]>, at: Scene): Promise<void> {
+			for (const [name, value] of planted) git(pool, 'config', name, value);
+			try {
+				await fetchAndPush(baseDir, `program-${caseCounter}`);
+			} finally {
+				for (const [name] of planted) git(pool, 'config', '--unset-all', name);
+			}
+			// `ranBy` names any planted program that ran, in any command of the
+			// provision or the publish.
+			expect(at.ranBy()).toBe('');
+			expect(at.leaked()).toBe('');
+		}
+
+		it.each(programKeys)(
+			'$key: the fetch keeps its credential, the push publishes, and it never runs',
+			async (entry) => {
+				const at = scene();
+				await provePlanted(plantings([entry], at), at);
+			}
+		);
+
+		it('alias.* (of every command the fetch and the push start): the same', async () => {
+			const at = scene();
+			await provePlanted(
+				aliasedCommands.map(
+					(command) => [`alias.${command}`, valueFor('bang', at.program(`alias.${command}`))] as const
+				),
+				at
+			);
+		});
+	});
+
+	it('all of them at once, with the keys that name nothing: the same', async () => {
+		const at = scene();
+		const pool = await seedPool(at.baseDir, originUrl);
+		mkdirSync(join(pool, 'info'), { recursive: true });
+		writeFileSync(join(pool, 'info', 'attributes'), '* diff=ewplanted merge=ewplanted filter=ewplanted\n');
+		for (const [name, value] of plantings(programKeys, at)) git(pool, 'config', name, value);
+		for (const command of aliasedCommands) {
+			git(pool, 'config', `alias.${command}`, valueFor('bang', at.program(`alias.${command}`)));
+		}
+		// What would make a push reach for a fetch by URL, were it not pinned;
+		// and the ones that name nothing at all.
+		git(pool, 'config', 'push.negotiate', 'true');
+		git(pool, 'config', 'color.pager', 'true');
+		git(pool, 'config', 'i18n.commitEncoding', 'UTF-8');
+
+		await fetchAndPush(at.baseDir, 'programs');
+
 		expect(at.ranBy()).toBe('');
 		expect(at.leaked()).toBe('');
 	});
