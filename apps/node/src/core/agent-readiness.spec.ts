@@ -1019,6 +1019,59 @@ describe('AgentRunHistory (what real runs proved)', () => {
 		expect(runs.get('claude-code').failure).toMatchObject({ kind: 'limit_reached', window: 'session' });
 	});
 
+	describe('observeThrottle — the worker`s throttle and a recorded usage limit (review N3)', () => {
+		const limited = () => {
+			const made = history();
+			made.runs.note({
+				provider: 'claude-code',
+				status: 'failed',
+				cliError: { text: "You've hit your weekly limit · resets Nov 12, 3am" }
+			});
+			return made;
+		};
+
+		it('marks a limit the worker took over, once', async () => {
+			const { runs, saved } = limited();
+			runs.observeThrottle('claude-code', true, true);
+			runs.observeThrottle('claude-code', true, true);
+			await runs.settled();
+			expect(runs.get('claude-code').failure).toMatchObject({ usageLimit: true, throttled: true });
+			// The limit itself, then the mark: two writes, not three.
+			expect(saved).toHaveLength(2);
+		});
+
+		it('drops a limit the worker HAD taken over as soon as it no longer holds it ("Clear limit now")', () => {
+			const { runs } = limited();
+			runs.observeThrottle('claude-code', true, true);
+			runs.observeThrottle('claude-code', false, true);
+			expect(runs.get('claude-code').failure).toBeNull();
+		});
+
+		it('leaves a limit the worker never throttled on, and one on a node without a worker', () => {
+			const { runs } = limited();
+			runs.observeThrottle('claude-code', false, true);
+			runs.observeThrottle('claude-code', false, false);
+			expect(runs.get('claude-code').failure).toMatchObject({ usageLimit: true });
+			expect(runs.get('claude-code').failure).not.toHaveProperty('throttled');
+		});
+
+		it('never touches a refusal that is not a usage limit', () => {
+			const { runs } = history();
+			runs.note({ provider: 'claude-code', status: 'failed', cliError: { text: ORG_DISABLED } });
+			runs.observeThrottle('claude-code', true, true);
+			runs.observeThrottle('claude-code', false, true);
+			expect(runs.get('claude-code').failure).toMatchObject({ kind: 'access_denied' });
+			expect(runs.get('claude-code').failure).not.toHaveProperty('throttled');
+		});
+
+		it('survives a restart: the mark is persisted with the limit', () => {
+			const { runs } = limited();
+			runs.observeThrottle('claude-code', true, true);
+			const restored = parseAgentRunHistoryRecord(JSON.stringify(runs.record()));
+			expect(restored?.agents['claude-code']?.failure).toMatchObject({ usageLimit: true, throttled: true });
+		});
+	});
+
 	it('persists every change in order, and a restart restores it', async () => {
 		const first = history();
 		first.runs.note({ provider: 'claude-code', status: 'succeeded' });
@@ -1256,18 +1309,18 @@ describe('resolveAgentStatus', () => {
 		});
 	});
 
-	it('a usage limit the worker no longer holds was lifted ("Clear limit now") → ready', () => {
+	it('a usage limit the worker took over and no longer holds was lifted ("Clear limit now") → ready at once', () => {
 		expect(
 			resolveAgentStatus({
 				...base,
-				history: emptyEntry({ failure: usageLimit }),
+				history: emptyEntry({ failure: { ...usageLimit, throttled: true } }),
 				throttle: null,
 				throttlesKnown: true
 			})
 		).toEqual({ status: 'ready', reasonCode: null });
 	});
 
-	it('a usage limit that named NO reset is unknown once its hold is over — never ready on no evidence', () => {
+	describe('a usage limit that named NO reset (a bare 429) — review N3', () => {
 		const noReset = failure({
 			kind: 'limit_reached',
 			code: 'usage_limit',
@@ -1277,17 +1330,81 @@ describe('resolveAgentStatus', () => {
 			usageLimit: true
 		});
 		const history = emptyEntry({ failure: noReset });
-		expect(resolveAgentStatus({ ...base, history, nowMs: NOW + 59 * 60_000 })).toMatchObject({
+		const held = {
 			status: 'limit_reached',
 			reasonCode: 'usage_limit',
+			limitResetsAt: noReset.until,
 			limitWindow: 'rate'
+		};
+
+		it('reads limit_reached for the whole hold — with a worker that never throttled on it, too', () => {
+			// It used to read `ready` here on a node with a worker: "no throttle"
+			// was taken for "lifted", when the worker had simply never held one.
+			for (const throttlesKnown of [false, true]) {
+				for (const minutes of [0, 5, 59]) {
+					expect(
+						resolveAgentStatus({
+							...base,
+							history,
+							throttle: null,
+							throttlesKnown,
+							nowMs: NOW + minutes * 60_000
+						})
+					).toEqual(held);
+				}
+			}
 		});
-		for (const throttlesKnown of [false, true]) {
-			expect(resolveAgentStatus({ ...base, history, nowMs: NOW + 61 * 60_000, throttlesKnown })).toEqual({
-				status: 'unknown',
-				reasonCode: 'verdict_stale'
+
+		it('then goes back to what the sign-in says: a rate limit leaves no lasting negative', () => {
+			// It used to read `unknown — the last run was refused` from minute 61
+			// until a run succeeded.
+			for (const throttlesKnown of [false, true]) {
+				for (const later of [NOW + 61 * 60_000, NOW + 10 * DAY]) {
+					const after = { ...base, history, throttle: null, throttlesKnown, nowMs: later };
+					expect(resolveAgentStatus(after)).toEqual({ status: 'ready', reasonCode: null });
+					expect(resolveAgentStatus({ ...after, auth: answered(SIGNED_OUT) })).toEqual({
+						status: 'not_signed_in',
+						reasonCode: 'status_signed_out'
+					});
+					expect(resolveAgentStatus({ ...after, auth: { state: 'unanswered' } })).toEqual({
+						status: 'unknown',
+						reasonCode: 'status_unanswered'
+					});
+				}
+			}
+		});
+
+		it('"Clear limit now" ends it immediately, for a limit the worker had taken over', () => {
+			expect(
+				resolveAgentStatus({
+					...base,
+					history: emptyEntry({ failure: { ...noReset, throttled: true } }),
+					throttle: null,
+					throttlesKnown: true,
+					nowMs: NOW + 5 * 60_000
+				})
+			).toEqual({ status: 'ready', reasonCode: null });
+		});
+
+		it('is what a 429 creates — also from a run that reached its model', () => {
+			const runs = new AgentRunHistory({ now: () => NOW });
+			runs.note({ provider: 'claude-code', status: 'failed', cliError: { apiStatus: 429 }, outputTokens: 812 });
+			expect(runs.get('claude-code').failure).toMatchObject({
+				kind: 'limit_reached',
+				code: 'usage_limit',
+				window: 'rate',
+				resetsAt: null,
+				until: noReset.until,
+				usageLimit: true
 			});
-		}
+			runs.note({
+				provider: 'codex',
+				status: 'failed',
+				cliError: { errorClass: 'rate_limit', text: 'API Error: 429 rate_limit_error' },
+				outputTokens: 0
+			});
+			expect(runs.get('codex').failure).toMatchObject({ code: 'usage_limit', usageLimit: true });
+		});
 	});
 
 	it('"credit balance too low" never flips back to ready by the clock: after its hour it is unknown (review 6a)', () => {
@@ -1456,6 +1573,40 @@ describe('buildAgentReadinessReport', () => {
 		});
 		const wire = JSON.stringify(report);
 		for (const leaked of ['FAKE', 'hunter2', 'db.internal', 'Fix external']) expect(wire).not.toContain(leaked);
+	});
+
+	it('a bare 429 on a node with a worker: limit reached for the hold, cleared by the owner, never a lasting negative (review N3)', async () => {
+		const runs = new AgentRunHistory({ now: () => NOW });
+		runs.note({ provider: 'claude-code', status: 'failed', cliError: { apiStatus: 429 }, outputTokens: 0 });
+		let throttles: Array<{ provider: string; until: string; window?: 'rate' }> = [];
+		const at = async (nowMs: number) =>
+			(
+				await buildAgentReadinessReport({
+					drivable: () => drivable,
+					auth: async () => answered(SIGNED_IN),
+					history: runs,
+					throttles: () => throttles,
+					now: () => nowMs
+				})
+			).agents[0];
+
+		// The worker holds no throttle for it (the executor did not park the job): still limit reached.
+		expect(await at(NOW + 5 * 60_000)).toMatchObject({
+			status: 'limit_reached',
+			reasonCode: 'usage_limit',
+			reason: 'The rate limit is reached.',
+			limitWindow: 'rate'
+		});
+		// Past the hold: back to the sign-in, with nothing left behind.
+		expect(await at(NOW + 61 * 60_000)).toMatchObject({ status: 'ready', reasonCode: null, reason: null });
+
+		// The same limit, this time taken over by the worker, then cleared by the owner.
+		runs.note({ provider: 'claude-code', status: 'failed', cliError: { apiStatus: 429 }, outputTokens: 0 });
+		throttles = [{ provider: 'claude-code', until: new Date(NOW + HOUR).toISOString(), window: 'rate' }];
+		expect((await at(NOW + 60_000))?.status).toBe('limit_reached');
+		throttles = [];
+		expect(await at(NOW + 2 * 60_000)).toMatchObject({ status: 'ready', reasonCode: null });
+		expect(runs.get('claude-code').failure).toBeNull();
 	});
 
 	it('an aged refusal reads unknown and keeps the last failure beside it (review 6b)', async () => {

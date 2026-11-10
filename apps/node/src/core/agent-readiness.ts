@@ -628,6 +628,14 @@ export interface AgentRunFailure extends FleetAgentFailure {
 	 * verdict short of a successful run.
 	 */
 	authFingerprint: string | null;
+	/**
+	 * A usage limit only: the worker has held a throttle for this CLI since
+	 * the limit was recorded. What tells "the owner pressed Clear limit now"
+	 * (the worker held one and no longer does: the limit is over) from "the
+	 * worker never throttled on this" (a bare 429: the hold stands on the
+	 * node's own word until it lapses).
+	 */
+	throttled?: boolean;
 }
 
 export interface AgentRunHistoryEntry {
@@ -721,7 +729,8 @@ function parseFailure(value: unknown): AgentRunFailure | null {
 		until: isoOrNull(failure.until),
 		usageLimit: failure.usageLimit === true,
 		at,
-		authFingerprint: typeof failure.authFingerprint === 'string' ? failure.authFingerprint.slice(0, 300) : null
+		authFingerprint: typeof failure.authFingerprint === 'string' ? failure.authFingerprint.slice(0, 300) : null,
+		...(failure.usageLimit === true && failure.throttled === true ? { throttled: true } : {})
 	};
 }
 
@@ -880,6 +889,31 @@ export class AgentRunHistory {
 		}
 	}
 
+	/**
+	 * Tell the history what the worker is holding for a CLI right now
+	 * (`held`), on a node that has a worker at all (`known`).
+	 *
+	 * Only a recorded usage limit is affected. While the worker holds a
+	 * throttle the limit is marked as taken over by it; once a limit the
+	 * worker HAD taken over is no longer held — the owner pressed "Clear limit
+	 * now", or it ran out — the limit is over and is dropped, so the agent
+	 * reads what its sign-in says again. A limit the worker never throttled
+	 * on is left alone: it stands for its own hold.
+	 */
+	observeThrottle(provider: string, held: boolean, known: boolean): void {
+		const entry = this.entries.get(provider);
+		const failure = entry?.failure;
+		if (!entry || !failure || !failure.usageLimit) return;
+		if (held) {
+			if (failure.throttled === true) return;
+			this.entries.set(provider, { ...entry, failure: { ...failure, throttled: true } });
+			this.save();
+		} else if (known && failure.throttled === true) {
+			this.entries.set(provider, { ...entry, failure: null });
+			this.save();
+		}
+	}
+
 	/** Everything observed so far, in the shape that is persisted. */
 	record(): AgentRunHistoryRecord {
 		return {
@@ -960,10 +994,12 @@ export interface AgentVerdict {
  *  2. a binary too old to be started by this node → `unsupported`;
  *  3. the worker is throttling this CLI → `limit_reached` until its instant;
  *  4. the last run was refused, and how old that is decides:
- *       - a usage limit stands until its instant — and, on a node with a
- *         worker, only while the worker still holds the throttle (an owner's
- *         "Clear limit now" lifts both). Once a hold that named NO reset has
- *         passed, nothing says the limit is gone: `unknown`, never `ready`;
+ *       - a usage limit stands until its instant: the reset the CLI named,
+ *         or the fallback hour when it named none (a bare 429). A limit the
+ *         worker took over and no longer holds was lifted by the owner
+ *         ("Clear limit now") and is over at once. When it is over it leaves
+ *         nothing behind — a rate limit is not an access refusal — and the
+ *         sign-in (steps 5 to 8) speaks again;
  *       - a sign-in or access verdict stands, shown with its age, for
  *         {@link FLEET_AGENT_VERDICT_MAX_AGE_MS}. Older than that with no
  *         newer run it is `unknown` with the last failure kept beside it —
@@ -1000,7 +1036,10 @@ export function resolveAgentStatus(input: ResolveAgentStatusInput): AgentVerdict
 		if (failure.usageLimit) {
 			const until = failure.until ? Date.parse(failure.until) : Number.NaN;
 			const held = Number.isFinite(until) && until > input.nowMs;
-			if (held && input.throttlesKnown !== true) {
+			// A limit the worker took over and no longer holds was lifted — the
+			// owner's "Clear limit now" — and is over at once.
+			const lifted = input.throttlesKnown === true && failure.throttled === true;
+			if (held && !lifted) {
 				return {
 					status: 'limit_reached',
 					reasonCode: 'usage_limit',
@@ -1008,9 +1047,8 @@ export function resolveAgentStatus(input: ResolveAgentStatusInput): AgentVerdict
 					...(failure.window ? { limitWindow: failure.window } : {})
 				};
 			}
-			// The hold is over (or, with a worker, lifted). When the CLI named its
-			// reset that is the evidence; when it named none, there is none.
-			if (!held && failure.resetsAt === null) return { status: 'unknown', reasonCode: 'verdict_stale' };
+			// Over. A limit is not a refusal: nothing of it outlives its hold, so
+			// the sign-in below speaks again — whether or not the CLI named a reset.
 		} else {
 			const at = Date.parse(failure.at);
 			const maxAgeMs =
@@ -1099,6 +1137,7 @@ export async function buildAgentReadinessReport(sources: AgentReadinessSources):
 		const auth = auths[index] ?? null;
 		const reading = auth?.state === 'answered' ? auth.reading : null;
 		if (installed) sources.history.observeAuth(cli.provider, reading);
+		sources.history.observeThrottle(cli.provider, throttles.has(cli.provider), throttlesKnown);
 		const history = sources.history.get(cli.provider);
 		const verdict = resolveAgentStatus({
 			installed,

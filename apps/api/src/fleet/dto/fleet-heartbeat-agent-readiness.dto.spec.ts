@@ -1,7 +1,10 @@
 import { ValidationPipe } from '@nestjs/common';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
-import { FLEET_AGENT_READINESS_STATUSES } from '@ever-works/contracts';
+import {
+    FLEET_AGENT_READINESS_MAX_REPORT_CHARS,
+    FLEET_AGENT_READINESS_STATUSES,
+} from '@ever-works/contracts';
 import { EnrollFleetNodeDto, FleetHeartbeatDto } from './fleet.dto';
 
 /**
@@ -124,6 +127,65 @@ describe('FleetHeartbeatDto — agent readiness', () => {
             },
         });
         await expect(failingProperties(dto)).resolves.toEqual([]);
+    });
+
+    describe('an absurd report is turned away at the edge (review N1)', () => {
+        it('refuses a report far larger than any real one, quickly', async () => {
+            // What one enrolled node could send to hold the event loop: the
+            // body limit is 1 MB, and the old masking was quadratic in this.
+            const dto = beat({
+                agents: {
+                    checkedAt: '2026-11-10T12:00:00.000Z',
+                    agents: [agent({ account: 'a-'.repeat(500_000) })],
+                },
+            });
+            const started = performance.now();
+            await expect(failingProperties(dto)).resolves.toEqual(['agents']);
+            expect(performance.now() - started).toBeLessThan(250);
+        });
+
+        it('refuses a list of very many agents the same way', async () => {
+            const agents = Array.from({ length: 5_000 }, (_, index) =>
+                agent({ provider: `cli-${index}` }),
+            );
+            await expect(
+                failingProperties(beat({ agents: { checkedAt: 'x', agents } })),
+            ).resolves.toEqual(['agents']);
+        });
+
+        it('leaves every real report far under the limit', async () => {
+            // The largest report this build can produce: every agent, every
+            // field at its cap.
+            const full = agent({
+                provider: 'p'.repeat(32),
+                version: 'v'.repeat(64),
+                account: 'a'.repeat(200),
+                status: 'limit_reached',
+                reasonCode: 'usage_limit',
+                limitWindow: 'weekly',
+                limitResetsAt: '2026-11-12T02:00:00.000Z',
+                usage: Array.from({ length: 6 }, (_, index) => ({
+                    window: `${'w'.repeat(30)}${index}`,
+                    usedPercent: 99.9,
+                    resetsAt: '2026-11-12T02:00:00.000Z',
+                    limited: true,
+                    windowMinutes: 10_080,
+                })),
+                usageObservedAt: '2026-11-10T11:30:00.000Z',
+                lastSuccessAt: '2026-11-10T10:00:00.000Z',
+                lastFailureAt: '2026-11-10T11:30:00.000Z',
+                lastFailureKind: 'limit_reached',
+                lastFailureCode: 'usage_limit',
+            });
+            const report = {
+                checkedAt: '2026-11-10T12:00:00.000Z',
+                agents: Array.from({ length: 8 }, () => full),
+            };
+            expect(JSON.stringify(report).length).toBeLessThan(
+                FLEET_AGENT_READINESS_MAX_REPORT_CHARS / 4,
+            );
+            await expect(failingProperties(beat({ agents: report }))).resolves.toEqual([]);
+        });
     });
 
     it('accepts an empty list: "this machine has no agent CLI" is a real report', async () => {

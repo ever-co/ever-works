@@ -801,7 +801,7 @@ describe('resolveFleetNodeAgentReadiness — a served verdict ages, even when th
 		expect(served(refused, at(30 * 24 * HOUR))?.agents[0]?.status).toBe('unknown');
 	});
 
-	it('an empty credit balance stands for its hour; a limit that named no reset likewise', () => {
+	it('an empty credit balance stands for its hour, then reads unknown — never ready', () => {
 		const credit = {
 			status: 'limit_reached',
 			reasonCode: 'out_of_credit',
@@ -811,50 +811,73 @@ describe('resolveFleetNodeAgentReadiness — a served verdict ages, even when th
 		};
 		expect(served(credit, at(20 * 60_000))?.agents[0]?.status).toBe('limit_reached');
 		expect(served(credit, at(HOUR))?.agents[0]).toMatchObject({ status: 'unknown', reasonCode: 'verdict_stale' });
-
-		const noReset = { ...credit, reasonCode: 'usage_limit', lastFailureCode: 'usage_limit', limitWindow: 'rate' };
-		expect(served(noReset, at(20 * 60_000))?.agents[0]?.status).toBe('limit_reached');
-		expect(served(noReset, at(HOUR))?.agents[0]).toMatchObject({
-			status: 'unknown',
-			reasonCode: 'verdict_stale',
-			limitWindow: 'rate'
-		});
 	});
 
-	it('a usage limit is over once the reset it named has passed — unknown, not ready', () => {
-		const limit = {
+	describe('a usage limit is not a refusal: when it is over the sign-in speaks again (review N3)', () => {
+		const named = {
 			status: 'limit_reached',
 			reasonCode: 'usage_limit',
 			limitWindow: 'weekly',
-			limitResetsAt: '2026-11-12T03:00:00.000Z'
+			limitResetsAt: '2026-11-12T03:00:00.000Z',
+			lastFailureAt: '2026-11-10T11:30:00.000Z',
+			lastFailureKind: 'limit_reached',
+			lastFailureCode: 'usage_limit'
 		};
-		expect(served(limit, Date.parse('2026-11-12T02:00:00.000Z'))?.agents[0]).toMatchObject({
-			status: 'limit_reached',
-			limitResetsAt: '2026-11-12T03:00:00.000Z'
-		});
-		const after = served(limit, Date.parse('2026-11-12T04:00:00.000Z'))?.agents[0];
-		expect(after).toMatchObject({ status: 'unknown', reasonCode: 'verdict_stale', limitWindow: 'weekly' });
-		expect(after).not.toHaveProperty('limitResetsAt');
+		const BEFORE = Date.parse('2026-11-12T02:00:00.000Z');
+		const AFTER = Date.parse('2026-11-12T04:00:00.000Z');
 
-		// Unless the platform itself is still holding that CLI back: its throttle is the newer evidence.
-		const held = resolveFleetNodeAgentReadiness(stored(limit), {
-			now: Date.parse('2026-11-12T04:00:00.000Z'),
-			throttles: [
-				{
-					provider: 'claude-code',
-					window: 'weekly',
-					until: '2026-11-13T00:00:00.000Z',
-					reason: 'not shown',
-					since: '2026-11-12T03:30:00.000Z'
-				}
-			]
+		it('stands until the reset it named', () => {
+			expect(served(named, BEFORE)?.agents[0]).toMatchObject({
+				status: 'limit_reached',
+				reasonCode: 'usage_limit',
+				limitResetsAt: '2026-11-12T03:00:00.000Z'
+			});
 		});
-		expect(held?.agents[0]).toMatchObject({
-			status: 'limit_reached',
-			reasonCode: 'usage_limit',
-			limitResetsAt: '2026-11-13T00:00:00.000Z'
+
+		it.each([
+			[true, 'ready', null, true],
+			[false, 'not_signed_in', 'status_signed_out', false],
+			[null, 'unknown', 'status_unanswered', null]
+		] as const)('after it, signedIn %j reads %s (%s)', (signedIn, status, reasonCode, anyReady) => {
+			const view = served({ ...named, signedIn }, AFTER);
+			expect(view?.agents[0]).toMatchObject({ status, reasonCode, reason: describeFleetAgentReason(reasonCode) });
+			expect(view?.agents[0]).not.toHaveProperty('limitResetsAt');
+			expect(view?.agents[0]).not.toHaveProperty('limitWindow');
+			// The last failure is still on record; it is just no longer the status.
+			expect(view?.agents[0]?.lastFailureCode).toBe('usage_limit');
+			expect(view?.anyReady).toBe(anyReady);
 		});
-		expect(held?.anyReady).toBe(false);
+
+		it('a limit that named no reset is held for its hour, then the same', () => {
+			const noReset = { ...named, limitWindow: 'rate', limitResetsAt: undefined };
+			expect(served(noReset, at(20 * 60_000))?.agents[0]?.status).toBe('limit_reached');
+			expect(served(noReset, at(HOUR))?.agents[0]).toMatchObject({ status: 'ready', reasonCode: null });
+			// The node sends the end of its hold as the reset; that is honoured the same way.
+			const withHold = { ...noReset, limitResetsAt: '2026-11-10T12:30:00.000Z' };
+			expect(served(withHold, at(20 * 60_000))?.agents[0]?.status).toBe('limit_reached');
+			expect(served(withHold, at(40 * 60_000))?.agents[0]?.status).toBe('ready');
+		});
+
+		it('unless the platform itself is still holding that CLI back: its throttle is the newer evidence', () => {
+			const held = resolveFleetNodeAgentReadiness(stored(named), {
+				now: AFTER,
+				throttles: [
+					{
+						provider: 'claude-code',
+						window: 'weekly',
+						until: '2026-11-13T00:00:00.000Z',
+						reason: 'not shown',
+						since: '2026-11-12T03:30:00.000Z'
+					}
+				]
+			});
+			expect(held?.agents[0]).toMatchObject({
+				status: 'limit_reached',
+				reasonCode: 'usage_limit',
+				limitResetsAt: '2026-11-13T00:00:00.000Z'
+			});
+			expect(held?.anyReady).toBe(false);
+		});
 	});
 
 	it('what the status command said does not age: it is re-asked, not remembered', () => {
@@ -898,5 +921,170 @@ describe('resolveFleetNodeAgentReadiness — a served verdict ages, even when th
 		// 20 hours after receipt: the run is 21 hours old on the node's clock (27 on the platform's).
 		expect(resolveFleetNodeAgentReadiness(skewed, { now: at(20 * HOUR) })?.agents[0]?.status).toBe('access_denied');
 		expect(resolveFleetNodeAgentReadiness(skewed, { now: at(24 * HOUR) })?.agents[0]?.status).toBe('unknown');
+	});
+});
+
+/**
+ * PR #3131 second review, N1 (blocker). The masking runs on text a NODE
+ * chose (`account`, `version`), synchronously, on the heartbeat's request
+ * path, and a body may be a megabyte. Two of its first patterns backtracked
+ * quadratically (`a-` × 16 KB took 0.6 s, × 32 KB 2.3 s): one enrolled node
+ * could hold the API's event loop for minutes.
+ *
+ * Two independent bounds now, each pinned here: every node-supplied string
+ * is cut to a small window before anything reads it, and every pattern is
+ * linear. The budgets are generous (the real figures are well under a
+ * millisecond); the old code missed them by three orders of magnitude.
+ */
+describe('masking and normalising are bounded for any input (review N1)', () => {
+	const MEGABYTE = 1024 * 1024;
+	/** Inputs that made the old patterns restart inside one long run. */
+	const ADVERSARIAL: ReadonlyArray<readonly [string, string]> = [
+		['a-', 'word boundaries inside a scheme-shaped run'],
+		['a.', 'dotted name run'],
+		['a_', 'underscored name run'],
+		['a ', 'short words'],
+		['key', 'a secret-shaped name, never assigned'],
+		['key ', 'secret-shaped names, never assigned'],
+		['://a', 'URL openers with no credentials'],
+		['://a:b', 'half a URL credential'],
+		['eyJaaaaaaaa-', 'token openers with no second segment'],
+		['Basic ', 'auth schemes with no value'],
+		['sk-', 'key openers'],
+		['=', 'separators'],
+		['a=', 'empty assignments'],
+		['\u0001', 'control characters'],
+		[' ', 'whitespace']
+	];
+	const repeatTo = (unit: string, length: number) => unit.repeat(Math.ceil(length / unit.length)).slice(0, length);
+	/** The fastest of three runs: a timing budget should not fail on one scheduler hiccup. */
+	const fastestMs = (run: () => unknown): number => {
+		let best = Number.POSITIVE_INFINITY;
+		for (let attempt = 0; attempt < 3; attempt += 1) {
+			const started = performance.now();
+			run();
+			best = Math.min(best, performance.now() - started);
+		}
+		return best;
+	};
+	const BUDGET_MS = 50;
+
+	it.each(ADVERSARIAL)('redactFleetAgentText: 1 MB of %j (%s) returns within the budget', (unit) => {
+		const text = repeatTo(unit, MEGABYTE);
+		expect(fastestMs(() => redactFleetAgentText(text))).toBeLessThan(BUDGET_MS);
+		// And what comes back is bounded too.
+		expect(redactFleetAgentText(text).length).toBeLessThanOrEqual(4096 + 64);
+	});
+
+	it.each(ADVERSARIAL)(
+		'the normaliser: a report whose every string is 1 MB of %j (%s) returns within the budget',
+		(unit) => {
+			const huge = repeatTo(unit, MEGABYTE);
+			const report = {
+				checkedAt: huge,
+				agents: [
+					{
+						provider: 'claude-code',
+						installed: true,
+						version: huge,
+						signedIn: true,
+						authMethod: huge,
+						account: huge,
+						status: huge,
+						reasonCode: huge,
+						reason: huge,
+						checkedAt: huge,
+						limitResetsAt: huge,
+						limitWindow: huge,
+						usage: [{ window: huge, usedPercent: 10, resetsAt: huge }],
+						usageObservedAt: huge,
+						lastSuccessAt: huge,
+						lastFailureAt: '2026-11-10T12:00:00.000Z',
+						lastFailureKind: huge,
+						lastFailureCode: huge
+					},
+					{ provider: huge, installed: true, status: 'ready' }
+				]
+			};
+			let normalised: ReturnType<typeof normalizeFleetAgentReadinessReport> = null;
+			expect(fastestMs(() => (normalised = normalizeFleetAgentReadinessReport(report)))).toBeLessThan(BUDGET_MS);
+			// One entry survives (the megabyte "provider" is not a token), and nothing of it is long.
+			expect(normalised?.agents).toHaveLength(1);
+			expect(JSON.stringify(normalised).length).toBeLessThan(2048);
+		}
+	);
+
+	it('an oversized agents list is truncated before it is walked', () => {
+		const agents = Array.from({ length: 200_000 }, (_, index) => ({
+			provider: `cli-${index}`,
+			installed: true,
+			status: 'ready',
+			account: 'a-'.repeat(2048)
+		}));
+		let normalised: ReturnType<typeof normalizeFleetAgentReadinessReport> = null;
+		expect(fastestMs(() => (normalised = normalizeFleetAgentReadinessReport({ agents })))).toBeLessThan(BUDGET_MS);
+		expect(normalised?.agents.map((agent) => agent.provider)).toEqual(
+			Array.from({ length: 8 }, (_, index) => `cli-${index}`)
+		);
+	});
+
+	it('the old quadratic inputs, at the sizes the review measured, now cost nothing', () => {
+		// Review: 8 KB = 0.2 s, 16 KB = 0.6 s, 32 KB = 2.3 s before the fix.
+		for (const size of [8_000, 16_000, 32_000]) {
+			for (const unit of ['a-', 'a.', 'a ']) {
+				const account = repeatTo(unit, size);
+				expect(
+					fastestMs(() =>
+						normalizeFleetAgentReadinessReport({
+							agents: [
+								{ provider: 'claude-code', installed: true, status: 'ready', account, version: account }
+							]
+						})
+					)
+				).toBeLessThan(BUDGET_MS);
+			}
+		}
+	});
+
+	it('cuts BEFORE it masks, without leaving half a secret at the cut', () => {
+		// A key that starts inside the 200 characters an account label keeps and
+		// runs far past them: it is seen whole by the masking, not cut in two.
+		const label = `${'owner@example.com '.repeat(10)}${FAKE_API_KEY}${'FAKE'.repeat(400)} trailing`;
+		const account = sanitizeFleetAgentAccount(label);
+		expect(Array.from(account ?? '').length).toBeLessThanOrEqual(200);
+		expect(account).toContain('[redacted]');
+		expect(account).not.toContain('FAKE');
+
+		// Text past the window is dropped, never returned unmasked.
+		const tail = `${'word '.repeat(2000)}${FAKE_API_KEY}`;
+		expect(redactFleetAgentText(tail)).not.toContain('FAKE');
+		expect(sanitizeFleetAgentAccount(tail)).not.toContain('FAKE');
+	});
+
+	it('masks the same shapes as before, and a quoted assignment too', () => {
+		expect(redactFleetAgentText('{"password":"hunter2-fake"}')).toBe('{"password=[redacted]"}');
+		expect(redactFleetAgentText("api_key = 'fake-value-1'")).toBe("api_key=[redacted]'");
+		// A name that is not a secret keeps its value.
+		expect(redactFleetAgentText('region=eu-west-1 plan: max')).toBe('region=eu-west-1 plan: max');
+		expect(redactFleetAgentText('see https://example.com/docs for more')).toBe(
+			'see https://example.com/docs for more'
+		);
+	});
+
+	it('a token that is too long to be one is refused without being read', () => {
+		const report = normalizeFleetAgentReadinessReport({
+			agents: [
+				{ provider: `${' '.repeat(40)}codex${' '.repeat(20)}`, installed: true, status: 'ready' },
+				{ provider: 'x'.repeat(200), installed: true, status: 'ready' },
+				{
+					provider: 'claude-code',
+					installed: true,
+					status: 'ready',
+					usage: [{ window: 'w'.repeat(5000), usedPercent: 5 }]
+				}
+			]
+		});
+		expect(report?.agents.map((agent) => agent.provider)).toEqual(['codex', 'claude-code']);
+		expect(report?.agents[1]?.usage).toBeUndefined();
 	});
 });

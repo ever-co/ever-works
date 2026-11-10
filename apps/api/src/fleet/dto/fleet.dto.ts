@@ -14,9 +14,12 @@ import {
     Min,
     MinLength,
     ValidateIf,
+    registerDecorator,
+    type ValidationOptions,
 } from 'class-validator';
 import {
     FLEET_ACTION_FAMILIES,
+    FLEET_AGENT_READINESS_MAX_REPORT_CHARS,
     FLEET_AUDIENCES,
     FLEET_CREDENTIAL_MAX_LENGTH,
     FLEET_CREDENTIAL_MIN_LENGTH,
@@ -81,6 +84,41 @@ const ENROLLABLE_KINDS: readonly FleetEnrollableNodeKind[] = FLEET_ENROLLABLE_NO
  * unbounded storage.
  */
 const FLEET_MAX_INSTANT_LENGTH = 64;
+
+/**
+ * Refuse a JSON value whose serialised form is longer than `max` characters.
+ *
+ * For the free-form objects of the heartbeat, which are deliberately not
+ * nested DTOs (a newer node's unknown key must not fail the beat): the
+ * service normalises what it keeps, and this makes sure an absurd payload is
+ * turned away at the edge before any of it is read. One `JSON.stringify` of a
+ * body the parser has already bounded (`BODY_LIMIT`, 1 MB by default) — a
+ * few milliseconds at worst, and nothing a real node ever comes near.
+ */
+function MaxSerializedLength(max: number, validationOptions?: ValidationOptions) {
+    return function (object: object, propertyName: string): void {
+        registerDecorator({
+            name: 'maxSerializedLength',
+            target: object.constructor,
+            propertyName,
+            constraints: [max],
+            options: validationOptions,
+            validator: {
+                validate(value: unknown): boolean {
+                    if (value === undefined || value === null) return true;
+                    try {
+                        return JSON.stringify(value).length <= max;
+                    } catch {
+                        return false;
+                    }
+                },
+                defaultMessage(): string {
+                    return `$property must serialise to at most ${max} characters`;
+                },
+            },
+        });
+    };
+}
 
 /**
  * Request body for `POST /api/fleet/nodes/enrollment-token` — issue a
@@ -908,6 +946,7 @@ export class FleetNodeSelfDescriptionDto {
     })
     @IsOptional()
     @IsObject()
+    @MaxSerializedLength(FLEET_AGENT_READINESS_MAX_REPORT_CHARS)
     agents?: Record<string, unknown>;
 }
 

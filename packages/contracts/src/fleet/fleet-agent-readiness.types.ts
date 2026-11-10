@@ -100,6 +100,13 @@ export const FLEET_AGENT_AUTH_METHODS: readonly FleetAgentAuthMethod[] = [
 
 /** Most agent CLIs one report lists. */
 export const FLEET_AGENT_READINESS_MAX_AGENTS = 8;
+/**
+ * Largest `agents` report, as JSON text, the heartbeat accepts. A real report
+ * is a few kilobytes (at most {@link FLEET_AGENT_READINESS_MAX_AGENTS} agents
+ * of bounded fields); anything near this is not one, and is refused at the
+ * edge before any of it is read.
+ */
+export const FLEET_AGENT_READINESS_MAX_REPORT_CHARS = 64 * 1024;
 /** Cap on the provider token (`claude-code`). */
 export const FLEET_AGENT_READINESS_MAX_PROVIDER_LENGTH = 32;
 /** Cap on a CLI version string. */
@@ -555,7 +562,7 @@ export function classifyFleetAgentFailure(
 
 // ─── Sanitising ─────────────────────────────────────────────────────────────
 
-/**
+/*
  * Credential-shaped runs of text, masked wherever a label is built or
  * stored. Defence in depth: the report carries no run output at all (see the
  * module comment), and the only free text left on it — the account label and
@@ -564,30 +571,91 @@ export function classifyFleetAgentFailure(
  * a leak: credentials inside a URL, `Basic` / `Bearer` values, `name=value`
  * pairs whose name says secret, API keys (`sk-…`), JSON Web Tokens, and any
  * unbroken run of 32 or more key-alphabet characters.
+ *
+ * It runs on text a NODE chose, on the heartbeat's request path, so it is
+ * bounded twice over: the input is cut to a fixed length before any pattern
+ * runs, and each pattern is linear (see the note above the patterns).
  */
-const CREDENTIAL_REPLACEMENTS: ReadonlyArray<readonly [RegExp, string]> = [
-	[/\b([a-z][a-z0-9+.-]*:\/\/)[^\s/@:]+:[^\s/@]+@/gi, '$1[redacted]@'],
-	[/\b(?:Basic|Bearer)\s+[A-Za-z0-9._~+/=-]{8,}/gi, '[redacted]'],
-	[
-		/\b([A-Za-z0-9_.-]*(?:secret|token|passwd|password|credential|key)[A-Za-z0-9_.-]*)\s*[=:]\s*[^\s,;]+/gi,
-		'$1=[redacted]'
-	],
-	[/\bsk-[A-Za-z0-9_-]{8,}/g, '[redacted]'],
-	[/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}(?:\.[A-Za-z0-9_-]+)?/g, '[redacted]'],
-	[/[A-Za-z0-9_+/=-]{32,}/g, '[redacted]']
-];
 
-/** `text` with anything credential-shaped replaced by `[redacted]`. */
+/**
+ * The most text the masking ever looks at. Its input is a label, and a label
+ * is short; text beyond this is cut BEFORE any pattern runs, so the work is
+ * bounded whatever a node sends (a heartbeat body may be a megabyte).
+ */
+const REDACT_MAX_INPUT_CHARS = 4096;
+
+/*
+ * Every pattern below is written to run in time linear in its input — the
+ * masking sits on the heartbeat's request path, on text a node chose:
+ *
+ *  - each one either starts at a LITERAL (`://`, `Basic`, `sk-`, `eyJ`) or
+ *    consumes a whole run of one character class per match, so the engine
+ *    never restarts inside a run it has already scanned;
+ *  - no quantified group contains another quantifier, and no two adjacent
+ *    quantified classes can match the same character;
+ *  - every repetition that follows a literal is bounded.
+ *
+ * The first version of the first and third patterns began with an unbounded
+ * `[a-z0-9+.-]*` after a word boundary; on `a-a-a-…` every second character
+ * is a boundary and each start rescanned the rest: quadratic.
+ */
+
+/** `scheme://user:password@` — the two names between `://` and `@`. */
+const URL_CREDENTIALS = /:\/\/[^\s/@:]{1,256}:[^\s/@]{1,256}@/g;
+/** `Basic <value>` / `Bearer <value>`. */
+const AUTH_SCHEME_VALUE = /\b(?:Basic|Bearer)\s{1,8}[A-Za-z0-9._~+/=-]{8,2048}/gi;
+/**
+ * A run of name characters, with the assignment that follows it when there
+ * is one (`name=value`, `name: value`, `"name":"value"`). EVERY name run is
+ * matched, assigned or not, so a run is scanned once; the replacer decides.
+ */
+const NAME_AND_ASSIGNMENT = /([A-Za-z0-9_.-]+)(?:(["']?\s*[=:]\s*["']?)([^\s,;"']+))?/g;
+/** A name that says its value is a secret. */
+const SECRET_NAME = /secret|token|passwd|password|credential|key/i;
+/** An API key (`sk-…`). */
+const API_KEY = /\bsk-[A-Za-z0-9_-]{8,2048}/g;
+/** A JSON Web Token: two or three base64url segments, the first starting `eyJ`. */
+const JSON_WEB_TOKEN = /\beyJ[A-Za-z0-9_-]{8,1024}\.[A-Za-z0-9_-]{8,2048}(?:\.[A-Za-z0-9_-]{1,1024})?/g;
+/** Any unbroken run of 32 or more key-alphabet characters. */
+const LONG_KEY_RUN = /[A-Za-z0-9_+/=-]{32,}/g;
+
+/**
+ * `text` with anything credential-shaped replaced by `[redacted]`.
+ *
+ * Bounded: text longer than {@link REDACT_MAX_INPUT_CHARS} characters is cut
+ * to that first (what is cut is dropped, never returned unmasked), and every
+ * pattern is linear, so this returns promptly for any input.
+ */
 export function redactFleetAgentText(text: string): string {
-	let out = text;
-	for (const [pattern, replacement] of CREDENTIAL_REPLACEMENTS) out = out.replace(pattern, replacement);
-	return out;
+	const bounded = text.length > REDACT_MAX_INPUT_CHARS ? text.slice(0, REDACT_MAX_INPUT_CHARS) : text;
+	return bounded
+		.replace(URL_CREDENTIALS, '://[redacted]@')
+		.replace(AUTH_SCHEME_VALUE, '[redacted]')
+		.replace(NAME_AND_ASSIGNMENT, (match: string, name: string, assignment: string | undefined) =>
+			assignment !== undefined && SECRET_NAME.test(name) ? `${name}=[redacted]` : match
+		)
+		.replace(API_KEY, '[redacted]')
+		.replace(JSON_WEB_TOKEN, '[redacted]')
+		.replace(LONG_KEY_RUN, '[redacted]');
+}
+
+/**
+ * How much of a string {@link oneLine} reads for a cap of `max`: a few times
+ * the cap, so a secret that straddles the final cut is still seen whole by
+ * the masking (and masked) rather than left as an unmasked half.
+ */
+function readWindow(max: number): number {
+	return Math.min(REDACT_MAX_INPUT_CHARS, Math.max(256, max * 4));
 }
 
 function oneLine(value: unknown, max: number): string | null {
 	if (typeof value !== 'string') return null;
+	// Cut FIRST: nothing below — no regex, no scan — ever sees more than a
+	// bounded window of what a node sent.
+	const window = readWindow(max);
+	const head = value.length > window ? value.slice(0, window) : value;
 	// eslint-disable-next-line no-control-regex
-	const cleaned = redactFleetAgentText(value.replace(/[\u0000-\u001F\u007F]+/g, ' ').replace(/\s+/g, ' ')).trim();
+	const cleaned = redactFleetAgentText(head.replace(/[\u0000-\u001F\u007F]+/g, ' ').replace(/\s+/g, ' ')).trim();
 	if (!cleaned) return null;
 	const points = Array.from(cleaned);
 	return points.length > max
@@ -610,7 +678,9 @@ function isoOrNull(value: unknown): string | null {
 }
 
 function token(value: unknown, max: number): string | null {
-	if (typeof value !== 'string') return null;
+	// The length is checked before anything reads the string: a token is short
+	// (a little slack for surrounding whitespace), and a megabyte is not one.
+	if (typeof value !== 'string' || value.length > max + 64) return null;
 	const trimmed = value.trim();
 	return /^[A-Za-z0-9._:+-]+$/.test(trimmed) && trimmed.length <= max ? trimmed : null;
 }
@@ -740,7 +810,9 @@ export function normalizeFleetAgentReadinessReport(
 	const checkedAt = isoOrNull(source.checkedAt) ?? isoOrNull(fallbackCheckedAt) ?? new Date(0).toISOString();
 	const seen = new Set<string>();
 	const agents: FleetAgentReadinessEntry[] = [];
-	for (const candidate of source.agents) {
+	// Truncated FIRST: an oversized list is not walked to its end looking for
+	// entries to keep.
+	for (const candidate of source.agents.slice(0, FLEET_AGENT_READINESS_MAX_AGENTS)) {
 		if (agents.length >= FLEET_AGENT_READINESS_MAX_AGENTS) break;
 		const entry = sanitizeEntry(candidate, checkedAt);
 		if (!entry || seen.has(entry.provider)) continue;
@@ -849,10 +921,14 @@ export interface ResolveFleetNodeAgentReadinessOptions {
  * A node that has gone offline leaves its last report behind, and without
  * this an "Access denied" it sent last month would read red for ever on the
  * strength of one old run. Same thresholds as the node: 24 hours for a
- * sign-in or access refusal, the fallback hour for an empty credit balance
- * and for a limit that named no reset; a usage limit whose reset has passed
- * is over. What it becomes is `unknown` (`verdict_stale`) with the last
- * failure kept — never `ready`: the platform cannot ask the CLI.
+ * sign-in or access refusal and the fallback hour for an empty credit
+ * balance, after which the entry reads `unknown` (`verdict_stale`) with the
+ * last failure kept — never `ready`: the platform cannot ask the CLI.
+ *
+ * A usage limit is different: it is not a refusal, and when its hold is over
+ * (the reset has passed, or the fallback hour for one that named none) it
+ * leaves nothing behind. The entry then reads what the node's sign-in probe
+ * last said, exactly as the node itself would report it.
  *
  * `nodeNowMs` is the node's own clock carried forward (its `checkedAt` plus
  * the time since the platform received the report), so a machine whose clock
@@ -872,9 +948,10 @@ function ageServedVerdict(entry: FleetAgentReadinessEntry, nodeNowMs: number): F
 		delete next.limitResetsAt;
 		return next;
 	};
-	if (entry.status === 'limit_reached' && entry.reasonCode === 'usage_limit') {
+	const usageLimit = entry.status === 'limit_reached' && entry.reasonCode === 'usage_limit';
+	if (usageLimit) {
 		const resets = entry.limitResetsAt ? Date.parse(entry.limitResetsAt) : Number.NaN;
-		if (Number.isFinite(resets)) return resets <= nodeNowMs ? stale() : entry;
+		if (Number.isFinite(resets)) return resets <= nodeNowMs ? afterUsageLimit(entry) : entry;
 	}
 	// Only a verdict that came from a run carries the run's own code; what the
 	// status command reported (`status_signed_out`) is re-asked every few
@@ -883,7 +960,22 @@ function ageServedVerdict(entry: FleetAgentReadinessEntry, nodeNowMs: number): F
 	const at = Date.parse(entry.lastFailureAt);
 	const maxAgeMs =
 		entry.status === 'limit_reached' ? FLEET_AGENT_FAILURE_FALLBACK_MS : FLEET_AGENT_VERDICT_MAX_AGE_MS;
-	return Number.isFinite(at) && nodeNowMs - at <= maxAgeMs ? entry : stale();
+	if (Number.isFinite(at) && nodeNowMs - at <= maxAgeMs) return entry;
+	return usageLimit ? afterUsageLimit(entry) : stale();
+}
+
+/** An entry whose usage limit is over: what the sign-in probe last said, and no trace of the limit as a status. */
+function afterUsageLimit(entry: FleetAgentReadinessEntry): FleetAgentReadinessEntry {
+	const next: FleetAgentReadinessEntry = { ...entry };
+	delete next.limitResetsAt;
+	delete next.limitWindow;
+	const [status, reasonCode]: [FleetAgentReadinessStatus, FleetAgentReasonCode | null] =
+		entry.signedIn === true
+			? ['ready', null]
+			: entry.signedIn === false
+				? ['not_signed_in', 'status_signed_out']
+				: ['unknown', 'status_unanswered'];
+	return { ...next, status, reasonCode, reason: describeFleetAgentReason(reasonCode) };
 }
 
 /**
