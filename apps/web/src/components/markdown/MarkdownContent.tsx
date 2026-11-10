@@ -39,11 +39,13 @@ export type MarkdownContentSize = 'sm' | 'xs';
 const BLOCK_CLASS = cn(
     'prose dark:prose-invert max-w-none break-words',
     'text-text-secondary dark:text-text-secondary-dark',
-    'prose-p:my-2 prose-p:leading-relaxed first:prose-p:mt-0',
+    'prose-p:my-2 prose-p:leading-relaxed',
+    // No outer margin on the first / last block, so the text lines up with its container.
+    '[&>:first-child]:mt-0 [&>:last-child]:mb-0',
     'prose-p:text-text-secondary dark:prose-p:text-text-secondary-dark',
     'prose-li:text-text-secondary dark:prose-li:text-text-secondary-dark',
     'prose-headings:text-text dark:prose-headings:text-text-dark prose-headings:font-semibold',
-    'prose-headings:mt-4 prose-headings:mb-1.5 first:prose-headings:mt-0',
+    'prose-headings:mt-4 prose-headings:mb-1.5',
     'prose-strong:text-text dark:prose-strong:text-text-dark prose-strong:font-semibold',
     'prose-ul:my-2 prose-ol:my-2 prose-li:my-0.5 prose-li:marker:text-text-muted',
     'prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-code:font-normal',
