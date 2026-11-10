@@ -2089,10 +2089,10 @@ function describeFetchAuthorization(fetch: FetchAuthorization, withheld: string 
 	if (fetch.credential) {
 		return withheld === null
 			? ' (fetched with the scoped read credential the platform issued for this repository)'
-			: ` (the scoped read credential for this repository was withheld — ${withheld} — so the fetch used this machine's own Git configuration)`;
+			: ` (the scoped read credential for this repository was withheld — ${withheld} — so the fetch used this machine’s own Git configuration)`;
 	}
 	return fetch.unavailable
-		? ` (no scoped read credential: ${fetch.unavailable}; the fetch used this machine's own Git configuration)`
+		? ` (no scoped read credential: ${fetch.unavailable}; the fetch used this machine’s own Git configuration)`
 		: '';
 }
 

@@ -482,6 +482,184 @@ describe('FleetJobClient scoped push credential', () => {
 	});
 });
 
+/**
+ * Scoped fetch credentials — `mintFetchCredential`, the read twin of the
+ * call above.
+ *
+ * Two properties are specific to it. The request must be something an API
+ * that PREDATES the route cannot choke on: the same body as the push call,
+ * no new field, so the only way an older platform can answer is a plain
+ * 404. And this method never decides what a failure means — it throws the
+ * channel's ordinary errors and `FetchCredentialSession` reads them.
+ */
+describe('FleetJobClient scoped fetch credential', () => {
+	const FETCH_TOKEN = 'ghs_fetchReadToken0123456789abcdefghijklmn';
+	const OTHER_TOKEN = 'ghs_otherReadToken0123456789abcdefghijklmn';
+	const JOB = 'job-1';
+
+	const answer = (overrides: Record<string, unknown> = {}) => ({
+		credentials: [
+			{
+				token: FETCH_TOKEN,
+				username: 'x-access-token',
+				expiresAt: '2026-11-10T20:00:00.000Z',
+				repositories: ['ever-works/ever-works']
+			}
+		],
+		uncovered: [{ repository: 'ever-works/template', reason: 'push-scope-unresolved' }],
+		...overrides
+	});
+
+	const clientWith = (
+		fetchFn: FetchLike,
+		logger?: { protect: (v: string) => void; unprotect?: (v: string) => void }
+	) =>
+		new FleetJobClient({
+			apiUrl: 'https://api.ever.works',
+			nodeId: NODE_ID,
+			secret: SECRET,
+			fetchFn,
+			timeoutMs: 0,
+			...(logger ? { logger: logger as never } : {})
+		});
+
+	it('asks the sibling ROUTE with the push call’s exact body — no field an older API could reject', async () => {
+		let sentUrl = '';
+		let sentBody = '';
+		const client = clientWith(async (url, init) => {
+			sentUrl = url;
+			sentBody = init.body;
+			return { ok: true, status: 200, text: async () => JSON.stringify(answer()) };
+		});
+
+		await client.mintFetchCredential(JOB, 7);
+
+		expect(sentUrl).toBe('https://api.ever.works/api/fleet/jobs/job-1/fetch-credential');
+		// `whitelist` + `forbidNonWhitelisted` turn an unknown field into a
+		// 400, so this is pinned as an EXACT object: no `mode`, no repository,
+		// no scope of any kind.
+		expect(JSON.parse(sentBody) as Record<string, unknown>).toEqual({
+			nodeId: NODE_ID,
+			secret: SECRET,
+			leaseGeneration: 7
+		});
+	});
+
+	it('returns the credentials and the uncovered repositories', async () => {
+		const client = clientWith(response(200, answer()));
+
+		await expect(client.mintFetchCredential(JOB, 7)).resolves.toEqual({
+			credentials: [
+				{
+					token: FETCH_TOKEN,
+					username: 'x-access-token',
+					expiresAt: '2026-11-10T20:00:00.000Z',
+					repositories: ['ever-works/ever-works']
+				}
+			],
+			uncovered: [{ repository: 'ever-works/template', reason: 'push-scope-unresolved' }]
+		});
+	});
+
+	it('registers EVERY token with the redactor before returning', async () => {
+		const protect = vi.fn();
+		const client = clientWith(
+			response(
+				200,
+				answer({
+					credentials: [
+						...answer().credentials,
+						{
+							token: OTHER_TOKEN,
+							username: 'x-access-token',
+							expiresAt: '',
+							repositories: ['ever-works/template']
+						}
+					]
+				})
+			),
+			{ protect }
+		);
+
+		await client.mintFetchCredential(JOB, 7);
+
+		expect(protect).toHaveBeenCalledWith(FETCH_TOKEN);
+		expect(protect).toHaveBeenCalledWith(OTHER_TOKEN);
+	});
+
+	it('accepts "nothing to give" — an empty list is an answer, not an error', async () => {
+		const client = clientWith(response(200, { credentials: [], uncovered: [] }));
+
+		await expect(client.mintFetchCredential(JOB, 7)).resolves.toEqual({ credentials: [], uncovered: [] });
+	});
+
+	it('degrades a missing or odd `uncovered` list instead of rejecting usable credentials', async () => {
+		const client = clientWith(response(200, answer({ uncovered: [{ repository: 7 }, null, 'nope'] })));
+
+		const result = await client.mintFetchCredential(JOB, 7);
+
+		expect(result.credentials).toHaveLength(1);
+		expect(result.uncovered).toEqual([]);
+	});
+
+	it.each([
+		['no credential list at all', { uncovered: [] }],
+		['a credential with no token', answer({ credentials: [{ username: 'x-access-token', repositories: [] }] })],
+		['a credential with no repositories', answer({ credentials: [{ token: FETCH_TOKEN }] })],
+		[
+			'a repository that is not a string',
+			answer({ credentials: [{ token: FETCH_TOKEN, repositories: ['ever-works/ever-works', 42] }] })
+		]
+	])('THROWS malformed for %s rather than returning a credential-shaped blank', async (_label, body) => {
+		const client = clientWith(response(200, body));
+
+		await expect(client.mintFetchCredential(JOB, 7)).rejects.toMatchObject({ kind: 'malformed' });
+	});
+
+	it('forgets the tokens of a response it rejects, so none stays pinned in the redactor', async () => {
+		const protect = vi.fn();
+		const unprotect = vi.fn();
+		const client = clientWith(
+			response(
+				200,
+				answer({
+					credentials: [...answer().credentials, { token: OTHER_TOKEN, repositories: 'not-a-list' }]
+				})
+			),
+			{ protect, unprotect }
+		);
+
+		const error = await client.mintFetchCredential(JOB, 7).catch((caught: unknown) => caught);
+
+		expect(error).toMatchObject({ kind: 'malformed' });
+		expect(protect).toHaveBeenCalledWith(FETCH_TOKEN);
+		expect(unprotect).toHaveBeenCalledWith(FETCH_TOKEN);
+		expect(unprotect).toHaveBeenCalledWith(OTHER_TOKEN);
+		// The message is authored here: it cannot echo what the body carried.
+		expect((error as Error).message).not.toContain(FETCH_TOKEN);
+	});
+
+	it('surfaces an API that predates the route as a 404 the caller can read', async () => {
+		// Nest answers an unmatched route with 404. The client keeps the
+		// status on the error; the session turns it into "fetch as before".
+		const client = clientWith(response(404, { message: 'Cannot POST /api/fleet/jobs/job-1/fetch-credential' }));
+		const error = await client.mintFetchCredential(JOB, 7).catch((caught: unknown) => caught);
+
+		expect(error).toBeInstanceOf(FleetClientError);
+		expect(error).toMatchObject({ kind: 'invalid-request', status: 404 });
+		expect((error as Error).message).not.toContain('Cannot POST');
+	});
+
+	it('keeps 401 as unauthorized and 409 as stale-lease, from the STATUS alone', async () => {
+		await expect(
+			clientWith(response(401, { message: 'private detail' })).mintFetchCredential(JOB, 7)
+		).rejects.toMatchObject({ kind: 'unauthorized', status: 401 });
+		await expect(
+			clientWith(response(409, { reason: 'stale-lease' })).mintFetchCredential(JOB, 7)
+		).rejects.toMatchObject({ kind: 'stale-lease' });
+	});
+});
+
 describe('FleetJobClient lease kind filters (attended live-view lane)', () => {
 	function capturing(): { fetchFn: FetchLike; bodies: Record<string, unknown>[] } {
 		const bodies: Record<string, unknown>[] = [];
