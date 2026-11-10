@@ -269,9 +269,13 @@ describe('scoped fetch credential — how it reaches git (real git, every child 
 			expect(valueOf(fetch, 'core.unsetenvvars')).toBeDefined();
 		}
 
-		// The pool is still maintained — by a child that carries nothing.
+		// The pool is still maintained — by a child that carries nothing, and
+		// that Git is asked to put in the background (see the maintenance
+		// cases below).
 		const maintenance = invocations.filter((entry) => entry.args[0] === 'maintenance');
-		expect(maintenance.map((entry) => entry.args)).toEqual([['maintenance', 'run', '--auto', '--quiet']]);
+		expect(maintenance.map((entry) => entry.args)).toEqual([
+			['maintenance', 'run', '--auto', '--quiet', '--detach']
+		]);
 		expect(carriesHeader(maintenance[0])).toBe(false);
 		expect(invocations.indexOf(maintenance[0])).toBeGreaterThan(invocations.indexOf(branch));
 	});
@@ -758,5 +762,145 @@ describe('no fetch credential — the provision is exactly what it was', () => {
 		expect(push.env.GIT_ALLOW_PROTOCOL).toBe('file');
 		expect(valueOf(push, 'push.gpgSign')).toBe('false');
 		expect(valueOf(push, 'push.recurseSubmodules')).toBe('no');
+	});
+});
+
+describe('pool maintenance after a credentialed fetch — it never holds the provision', () => {
+	// A credentialed fetch starts no gc of its own (a gc can be made to run a
+	// program the pool's config names, with the token in its environment), so
+	// the provider runs the maintenance itself afterwards, without the
+	// credential. A plain `git fetch` does not WAIT for that maintenance where
+	// Git can fork; these cases keep it that way.
+
+	type Answer = (args: string[], callback: (error: Error | null, stdout: string, stderr: string) => void) => boolean;
+
+	/** Real git, except that `git maintenance` is offered to `answer` first. */
+	function maintenanceGit(invocations: Invocation[], answer: Answer): typeof execFile {
+		return ((
+			command: string,
+			args: string[],
+			options: { env?: NodeJS.ProcessEnv },
+			callback: (error: Error | null, stdout: string, stderr: string) => void
+		) => {
+			invocations.push({ args: [...args], env: { ...(options.env ?? {}) } });
+			if (args[0] === 'maintenance' && answer(args, callback)) return { pid: 1 } as never;
+			return (execFile as unknown as (...rest: unknown[]) => unknown)(command, args, options, callback) as never;
+		}) as never;
+	}
+
+	const maintenanceOf = (invocations: Invocation[]): string[][] =>
+		invocations.filter((entry) => entry.args[0] === 'maintenance').map((entry) => entry.args);
+
+	it('falls back to the plain command on a Git that has no --detach, where gc detaches itself', async () => {
+		// Git before 2.47 answers `--detach` with a usage error (129). There
+		// `maintenance run --auto` already goes to the background on its own.
+		const invocations: Invocation[] = [];
+		const plugin = new LocalWorkspacePlugin({
+			execFile: maintenanceGit(invocations, (args, callback) => {
+				if (!args.includes('--detach')) return false;
+				setImmediate(() =>
+					callback(Object.assign(new Error('usage'), { code: 129 }), '', "error: unknown option `detach'")
+				);
+				return true;
+			})
+		});
+
+		const handle = await plugin.provision(
+			spec('fetch-maint-old', 'task/fetch-maint-old-0101', { fetchCredential: credential() })
+		);
+
+		expect(handle.baseSha).toMatch(/^[0-9a-f]{40}$/);
+		expect(maintenanceOf(invocations)).toEqual([
+			['maintenance', 'run', '--auto', '--quiet', '--detach'],
+			['maintenance', 'run', '--auto', '--quiet']
+		]);
+		for (const entry of invocations.filter((candidate) => candidate.args[0] === 'maintenance')) {
+			expect(carriesHeader(entry)).toBe(false);
+			expect(JSON.stringify(entry.env)).not.toContain(BASIC);
+		}
+	});
+
+	it('stops waiting at the bound when the maintenance does not return, and the provision succeeds', async () => {
+		// What Windows does: Git cannot detach there, so the command IS the gc.
+		// Here it never returns at all.
+		const invocations: Invocation[] = [];
+		const terminated: unknown[] = [];
+		const plugin = new LocalWorkspacePlugin({
+			execFile: maintenanceGit(invocations, () => true),
+			terminateProcessTree: async (child) => {
+				terminated.push(child);
+			},
+			poolMaintenanceTimeoutMs: 200
+		});
+		const started = Date.now();
+
+		const handle = await plugin.provision(
+			spec('fetch-maint-hang', 'task/fetch-maint-hang-0202', { fetchCredential: credential() })
+		);
+
+		expect(handle.baseSha).toMatch(/^[0-9a-f]{40}$/);
+		expect(existsSync(join(handle.path, 'README.md'))).toBe(true);
+		// Bounded: far below the two minutes production allows, let alone "for
+		// as long as a gc takes".
+		expect(Date.now() - started).toBeLessThan(60_000);
+		// The stuck process was stopped, and it was tried once — not retried
+		// without `--detach`, which would only wait again.
+		expect(terminated).toHaveLength(1);
+		expect(maintenanceOf(invocations)).toEqual([['maintenance', 'run', '--auto', '--quiet', '--detach']]);
+	});
+
+	it('does not turn a failed maintenance into a failed provision', async () => {
+		const invocations: Invocation[] = [];
+		const plugin = new LocalWorkspacePlugin({
+			execFile: maintenanceGit(invocations, (_args, callback) => {
+				setImmediate(() =>
+					callback(Object.assign(new Error('gc failed'), { code: 1 }), '', 'fatal: gc is already running')
+				);
+				return true;
+			})
+		});
+
+		const handle = await plugin.provision(
+			spec('fetch-maint-fail', 'task/fetch-maint-fail-0303', { fetchCredential: credential() })
+		);
+
+		expect(handle.baseSha).toMatch(/^[0-9a-f]{40}$/);
+		expect(maintenanceOf(invocations)).toHaveLength(1);
+	});
+
+	it('still passes the CALLER’s cancellation on', async () => {
+		// The bound swallows its own timeout, never the caller's abort.
+		const invocations: Invocation[] = [];
+		const controller = new AbortController();
+		const plugin = new LocalWorkspacePlugin({
+			execFile: maintenanceGit(invocations, () => {
+				setImmediate(() => controller.abort());
+				return true;
+			}),
+			terminateProcessTree: async () => undefined,
+			poolMaintenanceTimeoutMs: 60_000
+		});
+
+		await expect(
+			plugin.provision(
+				spec('fetch-maint-abort', 'task/fetch-maint-abort-0404', {
+					fetchCredential: credential(),
+					signal: controller.signal
+				})
+			)
+		).rejects.toThrow();
+		expect(controller.signal.aborted).toBe(true);
+		// Nothing ran after the abort: no worktree was added for this Task.
+		const after = invocations.slice(invocations.findIndex((entry) => entry.args[0] === 'maintenance') + 1);
+		expect(after.some((entry) => entry.args[0] === 'worktree' && entry.args[1] === 'add')).toBe(false);
+	});
+
+	it('runs no maintenance of its own for a plain fetch — that fetch starts its own, as it always did', async () => {
+		const invocations: Invocation[] = [];
+		const plugin = new LocalWorkspacePlugin({ execFile: maintenanceGit(invocations, () => false) });
+
+		await plugin.provision(spec('fetch-maint-plain', 'task/fetch-maint-plain-0505'));
+
+		expect(maintenanceOf(invocations)).toEqual([]);
 	});
 });

@@ -70,7 +70,8 @@ import { randomUUID } from 'node:crypto';
  * | `remote.<url>.vcs` | runs `git-remote-<vcs>` | dead: private remote name; helper transport not allowed | blocks |
  * | `remote.<url>.proxy` / `.proxyAuthMethod` | routes through a proxy — measured | dead: private remote name | blocks |
  * | `remote.<name>.mirror` / `.prune*` / `.fetch` / `.push` / `.tagOpt` | changes which refs move | dead for the URL: private remote name | plain-named remotes allowed |
- * | `url.<base>.insteadOf` / `.pushInsteadOf` | rewrites the URL Git connects to | other transports refused; the header is keyed to the ORIGINAL URL, so another https host is sent nothing — measured | blocks |
+ * | `remote.<private name>.proxy` / `.proxyAuthMethod` | the one remote key that OUTRANKS `http.<url>.proxy`; writable only by someone who read the name off the running command's argv | pinned on the private remote itself, to the value the `http.<url>.proxy` pin carries | blocks: the `ew-credentialed-` prefix is reserved, no file may hold a section for it |
+ * | `url.<base>.insteadOf` / `.pushInsteadOf` | rewrites the URL Git connects to | other transports refused; the header is keyed to the ORIGINAL URL, so another https host is sent nothing — measured | blocks; in the OPERATOR's scopes it withholds / refuses with its own reason — see below |
  * | `protocol.*.allow` | re-allows a transport — measured to beat command-scope config | ignored: `GIT_ALLOW_PROTOCOL` | blocks |
  * | `core.sshCommand`, `ssh.variant` | program run by the ssh transport — measured | transport not allowed | blocks |
  * | `core.gitProxy` | program run by the `git://` transport | transport not allowed | blocks |
@@ -81,7 +82,8 @@ import { randomUUID } from 'node:crypto';
  * | `core.askPass`, `GIT_ASKPASS`, `SSH_ASKPASS` | program asked for a password after a rejected header | overridden to empty; variables removed | blocks |
  * | `credential.helper`, `credential.<url>.*` | program asked for a password | helper list reset | blocks |
  * | `gc.recentObjectsHook` | program run by the gc a fetch triggers (documented; not reproduced here) | no gc in the child: `maintenance.auto=false`, `gc.auto=0` | blocks |
- * | `gpg.program`, `gpg.<format>.program`, `push.gpgSign` | signing program on a signed push | `push.gpgSign=false` | blocks |
+ * | `gpg.program`, `gpg.<format>.program`, `gpg.ssh.defaultKeyCommand`, `push.gpgSign` | signing program on a signed push | `push.gpgSign=false`, so nothing is signed — measured | allowed |
+ * | `push.negotiate` | the push starts `git fetch --negotiate-only <URL>` — BY URL, so `[remote "<url>"]` applies to that grandchild — measured: a planted `uploadpack` ran there with the header | overridden `false` | allowed |
  * | `fetch.recurseSubmodules`, `submodule.<n>.fetchRecurseSubmodules`, `push.recurseSubmodules` | a second fetch / push inside a repository under the pool | `--no-recurse-submodules` (fetch), `push.recurseSubmodules=no` | `submodule.*` allowed |
  * | `http.sslVerify` | accepts any certificate | pinned at the exact URL to the operator's value, else `true` — measured | blocks |
  * | `http.proxy`, `http.curloptResolve` | routes or resolves the connection elsewhere — measured | pinned at the exact URL to the operator's value, else the environment's proxy / none; resolutions reset — measured | blocks |
@@ -90,13 +92,58 @@ import { randomUUID } from 'node:crypto';
  * | `http.extraHeader` | a second header on the request (cannot read ours) | not overridden | blocks |
  * | other `http.*` (`cookieFile`, `sslCert`, `pinnedPubkey`, …) | none for the token | not overridden | blocks, except transfer tuning |
  * | `include.path`, `includeIf.*` | pulls any of the above in from another file | whatever it pulls in is read BEFORE command scope | followed, then blocks |
- * | `extensions.worktreeConfig` | adds the per-worktree file | same overrides | allowed; that file is read too |
- * | `fetch.bundleURI`, `promisor.*`, `extensions.partialClone` | downloads from another URI — never with our header | none needed | blocks |
- * | `core.editor`, `core.pager`, `pager.*`, `sequence.editor` | none: no terminal, nothing to edit | n/a | blocks (nothing writes them here) |
- * | `diff.*`, `merge.*`, `filter.*` drivers | none: a fetch or a push converts no content | n/a | sections allowed; program-naming variables in them still block |
- * | `alias.*` | none: Git never lets an alias shadow `fetch` / `push` | n/a | blocks |
+ * | `extensions.worktreeConfig`, `extensions.relativeWorktrees` | adds the per-worktree file; records how worktrees are linked | same overrides | allowed; that file is read too |
+ * | `extensions.partialClone`, `remote.<name>.promisor`, `.partialCloneFilter` | a missing object makes the command start `git fetch <promisor remote>` — a grandchild that names a remote the config DOES describe — measured: a planted promisor remote ran `core.sshCommand` with the header | the grandchild inherits this environment: one transport, the header keyed to the original URL, every override — measured | allowed (Git writes them itself after `fetch --filter`) |
+ * | `fetch.bundleURI`, `promisor.*` | downloads from another URI — never with our header | none needed | blocks |
+ * | `core.editor`, `core.pager`, `pager.*`, `sequence.editor` | none: Git starts a pager only on a terminal and an editor only to edit — measured | n/a | allowed |
+ * | `diff.<x>.textconv` / `.command`, `diff.external`, `merge.<x>.driver`, `filter.<x>.clean` / `.smudge` / `.process`, `mergetool.*`, `difftool.*` | none: a fetch or a push converts, merges and diffs no content — measured | n/a | allowed |
+ * | `alias.*` | none: Git never lets an alias shadow `fetch` / `push` — measured | n/a | allowed |
+ * | `color.*`, `i18n.*` | none: they name no program | n/a | allowed |
+ * | `GIT_TRACE*`, `GIT_CURL_VERBOSE` (environment) | Git writes the request, header included, to the file they name — measured with `GIT_TRACE2_EVENT` | removed from the child's environment | n/a: not config |
  * | `uploadpack.*`, `receive.*`, `uploadarchive.*` | server side of a local transport | transport not allowed (https) | blocks |
  * | `trace2.*`, `safe.*`, `uploadpack.packObjectsHook` | none: Git reads them from system / global config only | n/a | `safe.*` allowed |
+ *
+ * ## A rewrite in the operator's own config
+ *
+ * `url.<base>.insteadOf` in the machine's global or system config is an
+ * ordinary developer setup (`https://github.com/` → ssh). The repository's
+ * own rewrites never get this far — the allowlist blocks them. The
+ * operator's are trusted, and trusting them used to arm the credential and
+ * then kill the command: the rewritten URL leaves the one transport the
+ * child may speak (`fatal: transport 'ssh' not allowed`), so a job that
+ * cloned over the machine's SSH key stopped cloning. So
+ * {@link effectiveRemoteUrls} works out, from the same listing, the URL Git
+ * will really use, and a credential is armed only when that is still the
+ * URL it was issued for. Otherwise a fetch WITHHOLDS and runs as it always
+ * did, over whatever the rewrite points at; a push REFUSES, in one
+ * sentence that names the rewrite's scope and not its value.
+ *
+ * ## When the allowlist says no
+ *
+ * What is refused is named (`section.variable`, never a subsection or a
+ * value) together with the commands that remove it ({@link recoveryHint}),
+ * because the refusal lasts as long as the key does: the pool is shared by
+ * every Task of that repository on that machine, and nothing else cleans
+ * its config.
+ *
+ * This module does NOT remove the key itself, on purpose:
+ *
+ *  - what is left to refuse, now that everything a fetch or a push never
+ *    reads is allowed, is a key that can run a program or move a request,
+ *    or one nobody has classified. The first is evidence that something on
+ *    this machine tried to take Git over: deleting it on the way past
+ *    repairs the symptom and destroys the evidence, silently, from inside
+ *    the one code path that holds a credential. The second is not this
+ *    code's to judge.
+ *  - a gate that rewrites the file it is judging becomes a writer racing
+ *    every other job's `git config` on the same pool (Git's config lock
+ *    makes the loser fail), in the middle of a provision or a publish.
+ *  - nothing is lost by not doing it: layer 1 holds either way, a fetch
+ *    still runs (without the credential), and a push says exactly what to
+ *    remove.
+ *
+ * Clearing a tampered pool is an operator's decision, taken with the key
+ * still there to look at. The commands are in the message.
  *
  * NOT closed at exec time, stated rather than hidden: a planted
  * `http.sslCAInfo` / `sslCAPath` on a machine whose operator configured no
@@ -153,8 +200,17 @@ export function credentialedProtocol(remoteUrl: string): CredentialedProtocol | 
  * be about it.
  */
 export function privateRemoteName(): string {
-	return `ew-credentialed-${randomUUID()}`;
+	return `${RESERVED_REMOTE_PREFIX}${randomUUID()}`;
 }
+
+/**
+ * Every private remote starts with this, and the prefix is RESERVED: the
+ * allowlist refuses any `[remote "ew-credentialed-…"]` section in a config
+ * file, whatever it holds. A name is in its command's argv while that
+ * command runs, so "nobody can know it" is true before the command and
+ * not during it.
+ */
+export const RESERVED_REMOTE_PREFIX = 'ew-credentialed-';
 
 /** One key of `git config --show-scope --list -z`. */
 export interface ScopedConfigEntry {
@@ -222,20 +278,76 @@ function keyParts(key: string): ConfigKeyParts {
 }
 
 /**
- * A variable NAME that names something Git runs. None of the sections
- * allowed wholesale below needs one for a fetch or a push, so one that
- * appears there is refused whatever section it is in — the guard against
- * the next `gc.recentObjectsHook`.
+ * A variable NAME that names something Git runs. A section allowed
+ * wholesale below is allowed for its settings, not for the programs it can
+ * name, so a variable that looks like one is refused there — the guard
+ * against the next `gc.recentObjectsHook`. The exceptions are spelled out
+ * in {@link UNREACHABLE_PROGRAM_VARIABLES}.
  */
 const PROGRAM_NAMING_VARIABLE =
 	/(hook|command|cmd|program|driver|textconv|external|editor|pager|helper|askpass|proxy)$/;
 
 /**
+ * Variables in the inert sections that DO name a program (or look as if
+ * they did), and are allowed anyway because neither a fetch nor a push can
+ * reach the code that would run it. Each one is pinned by a real-git case
+ * in `credentialed-command.attacks.spec.ts` ("keys that name a program a
+ * fetch or a push never starts"): planted with a harvester, the
+ * credentialed fetch and push are run, and the harvester has not run.
+ *
+ *  - `diff.<driver>.textconv`, `diff.<driver>.command`, `diff.external` —
+ *    run by the diff machinery when it shows file CONTENT. A fetch and a
+ *    push show none (gitdiffcore(7); `fetch.recurseSubmodules`, the one
+ *    place a fetch walks a diff, compares gitlinks only and is off here).
+ *  - `merge.<driver>.driver` — run by a three-way file merge
+ *    (gitattributes(5), "Defining a custom merge driver"). Neither command
+ *    merges.
+ *  - `color.pager` — a boolean, not a program, whatever its name says.
+ */
+const UNREACHABLE_PROGRAM_VARIABLES: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+	['diff', new Set(['textconv', 'command', 'external'])],
+	['merge', new Set(['driver'])],
+	['color', new Set(['pager'])]
+]);
+
+/**
+ * Sections allowed with EVERY variable, the ones that name programs
+ * included, because a fetch or a push reads none of it (same real-git
+ * cases as above):
+ *
+ *  - `alias` — "aliases that hide existing Git commands are ignored"
+ *    (git-config(1)), and `fetch` / `push` and everything they start are
+ *    existing commands.
+ *  - `pager` — `pager.<cmd>` may be a command, and Git starts a pager only
+ *    when its output is a terminal (git-config(1): "when writing to a
+ *    tty"). A child of this provider writes to a pipe.
+ *  - `sequence` — `sequence.editor` is the editor of `rebase -i`.
+ *  - `i18n` — encodings.
+ *  - `gpg` — the signing program, its format, the ssh key command. A fetch
+ *    signs and verifies nothing; a push signs only with `--signed` /
+ *    `push.gpgSign`, which the child pins to `false`.
+ *  - `mergetool`, `difftool` — the tools of `git mergetool` / `git
+ *    difftool`, which are interactive commands of their own.
+ *  - `filter` — `clean` / `smudge` / `process` run when content moves
+ *    between the index and the working tree; neither command moves any.
+ */
+const UNREACHABLE_SECTIONS: ReadonlySet<string> = new Set([
+	'alias',
+	'pager',
+	'sequence',
+	'i18n',
+	'gpg',
+	'mergetool',
+	'difftool',
+	'filter'
+]);
+
+/**
  * Sections whose every variable is inert for `git fetch` / `git push`:
  * identity, porcelain defaults, object-storage tuning, and what common
  * tooling writes into a checkout (`submodule.*` by `git submodule init`,
- * `lfs.*` / `filter.lfs.*` by git-lfs). Named one by one; a section that is
- * not here is refused.
+ * `lfs.*` by git-lfs). Named one by one; a section that is neither here nor
+ * in {@link UNREACHABLE_SECTIONS} is refused.
  */
 const INERT_SECTIONS: ReadonlySet<string> = new Set([
 	'user',
@@ -280,7 +392,6 @@ const INERT_SECTIONS: ReadonlySet<string> = new Set([
 	'versionsort',
 	'safe',
 	'lfs',
-	'filter',
 	'submodule'
 ]);
 
@@ -300,6 +411,12 @@ const CORE_VARIABLES: ReadonlySet<string> = new Set([
 	'hookspath',
 	'fsmonitor',
 	'fsmonitorhookversion',
+	// Programs Git starts for a terminal user only: an editor when there is
+	// something to edit, a pager when its output is a terminal. A fetch or a
+	// push through this provider has neither (pinned by the real-git cases
+	// named at `UNREACHABLE_PROGRAM_VARIABLES`).
+	'editor',
+	'pager',
 	// File handling in a working tree; a fetch or a push reads none of it.
 	'autocrlf',
 	'eol',
@@ -352,7 +469,13 @@ const REMOTE_VARIABLES: ReadonlySet<string> = new Set([
 	'skipdefaultupdate',
 	'skipfetchall',
 	// The GitHub CLI records which remote is the base repository here.
-	'gh-resolved'
+	'gh-resolved',
+	// Written by Git itself after `git fetch --filter=…` (measured, git
+	// 2.52). They make a missing object start `git fetch <that remote>`, a
+	// grandchild of the credentialed command that inherits everything layer
+	// 1 put in its environment — see the key table.
+	'promisor',
+	'partialclonefilter'
 ]);
 /** `http.*` with no host in the key and no say over where the request goes or whom it trusts. */
 const HTTP_TUNING_VARIABLES: ReadonlySet<string> = new Set([
@@ -385,9 +508,21 @@ const PUSH_VARIABLES: ReadonlySet<string> = new Set([
 	'followtags',
 	'useforceifincludes',
 	'usebitmaps',
-	'recursesubmodules'
+	'recursesubmodules',
+	// Both are overridden for the credentialed push (`false`), so what the
+	// repository says about them is never read.
+	'negotiate',
+	'gpgsign'
 ]);
-const EXTENSION_VARIABLES: ReadonlySet<string> = new Set(['objectformat', 'refstorage', 'worktreeconfig']);
+const EXTENSION_VARIABLES: ReadonlySet<string> = new Set([
+	'objectformat',
+	'refstorage',
+	'worktreeconfig',
+	// Written by Git itself: by `clone --filter`, and (2.48+) by `worktree
+	// add --relative-paths` / `worktree.useRelativePaths`.
+	'partialclone',
+	'relativeworktrees'
+]);
 
 /**
  * May the repository's own config carry this key while a credentialed
@@ -406,6 +541,9 @@ export function isAllowedRepositoryConfigKey(key: string): boolean {
 			// `remote.pushDefault` only picks a remote for a push that names
 			// none; a credentialed command always names its own.
 			if (subsection === null) return variable === 'pushdefault';
+			// Reserved: a file that describes a private remote is describing a
+			// credentialed command, and nothing legitimate does.
+			if (subsection.toLowerCase().startsWith(RESERVED_REMOTE_PREFIX)) return false;
 			return PLAIN_REMOTE_NAME.test(subsection) && REMOTE_VARIABLES.has(variable);
 		case 'http':
 			return subsection === null && HTTP_TUNING_VARIABLES.has(variable);
@@ -416,7 +554,12 @@ export function isAllowedRepositoryConfigKey(key: string): boolean {
 		case 'transfer':
 			return subsection === null && variable === 'fsckobjects';
 		default:
-			return INERT_SECTIONS.has(section) && !PROGRAM_NAMING_VARIABLE.test(variable);
+			if (UNREACHABLE_SECTIONS.has(section)) return true;
+			if (!INERT_SECTIONS.has(section)) return false;
+			return (
+				!PROGRAM_NAMING_VARIABLE.test(variable) ||
+				UNREACHABLE_PROGRAM_VARIABLES.get(section)?.has(variable) === true
+			);
 	}
 }
 
@@ -433,13 +576,137 @@ export function foreignRepositoryConfig(entries: readonly ScopedConfigEntry[]): 
 	for (const entry of entries) {
 		if (OPERATOR_SCOPES.has(entry.scope)) continue;
 		if (isAllowedRepositoryConfigKey(entry.key)) continue;
-		const { section, subsection, variable } = keyParts(entry.key);
-		const safe = (text: string): string => (/^[a-z0-9-]+$/.test(text) ? text : '<…>');
-		foreign.add(
-			subsection === null ? `${safe(section)}.${safe(variable)}` : `${safe(section)}.<…>.${safe(variable)}`
-		);
+		foreign.add(displayConfigKey(entry.key));
 	}
 	return [...foreign];
+}
+
+/** A section or variable name that is safe to print and to put in a command line. */
+const PRINTABLE_NAME = /^[a-z0-9-]+$/;
+
+/**
+ * A config key as it may be SHOWN: `section.variable`, or
+ * `section.<…>.variable` when it has a subsection. The subsection itself is
+ * never printed — it is free text, and a URL with userinfo is a perfectly
+ * valid one.
+ */
+export function displayConfigKey(key: string): string {
+	const { section, subsection, variable } = keyParts(key);
+	const safe = (text: string): string => (PRINTABLE_NAME.test(text) ? text : '<…>');
+	return subsection === null ? `${safe(section)}.${safe(variable)}` : `${safe(section)}.<…>.${safe(variable)}`;
+}
+
+/**
+ * How an operator removes what {@link foreignRepositoryConfig} named, as
+ * text for the refusal — because the refusal lasts exactly as long as the
+ * key does, and nothing else will remove it.
+ *
+ * `names` are that function's output, so there is nothing here to leak: a
+ * key without a subsection is unset by name; a key WITH one cannot be
+ * named (the subsection is never printed), so the command that lists its
+ * full names on the machine is given instead, and the unset takes each of
+ * those. `--show-origin` because a key that came in through `include.path`
+ * lives in another file — there the include is what is removed, and it is
+ * on the list itself.
+ *
+ * `directory` is the shared repository the key was found in. It is a path
+ * on the node, and the job result it lands in is the node operator's.
+ */
+export function recoveryHint(names: readonly string[], directory: string): string {
+	const git = `git -C "${directory.replace(/\\/g, '/')}" config`;
+	const plain: string[] = [];
+	const patterns: string[] = [];
+	let unprintable = false;
+	for (const name of names) {
+		const parts = name.split('.');
+		if (parts.some((part) => part !== '<…>' && !PRINTABLE_NAME.test(part)) || name.startsWith('<…>')) {
+			unprintable = true;
+		} else if (parts.length === 2 && !name.endsWith('<…>')) {
+			plain.push(name);
+		} else if (parts.length === 3 && parts[1] === '<…>' && parts[2] !== '<…>') {
+			patterns.push(`^${parts[0]}\\..*\\.${parts[2]}$`);
+		} else {
+			unprintable = true;
+		}
+	}
+	const steps: string[] = [];
+	for (const name of plain) steps.push(`${git} --unset-all ${name}`);
+	if (patterns.length > 0 || unprintable) {
+		const listing = unprintable
+			? `${git} --show-origin --show-scope --list --name-only`
+			: `${git} --show-origin --name-only --get-regexp "${patterns.join('|')}"`;
+		steps.push(`${listing} (lists the full names; then ${git} --unset-all <name> for each)`);
+	}
+	return `To clear it on this machine: ${steps.join('; ')}`;
+}
+
+/**
+ * The URLs Git will really use for a remote whose `url` is `remoteUrl`,
+ * once `url.<base>.insteadOf` / `url.<base>.pushInsteadOf` from EVERY scope
+ * have been applied — Git's own rule (`remote.c`, `alias_url`): the longest
+ * `insteadOf` value that is a prefix of the URL wins and is replaced by its
+ * `<base>`; a push uses `pushInsteadOf` the same way when one matches (the
+ * remote has no `pushurl` of its own) and the fetch URL otherwise.
+ *
+ * Worked out from the listing the allowlist already read, so it costs no
+ * process, and pinned against Git itself: `credentialed-command.attacks.spec.ts`
+ * runs real `git remote -v` under the same scratch configs and requires the
+ * same answer.
+ *
+ * `fetchRule` / `pushRule` say which key and scope did the rewriting — for
+ * the message, which names those and never the value.
+ */
+export function effectiveRemoteUrls(
+	entries: readonly ScopedConfigEntry[],
+	remoteUrl: string
+): {
+	readonly fetch: string;
+	readonly push: string;
+	readonly fetchRule: RewriteRule | null;
+	readonly pushRule: RewriteRule | null;
+} {
+	const rewrite = (variable: 'insteadof' | 'pushinsteadof'): { url: string; rule: RewriteRule } | null => {
+		// Git keeps one list of prefixes PER BASE, bases in the order they
+		// first appear, and walks base by base — which is what decides a tie
+		// between two bases that claim the same prefix.
+		const byBase = new Map<string, Array<{ prefix: string; scope: string }>>();
+		for (const entry of entries) {
+			const parts = keyParts(entry.key);
+			if (parts.section !== 'url' || parts.variable !== variable || parts.subsection === null) continue;
+			const prefixes = byBase.get(parts.subsection) ?? [];
+			prefixes.push({ prefix: entry.value, scope: entry.scope });
+			byBase.set(parts.subsection, prefixes);
+		}
+		let best: { base: string; prefix: string; scope: string } | null = null;
+		for (const [base, prefixes] of byBase) {
+			for (const { prefix, scope } of prefixes) {
+				if (!remoteUrl.startsWith(prefix)) continue;
+				// Strictly longer only: among equals Git keeps the first.
+				if (best && best.prefix.length >= prefix.length) continue;
+				best = { base, prefix, scope };
+			}
+		}
+		if (!best) return null;
+		return {
+			url: `${best.base}${remoteUrl.slice(best.prefix.length)}`,
+			rule: { key: `url.<…>.${variable}`, scope: best.scope }
+		};
+	};
+	const fetched = rewrite('insteadof');
+	const pushed = rewrite('pushinsteadof');
+	const fetch = fetched?.url ?? remoteUrl;
+	return {
+		fetch,
+		push: pushed?.url ?? fetch,
+		fetchRule: fetched?.rule ?? null,
+		pushRule: pushed?.rule ?? fetched?.rule ?? null
+	};
+}
+
+/** The key and scope of a URL rewrite — never its value. */
+export interface RewriteRule {
+	readonly key: string;
+	readonly scope: string;
 }
 
 type OperatorPosture =
@@ -524,7 +791,12 @@ export function credentialedCommandEntries(input: {
 		['push.gpgSign', 'false'],
 		// A second fetch / push inside a repository under this one.
 		['fetch.recurseSubmodules', 'false'],
-		['push.recurseSubmodules', 'no']
+		['push.recurseSubmodules', 'no'],
+		// With it on, a push first runs `git fetch --negotiate-only … <URL>`:
+		// a grandchild addressed BY URL, to which every `[remote "<url>"]`
+		// section this module steers the command itself around applies again.
+		// Measured: a planted `uploadpack` ran there, header in its environment.
+		['push.negotiate', 'false']
 	];
 
 	// Git for Windows unsets the variables this key names before it starts
@@ -550,6 +822,28 @@ export function credentialedCommandEntries(input: {
 	// variables (and still honours `no_proxy` for a proxy given this way);
 	// with none of them either, an empty value is Git's "no proxy".
 	pin('proxy', 'proxy', environmentProxy(input.env));
+	// `remote.<name>.proxy` OUTRANKS `http.<url>.proxy` (`http.c` takes the
+	// remote's when it has one), and the remote's name is in this command's
+	// argv for as long as it runs. So the same value is pinned on the
+	// private remote itself — and the method beside it, which the remote
+	// outranks in the same way. Not when the operator's own proxy settings
+	// are URL-specific: which of those applies is Git's to work out, and a
+	// value written here would replace it.
+	const proxy = operatorPosture(config, 'http', 'proxy');
+	if (proxy.kind !== 'scoped') {
+		entries.push([
+			`remote.${remoteName}.proxy`,
+			proxy.kind === 'value' ? proxy.value : environmentProxy(input.env)
+		]);
+	}
+	const proxyAuthMethod = operatorPosture(config, 'http', 'proxyauthmethod');
+	if (proxyAuthMethod.kind !== 'scoped') {
+		entries.push([
+			`remote.${remoteName}.proxyAuthMethod`,
+			// `anyauth` is what Git uses when nothing is configured.
+			proxyAuthMethod.kind === 'value' ? proxyAuthMethod.value : 'anyauth'
+		]);
+	}
 	pin('followredirects', 'followRedirects', 'initial');
 	pin('schannelusesslcainfo', 'schannelUseSSLCAInfo', 'false');
 	// No value means "the built-in default" for these three, so they can
