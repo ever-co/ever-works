@@ -656,6 +656,78 @@ export class FleetJobRepository {
         return Number(row?.total ?? 0);
     }
 
+    /**
+     * Fleet agent readiness — what the run records say about some of ONE
+     * owner's nodes: `agent-task` jobs that reached a terminal status since
+     * `since`, grouped by node and status, with how many of them completed at
+     * or after `recentSince` and the model spend they reported.
+     *
+     * One grouped read for the whole node list (never one per node), owner-
+     * scoped in the WHERE clause like every read keyed by a node id, and
+     * portable: a `CASE` sum rather than `FILTER`, so better-sqlite3 (e2e /
+     * CI) and Postgres run the same statement. Rides
+     * `idx_fleet_jobs_node_completed` (`nodeId`, `completedAt`). A drained
+     * node's finished jobs keep their `nodeId`, so the figures survive a
+     * drain; queued and in-flight jobs have no `completedAt` and are not
+     * counted.
+     */
+    async countAgentTaskOutcomesByNode(
+        userId: string,
+        nodeIds: readonly string[],
+        since: Date,
+        recentSince: Date,
+    ): Promise<
+        Array<{
+            nodeId: string;
+            status: string;
+            runs: number;
+            recentRuns: number;
+            costCents: number;
+            recentCostCents: number;
+        }>
+    > {
+        if (nodeIds.length === 0) return [];
+        const rows = await this.repository
+            .createQueryBuilder('j')
+            .select('j.nodeId', 'nodeId')
+            .addSelect('j.status', 'status')
+            .addSelect('COUNT(*)', 'runs')
+            .addSelect(
+                'SUM(CASE WHEN j.completedAt >= :recentSince THEN 1 ELSE 0 END)',
+                'recentRuns',
+            )
+            .addSelect('COALESCE(SUM(j.costCents), 0)', 'costCents')
+            .addSelect(
+                'COALESCE(SUM(CASE WHEN j.completedAt >= :recentSince THEN j.costCents ELSE 0 END), 0)',
+                'recentCostCents',
+            )
+            .where('j.userId = :userId', { userId })
+            .andWhere('j.nodeId IN (:...nodeIds)', { nodeIds: [...nodeIds] })
+            .andWhere('j.kind = :kind', { kind: 'agent-task' })
+            .andWhere('j.status IN (:...statuses)', { statuses: [...FLEET_JOB_TERMINAL_STATUSES] })
+            .andWhere('j.completedAt >= :since', { since })
+            .setParameter('recentSince', recentSince)
+            .groupBy('j.nodeId')
+            .addGroupBy('j.status')
+            .getRawMany<{
+                nodeId: string;
+                status: string;
+                runs: string | number | null;
+                recentRuns: string | number | null;
+                costCents: string | number | null;
+                recentCostCents: string | number | null;
+            }>();
+        // `COUNT` / `SUM` come back as strings on Postgres and numbers on sqlite.
+        return rows.map((row) => ({
+            nodeId: row.nodeId,
+            status: row.status,
+            runs: Number(row.runs ?? 0),
+            recentRuns: Number(row.recentRuns ?? 0),
+            costCents: Number(row.costCents ?? 0),
+            recentCostCents: Number(row.recentCostCents ?? 0),
+        }));
+    }
+
     /** Cents every job of one owner reported since `since` — the FLEET-WIDE daily ceiling's input. */
     async sumCostCentsForUserSince(userId: string, since: Date): Promise<number> {
         const row = await this.repository

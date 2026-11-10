@@ -62,6 +62,7 @@ describe('FleetController', () => {
     };
     let jobs: {
         loadByNodeForUser: jest.Mock;
+        runStatsByNodeForUser: jest.Mock;
         promoteWaitingForNode: jest.Mock;
         historyForNode: jest.Mock;
     };
@@ -149,6 +150,7 @@ describe('FleetController', () => {
         };
         jobs = {
             loadByNodeForUser: jest.fn(async () => ({})),
+            runStatsByNodeForUser: jest.fn(async () => ({})),
             promoteWaitingForNode: jest.fn(async () => 0),
             historyForNode: jest.fn(async () => []),
         };
@@ -457,6 +459,64 @@ describe('FleetController', () => {
         );
     });
 
+    describe('run stats — what the platform’s own run records say (fleet agent readiness)', () => {
+        const stats = {
+            last24h: { runs: 4, failed: 4, costCents: 0 },
+            last7d: { runs: 9, failed: 6, costCents: 310 },
+        };
+
+        it('list merges the stats into each of my enrolled computers, in ONE grouped read', async () => {
+            jobs.runStatsByNodeForUser.mockResolvedValue({ [nodeView.id]: stats });
+
+            const result = await controller.list(auth);
+
+            expect(jobs.runStatsByNodeForUser).toHaveBeenCalledTimes(1);
+            expect(jobs.runStatsByNodeForUser).toHaveBeenCalledWith('user-1', [nodeView.id]);
+            expect(result[0].runStats).toEqual(stats);
+        });
+
+        it('list degrades to rows without stats when the ledger cannot be read', async () => {
+            jobs.runStatsByNodeForUser.mockRejectedValue(new Error('fleet_jobs unavailable'));
+
+            const result = await controller.list(auth);
+
+            expect(result).toEqual([{ ...nodeView, load: null }]);
+        });
+
+        it('never asks for a cluster row or a computer someone else owns', async () => {
+            const clusterNode = { ...nodeView, id: 'k8s:worker-1', persisted: false };
+            const shared = {
+                ...nodeView,
+                id: '22222222-2222-4222-8222-222222222222',
+                viewerRole: 'org-member',
+            };
+            service.listForUser.mockResolvedValue([clusterNode, shared]);
+
+            const result = await controller.list(auth);
+
+            expect(jobs.runStatsByNodeForUser).not.toHaveBeenCalled();
+            expect(result.every((row) => row.runStats === undefined)).toBe(true);
+        });
+
+        it('detail carries the stats on the node for its owner', async () => {
+            jobs.runStatsByNodeForUser.mockResolvedValue({ [nodeView.id]: stats });
+
+            const result = await controller.detail(auth, nodeView.id);
+
+            expect(jobs.runStatsByNodeForUser).toHaveBeenCalledWith('user-1', [nodeView.id]);
+            expect(result.node.runStats).toEqual(stats);
+        });
+
+        it('detail still answers when the ledger cannot be read', async () => {
+            jobs.runStatsByNodeForUser.mockRejectedValue(new Error('fleet_jobs unavailable'));
+
+            const result = await controller.detail(auth, nodeView.id);
+
+            expect(result.node.id).toBe(nodeView.id);
+            expect(result.node.runStats).toBeUndefined();
+        });
+    });
+
     describe('detail — the node drawer payload (EW-776)', () => {
         const RUN_ID = '99999999-9999-4999-8999-999999999999';
         const TASK_ID = '88888888-8888-4888-8888-888888888888';
@@ -650,6 +710,8 @@ describe('FleetController', () => {
                     'lanId',
                     'macAddress',
                     'timeZone',
+                    // Fleet agent readiness: the per-CLI report.
+                    'agents',
                 ].sort(),
             );
             expect(result.secret).toBe('node-secret');

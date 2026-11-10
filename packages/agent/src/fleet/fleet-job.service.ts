@@ -14,12 +14,14 @@ import type {
     FleetJobView,
     FleetNodeJobHistoryEntry,
     FleetNodeLoadView,
+    FleetNodeRunStats,
 } from '@ever-works/contracts';
 import type { FleetModelUsageLimit } from '@ever-works/contracts';
 import {
     activeFleetNodeModelThrottles,
     clampLeaseTtlSec,
     clampMaxAttempts,
+    emptyFleetNodeRunStats,
     FLEET_JOB_MAX_USAGE_LIMIT_PARKS,
     FLEET_JOB_MODEL_USAGE_LIMIT_QUEUED_REASON,
     FLEET_JOB_KINDS,
@@ -234,6 +236,10 @@ export class FleetJobStaleLeaseError extends ConflictException {
  * the `fleet-job-lease-sweeper` cron (global), so a fleet whose nodes
  * all died still converges without anyone polling.
  */
+/** Fleet agent readiness — the two windows a node's run stats cover. */
+export const FLEET_NODE_RUN_STATS_DAY_MS = 24 * 60 * 60 * 1000;
+export const FLEET_NODE_RUN_STATS_WEEK_MS = 7 * FLEET_NODE_RUN_STATS_DAY_MS;
+
 @Injectable()
 export class FleetJobService {
     private readonly logger = new Logger(FleetJobService.name);
@@ -1354,6 +1360,50 @@ export class FleetJobService {
             };
         }
         return byNode;
+    }
+
+    /**
+     * Fleet agent readiness — what the platform's own run records say about
+     * some of this owner's nodes: `agent-task` jobs finished and failed, and
+     * the model spend they reported, over the last 24 hours and the last 7
+     * days. Keyed by node id; EVERY requested node gets an entry (zeros when
+     * it ran nothing), so "0 runs" and "the ledger could not be read" — a
+     * throw the caller turns into an absent field — stay different answers.
+     *
+     * A run is a job that reached a terminal status (`done` or `failed`); a
+     * job parked for a usage limit goes back to the queue and is counted
+     * once, when it finally settles. Tokens are not summed — they live
+     * inside each job's result body, which a retention purge nulls; the cost
+     * column is the one figure the ledger keeps.
+     */
+    async runStatsByNodeForUser(
+        userId: string,
+        nodeIds: readonly string[],
+        now: Date = new Date(),
+    ): Promise<Record<string, FleetNodeRunStats>> {
+        const ids = [...new Set(nodeIds)].filter((id) => typeof id === 'string' && id.length > 0);
+        const stats: Record<string, FleetNodeRunStats> = {};
+        for (const id of ids) stats[id] = emptyFleetNodeRunStats();
+        if (ids.length === 0) return stats;
+        const rows = await this.jobs.countAgentTaskOutcomesByNode(
+            userId,
+            ids,
+            new Date(now.getTime() - FLEET_NODE_RUN_STATS_WEEK_MS),
+            new Date(now.getTime() - FLEET_NODE_RUN_STATS_DAY_MS),
+        );
+        for (const row of rows) {
+            const entry = stats[row.nodeId];
+            if (!entry) continue;
+            entry.last7d.runs += row.runs;
+            entry.last7d.costCents += row.costCents;
+            entry.last24h.runs += row.recentRuns;
+            entry.last24h.costCents += row.recentCostCents;
+            if (row.status === 'failed') {
+                entry.last7d.failed += row.runs;
+                entry.last24h.failed += row.recentRuns;
+            }
+        }
+        return stats;
     }
 
     /**

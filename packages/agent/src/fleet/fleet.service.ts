@@ -48,6 +48,8 @@ import {
     normalizeFleetConsents,
     normalizeFleetHelperTrust,
     normalizeFleetNodeSelfUpdate,
+    normalizeFleetAgentReadinessReport,
+    resolveFleetNodeAgentReadiness,
     isFleetTimeZone,
     normalizeFleetNodeWorkerState,
     normalizeFleetSessionDaemonReport,
@@ -308,6 +310,14 @@ export interface EnrollInput {
      * unusable leaves the stored zone alone.
      */
     timeZone?: unknown;
+    /**
+     * Fleet agent readiness — the node's per-CLI report (`agents`).
+     * Untrusted: re-read with `normalizeFleetAgentReadinessReport` (known
+     * fields, bounded, credential-shaped text masked) and stamped with the
+     * platform's receipt time; absent or not a report leaves the stored one
+     * alone like every other telemetry field.
+     */
+    agents?: unknown;
     /**
      * Desktop view & control (FL-07, CONTRACTS §1.1, R-8) — the screen
      * helper's trust and state, the displays, the desktop reasons and the
@@ -638,6 +648,9 @@ export class FleetService {
             minFreeDiskBytes: patch.minFreeDiskBytes ?? null,
         });
         if (enrolledHealth) patch.health = enrolledHealth;
+        // Fleet agent readiness: likewise never sent at enrol, stored the same
+        // way when it is.
+        applyReportedAgentReadiness(input, patch, now);
         // Remote node limits (slice AS) — the same keyed set as a beat; a
         // fresh row starts from whatever the machine said (usually nothing).
         applyReportedLimits(input, patch);
@@ -798,6 +811,12 @@ export class FleetService {
         if (daemonReport) patch.sessionDaemon = daemonReport;
         // Fleet node link (FL-02 T-25): the self-update report, likewise.
         applyReportedSelfUpdate(node, refresh, patch);
+        // Fleet agent readiness: the per-CLI report, stamped with THIS beat's
+        // receipt time and replacing the stored one whole — an agent that
+        // stopped being ready must not keep last minute's `ready`. A beat that
+        // carries none (an older daemon, or one that latched the field off
+        // against an older platform) leaves the stored report alone.
+        applyReportedAgentReadiness(refresh, patch, receivedAt);
         // Schedules on computers (FL-13): the machine's time zone, when it changed.
         if (isFleetTimeZone(refresh.timeZone) && node.timeZone !== refresh.timeZone) {
             patch.timeZone = refresh.timeZone;
@@ -2546,6 +2565,11 @@ export class FleetService {
             // Fleet node link (FL-02 T-25). Omitted when never reported, so a
             // view of a daemon older than the field is exactly what it was.
             ...selfUpdateView(node),
+            // Fleet agent readiness: the agents the node last reported and the
+            // node-level answer. Null = never reported ("unknown — update the
+            // node"), never "no agent can work". Owner views only —
+            // `toSharedView` is an allow-list that does not carry either.
+            ...agentReadinessView(node),
             // Virtual computers (FL-16): how the row came into being, the host
             // a child runs on, what it is, and its system / size / state.
             origin: isFleetNodeOrigin(node.origin) ? node.origin : 'enrolled',
@@ -2684,6 +2708,43 @@ function applyReportedConsents(
     if (!fleetConsentsDiffer(before, after)) return null;
     patch.consents = after;
     return { before, after };
+}
+
+/**
+ * Fleet agent readiness — fold a beat's per-CLI report into the patch.
+ *
+ * Normalised (known fields, bounded, an unknown status reads `unknown`,
+ * credential-shaped text masked) and stamped with the platform's receipt
+ * time, never the machine's clock. Absent — or not a report at all — leaves
+ * the stored one alone, the additive contract every telemetry field follows;
+ * an EMPTY agent list is a real report ("no agent CLI on this machine") and
+ * does overwrite.
+ */
+export function applyReportedAgentReadiness(
+    refresh: Pick<EnrollInput, 'agents'>,
+    patch: Partial<FleetNode>,
+    receivedAt: Date,
+): void {
+    const at = receivedAt.toISOString();
+    const report = normalizeFleetAgentReadinessReport(refresh.agents, at);
+    if (!report) return;
+    patch.agentReadiness = { ...report, at };
+}
+
+/**
+ * Fleet agent readiness — the stored report as the owner's view serves it,
+ * with the node-level answer beside it: `true` when at least one agent can
+ * work now, `false` when the node reported its agents and none can, `null`
+ * when it never reported. An agent the platform is throttling (an active
+ * `modelThrottles` entry) reads `limit_reached` whatever the node last said.
+ */
+export function agentReadinessView(
+    node: Pick<FleetNode, 'agentReadiness' | 'modelThrottles'>,
+): Pick<FleetNodeView, 'agentReadiness' | 'anyAgentReady'> {
+    const agentReadiness = resolveFleetNodeAgentReadiness(node.agentReadiness, {
+        throttles: activeFleetNodeModelThrottles(node.modelThrottles),
+    });
+    return { agentReadiness, anyAgentReady: agentReadiness ? agentReadiness.anyReady : null };
 }
 
 /** Fleet node link (FL-02 T-25) — the stored self-update report as a view field, or nothing. */

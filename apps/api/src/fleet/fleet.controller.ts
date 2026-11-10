@@ -43,6 +43,7 @@ import type {
     FleetExecutionPreferenceView,
     FleetHeartbeatResponse,
     FleetNodeRotateCredentialResponse,
+    FleetNodeRunStats,
     FleetNodeView,
     FleetRunnerStatusView,
     NeedsALookItem,
@@ -351,12 +352,19 @@ export class FleetController {
         } catch {
             load = {};
         }
+        // Fleet agent readiness: what the platform's own run records say about
+        // each of the caller's computers (agent-task jobs finished / failed and
+        // the spend reported, last 24 hours and 7 days). One grouped read for
+        // the whole list, composed here for the reason `load` is, and just as
+        // best-effort: without it the rows simply carry no `runStats`.
+        const runStats = await this.readRunStats(auth.userId, nodes);
         return nodes.map((node) => ({
             ...this.withLink(node),
             // Cluster-sourced rows are never leased onto, so they stay null.
             // A shared row is someone else's runner: its load is not in the
             // caller's job ledger, so it is not shown (null = idle/unknown).
             load: node.persisted ? (load[node.id] ?? null) : null,
+            ...(runStats[node.id] ? { runStats: runStats[node.id] } : {}),
         })) as FleetNodeView[];
     }
 
@@ -438,8 +446,15 @@ export class FleetController {
         // a settings endpoint has no reason to ship it.
         const history = buildNodeJobHistory(recentJobs, runs);
 
+        // Fleet agent readiness: the same run-record figures the list shows,
+        // for the owner only (the ledger is the owner's).
+        const runStats = role === 'owner' ? await this.readRunStats(auth.userId, [node]) : {};
+
         return {
-            node: this.withLink(node),
+            node: {
+                ...this.withLink(node),
+                ...(runStats[node.id] ? { runStats: runStats[node.id] } : {}),
+            },
             recentJobs: history,
             // Reconciled-aware, so the subset agrees with the badge each
             // row renders: a job the node called `done` whose run failed
@@ -448,6 +463,37 @@ export class FleetController {
             failures: history.filter(isFailedNodeHistoryEntry),
             historyUnavailable,
         };
+    }
+
+    /**
+     * Fleet agent readiness — the run-record figures for the caller's OWN
+     * enrolled computers among `nodes`, keyed by node id. Cluster rows and
+     * rows someone else owns are left out (their jobs are not in the caller's
+     * ledger). Never throws: a job-runtime hiccup must not take the list
+     * down, exactly like `load`.
+     */
+    private async readRunStats(
+        userId: string,
+        nodes: readonly FleetNodeView[],
+    ): Promise<Record<string, FleetNodeRunStats>> {
+        const ids = nodes
+            .filter(
+                (node) =>
+                    node.persisted &&
+                    (node.viewerRole === undefined || node.viewerRole === 'owner'),
+            )
+            .map((node) => node.id);
+        if (ids.length === 0) return {};
+        try {
+            return await this.jobs.runStatsByNodeForUser(userId, ids);
+        } catch (error) {
+            this.logger.debug(
+                `Node run stats skipped for user ${userId}: ${
+                    error instanceof Error ? error.message : String(error)
+                }`,
+            );
+            return {};
+        }
     }
 
     /** Runs behind a page of node history, by id. Never throws. */
@@ -898,6 +944,9 @@ export class FleetController {
             displays: body.displays,
             desktopReasons: body.desktopReasons,
             helperEvents: body.helperEvents,
+            // Fleet agent readiness: never sent at enrol; forwarded like every
+            // declared field and normalised by the service.
+            agents: body.agents,
         });
         if (!result) {
             // One undifferentiated message — never say WHICH check failed.
@@ -962,6 +1011,8 @@ export class FleetController {
             displays: body.displays,
             desktopReasons: body.desktopReasons,
             helperEvents: body.helperEvents,
+            // Fleet agent readiness: the per-CLI report, normalised by the service.
+            agents: body.agents,
         });
         if (!result) {
             throw new UnauthorizedException('Invalid node credential');

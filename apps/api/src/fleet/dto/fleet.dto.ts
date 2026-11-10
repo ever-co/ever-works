@@ -864,6 +864,46 @@ export class FleetNodeSelfDescriptionDto {
     @IsArray()
     @ArrayMaxSize(64)
     helperEvents?: Record<string, unknown>[];
+
+    /**
+     * Fleet agent readiness — every agent CLI on the machine with whether it
+     * can take work: `{ checkedAt, agents: [{ provider, installed, version,
+     * signedIn, authMethod, account, status, reason, checkedAt, usage?, … }] }`.
+     *
+     * Only `@IsObject()`, for the reason `health` is: under `whitelist +
+     * forbidNonWhitelisted` a nested class would 400 the WHOLE beat the day a
+     * newer node reports a status or a field this build has not heard of, and
+     * a failed beat is a node swept offline. `FleetService` runs
+     * `normalizeFleetAgentReadinessReport`, which keeps the known fields
+     * within their bounds, reads an unknown status as `unknown`, masks
+     * anything credential-shaped and DROPS the rest. Sent on the heartbeat
+     * only, in the node's newest optional tier.
+     */
+    @ApiProperty({
+        required: false,
+        type: Object,
+        example: {
+            checkedAt: '2026-11-10T12:00:00.000Z',
+            agents: [
+                {
+                    provider: 'claude-code',
+                    installed: true,
+                    version: '2.1.319',
+                    signedIn: true,
+                    authMethod: 'subscription',
+                    account: 'owner@example.com (Acme, max)',
+                    status: 'access_denied',
+                    reason: 'Your organization has disabled Claude subscription access for Claude Code',
+                    checkedAt: '2026-11-10T12:00:00.000Z',
+                },
+            ],
+        },
+        description:
+            'Agent readiness: per agent CLI whether it is installed, signed in (and how), and can take work (ready, not_signed_in, access_denied, limit_reached, not_installed, unsupported, unknown), with usage windows and the last successful run when known. Unknown or malformed values are dropped, never rejected. Never carries a credential.',
+    })
+    @IsOptional()
+    @IsObject()
+    agents?: Record<string, unknown>;
 }
 
 /**

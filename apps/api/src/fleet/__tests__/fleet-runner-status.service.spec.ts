@@ -104,6 +104,10 @@ describe('FleetRunnerStatusService', () => {
                 // here because this fixture's daemon reports neither.
                 workerState: null,
                 workerStateReason: null,
+                // Fleet agent readiness: null (unknown) for a daemon that never
+                // reported its agents — never "no agent can work".
+                agentReadiness: null,
+                anyAgentReady: null,
             });
         });
 
@@ -467,6 +471,76 @@ describe('FleetRunnerStatusService', () => {
             expect(snapshot.total).toBe(1);
             expect(snapshot.online).toBe(1);
             expect(snapshot.offline).toBe(0);
+        });
+    });
+
+    describe('agent readiness', () => {
+        const readiness = {
+            at: '2026-11-10T12:00:01.000Z',
+            checkedAt: '2026-11-10T12:00:00.000Z',
+            anyReady: false,
+            agents: [
+                {
+                    provider: 'claude-code',
+                    installed: true,
+                    version: '2.1.319',
+                    signedIn: true,
+                    authMethod: 'subscription' as const,
+                    account: 'owner@example.com (Acme, max)',
+                    status: 'access_denied' as const,
+                    reason: 'Your organization has disabled Claude subscription access for Claude Code',
+                    checkedAt: '2026-11-10T12:00:00.000Z',
+                },
+            ],
+        };
+
+        it('projects the agents and the node-level answer onto the pill row — online is not the whole story', async () => {
+            fleet.listEnrolledForUser.mockResolvedValue([
+                node({
+                    id: 'a',
+                    status: 'online',
+                    agentReadiness: readiness,
+                    anyAgentReady: false,
+                }),
+            ]);
+
+            const [row] = (await build().snapshot('user-1')).nodes;
+
+            expect(row.status).toBe('online');
+            expect(row.cliVersion).toBe('claude 1.4.2');
+            expect(row.anyAgentReady).toBe(false);
+            expect(row.agentReadiness).toEqual(readiness);
+        });
+
+        it('reports null — unknown, never "no agent can work" — for a daemon that never reported', async () => {
+            fleet.listEnrolledForUser.mockResolvedValue([node({ id: 'a' })]);
+
+            const [row] = (await build().snapshot('user-1')).nodes;
+
+            expect(row.agentReadiness).toBeNull();
+            expect(row.anyAgentReady).toBeNull();
+        });
+
+        it('does not change the counts or the free runners: the pill and the router read what they did', async () => {
+            // Routing on readiness is a separate decision (a follow-up); this
+            // only makes the condition visible.
+            fleet.listEnrolledForUser.mockResolvedValue([
+                node({
+                    id: 'a',
+                    status: 'online',
+                    agentReadiness: readiness,
+                    anyAgentReady: false,
+                }),
+            ]);
+
+            const snapshot = await build().snapshot('user-1');
+            expect(snapshot.online).toBe(1);
+            expect(snapshot.busy).toBe(0);
+            await expect(build().availability('user-1')).resolves.toEqual({
+                total: 1,
+                online: 1,
+                free: 1,
+            });
         });
     });
 });
