@@ -629,7 +629,9 @@ describePostgres('fleet node run stats — the read on a real Postgres (opt-in)'
     });
 
     beforeEach(async () => {
-        await dataSource.query('DELETE FROM fleet_jobs');
+        // TRUNCATE, not DELETE: it hands the out-of-line storage of the last
+        // case's payloads back at once.
+        await dataSource.query('TRUNCATE fleet_jobs');
     });
 
     const insert = async (row: {
@@ -798,12 +800,40 @@ describePostgres('fleet node run stats — the read on a real Postgres (opt-in)'
             expect(rows.find((row) => row.id === id)?.runId).toBe(expected);
     });
 
-    it.each([4, 32, 128])(
-        'a busy node: 2001 finished jobs of %i KB each are read in well under a second (N2)',
-        async (kilobytes) => {
-            const filler = 'Lorem ipsum dolor sit amet, "quoted" \\n consectetur. '.repeat(
-                Math.ceil((kilobytes * 1024) / 52),
-            );
+    /**
+     * Instructions as Postgres stores them: prose compresses into the row,
+     * while text that does not compress (code, logs, generated content) is
+     * stored out of line (TOAST) — the case where reading the whole value
+     * costs the most, and where only a prefix should ever be fetched.
+     */
+    const fillers: Record<'compressible' | 'incompressible', (length: number) => string> = {
+        compressible: (length) =>
+            'Lorem ipsum dolor sit amet, "quoted" \\n consectetur. '
+                .repeat(Math.ceil(length / 52))
+                .slice(0, length),
+        incompressible: (length) => {
+            const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+            let seed = 42;
+            let text = '';
+            for (let index = 0; index < length; index += 1) {
+                seed = (seed * 1103515245 + 12345) % 2147483648;
+                text += alphabet[Math.floor((seed / 2147483648) * 64)];
+            }
+            return text;
+        },
+    };
+
+    it.each([
+        [4, 'compressible'],
+        [32, 'compressible'],
+        [128, 'compressible'],
+        [4, 'incompressible'],
+        [32, 'incompressible'],
+        [128, 'incompressible'],
+    ] as const)(
+        'a busy node: 2001 finished jobs of %i KB (%s) each are read in well under a second (N2)',
+        async (kilobytes, kind) => {
+            const filler = fillers[kind](kilobytes * 1024);
             // The order production writes: ids first, the instructions after.
             const payload = stored({
                 taskId: TASK,
@@ -831,7 +861,7 @@ describePostgres('fleet node run stats — the read on a real Postgres (opt-in)'
             }
             // eslint-disable-next-line no-console
             console.log(
-                `fleet run stats on Postgres: 2001 rows × ${kilobytes} KB (${payload.length} chars): ${JSON.stringify(times)} ms`,
+                `fleet run stats on Postgres: 2001 rows × ${kilobytes} KB ${kind} (${payload.length} chars): ${JSON.stringify(times)} ms`,
             );
             expect(Math.min(...times)).toBeLessThan(1_000);
         },
