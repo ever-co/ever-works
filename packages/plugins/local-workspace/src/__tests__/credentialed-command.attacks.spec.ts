@@ -61,6 +61,7 @@ let originDir: string;
 let originUrl: string;
 let decoyDir: string;
 let originHead: string;
+let decoyHead: string;
 let caseCounter = 0;
 
 const slash = (path: string): string => path.replace(/\\/g, '/');
@@ -279,6 +280,7 @@ beforeAll(() => {
 	// Somewhere a redirect could land instead: different content, same branch.
 	commit('a decoy');
 	git(seedDir, 'push', pathToFileURL(decoyDir).toString(), 'HEAD:refs/heads/main');
+	decoyHead = git(seedDir, 'rev-parse', 'HEAD');
 	originUrl = pathToFileURL(originDir).toString();
 });
 
@@ -372,6 +374,73 @@ describe('scoped FETCH credential — a planted pool config cannot read it', () 
 				expect(fetches).toHaveLength(2);
 				expect(outcome.handle?.baseSha).toBe(originHead);
 			}
+		});
+	});
+
+	describe('remote.<url>.url → a local path alone', () => {
+		// No program is planted, so there is no receipt to read: on its own a
+		// `url` runs nothing. What it does is MOVE the fetch — the run would
+		// be built on whatever repository the plant names, with the
+		// credential in the environment of a transport it was not issued
+		// for. Judged by which repository the base commit came from.
+		const plant = (pool: string): void => {
+			git(pool, 'config', `remote.${originUrl}.url`, slash(decoyDir));
+		};
+
+		it('CONTROL: a fetch by URL lands on the planted repository', () => {
+			const at = scene();
+			const pool = scratchPool(at.dir, originUrl);
+			plant(pool);
+
+			controlFetch(pool, originUrl);
+
+			expect(git(pool, 'rev-parse', 'refs/remotes/origin/control')).toBe(decoyHead);
+		});
+
+		it('planted BEFORE the run: the credential is withheld', async () => {
+			const at = scene();
+			const pool = await seedPool(at.baseDir, originUrl);
+			plant(pool);
+			const invocations: Invocation[] = [];
+			const reasons: string[] = [];
+			const plugin = new LocalWorkspacePlugin({ execFile: recordingGit(invocations) });
+
+			await plugin
+				.provision(
+					provisionSpec(at.baseDir, originUrl, 'withheld', {
+						fetchCredential: { username: 'x-access-token', token: TOKEN, remoteUrl: originUrl },
+						onFetchCredentialWithheld: (reason) => reasons.push(reason)
+					})
+				)
+				.catch(() => undefined);
+
+			expect(reasons).toHaveLength(1);
+			expect(reasons[0]).toContain('remote.<…>.url');
+			expect(reasons[0]).not.toContain(slash(decoyDir));
+			expect(invocations.some(carriesHeader)).toBe(false);
+		});
+
+		it('planted BETWEEN the check and the fetch: the credentialed fetch is not moved', async () => {
+			const at = scene();
+			const pool = await seedPool(at.baseDir, originUrl);
+			const invocations: Invocation[] = [];
+			const reasons: string[] = [];
+			const plugin = new LocalWorkspacePlugin({ execFile: recordingGit(invocations, () => plant(pool)) });
+
+			const handle = await plugin.provision(
+				provisionSpec(at.baseDir, originUrl, 'raced', {
+					fetchCredential: { username: 'x-access-token', token: TOKEN, remoteUrl: originUrl },
+					onFetchCredentialWithheld: (reason) => reasons.push(reason)
+				})
+			);
+
+			expect(reasons).toEqual([]);
+			const fetches = invocations.filter((entry) => entry.args[0] === 'fetch');
+			expect(fetches).toHaveLength(2);
+			expect(fetches.every(carriesHeader)).toBe(true);
+			// The real repository, not the one the plant names.
+			expect(handle.baseSha).toBe(originHead);
+			expect(handle.baseSha).not.toBe(decoyHead);
 		});
 	});
 
