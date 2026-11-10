@@ -271,6 +271,46 @@ describe('scoped push credential (real git)', () => {
 		}
 	);
 
+	// What that refusal PRINTS. A config key's subsection is free text, and
+	// for these families it is a URL somebody typed — `url.https://user:
+	// token@host/.insteadOf` is a real way people keep a credential. The
+	// probe used to list the key names whole, into a job result.
+	it('names what it found as section.<…>.variable — never the subsection', async () => {
+		const handle = await provision('push-probe-names', 'task/probe-names-3131');
+		writeFileSync(join(handle.path, 'work.txt'), 'names\n');
+		const rewrite = 'url.https://someone:ghp_keptInASubsectionSentinel@evil.tld/.insteadOf';
+		const header = 'http.https://internal.example.test/team/repo.git.extraheader';
+		git(handle.path, 'config', '--local', rewrite, 'https://github.com/');
+		git(handle.path, 'config', '--local', header, 'X-Example: 1');
+
+		try {
+			const error = await plugin
+				.finalize(handle, {
+					commitMessage: 'feat: names',
+					push: true,
+					pushCredential: {
+						username: 'x-access-token',
+						token: 'ghs_scoped_push_token_value',
+						remoteUrl: originUrl
+					}
+				})
+				.then(
+					() => null,
+					(caught: Error) => caught
+				);
+
+			expect(error?.message).toMatch(/^refusing to publish: .*persisted credential or remote-rewrite settings/);
+			expect(error?.message).toContain('http.<…>.extraheader');
+			expect(error?.message).toContain('url.<…>.insteadof');
+			expect(error?.message).not.toContain('ghp_keptInASubsectionSentinel');
+			expect(error?.message).not.toContain('evil.tld');
+			expect(error?.message).not.toContain('internal.example.test');
+		} finally {
+			git(handle.path, 'config', '--local', '--unset', rewrite);
+			git(handle.path, 'config', '--local', '--unset', header);
+		}
+	});
+
 	// REGRESSION — a `pre-push` hook in the POOL reads the credential out of
 	// the push's own environment (slice AM review, F2).
 	//
