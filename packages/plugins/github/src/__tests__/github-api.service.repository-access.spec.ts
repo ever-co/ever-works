@@ -43,22 +43,135 @@ vi.mock('octokit', () => {
 	}
 	class RequestError extends Error {
 		status: number;
-		constructor(message: string, status: number) {
+		response?: { headers?: Record<string, string>; data?: { message?: string } };
+		constructor(
+			message: string,
+			status: number,
+			response?: { headers?: Record<string, string>; data?: { message?: string } }
+		) {
 			super(message);
 			this.status = status;
+			this.response = response;
 		}
 	}
 	return { Octokit: FakeOctokit, RequestError };
 });
 
 const { RequestError } = (await import('octokit')) as unknown as {
-	RequestError: new (message: string, status: number) => Error;
+	RequestError: new (
+		message: string,
+		status: number,
+		response?: { headers?: Record<string, string>; data?: { message?: string } }
+	) => Error;
 };
+
+/** The 403s GitHub sends when a RATE LIMIT is spent — not answers about the repository. */
+const RATE_LIMITED_403S: Array<[string, () => Error]> = [
+	[
+		'the primary budget is spent (x-ratelimit-remaining: 0)',
+		() =>
+			new RequestError('API rate limit exceeded for user ID 1.', 403, {
+				headers: { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': '1900000000' }
+			})
+	],
+	[
+		'a secondary limit names a wait (retry-after)',
+		() => new RequestError('Forbidden', 403, { headers: { 'retry-after': '60' } })
+	],
+	[
+		'a secondary limit is only worded',
+		() =>
+			new RequestError('Forbidden', 403, {
+				data: { message: 'You have exceeded a secondary rate limit. Please wait a few minutes.' }
+			})
+	]
+];
+
+/** The 403s that ARE an answer: this token may not see the repository. */
+const ACCESS_DENIED_403S: Array<[string, () => Error]> = [
+	['a plain refusal', () => new RequestError('Forbidden', 403)],
+	[
+		'OAuth App access restrictions (the organization policy the fallback exists for)',
+		() =>
+			new RequestError('Forbidden', 403, {
+				data: {
+					message:
+						'Although you appear to have the correct authorization credentials, the `acme` organization has enabled OAuth App access restrictions.'
+				}
+			})
+	],
+	[
+		'SAML single sign-on enforcement',
+		() =>
+			new RequestError('Forbidden', 403, {
+				data: { message: 'Resource protected by organization SAML enforcement.' }
+			})
+	],
+	[
+		'a refusal that still has rate-limit budget left',
+		() => new RequestError('Forbidden', 403, { headers: { 'x-ratelimit-remaining': '4999' } })
+	]
+];
 const { GitHubApiService } = await import('../github-api.service.js');
 
 const OWNER = 'ever-co';
 const REPO = 'ever-works';
 const TOKEN = 'ghs_read_only';
+
+/**
+ * `hasRepositoryAccess` answers "can this token see the repository". The
+ * Repository Work create path acts on a `false` (it falls back to a GitHub App
+ * installation), so a `false` must be an ANSWER: a 404, or a 403 that refuses
+ * the token. A 403 that is a spent rate limit throws, like every other
+ * failure that says nothing about the repository.
+ */
+describe('GitHubApiService.hasRepositoryAccess', () => {
+	let svc: InstanceType<typeof GitHubApiService>;
+
+	beforeEach(() => {
+		svc = new GitHubApiService();
+		getMock.mockReset();
+	});
+
+	it('answers true when the repository reads', async () => {
+		getMock.mockResolvedValue({ data: { id: 556677, full_name: 'ever-co/ever-works' } });
+
+		await expect(svc.hasRepositoryAccess(OWNER, REPO, TOKEN)).resolves.toBe(true);
+		expect(getMock).toHaveBeenCalledWith({ owner: OWNER, repo: REPO });
+	});
+
+	it('answers false for a 404', async () => {
+		getMock.mockRejectedValue(new RequestError('Not Found', 404));
+
+		await expect(svc.hasRepositoryAccess(OWNER, REPO, TOKEN)).resolves.toBe(false);
+	});
+
+	it.each(ACCESS_DENIED_403S)('answers false for a 403 that refuses the token: %s', async (_label, makeError) => {
+		getMock.mockRejectedValue(makeError());
+
+		await expect(svc.hasRepositoryAccess(OWNER, REPO, TOKEN)).resolves.toBe(false);
+	});
+
+	it.each(RATE_LIMITED_403S)('THROWS for a 403 that is a rate limit: %s', async (_label, makeError) => {
+		const failure = makeError();
+		getMock.mockRejectedValue(failure);
+
+		// The original error, untouched: callers that report it keep GitHub's status.
+		await expect(svc.hasRepositoryAccess(OWNER, REPO, TOKEN)).rejects.toBe(failure);
+	});
+
+	it.each([401, 429, 500, 502])('throws a %i, as before', async (status) => {
+		getMock.mockRejectedValue(new RequestError('boom', status));
+
+		await expect(svc.hasRepositoryAccess(OWNER, REPO, TOKEN)).rejects.toThrow('boom');
+	});
+
+	it('throws a non-HTTP failure, as before', async () => {
+		getMock.mockRejectedValue(new Error('socket hang up'));
+
+		await expect(svc.hasRepositoryAccess(OWNER, REPO, TOKEN)).rejects.toThrow('socket hang up');
+	});
+});
 
 describe('GitHubApiService.getRepositoryIdentity', () => {
 	let svc: InstanceType<typeof GitHubApiService>;
@@ -66,6 +179,19 @@ describe('GitHubApiService.getRepositoryIdentity', () => {
 	beforeEach(() => {
 		svc = new GitHubApiService();
 		getMock.mockReset();
+	});
+
+	it.each(RATE_LIMITED_403S)('THROWS for a 403 that is a rate limit: %s', async (_label, makeError) => {
+		const failure = makeError();
+		getMock.mockRejectedValue(failure);
+
+		await expect(svc.getRepositoryIdentity(OWNER, REPO, TOKEN)).rejects.toBe(failure);
+	});
+
+	it.each(ACCESS_DENIED_403S)('answers null for a 403 that refuses the token: %s', async (_label, makeError) => {
+		getMock.mockRejectedValue(makeError());
+
+		await expect(svc.getRepositoryIdentity(OWNER, REPO, TOKEN)).resolves.toBeNull();
 	});
 
 	it("reads the repository by name and reports GitHub's id (as a string) and current full name", async () => {

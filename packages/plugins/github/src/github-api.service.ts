@@ -2842,6 +2842,24 @@ export class GitHubApiService {
 		return repository !== null;
 	}
 
+	/**
+	 * Is this 403 GitHub refusing because a RATE LIMIT is spent (the primary
+	 * budget, or a secondary limit)?
+	 *
+	 * Such a response says nothing about the resource that was asked for. The
+	 * two reads below answer "the token cannot see this repository" for a 403,
+	 * and a rate limit must never be reported as that: a caller that acts on
+	 * "no" (the Repository Work create path falls back to a GitHub App
+	 * installation on it) would act on a failure that is gone a minute later.
+	 * `toGitProviderError` is the one place that reads GitHub's rate-limit
+	 * signals (the headers and its wording), so it decides.
+	 */
+	private isRateLimitRefusal(err: unknown): boolean {
+		if (!(err instanceof RequestError) || err.status !== 403) return false;
+		const reason = toGitProviderError(err).reason;
+		return reason === 'rate_limited' || reason === 'secondary_rate_limited';
+	}
+
 	async hasRepositoryAccess(owner: string, repo: string, token: string, baseUrl?: string): Promise<boolean> {
 		try {
 			const octokit = this.createOctokit(token, baseUrl);
@@ -2849,6 +2867,9 @@ export class GitHubApiService {
 			return true;
 		} catch (err) {
 			if (err instanceof RequestError && (err.status === 404 || err.status === 403)) {
+				// A rate-limited 403 is not an answer about the repository: it
+				// throws, exactly as a 429 and a 5xx already do.
+				if (this.isRateLimitRefusal(err)) throw err;
 				return false;
 			}
 			throw err;
@@ -2865,7 +2886,8 @@ export class GitHubApiService {
 	 * already holds to learn the name still means the same repository.
 	 *
 	 * `null` for 404 and 403, exactly as `hasRepositoryAccess` answers `false`
-	 * for them: the token cannot see the repository. Anything else throws.
+	 * for them: the token cannot see the repository. Anything else throws —
+	 * including a 403 that is a rate limit, which is not an answer.
 	 */
 	async getRepositoryIdentity(
 		owner: string,
@@ -2882,6 +2904,7 @@ export class GitHubApiService {
 			return { id: String(data.id), fullName: data.full_name };
 		} catch (err) {
 			if (err instanceof RequestError && (err.status === 404 || err.status === 403)) {
+				if (this.isRateLimitRefusal(err)) throw err;
 				return null;
 			}
 			throw err;
