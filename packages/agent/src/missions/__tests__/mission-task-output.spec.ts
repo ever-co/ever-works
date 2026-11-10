@@ -99,9 +99,9 @@ describe('missionTaskOutputEligibility', () => {
         // Missing or unknown reads as off: nothing is filed on a Work that may get no branch.
         expect(missionTaskOutputEligibility(row('repo', null))).toBe('isolation-off');
         expect(missionTaskOutputEligibility(row('repo', 'on'))).toBe('isolation-off');
-        expect(
-            missionTaskOutputEligibility({ relation: 'improves', workKind: 'repo' }),
-        ).toBe('isolation-off');
+        expect(missionTaskOutputEligibility({ relation: 'improves', workKind: 'repo' })).toBe(
+            'isolation-off',
+        );
     });
 
     it.each(WORK_KINDS.filter((kind) => kind !== 'app' && kind !== 'repo'))(

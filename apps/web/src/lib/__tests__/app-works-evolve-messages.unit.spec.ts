@@ -218,7 +218,9 @@ describe('APW-08 evolve copy (T28)', () => {
             if (typeof notice !== 'string' || !notice.includes('Task isolation')) {
                 // The setting is labelled "Task isolation" in every bundle, so the notice names it
                 // the way the settings page shows it.
-                problems.push(`${locale}: repoIsolationOff does not name the Task isolation setting`);
+                problems.push(
+                    `${locale}: repoIsolationOff does not name the Task isolation setting`,
+                );
             } else if (
                 locale !== 'en' &&
                 notice === at(en, 'dashboard.missionDetail.output.repoIsolationOff')

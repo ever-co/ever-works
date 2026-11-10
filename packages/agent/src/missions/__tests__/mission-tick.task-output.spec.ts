@@ -737,9 +737,10 @@ describe('MissionTickService — Task output (APW-08 T35)', () => {
         expect(result).toMatchObject({ outcome: 'tasks-filed', tasksFiled: 2 });
         expect(result.message).toContain('works=2');
         expect(result.message).toContain('isolation-off=1');
-        expect(
-            t.tasksService.create.mock.calls.map(([, input]) => (input as Row).workId),
-        ).toEqual(['w-app', 'w-on']);
+        expect(t.tasksService.create.mock.calls.map(([, input]) => (input as Row).workId)).toEqual([
+            'w-app',
+            'w-on',
+        ]);
     });
 
     it('when nothing new is filed, the notice also names the Repository Work that was skipped', async () => {
@@ -966,7 +967,9 @@ describe('MissionTickService — Task output (APW-08 T35)', () => {
 
     it('every other pull-request state still counts: none yet, open, draft, and merged-but-not-done', async () => {
         for (const prState of [null, undefined, 'open', 'draft', 'merged']) {
-            const t = build({ taskOutput: { tasksPerTick: 1, openTasksCap: 1 } } as Partial<Mission>);
+            const t = build({
+                taskOutput: { tasksPerTick: 1, openTasksCap: 1 },
+            } as Partial<Mission>);
             t.taskRows.push({
                 id: 'o1',
                 workId: 'w-1',
@@ -1028,9 +1031,9 @@ describe('MissionTickService — Task output (APW-08 T35)', () => {
                 "Tasks are filed there. Turn on Task isolation in the Work's settings to let this " +
                 'Mission file Tasks on it.',
         );
-        expect(describeMissionNothingToFile('repo-isolation-off', ['a', 'b', 'c', 'd', 'e'])).toContain(
-            'Repository Works "a", "b", "c" and 2 more, so no Tasks are filed there.',
-        );
+        expect(
+            describeMissionNothingToFile('repo-isolation-off', ['a', 'b', 'c', 'd', 'e']),
+        ).toContain('Repository Works "a", "b", "c" and 2 more, so no Tasks are filed there.');
     });
 
     it('a `both` Mission runs the Ideas branch, then files Tasks — and reports both halves', async () => {

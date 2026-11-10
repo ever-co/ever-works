@@ -96,21 +96,24 @@ Set the cap on the Mission detail page under **Settings**. The current count vs 
 
 A Mission's **Output** decides what its tick files. Set it in the **Output** card on the Mission page:
 
-| Output                          | What each tick does                                                                                           |
-| ------------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| **Ideas** (the default)         | Proposes Ideas, as every Mission did before.                                                                  |
-| **Tasks on attached App Works** | Plans small changes and files them as Tasks on the [App Works](./app-works.md) attached as Improves/Operates. |
-| **Both**                        | Ideas first, then Tasks.                                                                                      |
+| Output                                        | What each tick does                                                                                                                                   |
+| --------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Ideas** (the default)                       | Proposes Ideas, as every Mission did before.                                                                                                          |
+| **Tasks on attached App or Repository Works** | Plans small changes and files them as Tasks on the [App Works](./app-works.md) and [Repository Works](./work-kinds.md) attached as Improves/Operates. |
+| **Both**                                      | Ideas first, then Tasks.                                                                                                                              |
 
 When the Mission files Tasks:
 
-- It works on at most 5 App Works attached as **Improves** (product changes) or **Operates** (maintenance). A Mission with Task output and no such App Work is saved all the same, and says so: _Attach an App Work as Improves or Operates to file Tasks on it._
-- **Tasks per tick** (1–3) caps how many Tasks one tick files on each App Work, and **Open Tasks cap per Work** (1–10) stops filing while that many of the Mission's Tasks are still open there. A proposal whose title matches an open Task on that Work is dropped.
+- It works on at most 5 App or Repository Works attached as **Improves** (product changes) or **Operates** (maintenance). These are the two kinds whose Tasks are delivered as pull requests an agent run opens; Works of every other kind are never filed on. A Mission with Task output and no such Work is saved all the same, and says so: _Attach an App or Repository Work as Improves or Operates to file Tasks on it._
+- **A Repository Work needs Task isolation on.** A Task on a Repository Work only becomes a branch and a pull request while the Work's [Task isolation](./task-isolation.md) setting is on (an App Work always isolates its Tasks). The Mission never turns the setting on for you. While it is off the Mission files nothing on that Work, and tells you three ways: the **Output** card names the Work and links to its settings, saving the Mission answers the `repoWorkTaskIsolationOff` warning, and the day's "nothing to file" Activity entry names the Work.
+- On a Repository Work each Task is one small pull request into the Work's base branch, and the Task's title becomes the pull request's title. The planner is told to write titles that stand on their own and to keep the Mission's private context out of titles and descriptions, because the repository may be public.
+- **Tasks per tick** (1–3) caps how many Tasks one tick files on each Work, and **Open Tasks cap per Work** (1–10) stops filing while that many of the Mission's Tasks are still open there. A Task whose pull request was closed without merging does not count as open, so a rejected pull request never stalls the Mission; the Task itself stays where it is until you cancel it or run it again. A proposal whose title matches an open Task on that Work is dropped.
 - With **Require approval before creating** in the Mission's guardrails, new Tasks wait in **Backlog** until you move them to **To do**; otherwise they start right away with the Mission's Agent (or the Work's default one).
 - Each run is capped by the Mission's per-run budget (`maxBudgetCentsPerRun`).
 - A tick with nothing to file records one Activity entry per Mission per day.
+- When the operator pauses App changes (`EVER_WORKS_APP_CHANGES_ENABLED=false`), the Mission files nothing on its App Works. That switch is about App Works only, so the Mission keeps filing on its Repository Works.
 
-The Mission page lists them under **Tasks on attached Works**, newest first, 20 per page. Each Task then follows the App Work's delivery chain until it is live — see [Evolving an App Work](./app-works-evolve.md). The [Build on an open-source app](./mission-templates.md#templates-about-an-app-work) template sets all of this up in one step.
+The Mission page lists them under **Tasks on attached Works**, newest first, 20 per page. A Task on an App Work then follows the App Work's delivery chain until it is live — see [Evolving an App Work](./app-works-evolve.md); a Task on a Repository Work is done when its pull request is merged. The [Build on an open-source app](./mission-templates.md#templates-about-an-app-work) template sets all of this up in one step for an App Work.
 
 ## Attached Works and relations
 

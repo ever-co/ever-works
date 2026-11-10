@@ -72,9 +72,7 @@ describe('buildMissionTaskPrompt — the Work’s kind', () => {
         ]);
         expect(withoutKind).toContain('The app: Bookings');
         expect(withoutKind).not.toContain('repository');
-        expect(
-            buildMissionTaskPrompt({ ...INPUT, relation: 'operates' }),
-        ).toContain(
+        expect(buildMissionTaskPrompt({ ...INPUT, relation: 'operates' })).toContain(
             'maintenance work that keeps it healthy: dependency updates, fixing failed deliveries, resolving upstream conflicts',
         );
     });
@@ -87,7 +85,9 @@ describe('buildMissionTaskPrompt — the Work’s kind', () => {
             "Each Task is one small, reviewable change a coding agent can make in a single pull request into the repository's base branch.",
         );
         expect(prompt).toContain('The repository: ever-works');
-        expect(prompt).toContain("Do not repeat a Task that is already in the repository's recent Tasks.");
+        expect(prompt).toContain(
+            "Do not repeat a Task that is already in the repository's recent Tasks.",
+        );
         expect(prompt).not.toContain('one app');
         expect(prompt).not.toContain('The app:');
         // Maintenance on a plain repository: no delivery chain, no upstream fork.
