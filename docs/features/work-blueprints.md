@@ -161,12 +161,13 @@ This feature shipped in stages, and the spec checklist (`docs/specs/features/wor
 | Catalog service, 1-hour cache, sanitization, `GET /api/work-templates?chipType=` (unit and API e2e tested)                | Shipped     |
 | Server-side fetch with built-in fallback; same-origin `/api/work-templates` proxy                                         | Shipped     |
 | Template picker on `/works/new`: kind-filtered chips, search, "Your templates" first, featured pinning, default highlight | Shipped     |
-| Creating a Work **from a manifest blueprint** (forking `template.repo` at create time)                                    | In progress |
+| Creating a Work from a blueprint whose `template.repo` is a Website Template you can see (e.g. **Directory**)             | Shipped     |
+| Creating a Work from a blueprint whose `template.repo` has no Website Template (forking `template.repo` at create time)   | In progress |
 | Pre-filling the Git / deploy provider selectors from a blueprint's `defaults`                                             | Planned     |
 | A second template-chip line on `/new` with a `?template=<slug>` handoff to `/works/new`                                   | Planned     |
 
-:::caution Creating from a manifest-only blueprint
-`POST /api/works` validates `websiteTemplateId` against the Website Templates visible to you (`getVisibleTemplateForUser('website', …)` in `work-lifecycle.service.ts`). Manifest slugs such as `directory` or `directory-minimal` are not rows in that catalog yet, so submitting one is rejected with `400 Unsupported website template: <slug>`. Until the create-time wiring lands, pick an entry under **Your templates** — the built-in `classic` / `minimal` fallback blueprints are real catalog rows and work end to end — or leave the picker on its default.
+:::note How a blueprint becomes a Website Template
+`POST /api/works` accepts only the id of a Website Template visible to you (`getVisibleTemplateForUser('website', …)` in `work-lifecycle.service.ts`); a manifest slug such as `directory` is not one, and submitting it is rejected with `400 Unsupported website template: <slug>`. The picker therefore never submits a blueprint slug. A blueprint is listed only when a Website Template is built from its `template.repo`, and picking it submits that template's id: **Directory** (`ever-works/directory-web-template`) submits `classic`, and **Directory (Minimal)** (`ever-works/directory-web-minimal-template`) submits `minimal`. That template then leaves **Your templates** on the chip, so it is not listed twice. A blueprint whose repository has no Website Template yet is not listed until the create-time fork lands. The rules live in `apps/web/src/components/works/shared/work-template-picker-options.ts`, and the repository fields come from `GET /api/works/website-templates`.
 :::
 
 ## Contributing a blueprint

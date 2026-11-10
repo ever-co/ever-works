@@ -83,6 +83,14 @@ export interface WebsiteTemplateOption {
     isDefault: boolean;
     sourceType: 'built_in' | 'custom';
     originType: 'standard' | 'forked' | 'custom_url';
+    /**
+     * The repository the template is built from. The Create-Work picker maps a
+     * manifest blueprint (`template.repo`) to the catalog row of the same
+     * repository (`work-template-picker-options.ts`). Optional: an API that
+     * predates the field sends neither, and no blueprint is offered then.
+     */
+    repositoryOwner?: string | null;
+    repositoryName?: string | null;
 }
 
 export interface CreateWorkDto {

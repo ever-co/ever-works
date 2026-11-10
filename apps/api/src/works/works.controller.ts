@@ -334,6 +334,14 @@ export class WorksController {
                 description: template.description,
                 sourceType: template.sourceType,
                 originType: template.originType,
+                // The repository the template is built from. The Create-Work
+                // picker matches a manifest blueprint (`template.repo`) to the
+                // catalog row built from the same repository and submits that
+                // row's id: a blueprint slug is not a catalog id, and
+                // `POST /api/works` refuses one with "Unsupported website
+                // template".
+                repositoryOwner: template.repositoryOwner,
+                repositoryName: template.repositoryName,
                 isDefault:
                     template.isDefault ||
                     (!hasExplicitDefault && template.id === getDefaultWebsiteTemplateId()),
