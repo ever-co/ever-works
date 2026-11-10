@@ -78,9 +78,18 @@ function configPairs(env: NodeJS.ProcessEnv): Array<[string, string]> {
 
 const headerOf = (entry: Invocation): [string, string] | undefined =>
 	configPairs(entry.env).find(([key]) => /extraheader$/i.test(key));
+/**
+ * The URL a fetch goes to. A plain fetch names it; a CREDENTIALED fetch
+ * names a private remote instead, whose only definition is a
+ * `remote.<name>.url` entry in that child's own environment.
+ */
+const fetchRemote = (entry: Invocation): string | undefined => {
+	const target = entry.args.at(-2) as string;
+	return configPairs(entry.env).find(([key]) => key === `remote.${target}.url`)?.[1] ?? target;
+};
 const fetchesOf = (invocations: Invocation[], remoteUrl?: string): Invocation[] =>
 	invocations.filter(
-		(entry) => entry.args[0] === 'fetch' && (remoteUrl === undefined || entry.args.includes(remoteUrl))
+		(entry) => entry.args[0] === 'fetch' && (remoteUrl === undefined || fetchRemote(entry) === remoteUrl)
 	);
 
 function filesContaining(dir: string, needles: readonly string[]): string[] {
@@ -177,10 +186,23 @@ describe(
 					);
 					return { pid: 1 } as never;
 				}
+				// THE HARNESS PLAYS GITHUB. A credentialed child is bound to the
+				// https transport (`GIT_ALLOW_PROTOCOL=https`) — recorded above,
+				// exactly as the provider produced it, and asserted on below.
+				// This suite's "GitHub" is a bare repository on disk that the
+				// https URL is rewritten to, so for the real git underneath the
+				// stand-in's transport is let through as well. Nothing else of
+				// the child's environment is touched; what that binding STOPS is
+				// proven, unassisted, in the provider's own
+				// `credentialed-command.attacks.spec.ts`.
+				const env =
+					execOptions.env?.GIT_ALLOW_PROTOCOL === 'https'
+						? { ...execOptions.env, GIT_ALLOW_PROTOCOL: 'https:file' }
+						: execOptions.env;
 				return (execFile as unknown as (...rest: unknown[]) => unknown)(
 					command,
 					args,
-					execOptions,
+					{ ...execOptions, env },
 					callback
 				) as never;
 			}) as never;
@@ -308,7 +330,14 @@ describe(
 					expect(entry.args.join('\u0000')).not.toContain(PRIMARY_TOKEN);
 					expect(entry.args.join('\u0000')).not.toContain(basic(PRIMARY_TOKEN));
 				}
-				expect(fetches[0].args).toContain(PRIMARY_URL);
+				for (const fetch of fetches) {
+					// Bound to https and to a remote no config file can describe:
+					// the URL is not even in argv, only in this child's environment.
+					expect(fetch.env.GIT_ALLOW_PROTOCOL).toBe('https');
+					expect(fetch.args.at(-2)).toMatch(/^ew-credentialed-[0-9a-f-]{36}$/);
+					expect(fetch.args).not.toContain(PRIMARY_URL);
+					expect(fetchRemote(fetch)).toBe(PRIMARY_URL);
+				}
 
 				// …and in the environment of NO other child the provider spawned:
 				// not `init`, not `remote add`, not `worktree add`.
@@ -644,9 +673,10 @@ describe(
 					const warnings = entries.filter((entry) => entry.level === 'warn').map((entry) => entry.message);
 					expect(warnings).toHaveLength(1);
 					expect(warnings[0]).toContain('was not handed to Git');
-					expect(warnings[0]).toContain('http.*');
+					expect(warnings[0]).toContain('http.sslverify');
+					expect(warnings[0]).toContain('http.proxy');
 					expect(warnings[0]).toContain(`https://github.com/${PRIMARY_ID}.git`);
-					// Families only: no planted value reaches a log line.
+					// Key names only: no planted value reaches a log line.
 					expect(warnings[0]).not.toContain('127.0.0.1');
 				} finally {
 					git(pool, 'config', '--local', '--unset-all', 'http.sslVerify');

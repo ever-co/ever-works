@@ -111,8 +111,19 @@ export interface WorkspaceProvisionSpec {
  * today), so "do what you did before" is the safe answer — and it is the
  * only answer in which the token is never exposed. A provider withholds it
  * when `remoteUrl` is not byte-identical to the URL it is about to fetch,
- * or when the repository's own Git config could redirect, intercept or
- * answer for the request.
+ * when that URL is not one a header can authenticate (`https`), or when
+ * the repository's own Git config carries any key that is not on the
+ * provider's allowlist.
+ *
+ * A CHILD THAT CARRIES IT MUST BE SAFE WHATEVER THAT CONFIG SAYS. The
+ * credential is in the child's environment, so any program the child
+ * starts inherits it, and a checkout's shared config is writable by the
+ * run that used it last (and by one running beside this one). A provider
+ * therefore does not rely on having inspected the config: it binds the
+ * child to the credential's own transport, addresses the remote by a name
+ * no config file can describe, and overrides every key that could run a
+ * program or move the connection. The same holds for
+ * {@link WorkspacePushCredential}.
  */
 export interface WorkspaceFetchCredential {
 	/** Basic-auth username (a GitHub installation token uses `x-access-token`). */
@@ -196,7 +207,11 @@ export interface WorkspacePublishFence {
  *
  * Providers that cannot honour it MUST refuse the push rather than fall
  * back to whatever the machine's own credential helper would answer:
- * that fallback is the exact hole this exists to close.
+ * that fallback is the exact hole this exists to close. That includes a
+ * remote no header can authenticate (anything but `https`), and a
+ * repository whose own Git config carries a key that is not on the
+ * provider's allowlist — see the note on {@link WorkspaceFetchCredential}
+ * about what a credentialed child must be safe against.
  */
 export interface WorkspacePushCredential {
 	/** Basic-auth username (a GitHub installation token uses `x-access-token`). */

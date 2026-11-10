@@ -22,6 +22,9 @@ import type { WorkspaceHandle, WorkspaceProvisionSpec } from '@ever-works/plugin
  * And one thing the push spec has no counterpart for: a fetch credential
  * that cannot be offered safely is WITHHELD and the fetch runs exactly as
  * it did before — where a push refuses.
+ *
+ * What a planted pool config can do to a credentialed child — the attacks —
+ * is `credentialed-command.attacks.spec.ts`.
  */
 
 const git = (cwd: string, ...args: string[]): string =>
@@ -31,15 +34,13 @@ type Invocation = { args: string[]; env: NodeJS.ProcessEnv };
 
 const TOKEN = 'ghs_fetchScopedReadTokenSentinel0123456789';
 const BASIC = Buffer.from(`x-access-token:${TOKEN}`, 'utf8').toString('base64');
-/** What the fleet would send: a token-free https GitHub URL. Rewritten to the local origin below. */
-const REMOTE = 'https://github.com/ever-works/fetch-credential-fixture.git';
-const BLOCKING_PROBE = 'credential';
 
 let root: string;
 let originDir: string;
+/** A bare repository on disk stands in for the remote, as in the push spec. */
+let originUrl: string;
 let seedDir: string;
 let baseDir: string;
-let gitConfigIndex: number;
 let commitCounter = 0;
 
 /** Real `execFile`, with every invocation recorded first. */
@@ -71,17 +72,20 @@ function configPairs(env: NodeJS.ProcessEnv): Array<[string, string]> {
 	return pairs;
 }
 
+const valueOf = (entry: Invocation, key: string): string | undefined =>
+	configPairs(entry.env)
+		.filter(([name]) => name === key)
+		.map(([, value]) => value)
+		.at(-1);
 const carriesHeader = (entry: Invocation): boolean => configPairs(entry.env).some(([key]) => /extraheader$/i.test(key));
 const fetchesOf = (invocations: Invocation[]): Invocation[] => invocations.filter((entry) => entry.args[0] === 'fetch');
-/** The scoped-credential probe, as opposed to the hardening's own filter-driver probe. */
-const credentialProbes = (invocations: Invocation[]): Invocation[] =>
-	invocations.filter(
-		(entry) => entry.args.includes('--get-regexp') && entry.args.some((arg) => arg.includes(BLOCKING_PROBE))
-	);
+/** The read of the repository's config that decides whether a credential may be used. */
+const configChecks = (invocations: Invocation[]): Invocation[] =>
+	invocations.filter((entry) => entry.args.includes('--show-scope') && entry.args.includes('--list'));
 
 function spec(bindingKey: string, branch: string, extra: Partial<WorkspaceProvisionSpec> = {}): WorkspaceProvisionSpec {
 	return {
-		repoUrl: REMOTE,
+		repoUrl: originUrl,
 		baseRef: 'main',
 		branch,
 		bindingKey,
@@ -90,7 +94,11 @@ function spec(bindingKey: string, branch: string, extra: Partial<WorkspaceProvis
 	};
 }
 
-const credential = { username: 'x-access-token', token: TOKEN, remoteUrl: REMOTE };
+const credential = (): { username: string; token: string; remoteUrl: string } => ({
+	username: 'x-access-token',
+	token: TOKEN,
+	remoteUrl: originUrl
+});
 
 /** Move the base ref on the origin, so the next fetch really updates a ref. */
 function advanceOrigin(): void {
@@ -107,7 +115,7 @@ function advanceOrigin(): void {
 		'-m',
 		`advance ${commitCounter}`
 	);
-	git(seedDir, 'push', pathToFileURL(originDir).toString(), 'HEAD:refs/heads/main');
+	git(seedDir, 'push', originUrl, 'HEAD:refs/heads/main');
 }
 
 /** The one bare pool this suite's provisions share. */
@@ -154,27 +162,15 @@ beforeAll(() => {
 	mkdirSync(originDir, { recursive: true });
 	mkdirSync(seedDir, { recursive: true });
 	git(originDir, 'init', '--bare', '--initial-branch', 'main');
+	originUrl = pathToFileURL(originDir).toString();
 	git(seedDir, 'init', '--initial-branch', 'main');
 	writeFileSync(join(seedDir, 'README.md'), 'hello\n');
 	git(seedDir, 'add', '-A');
 	git(seedDir, '-c', 'user.name=Seed', '-c', 'user.email=seed@test.local', 'commit', '-m', 'seed');
-	git(seedDir, 'push', pathToFileURL(originDir).toString(), 'HEAD:refs/heads/main');
-
-	// Real git, no network: the https GitHub URL the fleet would use is
-	// rewritten to the test-owned bare repository for child processes only,
-	// exactly as the node's own workspace spec does. The credential is keyed
-	// to the https URL; git reads from disk.
-	gitConfigIndex = Number(process.env.GIT_CONFIG_COUNT ?? '0');
-	process.env.GIT_CONFIG_COUNT = String(gitConfigIndex + 1);
-	process.env[`GIT_CONFIG_KEY_${gitConfigIndex}`] = `url.${pathToFileURL(originDir).toString()}.insteadOf`;
-	process.env[`GIT_CONFIG_VALUE_${gitConfigIndex}`] = REMOTE;
+	git(seedDir, 'push', originUrl, 'HEAD:refs/heads/main');
 });
 
 afterAll(async () => {
-	delete process.env[`GIT_CONFIG_KEY_${gitConfigIndex}`];
-	delete process.env[`GIT_CONFIG_VALUE_${gitConfigIndex}`];
-	if (gitConfigIndex === 0) delete process.env.GIT_CONFIG_COUNT;
-	else process.env.GIT_CONFIG_COUNT = String(gitConfigIndex);
 	await fs.rm(root, { recursive: true, force: true, maxRetries: 3 });
 });
 
@@ -184,7 +180,7 @@ describe('scoped fetch credential — how it reaches git (real git, every child 
 		const plugin = new LocalWorkspacePlugin({ execFile: recordingGit(invocations) });
 
 		const handle = await plugin.provision(
-			spec('fetch-env', 'task/fetch-env-aaaa1111', { hardenRepoHooks: true, fetchCredential: credential })
+			spec('fetch-env', 'task/fetch-env-aaaa1111', { hardenRepoHooks: true, fetchCredential: credential() })
 		);
 		expect(existsSync(join(handle.path, 'README.md'))).toBe(true);
 
@@ -195,27 +191,30 @@ describe('scoped fetch credential — how it reaches git (real git, every child 
 		for (const fetch of fetches) {
 			const pairs = configPairs(fetch.env);
 			// The four entries the scoped PUSH installs, in the same order,
-			// appended LAST — after the operator's own entries and after the
-			// provision's hardening overlay.
-			const [helper, askpass, hooks, header] = pairs.slice(-4);
+			// after the operator's own entries and after the provision's
+			// hardening overlay.
+			const at = pairs.findIndex(([key]) => /extraheader$/i.test(key));
+			const [helper, askpass, hooks, header] = pairs.slice(at - 3, at + 1);
 			expect(helper).toEqual(['credential.helper', '']);
 			expect(askpass).toEqual(['core.askpass', '']);
 			expect(hooks[0]).toBe('core.hooksPath');
-			expect(header).toEqual([`http.${REMOTE}.extraheader`, `Authorization: Basic ${BASIC}`]);
+			expect(header).toEqual([`http.${originUrl}.extraheader`, `Authorization: Basic ${BASIC}`]);
 			expect(fetch.env.GIT_TERMINAL_PROMPT).toBe('0');
+			// The header is the ONLY entry that holds the credential.
+			expect(pairs.filter(([, value]) => value.includes(BASIC) || value.includes(TOKEN))).toHaveLength(1);
 		}
 
-		// NOT in argv — of any command. And the remote stays the token-free URL.
+		// NOT in argv — of any command.
 		for (const entry of invocations) {
 			expect(entry.args.join('\u0000')).not.toContain(TOKEN);
 			expect(entry.args.join('\u0000')).not.toContain(BASIC);
 			expect(entry.args.join('\u0000')).not.toContain('x-access-token');
 		}
-		expect(fetches[0].args).toContain(REMOTE);
 
 		// And in the environment of NOTHING else: not `init`, not `remote
 		// add`, not the ownership probes, not `worktree add` — the command
-		// that runs with the repository's own files on disk.
+		// that runs with the repository's own files on disk — and not the
+		// pool maintenance that follows the fetches.
 		const others = invocations.filter((entry) => entry.args[0] !== 'fetch');
 		expect(others.length).toBeGreaterThan(5);
 		expect(others.some((entry) => entry.args[0] === 'worktree' && entry.args[1] === 'add')).toBe(true);
@@ -223,7 +222,58 @@ describe('scoped fetch credential — how it reaches git (real git, every child 
 			expect(JSON.stringify(entry.env)).not.toContain(TOKEN);
 			expect(JSON.stringify(entry.env)).not.toContain(BASIC);
 			expect(carriesHeader(entry)).toBe(false);
+			expect(entry.env.GIT_ALLOW_PROTOCOL).toBeUndefined();
 		}
+	});
+
+	it('binds the credentialed fetch to ONE transport and to a remote no config file can describe', async () => {
+		// The exec-time half of `credentialed-command.ts`, as the child
+		// actually received it. None of it depends on what the pool's config
+		// says, which is the point: see the attack spec for what it stops.
+		const invocations: Invocation[] = [];
+		const plugin = new LocalWorkspacePlugin({ execFile: recordingGit(invocations) });
+
+		await plugin.provision(
+			spec('fetch-bound', 'task/fetch-bound-1212aaaa', { hardenRepoHooks: true, fetchCredential: credential() })
+		);
+
+		const [base, branch] = fetchesOf(invocations);
+		// The remote is a PRIVATE name minted per command, never the URL…
+		const name = base.args.at(-2) as string;
+		expect(name).toMatch(/^ew-credentialed-[0-9a-f-]{36}$/);
+		expect(base.args).toEqual([
+			'fetch',
+			'--no-recurse-submodules',
+			'--depth',
+			'1',
+			name,
+			'+refs/heads/main:refs/remotes/origin/main'
+		]);
+		// …and its only definition is in this child's own environment.
+		expect(valueOf(base, `remote.${name}.url`)).toBe(originUrl);
+		expect(base.args).not.toContain(originUrl);
+		// Each command gets its own.
+		expect(branch.args.at(-2)).not.toBe(name);
+		expect(valueOf(branch, `remote.${branch.args.at(-2)}.url`)).toBe(originUrl);
+
+		for (const fetch of [base, branch]) {
+			// The transport of the URL the credential was issued for — an
+			// environment variable, so no `protocol.*.allow` can widen it.
+			expect(fetch.env.GIT_ALLOW_PROTOCOL).toBe('file');
+			// Nothing the fetch could be made to start.
+			expect(valueOf(fetch, 'core.fsmonitor')).toBe('false');
+			expect(valueOf(fetch, 'core.alternateRefsCommand')).toBe('');
+			expect(valueOf(fetch, 'maintenance.auto')).toBe('false');
+			expect(valueOf(fetch, 'gc.auto')).toBe('0');
+			expect(valueOf(fetch, 'fetch.recurseSubmodules')).toBe('false');
+			expect(valueOf(fetch, 'core.unsetenvvars')).toBeDefined();
+		}
+
+		// The pool is still maintained — by a child that carries nothing.
+		const maintenance = invocations.filter((entry) => entry.args[0] === 'maintenance');
+		expect(maintenance.map((entry) => entry.args)).toEqual([['maintenance', 'run', '--auto', '--quiet']]);
+		expect(carriesHeader(maintenance[0])).toBe(false);
+		expect(invocations.indexOf(maintenance[0])).toBeGreaterThan(invocations.indexOf(branch));
 	});
 
 	it('leaves the token in NO file, no Git config and no remote URL', async () => {
@@ -231,7 +281,7 @@ describe('scoped fetch credential — how it reaches git (real git, every child 
 		const plugin = new LocalWorkspacePlugin({ execFile: recordingGit(invocations) });
 
 		const handle = await plugin.provision(
-			spec('fetch-disk', 'task/fetch-disk-bbbb2222', { hardenRepoHooks: true, fetchCredential: credential })
+			spec('fetch-disk', 'task/fetch-disk-bbbb2222', { hardenRepoHooks: true, fetchCredential: credential() })
 		);
 		// It WAS used — otherwise the scan below proves nothing.
 		expect(fetchesOf(invocations).every(carriesHeader)).toBe(true);
@@ -242,9 +292,11 @@ describe('scoped fetch credential — how it reaches git (real git, every child 
 		const poolConfig = git(poolDir(), 'config', '--local', '--list');
 		expect(poolConfig.toLowerCase()).not.toContain('extraheader');
 		expect(poolConfig.toLowerCase()).not.toContain('credential.');
+		// The private remote was never written down either.
+		expect(poolConfig).not.toContain('ew-credentialed-');
 		// The persisted remote is the literal token-free URL.
-		expect(git(poolDir(), 'config', '--get', 'remote.origin.url')).toBe(REMOTE);
-		expect(git(handle.path, 'config', '--get', 'remote.origin.url')).toBe(REMOTE);
+		expect(git(poolDir(), 'config', '--get', 'remote.origin.url')).toBe(originUrl);
+		expect(git(handle.path, 'config', '--get', 'remote.origin.url')).toBe(originUrl);
 		expect(git(handle.path, 'status', '--porcelain')).toBe('');
 	});
 
@@ -260,7 +312,7 @@ describe('scoped fetch credential — how it reaches git (real git, every child 
 		await plugin.provision(
 			spec('fetch-hardened', 'task/fetch-hardened-cccc3333', {
 				hardenRepoHooks: true,
-				fetchCredential: credential
+				fetchCredential: credential()
 			})
 		);
 
@@ -313,7 +365,7 @@ describe('scoped fetch credential — how it reaches git (real git, every child 
 			const plugin = new LocalWorkspacePlugin({ execFile: recordingGit(invocations) });
 			await plugin.provision(
 				spec('fetch-hook', 'task/fetch-hook-ffff6666', {
-					fetchCredential: { ...credential, token: 'ghs_hookHarvestSentinelToken0123456789' }
+					fetchCredential: { ...credential(), token: 'ghs_hookHarvestSentinelToken0123456789' }
 				})
 			);
 			expect(fetchesOf(invocations).every(carriesHeader)).toBe(true);
@@ -354,7 +406,7 @@ describe('scoped fetch credential — how it reaches git (real git, every child 
 			await plugin.provision(
 				spec('fetch-askpass', 'task/fetch-askpass-9999aaaa', {
 					hardenRepoHooks: true,
-					fetchCredential: credential
+					fetchCredential: credential()
 				})
 			);
 
@@ -384,12 +436,12 @@ describe('scoped fetch credential — how it reaches git (real git, every child 
 		const plugin = new LocalWorkspacePlugin({
 			execFile: recordingGit(
 				invocations,
-				`fatal: unable to access '${REMOTE}/': header was 'Authorization: Basic ${BASIC}' (${TOKEN})`
+				`fatal: unable to access '${originUrl}/': header was 'Authorization: Basic ${BASIC}' (${TOKEN})`
 			)
 		});
 
 		const error = await plugin
-			.provision(spec('fetch-scrub', 'task/fetch-scrub-8888bbbb', { fetchCredential: credential }))
+			.provision(spec('fetch-scrub', 'task/fetch-scrub-8888bbbb', { fetchCredential: credential() }))
 			.then(
 				() => null,
 				(caught: Error) => caught
@@ -421,7 +473,7 @@ describe('scoped fetch credential — withheld, never refused: the fetch falls b
 		const handle = await plugin.provision(
 			spec(bindingKey, branch, {
 				hardenRepoHooks: true,
-				fetchCredential: credential,
+				fetchCredential: credential(),
 				onFetchCredentialWithheld: (reason) => reasons.push(reason),
 				...extra
 			})
@@ -429,35 +481,57 @@ describe('scoped fetch credential — withheld, never refused: the fetch falls b
 		return { invocations, reasons, handle };
 	}
 
-	function expectNoCredentialAnywhere(invocations: Invocation[]): void {
-		expect(fetchesOf(invocations)).toHaveLength(2);
+	/** A withheld credential leaves the two fetches byte-for-byte the plain ones. */
+	function expectThePlainFetch(invocations: Invocation[]): void {
+		const fetches = fetchesOf(invocations);
+		expect(fetches.map((entry) => entry.args.slice(0, -1))).toEqual([
+			['fetch', '--depth', '1', originUrl],
+			['fetch', originUrl]
+		]);
 		for (const entry of invocations) {
 			expect(carriesHeader(entry)).toBe(false);
 			expect(JSON.stringify(entry.env)).not.toContain(TOKEN);
 			expect(JSON.stringify(entry.env)).not.toContain(BASIC);
 			expect(entry.args.join('\u0000')).not.toContain(TOKEN);
+			expect(entry.env.GIT_ALLOW_PROTOCOL).toBeUndefined();
 		}
+		// No pool maintenance of this provider's own either: the plain fetch
+		// runs git's, as it always did.
+		expect(invocations.some((entry) => entry.args[0] === 'maintenance')).toBe(false);
 	}
 
 	// Each of these in the pool's OWN config could redirect, intercept or
-	// answer for a credentialed request. The pool is the scope a previous
-	// run's model can reach through its worktree's `.git` pointer, and none
-	// of these is ever legitimate there: this plugin creates it with `init
-	// --bare` and only adds `remote.origin.*`.
+	// answer for a credentialed request, and none is on the allowlist. The
+	// pool is the scope a previous run's model can reach through its
+	// worktree's `.git` pointer.
 	it.each([
-		['a persisted credential helper', 'credential.helper', 'store', 'credential.*'],
-		['a second header', `http.${REMOTE}.extraheader`, 'Authorization: Basic cGxhbnRlZA==', 'http.*'],
-		['a proxy', 'http.proxy', 'http://127.0.0.1:9', 'http.*'],
-		['TLS verification switched off', 'http.sslVerify', 'false', 'http.*'],
-		['a pinned address', 'http.curloptResolve', 'github.com:443:127.0.0.1', 'http.*'],
-		['a URL rewrite', 'url.https://evil.tld/.insteadOf', 'https://github.com/', 'url.*.insteadOf'],
-		['a push-URL rewrite', 'url.https://evil.tld/.pushInsteadOf', 'https://github.com/', 'url.*.insteadOf'],
-		['a proxy on a remote NAMED by the URL', `remote.${REMOTE}.proxy`, 'http://127.0.0.1:9', 'remote.*.proxy']
-	])('is withheld when the pool config carries %s', async (_label, key, value, family) => {
+		['a persisted credential helper', 'credential.helper', 'store', 'credential.helper'],
+		[
+			'a second header',
+			'http.https://github.com/.extraheader',
+			'Authorization: Basic cGxhbnRlZA==',
+			'http.<…>.extraheader'
+		],
+		['a proxy', 'http.proxy', 'http://127.0.0.1:9', 'http.proxy'],
+		['TLS verification switched off', 'http.sslVerify', 'false', 'http.sslverify'],
+		['a planted CA bundle', 'http.sslCAInfo', '/tmp/planted-ca.pem', 'http.sslcainfo'],
+		['a pinned address', 'http.curloptResolve', 'github.com:443:127.0.0.1', 'http.curloptresolve'],
+		['a URL rewrite', 'url.https://evil.tld/.insteadOf', 'https://github.com/', 'url.<…>.insteadof'],
+		['a push-URL rewrite', 'url.https://evil.tld/.pushInsteadOf', 'https://github.com/', 'url.<…>.pushinsteadof'],
+		[
+			'a proxy on a remote NAMED by a URL',
+			'remote.https://github.com/o/r.git.proxy',
+			'http://127.0.0.1:9',
+			'remote.<…>.proxy'
+		],
+		['a transport policy', 'protocol.file.allow', 'always', 'protocol.<…>.allow'],
+		['a gc hook', 'gc.recentObjectsHook', 'echo', 'gc.recentobjectshook'],
+		['a key nothing here knows', 'ewunknown.setting', 'x', 'ewunknown.setting']
+	])('is withheld when the pool config carries %s', async (_label, key, value, reported) => {
 		const slug = key
 			.replace(/[^a-z0-9]/gi, '')
 			.toLowerCase()
-			.slice(0, 24);
+			.slice(0, 28);
 		git(poolDir(), 'config', '--local', key, value);
 		try {
 			const { invocations, reasons, handle } = await provisionWithheld(
@@ -468,15 +542,15 @@ describe('scoped fetch credential — withheld, never refused: the fetch falls b
 			// The provision SUCCEEDED — this is the fallback, not a refusal…
 			expect(existsSync(join(handle.path, 'README.md'))).toBe(true);
 			// …and Git never saw the credential, in any form, in any child.
-			expectNoCredentialAnywhere(invocations);
-			// The caller is told once, by FAMILY: a key's subsection is free
-			// text (`url.https://user:token@host/.insteadOf`), and this
-			// sentence ends up in a job result.
+			expectThePlainFetch(invocations);
+			// The caller is told once, with the key as `section.variable`: a
+			// subsection is free text (`url.https://user:token@host/.insteadOf`)
+			// and this sentence ends up in a job result.
 			expect(reasons).toHaveLength(1);
-			expect(reasons[0]).toContain(family);
+			expect(reasons[0]).toContain(`(${reported})`);
 			expect(reasons[0]).not.toContain('evil.tld');
 			expect(reasons[0]).not.toContain('127.0.0.1');
-			expect(reasons[0]).not.toContain(REMOTE);
+			expect(reasons[0]).not.toContain('github.com');
 		} finally {
 			git(poolDir(), 'config', '--local', '--unset-all', key);
 		}
@@ -484,7 +558,7 @@ describe('scoped fetch credential — withheld, never refused: the fetch falls b
 
 	it('is withheld when the setting arrives through an `include.path` the pool config names', async () => {
 		// `git config --local` skips includes unless told otherwise, so a
-		// probe without `--includes` reads a pool config that says only
+		// read restricted that way sees a pool config that says only
 		// `include.path = …` as clean while Git itself honours what it pulls in.
 		const included = join(root, 'planted.gitconfig');
 		writeFileSync(included, '[http]\n\tsslVerify = false\n');
@@ -494,10 +568,10 @@ describe('scoped fetch credential — withheld, never refused: the fetch falls b
 				'fetch-withheld-include',
 				'task/withheld-include-2222'
 			);
-			expectNoCredentialAnywhere(invocations);
+			expectThePlainFetch(invocations);
 			expect(reasons).toHaveLength(1);
-			expect(reasons[0]).toContain('http.*');
-			expect(credentialProbes(invocations)[0].args).toContain('--includes');
+			expect(reasons[0]).toContain('include.path');
+			expect(reasons[0]).toContain('http.sslverify');
 		} finally {
 			git(poolDir(), 'config', '--local', '--unset-all', 'include.path');
 		}
@@ -511,21 +585,20 @@ describe('scoped fetch credential — withheld, never refused: the fetch falls b
 			'fetch-withheld-remote',
 			'task/withheld-remote-3333',
 			{
-				fetchCredential: { ...credential, remoteUrl: 'https://github.com/someone-else/private-repo.git' }
+				fetchCredential: { ...credential(), remoteUrl: 'https://github.com/someone-else/private-repo.git' }
 			}
 		);
 
 		expect(existsSync(join(handle.path, 'README.md'))).toBe(true);
-		expectNoCredentialAnywhere(invocations);
+		expectThePlainFetch(invocations);
 		expect(reasons).toEqual(['it was issued for a different remote than the one being fetched']);
-		// Decided before the pool is even probed.
-		expect(credentialProbes(invocations)).toHaveLength(0);
+		// Decided before the pool is even read.
+		expect(configChecks(invocations)).toHaveLength(0);
 	});
 
 	it('is withheld when the provision already carries per-operation auth', async () => {
 		// The cloud path's URL-userinfo form. Its fetch is stubbed to fail:
-		// a URL carrying userinfo is not the one this suite rewrites to disk,
-		// and a hermetic spec must not reach the network to find that out.
+		// what is asserted is that the scoped credential stayed out of it.
 		const invocations: Invocation[] = [];
 		const reasons: string[] = [];
 		const plugin = new LocalWorkspacePlugin({ execFile: recordingGit(invocations, 'fatal: stubbed') });
@@ -534,7 +607,7 @@ describe('scoped fetch credential — withheld, never refused: the fetch falls b
 			plugin.provision(
 				spec('fetch-withheld-auth', 'task/withheld-auth-4444', {
 					auth: { username: 'x-access-token', token: 'cloud-path-token-value' },
-					fetchCredential: credential,
+					fetchCredential: credential(),
 					onFetchCredentialWithheld: (reason) => reasons.push(reason)
 				})
 			)
@@ -548,6 +621,29 @@ describe('scoped fetch credential — withheld, never refused: the fetch falls b
 		expect(reasons).toEqual(['this provision already carries per-operation auth']);
 	});
 
+	it('is withheld for a remote no header can authenticate', async () => {
+		// `http` would carry the header in clear; for ssh it means nothing.
+		// The repository is not even read.
+		const invocations: Invocation[] = [];
+		const reasons: string[] = [];
+		const plugin = new LocalWorkspacePlugin({ execFile: recordingGit(invocations, 'fatal: stubbed') });
+		const remote = 'http://git.example.test/owner/repo.git';
+
+		await plugin
+			.provision({
+				...spec('fetch-withheld-scheme', 'task/withheld-scheme-4545'),
+				repoUrl: remote,
+				settings: { baseDir: join(root, 'http-workspaces'), fetchDepth: 1 },
+				fetchCredential: { ...credential(), remoteUrl: remote },
+				onFetchCredentialWithheld: (reason) => reasons.push(reason)
+			})
+			.catch(() => undefined);
+
+		expect(reasons).toEqual(['a scoped credential is an HTTP header, and its remote is not an https URL']);
+		expect(configChecks(invocations)).toHaveLength(0);
+		for (const entry of invocations) expect(carriesHeader(entry)).toBe(false);
+	});
+
 	it('a callback that throws never decides how a repository is fetched', async () => {
 		git(poolDir(), 'config', '--local', 'credential.helper', 'store');
 		try {
@@ -555,14 +651,14 @@ describe('scoped fetch credential — withheld, never refused: the fetch falls b
 			const plugin = new LocalWorkspacePlugin({ execFile: recordingGit(invocations) });
 			const handle = await plugin.provision(
 				spec('fetch-withheld-throw', 'task/withheld-throw-5555', {
-					fetchCredential: credential,
+					fetchCredential: credential(),
 					onFetchCredentialWithheld: () => {
 						throw new Error('reporting is broken');
 					}
 				})
 			);
 			expect(existsSync(join(handle.path, 'README.md'))).toBe(true);
-			expectNoCredentialAnywhere(invocations);
+			for (const entry of invocations) expect(carriesHeader(entry)).toBe(false);
 		} finally {
 			git(poolDir(), 'config', '--local', '--unset-all', 'credential.helper');
 		}
@@ -577,20 +673,21 @@ describe('scoped fetch credential — withheld, never refused: the fetch falls b
 		await plugin.provision(
 			spec('fetch-clean-again', 'task/clean-again-6666', {
 				hardenRepoHooks: true,
-				fetchCredential: credential,
+				fetchCredential: credential(),
 				onFetchCredentialWithheld: (reason) => reasons.push(reason)
 			})
 		);
 
 		expect(reasons).toEqual([]);
 		expect(fetchesOf(invocations).every(carriesHeader)).toBe(true);
-		expect(credentialProbes(invocations)).toHaveLength(1);
+		// One read of the config serves the allowlist and the pins.
+		expect(configChecks(invocations)).toHaveLength(1);
 		expect(seeded.path).toBeTruthy();
 	});
 });
 
 describe('no fetch credential — the provision is exactly what it was', () => {
-	it('installs nothing, removes nothing and probes nothing', async () => {
+	it('installs nothing, removes nothing and reads nothing', async () => {
 		const previous = process.env.GIT_ASKPASS;
 		process.env.GIT_ASKPASS = 'ambient-askpass-kept-for-an-ordinary-fetch';
 		try {
@@ -599,51 +696,67 @@ describe('no fetch credential — the provision is exactly what it was', () => {
 			await plugin.provision(spec('fetch-none', 'task/fetch-none-7777', { hardenRepoHooks: true }));
 
 			const fetches = fetchesOf(invocations);
-			expect(fetches).toHaveLength(2);
+			// The exact two commands a provision has always run.
+			expect(fetches.map((entry) => entry.args)).toEqual([
+				['fetch', '--depth', '1', originUrl, '+refs/heads/main:refs/remotes/origin/main'],
+				['fetch', originUrl, '+refs/heads/task/fetch-none-7777:refs/remotes/origin/task/fetch-none-7777']
+			]);
 			for (const fetch of fetches) {
 				// The machine's own Git configuration answers, as it always
-				// did: no helper reset, no askpass removal, no header.
+				// did: no helper reset, no askpass removal, no header, no
+				// transport restriction.
 				const keys = configPairs(fetch.env).map(([key]) => key);
 				expect(keys).not.toContain('credential.helper');
 				expect(keys).not.toContain('core.askpass');
+				expect(keys).not.toContain('maintenance.auto');
 				expect(keys.some((key) => /extraheader$/i.test(key))).toBe(false);
+				expect(keys.some((key) => key.startsWith('remote.'))).toBe(false);
 				expect(fetch.env.GIT_ASKPASS).toBe('ambient-askpass-kept-for-an-ordinary-fetch');
+				expect(fetch.env.GIT_ALLOW_PROTOCOL).toBeUndefined();
 				// Exactly one `core.hooksPath`: the hardening's.
 				expect(keys.filter((key) => key === 'core.hooksPath')).toHaveLength(1);
 			}
-			// The scoped-credential probe belongs to the scoped path only.
-			expect(credentialProbes(invocations)).toHaveLength(0);
+			// The config check and the provider's own maintenance belong to
+			// the scoped path only.
+			expect(configChecks(invocations)).toHaveLength(0);
+			expect(invocations.some((entry) => entry.args[0] === 'maintenance')).toBe(false);
 		} finally {
 			if (previous === undefined) delete process.env.GIT_ASKPASS;
 			else process.env.GIT_ASKPASS = previous;
 		}
 	});
 
-	it('the scoped PUSH is untouched: still four entries, still an EMPTY hooks path', async () => {
-		// The fetch credential reuses the push's environment builder with
-		// one parameter added. This pins that the parameter's default is the
-		// push's old value, so the push did not move.
+	it('the scoped PUSH keeps its four entries where they were, with an EMPTY hooks path', async () => {
+		// The fetch credential reuses the push's environment builder. This
+		// pins what the push keeps: the same four entries at the same
+		// positions with the push's own `''` hooks path. What both gained —
+		// the entries after them — is the exec-time safety config.
 		const handle = await new LocalWorkspacePlugin().provision(spec('fetch-push-pin', 'task/push-pin-8888'));
 		writeFileSync(join(handle.path, 'work.txt'), 'work\n');
-		// What the push itself reads back: `remote get-url` applies this
-		// suite's rewrite, and the push credential must match it byte for byte.
-		const pushRemote = git(handle.path, 'remote', 'get-url', 'origin');
+		const inherited = Number(process.env.GIT_CONFIG_COUNT ?? '0');
 		const invocations: Invocation[] = [];
 		const plugin = new LocalWorkspacePlugin({ execFile: recordingGit(invocations) });
 
 		const result = await plugin.finalize(handle, {
 			commitMessage: 'feat: pinned push',
 			push: true,
-			pushCredential: { username: 'x-access-token', token: TOKEN, remoteUrl: pushRemote }
+			pushCredential: credential()
 		});
 
 		expect(result.pushed).toBe(true);
-		const push = invocations.find((entry) => entry.args[0] === 'push');
-		const [helper, askpass, hooks, header] = configPairs(push?.env ?? {}).slice(-4);
+		const push = invocations.find((entry) => entry.args[0] === 'push') as Invocation;
+		const [helper, askpass, hooks, header] = configPairs(push.env).slice(inherited, inherited + 4);
 		expect(helper).toEqual(['credential.helper', '']);
 		expect(askpass).toEqual(['core.askpass', '']);
 		expect(hooks).toEqual(['core.hooksPath', '']);
-		expect(header).toEqual([`http.${pushRemote}.extraheader`, `Authorization: Basic ${BASIC}`]);
-		expect(Number(push?.env.GIT_CONFIG_COUNT)).toBe(gitConfigIndex + 1 + 4);
+		expect(header).toEqual([`http.${originUrl}.extraheader`, `Authorization: Basic ${BASIC}`]);
+		// And the same binding the fetch gets.
+		const name = push.args.at(-2) as string;
+		expect(push.args).toEqual(['push', '--no-verify', name, `HEAD:refs/heads/${handle.branch}`]);
+		expect(name).toMatch(/^ew-credentialed-[0-9a-f-]{36}$/);
+		expect(valueOf(push, `remote.${name}.url`)).toBe(originUrl);
+		expect(push.env.GIT_ALLOW_PROTOCOL).toBe('file');
+		expect(valueOf(push, 'push.gpgSign')).toBe('false');
+		expect(valueOf(push, 'push.recurseSubmodules')).toBe('no');
 	});
 });
