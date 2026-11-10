@@ -1,8 +1,17 @@
+import {
+    FLEET_AGENT_REASON_CODES,
+    anyFleetAgentReady,
+    isFleetAgentUsageWindowCurrent,
+} from '@ever-works/contracts';
 import type {
+    FleetAgentFailureKind,
     FleetAgentReadinessEntry,
     FleetAgentReadinessStatus,
+    FleetAgentReasonCode,
     FleetAgentUsageWindow,
+    FleetModelUsageLimitWindow,
     FleetNodeAgentReadinessView,
+    FleetNodeRunStats,
     FleetNodeStatus,
     FleetViewerRole,
 } from '@ever-works/contracts';
@@ -115,17 +124,50 @@ export function agentUsageWindowKey(window: string): AgentUsageWindowKey | null 
 }
 
 /**
+ * The usage windows of an agent that still describe its seat, with when they
+ * were observed.
+ *
+ * A reading is a snapshot: "82% used" from a run six hours ago says nothing
+ * about a five-hour window now. A window that names its reset is shown until
+ * then; one that names none is shown for its own length after it was
+ * observed (the platform's rule, {@link isFleetAgentUsageWindowCurrent}). The
+ * platform drops stale windows when it serves the view; this covers the time
+ * a page stays open after that.
+ */
+export function currentAgentUsage(
+    agent: Pick<FleetAgentReadinessEntry, 'usage' | 'usageObservedAt'>,
+    now: number = Date.now(),
+): { windows: FleetAgentUsageWindow[]; observedAt: string | null } {
+    const observedAt = typeof agent.usageObservedAt === 'string' ? agent.usageObservedAt : null;
+    const windows = (agent.usage ?? []).filter((window) =>
+        isFleetAgentUsageWindowCurrent(window, observedAt, now),
+    );
+    return { windows, observedAt: windows.length > 0 ? observedAt : null };
+}
+
+/**
  * What a computer's agents add up to:
  *
- * - `hidden`     — nothing to show: someone else's computer (the report is
- *                  the owner's), a cluster row, or a machine still enrolling;
- * - `unknown`    — the node never reported its agents (an older node
- *                  version): "unknown — update the node", never "none can";
- * - `no-agents`  — it reported, and has no agent CLI installed;
- * - `none-ready` — it has agents, and none can work now;
- * - `ready`      — at least one can.
+ * - `hidden`       — nothing to show: someone else's computer (the report is
+ *                    the owner's), a cluster row, or a machine still enrolling;
+ * - `unknown`      — the node never reported its agents (an older node
+ *                    version): "unknown — update the node", never "none can";
+ * - `undetermined` — it reported, no agent is ready, and at least one could
+ *                    not be judged (a status command that did not answer, a
+ *                    lookup that timed out, a refusal too old to still call
+ *                    the status). Said neutrally: not known is not "cannot";
+ * - `no-agents`    — it reported, and has no agent CLI installed, for certain;
+ * - `none-ready`   — it has agents, and every one has a definite reason it
+ *                    cannot work now;
+ * - `ready`        — at least one can.
  */
-export type NodeAgentSummary = 'hidden' | 'unknown' | 'no-agents' | 'none-ready' | 'ready';
+export type NodeAgentSummary =
+    | 'hidden'
+    | 'unknown'
+    | 'undetermined'
+    | 'no-agents'
+    | 'none-ready'
+    | 'ready';
 
 export interface NodeAgentSummaryInput {
     status: FleetNodeStatus;
@@ -141,17 +183,26 @@ export function summarizeNodeAgents(node: NodeAgentSummaryInput): NodeAgentSumma
     if (node.status === 'enrolling') return 'hidden';
     const readiness = node.agentReadiness;
     if (!readiness) return 'unknown';
-    if (!readiness.agents.some((agent) => agent.installed)) return 'no-agents';
-    // The platform's answer when it gave one; the list itself otherwise.
-    const anyReady =
-        typeof node.anyAgentReady === 'boolean' ? node.anyAgentReady : readiness.anyReady === true;
-    return anyReady ? 'ready' : 'none-ready';
+    // The platform's three-state answer when the row carries one (it knows
+    // about a throttle the node has not heard of yet); the report's own
+    // otherwise; and only for a view that carries neither, the same rule the
+    // platform applies, over the list.
+    const answer =
+        node.anyAgentReady !== undefined
+            ? node.anyAgentReady
+            : readiness.anyReady !== undefined
+              ? readiness.anyReady
+              : anyFleetAgentReady(readiness.agents);
+    if (answer === true) return 'ready';
+    if (answer === null) return 'undetermined';
+    return readiness.agents.some((agent) => agent.installed === true) ? 'none-ready' : 'no-agents';
 }
 
 /**
- * True when the computer is ONLINE and no agent on it can work — the case
- * "Online" alone used to hide. An offline or drained computer is not warned
- * about: it takes no work whatever its agents say.
+ * True when the computer is ONLINE and it is CERTAIN no agent on it can work
+ * — the case "Online" alone used to hide. An offline or drained computer is
+ * not warned about: it takes no work whatever its agents say. Neither is one
+ * whose agents could not be judged: that gets a neutral line, not a warning.
  */
 export function nodeAgentsBlocked(node: NodeAgentSummaryInput): boolean {
     if (node.status !== 'online') return false;
@@ -160,18 +211,103 @@ export function nodeAgentsBlocked(node: NodeAgentSummaryInput): boolean {
 }
 
 /**
- * The agents worth a row: installed ones first, in the order the node sent
- * them. A CLI that is simply not installed is left out of the compact list
+ * The agents worth a row, in the order the node sent them.
+ *
+ * A CLI that is, for certain, not installed is left out of the compact list
  * (it would be noise on every computer) and kept, last, in the full one.
+ * Every other row stays in both — in particular one the node could not judge
+ * (`installed: null`, a lookup that timed out): it is the row that explains
+ * why the computer's answer is "not known".
  */
 export function listedAgents(
     readiness: Pick<FleetNodeAgentReadinessView, 'agents'> | null | undefined,
     options: { includeNotInstalled?: boolean } = {},
 ): FleetAgentReadinessEntry[] {
     const agents = readiness?.agents ?? [];
-    const installed = agents.filter((agent) => agent.installed);
-    if (!options.includeNotInstalled) return installed;
-    return [...installed, ...agents.filter((agent) => !agent.installed)];
+    const absent = (agent: FleetAgentReadinessEntry) =>
+        agent.status === 'not_installed' || agent.installed === false;
+    const shown = agents.filter((agent) => !absent(agent));
+    if (!options.includeNotInstalled) return shown;
+    return [...shown, ...agents.filter(absent)];
+}
+
+/**
+ * The reason code of an agent when this build has a sentence for it, else
+ * null (the caller then shows the platform's own English sentence).
+ *
+ * A reason is a CODE on the wire; the sentence is chosen here, in the
+ * viewer's language. Nothing an agent run printed is ever part of it.
+ */
+export function agentReasonKey(code: string | null | undefined): FleetAgentReasonCode | null {
+    return typeof code === 'string' &&
+        (FLEET_AGENT_REASON_CODES as readonly string[]).includes(code)
+        ? (code as FleetAgentReasonCode)
+        : null;
+}
+
+/** The windows a usage limit can name; anything else reads as the general one. */
+export const AGENT_LIMIT_WINDOW_KEYS = ['weekly', 'session', 'daily', 'rate', 'usage'] as const;
+
+export function agentLimitWindowKey(window: string | null | undefined): FleetModelUsageLimitWindow {
+    return (AGENT_LIMIT_WINDOW_KEYS as readonly string[]).includes(window ?? '')
+        ? (window as FleetModelUsageLimitWindow)
+        : 'usage';
+}
+
+/**
+ * What to say about the last run an agent refused, beside its status:
+ *
+ * - `seen` — the status IS that refusal (a run proved it): say how long ago
+ *   it was last seen, so a verdict from this morning does not read like one
+ *   from this minute;
+ * - `last` — the status has aged to `unknown` (no run since): keep the last
+ *   failure and its time in view, so "unknown" still says what to look at.
+ *
+ * Null when there is nothing to add — no refusal recorded, or an agent that
+ * is ready again.
+ */
+export interface AgentFailureNote {
+    mode: 'seen' | 'last';
+    at: string;
+    kind: FleetAgentFailureKind | null;
+    code: FleetAgentReasonCode | null;
+}
+
+export function agentFailureNote(
+    agent: Pick<
+        FleetAgentReadinessEntry,
+        'status' | 'reasonCode' | 'lastFailureAt' | 'lastFailureKind' | 'lastFailureCode'
+    >,
+): AgentFailureNote | null {
+    const at = typeof agent.lastFailureAt === 'string' ? agent.lastFailureAt : '';
+    if (!at || !Number.isFinite(new Date(at).getTime())) return null;
+    const note = (mode: AgentFailureNote['mode']): AgentFailureNote => ({
+        mode,
+        at,
+        kind: agent.lastFailureKind ?? null,
+        code: agentReasonKey(agent.lastFailureCode),
+    });
+    const refused =
+        agent.status === 'not_signed_in' ||
+        agent.status === 'access_denied' ||
+        agent.status === 'limit_reached';
+    // The status came from that run only when it carries the run's own code
+    // (a `not_signed_in` the status command reported has a different one).
+    if (refused && agent.reasonCode && agent.reasonCode === agent.lastFailureCode) {
+        return note('seen');
+    }
+    if (agent.status === 'unknown' && agent.reasonCode === 'verdict_stale') return note('last');
+    return null;
+}
+
+/**
+ * Whether a window of run statistics is a FLOOR ("2000+"). A capped read
+ * kept the newest jobs, so the 7-day figures always are; the 24-hour figures
+ * are only when every job it kept was that recent.
+ */
+export function runStatsAreFloor(stats: FleetNodeRunStats, window: 'last24h' | 'last7d'): boolean {
+    if (stats.capped !== true) return false;
+    return window === 'last7d' || stats.last24h.runs >= stats.last7d.runs;
 }
 
 /**

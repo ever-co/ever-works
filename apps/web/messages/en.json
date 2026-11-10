@@ -17216,8 +17216,37 @@
                 "last24h": "Runs, last 24 hours",
                 "last7d": "Runs, last 7 days",
                 "counts": "{runs} finished, {failed} failed",
-                "cost": "{amount} spent"
-            }
+                "cost": "{amount} spent",
+                "countsFloor": "{runs}+ finished, {failed}+ failed"
+            },
+            "undetermined": "Could not determine whether an agent can work on this computer.",
+            "reason": {
+                "org_access_disabled": "The organization has disabled subscription access for this CLI. Use an API key, or ask an admin to enable access.",
+                "permission_denied": "The API refused this account (403). It may not use this CLI or model.",
+                "not_logged_in": "The CLI is not signed in. Sign in on this computer.",
+                "session_expired": "The sign-in session expired or was revoked. Sign in again on this computer.",
+                "invalid_api_key": "The API key was rejected. Replace it on this computer.",
+                "unauthorized": "The API rejected the credential (401). Sign in again on this computer.",
+                "usage_limit": "The {window} is reached.",
+                "out_of_credit": "The credit balance or quota is exhausted. Add credit, or use another seat.",
+                "status_signed_out": "The CLI is not signed in on this computer.",
+                "status_unanswered": "The CLI did not answer its status command.",
+                "status_unavailable": "This CLI version cannot report its sign-in state. Update the CLI.",
+                "probe_timed_out": "The startup lookup for this CLI timed out. Restart the node when the computer is less busy.",
+                "cli_too_old": "This CLI version is too old for this node. Update the CLI.",
+                "no_executor": "This node version cannot run agent work with this CLI.",
+                "verdict_stale": "The last run was refused and none has run since, so the current state is not known."
+            },
+            "limitWindow": {
+                "weekly": "weekly limit",
+                "session": "5-hour limit",
+                "daily": "daily limit",
+                "rate": "rate limit",
+                "usage": "usage limit"
+            },
+            "lastSeen": "Last seen in a run {when}",
+            "lastFailure": "Last refused run {when}: {what}",
+            "usageAsOf": "Usage as of {when}"
         }
     },
     "everConnect": {
