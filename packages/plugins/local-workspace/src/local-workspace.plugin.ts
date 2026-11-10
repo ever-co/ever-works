@@ -766,7 +766,12 @@ export class LocalWorkspacePlugin implements IPlugin, IWorkspacePlugin {
 		const repoUrl = (
 			await this.gitOrThrow(['remote', 'get-url', 'origin'], dir, opts.auth, 'origin remote missing', signal)
 		).stdout.trim();
-		const scoped = this.resolvePushCredential(opts.pushCredential, repoUrl);
+		let scoped: WorkspacePushCredential | null;
+		try {
+			scoped = this.resolvePushCredential(opts.pushCredential, repoUrl);
+		} catch (mismatch) {
+			throw (await this.rewriteRefusal(opts.pushCredential, dir, signal)) ?? mismatch;
+		}
 		let credential: ChildCredential | null = null;
 		if (scoped) {
 			// Fail closed BEFORE the write, twice: once because a
@@ -1377,6 +1382,32 @@ export class LocalWorkspacePlugin implements IPlugin, IWorkspacePlugin {
 	}
 
 	/**
+	 * Why a push credential that did not match `origin` really did not —
+	 * when the reason is a URL REWRITE.
+	 *
+	 * `git remote get-url origin` applies `url.<base>.insteadOf`, so on a
+	 * machine whose global config rewrites `https://github.com/` to ssh the
+	 * URL {@link resolvePushCredential} compares is the rewritten one, and
+	 * the refusal used to say only that origin "is not the one it was issued
+	 * for". When the CONFIGURED `remote.origin.url` is byte-identical to the
+	 * credential's, the difference is the rewrite, and the gate says so in
+	 * its own sentence: the rewrite's key and scope, never its value (or, if
+	 * the rewrite is the repository's own, the allowlist's refusal). Null
+	 * when the mismatch is anything else — the caller's refusal stands.
+	 */
+	private async rewriteRefusal(
+		credential: WorkspacePushCredential | undefined,
+		dir: string,
+		signal?: AbortSignal
+	): Promise<Error | null> {
+		if (!credential?.token || !credential.remoteUrl) return null;
+		const configured = await this.git(['config', '--get', 'remote.origin.url'], dir, undefined, signal);
+		if (configured.code !== 0 || configured.stdout.trim() !== credential.remoteUrl) return null;
+		const armed = await this.armCredential(credential, dir, 'push', signal);
+		return armed.credential === null ? new Error(`refusing to publish: ${armed.refusal}`) : null;
+	}
+
+	/**
 	 * The scoped READ credential this provision's fetches may use, or null.
 	 *
 	 * WITHHOLDS — where {@link resolvePushCredential} refuses — and that is
@@ -1786,6 +1817,28 @@ export class LocalWorkspacePlugin implements IPlugin, IWorkspacePlugin {
 	}
 
 	/**
+	 * The three trace2 targets, switched OFF for a credentialed child.
+	 *
+	 * Removing the variables ({@link isWithheldFromCredentialedChild}) is not
+	 * enough for trace2: its targets can also come from the system or global
+	 * config (`trace2.eventTarget`, `trace2.normalTarget`,
+	 * `trace2.perfTarget`), and with `trace2.configParams` matching `http.*`
+	 * the event stream records the command-scope config — the
+	 * `Authorization` header with it (measured, git 2.52: one line holding
+	 * the header, from a global `trace2.eventTarget`). Those keys are read
+	 * only from the system and global files, never from command scope, so
+	 * no `GIT_CONFIG_*` entry can turn them off; the variable can: a set,
+	 * non-empty `GIT_TRACE2_EVENT` replaces the configured target, and `0`
+	 * means off (measured: no file was written). Every other Git call keeps
+	 * the operator's tracing.
+	 */
+	private static readonly credentialedChildTraceOff: Readonly<Record<string, string>> = {
+		GIT_TRACE2: '0',
+		GIT_TRACE2_EVENT: '0',
+		GIT_TRACE2_PERF: '0'
+	};
+
+	/**
 	 * Prove that nothing in this repository's own Git configuration can
 	 * answer for — or redirect — a credentialed push.
 	 *
@@ -1927,7 +1980,11 @@ export class LocalWorkspacePlugin implements IPlugin, IWorkspacePlugin {
 				// transport — and the `uploadpack` / `receivepack` /
 				// `core.sshCommand` program that transport would run with this
 				// environment — dies as `transport '…' not allowed`.
-				...(credential ? { GIT_ALLOW_PROTOCOL: credential.protocol } : {})
+				...(credential ? { GIT_ALLOW_PROTOCOL: credential.protocol } : {}),
+				// And no trace2 output from the one child that carries a token,
+				// even where the operator's own config asks for it — see
+				// {@link LocalWorkspacePlugin.credentialedChildTraceOff}.
+				...(credential ? LocalWorkspacePlugin.credentialedChildTraceOff : {})
 			},
 			maxBuffer: 16 * 1024 * 1024,
 			windowsHide: true,
