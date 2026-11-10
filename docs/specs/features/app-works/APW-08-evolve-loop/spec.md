@@ -676,8 +676,8 @@ and returns focus to the button that opened it.
   `workKindDeliversTasksAsPullRequests` (`app`, `repo`). A `repo` Work is filed on only while its Task isolation
   is on (nothing forces it on; the Mission answers the `repoWorkTaskIsolationOff` warning instead), the
   `EVER_WORKS_APP_CHANGES_ENABLED` switch (FR-74) keeps pausing App Works only, and FR-50's open-Tasks cap no
-  longer counts a Task whose pull request was closed without merging. Every other kind stays out of scope. See
-  [Missions → Output](../../../../features/missions.md#output).
+  longer counts a Task waiting (In review or Blocked) on a pull request that was closed without merging. Every
+  other kind stays out of scope. See [Missions → Output](../../../../features/missions.md#output).
 - Metric Goals computed from delivery data.
 
 ---

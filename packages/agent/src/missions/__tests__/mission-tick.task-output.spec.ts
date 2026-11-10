@@ -292,10 +292,11 @@ describe('MissionTickService — Task output (APW-08 T35)', () => {
     it('counts the Mission’s open Tasks on the Work in SQL, never by reading rows', async () => {
         const t = build();
         await t.service.runOnce('m1', 'u1');
-        // Two OR-ed branches (no pull-request state, or one that is not closed-unmerged), each
-        // scoped to this Mission's Tasks on this Work.
+        // Three OR-ed branches (see `missionOpenTasksWhere`), each scoped to this Mission's Tasks
+        // on this Work.
         expect(t.taskRepo.count).toHaveBeenCalledWith({
             where: [
+                expect.objectContaining({ workId: 'w-1', missionId: 'm1' }),
                 expect.objectContaining({ workId: 'w-1', missionId: 'm1' }),
                 expect.objectContaining({ workId: 'w-1', missionId: 'm1' }),
             ],
@@ -986,6 +987,27 @@ describe('MissionTickService — Task output (APW-08 T35)', () => {
         }
     });
 
+    it('a Task with a closed pull request still counts once it is running again or back in the queue', async () => {
+        // Only a Task WAITING on the closed pull request (In review, Blocked) is left out: one a
+        // person moved back to To do / Backlog, or that runs again, is open work.
+        for (const status of ['in_progress', 'todo', 'backlog']) {
+            const t = build({
+                taskOutput: { tasksPerTick: 1, openTasksCap: 1 },
+            } as Partial<Mission>);
+            t.taskRows.push({
+                id: 'o1',
+                workId: 'w-1',
+                missionId: 'm1',
+                status,
+                prNumber: 7,
+                prState: 'closed',
+                title: 'A',
+            });
+            expect((await t.service.runOnce('m1', 'u1')).tasksFiled).toBe(0);
+            expect(t.planner.plan).not.toHaveBeenCalled();
+        }
+    });
+
     it('a Done or Cancelled Task never counts, whatever its pull-request state', async () => {
         const t = build({ taskOutput: { tasksPerTick: 1, openTasksCap: 1 } } as Partial<Mission>);
         t.taskRows.push(
@@ -1009,20 +1031,33 @@ describe('MissionTickService — Task output (APW-08 T35)', () => {
         expect((await t.service.runOnce('m1', 'u1')).tasksFiled).toBe(1);
     });
 
-    it('missionOpenTasksWhere: not Done/Cancelled AND (no pull-request state OR one that is not closed)', () => {
-        const where = missionOpenTasksWhere({ workId: 'w-1', missionId: 'm1' });
-        expect(where).toHaveLength(2);
-        const row = (over: Row) => ({ workId: 'w-1', missionId: 'm1', status: 'todo', ...over });
-        expect(matches(row({}), where as unknown as Row[])).toBe(true);
-        expect(matches(row({ prState: 'open' }), where as unknown as Row[])).toBe(true);
-        expect(matches(row({ prState: 'closed' }), where as unknown as Row[])).toBe(false);
-        expect(matches(row({ status: 'done' }), where as unknown as Row[])).toBe(false);
-        expect(matches(row({ missionId: 'other' }), where as unknown as Row[])).toBe(false);
-        expect(matches(row({ workId: 'w-2' }), where as unknown as Row[])).toBe(false);
+    it('missionOpenTasksWhere: not Done/Cancelled, and not waiting (In review / Blocked) on a closed pull request', () => {
+        const where = missionOpenTasksWhere({ workId: 'w-1', missionId: 'm1' }) as unknown as Row[];
+        expect(where).toHaveLength(3);
+        const row = (over: Row) => ({
+            workId: 'w-1',
+            missionId: 'm1',
+            status: 'in_review',
+            ...over,
+        });
+        expect(matches(row({}), where)).toBe(true);
+        expect(matches(row({ prState: 'open' }), where)).toBe(true);
+        expect(matches(row({ prState: 'merged' }), where)).toBe(true);
+        expect(matches(row({ prState: 'closed' }), where)).toBe(false);
+        expect(matches(row({ status: 'blocked', prState: 'closed' }), where)).toBe(false);
+        expect(matches(row({ status: 'blocked', prState: 'draft' }), where)).toBe(true);
+        for (const status of ['in_progress', 'todo', 'backlog', 'some-future-status']) {
+            expect(matches(row({ status, prState: 'closed' }), where)).toBe(true);
+            expect(matches(row({ status }), where)).toBe(true);
+        }
+        expect(matches(row({ status: 'done' }), where)).toBe(false);
+        expect(matches(row({ status: 'cancelled', prState: 'open' }), where)).toBe(false);
+        expect(matches(row({ missionId: 'other' }), where)).toBe(false);
+        expect(matches(row({ workId: 'w-2' }), where)).toBe(false);
     });
 
     // The same rule against the REAL Task entity: what the count asks the database.
-    it('missionOpenTasksWhere compiles to "open AND (prState IS NULL OR prState NOT IN (closed))"', async () => {
+    it('missionOpenTasksWhere compiles to "not waiting, OR waiting AND (prState IS NULL OR prState NOT IN (closed))"', async () => {
         // The entity metadata is built against the real `Date` (a faked one is a different
         // constructor from the one the column decorators recorded).
         jest.useRealTimers();
@@ -1041,18 +1076,33 @@ describe('MissionTickService — Task output (APW-08 T35)', () => {
             .setFindOptions({ where: missionOpenTasksWhere({ workId: 'w-1', missionId: 'm1' }) });
         const sql = query.getQuery().replace(/\s+/g, ' ');
         const where = sql.slice(sql.indexOf(' WHERE ') + ' WHERE '.length);
-        // Two OR-ed branches, each scoped to the Work and the Mission and to an open status.
+        // Three OR-ed branches, each scoped to the Work and the Mission.
         const branches = where.split(' OR ');
-        expect(branches).toHaveLength(2);
+        expect(branches).toHaveLength(3);
         for (const branch of branches) {
             expect(branch).toContain('"task"."workId" = ');
             expect(branch).toContain('"task"."missionId" = ');
-            expect(branch).toContain('NOT("task"."status" IN (');
         }
-        expect(branches[0]).toContain('"task"."prState" IS NULL');
-        expect(branches[1]).toContain('NOT("task"."prState" IN (');
+        // 1: any status but Done, Cancelled and the two waiting ones — whatever the PR did.
+        expect(branches[0]).toContain('NOT("task"."status" IN (');
+        expect(branches[0]).not.toContain('"task"."prState"');
+        // 2 and 3: a waiting status, with no PR state yet or one that is not closed.
+        for (const branch of branches.slice(1)) {
+            expect(branch).toContain('("task"."status" IN (');
+            expect(branch).not.toContain('NOT("task"."status"');
+        }
+        expect(branches[1]).toContain('"task"."prState" IS NULL');
+        expect(branches[2]).toContain('NOT("task"."prState" IN (');
         expect(Object.values(query.getParameters())).toEqual(
-            expect.arrayContaining(['w-1', 'm1', 'done', 'cancelled', 'closed']),
+            expect.arrayContaining([
+                'w-1',
+                'm1',
+                'done',
+                'cancelled',
+                'in_review',
+                'blocked',
+                'closed',
+            ]),
         );
     });
 
@@ -1065,8 +1115,8 @@ describe('MissionTickService — Task output (APW-08 T35)', () => {
         );
         expect(describeMissionNothingToFile('repo-isolation-off', ['a', 'b'])).toBe(
             'Nothing filed. Task isolation is off on the attached Repository Works "a", "b", so no ' +
-                "Tasks are filed there. Turn on Task isolation in the Work's settings to let this " +
-                'Mission file Tasks on it.',
+                "Tasks are filed there. Turn on Task isolation in each Work's settings to let this " +
+                'Mission file Tasks on them.',
         );
         expect(
             describeMissionNothingToFile('repo-isolation-off', ['a', 'b', 'c', 'd', 'e']),

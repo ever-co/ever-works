@@ -59,27 +59,42 @@ export const MISSION_TASK_OUTPUT_MAX_WORKS = 5;
 export const MISSION_CLOSED_UNMERGED_PR_STATE = 'closed';
 
 /**
+ * The statuses in which a Task with a closed, unmerged pull request is only WAITING on it: In
+ * review (where opening the pull request put it) and Blocked (where the CI budget can move it).
+ */
+const MISSION_WAITING_ON_PR_STATUSES = [TaskStatus.IN_REVIEW, TaskStatus.BLOCKED];
+
+/**
  * The Mission's Tasks on one Work that count against `openTasksCap`: not Done or Cancelled, and
- * not one whose pull request was closed without merging.
+ * not one that is only waiting on a pull request that was closed without merging.
  *
  * A Task whose pull request is closed unmerged is not open work: nothing completes it (only a
- * MERGE moves a Task to Done), so it would sit in review and hold a slot until a person cancelled
- * it, and a Mission with a few rejected pull requests would stop filing for good. It is left
- * out of the count here; its status is not touched.
+ * MERGE moves a Task to Done, `TaskPrStatusService.completeOnMerge`), so it would sit in review
+ * and hold a slot until a person cancelled it, and a Mission with a few rejected pull requests
+ * would stop filing for good. It is left out of the count here; its status is not touched.
  *
- * `prState` is nullable and SQL's `<>` drops NULLs, so the rule is two OR-ed branches: no
- * pull-request state yet (no pull request, or one the status sweep has not read), or a state
- * other than `closed` (`open`, `draft`, and `merged` — a merged Task that is not Done yet is
- * still waiting on its delivery or an approver, so it still counts).
+ * Only while it waits (In review or Blocked): a Task a person moved back to To do or Backlog, or
+ * that is running again (In progress), is open work whatever its last pull request did, and an
+ * unknown status counts too. `prState` is nullable and SQL's `<>` drops NULLs, so the rule is
+ * three OR-ed branches: a status that is not waiting (and not Done or Cancelled); or a waiting
+ * status with no pull-request state yet (no pull request, or one the status sweep has not read);
+ * or a waiting status with a state other than `closed` (`open`, `draft`, and `merged` — a merged
+ * Task that is not Done yet is still waiting on its delivery or an approver, so it still counts).
  */
 export function missionOpenTasksWhere(base: {
     workId: string;
     missionId: string;
 }): FindOptionsWhere<Task>[] {
-    const open = { ...base, status: Not(In([TaskStatus.DONE, TaskStatus.CANCELLED])) };
+    const waiting = { ...base, status: In(MISSION_WAITING_ON_PR_STATUSES) };
     return [
-        { ...open, prState: IsNull() },
-        { ...open, prState: Not(In([MISSION_CLOSED_UNMERGED_PR_STATE])) },
+        {
+            ...base,
+            status: Not(
+                In([TaskStatus.DONE, TaskStatus.CANCELLED, ...MISSION_WAITING_ON_PR_STATUSES]),
+            ),
+        },
+        { ...waiting, prState: IsNull() },
+        { ...waiting, prState: Not(In([MISSION_CLOSED_UNMERGED_PR_STATE])) },
     ];
 }
 
@@ -110,12 +125,15 @@ export function describeMissionNothingToFile(
     reason: MissionNothingToFileReason,
     isolationOffWorkNames: readonly string[] = [],
 ): string {
+    const one = isolationOffWorkNames.length === 1;
     const isolationOff =
         isolationOffWorkNames.length > 0
-            ? `Task isolation is off on the attached Repository Work${
-                  isolationOffWorkNames.length === 1 ? '' : 's'
-              } ${quotedWorkNames(isolationOffWorkNames)}, so no Tasks are filed there. ` +
-              "Turn on Task isolation in the Work's settings to let this Mission file Tasks on it."
+            ? `Task isolation is off on the attached Repository Work${one ? '' : 's'} ${quotedWorkNames(
+                  isolationOffWorkNames,
+              )}, so no Tasks are filed there. ` +
+              (one
+                  ? "Turn on Task isolation in the Work's settings to let this Mission file Tasks on it."
+                  : "Turn on Task isolation in each Work's settings to let this Mission file Tasks on them.")
             : '';
     if (reason === 'repo-isolation-off') return `Nothing filed. ${isolationOff}`;
     if (reason === 'no-app-work') return 'No attached App or Repository Work to file Tasks on.';
