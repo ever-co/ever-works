@@ -1,7 +1,16 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { execFile, execFileSync } from 'node:child_process';
 import { promises as fs } from 'node:fs';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import {
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readdirSync,
+	readFileSync,
+	rmSync,
+	statSync,
+	writeFileSync
+} from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { pathToFileURL } from 'node:url';
@@ -843,10 +852,37 @@ describe('pool maintenance after a credentialed fetch — it never holds the pro
 		// Bounded: far below the two minutes production allows, let alone "for
 		// as long as a gc takes".
 		expect(Date.now() - started).toBeLessThan(60_000);
-		// The stuck process was stopped, and it was tried once — not retried
-		// without `--detach`, which would only wait again.
-		expect(terminated).toHaveLength(1);
+		// The provision stopped WAITING; the maintenance was left to finish —
+		// killing it would leave its lock behind (see the case below). And it
+		// was tried once, not retried without `--detach`, which would only
+		// wait again.
+		expect(terminated).toEqual([]);
 		expect(maintenanceOf(invocations)).toEqual([['maintenance', 'run', '--auto', '--quiet', '--detach']]);
+	});
+
+	it('CONTROL: why it is never killed — a lock a killed maintenance leaves silently disables every later one', () => {
+		// What `taskkill /T /F` (or a SIGKILL) leaves of a running `git
+		// maintenance`: its lock file, because the process gets no chance to
+		// remove it (measured with a real kill on Git for Windows 2.52; made
+		// here by hand, so the case does not race a gc). Every later run —
+		// this provider's, and the one a plain `git fetch` starts — exits 0
+		// and does nothing.
+		const repository = mkdtempSync(join(root, 'maint-lock-'));
+		git(repository, 'init', '--bare');
+		const loose = (): number => Number(/^count: (\d+)$/m.exec(git(repository, 'count-objects', '-v'))?.[1]);
+		for (const text of ['one', 'two', 'three']) {
+			execFileSync('git', ['hash-object', '-w', '--stdin'], { cwd: repository, input: `${text}\n` });
+		}
+		const lock = join(repository, 'objects', 'maintenance.lock');
+		writeFileSync(lock, '');
+
+		git(repository, 'maintenance', 'run', '--task=gc', '--quiet');
+		expect(loose()).toBe(3);
+
+		// The lock is the only thing in the way.
+		rmSync(lock);
+		git(repository, 'maintenance', 'run', '--task=gc', '--quiet');
+		expect(loose()).toBe(0);
 	});
 
 	it('does not turn a failed maintenance into a failed provision', async () => {
@@ -868,18 +904,24 @@ describe('pool maintenance after a credentialed fetch — it never holds the pro
 		expect(maintenanceOf(invocations)).toHaveLength(1);
 	});
 
-	it('still passes the CALLER’s cancellation on', async () => {
-		// The bound swallows its own timeout, never the caller's abort.
+	it('still passes the CALLER’s cancellation on — to the provision, not to the maintenance', async () => {
+		// The bound swallows its own timeout, never the caller's abort: the
+		// provision stops at once. The maintenance is left to finish, for the
+		// same reason it is not killed at the bound.
 		const invocations: Invocation[] = [];
+		const terminated: unknown[] = [];
 		const controller = new AbortController();
 		const plugin = new LocalWorkspacePlugin({
 			execFile: maintenanceGit(invocations, () => {
 				setImmediate(() => controller.abort());
 				return true;
 			}),
-			terminateProcessTree: async () => undefined,
+			terminateProcessTree: async (child) => {
+				terminated.push(child);
+			},
 			poolMaintenanceTimeoutMs: 60_000
 		});
+		const started = Date.now();
 
 		await expect(
 			plugin.provision(
@@ -890,9 +932,12 @@ describe('pool maintenance after a credentialed fetch — it never holds the pro
 			)
 		).rejects.toThrow();
 		expect(controller.signal.aborted).toBe(true);
+		// At once, not at the bound.
+		expect(Date.now() - started).toBeLessThan(30_000);
 		// Nothing ran after the abort: no worktree was added for this Task.
 		const after = invocations.slice(invocations.findIndex((entry) => entry.args[0] === 'maintenance') + 1);
 		expect(after.some((entry) => entry.args[0] === 'worktree' && entry.args[1] === 'add')).toBe(false);
+		expect(terminated).toEqual([]);
 	});
 
 	it('runs no maintenance of its own for a plain fetch — that fetch starts its own, as it always did', async () => {

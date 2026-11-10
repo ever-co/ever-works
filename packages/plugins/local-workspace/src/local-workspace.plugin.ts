@@ -218,9 +218,12 @@ export interface LocalWorkspacePluginOptions {
  * Git 2.47+ on a platform with `fork`) the command returns at once and
  * this never matters; where it cannot — Windows, where an automatic gc has
  * always run in the foreground of the fetch that triggered it — this is
- * the cap. Generous enough for an ordinary `gc --auto` to finish, and when
- * it is not, the gc is stopped and the next fetch starts another: a
- * maintenance that could not finish is never a provision's failure.
+ * the cap. Generous enough for an ordinary `gc --auto` to finish; when it
+ * is not, the provision stops waiting and the gc finishes in the background,
+ * as a detached one would. It is never killed: a killed maintenance leaves
+ * its lock behind and silently disables every later one (see
+ * `maintainPool`). A maintenance that could not finish is never a
+ * provision's failure.
  */
 export const POOL_MAINTENANCE_TIMEOUT_MS = 120_000;
 
@@ -1570,31 +1573,49 @@ export class LocalWorkspacePlugin implements IPlugin, IWorkspacePlugin {
 	 *    older Git does not know the option and says so (usage error, 129);
 	 *    there `gc --auto` detaches ITSELF, so the same command is run
 	 *    without it.
-	 *  - a bound either way, because Git cannot detach on Windows and an
-	 *    explicit `maintenance run` there is a whole gc in the foreground,
-	 *    with the repository lock held: {@link POOL_MAINTENANCE_TIMEOUT_MS}.
+	 *  - a bound on the WAIT either way, because Git cannot detach on Windows
+	 *    (it says nothing and runs in the foreground) and an explicit
+	 *    `maintenance run` there is a whole gc, with the repository lock
+	 *    held: {@link POOL_MAINTENANCE_TIMEOUT_MS}.
 	 *
 	 * Nothing this does is the provision's verdict: a failed, refused or
-	 * timed-out maintenance is tried again by the next fetch. Only the
-	 * CALLER's cancellation is passed on.
+	 * unfinished maintenance is tried again by the next fetch.
+	 *
+	 * The bound stops the WAITING, never the maintenance. A `git maintenance`
+	 * killed while it runs leaves `objects/maintenance.lock` behind (measured,
+	 * Git for Windows 2.52, killed the way this provider kills a child:
+	 * `taskkill /T /F`; a `SIGKILL` runs no cleanup either), and from then on
+	 * every maintenance of that repository — this one, and the one a plain
+	 * `git fetch` starts — finds the lock, exits 0 and does nothing (measured:
+	 * the loose objects stay loose), with nobody told. So the maintenance is
+	 * started with no signal at all and left to finish in the background,
+	 * exactly as a detached one would; the caller's cancellation, like the
+	 * bound, only stops this provision from waiting for it.
 	 */
 	private async maintainPool(poolDir: string, spec: WorkspaceProvisionSpec): Promise<void> {
-		const run = async (args: string[]): Promise<GitResult | null> => {
-			const bound = AbortSignal.timeout(this.poolMaintenanceTimeoutMs);
+		const { signal } = spec;
+		const waitFor = async (args: string[]): Promise<GitResult | null> => {
+			throwIfAborted(signal);
+			// No signal: nothing in this provider may kill it (see above).
+			const running = this.git(args, poolDir, spec.auth).catch(() => null);
+			let timer: ReturnType<typeof setTimeout> | undefined;
+			let stopWaiting: (() => void) | undefined;
+			const released = new Promise<null>((resolve) => {
+				stopWaiting = () => resolve(null);
+				timer = setTimeout(stopWaiting, this.poolMaintenanceTimeoutMs);
+				signal?.addEventListener('abort', stopWaiting, { once: true });
+			});
 			try {
-				return await this.git(
-					args,
-					poolDir,
-					spec.auth,
-					spec.signal ? AbortSignal.any([spec.signal, bound]) : bound
-				);
-			} catch (error) {
-				if (spec.signal?.aborted) throw error;
-				return null;
+				const result = await Promise.race([running, released]);
+				throwIfAborted(signal);
+				return result;
+			} finally {
+				clearTimeout(timer);
+				if (stopWaiting) signal?.removeEventListener('abort', stopWaiting);
 			}
 		};
-		const detached = await run(['maintenance', 'run', '--auto', '--quiet', '--detach']);
-		if (detached?.code === 129) await run(['maintenance', 'run', '--auto', '--quiet']);
+		const detached = await waitFor(['maintenance', 'run', '--auto', '--quiet', '--detach']);
+		if (detached?.code === 129) await waitFor(['maintenance', 'run', '--auto', '--quiet']);
 	}
 
 	/**
