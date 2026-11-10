@@ -70,9 +70,19 @@ import { revokeScopedCredential, type PushCredentialFetch } from './push-credent
  * What is NOT a fallback is a refusal that says the REQUEST is wrong. The
  * platform answers `401` when this node does not hold an active claim on
  * the job (not assigned to it, or no longer leased/running) and `409` when
- * the lease generation is stale. Both fail the run with the reason: a node
- * that carried on cloning after being told the job is not its own would be
- * working on a claim it does not have.
+ * the lease generation is stale. Neither falls back: a node that carried on
+ * cloning after being told the job is not its own would be working on a
+ * claim it does not have. A `401` fails the run with the reason; a `409` is
+ * rethrown untouched, so the worker reads it as it does everywhere else —
+ * abort, and do not report.
+ *
+ * ## What this does not cover
+ *
+ * The workspace reaper (`workspace-inventory.ts`) still reaches a remote
+ * with the machine's own Git configuration. This credential is issued PER
+ * JOB, against a lease, and the reaper runs outside any job. On a machine
+ * with no Git credential it therefore cannot ask a private repository's
+ * remote anything, its rule answers "unknown", and unknown means keep.
  */
 export interface FetchCredentialClient {
 	mintFetchCredential(jobId: string, leaseGeneration?: number): Promise<FleetJobFetchCredentialResponse>;

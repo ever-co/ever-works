@@ -389,7 +389,11 @@ scan does one `ls-remote` and one batched `fetch` per repository pool through th
 credential helper (token-free, `GIT_TERMINAL_PROMPT=0`, 30 s bound per call) before judging, and a
 branch the remote no longer has gets its stale tracking ref deleted. A merged branch that still exists
 on the remote is judged by `merge-base --is-ancestor` against the refreshed default branch; when the
-merge predates the pool's shallow boundary that answers "no" and the worktree is kept.
+merge predates the pool's shallow boundary that answers "no" and the worktree is kept. The scan does
+**not** use the scoped read credential a job fetches with — that one is issued per job, and the reaper
+runs outside any job — so on a machine with no Git credential of its own the remote of a **private**
+repository is unreachable here, rule 6 answers "unknown", and those worktrees are kept until an operator
+removes them.
 
 Removal never calls a recursive filesystem delete on a checkout. Every `.mounts/*` link is unlinked
 first — a junction there points at **another** Task's worktree — then the provider's own `teardown`
