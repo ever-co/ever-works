@@ -178,6 +178,13 @@ interface FetchVector {
 	plant(pool: string, remoteUrl: string, at: Scene): void;
 	/** `section.variable` names the allowlist must report for it. */
 	readonly reported: readonly string[];
+	/**
+	 * What the credentialed fetch does when the plant lands AFTER the check.
+	 * `ignored` (the default): the plant has no say and the fetch succeeds
+	 * against the real remote. `refused`: the plant moves the request onto a
+	 * transport the child is not allowed to speak, and the fetch fails closed.
+	 */
+	readonly raced?: 'ignored' | 'refused';
 }
 
 /** `ext::` splits its command on spaces; `% ` is a literal one. */
@@ -237,6 +244,18 @@ const fetchVectors: FetchVector[] = [
 			git(pool, 'config', 'core.alternateRefsCommand', `${at.harvest} :`);
 		},
 		reported: ['core.alternaterefscommand']
+	},
+	{
+		// Not a `remote.<url>.*` key, so the private remote name does not
+		// cover it: a URL rewrite applies to that remote's URL too. Only the
+		// transport pin stands between this and `core.sshCommand`.
+		name: 'url.<base>.insteadOf → an ssh URL, with core.sshCommand',
+		plant: (pool, remoteUrl, at) => {
+			git(pool, 'config', 'url.ssh://nowhere.invalid/x/.insteadOf', remoteUrl);
+			git(pool, 'config', 'core.sshCommand', `${at.harvest} false`);
+		},
+		reported: ['url.<…>.insteadof', 'core.sshcommand'],
+		raced: 'refused'
 	}
 ];
 
@@ -320,24 +339,39 @@ describe('scoped FETCH credential — a planted pool config cannot read it', () 
 				execFile: recordingGit(invocations, () => vector.plant(pool, originUrl, at))
 			});
 
-			const handle = await plugin.provision(
-				provisionSpec(at.baseDir, originUrl, 'raced', {
-					fetchCredential: { username: 'x-access-token', token: TOKEN, remoteUrl: originUrl },
-					onFetchCredentialWithheld: (reason) => reasons.push(reason)
-				})
-			);
+			const outcome = await plugin
+				.provision(
+					provisionSpec(at.baseDir, originUrl, 'raced', {
+						fetchCredential: { username: 'x-access-token', token: TOKEN, remoteUrl: originUrl },
+						onFetchCredentialWithheld: (reason) => reasons.push(reason)
+					})
+				)
+				.then(
+					(handle) => ({ handle, error: null as Error | null }),
+					(error: Error) => ({ handle: null, error })
+				);
 
 			// The allowlist saw a clean pool, so the credential WAS handed to
 			// git — this is the case the allowlist cannot help with.
 			expect(reasons).toEqual([]);
 			const fetches = invocations.filter((entry) => entry.args[0] === 'fetch');
-			expect(fetches).toHaveLength(2);
+			expect(fetches.length).toBeGreaterThan(0);
 			expect(fetches.every(carriesHeader)).toBe(true);
 			// And the planted program did not run, let alone read it.
 			expect(at.didRun()).toBe(false);
 			expect(at.leaked()).toBe('');
-			// The fetch went to the REAL remote, redirect or not.
-			expect(handle.baseSha).toBe(originHead);
+			if (vector.raced === 'refused') {
+				// The plant put the request on a transport this child may not
+				// speak. It fails closed, and says nothing of the credential.
+				expect(outcome.error?.message).toMatch(/fetch of base ref 'main' failed.*not allowed/s);
+				expect(outcome.error?.message).not.toContain(TOKEN);
+				expect(outcome.error?.message).not.toContain(BASIC);
+			} else {
+				// The fetch went to the REAL remote, redirect or not.
+				expect(outcome.error).toBeNull();
+				expect(fetches).toHaveLength(2);
+				expect(outcome.handle?.baseSha).toBe(originHead);
+			}
 		});
 	});
 
