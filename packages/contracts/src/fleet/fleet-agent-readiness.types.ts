@@ -97,6 +97,14 @@ export const FLEET_AGENT_READINESS_MAX_USAGE_WINDOWS = 6;
 export const FLEET_AGENT_READINESS_MAX_WINDOW_LENGTH = 32;
 /** When a failure names no reset time, it is trusted for this long (the usage-limit fallback). */
 export const FLEET_AGENT_FAILURE_FALLBACK_MS = 60 * 60 * 1000;
+/**
+ * A stored report this much older than the node's last accepted heartbeat is
+ * no longer the node's word: the node kept beating WITHOUT reporting (it was
+ * downgraded to a version older than the field, or its probe stopped
+ * answering). Served as "never reported" — unknown — rather than as last
+ * week's `ready`.
+ */
+export const FLEET_AGENT_READINESS_STALE_AFTER_MS = 15 * 60 * 1000;
 
 /**
  * One usage window of a seat — a subscription's rolling 5-hour or weekly
@@ -549,6 +557,12 @@ export interface ResolveFleetNodeAgentReadinessOptions {
 	 * platform learned from a job result.
 	 */
 	throttles?: readonly FleetNodeModelThrottleView[] | null;
+	/**
+	 * When the node's last heartbeat was accepted. A report older than it by
+	 * more than {@link FLEET_AGENT_READINESS_STALE_AFTER_MS} is not served: the
+	 * node has been beating without one. Absent: the report is served as is.
+	 */
+	lastHeartbeatAt?: string | Date | null;
 }
 
 /**
@@ -558,7 +572,8 @@ export interface ResolveFleetNodeAgentReadinessOptions {
  * Re-normalised on the way out, so a value written by an older or newer
  * build is served in THIS build's shape. An agent the node called `ready`
  * that the platform is throttling reads `limit_reached` until the throttle's
- * own instant.
+ * own instant. A report the node stopped refreshing while it kept beating is
+ * not served at all (see `lastHeartbeatAt`).
  */
 export function resolveFleetNodeAgentReadiness(
 	stored: unknown,
@@ -568,6 +583,13 @@ export function resolveFleetNodeAgentReadiness(
 	if (!report) return null;
 	const at = isoOrNull((stored as { at?: unknown }).at);
 	if (!at) return null;
+	const lastBeat =
+		options.lastHeartbeatAt instanceof Date
+			? options.lastHeartbeatAt.getTime()
+			: typeof options.lastHeartbeatAt === 'string'
+				? Date.parse(options.lastHeartbeatAt)
+				: Number.NaN;
+	if (Number.isFinite(lastBeat) && lastBeat - Date.parse(at) > FLEET_AGENT_READINESS_STALE_AFTER_MS) return null;
 	const throttles = new Map<string, FleetNodeModelThrottleView>();
 	for (const throttle of options.throttles ?? []) {
 		if (throttle && typeof throttle.provider === 'string') throttles.set(throttle.provider, throttle);

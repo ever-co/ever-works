@@ -17162,6 +17162,62 @@
                 "reinstalling": "Reinstalling {name}…",
                 "failed": "The runner could not be reinstalled."
             }
+        },
+        "agents": {
+            "title": "Agents",
+            "noneReady": "Online, but no agent can work on this computer right now.",
+            "noneInstalledOnline": "Online, but no agent CLI is installed on this computer.",
+            "noneInstalled": "No agent CLI is installed on this computer.",
+            "unknown": "Agent status unknown. Update the node on this computer to see it.",
+            "status": {
+                "ready": "Ready",
+                "not_signed_in": "Not signed in",
+                "access_denied": "Access denied",
+                "limit_reached": "Limit reached",
+                "not_installed": "Not installed",
+                "unsupported": "Not supported",
+                "unknown": "Unknown"
+            },
+            "authMethod": {
+                "subscription": "Subscription",
+                "api_key": "API key",
+                "access_token": "Access token",
+                "cloud_provider": "Cloud provider",
+                "none": "Not signed in",
+                "unknown": "Sign-in method unknown"
+            },
+            "resetsIn": {
+                "soon": "resets soon",
+                "minute": "resets in {value}m",
+                "hour": "resets in {value}h",
+                "day": "resets in {value}d"
+            },
+            "window": {
+                "five_hour": "5-hour limit",
+                "weekly": "Weekly limit",
+                "weekly_opus": "Weekly limit (Opus)",
+                "weekly_sonnet": "Weekly limit (Sonnet)",
+                "overage": "Extra usage",
+                "primary": "Primary limit",
+                "secondary": "Secondary limit",
+                "usage": "Usage limit"
+            },
+            "usage": "{window}: {percent}% used",
+            "usageLimited": "{window}: reached",
+            "lastSuccess": "Last successful run {when}",
+            "lastSuccessNever": "No successful run recorded yet",
+            "ago": {
+                "second": "{value}s ago",
+                "minute": "{value}m ago",
+                "hour": "{value}h ago",
+                "day": "{value}d ago"
+            },
+            "runs": {
+                "last24h": "Runs, last 24 hours",
+                "last7d": "Runs, last 7 days",
+                "counts": "{runs} finished, {failed} failed",
+                "cost": "{amount} spent"
+            }
         }
     },
     "everConnect": {

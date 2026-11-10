@@ -874,18 +874,37 @@ export async function buildAgentReadinessReport(sources: AgentReadinessSources):
 	const throttles = new Map<string, AgentThrottle>();
 	for (const throttle of sources.throttles?.() ?? []) throttles.set(throttle.provider, throttle);
 
-	const agents: FleetAgentReadinessEntry[] = [];
-	for (const cli of await sources.drivable()) {
-		const installed = typeof cli.executable === 'string' && cli.executable.length > 0;
-		let auth: AgentAuthReading | null = null;
-		if (installed) {
+	// Every status command and the scan for other CLIs run CONCURRENTLY: the
+	// report is built inside a heartbeat, and a machine where one CLI is slow
+	// to start must pay one timeout, never the sum of them.
+	const drivable = await sources.drivable();
+	const isInstalled = (cli: DrivableAgentCli): boolean =>
+		typeof cli.executable === 'string' && cli.executable.length > 0;
+	const [auths, others] = await Promise.all([
+		Promise.all(
+			drivable.map(async (cli): Promise<AgentAuthReading | null> => {
+				if (!isInstalled(cli)) return null;
+				try {
+					return await sources.auth(cli.provider, cli.executable as string);
+				} catch {
+					return null;
+				}
+			})
+		),
+		(async (): Promise<ReadonlyArray<{ provider: string; version: string | null }>> => {
 			try {
-				auth = await sources.auth(cli.provider, cli.executable as string);
+				return (await sources.unsupported?.()) ?? [];
 			} catch {
-				auth = null;
+				return [];
 			}
-			sources.history.observeAuth(cli.provider, auth);
-		}
+		})()
+	]);
+
+	const agents: FleetAgentReadinessEntry[] = [];
+	for (const [index, cli] of drivable.entries()) {
+		const installed = isInstalled(cli);
+		const auth = auths[index] ?? null;
+		if (installed) sources.history.observeAuth(cli.provider, auth);
 		const history = sources.history.get(cli.provider);
 		const verdict = resolveAgentStatus({
 			installed,
@@ -919,12 +938,6 @@ export async function buildAgentReadinessReport(sources: AgentReadinessSources):
 		agents.push(entry);
 	}
 
-	let others: ReadonlyArray<{ provider: string; version: string | null }> = [];
-	try {
-		others = (await sources.unsupported?.()) ?? [];
-	} catch {
-		others = [];
-	}
 	for (const other of others) {
 		if (agents.some((entry) => entry.provider === other.provider)) continue;
 		agents.push({

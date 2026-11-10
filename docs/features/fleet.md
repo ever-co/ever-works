@@ -163,6 +163,32 @@ A model CLI on a node can run out of quota: Claude Code's weekly or 5-hour limit
 
 To resume sooner, sign that CLI on that machine in to a seat with quota left, then press **Clear limit now** next to the limit in the node drawer (`POST /api/fleet/nodes/:id/clear-model-throttle` with an optional `{ "provider": "claude-code" }`; owner-scoped, audited as `node.model-throttle-clear`). The lease offers that CLI's work to the node again on its next poll, and the node lifts its own copy from its next heartbeat — every heartbeat response carries `node.modelThrottles`, which the node reconciles with (adopting the platform's after a restart; dropping one the owner cleared once it is older than two minutes, so a beat answered just before the platform recorded a fresh limit cannot undo it). If the seat is in fact still out, the next run simply parks again.
 
+### Agent readiness
+
+"Online" and an installed agent CLI do not say whether an agent can actually work. (Prod, 2026-11: a node read `online` with `claude 2.1.319` installed while every run failed at once with `Your organization has disabled Claude subscription access for Claude Code`; before that it failed for days on an expired OAuth session.) So a node reports, per agent CLI, whether it can take work, and the platform shows it in the runner popover, on the Computers table and in the node drawer:
+
+| Status          | Meaning                                                                                 |
+| --------------- | --------------------------------------------------------------------------------------- |
+| `ready`         | Installed, signed in, and nothing the last runs said contradicts it                     |
+| `not_signed_in` | No credential, or the CLI said its session expired, was revoked or is invalid           |
+| `access_denied` | Signed in, but the account may not use the CLI (organization policy, a 403)             |
+| `limit_reached` | Out of quota or credit until a reset (shown with the reset time when the CLI named one) |
+| `not_installed` | The node has no such CLI                                                                |
+| `unsupported`   | Installed, but this node version cannot run agent work with it (Gemini CLI, opencode)   |
+| `unknown`       | The node could not tell (the status command did not answer)                             |
+
+Each agent also carries its version, the sign-in method (subscription, API key, access token, cloud provider) and the account label when the CLI prints one, the usage windows last observed (5-hour and weekly utilisation with reset times), and the last successful run. The node view adds `anyAgentReady`: `true` when at least one agent can work now, `false` when the node reported its agents and none can, `null` when it never reported — an older node version, shown as "unknown, update the node" and never as "no agent can work". An online computer with no ready agent gets a warning line. The list and detail reads also carry `runStats` from the platform's own job ledger: agent-task jobs finished and failed, and the spend they reported, over the last 24 hours and 7 days.
+
+**No probe spends a model token.** The node learns all of it from free sources:
+
+- **Sign-in state**: the CLIs' own status commands, `claude auth status --json` and `codex login status`, asked at most every five minutes. Only whitelisted fields are read; the raw output is never forwarded or logged.
+- **Run outcomes**: every model-CLI invocation of a real `agent-task` tells the node whether that agent just worked. A failure is classified from the CLI's own sentence by `classifyFleetAgentFailure` (`@ever-works/contracts`), a pure function that knows the CLIs' documented messages. The last success and the last classified refusal are kept beside the node config (`<config>.agent-readiness.json`), so a restart does not forget a refusal.
+- **Usage**: Claude Code writes `rate_limit_event` lines into the `stream-json` output of a run on a subscription seat; the node reads them from runs that happened anyway. Codex prints token counts only, so its rate-limit snapshot is read from its newest session record (`<codex home>/sessions/…/rollout-*.jsonl`), and only when the machine's owner switched `--usage-scan` on.
+
+What the last run proved outranks what the status command says: a seat whose organization switched access off still reads "signed in". A `not_signed_in` or `access_denied` verdict stays until a run succeeds or the sign-in changes (a different account or method); a `limit_reached` one until its reset, or until the owner presses **Clear limit now**. The report never carries a token, a key or a credential file's content, and anything credential-shaped in a CLI's sentence is masked on the node and again on the platform. It is the owner's: a computer shared through an Organization does not show it.
+
+The report rides the heartbeat as `agents`, in the node's newest optional tier: a platform older than the field answers the first beat with a 400 and the node keeps beating without it. A node older than the field simply sends none. Routing does not read readiness yet — the lease still offers work to a node with no ready agent; only an active usage limit holds a CLI's work back.
+
 ### Inbox notices
 
 Three notices, each filed **exactly once per event** and re-armed when the node recovers:

@@ -2737,12 +2737,17 @@ export function applyReportedAgentReadiness(
  * work now, `false` when the node reported its agents and none can, `null`
  * when it never reported. An agent the platform is throttling (an active
  * `modelThrottles` entry) reads `limit_reached` whatever the node last said.
+ * A report the node stopped refreshing while it kept beating (a downgrade to
+ * a version older than the field) reads never reported, not last week's
+ * `ready`.
  */
 export function agentReadinessView(
-    node: Pick<FleetNode, 'agentReadiness' | 'modelThrottles'>,
+    node: Pick<FleetNode, 'agentReadiness' | 'modelThrottles'> &
+        Partial<Pick<FleetNode, 'lastHeartbeatAt'>>,
 ): Pick<FleetNodeView, 'agentReadiness' | 'anyAgentReady'> {
     const agentReadiness = resolveFleetNodeAgentReadiness(node.agentReadiness, {
         throttles: activeFleetNodeModelThrottles(node.modelThrottles),
+        lastHeartbeatAt: node.lastHeartbeatAt ?? null,
     });
     return { agentReadiness, anyAgentReady: agentReadiness ? agentReadiness.anyReady : null };
 }

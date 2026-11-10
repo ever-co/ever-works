@@ -8,6 +8,7 @@ import { ROUTES } from '@/lib/constants';
 import { Link } from '@/i18n/navigation';
 import { useRunnerStatusPolling } from '@/lib/hooks/use-runner-status-polling';
 import { useFleetHubEnabled } from '@/components/fleet/FleetHubFlagProvider';
+import { AgentReadinessList } from '@/components/fleet/agents/AgentReadinessList';
 import type { FleetRunnerStatusView } from '@/lib/api/fleet';
 import {
     formatBytes,
@@ -61,7 +62,9 @@ interface RunnerStatusPillProps {
  * how long since it last checked in, the daemon version, the AGENT-CLI
  * version, and free disk. Those last three are the three ways a runner
  * that looks healthy silently is not: an old daemon, an old (or absent)
- * CLI, or a full volume.
+ * CLI, or a full volume. And a fourth, which none of them shows: a CLI that
+ * is installed but cannot work (signed out, access denied, out of quota) —
+ * the per-agent list under each node says so.
  *
  * The refresh cadence comes from the payload, so the caption cannot
  * claim 30s while the poller does something else.
@@ -253,6 +256,13 @@ export function RunnerStatusPill({
                                         <dt className="truncate">{t('fields.diskFree')}</dt>
                                         <dd className="text-right truncate">{disk ?? '-'}</dd>
                                     </dl>
+                                    {/* Fleet agent readiness: "Online" and an
+                                        installed CLI never said whether any
+                                        agent could actually work. Per agent: a
+                                        status, usage when known, the last
+                                        successful run — and one clear line when
+                                        the machine is online and none can. */}
+                                    <AgentReadinessList node={node} compact className="pl-5" />
                                 </li>
                             );
                         })}

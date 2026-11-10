@@ -150,6 +150,21 @@ describe('FleetService — agent readiness on the heartbeat', () => {
         expect(result?.node.status).toBe('online');
     });
 
+    it('a node that kept beating without a report for long reads unknown again (a downgraded daemon)', async () => {
+        const previous: FleetAgentReadinessStored = {
+            at: new Date(Date.now() - 60 * 60_000).toISOString(),
+            ...report([agent()]),
+        };
+        repository.findById.mockResolvedValue(node({ agentReadiness: previous }));
+
+        const result = await build().heartbeat(NODE_ID, SECRET, { version: '0.2.9' });
+
+        // Nothing is erased; the hour-old report is simply no longer served.
+        expect(patchOf()).not.toHaveProperty('agentReadiness');
+        expect(result?.node.agentReadiness).toBeNull();
+        expect(result?.node.anyAgentReady).toBeNull();
+    });
+
     it('a node that never reported reads unknown — never "no agent can work"', async () => {
         const result = await build().heartbeat(NODE_ID, SECRET, { version: '0.2.9' });
         expect(result?.node.agentReadiness).toBeNull();

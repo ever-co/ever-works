@@ -6,6 +6,7 @@ import {
 	FLEET_AGENT_READINESS_MAX_AGENTS,
 	FLEET_AGENT_READINESS_MAX_REASON_LENGTH,
 	FLEET_AGENT_READINESS_MAX_USAGE_WINDOWS,
+	FLEET_AGENT_READINESS_STALE_AFTER_MS,
 	FLEET_AGENT_READINESS_STATUSES,
 	anyFleetAgentReady,
 	classifyFleetAgentFailure,
@@ -407,6 +408,27 @@ describe('the node-level answer', () => {
 		);
 		expect(view?.agents[0]).toMatchObject({ status: 'not_signed_in', reason: 'Login expired · Please run /login' });
 		expect(view?.anyReady).toBe(true);
+	});
+
+	it('a report the node stopped sending while it kept beating is not served — unknown, not last week`s ready', () => {
+		const stored = { at: '2026-11-10T12:00:00.000Z', checkedAt: '2026-11-10T12:00:00.000Z', agents: [entry()] };
+		const at = Date.parse(stored.at);
+		// Refreshed on this very beat, or a few beats ago: served.
+		expect(resolveFleetNodeAgentReadiness(stored, { lastHeartbeatAt: stored.at })?.anyReady).toBe(true);
+		expect(
+			resolveFleetNodeAgentReadiness(stored, {
+				lastHeartbeatAt: new Date(at + FLEET_AGENT_READINESS_STALE_AFTER_MS)
+			})?.anyReady
+		).toBe(true);
+		// The node has been beating for longer than that without a report.
+		expect(
+			resolveFleetNodeAgentReadiness(stored, {
+				lastHeartbeatAt: new Date(at + FLEET_AGENT_READINESS_STALE_AFTER_MS + 1).toISOString()
+			})
+		).toBeNull();
+		// An OFFLINE node's last report stays: its last beat is the one that carried it.
+		expect(resolveFleetNodeAgentReadiness(stored, { lastHeartbeatAt: null })?.anyReady).toBe(true);
+		expect(resolveFleetNodeAgentReadiness(stored, { lastHeartbeatAt: 'not a date' })?.anyReady).toBe(true);
 	});
 
 	it('emptyFleetNodeRunStats is a fresh zeroed pair of windows', () => {
