@@ -236,18 +236,70 @@ describe('TaskPrStatusService', () => {
         expect(tasks.updatePrStatusCache).not.toHaveBeenCalled();
     });
 
-    it('stamps the read time (not the state) when the PR vanished upstream', async () => {
+    it('records "not found" and the read time when the PR vanished upstream, and nothing else', async () => {
         tasks.findByIdAndUser.mockResolvedValue(makeTask({ ciCheckedAt: new Date(0) }));
         git.getPullRequestStatus.mockResolvedValue(null);
 
-        await service.getForTask(USER, 'task-1', { refresh: true });
+        const view = await service.getForTask(USER, 'task-1', { refresh: true });
 
+        expect(tasks.updatePrStatusCache).toHaveBeenCalledTimes(1);
+        const patch = tasks.updatePrStatusCache.mock.calls[0][1];
+        expect(patch).toEqual({ prState: 'not_found', ciCheckedAt: expect.any(Date) });
+        expect(view.prState).toBe('not_found');
+        // The CI cache of the vanished PR is left as it was; no head, no merge, no branch chip.
+        expect(view.ciState).toBe('pending');
+        expect(tasks.recordCiHead).not.toHaveBeenCalled();
+        expect(tasks.updateById).not.toHaveBeenCalled();
+        expect(mergeGate.onPullRequestStatusRefreshed).not.toHaveBeenCalled();
+    });
+
+    it('records task.runtime_updated when a PR goes "not found", and not again while it stays gone', async () => {
+        const runtime = jest.fn().mockResolvedValue(undefined);
+        const domainEvents = {
+            transaction: jest.fn(async (fn: (manager: unknown) => Promise<unknown>) => fn({})),
+            runtime,
+        };
+        const withEvents = new TaskPrStatusService(
+            tasks as unknown as TaskRepository,
+            works as unknown as WorkRepository,
+            git as unknown as GitFacadeService,
+            transitions as unknown as TaskTransitionService,
+            mergeGate as unknown as TaskMergeGateService,
+            autoResume as unknown as TaskCiAutoResumeService,
+            undefined,
+            domainEvents as never,
+        );
+        git.getPullRequestStatus.mockResolvedValue(null);
+
+        tasks.findByIdAndUser.mockResolvedValue(makeTask({ ciCheckedAt: new Date(0) }));
+        await withEvents.getForTask(USER, 'task-1', { refresh: true });
+        expect(runtime).toHaveBeenCalledTimes(1);
+        expect(runtime).toHaveBeenCalledWith(
+            {},
+            'task-1',
+            expect.objectContaining({ previous: { runtime: { prState: 'open' } } }),
+        );
+
+        tasks.findByIdAndUser.mockResolvedValue(
+            makeTask({ prState: 'not_found', ciCheckedAt: new Date(0) }),
+        );
+        await withEvents.getForTask(USER, 'task-1', { refresh: true });
+        expect(runtime).toHaveBeenCalledTimes(1);
+    });
+
+    it('re-checks a "not found" PR on demand, and records it again when the provider answers', async () => {
+        tasks.findByIdAndUser.mockResolvedValue(
+            makeTask({ prState: 'not_found', ciCheckedAt: new Date(0) }),
+        );
+
+        const view = await service.getForTask(USER, 'task-1');
+
+        expect(git.getPullRequestStatus).toHaveBeenCalledTimes(1);
         expect(tasks.updatePrStatusCache).toHaveBeenCalledWith(
             'task-1',
-            expect.objectContaining({ ciCheckedAt: expect.any(Date) }),
+            expect.objectContaining({ prState: 'open' }),
         );
-        const patch = tasks.updatePrStatusCache.mock.calls[0][1];
-        expect(patch.prState).toBeUndefined();
+        expect(view.prState).toBe('open');
     });
 
     it('mirrors a landed PR onto the branch chip', async () => {

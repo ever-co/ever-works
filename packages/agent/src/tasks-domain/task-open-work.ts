@@ -14,11 +14,22 @@ import { Raw, type FindOperator } from 'typeorm';
 export const TASK_CLOSED_UNMERGED_PR_STATE = 'closed';
 
 /**
+ * A Task's cached pull-request state once the git provider answered "not found" for its pull
+ * request: the repository or the pull request was deleted, or the connection can no longer see
+ * it (a provider answers "not found" for a private repository it does not show you). Written by
+ * the PR-status read (`TaskPrStatusService.refreshTask`). Like `closed` and `merged`, the sweep
+ * never polls it again (`TaskRepository.findDuePrStatusSync` reads only null / open / draft); the
+ * on-demand read re-checks it, and a new pull request on the Task resets it.
+ */
+export const TASK_PR_NOT_FOUND_STATE = 'not_found';
+
+/**
  * How long a Task whose pull request was closed without merging still holds its slot of a cap:
  * 24 hours after it last changed (the later of `updatedAt` and `ciCheckedAt`, the sweep's read
- * that saw it close; a closed pull request is never polled again). So closing a loop's pull
- * requests throttles it to at most the cap per day, instead of freeing a slot the moment each
- * closes, and a pull request nobody merges can never hold a slot for good.
+ * that saw it close; a closed pull request is never polled again, and the sweep's write keeps
+ * `updatedAt`). So closing a loop's pull requests throttles it to at most the cap per day,
+ * instead of freeing a slot the moment each closes, and a pull request nobody merges can never
+ * hold a slot for good.
  */
 export const TASK_CLOSED_PR_SLOT_HOLD_MS = 24 * 60 * 60 * 1000;
 

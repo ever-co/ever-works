@@ -630,8 +630,16 @@ export class TaskRepository {
      * Branch-GC candidates (worktree-per-Task M6): Tasks that still hold
      * a live branch (`branchState` pushed/pr-open/conflict/created) and
      * are either TERMINAL (done/cancelled — eligible immediately, the
-     * per-Work cleanup policy is applied by the sweeper) or abandoned
-     * (not updated in `staleDays`). Uses idx_tasks_branch_state.
+     * per-Work cleanup policy is applied by the sweeper) or abandoned.
+     * Uses idx_tasks_branch_state.
+     *
+     * Abandoned = no sign of life in `staleDays`: the row was not written
+     * (`updatedAt`), the PR-status sweep did not read its pull request
+     * (`ciCheckedAt`), and no CI result named a head for it
+     * (`ciHeadSeenAt`). The last two are machine writes that keep
+     * `updatedAt` (`updatePrStatusCache`, `recordCiHead`), so they are read
+     * here by name: an open pull request still waiting for review is not
+     * abandoned, and deleting its branch would close it.
      */
     async findBranchCleanupCandidates(staleDays: number): Promise<Task[]> {
         const cutoff = new Date(Date.now() - staleDays * 24 * 60 * 60 * 1000);
@@ -641,10 +649,12 @@ export class TaskRepository {
             .andWhere('task.branchState IN (:...live)', {
                 live: ['created', 'pushed', 'pr-open', 'conflict'],
             })
-            .andWhere('(task.status IN (:...terminal) OR task.updatedAt < :cutoff)', {
-                terminal: ['done', 'cancelled'],
-                cutoff,
-            })
+            .andWhere(
+                '(task.status IN (:...terminal) OR (task.updatedAt < :cutoff' +
+                    ' AND (task.ciCheckedAt IS NULL OR task.ciCheckedAt < :cutoff)' +
+                    ' AND (task.ciHeadSeenAt IS NULL OR task.ciHeadSeenAt < :cutoff)))',
+                { terminal: ['done', 'cancelled'], cutoff },
+            )
             .take(200)
             .getMany();
     }
@@ -660,7 +670,9 @@ export class TaskRepository {
      *  - `prState` is null / `open` / `draft` — a merged or closed PR is
      *    TERMINAL. Once observed, we never poll it again; the plan's
      *    "only while the PR is open" rule is enforced here rather than
-     *    left to the caller.
+     *    left to the caller. So is one the provider answered "not found"
+     *    for (`not_found`, `TASK_PR_NOT_FOUND_STATE`): the on-demand read
+     *    (`GET /api/tasks/:id/pr-status`) still re-checks it.
      *
      * Never-checked rows (`ciCheckedAt IS NULL`) sort first, then the
      * stalest — so a newly opened PR gets its dot quickly and a long
@@ -681,9 +693,15 @@ export class TaskRepository {
     }
 
     /**
-     * PR-status cache write. Query-builder update on purpose: like
-     * `updateLatestRun` it must NOT bump `updatedAt`, or every sync tick
-     * would reshuffle the updatedAt-ordered board.
+     * PR-status cache write. Like `updateLatestRun` it must NOT bump
+     * `updatedAt` (domain events §4: a machine-only write, recorded as
+     * `task.runtime_updated`), or every sync tick would reshuffle the
+     * updatedAt-ordered board and every reader of "last changed" (the
+     * stall flag, a recurring template's open-instance count, the digest)
+     * would read a sweep that merely re-read an open pull request as a
+     * change. TypeORM's update builder sets an `@UpdateDateColumn` to
+     * CURRENT_TIMESTAMP unless the SET names it, so `updatedAt` is set to
+     * its own value. `ciCheckedAt` is the sweep's own stamp.
      */
     async updatePrStatusCache(
         taskId: string,
@@ -691,10 +709,11 @@ export class TaskRepository {
             Pick<Task, 'prState' | 'ciState' | 'ciCheckedAt' | 'prChecks' | 'prHeadSha'>
         >,
     ): Promise<void> {
+        const keepUpdatedAt = this.repository.manager.connection.driver.escape('updatedAt');
         await this.repository
             .createQueryBuilder()
             .update(Task)
-            .set(patch)
+            .set({ ...patch, updatedAt: () => keepUpdatedAt })
             .where('id = :taskId', { taskId })
             .execute();
     }
@@ -1324,9 +1343,9 @@ export class TaskRepository {
      * overwritten by the older one. Returns whether this caller's head
      * write landed.
      *
-     * Query-builder update for the same reason `updatePrStatusCache` uses
-     * one: it must NOT bump `updatedAt`, or a busy CI would reshuffle the
-     * updatedAt-ordered board on every job.
+     * Keeps `updatedAt` for the same reason `updatePrStatusCache` does: a
+     * busy CI must not reshuffle the updatedAt-ordered board on every job,
+     * nor read as a change to the Task. `ciHeadSeenAt` is its own stamp.
      *
      * `ciState` is only ever written RED here. A single green check is not
      * a green gate — only the poll, which sees every check at once, may
@@ -1345,10 +1364,11 @@ export class TaskRepository {
             patch.ciState = 'failing';
             patch.ciCheckedAt = input.seenAt;
         }
+        const keepUpdatedAt = this.repository.manager.connection.driver.escape('updatedAt');
         const qb = this.repository
             .createQueryBuilder()
             .update(Task)
-            .set(patch)
+            .set({ ...patch, updatedAt: () => keepUpdatedAt })
             .where('id = :taskId', { taskId: input.taskId });
         if (input.expectedHeadSha === null) {
             qb.andWhere('ciHeadSha IS NULL');

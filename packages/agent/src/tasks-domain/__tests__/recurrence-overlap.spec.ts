@@ -146,7 +146,10 @@ describe('recurrence overlap rules', () => {
         // 4: no pull-request outcome yet, spawned in the window.
         expect(branches[3]).toContain('"task"."prState" IS NULL');
         expect(branches[3]).toContain('"task"."createdAt" >= ');
-        // 5-6: closed unmerged, changed in the last day by either timestamp.
+        // 5-6: closed unmerged or "not found", changed in the last day by either timestamp.
+        for (const branch of branches.slice(4)) {
+            expect(branch).toContain('"task"."prState" IN (');
+        }
         expect(branches[4]).toContain('"task"."updatedAt" >= ');
         expect(branches[5]).toContain('"task"."ciCheckedAt" >= ');
 
@@ -159,6 +162,7 @@ describe('recurrence overlap rules', () => {
                 'open',
                 'draft',
                 'closed',
+                'not_found',
             ]),
         );
         // Four week-long bounds (run, sweep read, last change, spawn) and the two-sided day hold.

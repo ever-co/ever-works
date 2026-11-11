@@ -53,6 +53,7 @@ const PR_TONES: Record<TaskPrState, string> = {
     draft: 'bg-slate-100 dark:bg-slate-800/40 text-slate-600 dark:text-slate-300',
     merged: 'bg-violet-100 dark:bg-violet-900/40 text-violet-700 dark:text-violet-300',
     closed: 'bg-slate-100 dark:bg-slate-800/40 text-slate-500 dark:text-slate-400',
+    not_found: 'bg-slate-100 dark:bg-slate-800/40 text-slate-500 dark:text-slate-400',
 };
 
 const FALLBACK_TONE = 'bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300';
@@ -97,7 +98,7 @@ export function TaskPrPill({ task }: { task: Task }) {
     const guardRefused = activeGuardRefusal(task) !== null;
     const tone = guardRefused ? GUARD_REFUSED_TONE : (PR_TONES[prState] ?? FALLBACK_TONE);
     const href = safePrUrl(task.prUrl);
-    const title = `Pull request #${task.prNumber} — ${prState}${
+    const title = `Pull request #${task.prNumber} — ${prState === 'not_found' ? 'not found' : prState}${
         guardRefused ? " · blocked by an App Work's change guard, do not merge it as it stands" : ''
     } · ${describeChecks(task)}`;
 
@@ -113,6 +114,7 @@ export function TaskPrPill({ task }: { task: Task }) {
             {prState === 'draft' && <span className="shrink-0 opacity-70">draft</span>}
             {prState === 'merged' && <span className="shrink-0 opacity-70">merged</span>}
             {prState === 'closed' && <span className="shrink-0 opacity-70">closed</span>}
+            {prState === 'not_found' && <span className="shrink-0 opacity-70">not found</span>}
             {guardRefused && <span className="shrink-0 font-semibold">refused</span>}
         </>
     );
