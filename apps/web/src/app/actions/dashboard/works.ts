@@ -63,7 +63,7 @@ import { revalidatePath } from 'next/cache';
 import { ROUTES } from '@/lib/constants';
 import { redirect } from 'next/navigation';
 import { sanitizeName, sanitizeDescription, sanitizePrompt } from '@/lib/utils/sanitize';
-import { slugify } from '@ever-works/plugin';
+import { isValidWorkSlug, workSlugFromName } from '@/lib/works/work-slug.shared';
 import { ApiResponseError, serverMutation } from '@/lib/api/server-api';
 import { workProposalsAPI } from '@/lib/api/work-proposals';
 
@@ -602,7 +602,7 @@ export async function createWorkWithAI(request: AIWorkOptions) {
             : validation.data.prompt;
         const defaultDetails = {
             name: validation.data.name,
-            slug: slugify(validation.data.name),
+            slug: workSlugFromName(validation.data.name),
             description: validation.data.prompt,
             keywords: [] as string[],
             categories: [] as string[],
@@ -625,6 +625,12 @@ export async function createWorkWithAI(request: AIWorkOptions) {
         // different.
         if (validation.data.slug) {
             workDetails = { ...workDetails, slug: validation.data.slug };
+        }
+        // The AI details slugify the name with an ASCII-only rule too, so a
+        // name with no Latin letters came back as '' / '-' and the create
+        // failed with "invalid generated data". Fall back to the name's slug.
+        if (!isValidWorkSlug(workDetails.slug)) {
+            workDetails = { ...workDetails, slug: workSlugFromName(validation.data.name) };
         }
 
         // Determine organization settings
