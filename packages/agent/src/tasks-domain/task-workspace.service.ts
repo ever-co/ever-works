@@ -1969,6 +1969,16 @@ export class TaskWorkspaceService {
         // Work this is the SECOND judgement: `judgeBeforePush` already ran the
         // shared rules on the exact commit before it was published, and this
         // one adds the size rule and the provider's own diff.
+        //
+        // Same branch, same pull request — a re-run of a Task whose pull request
+        // is still OPEN (a review fix run, a CI fix, a recurring re-run) has just
+        // pushed more commits onto that pull request's head, and the provider has
+        // already put them on it. Asking for another pull request was refused by
+        // the provider (one open pull request per head) AFTER the push landed, so
+        // the run whose work IS on the pull request ended `failed`. Mirrors
+        // `finalizeRemotePush`, the fleet path; a merged or closed pull request
+        // (or none) is still followed by a new one, exactly as before.
+        const existingPullRequest = openPullRequestOf(task);
         const guarded = await this.guardAppChange({
             input,
             work,
@@ -1977,8 +1987,21 @@ export class TaskWorkspaceService {
             gitOptions,
             baseRef,
             branch: workspace.branch,
+            ...(existingPullRequest ? { existingPullRequest } : {}),
         });
         if (guarded) return guarded;
+
+        if (existingPullRequest) {
+            await this.tasks.updateById(task.id, { branchState: 'pr-open' });
+            this.logger.log(
+                `Task ${task.id} already has PR #${existingPullRequest.number}; push of ${workspace.branch} recorded without opening another.`,
+            );
+            return {
+                outcome: 'pr-opened',
+                prNumber: existingPullRequest.number,
+                prUrl: existingPullRequest.url,
+            };
+        }
 
         return this.openPullRequestForBranch({
             task,

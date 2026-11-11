@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { IsNull, Repository } from 'typeorm';
+import { In, IsNull, Not, Repository } from 'typeorm';
 import { isUniqueConstraintError } from '../../utils/db-error.utils';
 import {
     TASK_REVIEW_REJECTION_MAX_FEEDBACK_CHARS,
@@ -134,6 +134,100 @@ export class TaskReviewRejectionRepository {
             .where('id IN (:...ids)', { ids })
             .andWhere('consumedByRunId IS NULL')
             .execute();
+        return result.affected ?? 0;
+    }
+
+    // ── Review feedback reaches the next run (fix runs) ─────────────────
+    //
+    // A FRESH run (not a resume) is given the Task's open findings and is
+    // only told it fixed them once it finishes, so it CARRIES them first:
+    //
+    //   consumedByRunId NULL                  pending (unchanged)
+    //   consumedByRunId = R, consumedAt NULL  carried by run R, outcome unknown
+    //   consumedByRunId = R, consumedAt set   consumed (unchanged; `markConsumed`
+    //                                         writes both at once for a resume)
+    //
+    // No new column: the carried state is the one combination the resume
+    // path never writes. `findPendingForTask` reads a carried row as not
+    // pending, which is right while its run is in flight; a run that ends
+    // without completing gives its rows back (`releaseCarried`).
+
+    /**
+     * Every row of the Task that is not consumed yet — pending, or carried by
+     * a run whose outcome is not recorded — oldest first. The caller decides
+     * which of the carried ones are really still open (their run failed, was
+     * cancelled, or is the one being planned).
+     */
+    async findOpenForTask(taskId: string, limit = 50): Promise<TaskReviewRejection[]> {
+        return this.repository.find({
+            where: { taskId, consumedAt: IsNull() },
+            order: { createdAt: 'ASC' },
+            take: Math.max(1, Math.min(100, limit)),
+        });
+    }
+
+    /**
+     * The runs that ever carried or consumed a finding of this Task. A run in
+     * this set is never used as the "already handled everything before it"
+     * cutoff: it may have carried only the first part of a longer queue.
+     */
+    async findCarrierRunIds(taskId: string): Promise<Set<string>> {
+        const rows = await this.repository.find({
+            where: { taskId, consumedByRunId: Not(IsNull()) },
+            select: { id: true, consumedByRunId: true },
+        });
+        return new Set(
+            rows
+                .map((row) => row.consumedByRunId)
+                .filter((runId): runId is string => typeof runId === 'string' && runId !== ''),
+        );
+    }
+
+    /**
+     * Claim rows for a fresh run, then answer what this run now holds,
+     * oldest first. CAS-guarded twice: a row is taken only while nothing has
+     * consumed it, and only from nobody, from this run (a re-plan of the same
+     * job), or from a run named in `reclaimFrom` (one the caller saw end
+     * without completing). Two runs planned at once cannot both carry a row.
+     */
+    async carryForRun(
+        ids: string[],
+        runId: string,
+        reclaimFrom: readonly string[] = [],
+    ): Promise<TaskReviewRejection[]> {
+        if (ids.length === 0) return [];
+        await this.repository.update(
+            { id: In(ids), consumedAt: IsNull(), consumedByRunId: IsNull() },
+            { consumedByRunId: runId },
+        );
+        const from = [...new Set(reclaimFrom.filter((id) => id && id !== runId))];
+        if (from.length > 0) {
+            await this.repository.update(
+                { id: In(ids), consumedAt: IsNull(), consumedByRunId: In(from) },
+                { consumedByRunId: runId },
+            );
+        }
+        return this.repository.find({
+            where: { id: In(ids), consumedByRunId: runId, consumedAt: IsNull() },
+            order: { createdAt: 'ASC' },
+        });
+    }
+
+    /** The run that carried rows COMPLETED: they are consumed, by that run. */
+    async markCarriedConsumed(runId: string): Promise<number> {
+        const result = await this.repository.update(
+            { consumedByRunId: runId, consumedAt: IsNull() },
+            { consumedAt: new Date() },
+        );
+        return result.affected ?? 0;
+    }
+
+    /** The run that carried rows did NOT complete: they are pending again. */
+    async releaseCarried(runId: string): Promise<number> {
+        const result = await this.repository.update(
+            { consumedByRunId: runId, consumedAt: IsNull() },
+            { consumedByRunId: null },
+        );
         return result.affected ?? 0;
     }
 }

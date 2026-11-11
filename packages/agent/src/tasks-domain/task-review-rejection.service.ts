@@ -6,16 +6,36 @@ import {
     Optional,
 } from '@nestjs/common';
 import { DomainEventPublisher } from '../domain-events/domain-event-publisher.service';
+import { AgentRunRepository } from '../database/repositories/agent-run.repository';
 import { TaskRepository } from '../database/repositories/task.repository';
 import { TaskReviewRejectionRepository } from '../database/repositories/task-review-rejection.repository';
 import { TaskReviewerRepository } from '../database/repositories/task-side.repositories';
 import { WorkRepository } from '../database/repositories/work.repository';
+import {
+    selectReviewFeedback,
+    type ReviewFeedbackItem,
+    type RunReviewFeedback,
+} from '../agents/review-feedback-brief';
 import { findTaskForPullRequest } from './task-repository';
+import { isAgentReviewRunScope } from './task-agent-review';
+import type { AgentRun } from '../entities/agent-run.entity';
 import type {
     TaskReviewRejection,
     TaskReviewRejectionReviewerKind,
     TaskReviewRejectionSeverity,
 } from '../entities/task-review-rejection.entity';
+
+/**
+ * Review feedback reaches the next run — how many open findings, and how
+ * many of the Task's newest runs, one claim reads. Both bound a read on the
+ * dispatch path; neither is a product limit (the caps on what a run is
+ * GIVEN live in `review-feedback-brief.ts`).
+ */
+const REVIEW_FEEDBACK_SCAN = 50;
+const REVIEW_FEEDBACK_RUN_SCAN = 50;
+
+/** How a run ended, as the board denorm records it (`TaskRunTerminalStatus`). */
+export type ReviewFeedbackRunOutcome = 'completed' | 'failed' | 'cancelled';
 
 /**
  * Orchestration M9 — the write half of the rejection loop.
@@ -62,6 +82,11 @@ export class TaskReviewRejectionService {
         // `reviewState`, which the task DTO shows: `task.updated`. Appended
         // LAST + @Optional (positional-spec arity rule).
         @Optional() private readonly domainEvents?: DomainEventPublisher,
+        // Review feedback reaches the next run — the run being planned and
+        // the Task's earlier runs (see `claimFeedbackForRun`). Appended LAST +
+        // @Optional (positional-spec arity rule); absent, no fresh run is ever
+        // given feedback and nothing is settled (the resume path is unchanged).
+        @Optional() private readonly runs?: AgentRunRepository,
     ) {}
 
     /**
@@ -213,6 +238,142 @@ export class TaskReviewRejectionService {
         });
     }
 
+    // ── Review feedback reaches the next run (fix runs) ─────────────
+
+    /**
+     * The findings a FRESH run of this Task must address, claimed for it.
+     *
+     * Called where a run's prompt is built — the fleet planner and the cloud
+     * worker — for every dispatch path that ends in a run of the Task (Run on
+     * the board or `POST /api/tasks/:id/run`, a transition fan-out, a
+     * recurring re-run, a drained or parked run). Before this, recorded
+     * findings reached a RESUMED run only, and a resume refuses a completed
+     * run: a new run started from the Task's standing brief and treated
+     * itself as fresh work.
+     *
+     * What counts as open for `runId`:
+     *
+     *  - not consumed (`consumedAt` NULL), and either pending, already carried
+     *    by this run (a re-plan of the same job), or carried by a run that
+     *    ended WITHOUT finishing the work: failed, cancelled, parked on an
+     *    owner question, or the run this one resumes;
+     *  - recorded after the Task's latest COMPLETED authoring run that carried
+     *    no findings ({@link feedbackCutoff}). Such a run had every older
+     *    finding in front of it, or predates this feature; replaying a
+     *    months-old finding on a recurring Task would send the run to fix a
+     *    pull request that was merged long ago.
+     *
+     * Oldest first, within the caps of `selectReviewFeedback`; what does not
+     * fit stays pending for the next run. The rows are CARRIED (`consumedByRunId`
+     * set, `consumedAt` not yet) and only become consumed when the run
+     * completes ({@link settleFeedbackForRun}).
+     *
+     * Never throws: the run goes ahead without the section (and says so in
+     * the log) rather than failing because a lookup hiccuped. A review run,
+     * a run of another Task or another owner, and a non-Task run get nothing.
+     */
+    async claimFeedbackForRun(input: {
+        taskId: string;
+        runId: string;
+        userId: string;
+    }): Promise<RunReviewFeedback | null> {
+        const { taskId, runId, userId } = input;
+        if (!this.runs || !taskId || !runId) return null;
+        try {
+            const run = await this.runs.findById(runId);
+            if (!run || run.taskId !== taskId || run.userId !== userId) return null;
+            if (run.triggerKind !== 'task' || isAgentReviewRunScope(run.delegationScope)) {
+                return null;
+            }
+            const open = await this.rejections.findOpenForTask(taskId, REVIEW_FEEDBACK_SCAN);
+            if (open.length === 0) return null;
+
+            const recent =
+                (await this.runs.findRecentForTask(taskId, REVIEW_FEEDBACK_RUN_SCAN)) ?? [];
+            const runsById = new Map<string, AgentRun>(recent.map((row) => [row.id, row]));
+            const unknownCarriers = [
+                ...new Set(
+                    open
+                        .map((row) => row.consumedByRunId)
+                        .filter((id): id is string => !!id && id !== runId && !runsById.has(id)),
+                ),
+            ];
+            if (unknownCarriers.length > 0) {
+                for (const row of await this.runs.findByIds(unknownCarriers)) {
+                    runsById.set(row.id, row);
+                }
+            }
+            const carriers = await this.rejections.findCarrierRunIds(taskId);
+            const cutoff = feedbackCutoff(recent, carriers, runId);
+
+            const reclaimFrom = new Set<string>();
+            const eligible = open.filter((row) => {
+                const carrier = row.consumedByRunId ?? null;
+                // Already this run's: a retried enqueue re-plans the same job.
+                if (carrier === runId) return true;
+                const createdAt = createdAtOf(row);
+                if (cutoff && createdAt && createdAt <= cutoff) return false;
+                if (!carrier) return true;
+                if (!carrierGaveItUp(runsById.get(carrier), runId)) return false;
+                reclaimFrom.add(carrier);
+                return true;
+            });
+            if (eligible.length === 0) return null;
+
+            const { selected, omitted } = selectReviewFeedback(eligible);
+            const carried = await this.rejections.carryForRun(
+                selected.map((row) => row.id),
+                runId,
+                [...reclaimFrom],
+            );
+            if (carried.length === 0) return null;
+            this.logger.log(
+                `Run ${runId}: carries ${carried.length} review finding(s) for task ${taskId}${
+                    omitted > 0 ? ` (${omitted} left for a later run)` : ''
+                }.`,
+            );
+            return { items: carried.map(toFeedbackItem), omitted };
+        } catch (error) {
+            this.logger.warn(
+                `Run ${runId}: review-feedback lookup failed — the run starts without it: ${
+                    error instanceof Error ? error.message : String(error)
+                }`,
+            );
+            return null;
+        }
+    }
+
+    /**
+     * The run that carried findings has ended. Completed: the findings are
+     * consumed by it, so no later run is told to fix them again. Failed or
+     * cancelled: they are pending again, for the next run and for the resume
+     * path's own reader. A run that completed PARKED on an owner question
+     * keeps them: the run the answer starts carries them on.
+     *
+     * Called from `TaskRunDenormService.recordTerminal`, the one write both
+     * runtimes make when a run ends. Best-effort: a missed settle is covered
+     * by {@link claimFeedbackForRun}, which reads the carrier's own status.
+     * Never throws.
+     */
+    async settleFeedbackForRun(runId: string, outcome: ReviewFeedbackRunOutcome): Promise<void> {
+        if (!runId) return;
+        try {
+            if (outcome === 'completed') {
+                const run = this.runs ? await this.runs.findById(runId) : null;
+                if (run?.awaitingInput === true) return;
+                await this.rejections.markCarriedConsumed(runId);
+                return;
+            }
+            await this.rejections.releaseCarried(runId);
+        } catch (error) {
+            this.logger.warn(
+                `Run ${runId}: review-feedback settle (${outcome}) failed — the next claim re-reads the run: ${
+                    error instanceof Error ? error.message : String(error)
+                }`,
+            );
+        }
+    }
+
     // ── internals ──────────────────────────────────────────────────
 
     private async syncReviewerState(taskId: string, userId: string): Promise<void> {
@@ -231,4 +392,73 @@ export class TaskReviewRejectionService {
             );
         }
     }
+}
+
+/** An authoring run of the Task: a Task run that is not an agent REVIEW run. */
+function isAuthoringRun(run: AgentRun): boolean {
+    return run.triggerKind === 'task' && !isAgentReviewRunScope(run.delegationScope);
+}
+
+/**
+ * The start of the Task's latest COMPLETED authoring run (other than
+ * `runId`) that carried no findings, or `null` when it has none.
+ *
+ * Such a run was planned with every older open finding in front of it — or
+ * it ran before findings reached fresh runs at all — so a finding recorded
+ * before it started is not "unaddressed review feedback" any more. A run
+ * that DID carry findings is skipped: the caps may have left part of the
+ * queue for the next run. A run parked on an owner question did not finish
+ * and is skipped too. `startedAt` rather than `finishedAt`: a finding
+ * recorded while that run was working was never in front of it.
+ */
+export function feedbackCutoff(
+    recentNewestFirst: readonly AgentRun[],
+    carriers: ReadonlySet<string>,
+    runId: string,
+): Date | null {
+    for (const run of recentNewestFirst) {
+        if (!run || run.id === runId || !isAuthoringRun(run)) continue;
+        if (run.status !== 'completed' || run.awaitingInput === true) continue;
+        if (carriers.has(run.id)) continue;
+        const at = run.startedAt ?? run.createdAt;
+        const time = at ? new Date(at) : null;
+        return time && !Number.isNaN(time.getTime()) ? time : null;
+    }
+    return null;
+}
+
+/**
+ * Did the run that carried a finding end WITHOUT finishing it, so that
+ * `runId` may take it over? Failed and cancelled, plainly; completed but
+ * parked on an owner question; and the run `runId` resumes (the resume
+ * clears the parked flag, sometimes before the successor is planned). A
+ * run row that cannot be found carries nothing. A run still queued or
+ * running is working on it — never taken over.
+ */
+function carrierGaveItUp(carrier: AgentRun | undefined, runId: string): boolean {
+    if (!carrier) return true;
+    if (carrier.status === 'failed' || carrier.status === 'cancelled') return true;
+    if (carrier.status === 'completed') {
+        return carrier.awaitingInput === true || carrier.resumeSuccessorRunId === runId;
+    }
+    return false;
+}
+
+function createdAtOf(row: { createdAt?: Date | string | null }): Date | null {
+    if (!row.createdAt) return null;
+    const at = new Date(row.createdAt);
+    return Number.isNaN(at.getTime()) ? null : at;
+}
+
+function toFeedbackItem(row: TaskReviewRejection): ReviewFeedbackItem {
+    return {
+        id: row.id,
+        source: row.source,
+        feedback: row.feedback,
+        reviewerLabel: row.reviewerLabel ?? null,
+        reviewerKind: row.reviewerKind ?? null,
+        severity: row.severity ?? null,
+        prNumber: row.prNumber ?? null,
+        createdAt: row.createdAt ?? null,
+    };
 }

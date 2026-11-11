@@ -1341,17 +1341,26 @@ export class TasksController {
      * Orchestration M9 — record a reviewer REJECTION with its feedback.
      *
      * This is the human half of the rejection loop: the text lands in
-     * `task_review_rejections` and the NEXT resumed run for this Task is
-     * seeded with it, ahead of whatever message the resumer types. It
-     * also finally writes `task_reviewers.reviewState` — the advisory
-     * signal that existed with no writer — so the two never disagree.
+     * `task_review_rejections` and the NEXT run of this Task is given it —
+     * a resumed run as its first input, a fresh run (Run, a transition, a
+     * recurring re-run) as its `# REVIEW FEEDBACK TO ADDRESS` section, which
+     * tells it to fix exactly these findings on the Task's branch and pull
+     * request. It also finally writes `task_reviewers.reviewState` — the
+     * advisory signal that existed with no writer — so the two never disagree.
+     *
+     * `runNow: true` starts that fix run right after recording, through the
+     * batch run path (`runTasksBatch` → `runTask`: the same Agent resolution,
+     * in-flight refusal and dispatch gate as `POST /:id/run`). The rejection
+     * is recorded either way; the dispatch outcome is DATA in `run`, never an
+     * error status, so a client that sees `RUN_ALREADY_IN_FLIGHT` does not
+     * retry and record the same finding twice.
      *
      * 201 rather than 200: this creates a durable record.
      */
     @Post(':id/reject')
     @ApiOperation({
         summary:
-            'Record a reviewer rejection with feedback. The next resumed run for this Task receives it as its first input.',
+            'Record a reviewer rejection with feedback. The next run of this Task (resumed or fresh) is given it to fix on the same branch and pull request; `runNow: true` starts that run right away.',
     })
     @HttpCode(HttpStatus.CREATED)
     async rejectTask(
@@ -1371,16 +1380,32 @@ export class TasksController {
             'the fix loop replays it into a new run; a person rejects in the app.',
             ['fleet-run'],
         );
-        await this.service.getOne(auth.userId, id, this.scopeContext.getScope());
+        const runNow = body.runNow === true;
+        // `POST /:id/run`'s own refusal, asked BEFORE anything is recorded so
+        // a refused run never leaves a half-done request behind.
+        if (runNow) {
+            refuseMachinePrincipalAction(auth, req, 'run a Task', RUN_TOKEN_NO_DISPATCH, [
+                'fleet-run',
+            ]);
+        }
+        const scope = this.scopeContext.getScope();
+        await this.service.getOne(auth.userId, id, scope);
         const row = await this.rejections.rejectTask(auth.userId, id, body.feedback, {
             runId: body.runId ?? null,
         });
-        return {
+        const recorded = {
             id: row.id,
             taskId: row.taskId,
             source: row.source,
             createdAt: row.createdAt,
         };
+        if (!runNow) return recorded;
+        const { results } = await this.service.runTasksBatch(
+            auth.userId,
+            [{ taskId: id, agentId: null }],
+            scope,
+        );
+        return { ...recorded, run: results[0] ?? null };
     }
 
     /**

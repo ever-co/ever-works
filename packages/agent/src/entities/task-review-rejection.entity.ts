@@ -155,12 +155,18 @@ export class TaskReviewRejection {
     sourceKey?: string | null;
 
     /**
-     * The resumed run this rejection was seeded into. NULL = still
-     * pending, and that is the only "open/closed" state this record has.
+     * The run this rejection was given to. NULL = still pending.
+     *
+     * A RESUMED run claims it outright (`consumedAt` is written at the same
+     * time). A FRESH run (review feedback reaches the next run, 2026-11-11)
+     * CARRIES it: this column is set and `consumedAt` stays NULL until that
+     * run ends — completed writes `consumedAt`, failed or cancelled clears
+     * this column again (`TaskReviewRejectionService.settleFeedbackForRun`).
      */
     @Column({ type: 'uuid', nullable: true })
     consumedByRunId?: string | null;
 
+    /** When the run in `consumedByRunId` consumed it; NULL while pending or carried. */
     @PortableDateColumn({ nullable: true })
     consumedAt?: Date | null;
 
