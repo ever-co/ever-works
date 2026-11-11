@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+# The linux-x64 release build of the screen helper, inside a pinned container.
+#
+# Runs build-release.sh (two clean builds, compared) in the Rust image below,
+# pinned by digest, on this folder AS COMMITTED (git archive of HEAD, LF line
+# endings), so the binary depends on the commit and the image, not on the
+# machine or its checkout: a GitHub runner, an in-cluster runner and a
+# workstation with Docker produce the same bytes, and anyone can check a
+# published fingerprint by running this script at the release's commit. The
+# image is Debian 12 (glibc 2.36), so the helper runs on Debian 12 / Ubuntu
+# 22.04 and newer. publish-node.yml builds the released linux-x64 helper with
+# it (see PACKAGING.md, "Release builds").
+#
+# Uncommitted changes in this folder are NOT built (the script says so).
+#
+# Usage: bash build-release-linux.sh [out_dir]   (needs Docker and git; default dist)
+set -euo pipefail
+
+cd "$(dirname "$0")"
+out_dir="${1:-dist}"
+
+# rust:1.88.0-slim-bookworm (the channel rust-toolchain.toml pins). Change both together.
+image="${SCREEN_HELPER_LINUX_IMAGE:-docker.io/library/rust:1.88.0-slim-bookworm@sha256:38bc5a86d998772d4aec2348656ed21438d20fcdce2795b56ca434cf21430d89}"
+toolchain="$(sed -n 's/^channel = "\(.*\)"/\1/p' rust-toolchain.toml | tr -d '\r')"
+case "$image" in
+  *"rust:$toolchain-"*) ;;
+  *) echo "the build image ($image) is not Rust $toolchain, the channel rust-toolchain.toml pins" >&2; exit 2 ;;
+esac
+
+commit="$(git rev-parse --verify HEAD)"
+folder="$(git rev-parse --show-prefix)"
+folder="${folder%/}"
+if [ -n "$(git status --porcelain -- .)" ]; then
+  echo "note: building $folder as committed in $commit; these uncommitted changes are not part of the build:" >&2
+  git status --short -- . >&2
+fi
+epoch="${SOURCE_DATE_EPOCH:-$(git log -1 --format=%ct "$commit")}"
+
+mkdir -p "$out_dir"
+out_abs="$(cd "$out_dir" && pwd)"
+# Git Bash on Windows: Docker wants the Windows form of the path, untouched by MSYS.
+if command -v cygpath >/dev/null 2>&1; then out_abs="$(cygpath -w "$out_abs")"; fi
+
+echo "ever-works-screen linux-x64 release build of $commit ($folder) in $image"
+# RUSTUP_TOOLCHAIN: use the image's toolchain as it is (rust-toolchain.toml would
+# also ask rustup for clippy and rustfmt, which a release build does not need).
+# The build runs in /build/ever-works-screen, the path build-release.sh remaps,
+# and the outputs are handed back to the caller's user.
+git -c core.autocrlf=false -c core.eol=lf archive --format=tar "$commit:$folder" |
+  MSYS_NO_PATHCONV=1 docker run --rm -i --platform linux/amd64 \
+    --volume "$out_abs:/out" \
+    --env "SOURCE_DATE_EPOCH=$epoch" \
+    --env "RUSTUP_TOOLCHAIN=$toolchain" \
+    --env "HOST_UID=$(id -u)" \
+    --env "HOST_GID=$(id -g)" \
+    "$image" \
+    bash -c 'set -euo pipefail
+      mkdir -p /build/ever-works-screen
+      tar -C /build/ever-works-screen -xf -
+      cd /build/ever-works-screen
+      bash build-release.sh /out
+      chown -R "$HOST_UID:$HOST_GID" /out'

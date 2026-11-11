@@ -14,6 +14,18 @@ name: Publish Node
 # together in a PR (`src/version.spec.ts` pins them to each other), merge it,
 # then tag the merge commit `node-v<version>`. The tag must equal the
 # package version, so every published version maps to exactly one commit.
+#
+# The screen helper (FL-07, `apps/node/native/ever-works-screen`) ships with
+# every release: `screen-helper` builds it reproducibly for each target, `build`
+# bakes each build's SHA-256 and download URL into the bundle (the manifest
+# `ever-works-node helper install` checks a download against), and
+# `release-screen-helper` hosts the binaries as assets of this tag's GitHub
+# release (`https://github.com/<repo>/releases/download/node-v<version>/...`)
+# BEFORE npm publishes the package that points at them. Only the job token is
+# needed (`contents: write` there). The targets are the four below unless the
+# repository variable SCREEN_HELPER_RELEASE_TARGETS (a JSON list, e.g.
+# '["linux-x64","win32-x64"]' on an engine with no macOS runner) narrows them;
+# `build` then requires exactly those, so a target is never dropped silently.
 
 on:
   push:
@@ -29,7 +41,81 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  screen-helper:
+    name: screen helper (${{ matrix.target }})
+    strategy:
+      fail-fast: true
+      matrix:
+        # Keep in step with SCREEN_HELPER_REQUIRED_TARGETS in the build job.
+        target: ${{ fromJSON(vars.SCREEN_HELPER_RELEASE_TARGETS || '["linux-x64","win32-x64","darwin-arm64","darwin-x64"]') }}
+    # linux-x64 builds in a pinned container (Docker), so any Linux runner gives the
+    # same bytes; Windows on our own Windows machines (RUNNER_WINDOWS_X64, a JSON
+    # label list); both macOS targets on Apple silicon (darwin-x64 cross-built).
+    runs-on: ${{ matrix.target == 'linux-x64' && (vars.RUNNER_LINUX_X64_4 || 'ubuntu-latest') || matrix.target == 'win32-x64' && (vars.RUNNER_WINDOWS_X64 && fromJSON(vars.RUNNER_WINDOWS_X64) || 'windows-latest') || 'macos-latest' }}
+    timeout-minutes: 40
+    defaults:
+      run:
+        shell: bash
+        working-directory: apps/node/native/ever-works-screen
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # Git Bash, PowerShell 7 and rustup on our own Windows runners; a no-op
+      # on GitHub-hosted ones.
+      - name: Self-hosted Windows setup
+        if: runner.os == 'Windows'
+        uses: ./.github/actions/self-hosted-windows-setup
+        with:
+          pwsh: 'true'
+          rust: 'true'
+
+      - name: Install the pinned toolchain (rust-toolchain.toml)
+        if: matrix.target != 'linux-x64'
+        run: |
+          rustup toolchain install
+          rustup show
+
+      - name: Reproducible release build (linux-x64, pinned container)
+        if: matrix.target == 'linux-x64'
+        run: bash ./build-release-linux.sh dist
+
+      - name: Reproducible release build (macOS)
+        if: startsWith(matrix.target, 'darwin-')
+        env:
+          SCREEN_HELPER_TARGET: ${{ matrix.target }}
+        run: bash ./build-release.sh dist
+
+      - name: Reproducible release build (Windows)
+        if: matrix.target == 'win32-x64'
+        shell: pwsh
+        run: ./build-release.ps1 -OutDir dist
+
+      - name: Check the build is the ${{ matrix.target }} helper
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          cat dist/unsigned-release-metadata.json
+          grep -Eq "\"target\": *\"$TARGET\"" dist/unsigned-release-metadata.json || {
+            echo "::error::this runner built another target than $TARGET"
+            exit 1
+          }
+
+      - name: Keep the build for the bundle and the release
+        uses: actions/upload-artifact@v7
+        with:
+          name: screen-helper-${{ matrix.target }}
+          path: |
+            apps/node/native/ever-works-screen/dist/ever-works-screen
+            apps/node/native/ever-works-screen/dist/ever-works-screen.exe
+            apps/node/native/ever-works-screen/dist/unsigned-release-metadata.json
+          if-no-files-found: error
+          retention-days: 30
+
   build:
+    needs: screen-helper
     runs-on: ${{ vars.RUNNER_LINUX_X64_4 || 'ubuntu-latest' }}
     timeout-minutes: 30
 
@@ -86,9 +172,26 @@ jobs:
         working-directory: apps/node
         run: npx vitest run src/version.spec.ts src/cli/program.spec.ts src/cli/program.workspace-root.spec.ts
 
+      - name: Download the screen helper builds
+        uses: actions/download-artifact@v8
+        with:
+          pattern: screen-helper-*
+          path: ${{ runner.temp }}/screen-helper
+
+      # Bakes each helper build's SHA-256 and URL into cli.js and stages the
+      # binaries under their release names in apps/node/dist-screen-helper/.
       - name: Stage the publishable bundle
         working-directory: apps/node
-        run: pnpm build:bundle
+        env:
+          SCREEN_HELPER_RELEASE_DIR: ${{ runner.temp }}/screen-helper
+          # Keep in step with the screen-helper matrix.
+          SCREEN_HELPER_REQUIRED_TARGETS: ${{ join(fromJSON(vars.SCREEN_HELPER_RELEASE_TARGETS || '["linux-x64","win32-x64","darwin-arm64","darwin-x64"]'), ',') }}
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          export SCREEN_HELPER_URL_BASE="https://github.com/${GITHUB_REPOSITORY}/releases/download/node-v${version}"
+          pnpm build:bundle
+          cat dist-bundle/helper-manifest.json
+          cat dist-screen-helper/SHA256SUMS
 
       - name: Smoke-test the bundle
         working-directory: apps/node/dist-bundle
@@ -101,6 +204,15 @@ jobs:
           code=$?
           set -e
           if [ "$code" != "3" ]; then echo "expected exit 3 for an un-enrolled node, got $code" >&2; exit 1; fi
+          # The baked manifest publishes this runner's helper (linux-x64) when the release builds it.
+          status="$(EVER_WORKS_NODE_CONFIG="$(mktemp -d)/node-config.json" node cli.js helper status --json)"
+          echo "$status"
+          if grep -q '"linux-x64"' helper-manifest.json; then
+            echo "$status" | grep -q '"manifestPublishesThisTarget":true' || {
+              echo "the bundle does not publish the linux-x64 screen helper it was built with" >&2
+              exit 1
+            }
+          fi
 
       - name: Upload bundle artifact
         uses: actions/upload-artifact@v7
@@ -108,8 +220,92 @@ jobs:
           name: ever-works-node-bundle
           path: apps/node/dist-bundle/
 
-  publish:
+      - name: Upload the screen helper release assets
+        uses: actions/upload-artifact@v7
+        with:
+          name: ever-works-node-screen-helper
+          path: apps/node/dist-screen-helper/
+          if-no-files-found: error
+
+  # Hosts the screen helper binaries where the baked manifest points: assets
+  # of this tag's GitHub release. Runs before npm publishes, so a published
+  # package never names a download that does not exist yet. Safe to re-run: an
+  # asset already there is compared with the build, never replaced. A dispatch
+  # (dry run) only checks and lists them.
+  release-screen-helper:
     needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download the screen helper release assets
+        uses: actions/download-artifact@v8
+        with:
+          name: ever-works-node-screen-helper
+          path: screen-helper/
+
+      - name: Check them against the baked fingerprints
+        working-directory: screen-helper
+        run: |
+          sha256sum --check --strict SHA256SUMS
+          cat helper-manifest.json
+
+      - name: Host them on the GitHub release of this tag
+        if: startsWith(github.ref, 'refs/tags/node-v')
+        working-directory: screen-helper
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          repo="$GITHUB_REPOSITORY"
+          if ! gh release view "$TAG" --repo "$repo" >/dev/null 2>&1; then
+            {
+              echo "The fleet node ever-works-node ${TAG#node-v} (npm). The assets are the native screen helper"
+              echo "builds this version publishes; the node downloads and checks them itself:"
+              echo
+              echo '```'
+              echo 'ever-works-node helper install'
+              echo 'ever-works-node helper admit'
+              echo '```'
+              echo
+              echo 'SHA-256 (the same fingerprints are baked into the package, see helper-manifest.json):'
+              echo
+              echo '```'
+              cat SHA256SUMS
+              echo '```'
+            } > "$RUNNER_TEMP/notes.md"
+            # Not "Latest": that stays with the platform's own releases.
+            gh release create "$TAG" --repo "$repo" --verify-tag --latest=false \
+              --title "ever-works-node ${TAG#node-v}" --notes-file "$RUNNER_TEMP/notes.md"
+          fi
+          existing="$(gh release view "$TAG" --repo "$repo" --json assets --jq '.assets[].name')"
+          for file in *; do
+            if grep -qxF "$file" <<<"$existing"; then
+              check="$(mktemp -d)"
+              gh release download "$TAG" --repo "$repo" --pattern "$file" --dir "$check"
+              if ! cmp -s "$file" "$check/$file"; then
+                echo "::error::$TAG already hosts a different $file; nothing was replaced. Delete that asset by hand if it is wrong, then re-run."
+                exit 1
+              fi
+              echo "$file: already hosted, identical"
+            else
+              gh release upload "$TAG" "$file" --repo "$repo"
+              echo "$file: uploaded"
+            fi
+          done
+
+      - name: Dry run (dispatch)
+        if: ${{ !startsWith(github.ref, 'refs/tags/node-v') }}
+        working-directory: screen-helper
+        run: |
+          echo "A node-v* tag would host these on its GitHub release:"
+          ls -l
+
+  publish:
+    needs: [build, release-screen-helper]
     # GitHub-HOSTED on purpose. npm verifies the provenance bundle and refuses one minted on a
     # self-hosted runner: the first real release (node-v0.2.0, run 37966885221) failed with
     # `E422 ... Unsupported GitHub Actions runner environment: "self-hosted". Only "github-hosted"

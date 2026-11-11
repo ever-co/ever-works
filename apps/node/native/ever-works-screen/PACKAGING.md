@@ -69,15 +69,43 @@ release signing below.
 
 `build-release.sh` (Linux, macOS) and `build-release.ps1` (Windows) build `--release --locked` twice in clean
 target directories and compare the SHA-256 of both outputs; a mismatch fails the build. They write
-`unsigned-release-metadata.json` with `productionEligible: false` — an unsigned helper is never a production
-artifact — and the fingerprint the node package's `helper-manifest.json` (`helper-manifest.schema.json`) must carry
-for that version and target. Publishing a helper and baking its fingerprints into a node release are separate,
-owner-approved steps; nothing here uploads anything.
+`unsigned-release-metadata.json` with `productionEligible: false` (an unsigned build never counts as a signed one) and
+the fingerprint the node package's `helper-manifest.json` (`helper-manifest.schema.json`) carries for that version and
+target. `SCREEN_HELPER_TARGET=darwin-x64 bash build-release.sh <dir>` builds the Intel Mac helper on an Apple silicon
+Mac. The build scripts upload nothing.
 
-The fingerprint is reproducible on the machine that built it: two builds there are byte-identical. A build on another
-machine matches only with the same linker and system libraries (the CI runners' fingerprints differ from a
-workstation's), so a release takes its fingerprint from the one release machine, and anyone checking it rebuilds
-with that machine's toolchain.
+`build-release-linux.sh` runs `build-release.sh` in a Rust image pinned by digest (`rust:1.88.0-slim-bookworm`, Debian
+12, glibc 2.36: the helper runs on Debian 12 / Ubuntu 22.04 and newer). The linux-x64 fingerprint therefore depends on
+the image, not on the machine: a CI runner and a workstation with Docker produce the same bytes, and anyone can check a
+released fingerprint by running `bash build-release-linux.sh` at the release's commit. The macOS and Windows builds
+are reproducible on the machine that built them (two builds there are byte-identical), but another machine matches
+only with the same linker and system libraries, so for those targets a release takes the fingerprint of its own build.
+
+### How a node release publishes the helper
+
+`.github/workflows/publish-node.yml`, on the owner's `node-v<version>` tag:
+
+1. `screen-helper` builds every target: linux-x64 in the pinned container, darwin-arm64 and darwin-x64 on Apple
+   silicon, win32-x64 on Windows (the repository variable `SCREEN_HELPER_RELEASE_TARGETS`, a JSON list, narrows them);
+2. `build` stages the node bundle with those builds (`apps/node/build.js`, `SCREEN_HELPER_RELEASE_DIR`):
+   `apps/node/screen-helper-release.js` checks every binary against its metadata and bakes, per target, its SHA-256
+   and the URL
+   `https://github.com/ever-co/ever-works/releases/download/node-v<version>/ever-works-screen-<helper version>-<target>`
+   (`.exe` on Windows) into `cli.js`, which also ships the manifest as `helper-manifest.json`. A target that was asked
+   for and not built fails the release;
+3. `release-screen-helper` uploads the binaries, `SHA256SUMS` and `helper-manifest.json` to that tag's GitHub release
+   (the job's own token, `contents: write`; the release is not marked Latest). A re-run compares an asset already
+   there with the build and never replaces it;
+4. only then `publish` publishes the npm package that points at them.
+
+On a machine, `ever-works-node helper install` downloads its target's build and keeps it only when it hashes to the
+baked fingerprint; `helper admit` shows both fingerprints and records a **published** hash-pinned admission (no
+`--allow-unpublished`). A manual dispatch of the workflow is a dry run: it builds and bakes, uploads nothing and runs
+`npm publish --dry-run`. The `Screen Helper` workflow runs the same release builds and the manifest step
+(`release-manifest`) on every pull request that touches the crate.
+
+The published builds are unsigned on every OS (hash-pinned, "Reduced trust"). Once the owner holds the signing
+identities, a release adds the signed builds below and the manifest's `signedSha256` and `signer`.
 
 ## Release signing
 
