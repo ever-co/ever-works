@@ -370,15 +370,30 @@ describe('provision (persistent pool + worktree)', () => {
 		expect(list).toContain('lw-par-b');
 	});
 
-	it('releases settled repository and worktree mutex entries after concurrent reuse stress', async () => {
+	it('releases settled repository and worktree mutex entries after concurrent reuse stress', async ({ signal }) => {
+		// The provisions of one repository run one after another by design, so
+		// this costs tasks × 2 real provisions back to back. Eight tasks took
+		// 18-19 s on an idle 8-thread machine, 14.4 s on stage CI round 21 and
+		// more than the 30 s budget on round 22, whose runner was 1.4-2x slower
+		// on spec files that had not changed. Four tasks still queue three
+		// waiters behind one tail, which is what the deletion rule is about.
+		//
+		// Its own pool, and the test's signal: a timed-out run left its
+		// provisions fetching the suite's pool while the next real-git test
+		// fetched it too ("shallow file has changed since we read it").
 		const stressPlugin = new LocalWorkspacePlugin();
-		const tasks = Array.from({ length: 8 }, (_, index) => ({
+		const stressSettings = { baseDir: join(root, 'lock-stress'), fetchDepth: 1 };
+		const tasks = Array.from({ length: 4 }, (_, index) => ({
 			bindingKey: `lw-lock-stress-${index}`,
 			branch: `task/lock-stress-${index}-abcdef12`
 		}));
-		const first = await Promise.all(
-			tasks.map((task) => stressPlugin.provision(spec(task.bindingKey, task.branch)))
-		);
+		const provisionAll = () =>
+			Promise.all(
+				tasks.map((task) =>
+					stressPlugin.provision({ ...spec(task.bindingKey, task.branch), settings: stressSettings, signal })
+				)
+			);
+		const first = await provisionAll();
 
 		await expect
 			.poll(() => (stressPlugin as unknown as { repoLocks: Map<string, Promise<void>> }).repoLocks.size, {
@@ -386,9 +401,7 @@ describe('provision (persistent pool + worktree)', () => {
 			})
 			.toBe(0);
 
-		const reused = await Promise.all(
-			tasks.map((task) => stressPlugin.provision(spec(task.bindingKey, task.branch)))
-		);
+		const reused = await provisionAll();
 		expect(reused.every((handle, index) => handle.reused && handle.path === first[index].path)).toBe(true);
 		await expect
 			.poll(() => (stressPlugin as unknown as { repoLocks: Map<string, Promise<void>> }).repoLocks.size, {
