@@ -106,15 +106,22 @@ describe('the import routes get the larger limit, for a signed-in caller only', 
 
 describe('accountImportCallerCheck: the credentials AuthSessionGuard accepts here', () => {
     const req = (headers: Record<string, string>) => ({ headers }) as unknown as IncomingMessage;
-    function check(session: unknown, key: unknown) {
+    function check(
+        session: unknown,
+        key: { userId: string } | null,
+        owner: { isActive?: boolean } | null = { isActive: true },
+    ) {
         const authenticate = jest.fn(async () => session);
         const validate = jest.fn(async () => key);
+        const findOwner = jest.fn(async () => owner);
         return {
             authenticate,
             validate,
+            findOwner,
             run: accountImportCallerCheck({
                 authenticateSession: () => authenticate,
                 validatePersonalKey: () => validate,
+                findKeyOwner: () => findOwner,
             }),
         };
     }
@@ -137,6 +144,14 @@ describe('accountImportCallerCheck: the credentials AuthSessionGuard accepts her
         await expect(revoked.run(req({ 'x-api-key': 'ew_live_old' }))).resolves.toBe(false);
     });
 
+    it('refuses a still-valid key whose owner is inactive or gone, as AuthSessionGuard does', async () => {
+        const inactive = check(null, { userId: 'u1' }, { isActive: false });
+        await expect(inactive.run(req({ 'x-api-key': 'ew_live_abc' }))).resolves.toBe(false);
+        expect(inactive.findOwner).toHaveBeenCalledWith('u1');
+        const gone = check(null, { userId: 'u1' }, null);
+        await expect(gone.run(req({ authorization: 'Bearer ew_live_abc' }))).resolves.toBe(false);
+    });
+
     it.each(['ew_int_abc', 'ew_run_abc'])(
         'an integration or fleet-run key (%s) never gets the large parser',
         async (key) => {
@@ -151,6 +166,7 @@ describe('accountImportCallerCheck: the credentials AuthSessionGuard accepts her
         const missing = accountImportCallerCheck({
             authenticateSession: () => undefined,
             validatePersonalKey: () => undefined,
+            findKeyOwner: () => undefined,
         });
         await expect(missing(req({ authorization: 'Bearer s' }))).resolves.toBe(false);
         await expect(missing(req({ 'x-api-key': 'ew_live_k' }))).resolves.toBe(false);
@@ -159,6 +175,7 @@ describe('accountImportCallerCheck: the credentials AuthSessionGuard accepts her
                 throw new Error('provider down');
             },
             validatePersonalKey: () => undefined,
+            findKeyOwner: () => undefined,
         });
         await expect(throwing(req({ authorization: 'Bearer s' }))).resolves.toBe(false);
     });
@@ -174,6 +191,7 @@ describe('main.ts wiring', () => {
         expect(globalJson).toBeGreaterThan(-1);
         expect(mount).toBeLessThan(globalJson);
         expect(source).toContain('accountImportCallerCheck(');
+        expect(source).toContain('findKeyOwner:');
     });
 
     it('mounts no other parser on the import paths (no ungated 25 MB parser, no raw copy)', () => {

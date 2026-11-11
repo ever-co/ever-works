@@ -2,6 +2,7 @@ import type { IncomingMessage } from 'http';
 import { json, type RequestHandler } from 'express';
 import { parseByteSize } from '../email/inbound-email-body-limit';
 import { toHeaders } from '../auth/providers/request-headers';
+import { isActiveApiKeyOwner } from '../auth/guards/api-key-owner';
 
 /**
  * The request-body limit for the account IMPORT routes (Settings → Data →
@@ -75,14 +76,20 @@ function bearerOf(req: IncomingMessage): string | null {
 /**
  * The same two credentials `AuthSessionGuard` accepts on these routes, checked
  * the same way: a personal API key (`x-api-key` or `Authorization: Bearer
- * ew_live_…`) through `ApiKeyService.validateKey`, anything that is not a
+ * ew_live_…`) through `ApiKeyService.validateKey` AND an active key owner
+ * (`isActiveApiKeyOwner`, the guard's own rule), anything that is not a
  * machine key through the auth provider's session check. Integration keys are
  * refused on `/api/account` (`IntegrationForbiddenGuard`) and fleet-run tokens
  * never import, so both answer false. A lookup that throws answers false.
  */
 export function accountImportCallerCheck(deps: {
     authenticateSession: () => ((headers: Headers) => Promise<unknown>) | undefined;
-    validatePersonalKey: () => ((rawKey: string) => Promise<unknown>) | undefined;
+    validatePersonalKey: () =>
+        | ((rawKey: string) => Promise<{ userId: string } | null | undefined>)
+        | undefined;
+    findKeyOwner: () =>
+        | ((userId: string) => Promise<{ isActive?: boolean | null } | null | undefined>)
+        | undefined;
 }): AccountImportCallerCheck {
     return async (req) => {
         try {
@@ -95,7 +102,11 @@ export function accountImportCallerCheck(deps: {
             if (machineKey) {
                 if (!machineKey.startsWith(PERSONAL_API_KEY_PREFIX)) return false;
                 const validate = deps.validatePersonalKey();
-                return validate ? Boolean(await validate(machineKey)) : false;
+                const findOwner = deps.findKeyOwner();
+                if (!validate || !findOwner) return false;
+                const key = await validate(machineKey);
+                if (!key) return false;
+                return isActiveApiKeyOwner(await findOwner(key.userId));
             }
             const authenticate = deps.authenticateSession();
             return authenticate ? Boolean(await authenticate(toHeaders(req.headers))) : false;

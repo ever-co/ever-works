@@ -26,6 +26,7 @@ import {
 import { AUTH_PROVIDER } from './auth/providers/auth-provider.constants';
 import type { AuthProvider } from './auth/providers/auth-provider.abstract';
 import { ApiKeyService } from './auth/services/api-key.service';
+import { UserRepository } from '@ever-works/agent/database';
 import { assertProductionCorsConfig } from './cors-validation';
 import { config as appConfig } from './config/constants';
 import { config as agentConfig } from '@ever-works/agent/config';
@@ -225,6 +226,11 @@ async function bootstrap() {
             validatePersonalKey: () => {
                 const keys = resolveOptional<ApiKeyService>(ApiKeyService);
                 return keys ? (rawKey) => keys.validateKey(rawKey) : undefined;
+            },
+            // The guard's second check on a personal key: its owner is active.
+            findKeyOwner: () => {
+                const users = resolveOptional<UserRepository>(UserRepository);
+                return users ? (userId) => users.findById(userId) : undefined;
             },
         }),
     );
