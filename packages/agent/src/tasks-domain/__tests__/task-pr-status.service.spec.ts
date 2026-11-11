@@ -292,15 +292,23 @@ describe('TaskPrStatusService', () => {
             { name: 'build', status: 'completed', conclusion: 'failure', appSlug: 'github-actions' },
         ];
         const recently = new Date(Date.now() - 60_000);
+        // Everything the re-offer needs (a red cache from an allow-listed app, a recorded head):
+        // only the "not found" answer stands between these Tasks and the fix loop.
         tasks.findDuePrStatusSync.mockResolvedValue([
             // Not persisted yet: the cache (red) is left as it was.
-            makeTask({ ciCheckedAt: recently, ciState: 'failing', prChecks: failingChecks }),
+            makeTask({
+                ciCheckedAt: recently,
+                ciState: 'failing',
+                prChecks: failingChecks,
+                ciHeadSha: 'deadbeef',
+            }),
             // Persisted: recorded `not_found`.
             makeTask({
                 id: 'task-2',
                 ciCheckedAt: new Date(0),
                 ciState: 'failing',
                 prChecks: failingChecks,
+                ciHeadSha: 'deadbeef',
             }),
         ]);
         git.getPullRequestStatus.mockResolvedValue(null);
@@ -308,6 +316,24 @@ describe('TaskPrStatusService', () => {
         await service.syncDuePrStatuses();
 
         expect(autoResume.onCheckResult).not.toHaveBeenCalled();
+
+        // Control: the same red Task, answered for, IS re-offered.
+        git.getPullRequestStatus.mockResolvedValue({
+            ...openStatus,
+            ciState: 'failing',
+            headSha: 'deadbeef',
+            checks: failingChecks as never,
+        });
+        tasks.findDuePrStatusSync.mockResolvedValue([
+            makeTask({
+                ciCheckedAt: recently,
+                ciState: 'failing',
+                prChecks: failingChecks,
+                ciHeadSha: 'deadbeef',
+            }),
+        ]);
+        await service.syncDuePrStatuses();
+        expect(autoResume.onCheckResult).toHaveBeenCalledTimes(1);
     });
 
     it('re-reads a "not found" PR on the sweep only to stamp the read while it stays gone', async () => {
