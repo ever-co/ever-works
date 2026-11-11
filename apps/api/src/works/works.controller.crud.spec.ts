@@ -408,6 +408,9 @@ describe('WorksController — core CRUD endpoints', () => {
                         description: 'd1',
                         sourceType: 'git',
                         originType: 'system',
+                        repositoryOwner: 'ever-works',
+                        repositoryName: 'directory-web-template',
+                        branch: 'main',
                         isDefault: true,
                     },
                     {
@@ -416,6 +419,9 @@ describe('WorksController — core CRUD endpoints', () => {
                         description: 'd2',
                         sourceType: 'git',
                         originType: 'system',
+                        repositoryOwner: 'someone',
+                        repositoryName: 'beta-template',
+                        branch: 'main',
                         isDefault: false,
                     },
                 ],
@@ -436,6 +442,8 @@ describe('WorksController — core CRUD endpoints', () => {
                         description: 'd1',
                         sourceType: 'git',
                         originType: 'system',
+                        repositoryOwner: 'ever-works',
+                        repositoryName: 'directory-web-template',
                         isDefault: true,
                     },
                     {
@@ -444,10 +452,15 @@ describe('WorksController — core CRUD endpoints', () => {
                         description: 'd2',
                         sourceType: 'git',
                         originType: 'system',
+                        repositoryOwner: 'someone',
+                        repositoryName: 'beta-template',
                         isDefault: false,
                     },
                 ],
             });
+            // Only the repository coordinates the picker matches on cross the
+            // wire, never the rest of the catalog row (branch, sync branches…).
+            expect(result.templates[0]).not.toHaveProperty('branch');
         });
 
         it('falls back to the global default-template id when no template advertises isDefault', async () => {
