@@ -249,6 +249,101 @@ const payload = {
 };
 
 describe('runAgentTaskJob — model-cli execution', () => {
+	it('commits under the subject the run named on its last PR-TITLE line, keeping the planned body', async () => {
+		const { spawnFn } = recordingSpawn([]);
+		const envelope = JSON.stringify({
+			type: 'result',
+			subtype: 'success',
+			is_error: false,
+			result: 'The salary filter dropped zero-minimum jobs.\n\nPR-TITLE: Fix salary filter dropping zero-minimum jobs [skip ci] @octocat',
+			total_cost_usd: 0.5,
+			num_turns: 3,
+			session_id: 'sess-1'
+		});
+		const io = baseIo({ spawnFn, scratchFs: scratchFs(envelope) });
+
+		await runAgentTaskJob(
+			job({ ...payload, git: { commitMessage: 'feat: quality loop: fix one real defect\n\nTask: T-2286' } }),
+			io
+		);
+
+		expect(io.finalizeWorkspace).toHaveBeenCalledWith(
+			't1',
+			descriptor,
+			{
+				commitMessage: 'fix: salary filter dropping zero-minimum jobs (skip ci) octocat\n\nTask: T-2286',
+				push: true
+			},
+			undefined
+		);
+	});
+
+	it('never commits a credential the run printed in its PR-TITLE line (review of #3145)', async () => {
+		const { spawnFn } = recordingSpawn([]);
+		const token = `ghp_${'A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8'}`;
+		const envelope = JSON.stringify({
+			type: 'result',
+			subtype: 'success',
+			is_error: false,
+			result: `Fixed the deploy script.\n\nI tested with GITHUB_TOKEN=${token}.\n\nPR-TITLE: fix!: deploy script uses ${token}`,
+			total_cost_usd: 0.5,
+			num_turns: 3,
+			session_id: 'sess-1'
+		});
+		const io = baseIo({ spawnFn, scratchFs: scratchFs(envelope) });
+
+		await runAgentTaskJob(job({ ...payload, git: { commitMessage: 'feat: planned\n\nTask: T-1' } }), io);
+
+		const [, , options] = (io.finalizeWorkspace as unknown as { mock: { calls: unknown[][] } }).mock.calls[0]!;
+		const { commitMessage } = options as { commitMessage: string };
+		expect(commitMessage).not.toContain(token);
+		// No breaking-change marker either: an agent never declares a major release.
+		expect(commitMessage).toBe('fix: deploy script uses [redacted secret]\n\nTask: T-1');
+	});
+
+	it.each([
+		['an HTML comment', '<!-- -->'],
+		['a backtick', '`'],
+		['strong emphasis', '**', '**'],
+		['a tag pair', '<b></b>']
+	])(
+		'never commits a credential split by %s in its PR-TITLE line (closure check of #3145)',
+		async (_what, by, close = '') => {
+			const { spawnFn } = recordingSpawn([]);
+			const token = `ghp_${'A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8'}`;
+			const written = `${token.slice(0, 12)}${by}${token.slice(12, 20)}${close}${token.slice(20)}`;
+			const envelope = JSON.stringify({
+				type: 'result',
+				subtype: 'success',
+				is_error: false,
+				result: `Done.\n\nPR-TITLE: fix: deploy script uses ${written}`,
+				total_cost_usd: 0.5,
+				num_turns: 3,
+				session_id: 'sess-1'
+			});
+			const io = baseIo({ spawnFn, scratchFs: scratchFs(envelope) });
+
+			await runAgentTaskJob(job({ ...payload, git: { commitMessage: 'feat: planned\n\nTask: T-1' } }), io);
+
+			const [, , options] = (io.finalizeWorkspace as unknown as { mock: { calls: unknown[][] } }).mock.calls[0]!;
+			const { commitMessage } = options as { commitMessage: string };
+			expect(commitMessage).not.toContain(token);
+			expect(commitMessage).toBe('fix: deploy script uses [redacted secret]\n\nTask: T-1');
+		}
+	);
+
+	it('commits the planned message unchanged when the run named no title', async () => {
+		const { spawnFn } = recordingSpawn([]);
+		const io = baseIo({ spawnFn, scratchFs: scratchFs(claudeEnvelope) });
+		await runAgentTaskJob(job({ ...payload, git: { commitMessage: 'feat: planned\n\nTask: T-1' } }), io);
+		expect(io.finalizeWorkspace).toHaveBeenCalledWith(
+			't1',
+			descriptor,
+			{ commitMessage: 'feat: planned\n\nTask: T-1', push: true },
+			undefined
+		);
+	});
+
 	it('runs the model in the worktree, grades the checks, commits and pushes, and reports success', async () => {
 		const spawnEnvs: Array<Record<string, string>> = [];
 		const { commands, spawnFn } = recordingSpawn([], undefined, (env) => spawnEnvs.push(env));

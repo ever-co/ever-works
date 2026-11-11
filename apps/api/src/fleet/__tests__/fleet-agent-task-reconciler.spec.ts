@@ -743,6 +743,57 @@ describe('FleetAgentTaskReconcilerService', () => {
     });
 
     /**
+     * Self-explaining pull requests — the run summary reaches the pull request:
+     * the CLI's own final message, whole (its `PR-TITLE:` line is its LAST
+     * line), never the "Fleet run finished." placeholder and never the node's
+     * output tail. Turning it into provider text (and sanitizing it) is
+     * `TaskWorkspaceService`'s job; the reconciler only plumbs it.
+     */
+    describe('the run summary reaches the pull request', () => {
+        const complete = (model: Record<string, unknown>) =>
+            build().onCompleted(
+                new FleetJobCompletedEvent(job(), USER, 'node-report', NODE, {
+                    ...successResult,
+                    model: { ...successResult.model, ...model },
+                } as unknown as Record<string, unknown>),
+            );
+
+        it('hands the model summary to the primary finalize', async () => {
+            await complete({ summary: 'Fixed it.\n\nPR-TITLE: Fix the login redirect' });
+            expect(taskWorkspace.finalizeRemotePush).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    summary: 'Fixed it.\n\nPR-TITLE: Fix the login redirect',
+                }),
+            );
+        });
+
+        it('hands it over whole, while the run row keeps its capped copy', async () => {
+            const long = `${'Explained at length. '.repeat(400)}\nPR-TITLE: Fix the login redirect`;
+            await complete({ summary: long });
+            expect(taskWorkspace.finalizeRemotePush).toHaveBeenCalledWith(
+                expect.objectContaining({ summary: long }),
+            );
+            const recorded: string = runs.markCompleted.mock.calls[0][1];
+            expect(recorded.length).toBeLessThan(long.length);
+            expect(recorded).not.toContain('PR-TITLE');
+        });
+
+        it('hands over nothing — not the placeholder, not the output tail — when the model wrote no summary', async () => {
+            await complete({ summary: null, outputTail: 'PR-TITLE: from the log TOKEN=abc' });
+            expect(taskWorkspace.finalizeRemotePush).toHaveBeenCalledWith(
+                expect.objectContaining({ summary: null }),
+            );
+            expect(runs.markCompleted).toHaveBeenCalledWith(RUN, 'Fleet run finished.');
+
+            taskWorkspace.finalizeRemotePush.mockClear();
+            await complete({ summary: '   \n ' });
+            expect(taskWorkspace.finalizeRemotePush).toHaveBeenCalledWith(
+                expect.objectContaining({ summary: null }),
+            );
+        });
+    });
+
+    /**
      * APW-08 T17 — the second adversarial review found three fleet paths that
      * pushed an App Work's branch and never judged it: a run that ends with a
      * question, a run that fails, and a run whose node reports nothing pushed.
@@ -1443,6 +1494,39 @@ describe('FleetAgentTaskReconcilerService', () => {
                 },
             ],
         };
+
+        it('hands a mount the same REDACTED summary as the primary (review of #3145)', async () => {
+            const token = `ghp_${'A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8'}`;
+            await build().onCompleted(
+                new FleetJobCompletedEvent(mountedJob(), USER, 'node-report', NODE, {
+                    ...mountedResult,
+                    model: {
+                        ...mountedResult.model,
+                        summary: `Used GITHUB_TOKEN=${token}.\nPR-TITLE: fix: uses ${token}`,
+                    },
+                } as unknown as Record<string, unknown>),
+            );
+            const primary: string = taskWorkspace.finalizeRemotePush.mock.calls[0][0].summary;
+            const mount: string = taskWorkspace.finalizeMountPush.mock.calls[0][0].summary;
+            expect(primary).toBe(mount);
+            expect(primary).not.toContain(token);
+            expect(primary).toContain('[redacted secret]');
+        });
+
+        it('hands a mount the same summary as the primary, and never the placeholder', async () => {
+            await build().onCompleted(
+                new FleetJobCompletedEvent(mountedJob(), USER, 'node-report', NODE, {
+                    ...mountedResult,
+                    model: { ...mountedResult.model, summary: null },
+                } as unknown as Record<string, unknown>),
+            );
+            expect(taskWorkspace.finalizeMountPush).toHaveBeenCalledWith(
+                expect.objectContaining({ repositoryId: 'acme/template', summary: null }),
+            );
+            expect(taskWorkspace.finalizeRemotePush).toHaveBeenCalledWith(
+                expect.objectContaining({ summary: null }),
+            );
+        });
 
         it('opens one pull request per pushed mount, cross-linked to the primary, and posts one Inbox notice', async () => {
             await build().onCompleted(

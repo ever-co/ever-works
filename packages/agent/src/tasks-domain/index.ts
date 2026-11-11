@@ -121,7 +121,13 @@ export { TaskTemplateStep } from '../entities/task-template-step.entity';
 export { TaskWatcher } from '../entities/task-watcher.entity';
 export { TaskKbMention } from '../entities/task-kb-mention.entity';
 export { UserTaskCounter } from '../entities/user-task-counter.entity';
-export { TaskRepository, type ListTasksFilter } from '../database/repositories/task.repository';
+export {
+    TaskRepository,
+    TASK_PULL_REQUEST_SUMMARY_HEAD_CHARS,
+    TASK_PULL_REQUESTS_BY_WORK_MAX,
+    type ListTasksFilter,
+    type TaskPullRequestRow,
+} from '../database/repositories/task.repository';
 export { TaskTemplateRepository } from '../database/repositories/task-template.repository';
 export {
     TaskAssigneeRepository,
