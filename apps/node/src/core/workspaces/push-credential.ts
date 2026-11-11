@@ -239,32 +239,8 @@ export class PushCredentialSession implements PushCredentialProvider {
 	 * mint that lands after disposal has produced a live credential nobody
 	 * asked for, and the session it would have belonged to is already gone.
 	 */
-	private async revoke(token: string | null): Promise<void> {
-		if (!token) return;
-		const fetchFn = this.options.fetchFn ?? defaultFetch();
-		const timeout = revokeTimeoutSignal();
-		try {
-			if (!fetchFn) return;
-			await fetchFn(FLEET_PUSH_CREDENTIAL_REVOKE_URL, {
-				method: 'DELETE',
-				headers: {
-					Accept: 'application/vnd.github+json',
-					Authorization: `Bearer ${token}`,
-					'User-Agent': 'ever-works-node',
-					'X-GitHub-Api-Version': '2022-11-28'
-				},
-				...(timeout ? { signal: timeout } : {})
-			});
-		} catch {
-			// Best-effort by contract. Never fails a run: the work is
-			// already pushed (or already failed) by the time this runs.
-		} finally {
-			// AFTER the request, because the revoke is the last thing that
-			// legitimately holds this value and a failure in it is logged
-			// through the same redactor. From here the token exists in no
-			// node data structure at all.
-			this.options.logger?.unprotect(token);
-		}
+	private revoke(token: string | null): Promise<void> {
+		return revokeScopedCredential(token, this.options);
 	}
 
 	private load(): Promise<FleetJobPushCredentialResponse> {
@@ -302,6 +278,47 @@ export class PushCredentialSession implements PushCredentialProvider {
 				);
 			});
 		return this.inFlight;
+	}
+}
+
+/**
+ * DELETE one installation token at GitHub and forget it locally.
+ *
+ * The body {@link PushCredentialSession} always ran, lifted out so the
+ * scoped FETCH credential (`fetch-credential.ts`) revokes through the very
+ * same code rather than a second copy of it: an installation token is
+ * revoked the same way whatever it was scoped to. Bounded by
+ * {@link PUSH_CREDENTIAL_REVOKE_TIMEOUT_MS}, never throws, and unprotects
+ * the value only AFTER the request.
+ */
+export async function revokeScopedCredential(
+	token: string | null,
+	options: { fetchFn?: PushCredentialFetch; logger?: Logger }
+): Promise<void> {
+	if (!token) return;
+	const fetchFn = options.fetchFn ?? defaultFetch();
+	const timeout = revokeTimeoutSignal();
+	try {
+		if (!fetchFn) return;
+		await fetchFn(FLEET_PUSH_CREDENTIAL_REVOKE_URL, {
+			method: 'DELETE',
+			headers: {
+				Accept: 'application/vnd.github+json',
+				Authorization: `Bearer ${token}`,
+				'User-Agent': 'ever-works-node',
+				'X-GitHub-Api-Version': '2022-11-28'
+			},
+			...(timeout ? { signal: timeout } : {})
+		});
+	} catch {
+		// Best-effort by contract. Never fails a run: the work is
+		// already pushed (or already failed) by the time this runs.
+	} finally {
+		// AFTER the request, because the revoke is the last thing that
+		// legitimately holds this value and a failure in it is logged
+		// through the same redactor. From here the token exists in no
+		// node data structure at all.
+		options.logger?.unprotect(token);
 	}
 }
 

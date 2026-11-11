@@ -4,6 +4,7 @@ import type {
 	ComputerNodeToServerFrame,
 	FleetJobCompleteResponse,
 	FleetJobEnvFilesResponse,
+	FleetJobFetchCredentialResponse,
 	FleetJobHeartbeatResponse,
 	FleetJobKind,
 	FleetJobLeaseResponse,
@@ -41,6 +42,7 @@ export type FleetVirtualProgressFields = Omit<
  *   POST /api/fleet/jobs/:id/mcp-credential          → mint a run token
  *   POST /api/fleet/jobs/:id/mcp-credential/revoke   → drop it early
  *   POST /api/fleet/jobs/:id/push-credential         → mint a scoped write token
+ *   POST /api/fleet/jobs/:id/fetch-credential        → mint scoped read tokens
  *
  * Same posture as {@link FleetClient}: all three are `@Public()` and
  * self-authenticating (the `(nodeId, secret)` pair in the body IS the
@@ -82,6 +84,10 @@ export interface FleetJobClientOptions {
 }
 
 export const DEFAULT_JOB_REQUEST_TIMEOUT_MS = 30_000;
+
+/** What an "uncovered repository" entry of a fetch-credential answer may look like; see `mintFetchCredential`. */
+const FETCH_UNCOVERED_REPOSITORY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$/;
+const FETCH_UNCOVERED_REASON_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
 /**
  * One lease poll, with the platform's reason when it refused it (node
@@ -424,6 +430,93 @@ export class FleetJobClient {
 			this.logger?.protect(push.token);
 		}
 		return payload;
+	}
+
+	/**
+	 * Scoped FETCH credentials — ask the platform for the repository-scoped
+	 * READ tokens this run's clone may authenticate with.
+	 *
+	 * The push-credential call's read twin, on purpose: the same channel,
+	 * the same credential, the same lease generation, and a body that
+	 * carries NOTHING else — no repository, no scope. That is also what
+	 * keeps an older platform from breaking a run: there is no new field
+	 * for its validator to reject, and a platform that predates the route
+	 * answers a plain `404`.
+	 *
+	 * This method does NOT decide what a failure means. It throws the same
+	 * `FleetClientError`s every call here throws, and
+	 * `FetchCredentialSession` reads them: `401` / `409` fail the run,
+	 * everything else (the `404` included) means "fetch as before".
+	 *
+	 * Every token is registered with the redacting logger before this
+	 * method returns, and none is stored on this client.
+	 */
+	async mintFetchCredential(jobId: string, leaseGeneration?: number): Promise<FleetJobFetchCredentialResponse> {
+		const body: Record<string, unknown> = { nodeId: this.nodeId, secret: this.secret };
+		if (leaseGeneration !== undefined) body.leaseGeneration = leaseGeneration;
+
+		const payload = (await this.post(
+			`api/fleet/jobs/${encodeURIComponent(jobId)}/fetch-credential`,
+			'job-fetch-credential',
+			body
+		)) as FleetJobFetchCredentialResponse | null;
+		// Protect FIRST, whatever the rest of the body looks like: a token in
+		// a response this method is about to reject is still a live token.
+		const entries = payload && Array.isArray(payload.credentials) ? payload.credentials : null;
+		const tokens: string[] = [];
+		for (const entry of entries ?? []) {
+			if (entry && typeof entry.token === 'string' && entry.token) {
+				tokens.push(entry.token);
+				this.logger?.protect(entry.token);
+			}
+		}
+		const malformed = (message: string): FleetClientError => {
+			// A rejected response is dropped whole, so nothing will ever
+			// unprotect what it carried: do it here rather than pin a live
+			// token in the redactor for the rest of this process's life. The
+			// message below is authored here and cannot echo one.
+			for (const token of tokens) this.logger?.unprotect(token);
+			return new FleetClientError('malformed', message);
+		};
+		if (!payload || !entries) {
+			throw malformed('Fetch credential response did not contain a credential list');
+		}
+		for (const entry of entries) {
+			if (
+				!entry ||
+				typeof entry.token !== 'string' ||
+				!entry.token ||
+				!Array.isArray(entry.repositories) ||
+				entry.repositories.some((repository: unknown) => typeof repository !== 'string')
+			) {
+				throw malformed('Fetch credential response contained an unusable credential');
+			}
+		}
+		return {
+			credentials: entries.map((entry) => ({
+				token: entry.token,
+				username: typeof entry.username === 'string' ? entry.username : '',
+				expiresAt: typeof entry.expiresAt === 'string' ? entry.expiresAt : '',
+				repositories: [...entry.repositories]
+			})),
+			// For log lines only, so a missing or odd list degrades to "no
+			// reasons known" rather than failing a response whose
+			// credentials are perfectly usable. And SHAPED, not merely typed:
+			// these two strings are the one piece of server-written text this
+			// method lets through, so each must look like what it claims to
+			// be — a repository identity and a short machine token — or the
+			// entry is dropped. Nothing free-form reaches a node log line.
+			uncovered: (Array.isArray(payload.uncovered) ? payload.uncovered : [])
+				.filter(
+					(entry) =>
+						entry &&
+						typeof entry.repository === 'string' &&
+						typeof entry.reason === 'string' &&
+						FETCH_UNCOVERED_REPOSITORY_PATTERN.test(entry.repository) &&
+						FETCH_UNCOVERED_REASON_PATTERN.test(entry.reason)
+				)
+				.map((entry) => ({ repository: entry.repository, reason: entry.reason }))
+		};
 	}
 
 	// ── Virtual computers (FL-16) — the host's two calls while it builds a child ──

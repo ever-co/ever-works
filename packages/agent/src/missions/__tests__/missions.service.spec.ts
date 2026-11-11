@@ -667,24 +667,117 @@ describe('MissionsService', () => {
 
 /**
  * APW-08 T34 (FR-51, plan §5 / S27) — the output mode is validated and stored, the Task output is
- * stored normalized, and a Mission that files Tasks with no App Work attached as Improves or
- * Operates is ACCEPTED with the `noAppWorkRelation` warning.
+ * stored normalized, and a Mission that files Tasks with no App or Repository Work attached as
+ * Improves or Operates is ACCEPTED with the `noAppWorkRelation` warning. One with a Repository
+ * Work attached whose Task isolation is off is accepted with `repoWorkTaskIsolationOff`.
  */
 describe('MissionsService — output mode (APW-08 T34)', () => {
     let repo: ReturnType<typeof makeRepoMock>;
-    const relationsOf = (rows: Array<{ relation: string; workKind: string | null }>) => ({
+    const relationsOf = (
+        rows: Array<{
+            relation: string;
+            workKind: string | null;
+            workId?: string;
+            workTaskIsolation?: string | null;
+        }>,
+    ) => ({
         listForMissionWithWork: jest.fn(async () => rows),
     });
-    const build = (missionWorks?: unknown) =>
+    const build = (missionWorks?: unknown, tickService?: unknown) =>
         new MissionsService(
             repo as unknown as Repository<Mission>,
             new TitlerService(),
-            undefined, // tickService
+            tickService as never,
             undefined, // missionAttachments
             undefined, // uploadsRepo
             missionWorks as never,
         );
     const base = { title: 'Grow Bookings', description: 'd', type: MissionType.ONE_SHOT };
+
+    // The Agent half of a Repository Work's check, asked through the tick (the rule the tick
+    // asks before planning, and dispatch asks again).
+    describe('a Repository Work whose Tasks could not run unattended', () => {
+        const repoOn = {
+            relation: 'improves',
+            workKind: 'repo',
+            workId: 'w-repo',
+            workTaskIsolation: 'worktree',
+        };
+        const tickWith = (blocked: {
+            agentCannotOpenPullRequests: string[];
+            agentMergeAllowed: string[];
+        }) => ({ blockedRepoWorksForMission: jest.fn(async () => blocked) });
+
+        it('warns repoWorkAgentCannotOpenPullRequests and repoWorkAllowsAgentMerge, asked with the stored Task output', async () => {
+            const tick = tickWith({
+                agentCannotOpenPullRequests: ['ever-works'],
+                agentMergeAllowed: ['website'],
+            });
+            const dto = await build(relationsOf([repoOn]), tick).create('u1', {
+                ...base,
+                outputMode: 'tasks',
+                taskOutput: { tasksPerTick: 2 },
+            });
+            expect(dto.warnings).toEqual([
+                'repoWorkAgentCannotOpenPullRequests',
+                'repoWorkAllowsAgentMerge',
+            ]);
+            expect(tick.blockedRepoWorksForMission).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    id: dto.id,
+                    userId: 'u1',
+                    taskOutput: expect.objectContaining({ tasksPerTick: 2 }),
+                }),
+                [repoOn],
+                undefined,
+            );
+        });
+
+        it('nothing more when the Agent and the merge policy are fine, or for an ideas Mission', async () => {
+            const tick = tickWith({ agentCannotOpenPullRequests: [], agentMergeAllowed: [] });
+            const ok = await build(relationsOf([repoOn]), tick).create('u1', {
+                ...base,
+                outputMode: 'both',
+            });
+            expect(ok.warnings).toBeUndefined();
+            const ideas = await build(relationsOf([repoOn]), tick).create('u1', base);
+            expect(ideas.warnings).toBeUndefined();
+            expect(tick.blockedRepoWorksForMission).toHaveBeenCalledTimes(1);
+        });
+
+        it('a check that fails warns nothing more, and the write is accepted', async () => {
+            const tick = {
+                blockedRepoWorksForMission: jest.fn(async () => {
+                    throw new Error('db down');
+                }),
+            };
+            const dto = await build(
+                relationsOf([{ ...repoOn, workTaskIsolation: 'off' }]),
+                tick,
+            ).create('u1', { ...base, outputMode: 'tasks' });
+            expect(dto.outputMode).toBe('tasks');
+            expect(dto.warnings).toEqual(['repoWorkTaskIsolationOff']);
+        });
+    });
+
+    it('keeps an API-only taskOutput.allowAgentMerge opt-in, and only when exactly true', async () => {
+        const opted = await build(relationsOf([])).create('u1', {
+            ...base,
+            taskOutput: { allowAgentMerge: true },
+        });
+        expect(opted.taskOutput).toEqual({
+            tasksPerTick: 1,
+            openTasksCap: 3,
+            allowAgentMerge: true,
+        });
+        for (const allowAgentMerge of [false, 'true', 1]) {
+            const dto = await build(relationsOf([])).create('u1', {
+                ...base,
+                taskOutput: { allowAgentMerge },
+            });
+            expect(dto.taskOutput).toEqual({ tasksPerTick: 1, openTasksCap: 3 });
+        }
+    });
 
     beforeEach(() => {
         repo = makeRepoMock();
@@ -723,6 +816,72 @@ describe('MissionsService — output mode (APW-08 T34)', () => {
             relationsOf([{ relation: 'improves', workKind: 'directory' }]),
         ).create('u1', { ...base, outputMode: 'tasks' });
         expect(site.warnings).toEqual(['noAppWorkRelation']);
+    });
+
+    it('no warning once a Repository Work with Task isolation on is attached as Improves or Operates', async () => {
+        for (const relation of ['improves', 'operates']) {
+            const dto = await build(
+                relationsOf([{ relation, workKind: 'repo', workTaskIsolation: 'worktree' }]),
+            ).create('u1', { ...base, outputMode: 'tasks' });
+            expect(dto.warnings).toBeUndefined();
+        }
+        // Under another relation it is not a Work the Mission files on.
+        const researched = await build(
+            relationsOf([
+                { relation: 'researches', workKind: 'repo', workTaskIsolation: 'worktree' },
+            ]),
+        ).create('u1', { ...base, outputMode: 'tasks' });
+        expect(researched.warnings).toEqual(['noAppWorkRelation']);
+    });
+
+    it('a Repository Work with Task isolation off: accepted, with repoWorkTaskIsolationOff', async () => {
+        const off = await build(
+            relationsOf([{ relation: 'improves', workKind: 'repo', workTaskIsolation: 'off' }]),
+        ).create('u1', { ...base, outputMode: 'tasks' });
+        expect(off.outputMode).toBe('tasks');
+        // Not "no Work": a Repository Work IS attached, and the fix is its setting.
+        expect(off.warnings).toEqual(['repoWorkTaskIsolationOff']);
+        expect(repo._rows).toHaveLength(1);
+
+        // The setting missing from the row reads as off (nothing is forced on).
+        const unknown = await build(
+            relationsOf([{ relation: 'operates', workKind: 'repo' }]),
+        ).create('u1', { ...base, outputMode: 'both' });
+        expect(unknown.warnings).toEqual(['repoWorkTaskIsolationOff']);
+
+        // Beside an App Work the Mission still files Tasks, and still says which Work gets none.
+        const mixed = await build(
+            relationsOf([
+                { relation: 'improves', workKind: 'app', workId: 'w-app' },
+                {
+                    relation: 'improves',
+                    workKind: 'repo',
+                    workId: 'w-repo',
+                    workTaskIsolation: 'off',
+                },
+            ]),
+        ).create('u1', { ...base, outputMode: 'tasks' });
+        expect(mixed.warnings).toEqual(['repoWorkTaskIsolationOff']);
+    });
+
+    it('an ideas Mission warns nothing about its Works, whatever is attached', async () => {
+        const missionWorks = relationsOf([
+            { relation: 'improves', workKind: 'repo', workTaskIsolation: 'off' },
+        ]);
+        const dto = await build(missionWorks).create('u1', { ...base, outputMode: 'ideas' });
+        expect(dto.warnings).toBeUndefined();
+        expect(missionWorks.listForMissionWithWork).not.toHaveBeenCalled();
+    });
+
+    it('other kinds never count, with Task isolation on or off', async () => {
+        for (const workKind of ['directory', 'default', 'awesome-repo', 'website', 'project']) {
+            for (const workTaskIsolation of ['worktree', 'off']) {
+                const dto = await build(
+                    relationsOf([{ relation: 'improves', workKind, workTaskIsolation }]),
+                ).create('u1', { ...base, outputMode: 'tasks' });
+                expect(dto.warnings).toEqual(['noAppWorkRelation']);
+            }
+        }
     });
 
     it('refuses an unknown mode (400) and stores Task output normalized', async () => {

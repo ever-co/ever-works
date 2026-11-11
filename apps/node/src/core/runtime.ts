@@ -75,6 +75,7 @@ import {
 	FleetTaskWorkspaceProvisioner
 } from './workspaces/fleet-task-workspace';
 import { measureWorkspaceFreeBytes } from './workspaces/disk-headroom';
+import { FetchCredentialSession } from './workspaces/fetch-credential';
 import { PushCredentialSession } from './workspaces/push-credential';
 import type { Logger } from './logger';
 import { PtyLocalPlugin } from '@ever-works/pty-local-plugin';
@@ -2051,8 +2052,46 @@ export function createNodeRuntime(config: NodeConfig, io: NodeIo, options: Creat
 				return await runAgentTaskJob(
 					job,
 					{
-						provisionWorkspace: (taskId, spec, provisionSignal) =>
-							workspaceProvisioner.provision(taskId, spec, provisionSignal),
+						provisionWorkspace: async (taskId, spec, provisionSignal) => {
+							// Scoped fetch credentials — the read twin of the
+							// push session above, and it hangs off the LEASE for
+							// the same reason: the platform proves this node
+							// still holds an active claim before it hands over
+							// a credential for the owner's repositories.
+							//
+							// Two things differ from push, both on purpose:
+							//
+							//  - its LIFETIME is this one call. The clone comes
+							//    first, so the credential cannot be minted late
+							//    the way the push's is; instead it is created
+							//    for the provision and disposed (revoked, and
+							//    dropped from this process) before this function
+							//    returns — i.e. before the model's first byte.
+							//  - with NO session the provision still runs. A
+							//    lease handle that cannot make the call (an
+							//    older client, an embedder) leaves the fetch on
+							//    this machine's own Git configuration, exactly
+							//    as it was; a push in the same position is
+							//    refused. See `fetch-credential.ts`.
+							const mintFetchCredential = lease?.mintFetchCredential;
+							const fetchCredentials = mintFetchCredential
+								? new FetchCredentialSession({
+										jobId: job.id,
+										client: { mintFetchCredential: () => mintFetchCredential() },
+										...(io.logger ? { logger: io.logger } : {})
+									})
+								: null;
+							if (!fetchCredentials) return workspaceProvisioner.provision(taskId, spec, provisionSignal);
+							try {
+								return await workspaceProvisioner.provision(taskId, spec, provisionSignal, {
+									fetchCredentials
+								});
+							} finally {
+								// Success, a failed fetch, a refused claim and a
+								// cancel all pass through here. Never throws.
+								await fetchCredentials.dispose();
+							}
+						},
 						...(workspaceProvisioner.finalize
 							? {
 									finalizeWorkspace: (taskId, descriptor, opts, finalizeSignal) =>

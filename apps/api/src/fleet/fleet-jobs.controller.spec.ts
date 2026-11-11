@@ -3,7 +3,7 @@ import {
     UnauthorizedException,
     UnprocessableEntityException,
 } from '@nestjs/common';
-import type { FleetJobView } from '@ever-works/contracts';
+import type { FleetJobFetchCredentialResponse, FleetJobView } from '@ever-works/contracts';
 import { FLEET_JOB_STALE_LEASE_REASON } from '@ever-works/contracts';
 import { FleetJobsController } from './fleet-jobs.controller';
 import {
@@ -73,6 +73,10 @@ function makeController(
     // must fail this suite rather than pass it quietly.
     pushCredentials: Partial<FleetPushCredentialService> = {
         mint: jest.fn(async () => null),
+        // The read mode of the same service. Refuses by default for the same
+        // reason: a route that minted a credential it was not asked for must
+        // fail this suite, not pass it.
+        mintFetch: jest.fn(async () => null),
     },
 ): FleetJobsController {
     return new FleetJobsController(
@@ -533,6 +537,133 @@ describe('FleetJobsController', () => {
             expect((error as ConflictException).getResponse()).toMatchObject({
                 reason: FLEET_JOB_STALE_LEASE_REASON,
             });
+        });
+    });
+
+    /**
+     * Scoped fetch credentials — the push route's read twin.
+     *
+     * It keeps the channel's two answers (one undifferentiated 401, one 409
+     * stale-lease) and, UNLIKE its sibling, has no 422: a repository the
+     * platform cannot cover is an ordinary 200 with that repository listed
+     * as uncovered, because a fetch — unlike a push — keeps the node's own
+     * fetch as its fallback. Only the claim itself fails closed.
+     */
+    describe('POST /api/fleet/jobs/:id/fetch-credential', () => {
+        const body = { nodeId: NODE_ID, secret: SECRET, leaseGeneration: GENERATION };
+        const answer: FleetJobFetchCredentialResponse = {
+            credentials: [
+                {
+                    token: 'ghs_scoped_read',
+                    username: 'x-access-token',
+                    expiresAt: '2026-11-10T21:00:00.000Z',
+                    repositories: ['ever-works/ever-works'],
+                },
+            ],
+            uncovered: [{ repository: 'ever-works/template', reason: 'push-scope-unresolved' }],
+        };
+
+        it('forwards the claim exactly as the node sent it and returns the credentials once', async () => {
+            const mintFetch = jest.fn(async () => answer);
+            const mint = jest.fn(async () => null);
+            const controller = makeController({}, undefined, {}, { mint, mintFetch });
+
+            await expect(controller.fetchCredential(JOB_ID, body)).resolves.toEqual(answer);
+            // The job id comes from the PATH and the claim from the body;
+            // nothing else exists for a caller to steer the scope with.
+            expect(mintFetch).toHaveBeenCalledWith({
+                nodeId: NODE_ID,
+                secret: SECRET,
+                jobId: JOB_ID,
+                leaseGeneration: GENERATION,
+            });
+            // A READ route never reaches the WRITE mint.
+            expect(mint).not.toHaveBeenCalled();
+        });
+
+        it('answers "nothing to give" as an ordinary 200 — never a 422', async () => {
+            const nothing: FleetJobFetchCredentialResponse = {
+                credentials: [],
+                uncovered: [
+                    {
+                        repository: 'ever-works/ever-works',
+                        reason: 'push-credential-not-configured',
+                    },
+                ],
+            };
+            const controller = makeController(
+                {},
+                undefined,
+                {},
+                { mintFetch: jest.fn(async () => nothing) },
+            );
+
+            await expect(controller.fetchCredential(JOB_ID, body)).resolves.toEqual(nothing);
+        });
+
+        it('collapses a refused claim to the SAME 401 as every other route', async () => {
+            // Not this node's job, or a job that is no longer leased/running:
+            // one answer, so a valid node secret is not a probe for which
+            // jobs exist and what state they are in.
+            const controller = makeController(
+                {},
+                undefined,
+                {},
+                { mintFetch: jest.fn(async () => null) },
+            );
+
+            const error = await controller.fetchCredential(JOB_ID, body).catch((e: unknown) => e);
+            expect(error).toBeInstanceOf(UnauthorizedException);
+
+            const pushError = await makeController(
+                {},
+                undefined,
+                {},
+                { mint: jest.fn(async () => null) },
+            )
+                .pushCredential(JOB_ID, body)
+                .catch((e: unknown) => e);
+            expect((error as Error).message).toBe((pushError as Error).message);
+        });
+
+        it('lets a stale lease surface as the channel-wide 409', async () => {
+            const controller = makeController(
+                {},
+                undefined,
+                {},
+                {
+                    mintFetch: jest.fn(async () => {
+                        throw new FleetJobStaleLeaseError();
+                    }),
+                },
+            );
+
+            const error = await controller.fetchCredential(JOB_ID, body).catch((e: unknown) => e);
+            expect(error).toBeInstanceOf(ConflictException);
+            expect((error as ConflictException).getResponse()).toMatchObject({
+                reason: FLEET_JOB_STALE_LEASE_REASON,
+            });
+        });
+
+        it('does not dress an unexpected failure up as a credential refusal', async () => {
+            // The push route turns `FleetPushCredentialError` into a 422. This
+            // route has no 422, so nothing may be converted into one: an
+            // error the service did not mean propagates as itself.
+            const boom = new FleetPushCredentialError('push-scope-unresolved');
+            const controller = makeController(
+                {},
+                undefined,
+                {},
+                {
+                    mintFetch: jest.fn(async () => {
+                        throw boom;
+                    }),
+                },
+            );
+
+            const error = await controller.fetchCredential(JOB_ID, body).catch((e: unknown) => e);
+            expect(error).toBe(boom);
+            expect(error).not.toBeInstanceOf(UnprocessableEntityException);
         });
     });
 });

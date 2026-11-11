@@ -15,6 +15,7 @@ import { Throttle } from '@nestjs/throttler';
 import type {
     FleetJobCompleteResponse,
     FleetJobEnvFilesResponse,
+    FleetJobFetchCredentialResponse,
     FleetJobHeartbeatResponse,
     FleetJobLeaseResponse,
     FleetJobMcpCredentialResponse,
@@ -26,6 +27,7 @@ import { Public } from '../auth/decorators/public.decorator';
 import {
     CompleteFleetJobDto,
     FleetJobEnvFilesDto,
+    FleetJobFetchCredentialDto,
     FleetJobHeartbeatDto,
     FleetJobNodeCredentialDto,
     FleetJobPushCredentialDto,
@@ -91,6 +93,15 @@ import { FleetNodeAuthGuard } from './guards/fleet-node-auth.guard';
  * scoped from platform state alone (this job's repositories,
  * `contents: write`, under the hour) and there is no degraded path back to
  * the machine's own credential helper.
+ *
+ *   POST /api/fleet/jobs/:id/fetch-credential        mint scoped read tokens
+ *
+ * The fetch credential is the push credential's read twin: the same four
+ * checks, the same platform-state scope, `contents: read` +
+ * `metadata: read`. It answers 401 and 409 exactly as its siblings do and
+ * has NO 422 — a repository the platform cannot cover is an ordinary 200
+ * with that repository listed as uncovered, because a fetch, unlike a
+ * push, keeps the node's own fetch as its fallback.
  *
  * Throttles are sized for polling: a node with a 5-second idle poll
  * needs ~12 lease calls/minute, and job heartbeats fire at a third of
@@ -325,6 +336,64 @@ export class FleetJobsController {
             // `{ reason: 'stale-lease' }` — same as heartbeat and complete.
             throw error;
         }
+        if (!response) {
+            throw new UnauthorizedException('Invalid node credential');
+        }
+        return response;
+    }
+
+    /**
+     * Scoped FETCH credentials — the read twin of `push-credential`, and
+     * the "separate change" slice AM left the fetch for.
+     *
+     * The gap it closes: a node still CLONED with the machine's own Git
+     * credential helper. A fleet node that is a fenced VM has none, by
+     * design, so a job on a private repository could not clone at all —
+     * even though the Ever Works GitHub App was installed on that
+     * repository and the push would have worked.
+     *
+     * Same posture as `push-credential`, and the SAME four checks:
+     * credential, recorded holder, active status, current lease generation.
+     * Only the node this job is assigned to is served, and — like its
+     * sibling — the request carries NO scope: the repositories come from
+     * the job's own planner-written workspace, resolved against the owner's
+     * installation snapshot.
+     *
+     * What comes back is one GitHub App installation token per repository
+     * the platform can cover, each narrowed to that single repository and to
+     * `contents: read` + `metadata: read`.
+     *
+     * THE ONE DIFFERENCE FROM `push-credential`: there is no 422. A push
+     * with no scoped credential must fail, because the alternative is the
+     * ambient helper. A fetch with none is the fetch every node ran before
+     * this route existed, so a repository the platform cannot cover (no App
+     * configured, no installation of this owner's covering it, a public
+     * repository on an account without the App) is listed as `uncovered`
+     * with a stable reason, and the node fetches it as it always did. The
+     * claim itself still fails closed: 401 for a node that does not hold an
+     * active claim on this job, 409 for a stale lease.
+     */
+    @Public()
+    @Post(':id/fetch-credential')
+    @ApiOperation({
+        summary:
+            "Mint repository-scoped read credentials for a job this node holds (public, node-secret-authenticated). One token per repository of the job's own workspace that an installation of the job's owner covers, contents:read + metadata:read only, expiring within the hour. Repositories that cannot be covered are listed with a stable reason and the node fetches them as before. Returned once; never recoverable.",
+    })
+    @HttpCode(HttpStatus.OK)
+    @Throttle({ long: { limit: 60, ttl: 60_000 } })
+    async fetchCredential(
+        @Param('id', ParseUUIDPipe) id: string,
+        @Body() body: FleetJobFetchCredentialDto,
+    ): Promise<FleetJobFetchCredentialResponse> {
+        // `FleetJobStaleLeaseError` propagates untouched, as 409
+        // `{ reason: 'stale-lease' }` — same as every sibling. Nothing else
+        // is thrown as a refusal: see the note above.
+        const response = await this.pushCredentials.mintFetch({
+            nodeId: body.nodeId,
+            secret: body.secret,
+            jobId: id,
+            leaseGeneration: body.leaseGeneration,
+        });
         if (!response) {
             throw new UnauthorizedException('Invalid node credential');
         }

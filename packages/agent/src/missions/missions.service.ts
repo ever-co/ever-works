@@ -3,9 +3,10 @@ import {
     DEFAULT_MISSION_OUTPUT_MODE,
     isMissionOutputMode,
     missionFilesTasks,
-    MISSION_NO_APP_WORK_RELATION,
+    missionTaskOutputWarnings,
     MISSION_OUTPUT_MODES,
-    MISSION_TASK_OUTPUT_RELATIONS,
+    MISSION_REPO_WORK_AGENT_CANNOT_OPEN_PULL_REQUESTS,
+    MISSION_REPO_WORK_ALLOWS_AGENT_MERGE,
     normalizeMissionTaskOutput,
     type MissionOutputMode,
     type MissionTaskOutput,
@@ -1134,9 +1135,13 @@ export class MissionsService {
     }
 
     /**
-     * APW-08 T34 (plan §5, S27) — a Mission that files Tasks but has no App Work attached as
-     * Improves or Operates is accepted, and the answer says `noAppWorkRelation` so the form can
-     * point at the fix. Unbound relation reads (a trimmed graph) warn nothing.
+     * APW-08 T34 (plan §5, S27) — a Mission that files Tasks but has no App or Repository Work
+     * attached as Improves or Operates is accepted, and the answer says `noAppWorkRelation` so
+     * the form can point at the fix. One that has a Repository Work attached with its Task
+     * isolation off is accepted too, and the answer says `repoWorkTaskIsolationOff`: nothing is
+     * filed on that Work until the setting is on (the Mission never turns it on by itself).
+     * The rule is {@link missionTaskOutputWarnings}, shared with the tick. Unbound relation
+     * reads (a trimmed graph) warn nothing.
      */
     private async withTaskOutputWarnings(
         dto: MissionDto,
@@ -1150,12 +1155,32 @@ export class MissionsService {
         } catch {
             return dto;
         }
-        const hasAppWork = relations.some(
-            (relation) =>
-                (MISSION_TASK_OUTPUT_RELATIONS as readonly string[]).includes(relation.relation) &&
-                isAppWorkKind(relation.workKind ?? null),
-        );
-        return hasAppWork ? dto : withWarnings(dto, [MISSION_NO_APP_WORK_RELATION]);
+        const warnings = missionTaskOutputWarnings(relations);
+        // The Agent half of the same question, asked exactly as the tick asks it before planning
+        // (the Agent dispatch will resolve, its permissions, the Work's merge policy). A failure
+        // to ask warns nothing more: the write is accepted either way, and the tick re-asks.
+        if (this.tickService) {
+            try {
+                const blocked = await this.tickService.blockedRepoWorksForMission(
+                    { id: dto.id, userId, taskOutput: dto.taskOutput },
+                    relations,
+                    scope,
+                );
+                if (blocked.agentCannotOpenPullRequests.length > 0) {
+                    warnings.push(MISSION_REPO_WORK_AGENT_CANNOT_OPEN_PULL_REQUESTS);
+                }
+                if (blocked.agentMergeAllowed.length > 0) {
+                    warnings.push(MISSION_REPO_WORK_ALLOWS_AGENT_MERGE);
+                }
+            } catch (err) {
+                this.logger.warn(
+                    `Mission ${dto.id}: whether its Repository Works can take Tasks could not be checked (${
+                        err instanceof Error ? err.message : String(err)
+                    }).`,
+                );
+            }
+        }
+        return warnings.length > 0 ? withWarnings(dto, warnings) : dto;
     }
 
     /**
@@ -1363,7 +1388,7 @@ export class MissionsService {
         missionId: string;
         ideasCreated?: number;
         ideasQueued?: number;
-        /** APW-08 T35 — Tasks filed on the Mission's App Works. */
+        /** APW-08 T35 — Tasks filed on the Mission's App or Repository Works. */
         tasksFiled?: number;
         message?: string;
     }> {

@@ -37,6 +37,8 @@ export interface MissionTaskOutput {
     tasksPerTick: number;
     openTasksCap: number;
     agentId?: string;
+    /** Set over the API only: Repository Work Tasks under a merge policy that lets agents merge. */
+    allowAgentMerge?: boolean;
 }
 
 export interface Mission {
@@ -67,7 +69,14 @@ export interface Mission {
     /** APW-08 T34 — the Task output's bounds (normalized by the API). */
     taskOutput?: MissionTaskOutput;
     taskOutputNoticeAt?: string | null;
-    /** APW-08 T34 — on a write's answer only: `noAppWorkRelation`. */
+    /**
+     * APW-08 T34 — on a write's answer only, for a Mission that files Tasks:
+     * `noAppWorkRelation` (no App or Repository Work attached as Improves or Operates),
+     * `repoWorkTaskIsolationOff` (a Repository Work is attached, with its Task isolation off),
+     * `repoWorkAgentCannotOpenPullRequests` (the Agent its Tasks would run with may not commit
+     * and open pull requests) or `repoWorkAllowsAgentMerge` (its merge policy lets agents merge
+     * and the Mission has not opted in).
+     */
     warnings?: string[];
 }
 
@@ -174,7 +183,7 @@ export interface MissionRunNowResponse {
     missionId: string;
     ideasCreated?: number;
     ideasQueued?: number;
-    /** APW-08 T35 — Tasks filed on the Mission's App Works. */
+    /** APW-08 T35 — Tasks filed on the Mission's App or Repository Works. */
     tasksFiled?: number;
     message?: string;
 }
@@ -500,8 +509,13 @@ export interface MissionWorkRelationDto {
     readonly createdAt: string;
     readonly workName: string | null;
     readonly workSlug: string | null;
-    /** APW-08 T34 — the Work's kind (`app` lets a Mission file Tasks on it). */
+    /** APW-08 T34 — the Work's kind (`app` and `repo` let a Mission file Tasks on it). */
     readonly workKind?: string | null;
+    /**
+     * The Work's Task isolation setting (`worktree` = on). A Mission files Tasks on a
+     * Repository Work only while it is on.
+     */
+    readonly workTaskIsolation?: string | null;
 }
 
 /** One Agent on the Mission page's "Team and agents" panel (agent-side `MissionTeamAgentView`). */

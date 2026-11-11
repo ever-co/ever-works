@@ -2391,9 +2391,9 @@
                     "no-ideas": "Tick ran but generated no Ideas",
                     "failed": "Run now failed",
                     "cron-no-match": "Tick ran (cron skipped)",
-                    "tasks-filed": "Задачите са заведени в App Works на мисията.",
-                    "no-tasks": "Няма нищо ново за завеждане в App Works на мисията.",
-                    "spawned-and-tasks-filed": "Създадени са нови идеи и задачите са заведени в App Works на мисията."
+                    "tasks-filed": "Задачите са заведени в App или Repository Works на мисията.",
+                    "no-tasks": "Няма нищо ново за завеждане в App или Repository Works на мисията.",
+                    "spawned-and-tasks-filed": "Създадени са нови идеи и задачите са заведени в App или Repository Works на мисията."
                 }
             },
             "goals": {
@@ -2429,14 +2429,17 @@
             "output": {
                 "title": "Резултат",
                 "ideas": "Идеи",
-                "tasks": "Задачи в прикачените App Works",
+                "tasks": "Задачи в прикачените App или Repository Works",
                 "both": "И двете",
                 "tasksPerTick": "Задачи на цикъл",
                 "openCap": "Лимит на отворени задачи за Работа",
                 "appliesTo": "Важи за Работи, прикачени като „Подобрява“ или „Поддържа“.",
-                "noAppWork": "Прикачете App Work като „Подобрява“ или „Поддържа“, за да заведете задачи в него.",
+                "noAppWork": "Прикачете App или Repository Work като „Подобрява“ или „Поддържа“, за да заведете задачи в него.",
+                "repoIsolationOff": "Настройката „Task isolation“ е изключена за прикачен Repository Work, затова в него не се завеждат задачи. Включете „Task isolation“ в настройките на този Work.",
+                "repoAgentCannotOpenPullRequests": "Агентът, който би изпълнявал задачите в прикачен Repository Work, няма право да прави commit и да отваря pull request-и, затова в него не се завеждат задачи. Изберете за изхода със задачи на тази мисия агент с двете права или ги дайте на агента на този Work.",
+                "repoAllowsAgentMerge": "Политиката за сливане на прикачен Repository Work позволява на агентите да сливат собствените си pull request-и, затова тази мисия не завежда задачи в него. Изключете сливането от агенти за този Work, за да може мисията да завежда задачи там.",
                 "tasksOnWorks": "Задачи в прикачените Работи",
-                "nothingToFile": "Няма прикачен App Work, в който да се заведат задачи.",
+                "nothingToFile": "Няма прикачен App или Repository Work, в който да се заведат задачи.",
                 "tasksOnWorksEmpty": "Все още няма заведени задачи.",
                 "save": "Запазване",
                 "saved": "Резултатът е запазен",
@@ -2866,7 +2869,7 @@
         },
         "feed": {
             "narration": {
-                "missionNothingToFile": "<b>{actor}</b> не намери днес нищо ново за завеждане в App Works на мисия"
+                "missionNothingToFile": "<b>{actor}</b> не намери днес нищо ново за завеждане в App или Repository Works на мисия"
             }
         },
         "works": {

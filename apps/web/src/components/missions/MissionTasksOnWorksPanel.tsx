@@ -20,7 +20,7 @@ type Load =
 
 /**
  * APW-08 T36 (FR-55) — **Tasks on attached Works**: the Tasks this Mission filed on its App
- * Works (the `mission-task` label), most recent activity first, 20 per page.
+ * or Repository Works (the `mission-task` label), most recent activity first, 20 per page.
  */
 export function MissionTasksOnWorksPanel({ missionId }: { missionId: string }) {
     const t = useTranslations('dashboard.missionDetail.output');

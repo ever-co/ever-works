@@ -61,7 +61,7 @@ import { TeamResource } from '../entities/team-resource.entity';
             Work,
             WorkProposal,
             UserUpload,
-            // APW-08 T35 — the Mission tick reads the Tasks on its App Works (open cap, recent
+            // APW-08 T35 — the Mission tick reads the Tasks on its Works (open cap, recent
             // titles, duplicates). Injected `@Optional()`, so it MUST be registered here or it
             // silently resolves to undefined (pinned by missions.module.task-output.spec).
             Task,
@@ -98,7 +98,7 @@ import { TeamResource } from '../entities/team-resource.entity';
         // facade (FacadesModule, imported above) so MissionsService.create applies its defaults.
         MissionTemplateManifestReader,
         MissionAttachmentRepository,
-        // APW-08 T35 (FR-51) — proposes the Tasks a Mission files on its App Works.
+        // APW-08 T35 (FR-51) — proposes the Tasks a Mission files on its App or Repository Works.
         MissionTaskPlannerService,
         // The Mission page's "Team and agents" panel (`GET /me/missions/:id/team`).
         MissionTeamService,

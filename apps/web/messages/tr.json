@@ -2360,9 +2360,9 @@
                     "no-ideas": "Tick ran but generated no Ideas",
                     "failed": "Run now failed",
                     "cron-no-match": "Tick ran (cron skipped)",
-                    "tasks-filed": "Görevin App Works’üne işler kaydedildi.",
-                    "no-tasks": "Görevin App Works’üne kaydedilecek yeni bir şey yok.",
-                    "spawned-and-tasks-filed": "Yeni Fikirler oluşturuldu ve Görevin App Works’üne işler kaydedildi."
+                    "tasks-filed": "Görevin App Works veya Repository Works’üne işler kaydedildi.",
+                    "no-tasks": "Görevin App Works veya Repository Works’üne kaydedilecek yeni bir şey yok.",
+                    "spawned-and-tasks-filed": "Yeni Fikirler oluşturuldu ve Görevin App Works veya Repository Works’üne işler kaydedildi."
                 }
             },
             "goals": {
@@ -2398,14 +2398,17 @@
             "output": {
                 "title": "Çıktı",
                 "ideas": "Fikirler",
-                "tasks": "Ekli App Works üzerindeki işler",
+                "tasks": "Ekli App Works veya Repository Works üzerindeki işler",
                 "both": "İkisi de",
                 "tasksPerTick": "Döngü başına iş",
                 "openCap": "Work başına açık iş sınırı",
                 "appliesTo": "“İyileştirir” veya “İşletir” olarak eklenen Works için geçerlidir.",
-                "noAppWork": "İş kaydetmek için bir App Work’ü “İyileştirir” veya “İşletir” olarak ekleyin.",
+                "noAppWork": "İş kaydetmek için bir App Work veya Repository Work’ü “İyileştirir” veya “İşletir” olarak ekleyin.",
+                "repoIsolationOff": "Ekli bir Repository Work’te “Task isolation” kapalı olduğundan oraya iş kaydedilmiyor. O Work’ün ayarlarından “Task isolation”ı açın.",
+                "repoAgentCannotOpenPullRequests": "Ekli bir Repository Work’te işleri çalıştıracak ajanın commit yapma ve pull request açma izni olmadığından oraya iş kaydedilmiyor. Bu Görevin iş çıktısı için iki izne de sahip bir ajan seçin veya bu izinleri o Work’ün ajanına verin.",
+                "repoAllowsAgentMerge": "Ekli bir Repository Work’ün birleştirme politikası ajanların kendi pull request’lerini birleştirmesine izin verdiğinden bu Görev oraya iş kaydetmiyor. Görevin oraya iş kaydedebilmesi için o Work’te ajanlarla birleştirmeyi kapatın.",
                 "tasksOnWorks": "Ekli Works üzerindeki işler",
-                "nothingToFile": "İş kaydedilecek ekli bir App Work yok.",
+                "nothingToFile": "İş kaydedilecek ekli bir App Work veya Repository Work yok.",
                 "tasksOnWorksEmpty": "Henüz kaydedilmiş iş yok.",
                 "save": "Kaydet",
                 "saved": "Çıktı kaydedildi",
@@ -2797,7 +2800,7 @@
         },
         "feed": {
             "narration": {
-                "missionNothingToFile": "<b>{actor}</b> bugün bir Görevin App Works’üne kaydedecek yeni bir şey bulamadı"
+                "missionNothingToFile": "<b>{actor}</b> bugün bir Görevin App Works veya Repository Works’üne kaydedecek yeni bir şey bulamadı"
             }
         },
         "works": {

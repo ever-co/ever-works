@@ -134,7 +134,7 @@ export async function getMissionTeamAction(missionId: string): Promise<MissionTe
 }
 
 /**
- * APW-08 T36 (FR-55) — one page of the Tasks a Mission filed on its App Works (the
+ * APW-08 T36 (FR-55) — one page of the Tasks a Mission filed on its attached Works (the
  * `mission-task` label), newest first, 20 per page.
  */
 export async function listMissionTasksOnWorksAction(
