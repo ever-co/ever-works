@@ -332,6 +332,9 @@ describe('fleet-run token surface vs. the MCP whitelist', () => {
 	it('refuses the credential routes themselves — a token cannot mint another', () => {
 		expect(isFleetRunTokenRouteAllowed('POST', '/api/fleet/jobs/j1/mcp-credential')).toBe(false);
 		expect(isFleetRunTokenRouteAllowed('POST', '/api/fleet/jobs/j1/push-credential')).toBe(false);
+		// The scoped READ credential is a credential route like its write
+		// twin: the model's run token must not be able to mint one either.
+		expect(isFleetRunTokenRouteAllowed('POST', '/api/fleet/jobs/j1/fetch-credential')).toBe(false);
 		expect(isFleetRunTokenRouteAllowed('POST', '/api/auth/api-keys')).toBe(false);
 		expect(WHITELIST.some((entry) => entry.path.startsWith('/api/auth'))).toBe(false);
 		expect(WHITELIST.some((entry) => entry.path.includes('/terminal'))).toBe(false);

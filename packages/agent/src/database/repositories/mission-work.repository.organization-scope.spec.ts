@@ -1,4 +1,4 @@
-import { DataSource, type DeleteResult, type Repository } from 'typeorm';
+import { DataSource, SelectQueryBuilder, type DeleteResult, type Repository } from 'typeorm';
 import { ENTITIES } from '../_entities-inventory';
 import { MissionWork } from '../../entities/mission-work.entity';
 import { MissionWorkRepository } from './mission-work.repository';
@@ -56,6 +56,14 @@ describe('MissionWorkRepository Organization scope', () => {
             expect.arrayContaining([
                 'rel.tenantId AS "tenantId"',
                 'rel.organizationId AS "organizationId"',
+            ]),
+        );
+        // A Mission's Task output decides from this row whether it files Tasks on
+        // the Work: its kind, and (for a Repository Work) its Task isolation setting.
+        expect(harness.selected).toEqual(
+            expect.arrayContaining([
+                'work.kind AS "workKind"',
+                'work.taskIsolation AS "workTaskIsolation"',
             ]),
         );
         // The edge row is a pure join keyed by its validated endpoints;
@@ -185,5 +193,35 @@ describe('MissionWorkRepository Organization scope', () => {
         expect(criteria).not.toHaveProperty('tenantId');
         expect(criteria).not.toHaveProperty('organizationId');
         expect(Object.values(criteria).every((value) => typeof value === 'string')).toBe(true);
+    });
+
+    // The Task output's inputs, against the REAL entity metadata: a select of a property the
+    // Work entity does not have would only fail at run time, on the first tick.
+    it('selects the joined Work’s kind and Task isolation setting in the real query', async () => {
+        const dataSource = new DataSource({
+            type: 'postgres',
+            host: '127.0.0.1',
+            username: 'unused',
+            password: 'unused',
+            database: 'unused',
+            entities: ENTITIES,
+        });
+        await (dataSource as unknown as { buildMetadatas(): Promise<void> }).buildMetadatas();
+        let sql = '';
+        const spy = jest
+            .spyOn(SelectQueryBuilder.prototype, 'getRawMany')
+            .mockImplementation(async function (this: SelectQueryBuilder<MissionWork>) {
+                sql = this.getQuery();
+                return [];
+            });
+        try {
+            await new MissionWorkRepository(
+                dataSource.getRepository(MissionWork),
+            ).listForMissionWithWork('mission-1', 'user-1', EVER_SCOPE);
+        } finally {
+            spy.mockRestore();
+        }
+        expect(sql).toContain('"work"."kind" AS "workKind"');
+        expect(sql).toContain('"work"."taskIsolation" AS "workTaskIsolation"');
     });
 });

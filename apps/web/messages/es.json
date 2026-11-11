@@ -2381,9 +2381,9 @@
                     "no-ideas": "Tick ran but generated no Ideas",
                     "failed": "Run now failed",
                     "cron-no-match": "Tick ran (cron skipped)",
-                    "tasks-filed": "Tareas registradas en los App Works de la Misión.",
-                    "no-tasks": "Nada nuevo que registrar en los App Works de la Misión.",
-                    "spawned-and-tasks-filed": "Nuevas Ideas generadas y Tareas registradas en los App Works de la Misión."
+                    "tasks-filed": "Tareas registradas en los App Works o Repository Works de la Misión.",
+                    "no-tasks": "Nada nuevo que registrar en los App Works o Repository Works de la Misión.",
+                    "spawned-and-tasks-filed": "Nuevas Ideas generadas y Tareas registradas en los App Works o Repository Works de la Misión."
                 }
             },
             "goals": {
@@ -2419,14 +2419,17 @@
             "output": {
                 "title": "Salida",
                 "ideas": "Ideas",
-                "tasks": "Tareas en los App Works adjuntos",
+                "tasks": "Tareas en los App Works o Repository Works adjuntos",
                 "both": "Ambas",
                 "tasksPerTick": "Tareas por ciclo",
                 "openCap": "Límite de tareas abiertas por Work",
                 "appliesTo": "Se aplica a los Works adjuntos como «Mejora» u «Opera».",
-                "noAppWork": "Adjunta un App Work como «Mejora» u «Opera» para registrar tareas en él.",
+                "noAppWork": "Adjunta un App Work o un Repository Work como «Mejora» u «Opera» para registrar tareas en él.",
+                "repoIsolationOff": "«Task isolation» está desactivado en un Repository Work adjunto, así que no se registran tareas en él. Activa «Task isolation» en los ajustes de ese Work.",
+                "repoAgentCannotOpenPullRequests": "El agente que ejecutaría las tareas en un Repository Work adjunto no puede hacer commits y abrir pull requests, así que no se registran tareas en él. Elige un agente con ambos permisos para la salida de tareas de esta Misión, o concédeselos al agente del Work.",
+                "repoAllowsAgentMerge": "La política de fusión de un Repository Work adjunto permite que los agentes fusionen sus propios pull requests, así que esta Misión no registra tareas en él. Desactiva las fusiones por agentes en ese Work para que la Misión pueda registrar tareas allí.",
                 "tasksOnWorks": "Tareas en los Works adjuntos",
-                "nothingToFile": "No hay ningún App Work adjunto en el que registrar tareas.",
+                "nothingToFile": "No hay ningún App Work ni Repository Work adjunto en el que registrar tareas.",
                 "tasksOnWorksEmpty": "Aún no se han registrado tareas.",
                 "save": "Guardar",
                 "saved": "Salida guardada",
@@ -2843,7 +2846,7 @@
         },
         "feed": {
             "narration": {
-                "missionNothingToFile": "<b>{actor}</b> no encontró hoy nada nuevo que registrar en los App Works de una Misión"
+                "missionNothingToFile": "<b>{actor}</b> no encontró hoy nada nuevo que registrar en los App Works o Repository Works de una Misión"
             }
         },
         "works": {

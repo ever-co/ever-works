@@ -271,6 +271,46 @@ describe('scoped push credential (real git)', () => {
 		}
 	);
 
+	// What that refusal PRINTS. A config key's subsection is free text, and
+	// for these families it is a URL somebody typed — `url.https://user:
+	// token@host/.insteadOf` is a real way people keep a credential. The
+	// probe used to list the key names whole, into a job result.
+	it('names what it found as section.<…>.variable — never the subsection', async () => {
+		const handle = await provision('push-probe-names', 'task/probe-names-3131');
+		writeFileSync(join(handle.path, 'work.txt'), 'names\n');
+		const rewrite = 'url.https://someone:ghp_keptInASubsectionSentinel@evil.tld/.insteadOf';
+		const header = 'http.https://internal.example.test/team/repo.git.extraheader';
+		git(handle.path, 'config', '--local', rewrite, 'https://github.com/');
+		git(handle.path, 'config', '--local', header, 'X-Example: 1');
+
+		try {
+			const error = await plugin
+				.finalize(handle, {
+					commitMessage: 'feat: names',
+					push: true,
+					pushCredential: {
+						username: 'x-access-token',
+						token: 'ghs_scoped_push_token_value',
+						remoteUrl: originUrl
+					}
+				})
+				.then(
+					() => null,
+					(caught: Error) => caught
+				);
+
+			expect(error?.message).toMatch(/^refusing to publish: .*persisted credential or remote-rewrite settings/);
+			expect(error?.message).toContain('http.<…>.extraheader');
+			expect(error?.message).toContain('url.<…>.insteadof');
+			expect(error?.message).not.toContain('ghp_keptInASubsectionSentinel');
+			expect(error?.message).not.toContain('evil.tld');
+			expect(error?.message).not.toContain('internal.example.test');
+		} finally {
+			git(handle.path, 'config', '--local', '--unset', rewrite);
+			git(handle.path, 'config', '--local', '--unset', header);
+		}
+	});
+
 	// REGRESSION — a `pre-push` hook in the POOL reads the credential out of
 	// the push's own environment (slice AM review, F2).
 	//
@@ -334,6 +374,22 @@ describe('how the credential reaches git (execFile seam)', () => {
 
 	const TOKEN = 'ghs_0123456789abcdefghijklmnopqrstuvwxyz';
 	const REMOTE = 'https://github.com/ever-works/ever-works.git';
+
+	/**
+	 * The URL a credentialed push really goes to: the remote it names is a
+	 * private one, defined only by a `remote.<name>.url` entry in that
+	 * child's own environment.
+	 */
+	const remoteOf = (push: Invocation | undefined): string | undefined => {
+		const name = push?.args.at(-2);
+		const count = Number(push?.env.GIT_CONFIG_COUNT ?? '0');
+		for (let index = 0; index < count; index += 1) {
+			if (push?.env[`GIT_CONFIG_KEY_${index}`] === `remote.${name}.url`) {
+				return push.env[`GIT_CONFIG_VALUE_${index}`];
+			}
+		}
+		return undefined;
+	};
 
 	function fakeGit(invocations: Invocation[], pushStderr?: string) {
 		return ((
@@ -401,9 +457,20 @@ describe('how the credential reaches git (execFile seam)', () => {
 		// decides whether a `pre-push` hook gets handed this very
 		// environment. The header is LAST, so its index moves with them.
 		const basic = Buffer.from(`x-access-token:${TOKEN}`, 'utf8').toString('base64');
-		expect(push?.env.GIT_CONFIG_COUNT).toBe('4');
+		// The four credential entries keep their positions. What follows them
+		// (indices 4 and up) is the exec-time safety config of
+		// `credentialed-command.ts` — the private remote's definition and the
+		// pins that hold whatever the repository's own config says — which is
+		// pinned entry by entry in `credentialed-command.attacks.spec.ts`.
+		expect(Number(push?.env.GIT_CONFIG_COUNT)).toBeGreaterThan(4);
 		expect(push?.env.GIT_CONFIG_KEY_3).toBe(`http.${REMOTE}.extraheader`);
 		expect(push?.env.GIT_CONFIG_VALUE_3).toBe(`Authorization: Basic ${basic}`);
+		// The header is the ONLY place the credential is: none of the entries
+		// added after it repeats the token.
+		for (let index = 4; index < Number(push?.env.GIT_CONFIG_COUNT); index += 1) {
+			expect(push?.env[`GIT_CONFIG_VALUE_${index}`]).not.toContain(TOKEN);
+			expect(push?.env[`GIT_CONFIG_VALUE_${index}`]).not.toContain(basic);
+		}
 	});
 
 	it('APPENDS to environment config the process already carries', async () => {
@@ -431,7 +498,9 @@ describe('how the credential reaches git (execFile seam)', () => {
 			});
 
 			const push = invocations.find((entry) => entry.args[0] === 'push');
-			expect(push?.env.GIT_CONFIG_COUNT).toBe('5');
+			// One inherited entry, then the four credential entries at 1-4,
+			// then the exec-time safety config — everything still APPENDED.
+			expect(Number(push?.env.GIT_CONFIG_COUNT)).toBeGreaterThan(5);
 			expect(push?.env.GIT_CONFIG_KEY_0).toBe('url.file:///local/.insteadOf');
 			expect(push?.env.GIT_CONFIG_KEY_1).toBe('credential.helper');
 			expect(push?.env.GIT_CONFIG_VALUE_1).toBe('');
@@ -558,8 +627,13 @@ describe('how the credential reaches git (execFile seam)', () => {
 		expect(push?.env.GIT_CONFIG_KEY_2).toBe('core.hooksPath');
 		expect(push?.env.GIT_CONFIG_VALUE_2).toBe('');
 		// The refspec and the remote still follow, in that order — the flag
-		// was inserted, not substituted for one of them.
-		expect(push?.args.slice(-2)).toEqual([REMOTE, `HEAD:refs/heads/${handle.branch}`]);
+		// was inserted, not substituted for one of them. The remote is named
+		// by a PRIVATE name minted for this one command, and that name's only
+		// definition — in this child's environment — is the token-free URL:
+		// `git push <url>` would read `remote.<url>.receivepack` / `.pushurl`
+		// from the repository's own config.
+		expect(push?.args.slice(-1)).toEqual([`HEAD:refs/heads/${handle.branch}`]);
+		expect(remoteOf(push)).toBe(REMOTE);
 	});
 
 	it('leaves hooks alone when there is no credential to protect', async () => {
@@ -722,7 +796,13 @@ describe('how the credential reaches git (execFile seam)', () => {
 			expect(invocations.some((entry) => entry.args[0] === 'add')).toBe(false);
 			expect(invocations.some((entry) => entry.args.includes('commit'))).toBe(false);
 			const push = invocations.find((entry) => entry.args[0] === 'push');
-			expect(push?.args).toEqual(['push', '--no-verify', REMOTE, `${PUBLISH}:refs/heads/${handle.branch}`]);
+			expect(push?.args).toEqual([
+				'push',
+				'--no-verify',
+				expect.stringMatching(/^ew-credentialed-[0-9a-f-]{36}$/),
+				`${PUBLISH}:refs/heads/${handle.branch}`
+			]);
+			expect(remoteOf(push)).toBe(REMOTE);
 			expect(push?.env.GIT_CONFIG_KEY_2).toBe('core.hooksPath');
 			expect(push?.env.GIT_CONFIG_KEY_3).toBe(`http.${REMOTE}.extraheader`);
 			for (const entry of invocations) {

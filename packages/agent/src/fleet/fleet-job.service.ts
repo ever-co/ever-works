@@ -234,6 +234,26 @@ export class FleetJobStaleLeaseError extends ConflictException {
  * the `fleet-job-lease-sweeper` cron (global), so a fleet whose nodes
  * all died still converges without anyone polling.
  */
+/** Fleet agent readiness — the two windows a node's run stats cover. */
+export const FLEET_NODE_RUN_STATS_DAY_MS = 24 * 60 * 60 * 1000;
+export const FLEET_NODE_RUN_STATS_WEEK_MS = 7 * FLEET_NODE_RUN_STATS_DAY_MS;
+/** Most finished jobs one read of a node's run stats looks at (newest first). */
+export const FLEET_NODE_RUN_STATS_MAX_JOBS = 2000;
+
+/** One finished `agent-task` job, as a node's run statistics read it. */
+export interface FleetNodeJobOutcome {
+    jobId: string;
+    /** The job's own terminal status: the NODE's verdict, not the run's outcome. */
+    status: string;
+    /** Model spend the node reported for it, in cents (0 when none). */
+    costCents: number;
+    /** True when it finished inside the last 24 hours. */
+    recent: boolean;
+    /** `payload.runId` / `payload.taskId` as stored; null when absent or purged. */
+    runId: string | null;
+    taskId: string | null;
+}
+
 @Injectable()
 export class FleetJobService {
     private readonly logger = new Logger(FleetJobService.name);
@@ -1354,6 +1374,51 @@ export class FleetJobService {
             };
         }
         return byNode;
+    }
+
+    /**
+     * Fleet agent readiness — the `agent-task` jobs one of this owner's nodes
+     * finished in the last 7 days, newest first, for its run statistics.
+     *
+     * Each row is the job's OWN verdict (`done` / `failed`) plus the run and
+     * task ids it carried, and deliberately not a count: a job the node
+     * reports `done` can sit in front of a run that failed (the node did its
+     * work; the agent run did not succeed), so only the caller that can read
+     * the runs may say how many failed. See `readNodeRunStats` at the API
+     * edge, which applies the node history's rule.
+     *
+     * A run is a job that reached a terminal status; a job parked for a usage
+     * limit goes back to the queue and is counted once, when it settles.
+     * Bounded by {@link FLEET_NODE_RUN_STATS_MAX_JOBS}: `capped` says the
+     * node finished more than that in the window, so the 7-day figures are a
+     * floor. Tokens are not summed — they live inside each job's result body,
+     * which a retention purge nulls; the cost column is the one figure the
+     * ledger keeps.
+     */
+    async agentTaskOutcomesForNode(
+        userId: string,
+        nodeId: string,
+        now: Date = new Date(),
+    ): Promise<{ outcomes: FleetNodeJobOutcome[]; capped: boolean }> {
+        const rows = await this.jobs.findAgentTaskOutcomesForNode(
+            userId,
+            nodeId,
+            new Date(now.getTime() - FLEET_NODE_RUN_STATS_WEEK_MS),
+            new Date(now.getTime() - FLEET_NODE_RUN_STATS_DAY_MS),
+            FLEET_NODE_RUN_STATS_MAX_JOBS + 1,
+        );
+        const capped = rows.length > FLEET_NODE_RUN_STATS_MAX_JOBS;
+        return {
+            outcomes: rows.slice(0, FLEET_NODE_RUN_STATS_MAX_JOBS).map((row) => ({
+                jobId: row.id,
+                status: row.status,
+                costCents: row.costCents,
+                recent: row.recent,
+                runId: row.runId,
+                taskId: row.taskId,
+            })),
+            capped,
+        };
     }
 
     /**

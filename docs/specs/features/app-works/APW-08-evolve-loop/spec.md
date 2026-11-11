@@ -670,7 +670,18 @@ and returns focus to the button that opened it.
   rule and they are followed like any Task — FR-9).
 - A separate "Changes" page: the Work's Tasks tab with delivery chips is that view (plan §5.1).
 - Auto-resolving merge conflicts, auto-merging, or changing merge-policy defaults.
-- Missions filing Tasks on Works that are not App Works; metric Goals computed from delivery data.
+- ~~Missions filing Tasks on Works that are not App Works~~ — **lifted for Repository Works (2026-11-10).** A
+  Mission's Task output (FR-49…FR-54) now also files on `repo` Works attached as _Improves_ or _Operates_, and
+  FR-47's wait-for-merge covers a Goal scoped to a `repo` Work. Both ask one predicate,
+  `workKindDeliversTasksAsPullRequests` (`app`, `repo`). A `repo` Work is filed on only while its Task isolation
+  is on (nothing forces it on; the Mission answers the `repoWorkTaskIsolationOff` warning instead), the
+  `EVER_WORKS_APP_CHANGES_ENABLED` switch (FR-74) keeps pausing App Works only, and FR-50's open-Tasks cap no
+  longer counts a Task waiting (In review or Blocked) on a pull request that was closed without merging, once 24 h
+  have passed since it last changed (a Task with a run in flight always counts). A `repo` Work is filed on only
+  when the Agent its Tasks would run with may commit and open pull requests, and not under a merge policy that lets
+  agents merge unless the Mission opts in; dispatch re-checks both. Every other kind stays out of scope. See
+  [Missions → Output](../../../../features/missions.md#output).
+- Metric Goals computed from delivery data.
 
 ---
 

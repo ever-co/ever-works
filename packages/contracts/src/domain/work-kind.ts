@@ -142,6 +142,38 @@ export function isAppWorkKind(value?: string | null): boolean {
 }
 
 /**
+ * True when Tasks on a Work of this kind are delivered as pull requests an
+ * agent run opens: the agent works on the Task's own branch of a code
+ * repository the platform did not generate, and the change reaches the base
+ * branch only as a reviewed pull request. True for `app` and `repo`, false
+ * for every other kind.
+ *
+ * This is the one question two loops ask before they plan on that fact:
+ *
+ *   - a Mission's Task output files and starts Tasks only on such Works
+ *     (each planned Task is one pull request), and
+ *   - a Goal's loop waits while an earlier iteration's pull request on such
+ *     a Work is still open, so iteration N+1 never branches from a base that
+ *     lacks iteration N's change.
+ *
+ * It is a KIND test, like `isAppWorkKind` and `isRepositoryWorkKind`, and not
+ * a capability flag: it names exactly the two kinds that wrap code the
+ * platform did not generate, and no generated kind is meant to opt in. It
+ * says what the kind's Tasks are FOR, not that a given Task will get a
+ * branch: an App Work always isolates its Tasks, a Repository Work only
+ * while its Task isolation setting is on, so a caller that needs the branch
+ * must still ask `resolveTaskIsolation` (in `@ever-works/agent`).
+ *
+ * Callers that need to tell the two kinds apart (the App kill switch, the
+ * App delivery chain) keep using `isAppWorkKind`. Accepts the same loose
+ * input as `normalizeWorkKind` and never throws.
+ */
+export function workKindDeliversTasksAsPullRequests(value?: string | null): boolean {
+	const kind = normalizeWorkKind(value);
+	return kind === 'app' || kind === 'repo';
+}
+
+/**
  * True when `value` names the Project kind (`project`, EW-P2-4) — the one
  * repo-less kind: no data, work or website repository, no deploy, no
  * generator. Callers that would clone, generate into, build or deploy a

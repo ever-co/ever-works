@@ -29,7 +29,13 @@ import {
     FleetNodeSelfDescriptionDto,
     FleetUnenrollDto,
 } from '../dto/fleet.dto';
-import { CompleteFleetJobDto, FleetJobHeartbeatDto, LeaseFleetJobsDto } from '../dto/fleet-job.dto';
+import {
+    CompleteFleetJobDto,
+    FleetJobFetchCredentialDto,
+    FleetJobHeartbeatDto,
+    FleetJobPushCredentialDto,
+    LeaseFleetJobsDto,
+} from '../dto/fleet-job.dto';
 import { FleetController } from '../fleet.controller';
 import { FleetJobsController } from '../fleet-jobs.controller';
 import { FleetEnabledGuard } from '../guards/fleet-enabled.guard';
@@ -243,14 +249,58 @@ describe('fleet node contract — the wire a deployed node actually speaks', () 
         // which is why the platform ALSO stops offering `agent-task` work to
         // a node that does not advertise `git-push`: a node that would push
         // with its own ambient helper must not be handed the work.
+        // Scoped fetch credentials add `fetchCredential`: POST
+        // /api/fleet/jobs/:id/fetch-credential, the read twin of
+        // `pushCredential`. A node verb like the others — same credential,
+        // same four lease checks, `@Public()` — and it changes NOTHING for a
+        // node that predates it, in either direction: an older node never
+        // calls it and keeps fetching with the machine's own Git
+        // configuration, and a newer node that meets a platform without it
+        // reads the 404 as exactly that instruction. So, unlike `git-push`,
+        // it gates no work and needs no capability tag.
         expect(declared.sort()).toEqual([
             'complete',
             'envFiles',
+            'fetchCredential',
             'heartbeat',
             'lease',
             'mintMcpCredential',
             'pushCredential',
             'revokeMcpCredential',
+        ]);
+    });
+
+    it('declares the fetch-credential verb exactly as its push twin is declared', () => {
+        // Not in the pinned fixture (no deployed node calls it yet), so its
+        // edge contract is pinned against the route it mirrors instead: the
+        // same method, the same 200, `@Public()` — a node has no session —
+        // and a body that is the push body and nothing more, which is what
+        // lets a node send it to a platform of any age.
+        const fetchHandler = FleetJobsController.prototype.fetchCredential as object;
+        const pushHandler = FleetJobsController.prototype.pushCredential as object;
+        expect(Reflect.getMetadata(PATH_METADATA, fetchHandler)).toBe(':id/fetch-credential');
+        expect(Reflect.getMetadata(PATH_METADATA, pushHandler)).toBe(':id/push-credential');
+        for (const key of [METHOD_METADATA, HTTP_CODE_METADATA, IS_PUBLIC_KEY]) {
+            expect(Reflect.getMetadata(key, fetchHandler)).toEqual(
+                Reflect.getMetadata(key, pushHandler),
+            );
+        }
+        expect(Reflect.getMetadata(METHOD_METADATA, fetchHandler)).toBe(RequestMethod.POST);
+        expect(Reflect.getMetadata(IS_PUBLIC_KEY, fetchHandler)).toBe(true);
+
+        const validated = (dto: new () => object): string[] =>
+            [
+                ...new Set(
+                    getMetadataStorage()
+                        .getTargetValidationMetadatas(dto, '', false, false)
+                        .map((entry) => entry.propertyName),
+                ),
+            ].sort();
+        expect(validated(FleetJobFetchCredentialDto)).toEqual(validated(FleetJobPushCredentialDto));
+        expect(validated(FleetJobFetchCredentialDto)).toEqual([
+            'leaseGeneration',
+            'nodeId',
+            'secret',
         ]);
     });
 
@@ -692,6 +742,10 @@ function buildRealJobsController(options: { stopped?: boolean } = {}) {
     const pushCredentials = {
         mint: async () => {
             throw new Error('the node-contract routes must not mint a push credential');
+        },
+        // The read mode of the same service, refused for the same reason.
+        mintFetch: async () => {
+            throw new Error('the node-contract routes must not mint a fetch credential');
         },
     };
     return {

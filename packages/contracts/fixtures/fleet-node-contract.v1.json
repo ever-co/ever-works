@@ -567,7 +567,8 @@
 			"helper",
 			"displays",
 			"desktopReasons",
-			"helperEvents"
+			"helperEvents",
+			"agents"
 		],
 		"nodeEmits": ["platform", "version", "capabilities", "cliVersion", "diskFreeBytes", "modelIdentity"],
 		"nodeEmitsOptional": [
@@ -593,7 +594,8 @@
 			"helper",
 			"displays",
 			"desktopReasons",
-			"helperEvents"
+			"helperEvents",
+			"agents"
 		],
 		"controllerForwards": {
 			"enroll": [
@@ -625,7 +627,8 @@
 				"helper",
 				"displays",
 				"desktopReasons",
-				"helperEvents"
+				"helperEvents",
+				"agents"
 			],
 			"heartbeat": [
 				"platform",
@@ -656,7 +659,8 @@
 				"helper",
 				"displays",
 				"desktopReasons",
-				"helperEvents"
+				"helperEvents",
+				"agents"
 			]
 		}
 	},

@@ -348,6 +348,85 @@ export interface FleetJobPushCredentialResponse {
 	readonly push: FleetPushCredential | null;
 }
 
+/**
+ * Scoped FETCH credentials — the read half of this module
+ * (`POST /api/fleet/jobs/:id/fetch-credential`).
+ *
+ * ## The gap it closes
+ *
+ * Slice AM scoped the PUSH and left the fetch on the machine's own Git
+ * credential helper ("Scoping it is a separate change"). A fleet node that
+ * is a fenced VM has no Git credential at all, by design, so a job on a
+ * PRIVATE repository could not clone — although the Ever Works GitHub App
+ * was installed on that repository and the push would have worked.
+ *
+ * What a node gets here is the same kind of thing the push gets, narrowed
+ * further: a GitHub App installation token per repository of the job,
+ * resolved by the SAME rules (platform state only, the job owner's own
+ * installation, `github.com` only), carrying `contents: read` and
+ * `metadata: read` and nothing else. It reaches `git fetch` through the
+ * child environment exactly as the push credential reaches `git push`,
+ * and is dropped — and revoked — when the fetch ends, before the model's
+ * first byte.
+ *
+ * ## The ONE deliberate difference from push: fetch keeps its fallback
+ *
+ * A push with no scoped credential is refused, because the only other way
+ * to authenticate it is the ambient helper the slice exists to stop using.
+ * A fetch with no scoped credential runs EXACTLY AS IT DID BEFORE this
+ * endpoint existed: a public repository needs no credential, and a node
+ * whose operator configured a helper keeps working on a repository the
+ * App is not installed on. So "the platform has nothing to give" is an
+ * ordinary `200` here — an entry in {@link FleetJobFetchCredentialResponse.uncovered}
+ * — and never the `422` the push route answers.
+ *
+ * What is NOT a fallback: a claim the platform refuses (`401`: not this
+ * node's job, or the job is no longer active) and a stale lease (`409`).
+ * Those say the REQUEST is wrong, and the node fails the run on them.
+ *
+ * These are TYPES only, on purpose: the stable reason tokens are the push
+ * route's own ({@link FleetPushCredentialReason}), because the conditions
+ * are the same conditions decided by the same resolver.
+ */
+export interface FleetFetchCredential {
+	/**
+	 * The raw read credential. Exists outside the platform's process for the
+	 * length of one HTTPS response and then one `git fetch`; nothing recovers
+	 * it afterwards.
+	 */
+	readonly token: string;
+	/** Always {@link FLEET_PUSH_CREDENTIAL_USERNAME}; sent so the node need not assume. */
+	readonly username: string;
+	/** ISO-8601 instant GitHub says the token stops working. */
+	readonly expiresAt: string;
+	/**
+	 * The repositories this token can READ, as normalized `owner/repo`.
+	 * The platform issues one token per repository, so this holds exactly
+	 * one name; it is a list so the node's scope check is the same
+	 * comparison the push credential uses. The node offers the credential
+	 * to no other remote.
+	 */
+	readonly repositories: readonly string[];
+}
+
+/** Why the platform issued no read credential for one repository of the job. */
+export type FleetFetchCredentialUnavailableReason = FleetPushCredentialReason;
+
+/** A repository of the job the platform could not cover. The node fetches it as it always did. */
+export interface FleetFetchCredentialUncovered {
+	/** The repository as the job's own plan names it (normalized `owner/repo` when it is one). */
+	readonly repository: string;
+	readonly reason: FleetFetchCredentialUnavailableReason;
+}
+
+/** Response body of `POST /api/fleet/jobs/:id/fetch-credential`. */
+export interface FleetJobFetchCredentialResponse {
+	/** One entry per repository the platform could cover. Empty when it could cover none. */
+	readonly credentials: readonly FleetFetchCredential[];
+	/** The job's remaining repositories, each with the stable reason it was not covered. */
+	readonly uncovered: readonly FleetFetchCredentialUncovered[];
+}
+
 /** The four Git identity fields a fleet commit is made with. */
 export interface FleetPushCommitIdentity {
 	readonly authorName: string;

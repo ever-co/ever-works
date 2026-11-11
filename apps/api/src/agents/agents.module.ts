@@ -71,7 +71,12 @@ import {
 // names the roles it chooses between. Same two imports, and the same rule,
 // as `repos[role]` in `packages/agent/src/works/repository-work-guard.ts`
 // (`hasRepositoryRole`) — the ONE place that knowledge lives.
-import { getWorkCapabilities, isAppWorkKind, workKindHasRepository } from '@ever-works/contracts';
+import {
+    getWorkCapabilities,
+    isAppWorkKind,
+    isRepositoryWorkKind,
+    workKindHasRepository,
+} from '@ever-works/contracts';
 import { lstat, realpath } from 'node:fs/promises';
 import {
     join as joinPath,
@@ -127,6 +132,8 @@ import {
     appWorkCloudPushRefusal,
     // APW-04 T10 — the run's Task, for the App provisioning write rule.
     TaskRepository,
+    // A Repository Work's base branch is refused to `commitToRepo` for an isolated Task's run.
+    resolveTaskIsolation,
 } from '@ever-works/agent/tasks-domain';
 // Domain chat-tool sources (AGENT_DOMAIN_TOOL_SOURCES binding below).
 // Each module contributes the ONE service/repository its descriptor
@@ -1534,6 +1541,38 @@ async function assertRealWriteTarget(
                     return appProvisioningTaskOrigin(task.origin);
                 };
 
+                /**
+                 * Does this run work on an ISOLATED Task of this Work (its own branch, its change
+                 * a pull request)? Asked only for a Repository Work's base branch, so an ordinary
+                 * non-isolated Task — which commits straight to the Work's branch by design — is
+                 * untouched. `taskId` comes from the run context, never from the model. A Task
+                 * that cannot be read is a refusal: whether it runs on its own branch is unknown.
+                 */
+                const runsIsolatedTask = async (
+                    tool: 'commitToRepo',
+                    taskId: string | undefined,
+                    work: { id: string; kind?: string | null; taskIsolation?: string | null },
+                    agentCanCommit: boolean,
+                    consequence: string,
+                ): Promise<boolean> => {
+                    if (!taskId) return false;
+                    let task: {
+                        workId?: string | null;
+                        isolationMode?: string | null;
+                    } | null;
+                    try {
+                        if (!taskRows) throw new Error('the Task repository is not bound');
+                        task = (await taskRows.findById(taskId)) ?? null;
+                    } catch {
+                        throw new Error(
+                            `${tool}: this run's Task could not be read, so whether it runs on its own ` +
+                                `branch is unknown. ${consequence}`,
+                        );
+                    }
+                    if (!task || task.workId !== work.id) return false;
+                    return resolveTaskIsolation(task, work, { agentCanCommit }) === 'on';
+                };
+
                 /** The branch an App Work's RULES are read from: the Work's own base. */
                 const appRulesBase = async (
                     target: Awaited<ReturnType<typeof resolveWorkGitTarget>>,
@@ -1625,6 +1664,38 @@ async function assertRealWriteTarget(
                         // Only this call's paths are judged, and only they can be
                         // committed: the branch switch below resets the index to the
                         // branch, so nothing staged earlier rides along.
+                        //
+                        // A Repository Work's base branch, for the run of an ISOLATED
+                        // Task: that Task's change reaches the base branch only as its own
+                        // pull request (the finalize path), so this tool never commits
+                        // there behind it — the same rule an App Work's base branch has,
+                        // whatever the merge policy protects. A non-isolated Task commits to
+                        // the Work's branch by design and is untouched.
+                        if (isRepositoryWorkKind(target.work.kind)) {
+                            const targetsBase =
+                                !requestedBranch ||
+                                (base !== '' &&
+                                    normalizeBranchRef(branch) === normalizeBranchRef(base));
+                            if (
+                                targetsBase &&
+                                (await runsIsolatedTask(
+                                    'commitToRepo',
+                                    input.taskId,
+                                    target.work,
+                                    (agent as { permissions?: { canCommitToRepo?: boolean } })
+                                        .permissions?.canCommitToRepo !== false,
+                                    'Nothing was written, committed or pushed.',
+                                ))
+                            ) {
+                                throw new Error(
+                                    `commitToRepo: this run's Task runs on its own branch, so a ` +
+                                        `Repository Work's base branch${base ? ` '${base}'` : ''} ` +
+                                        `changes only through that Task's pull request. Name a ` +
+                                        `feature branch instead. Nothing was written, committed or ` +
+                                        `pushed.`,
+                                );
+                            }
+                        }
                         if (isAppWorkKind(target.work.kind)) {
                             // The rules are read from the Work's base branch, so the base
                             // branch is never a commit target here: an agent that could

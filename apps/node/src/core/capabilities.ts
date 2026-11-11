@@ -19,9 +19,11 @@ import {
 	FLEET_SESSIONS_CAPABILITY,
 	FLEET_USAGE_SCAN_CAPABILITY,
 	isFleetTimeZone,
+	normalizeFleetAgentReadinessReport,
 	normalizeFleetNodeSelfUpdate,
 	normalizeFleetSessionDaemonReport,
 	sanitizeFleetNodeHealthSnapshot,
+	type FleetAgentReadinessReport,
 	type FleetConsents,
 	type FleetDesktopReason,
 	type FleetDisplayView,
@@ -71,6 +73,18 @@ export interface CommandRunOptions {
 	 * vendor tool is reaped at the deadline rather than lingering.
 	 */
 	timeoutMs?: number;
+	/**
+	 * Start the process in EXACTLY this environment instead of the runner's
+	 * default (the daemon's own). Fleet agent readiness passes the
+	 * allow-listed environment a run gets (`buildNodeCheckEnv`), so a CLI's
+	 * status command sees the credentials runs see — no more and no less.
+	 */
+	env?: Readonly<Record<string, string>>;
+	/**
+	 * Close the child's stdin at once, so nothing can wait for input. A
+	 * status command must never be able to sit at a prompt.
+	 */
+	closeStdin?: boolean;
 }
 
 export interface CommandRunner {
@@ -638,6 +652,15 @@ export interface SelfDescriptionTelemetry {
 	 * strip tier; null or a throw leaves all five fields ABSENT.
 	 */
 	desktop?: () => Promise<NodeDesktopTelemetry | null> | NodeDesktopTelemetry | null;
+	/**
+	 * Fleet agent readiness — every agent CLI on this machine with whether it
+	 * can take work (`buildAgentReadinessReport`, `agent-readiness.ts`): free
+	 * status commands and what real runs proved, never a model call.
+	 * Heartbeat only, in the newest strip tier — enrolment never wires it,
+	 * because enrolment has no strip-and-retry fallback for a field an older
+	 * platform does not know. Null or a throw leaves the field ABSENT.
+	 */
+	agents?: () => Promise<FleetAgentReadinessReport | null> | FleetAgentReadinessReport | null;
 }
 
 /** What the desktop probe reports (each field re-read at the wire boundary). */
@@ -809,6 +832,12 @@ export async function describeSelf(
 		description.desktopReasons = normalizeFleetDesktopReasons(desktop.desktopReasons);
 		description.helperEvents = normalizeFleetHelperEvents(desktop.helperEvents);
 	}
+	// Fleet agent readiness: the report, re-read through the contract's own
+	// normaliser at the wire boundary for the reason the housekeeping block
+	// gives — only known fields, bounded, with anything credential-shaped
+	// masked, ever reach the wire.
+	const agents = normalizeFleetAgentReadinessReport(await resolveTelemetry(telemetry.agents));
+	if (agents) description.agents = agents;
 	return description;
 }
 

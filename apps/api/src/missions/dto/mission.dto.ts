@@ -99,6 +99,15 @@ export class MissionTaskOutputDto {
     @IsOptional()
     @IsUUID()
     agentId?: string;
+
+    @ApiProperty({
+        required: false,
+        description:
+            "Opt in to filing and starting this Mission's unattended Tasks on Repository Works whose merge policy lets agents merge their own pull requests. Off by default: such a Work gets no Task, and the write answers the `repoWorkAllowsAgentMerge` warning. API only.",
+    })
+    @IsOptional()
+    @IsBoolean()
+    allowAgentMerge?: boolean;
 }
 
 /**
@@ -215,7 +224,7 @@ export class CreateMissionDto {
         required: false,
         enum: ['ideas', 'tasks', 'both'],
         description:
-            'APW-08 T34 (FR-51) — what the tick files: Ideas, Tasks on attached App Works, or both.',
+            'APW-08 T34 (FR-51) — what the tick files: Ideas, Tasks on attached App or Repository Works (a Repository Work only while its Task isolation is on), or both.',
     })
     @IsOptional()
     @IsIn(['ideas', 'tasks', 'both'])
@@ -330,7 +339,7 @@ export class UpdateMissionDto {
         required: false,
         enum: ['ideas', 'tasks', 'both'],
         description:
-            'APW-08 T34 (FR-51) — what the tick files: Ideas, Tasks on attached App Works, or both.',
+            'APW-08 T34 (FR-51) — what the tick files: Ideas, Tasks on attached App or Repository Works (a Repository Work only while its Task isolation is on), or both.',
     })
     @IsOptional()
     @IsIn(['ideas', 'tasks', 'both'])

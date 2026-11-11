@@ -94,6 +94,7 @@ import {
 import { isModelCliCompatible, ModelCliCompatibilityProbe, type ModelCliCompatibility } from '../core/model-cli-compat';
 import type { ModelCliPaths } from '../core/executors/model-cli';
 import { readNodeLifecycleRecord, writeNodeLifecycleRecord, type NodeLifecycleRecord } from '../core/node-lifecycle';
+import { readAgentRunHistoryRecord, writeAgentRunHistoryRecord } from '../core/agent-readiness';
 import {
 	describeConsents,
 	describeLinkRecord,
@@ -809,6 +810,7 @@ export async function runStart(deps: CliDeps, options: StartCommandOptions): Pro
 	};
 	/** Stops the management lane when the worker host quarantines (set once the lanes exist). */
 	let haltManagementLane: (() => void) | null = null;
+	const agentRunHistory = await readAgentRunHistoryRecord(deps.fs, deps.configPath);
 	const runtime = createNodeRuntime(config, io, {
 		workerEnabled,
 		startPaused,
@@ -844,6 +846,10 @@ export async function runStart(deps: CliDeps, options: StartCommandOptions): Pro
 		// Node lifecycle (slice AR): what the platform last said about this
 		// daemon's version, recorded beside the config for `status`/`doctor`.
 		persistLifecycle: (record) => writeNodeLifecycleRecord(deps.fs, deps.configPath, record),
+		// Fleet agent readiness: what the last runs proved about each agent CLI,
+		// kept beside the config so a restart does not forget a refusal.
+		agentRunHistory,
+		persistAgentRunHistory: (record) => writeAgentRunHistoryRecord(deps.fs, deps.configPath, record),
 		...(deps.resourceProbe ? { resourceProbe: deps.resourceProbe } : {}),
 		attendEnabled,
 		// Fleet node link (FL-02): the fourth consent, and the link itself. The

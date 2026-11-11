@@ -21,6 +21,8 @@ import {
 } from '@/components/ui/dialog';
 import type { FleetJobView, FleetNodeDetailView, FleetNodeView } from '@/lib/api/fleet';
 import { formatBytes } from '@/components/dashboard/runner-status.shared';
+import { AgentReadinessList } from '@/components/fleet/agents/AgentReadinessList';
+import { summarizeNodeAgents } from '@/components/fleet/agents/agent-readiness.shared';
 import {
     centsToUsdInput,
     formatCeilingCents,
@@ -139,6 +141,8 @@ export function FleetNodeDrawer({
     onDrain,
 }: FleetNodeDrawerProps) {
     const t = useTranslations('dashboard.settings.fleet');
+    // Fleet agent readiness: the Agents block.
+    const tAgents = useTranslations('fleet.agents');
     const [tags, setTags] = useState<string[]>([]);
     const [pinned, setPinned] = useState(false);
     const [draft, setDraft] = useState('');
@@ -345,6 +349,28 @@ export function FleetNodeDrawer({
                                 ) : null}
                             </dd>
                         </div>
+                        {/* Fleet agent readiness: every agent CLI on this
+                            machine with whether it can work, how it is signed
+                            in, its usage and last successful run, and what the
+                            platform's own run records say (24 hours, 7 days). */}
+                        {summarizeNodeAgents(node) !== 'hidden' ? (
+                            <div
+                                className="col-span-2 sm:col-span-4"
+                                data-testid="fleet-node-drawer-agents"
+                            >
+                                <dt className="text-text-muted dark:text-text-muted-dark text-xs">
+                                    {tAgents('title')}
+                                </dt>
+                                <dd className="mt-1 max-w-md">
+                                    <AgentReadinessList
+                                        node={{
+                                            ...node,
+                                            runStats: detail?.node.runStats ?? node.runStats,
+                                        }}
+                                    />
+                                </dd>
+                            </div>
+                        ) : null}
                         {/* Fleet usage limits: a model CLI out of quota on this
                             machine, and until when. `online` + `idle` + nothing
                             running is what this used to look like. */}
