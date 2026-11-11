@@ -84,7 +84,7 @@ import { randomUUID } from 'node:crypto';
  * | `core.unsetEnvVars` (Git for Windows) | strips named environment variables from Git's children — measured to remove `GIT_ALLOW_PROTOCOL` | pinned to the operator's value, else the default | blocks |
  * | `core.askPass`, `GIT_ASKPASS`, `SSH_ASKPASS` | program asked for a password after a rejected header | overridden to empty; variables removed | blocks |
  * | `credential.helper`, `credential.<url>.*` | program asked for a password | helper list reset | blocks |
- * | `gc.recentObjectsHook` | program run by the gc a fetch triggers (documented; not reproduced here) | no gc in the child: `maintenance.auto=false`, `gc.auto=0` | blocks |
+ * | `gc.recentObjectsHook` | program run by the gc a fetch triggers (documented; not reproduced here) | no gc in the child: `maintenance.auto=false`, `gc.auto=0`; the provider maintains the pool afterwards in a child that carries nothing (see "The maintenance that follows") | blocks |
  * | `gpg.program`, `gpg.<format>.program`, `gpg.ssh.defaultKeyCommand`, `push.gpgSign` | signing program on a signed push | `push.gpgSign=false`, so nothing is signed — measured, one case per key | allowed |
  * | `push.negotiate` | the push starts `git fetch --negotiate-only <URL>` — BY URL, so `[remote "<url>"]` applies to that grandchild — measured: a planted `uploadpack` ran there with the header | overridden `false` | allowed |
  * | `fetch.recurseSubmodules`, `submodule.<n>.fetchRecurseSubmodules`, `push.recurseSubmodules` | a second fetch / push inside a repository under the pool | `--no-recurse-submodules` (fetch), `push.recurseSubmodules=no` | `submodule.*` allowed |
@@ -96,7 +96,7 @@ import { randomUUID } from 'node:crypto';
  * | other `http.*` (`cookieFile`, `sslCert`, `pinnedPubkey`, …) | none for the token | not overridden | blocks, except transfer tuning |
  * | `include.path`, `includeIf.*` | pulls any of the above in from another file | whatever it pulls in is read BEFORE command scope | followed, then blocks |
  * | `extensions.worktreeConfig`, `extensions.relativeWorktrees` | adds the per-worktree file; records how worktrees are linked | same overrides | allowed; that file is read too |
- * | `extensions.partialClone`, `remote.<name>.promisor`, `.partialCloneFilter` | a missing object makes the command start a lazy `git fetch <promisor remote>` — a grandchild that names a PLAIN remote, so nothing pinned on the private remote covers it: its `uploadpack` runs (file transport) and its `proxy` outranks the `http.<url>.proxy` pin (https) — measured: a planted promisor `uploadpack` ran there, header in its environment | `GIT_NO_LAZY_FETCH=1` (Git 2.44+): no lazy fetch at all, and the fetch still succeeds — measured; the grandchild would also inherit the one transport | blocks: the provider never runs `fetch --filter`, so in a pool these are planted |
+ * | `extensions.partialClone`, `remote.<name>.promisor`, `.partialCloneFilter` | a missing object makes the command start a lazy `git fetch <promisor remote>` — a grandchild that names a PLAIN remote, so nothing pinned on the private remote covers it: its `uploadpack` runs (file transport) and its `proxy` outranks the `http.<url>.proxy` pin (https) — measured: a planted promisor `uploadpack` ran there, header in its environment | `GIT_NO_LAZY_FETCH=1` (Git 2.44+): no lazy fetch at all, and the fetch still succeeds — measured; the grandchild would also inherit the one transport. The maintenance that follows gets the same variable and no transport — measured: git 2.56's `maintenance run --auto` starts that grandchild otherwise | blocks: the provider never runs `fetch --filter`, so in a pool these are planted |
  * | `fetch.bundleURI`, `promisor.*` | downloads from another URI — never with our header | none needed | blocks |
  * | `core.editor`, `core.pager`, `pager.*`, `sequence.editor` | none: Git starts a pager only on a terminal and an editor only to edit — measured, one case per key | n/a | allowed |
  * | `diff.<x>.textconv` / `.command`, `diff.external`, `merge.<x>.driver`, `filter.<x>.clean` / `.smudge` / `.process`, `mergetool.*`, `difftool.*` | none: a fetch or a push converts, merges and diffs no content — measured, one case per key, with `info/attributes` selecting the driver | n/a | allowed |
@@ -107,6 +107,21 @@ import { randomUUID } from 'node:crypto';
  * | `trace2.eventTarget` / `.normalTarget` / `.perfTarget` (system / global config) | with `trace2.configParams` matching `http.*` the event stream records the command-scope config, header included — measured | `GIT_TRACE2`, `GIT_TRACE2_EVENT`, `GIT_TRACE2_PERF` = `0` in the child: Git reads these keys from system and global only, so command scope cannot turn them off; the variable can | n/a: the operator's scopes |
  * | `uploadpack.*`, `receive.*`, `uploadarchive.*` | server side of a local transport | transport not allowed (https) | blocks |
  * | `safe.*`, `uploadpack.packObjectsHook` | none: Git reads them from system / global config only | n/a | `safe.*` allowed |
+ *
+ * ## The maintenance that follows
+ *
+ * A credentialed fetch runs no gc, so the provider runs `git maintenance run
+ * --auto` itself afterwards, in a child that never carries the credential.
+ * It still runs in the same pool, over a config that may have been written
+ * after the allowlist looked, so it gets the exec-time half too:
+ * {@link POOL_MAINTENANCE_ENV} (no lazy fetch, no transport) and
+ * {@link poolMaintenanceEntries} (no hooks, no fsmonitor, no
+ * `alternateRefsCommand`, no askpass or helper, the operator's
+ * `core.unsetEnvVars`). Measured with git 2.56 on Linux, where it was
+ * missing: a promisor remote planted between the check and the fetch did not
+ * run in the credentialed fetch — it ran in the maintenance, as a lazy
+ * `git fetch <promisor remote>` started before and after `--detach`, with no
+ * token to read.
  *
  * ## A rewrite in the operator's own config
  *
@@ -903,4 +918,73 @@ export function credentialedCommandEntries(input: {
 		entries.push([`http.${remoteUrl}.curloptResolve`, '']);
 	}
 	return entries;
+}
+
+/**
+ * The environment of the POOL MAINTENANCE a provider runs after a
+ * credentialed fetch (`git maintenance run --auto`), beside
+ * {@link poolMaintenanceEntries}. That child carries no credential, but it
+ * runs in the same pool, a moment after the fetch, over the same config a
+ * concurrent job may have written after the allowlist looked:
+ *
+ *  - `GIT_NO_LAZY_FETCH=1`: measured, git 2.56 on Linux (round-20 stage CI):
+ *    with a promisor remote planted after the check, `maintenance run --auto`
+ *    — in the foreground, before it detaches, and again in the background —
+ *    walked the refs, found an object missing and started
+ *    `git fetch <promisor remote>`, which ran that remote's planted
+ *    `uploadpack` / `core.sshCommand`. Git 2.52 does the same for an explicit
+ *    `--task=pack-refs`, `gc` or `commit-graph` (measured); its `--auto` just
+ *    had nothing to do. With the variable, no task starts the grandchild.
+ *  - `GIT_ALLOW_PROTOCOL` = `''`: NO transport at all. An automatic
+ *    maintenance never needs one — `prefetch`, the one task that fetches,
+ *    has no automatic condition and is never run by `--auto` (measured, also
+ *    with `maintenance.prefetch.enabled` and `maintenance.strategy` planted)
+ *    — so this child is refused every transport, `uploadpack`,
+ *    `core.sshCommand`, `core.gitProxy` and `ext::` included, whatever any
+ *    config file allows. An empty value is a set one: measured on Git for
+ *    Windows 2.52 and git 2.56, `transport 'file' not allowed`.
+ */
+export const POOL_MAINTENANCE_ENV: Readonly<Record<string, string>> = {
+	GIT_NO_LAZY_FETCH: '1',
+	GIT_ALLOW_PROTOCOL: ''
+};
+
+/**
+ * The command-scope config of that pool maintenance: every key that could
+ * make it start a program, pinned or emptied, on top of
+ * {@link POOL_MAINTENANCE_ENV}. Decided from the same single listing the
+ * credentialed fetch was armed from.
+ *
+ * NOT `maintenance.auto` / `gc.auto`, which the credentialed fetch gets:
+ * maintaining the pool is this child's whole job.
+ *
+ * NOT closed here, stated rather than hidden: `gc.recentObjectsHook` is
+ * multi-valued and Git has no value that clears it, so a planted one stays
+ * live for a gc this child runs (documented by Git; not reproduced here). No
+ * credential is ever in this child's environment, so what such a program
+ * could read is what the plain fetch's own maintenance always exposed.
+ */
+export function poolMaintenanceEntries(input: {
+	/** An EMPTY directory: `pre-auto-gc`, `reference-transaction`, … — none runs. */
+	readonly hooksPath: string;
+	readonly config: readonly ScopedConfigEntry[];
+}): Array<[string, string]> {
+	// Git for Windows strips the variables this key names from every child
+	// Git starts — maintenance runs each task as one — and planted, it would
+	// take `GIT_NO_LAZY_FETCH` and `GIT_ALLOW_PROTOCOL` with it.
+	const unset = operatorPosture(input.config, 'core', 'unsetenvvars');
+	return [
+		['core.hooksPath', input.hooksPath],
+		['core.fsmonitor', 'false'],
+		['core.alternateRefsCommand', ''],
+		// Asked only by a transport, and none is allowed; reset anyway, with
+		// the same values as the credentialed child's, so that losing the
+		// transport pin is not by itself enough to start one. `core.sshCommand`
+		// and `core.gitProxy` are not given a value: Git has none that means
+		// "nothing", and the transport pin is what stops them (the attack spec
+		// plants `core.sshCommand` behind a promisor remote to show it).
+		['core.askpass', ''],
+		['credential.helper', ''],
+		['core.unsetenvvars', unset.kind === 'value' ? unset.value : 'PERL5LIB']
+	];
 }

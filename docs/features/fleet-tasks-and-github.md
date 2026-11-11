@@ -100,3 +100,4 @@ ever-works fleet nodes git-identity <nodeId> [--set [--confirm]] [--json]
 
 - [Sessions on computers](./fleet-sessions.md) · [Checkouts on computers](./fleet-checkouts.md) ·
   [Tasks](./tasks.md) · [Inbound Triggers](./inbound-triggers.md)
+- [What a fleet run is told, and the pull request it opens](./fleet-run-context-and-pull-requests.md)

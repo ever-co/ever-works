@@ -8,6 +8,7 @@ import {
     type SelectQueryBuilder,
 } from 'typeorm';
 import type { QueryDeepPartialEntity } from 'typeorm/query-builder/QueryPartialEntity';
+import { AgentRun } from '../../entities/agent-run.entity';
 import { ExternalRecordLink } from '../../entities/external-record-link.entity';
 import { Task, TaskStatus } from '../../entities/task.entity';
 import {
@@ -105,6 +106,35 @@ export interface ListTasksFilter {
     limit?: number;
     offset?: number;
 }
+
+/**
+ * One Task with a pull request, as {@link TaskRepository.findPullRequestsByWork}
+ * reads it: only what a one-line list entry needs.
+ */
+export interface TaskPullRequestRow {
+    taskId: string;
+    slug: string | null;
+    title: string | null;
+    prNumber: number;
+    prUrl: string | null;
+    /** The cached provider state (`open | draft | closed | merged`), `null` when not read yet. */
+    prState: string | null;
+    /**
+     * The head of the summary of the Task's latest run (at most
+     * {@link TASK_PULL_REQUEST_SUMMARY_HEAD_CHARS} characters), or `null`
+     * when it has no run or the run wrote none. Model-authored text.
+     */
+    summary: string | null;
+}
+
+/**
+ * How much of a run summary {@link TaskRepository.findPullRequestsByWork}
+ * reads per row: enough for its first sentence, never the whole column.
+ */
+export const TASK_PULL_REQUEST_SUMMARY_HEAD_CHARS = 1000;
+
+/** Most rows one {@link TaskRepository.findPullRequestsByWork} call answers. */
+export const TASK_PULL_REQUESTS_BY_WORK_MAX = 50;
 
 /** Task statuses the board bounds to a recent window. */
 const TERMINAL_TASK_STATUSES: TaskStatus[] = [TaskStatus.DONE, TaskStatus.CANCELLED];
@@ -205,6 +235,113 @@ export class TaskRepository {
             where: { workId, branchRef },
             order: { updatedAt: 'DESC' },
         });
+    }
+
+    /**
+     * Work in flight — the Tasks of ONE Work whose branch carries a pull
+     * request that is still open (`state: 'open'`) or has landed
+     * (`state: 'merged'`), for the planner's "what is already being worked
+     * on here" section of a fleet run's instructions.
+     *
+     * Why this exists: every scheduled fire of a recurring Task is a NEW
+     * Task on a fresh checkout of the base branch, so a run cannot see the
+     * unmerged work of the runs before it and repeats or collides with it.
+     *
+     * - **One query, no N+1.** Each row carries the head of its Task's
+     *   latest run summary through a join on `latestRunId` (the board's
+     *   denormalised pointer), so a list of fifteen costs one round trip.
+     * - **Owner-scoped.** `userId` is a predicate on the Task AND on the
+     *   joined run, not a filter applied afterwards: the caller is planning a
+     *   run for that owner and learns nothing about anyone else's Tasks or
+     *   runs. A Task's Work is always its owner's
+     *   (`TasksService.assertScopeReachable`), so this loses none of the
+     *   owner's own work.
+     * - **Open means open.** `branchState = 'pr-open'` stays set on a pull
+     *   request that was CLOSED without merging (only a merge moves it), so
+     *   the cached provider state is read too: not read yet (`NULL`, which is
+     *   also what opening a NEW pull request resets it to), `open` and
+     *   `draft` count; `closed` and `merged` do not.
+     * - **Merged means merged.** The provider said so (`prState`), or the
+     *   platform recorded the merge (`branchState`); a branch the sweep later
+     *   cleaned keeps its `prState`.
+     * - **Newest first.** Open pull requests by number, which only grows
+     *   inside one repository (a Work has one Task repository); merged ones
+     *   by the row's last write, which is the merge being recorded.
+     * - **Bounded and narrow.** At most `limit` rows (1 to
+     *   {@link TASK_PULL_REQUESTS_BY_WORK_MAX}), only the columns a list line
+     *   needs, and only the head of the summary — never the description, the
+     *   checks or the review memory. The Work predicate is served by
+     *   `idx_tasks_branch_state` (`workId`, `branchState`).
+     */
+    async findPullRequestsByWork(input: {
+        workId: string;
+        userId: string;
+        state: 'open' | 'merged';
+        limit: number;
+        /** The Task being planned: its own pull request is not "other work". */
+        excludeTaskId?: string | null;
+    }): Promise<TaskPullRequestRow[]> {
+        if (!input.workId || !input.userId) return [];
+        const take = Math.min(
+            Math.max(Math.floor(input.limit) || 0, 1),
+            TASK_PULL_REQUESTS_BY_WORK_MAX,
+        );
+        const qb = this.repository
+            .createQueryBuilder('task')
+            .leftJoin(AgentRun, 'run', 'run.id = task.latestRunId AND run.userId = task.userId')
+            .select('task.id', 'taskId')
+            .addSelect('task.slug', 'slug')
+            .addSelect('task.title', 'title')
+            .addSelect('task.prNumber', 'prNumber')
+            .addSelect('task.prUrl', 'prUrl')
+            .addSelect('task.prState', 'prState')
+            .addSelect(`SUBSTR(run.summary, 1, ${TASK_PULL_REQUEST_SUMMARY_HEAD_CHARS})`, 'summary')
+            .where('task.workId = :workId', { workId: input.workId })
+            .andWhere('task.userId = :userId', { userId: input.userId })
+            .andWhere('task.prNumber IS NOT NULL');
+        if (input.state === 'open') {
+            qb.andWhere('task.branchState = :prOpen', { prOpen: 'pr-open' })
+                .andWhere(
+                    new Brackets((open) =>
+                        open
+                            .where('task.prState IS NULL')
+                            .orWhere('task.prState IN (:...openStates)', {
+                                openStates: ['open', 'draft'],
+                            }),
+                    ),
+                )
+                .orderBy('task.prNumber', 'DESC');
+        } else {
+            qb.andWhere(
+                new Brackets((merged) =>
+                    merged
+                        .where('task.prState = :mergedState', { mergedState: 'merged' })
+                        .orWhere('task.branchState = :mergedBranch', { mergedBranch: 'merged' }),
+                ),
+            ).orderBy('task.updatedAt', 'DESC');
+        }
+        qb.addOrderBy('task.id', 'DESC');
+        if (input.excludeTaskId) {
+            qb.andWhere('task.id != :excludeTaskId', { excludeTaskId: input.excludeTaskId });
+        }
+        const rows = await qb.limit(take).getRawMany<{
+            taskId: string;
+            slug: string | null;
+            title: string | null;
+            prNumber: number | string | null;
+            prUrl: string | null;
+            prState: string | null;
+            summary: string | null;
+        }>();
+        return rows.map((row) => ({
+            taskId: row.taskId,
+            slug: row.slug ?? null,
+            title: row.title ?? null,
+            prNumber: Number(row.prNumber),
+            prUrl: row.prUrl ?? null,
+            prState: row.prState ?? null,
+            summary: typeof row.summary === 'string' && row.summary ? row.summary : null,
+        }));
     }
 
     async findByUserIdFiltered(
