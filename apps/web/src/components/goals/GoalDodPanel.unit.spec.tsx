@@ -7,8 +7,12 @@ vi.mock('next-intl', () => ({
 }));
 
 const toastSuccess = vi.fn();
+const toastError = vi.fn();
 vi.mock('sonner', () => ({
-    toast: { success: (...args: unknown[]) => toastSuccess(...args), error: vi.fn() },
+    toast: {
+        success: (...args: unknown[]) => toastSuccess(...args),
+        error: (...args: unknown[]) => toastError(...args),
+    },
 }));
 
 vi.mock('@/i18n/navigation', () => ({
@@ -40,6 +44,7 @@ describe('GoalDodPanel — Markdown criteria', () => {
     beforeEach(() => {
         patchCriterion.mockReset();
         toastSuccess.mockReset();
+        toastError.mockReset();
     });
 
     it('renders a criterion as inline Markdown and its evidence as plain text', () => {
@@ -90,5 +95,34 @@ describe('GoalDodPanel — Markdown criteria', () => {
         fireEvent.click(screen.getByTestId('goal-dod-edit'));
         fireEvent.keyDown(screen.getByTestId('goal-dod-edit-input'), { key: 'Enter' });
         expect(patchCriterion).not.toHaveBeenCalled();
+    });
+    it.each(['done', 'waived'] as const)(
+        'offers no Edit on a %s criterion (its wording was signed off)',
+        (status) => {
+            render(<GoalDodPanel goal={mkGoal('Signed off', { status })} onGoalChange={vi.fn()} />);
+            expect(screen.queryByTestId('goal-dod-edit')).toBeNull();
+        },
+    );
+
+    it('keeps the typed text in the input when the save is refused', async () => {
+        patchCriterion.mockRejectedValueOnce(
+            new Error('Reopen this criterion before rewording it'),
+        );
+        const onGoalChange = vi.fn();
+        render(<GoalDodPanel goal={mkGoal('Pricing page ships')} onGoalChange={onGoalChange} />);
+
+        fireEvent.click(screen.getByTestId('goal-dod-edit'));
+        fireEvent.change(screen.getByTestId('goal-dod-edit-input'), {
+            target: { value: 'A better wording' },
+        });
+        fireEvent.keyDown(screen.getByTestId('goal-dod-edit-input'), { key: 'Enter' });
+
+        await waitFor(() =>
+            expect(toastError).toHaveBeenCalledWith('Reopen this criterion before rewording it'),
+        );
+        expect(onGoalChange).not.toHaveBeenCalled();
+        expect((screen.getByTestId('goal-dod-edit-input') as HTMLInputElement).value).toBe(
+            'A better wording',
+        );
     });
 });

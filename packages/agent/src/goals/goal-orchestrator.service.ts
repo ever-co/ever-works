@@ -533,6 +533,9 @@ export class GoalOrchestratorService {
      * Waiving requires no note by contract, but the note is what makes the
      * waiver auditable, so it is carried onto both the row and the log
      * line whenever supplied.
+     *
+     * Rewording (`text`) is for OPEN criteria only (400 otherwise, unless the
+     * same patch reopens it).
      */
     async patchDodCriterion(
         userId: string,
@@ -545,6 +548,20 @@ export class GoalOrchestratorService {
         const target = existing.find((entry) => entry.id === criterionId);
         if (!target) {
             throw new NotFoundException(`Criterion not found`);
+        }
+        // A done or waived criterion keeps the wording it was signed off with:
+        // rewording it in place would make the log read as if the NEW wording
+        // had been signed off. Reopening it in the same patch is allowed, and
+        // so is resending the same text (status, evidence and note are unaffected).
+        if (
+            patch.text !== undefined &&
+            patch.text.trim() !== target.text.trim() &&
+            target.status !== 'open' &&
+            patch.status !== 'open'
+        ) {
+            throw new BadRequestException(
+                `Reopen this criterion before rewording it: a ${target.status} criterion keeps the wording it was signed off with.`,
+            );
         }
 
         const beforeSignature = dodProgressSignature(existing);

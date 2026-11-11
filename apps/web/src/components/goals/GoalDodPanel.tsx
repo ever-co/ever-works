@@ -125,16 +125,29 @@ export function GoalDodPanel({ goal, onGoalChange }: GoalDodPanelProps) {
         setEditText(criterion.text);
     };
 
+    /**
+     * Only an OPEN criterion can be reworded (the API refuses the rest): a done
+     * or waived one keeps the wording it was signed off with. The input stays
+     * open with the typed text until the save succeeds, so a refusal loses
+     * nothing.
+     */
     const saveText = (criterion: GoalDoDCriterion) => {
         const text = editText.trim();
         if (!text || text.length > MAX_DOD_TEXT_CHARS) return;
-        setEditingId(null);
-        setEditText('');
-        if (text === criterion.text.trim()) return;
-        run(
-            () => patchGoalDodCriterionAction(goal.id, criterion.id, { text }),
-            'toasts.statusSaved',
-        );
+        if (text === criterion.text.trim()) {
+            setEditingId(null);
+            return;
+        }
+        startTransition(async () => {
+            try {
+                onGoalChange(await patchGoalDodCriterionAction(goal.id, criterion.id, { text }));
+                setEditingId(null);
+                setEditText('');
+                toast.success(t('toasts.statusSaved'));
+            } catch (err) {
+                toast.error(err instanceof Error ? err.message : t('toasts.error'));
+            }
+        });
     };
 
     const confirmWaive = (criterion: GoalDoDCriterion) => {
@@ -334,17 +347,19 @@ export function GoalDodPanel({ goal, onGoalChange }: GoalDodPanelProps) {
                                             {t('approve')}
                                         </Button>
                                     ) : null}
-                                    <Button
-                                        size="icon"
-                                        variant="ghost"
-                                        aria-label={t('edit')}
-                                        title={t('edit')}
-                                        disabled={pending}
-                                        onClick={() => startEdit(criterion)}
-                                        data-testid="goal-dod-edit"
-                                    >
-                                        <Pencil className="h-4 w-4" />
-                                    </Button>
+                                    {criterion.status === 'open' ? (
+                                        <Button
+                                            size="icon"
+                                            variant="ghost"
+                                            aria-label={t('edit')}
+                                            title={t('edit')}
+                                            disabled={pending}
+                                            onClick={() => startEdit(criterion)}
+                                            data-testid="goal-dod-edit"
+                                        >
+                                            <Pencil className="h-4 w-4" />
+                                        </Button>
+                                    ) : null}
                                     {criterion.status !== 'done' ? (
                                         <Button
                                             size="icon"
