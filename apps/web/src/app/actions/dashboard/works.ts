@@ -93,6 +93,9 @@ const workKindSchema = z.enum([
 // more: creating one forks or links somebody's repository, which the AI path
 // must never do without the member's explicit choice of mode and owner.
 const aiWorkKindSchema = workKindSchema.exclude(['repo', 'app']);
+
+/** Longest Create-Work prompt the form and the server action accept. */
+const AI_WORK_PROMPT_MAX_LENGTH = 4000;
 type AIWorkKind = z.infer<typeof aiWorkKindSchema>;
 
 const getCreateWorkSchema = async () => {
@@ -560,11 +563,16 @@ export async function createWorkWithAI(request: AIWorkOptions) {
     // digits, hyphens); when missing we fall back to slugify(name)
     // below.
     const aiPromptSchema = z.object({
+        // Checked BEFORE sanitizing: sanitizePrompt truncates to its limit, so a
+        // max() after it never fired and a long prompt (an Idea's, or `?prompt=`,
+        // which /works/new accepts up to 4000) lost its tail without a word.
+        // 4000 keeps the generation prompt (kind prefix included) under the
+        // API's 5000 (`CreateItemsGeneratorDto.prompt`).
         prompt: z
             .string()
             .min(10, t('prompt.minLength'))
-            .transform((val) => sanitizePrompt(val, 1000))
-            .pipe(z.string().max(1000, t('prompt.maxLength'))),
+            .max(AI_WORK_PROMPT_MAX_LENGTH, t('prompt.maxLength'))
+            .transform((val) => sanitizePrompt(val, AI_WORK_PROMPT_MAX_LENGTH)),
         name: z
             .string()
             .min(1, t('name.required'))

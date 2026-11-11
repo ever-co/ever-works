@@ -10946,7 +10946,7 @@
             },
             "prompt": {
                 "minLength": "프롬프트는 최소 10자 이상이어야 합니다",
-                "maxLength": "프롬프트는 1000자 미만이어야 합니다"
+                "maxLength": "프롬프트는 4000자 미만이어야 합니다"
             },
             "oauthRequired": "OAuth 연결이 필요합니다. 먼저 {provider} 계정을 연결하세요.",
             "githubRequired": "GitHub 연결이 필요합니다. 먼저 GitHub 계정을 연결하세요.",

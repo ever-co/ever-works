@@ -10946,7 +10946,7 @@
             },
             "prompt": {
                 "minLength": "プロンプトは少なくとも10文字である必要があります",
-                "maxLength": "プロンプトは1000文字未満でなければなりません"
+                "maxLength": "プロンプトは4000文字未満でなければなりません"
             },
             "oauthRequired": "OAuth接続が必要です。まず{provider}アカウントを接続してください。",
             "githubRequired": "GitHub接続が必要です。まずGitHubアカウントを接続してください。",

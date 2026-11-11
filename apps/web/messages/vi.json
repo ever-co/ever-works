@@ -10946,7 +10946,7 @@
             },
             "prompt": {
                 "minLength": "Prompt phải ít nhất 10 ký tự",
-                "maxLength": "Prompt phải dưới 1000 ký tự"
+                "maxLength": "Prompt phải dưới 4000 ký tự"
             },
             "oauthRequired": "Yêu cầu kết nối OAuth. Vui lòng kết nối tài khoản {provider} trước.",
             "githubRequired": "Yêu cầu kết nối GitHub. Vui lòng kết nối tài khoản GitHub trước.",

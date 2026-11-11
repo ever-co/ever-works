@@ -589,6 +589,16 @@ export class WorkLifecycleService {
             createWorkDto,
             user.id,
         );
+        // `k8s-apps-tier` ("Ever Works Apps (managed)") deploys App Works only
+        // (an App Work returned above, through its own create path). Stored on
+        // a website Work it let the create succeed and failed every deploy
+        // after (`NoDeployCredentialsError`, or the plugin's own refusal).
+        if (deployProvider && this.deployFacade.isHiddenProvider(deployProvider)) {
+            throw new BadRequestException({
+                status: 'error',
+                message: `Unsupported deploy provider: ${deployProvider}`,
+            });
+        }
 
         // Ever Works Deploy is capped per user. The check is a no-op when
         // the user isn't picking it; we still want a hard fail BEFORE the
@@ -1616,9 +1626,12 @@ export class WorkLifecycleService {
                     // persisting a provider that can never run.
                     assertNotRepositoryWork(work, 'choosing a deploy provider');
                     const availableProviders = this.deployFacade.getAvailableProviders();
-                    const isSupported = availableProviders.some(
-                        (p) => p.id === updateDto.deployProvider,
-                    );
+                    // A hidden provider (`k8s-apps-tier`) deploys App Works only;
+                    // an App Work's target is set through its own picker.
+                    const isSupported =
+                        availableProviders.some((p) => p.id === updateDto.deployProvider) &&
+                        (isAppWorkKind(work.kind) ||
+                            !this.deployFacade.isHiddenProvider(updateDto.deployProvider));
                     if (!isSupported) {
                         throw new BadRequestException({
                             status: 'error',

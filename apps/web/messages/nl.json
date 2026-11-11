@@ -10946,7 +10946,7 @@
             },
             "prompt": {
                 "minLength": "Prompt moet minstens 10 tekens bevatten",
-                "maxLength": "Prompt moet minder dan 1000 tekens bevatten"
+                "maxLength": "Prompt moet minder dan 4000 tekens bevatten"
             },
             "oauthRequired": "OAuth-verbinding vereist. Verbind eerst je {provider}-account.",
             "githubRequired": "GitHub-verbinding vereist. Verbind eerst je GitHub-account.",

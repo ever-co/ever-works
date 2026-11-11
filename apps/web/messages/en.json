@@ -13465,7 +13465,7 @@
             },
             "prompt": {
                 "minLength": "Prompt must be at least 10 characters",
-                "maxLength": "Prompt must be less than 1000 characters"
+                "maxLength": "Prompt must be less than 4000 characters"
             },
             "oauthRequired": "OAuth connection required. Please connect your {provider} account first.",
             "githubRequired": "GitHub connection required. Please connect your GitHub account first.",
