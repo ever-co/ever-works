@@ -322,6 +322,23 @@ describe('MissionTickService — Task output (APW-08 T35)', () => {
         },
     );
 
+    // As a private Goal's iterations (review 2026-10-17 F1): the Task carries text planned from
+    // the Mission's description, so only a private Mission asks for a private Task.
+    it.each([
+        ['private', true],
+        ['team', false],
+        ['organization', false],
+    ])(
+        'a Mission with visibility %s files with derivedFromPrivate %s',
+        async (visibility, derived) => {
+            const t = build({ visibility } as Partial<Mission>);
+            await t.service.runOnce('m1', 'u1');
+            expect(t.tasksService.create.mock.calls[0][1]).toMatchObject({
+                derivedFromPrivate: derived,
+            });
+        },
+    );
+
     // Review of #3061 — the per-run cap is resolved by `dispatchAgentRun` from the Task's Mission
     // for EVERY run of it, so the tick passes none of its own (pinned in the transition spec).
     it('leaves the Mission’s per-run budget to the dispatch path (FR-53)', async () => {

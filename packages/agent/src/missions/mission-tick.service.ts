@@ -1428,6 +1428,10 @@ export class MissionTickService {
                 status: requireApproval ? TaskStatus.BACKLOG : TaskStatus.TODO,
                 createdByType: 'user',
                 createdById: mission.userId,
+                // The Task carries text planned from the Mission's description, so a private
+                // Mission's Tasks are private too, as a private Goal's iterations are (review
+                // 2026-10-17 F1). Any other Mission's Tasks keep the insert-time default.
+                derivedFromPrivate: mission.visibility === 'private',
                 ...(output.agentId ? { agentId: output.agentId } : {}),
             };
             const task = scope

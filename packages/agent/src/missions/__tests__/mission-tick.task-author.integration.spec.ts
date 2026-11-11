@@ -1,5 +1,6 @@
 import { DataSource, type Repository } from 'typeorm';
 import { ENTITIES } from '../../database/_entities-inventory';
+import { RecordVisibilitySubscriber } from '../../database/record-visibility.subscriber';
 import { TaskRepository } from '../../database/repositories/task.repository';
 import { Mission, MissionStatus, MissionType } from '../../entities/mission.entity';
 import { Task } from '../../entities/task.entity';
@@ -13,6 +14,10 @@ import { MISSION_TASK_LABEL, MissionTickService } from '../mission-tick.service'
  * hid that from the compiler. The unit specs mock `TasksService.create`, so only a real insert
  * shows it: here the tick runs against the real `TasksService` and `TaskRepository` on an
  * in-memory SQLite database whose `tasks` table has the same NOT NULL author columns.
+ *
+ * The filed Task also takes the Mission's privacy: it carries text planned from the Mission's
+ * description, so a private Mission files private Tasks (as a private Goal files private
+ * iterations), and any other Mission's Tasks keep the insert-time default.
  */
 describe('Mission Task output files a Task the database accepts (real SQLite)', () => {
     let dataSource: DataSource;
@@ -29,6 +34,9 @@ describe('Mission Task output files a Task the database accepts (real SQLite)', 
             type: 'better-sqlite3',
             database: ':memory:',
             entities: ENTITIES,
+            // Record visibility (EW-P1-3): the insert-time default, registered exactly as
+            // `databaseConfig()` registers it, so org rows start `team` / `organization`.
+            subscribers: [RecordVisibilitySubscriber],
             synchronize: true,
         });
         await dataSource.initialize();
@@ -46,7 +54,10 @@ describe('Mission Task output files a Task the database accepts (real SQLite)', 
         await missionRows.clear();
     });
 
-    async function tick(scope: { tenantId: string | null; organizationId: string | null }) {
+    async function tick(
+        scope: { tenantId: string | null; organizationId: string | null },
+        missionOver: Partial<Mission> = {},
+    ) {
         const mission = await missionRows.save(
             missionRows.create({
                 userId: OWNER,
@@ -56,6 +67,7 @@ describe('Mission Task output files a Task the database accepts (real SQLite)', 
                 status: MissionStatus.ACTIVE,
                 outputMode: 'tasks',
                 ...scope,
+                ...missionOver,
             }),
         );
         // The Work the Mission improves, as both services read it.
@@ -153,5 +165,59 @@ describe('Mission Task output files a Task the database accepts (real SQLite)', 
             { agentId: null },
             scope.organizationId ? scope : undefined,
         );
+    });
+
+    describe("the filed Task takes the Mission's privacy", () => {
+        const ORG_SCOPE = { tenantId: TENANT, organizationId: ORG };
+
+        it('an Organization Mission made private files a private Task, not a team / organization one', async () => {
+            const { mission, outcome } = await tick(ORG_SCOPE, {
+                visibility: 'private',
+                visibilityExplicit: true,
+            });
+            expect(mission.visibility).toBe('private');
+
+            expect(outcome).toMatchObject({ outcome: 'tasks-filed', tasksFiled: 1 });
+            const [row] = await taskRows.find();
+            expect(row).toMatchObject({
+                missionId: mission.id,
+                organizationId: ORG,
+                visibility: 'private',
+                visibilityExplicit: true,
+            });
+        });
+
+        it('an Organization Mission shared with the Organization keeps the insert-time default', async () => {
+            const { mission, outcome } = await tick(ORG_SCOPE);
+            // The same default the Task gets: an org row with no Team is `organization`.
+            expect(mission.visibility).toBe('organization');
+
+            expect(outcome).toMatchObject({ outcome: 'tasks-filed', tasksFiled: 1 });
+            const [row] = await taskRows.find();
+            expect(row).toMatchObject({
+                missionId: mission.id,
+                organizationId: ORG,
+                visibility: 'organization',
+                visibilityExplicit: false,
+            });
+        });
+
+        it('an Organization Mission shared with a Team keeps the insert-time default too', async () => {
+            const { mission } = await tick(ORG_SCOPE, { visibility: 'team' });
+            expect(mission.visibility).toBe('team');
+
+            const [row] = await taskRows.find();
+            // Only `private` is inherited. The Task is filed on no Team, so the insert-time
+            // default (`organization`) applies, exactly as before this change.
+            expect(row).toMatchObject({ visibility: 'organization', visibilityExplicit: false });
+        });
+
+        it('a personal Mission (private by default) files a private Task', async () => {
+            const { mission } = await tick({ tenantId: null, organizationId: null });
+            expect(mission.visibility).toBe('private');
+
+            const [row] = await taskRows.find();
+            expect(row).toMatchObject({ visibility: 'private', visibilityExplicit: true });
+        });
     });
 });
