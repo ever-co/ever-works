@@ -399,6 +399,48 @@ describe('agent/dto submodule', () => {
         });
     });
 
+    describe('KbDocumentQueryDto.statuses / tags (repeatable query keys)', () => {
+        const query = (plain: Record<string, unknown>) =>
+            plainToInstance(KbDocumentQueryDto, plain) as KbDocumentQueryDto;
+
+        it('reads a repeated key, a comma-joined value and a single value as a list', async () => {
+            expect(query({ statuses: ['draft', 'active'] }).statuses).toEqual(['draft', 'active']);
+            expect(query({ statuses: 'draft, active' }).statuses).toEqual(['draft', 'active']);
+            expect(query({ statuses: 'archived' }).statuses).toEqual(['archived']);
+            expect(query({ tags: ['gdpr', 'legal'] }).tags).toEqual(['gdpr', 'legal']);
+            expect(query({ tags: 'gdpr,legal' }).tags).toEqual(['gdpr', 'legal']);
+            expect(query({ tags: 'gdpr' }).tags).toEqual(['gdpr']);
+            await expectValid(query({ statuses: ['draft', 'active'], tags: 'gdpr,legal' }));
+        });
+
+        it('keeps the single status and tag unchanged', async () => {
+            const dto = query({ status: 'draft', tag: 'gdpr' });
+            expect(dto.status).toBe('draft');
+            expect(dto.tag).toBe('gdpr');
+            expect(dto.statuses).toBeUndefined();
+            expect(dto.tags).toBeUndefined();
+            await expectValid(dto);
+        });
+
+        it('refuses a status that is not one', async () => {
+            const errs = await expectValidationErrors(query({ statuses: ['draft', 'deleted'] }));
+            expect(errs).toContain('isIn');
+        });
+
+        it('refuses a tag longer than a tag may be', async () => {
+            const errs = await expectValidationErrors(query({ tags: ['ok', 'x'.repeat(65)] }));
+            expect(errs).toContain('maxLength');
+        });
+
+        it('takes at most 10 values per list', async () => {
+            const tags = Array.from({ length: 11 }, (_, i) => `t${i}`);
+            expect(await expectValidationErrors(query({ tags }))).toContain('arrayMaxSize');
+            await expectValid(query({ tags: tags.slice(0, 10) }));
+            const statuses = Array.from({ length: 11 }, () => 'draft');
+            expect(await expectValidationErrors(query({ statuses }))).toContain('arrayMaxSize');
+        });
+    });
+
     describe('UpdateWorkDto', () => {
         it('accepts an empty payload (all fields optional)', async () => {
             const dto = plainToInstance(UpdateWorkDto, {});

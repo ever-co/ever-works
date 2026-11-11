@@ -247,6 +247,99 @@ describe('KnowledgeBaseService — memory facets + retrieval log', () => {
         expect(result.total).toBe(1);
     });
 
+    it('pushes several statuses and several tags into the repository query, on both paths', async () => {
+        const opts = {
+            statuses: [KbDocumentStatus.DRAFT, KbDocumentStatus.ACTIVE],
+            tags: ['gdpr', 'legal'],
+        };
+
+        await service.listDocuments(WORK_ID, USER_ID, opts);
+        await service.listDocuments(WORK_ID, USER_ID, { ...opts, q: 'retention' });
+
+        expect(docRepo.list).toHaveBeenCalledTimes(2);
+        for (const [call] of docRepo.list.mock.calls) {
+            expect(call).toEqual(
+                expect.objectContaining({
+                    statuses: [KbDocumentStatus.DRAFT, KbDocumentStatus.ACTIVE],
+                    tags: ['gdpr', 'legal'],
+                }),
+            );
+        }
+    });
+
+    it('narrows status + statuses to the statuses in both, and answers nothing when they share none', async () => {
+        await service.listDocuments(WORK_ID, USER_ID, {
+            status: KbDocumentStatus.DRAFT,
+            statuses: [KbDocumentStatus.DRAFT, KbDocumentStatus.ACTIVE],
+        });
+        expect(docRepo.list).toHaveBeenCalledWith(
+            expect.objectContaining({ statuses: [KbDocumentStatus.DRAFT] }),
+        );
+
+        docRepo.list.mockClear();
+        const result = await service.listDocuments(WORK_ID, USER_ID, {
+            status: KbDocumentStatus.ARCHIVED,
+            statuses: [KbDocumentStatus.DRAFT, KbDocumentStatus.ACTIVE],
+        });
+        expect(result).toEqual({ items: [], total: 0 });
+        expect(docRepo.list).not.toHaveBeenCalled();
+    });
+
+    it('re-applies several statuses (any) and several tags (all) to documents the semantic leg adds', async () => {
+        const docs = [
+            buildDocument({ id: 'active-both', tags: ['gdpr', 'legal'] }),
+            buildDocument({
+                id: 'draft-both',
+                status: KbDocumentStatus.DRAFT,
+                tags: ['legal', 'gdpr'],
+            }),
+            buildDocument({
+                id: 'archived-both',
+                status: KbDocumentStatus.ARCHIVED,
+                tags: ['gdpr', 'legal'],
+            }),
+            buildDocument({ id: 'active-gdpr-only', tags: ['gdpr'] }),
+            buildDocument({ id: 'active-untagged', tags: null }),
+        ];
+        const byId = new Map(docs.map((d) => [d.id, d]));
+        docRepo.list.mockResolvedValue({ items: [], total: 0 });
+        docRepo.findById.mockImplementation(async (_workId, id) => byId.get(id) ?? null);
+        jest.spyOn(service, 'semanticSearch').mockResolvedValue(
+            docs.map((d) => ({ documentId: d.id })) as never,
+        );
+
+        const result = await service.listDocuments(WORK_ID, USER_ID, {
+            q: 'retention',
+            statuses: [KbDocumentStatus.ACTIVE, KbDocumentStatus.DRAFT],
+            tags: ['gdpr', 'legal'],
+        });
+
+        expect(result.items.map((d) => d.id).sort()).toEqual(['active-both', 'draft-both']);
+        expect(result.total).toBe(2);
+    });
+
+    it('re-applies the single tag and the tags list together (all of them)', async () => {
+        const docs = [
+            buildDocument({ id: 'both', tags: ['gdpr', 'legal'] }),
+            buildDocument({ id: 'legal-only', tags: ['legal'] }),
+            buildDocument({ id: 'gdpr-only', tags: ['gdpr'] }),
+        ];
+        const byId = new Map(docs.map((d) => [d.id, d]));
+        docRepo.list.mockResolvedValue({ items: [], total: 0 });
+        docRepo.findById.mockImplementation(async (_workId, id) => byId.get(id) ?? null);
+        jest.spyOn(service, 'semanticSearch').mockResolvedValue(
+            docs.map((d) => ({ documentId: d.id })) as never,
+        );
+
+        const result = await service.listDocuments(WORK_ID, USER_ID, {
+            q: 'retention',
+            tag: 'gdpr',
+            tags: ['legal'],
+        });
+
+        expect(result.items.map((d) => d.id)).toEqual(['both']);
+    });
+
     it('leaves semantic hits alone when no such chip is set', async () => {
         const docs = [
             buildDocument({ id: 'a', status: KbDocumentStatus.DRAFT }),

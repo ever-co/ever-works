@@ -15,13 +15,12 @@ import type { KbDocumentDto, KbSearchHit, KbSearchResult } from '@ever-works/con
  *   - `searchBody=true` (sent by the workbench palette) extends the query to
  *     document bodies; without it the search stays on title + description, so
  *     the pickers' suggestions do not change;
- *   - classes go upstream as the repeatable `classes` facet; a single status
- *     or tag goes upstream as `status` / `tag` (the API takes one), and with
- *     more than one the proxy keeps the documents matching any status and all
- *     tags itself — among the first 50 matches only (see the known limit in
- *     `upstreamKbSearchParams`); `locked=true` and a 2–8 character `language`
- *     go upstream;
- *   - the documents are mapped to `KbSearchHit`s.
+ *   - classes go upstream as the repeatable `classes` facet, several statuses
+ *     as `statuses` (any of them) and several tags as `tags` (all of them), so
+ *     the API filters, pages and counts; one status or tag still goes as
+ *     `status` / `tag`; `locked=true` and a 2–8 character `language` go
+ *     upstream;
+ *   - the documents are mapped to `KbSearchHit`s; `total` is the API's.
  */
 
 export const KB_SEARCH_MAX_LIMIT = 50;
@@ -68,43 +67,26 @@ export function upstreamKbSearchParams(request: KbSearchRequest): URLSearchParam
     const upstream = new URLSearchParams();
     upstream.set('q', request.q);
     if (request.searchBody) upstream.set('searchBody', 'true');
-    // Filtered client-side below when more than one status/tag is chosen, so
-    // fetch the maximum the proxy allows to keep enough rows after filtering.
-    //
-    // KNOWN LIMIT: with several statuses or tags only the first
-    // KB_SEARCH_MAX_LIMIT (50) matches of `q` + the upstream filters are
-    // looked at; a matching document ranked past them is not shown. The API
-    // cannot do better cheaply today: `KbDocumentQueryDto` takes ONE `status`
-    // and ONE `tag`, and paging does not help on the `q` path —
-    // `KnowledgeBaseService.listDocuments` fetches 2×limit candidates from
-    // offset 0 and slices, so an offset past 2×limit answers empty. The fix
-    // is a repeatable `statuses` (the repository already filters
-    // `status IN (…)`) and an all-of `tags` filter upstream.
-    const filtersLocally = request.statuses.length > 1 || request.tags.length > 1;
-    upstream.set('limit', String(filtersLocally ? KB_SEARCH_MAX_LIMIT : request.limit));
+    upstream.set('limit', String(request.limit));
     for (const cls of request.classes) upstream.append('classes', cls);
+    // The API filters several statuses (any) and several tags (all) itself,
+    // so every match is found, not only those in one fetched page. A single
+    // value keeps the original `status` / `tag` key.
     if (request.statuses.length === 1) upstream.set('status', request.statuses[0]!);
-    if (request.tags.length >= 1) upstream.set('tag', request.tags[0]!);
+    else for (const status of request.statuses) upstream.append('statuses', status);
+    if (request.tags.length === 1) upstream.set('tag', request.tags[0]!);
+    else for (const tag of request.tags) upstream.append('tags', tag);
     if (request.locked) upstream.set('locked', 'true');
     if (request.language) upstream.set('language', request.language);
     return upstream;
 }
 
-/** The list answer as palette hits, with the filters the API cannot apply. */
+/** The list answer as palette hits, next to the unchanged `items` + `total`. */
 export function toKbSearchResult(
     request: KbSearchRequest,
     upstream: { items?: KbDocumentDto[]; total?: number } | null,
 ): KbSearchResult & { items: KbDocumentDto[] } {
-    let items = upstream?.items ?? [];
-    if (request.statuses.length > 1) {
-        const statuses = new Set(request.statuses);
-        items = items.filter((doc) => statuses.has(doc.status));
-    }
-    if (request.tags.length > 1) {
-        items = items.filter((doc) => request.tags.every((tag) => doc.tags?.includes(tag)));
-    }
-    const filteredLocally = request.statuses.length > 1 || request.tags.length > 1;
-    items = items.slice(0, request.limit);
+    const items = (upstream?.items ?? []).slice(0, request.limit);
     const hits: KbSearchHit[] = items.map((doc) => ({
         documentId: doc.id,
         path: doc.path,
@@ -113,11 +95,5 @@ export function toKbSearchResult(
         snippet: doc.description ?? '',
         score: 0,
     }));
-    return {
-        items,
-        hits,
-        // Filtered here, `total` counts the matches within the fetched page
-        // (see the known limit in `upstreamKbSearchParams`), not every match.
-        total: filteredLocally ? items.length : (upstream?.total ?? items.length),
-    };
+    return { items, hits, total: upstream?.total ?? items.length };
 }
