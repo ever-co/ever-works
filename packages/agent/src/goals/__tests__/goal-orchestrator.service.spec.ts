@@ -1765,7 +1765,7 @@ describe('GoalOrchestratorService — cold start on a Work that names its defaul
     }
 
     it('routes the first iteration to the Work default Agent, not round-robin over the scope', async () => {
-        const { service, agents, transitions, events } = onWork('agent-docs', [
+        const { service, agents, transitions, events, tasksService } = onWork('agent-docs', [
             agentRow('agent-docs'),
         ]);
 
@@ -1775,6 +1775,14 @@ describe('GoalOrchestratorService — cold start on a Work that names its defaul
         expect(result.reasonCode).toBe('routed-work-default');
         expect(result.agentId).toBe('agent-docs');
         expect(agents.findByUserIdScoped).not.toHaveBeenCalled();
+        // The iteration Task records the default as ITS OWN Agent — which is why Run must keep
+        // resolving a Task whose own Agent is the Work default (review of #3159, finding 1;
+        // pinned in `work-default-agent-resolution.spec.ts`).
+        expect(tasksService.create).toHaveBeenCalledWith(
+            'u1',
+            expect.objectContaining({ goalId: 'g1', workId: 'w-docs', agentId: 'agent-docs' }),
+            everScope,
+        );
         expect(transitions.dispatchAgentRun).toHaveBeenCalledWith(
             expect.objectContaining({ workId: 'w-docs' }),
             'agent-docs',

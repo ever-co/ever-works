@@ -1918,7 +1918,7 @@ export class TasksService {
      *     resolves); `'unreadable'` when it could not be read;
      *   - `ownCount` — how many candidates the Task itself names (assignees + its `agentId`);
      *   - `ruleCandidates` — the candidates the older rule counts: every one EXCEPT a Work
-     *     default that is not also one of the Work's Work-scoped Agents.
+     *     default that is neither the Task's own Agent nor one of the Work's Work-scoped Agents.
      */
     private async gatherRunCandidates(
         userId: string,
@@ -2008,8 +2008,15 @@ export class TasksService {
         const defaultId = workDefault && workDefault !== 'unreadable' ? workDefault.id : null;
         return {
             candidates,
+            // Leave the default out ONLY where it entered as the Work default. When it is also
+            // the Task's own Agent (an assignee or its `agentId` — `push` dedupes by id, so it
+            // keeps that source) it is one of the Task's candidates, and dropping it would let
+            // Run start a Work-scoped Agent the Task never named (review of #3159).
             ruleCandidates: candidates.filter(
-                (candidate) => candidate.id !== defaultId || workScopedIds.has(candidate.id),
+                (candidate) =>
+                    candidate.id !== defaultId ||
+                    candidate.source !== 'work-default' ||
+                    workScopedIds.has(candidate.id),
             ),
             ownCount,
             workDefault,

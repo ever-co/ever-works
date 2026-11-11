@@ -84,7 +84,7 @@ function build(opts: {
     agents: ReturnType<typeof agentRepo>;
     works?: ReturnType<typeof workRepo>;
     task?: Task;
-    assigneeIds?: string[];
+    assigneeIds?: readonly string[];
 }) {
     const tasks = { findByIdAndUser: jest.fn().mockResolvedValue(opts.task ?? makeTask()) };
     const assignees = {
@@ -255,6 +255,75 @@ describe('TasksService.runTask — with a Work default Agent', () => {
         expect((error as BadRequestException).getResponse()).toMatchObject({
             code: RUN_AGENT_AMBIGUOUS,
         });
+    });
+
+    // Review of #3159, finding 1: the Task's own Agent (an assignee, or its `agentId`) IS the
+    // Work default — the shared Agent this feature exists for, picked on the Task page, or
+    // recorded by a Goal's first iteration. It must resolve exactly as it did before defaults
+    // existed: never dropped as "only the default", never swapped for a Work-scoped Agent.
+    const ownIsDefault = [
+        ['an Agent assignee', { assigneeIds: [shared.id] }],
+        ["the Task's own agentId", { task: makeTask({ agentId: shared.id }) }],
+    ] as const;
+
+    it.each(ownIsDefault)(
+        'runs the Task’s own Agent when %s is also the Work default (no Work-scoped Agent)',
+        async (_label, own) => {
+            const { svc, transitions } = build({
+                agents: agentRepo([shared]),
+                works: workRepo(shared.id),
+                ...own,
+            });
+            await expect(svc.runTask('u1', 't1', {}, SCOPE)).resolves.toMatchObject({
+                agentId: shared.id,
+            });
+            expect(transitions.dispatchAgentRun).toHaveBeenCalledWith(
+                expect.objectContaining({ id: 't1' }),
+                shared.id,
+                expect.anything(),
+            );
+        },
+    );
+
+    it.each(ownIsDefault)(
+        'never starts the Work-scoped Agent instead when %s is also the Work default: ambiguous, as before',
+        async (_label, own) => {
+            const { svc, transitions } = build({
+                agents: agentRepo([shared, pinned]),
+                works: workRepo(shared.id),
+                ...own,
+            });
+            const error = await svc.runTask('u1', 't1', {}, SCOPE).catch((e: unknown) => e);
+            expect(error).toBeInstanceOf(BadRequestException);
+            const response = (error as BadRequestException).getResponse() as {
+                code: string;
+                candidates: Array<{ id: string }>;
+            };
+            expect(response.code).toBe(RUN_AGENT_AMBIGUOUS);
+            expect(response.candidates.map((candidate) => candidate.id).sort()).toEqual(
+                [pinned.id, shared.id].sort(),
+            );
+            expect(transitions.dispatchAgentRun).not.toHaveBeenCalled();
+        },
+    );
+
+    it('a Goal’s first iteration — filed with the Work default as its agentId — re-run by hand runs that Agent', async () => {
+        // What `GoalOrchestratorService` files on a `routed-work-default` cold start: the
+        // iteration Task carries `goalId` and `agentId: <the routed Agent>`.
+        const iteration = makeTask({ id: 't1', goalId: 'g1', agentId: shared.id } as Partial<Task>);
+        const { svc, transitions } = build({
+            agents: agentRepo([shared]),
+            works: workRepo(shared.id),
+            task: iteration,
+        });
+        await expect(svc.runTask('u1', 't1', {}, SCOPE)).resolves.toMatchObject({
+            agentId: shared.id,
+        });
+        expect(transitions.dispatchAgentRun).toHaveBeenCalledWith(
+            expect.objectContaining({ goalId: 'g1' }),
+            shared.id,
+            expect.anything(),
+        );
     });
 
     it('a stale or cross-scope default falls back to the Work’s only Agent', async () => {
