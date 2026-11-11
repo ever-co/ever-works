@@ -8,6 +8,7 @@ import { cn } from '@/lib/utils/cn';
 import { StatusPill } from '@/components/work-agent';
 import type { Mission } from '@/lib/api/missions';
 import { ChatAboutButton } from '@/components/ai/conversations/ConversationEntryButtons';
+import { markdownExcerpt } from '@/lib/markdown/markdown-excerpt';
 
 /**
  * Phase 6 PR Q — MissionCard.
@@ -57,7 +58,7 @@ export function MissionCard({ mission }: { mission: Mission }) {
                             {mission.title}
                         </h3>
                         <p className="mt-1 text-xs text-text-muted dark:text-text-muted-dark line-clamp-2">
-                            {mission.description}
+                            {markdownExcerpt(mission.description)}
                         </p>
                     </div>
                     <ChevronRight className="w-4 h-4 text-text-muted dark:text-text-muted-dark shrink-0 mt-1 opacity-0 group-hover:opacity-100 transition-opacity" />

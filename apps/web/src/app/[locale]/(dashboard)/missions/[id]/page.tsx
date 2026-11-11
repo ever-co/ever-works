@@ -5,6 +5,7 @@ import { missionsAPI } from '@/lib/api/missions';
 import { workProposalsAPI } from '@/lib/api/work-proposals';
 import { workAPI } from '@/lib/api/work';
 import { goalsAPI } from '@/lib/api/goals';
+import { recordVisibilityAPI } from '@/lib/api/record-visibility';
 import { MissionDetailClient } from '@/components/missions';
 
 /**
@@ -70,6 +71,7 @@ export default async function MissionDetailPage({ params }: { params: Params }) 
         worksResponse,
         goalLinks,
         attachableGoals,
+        visibility,
     ] = await Promise.all([
         workProposalsAPI
             .list(['pending', 'queued', 'building', 'failed', 'accepted', 'dismissed'], {
@@ -92,6 +94,9 @@ export default async function MissionDetailPage({ params }: { params: Params }) 
         workAPI.getAll({ limit: 100 }).catch(() => null),
         missionsAPI.listGoals(id).catch(() => []),
         goalsAPI.list({ limit: 100 }).catch(() => []),
+        // Who may change this Mission (the owner): gates the Edit action.
+        // Unknown (a flaky endpoint) keeps the action, the API still refuses.
+        recordVisibilityAPI.get('mission', id).catch(() => null),
     ]);
 
     return (
@@ -114,6 +119,7 @@ export default async function MissionDetailPage({ params }: { params: Params }) 
                 title: g.title,
                 status: g.status,
             }))}
+            canEdit={visibility ? visibility.canEdit : true}
         />
     );
 }

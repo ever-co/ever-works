@@ -19,6 +19,7 @@ import {
     type LucideIcon,
 } from 'lucide-react';
 import { ShowDateTime } from '@/components/ui/show-datetime';
+import { markdownExcerpt } from '@/lib/markdown/markdown-excerpt';
 
 const MAX_VISIBLE = 15;
 
@@ -169,7 +170,7 @@ function KanbanCard({ work, col }: KanbanCardProps) {
             {/* Description */}
             {work.description ? (
                 <p className="text-[11px] leading-4.5 text-text-secondary dark:text-text-secondary-dark line-clamp-2">
-                    {work.description}
+                    {markdownExcerpt(work.description)}
                 </p>
             ) : (
                 <p className="text-[11px] text-text-muted dark:text-text-muted-dark italic">

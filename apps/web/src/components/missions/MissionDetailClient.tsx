@@ -12,6 +12,7 @@ import {
     GitFork,
     Lightbulb,
     Pause,
+    Pencil,
     Play,
     PlayCircle,
     Radio,
@@ -57,6 +58,8 @@ import { MissionTasksOnWorksPanel } from './MissionTasksOnWorksPanel';
 import { MissionGoalsPanel, type AttachableGoalOption } from './MissionGoalsPanel';
 import { BudgetSummaryCard } from '@/components/budgets';
 import { EntityAttachmentsSection } from '@/components/common/EntityAttachmentsSection';
+import { CollapsibleMarkdown } from '@/components/markdown/CollapsibleMarkdown';
+import { MissionEditDialog } from './MissionEditDialog';
 import { MissionTeamPanel } from './MissionTeamPanel';
 import {
     Dialog,
@@ -87,6 +90,12 @@ export interface MissionDetailClientProps {
     goalLinks?: ReadonlyArray<MissionGoalLinkDto>;
     /** Goals & Metrics PR-8 — the caller's Goals, feeding the "Attach Goal" select. */
     attachableGoals?: ReadonlyArray<AttachableGoalOption>;
+    /**
+     * Whether the viewer may change this Mission (the owner — the API's
+     * record-visibility answer). Gates the Edit action; defaults to `true`
+     * so the API stays the one that refuses when the answer is unknown.
+     */
+    canEdit?: boolean;
 }
 
 const RUNNABLE_STATUSES = new Set(['active', 'paused']);
@@ -189,6 +198,7 @@ export function MissionDetailClient({
     attachableWorks = [],
     goalLinks = [],
     attachableGoals = [],
+    canEdit = true,
 }: MissionDetailClientProps) {
     const t = useTranslations('dashboard.missionDetail');
     const router = useRouter();
@@ -200,6 +210,7 @@ export function MissionDetailClient({
     const [pendingDelete, startDelete] = useTransition();
     const [pendingClone, startClone] = useTransition();
 
+    const [editOpen, setEditOpen] = useState(false);
     const [cloneOpen, setCloneOpen] = useState(false);
     const [cloneTitleDraft, setCloneTitleDraft] = useState('');
 
@@ -424,6 +435,17 @@ export function MissionDetailClient({
                                 {t('actions.runNow')}
                             </button>
                         )}
+                        {canEdit && (
+                            <button
+                                type="button"
+                                data-testid="mission-edit-button"
+                                onClick={() => setEditOpen(true)}
+                                className={cn(btn, 'shrink-0')}
+                            >
+                                <Pencil className="w-3.5 h-3.5" />
+                                {t('actions.edit')}
+                            </button>
+                        )}
                         <button
                             type="button"
                             onClick={() => setCloneOpen(true)}
@@ -543,10 +565,15 @@ export function MissionDetailClient({
                                 </span>
                             )}
                         </div>
+                        {/* Markdown, clamped with "Show more" when long, so a
+                            structured description never pushes the panels
+                            below off the screen. */}
                         {mission.description && (
-                            <p className="mt-2.5 text-sm text-text-secondary dark:text-text-secondary-dark max-w-3xl leading-relaxed">
-                                {mission.description}
-                            </p>
+                            <CollapsibleMarkdown
+                                content={mission.description}
+                                className="mt-2.5 max-w-3xl"
+                                data-testid="mission-description"
+                            />
                         )}
                     </div>
                 </div>
@@ -806,6 +833,16 @@ export function MissionDetailClient({
                     </section>
                 </aside>
             </div>
+
+            {/* ── Edit modal (title + Markdown description) ──────────────── */}
+            {canEdit && (
+                <MissionEditDialog
+                    mission={mission}
+                    open={editOpen}
+                    onOpenChange={setEditOpen}
+                    onSaved={setMission}
+                />
+            )}
 
             {/* ── Clone modal ──────────────────────────────────────────────── */}
             <Dialog open={cloneOpen} onOpenChange={setCloneOpen}>

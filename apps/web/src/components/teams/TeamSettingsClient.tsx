@@ -6,11 +6,14 @@ import { Save, Settings, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Textarea } from '@/components/ui/textarea';
+import { MarkdownEditor } from '@/components/markdown/MarkdownEditor';
 import { useRouter } from '@/i18n/navigation';
 import { ROUTES } from '@/lib/constants';
 import { deleteTeamAction, updateTeamAction } from '@/app/actions/dashboard/teams';
 import type { Team, TeamDetail, TeamsOrganization, UpdateTeamInput } from '@/lib/api/teams';
+
+/** `UpdateTeamDto.description` (apps/api/src/teams/dto). */
+const TEAM_DESCRIPTION_MAX_LENGTH = 4000;
 
 const SELECT_CLASSES =
     'w-full rounded-md border border-border/60 dark:border-border-dark/60 bg-card dark:bg-card-primary-dark px-3 h-9 text-sm text-text dark:text-text-dark';
@@ -165,12 +168,15 @@ export function TeamSettingsClient({ org, team, teams, agents }: TeamSettingsCli
                     </div>
                 </div>
 
-                <Textarea
+                {/* Markdown with Write / Preview; the Team page renders it. */}
+                <MarkdownEditor
+                    id="team-settings-description"
                     label={t('settings.descriptionLabel')}
-                    variant="form"
                     value={description}
-                    onChange={(event) => setDescription(event.target.value)}
-                    rows={3}
+                    onChange={setDescription}
+                    maxLength={TEAM_DESCRIPTION_MAX_LENGTH}
+                    rows={6}
+                    data-testid="team-settings-description"
                 />
 
                 <div>

@@ -8,6 +8,8 @@ import { Button } from '@/components/ui/button';
 import { Link, useRouter } from '@/i18n/navigation';
 import { ROUTES } from '@/lib/constants';
 import { cn } from '@/lib/utils/cn';
+import { CollapsibleMarkdown } from '@/components/markdown/CollapsibleMarkdown';
+import { MarkdownEditor } from '@/components/markdown/MarkdownEditor';
 // Priority dot/tone — shared so the detail rail and the New Task form
 // picker cannot drift apart. Labels stay in the `tasksPage.priority`
 // i18n namespace.
@@ -506,19 +508,21 @@ export function TaskDetailClient({
                         </div>
                         {editingDesc ? (
                             <div className="space-y-2">
-                                <textarea
+                                {/* Write / Preview, rendered by the same Markdown
+                                    renderer as the read view below. */}
+                                <MarkdownEditor
+                                    id={`task-${task.id}-description`}
+                                    label={t('description')}
+                                    hideLabel
                                     value={descDraft}
-                                    onChange={(e) => setDescDraft(e.target.value)}
-                                    rows={6}
+                                    onChange={setDescDraft}
+                                    rows={10}
                                     autoFocus
+                                    disabled={pendingDesc}
                                     placeholder={t('descriptionPlaceholder')}
-                                    className="w-full rounded-md border border-border/60 dark:border-border-dark/60 bg-card dark:bg-card-primary-dark p-3 text-sm leading-relaxed text-text dark:text-text-dark"
+                                    error={descError}
+                                    data-testid="task-description-editor"
                                 />
-                                {descError && (
-                                    <p className="text-xs text-danger" role="alert">
-                                        {descError}
-                                    </p>
-                                )}
                                 <div className="flex justify-end gap-2">
                                     <Button
                                         type="button"
@@ -543,9 +547,11 @@ export function TaskDetailClient({
                                 </div>
                             </div>
                         ) : description ? (
-                            <p className="text-sm leading-relaxed text-text-secondary dark:text-text-secondary-dark whitespace-pre-wrap">
-                                {description}
-                            </p>
+                            <CollapsibleMarkdown
+                                content={description}
+                                collapsedHeight={320}
+                                data-testid="task-description"
+                            />
                         ) : (
                             <p className="text-sm text-text-muted italic">{t('noDescription')}</p>
                         )}

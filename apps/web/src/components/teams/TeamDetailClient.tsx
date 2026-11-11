@@ -25,6 +25,8 @@ import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Link, useRouter } from '@/i18n/navigation';
 import { ROUTES } from '@/lib/constants';
+import { CollapsibleMarkdown } from '@/components/markdown/CollapsibleMarkdown';
+import { markdownExcerpt } from '@/lib/markdown/markdown-excerpt';
 import { addTeamMemberAction, removeTeamMemberAction } from '@/app/actions/dashboard/teams';
 import { TeamResourcesSection, type ResourceOption } from '@/components/teams/TeamResourcesSection';
 import type {
@@ -212,9 +214,11 @@ export function TeamDetailClient({
                             {team.name}
                         </h1>
                         {team.description ? (
-                            <p className="text-sm text-text-secondary dark:text-text-secondary-dark mt-1 max-w-2xl">
-                                {team.description}
-                            </p>
+                            <CollapsibleMarkdown
+                                content={team.description}
+                                className="mt-1 max-w-2xl"
+                                data-testid="team-description"
+                            />
                         ) : null}
                         <div className="flex flex-wrap items-center gap-2 mt-2 text-xs text-text-secondary dark:text-text-secondary-dark">
                             {manager ? (
@@ -437,7 +441,7 @@ export function TeamDetailClient({
                                         </div>
                                         {subTeam.description ? (
                                             <div className="text-xs text-text-muted dark:text-text-muted-dark line-clamp-2 mt-0.5">
-                                                {subTeam.description}
+                                                {markdownExcerpt(subTeam.description)}
                                             </div>
                                         ) : null}
                                     </div>
