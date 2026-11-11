@@ -73,28 +73,31 @@ describe('expectLinearTime under a stall', () => {
 });
 
 describe('relativeBudget', () => {
+    // Wall-clock spins overshoot when the process is descheduled, so every
+    // margin below is wide enough for a busy runner to leave the verdict alone.
     it('keeps work over budget when one reference timing of its retry is slow', () => {
         let references = 0;
         // 10 ms a reference; the 4th timing (the first one of the first retry,
-        // after three to calibrate) is slowed to 40 ms by a burst of load. Judged
-        // against that one timing alone, the work would pass (100 < 4 × 40).
-        const budget = relativeBudget(() => stall(++references === 4 ? 40 : 10));
+        // after three to calibrate) is slowed to 150 ms by a burst of load. Judged
+        // against that one timing alone, the work would pass (200 < 2 × 150).
+        const budget = relativeBudget(() => stall(++references === 4 ? 150 : 10));
         budget.calibrate();
-        // 100 ms of work against 4 units of ~10 ms: 2.5× its budget, every time.
-        const run = budget.measure(4, () => stall(100));
+        // 200 ms of work against 2 units of ~10 ms: 10× its budget, every time.
+        const run = budget.measure(2, () => stall(200));
         expect(run.ms).toBeGreaterThanOrEqual(run.budgetMs);
     });
 
     it('passes work within budget at once', () => {
         const budget = relativeBudget(() => stall(10));
         budget.calibrate();
-        const run = budget.measure(4, () => stall(20));
+        // 10 ms of work against 10 units of ~10 ms.
+        const run = budget.measure(10, () => stall(10));
         expect(run.ms).toBeLessThan(run.budgetMs);
     });
 
     it('calibrates to the fastest reference timing, for an absolute ceiling', () => {
         let references = 0;
-        const budget = relativeBudget(() => stall(++references === 2 ? 5 : 30));
-        expect(budget.calibrate()).toBeLessThan(20);
+        const budget = relativeBudget(() => stall(++references === 2 ? 5 : 150));
+        expect(budget.calibrate()).toBeLessThan(100);
     });
 });

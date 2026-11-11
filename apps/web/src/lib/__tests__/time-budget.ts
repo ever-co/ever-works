@@ -163,6 +163,7 @@ function costRatio(
         let bestHeavy = timedHeavy;
         let bestLight = Number.POSITIVE_INFINITY;
         let fastestSlice = Number.POSITIVE_INFINITY;
+        const lightFloor = (): number => Math.min(bestLight, fastestSlice * repeats);
         for (let round = 1; round <= MAX_ROUNDS; round += 1) {
             if (round > 1 || !Number.isFinite(timedHeavy)) {
                 bestHeavy = Math.min(bestHeavy, timeBatch(heavy));
@@ -182,9 +183,11 @@ function costRatio(
             }
             bestLight = Math.min(bestLight, lightTotal);
             // Within the bound on two rounds: done. Anything else is timed again.
-            if (round >= MIN_ROUNDS && bestHeavy < bound * bestLight) break;
+            // Judged against the fastest slice too: a stall in every round's light
+            // total cannot make the large input look cheap.
+            if (round >= MIN_ROUNDS && bestHeavy < bound * lightFloor()) break;
         }
-        return bestHeavy / bestLight;
+        return bestHeavy / lightFloor();
     };
     const ratio = rounds(batch === 1 ? single : Number.POSITIVE_INFINITY);
     if (ratio < bound) return ratio;
