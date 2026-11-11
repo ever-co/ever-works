@@ -1692,6 +1692,9 @@
                 "frequency": "Frequentie",
                 "endsAt": "Einde (optioneel)",
                 "maxOccurrences": "Max. herhalingen (optioneel)",
+                "maxOpenInstances": "Maximaal tegelijk open",
+                "maxOpenInstancesHint": "Slaat een geplande run over zolang er nog zoveel eerdere runs open staan (bezig, of wachtend op een open pull request). Leeg = geen limiet.",
+                "maxOpenInstancesInvalid": "Voer een geheel getal van 1 tot {max} in, of laat het leeg voor geen limiet.",
                 "rulePreview": "Voorbeeld van regel",
                 "ruleInvalid": "ongeldig",
                 "cancel": "Annuleren",
@@ -1700,6 +1703,7 @@
                 "nextAt": "Volgende op",
                 "ends": "Eindigt",
                 "max": "Max.",
+                "lastSkipped": "Laatst overgeslagen",
                 "stopConfirm": "Het terugkerende schema stoppen? Bestaande exemplaren blijven bestaan; er worden geen nieuwe aangemaakt.",
                 "stopError": "Het terugkerende schema kon niet worden gestopt",
                 "saveError": "Het schema kon niet worden opgeslagen"
@@ -2727,6 +2731,7 @@
                     "memberRemoved": "Lid verwijderd",
                     "scheduleCreated": "Schema gemaakt",
                     "scheduleExecuted": "Schema uitgevoerd",
+                    "scheduleSkipped": "Schema overgeslagen",
                     "import": "Importeren",
                     "login": "Inloggen",
                     "signup": "Registreren",
@@ -10259,6 +10264,11 @@
                 "title": "Nog niets gepland",
                 "description": "Terugkerende taken, agent-heartbeats, werkplanningen, Mission-ticks, bronvalidatie en gegevenssynchronisatie verschijnen hier zodra je ze hebt ingesteld.",
                 "noResults": "Geen planningen komen overeen met het huidige filter."
+            },
+            "lastSkipped": "Overgeslagen",
+            "lastSkippedHint": "De laatste geplande run is overgeslagen: er staan nog te veel eerdere runs van dit schema open.",
+            "runNow": {
+                "tooManyOpenConfirm": "Er staan nog te veel eerdere runs van ‘{name}’ open, dus de limiet houdt deze run tegen. Toch uitvoeren?"
             }
         },
         "triggers": {

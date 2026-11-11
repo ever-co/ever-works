@@ -34,6 +34,7 @@ const TYPE_COLORS: Record<string, string> = {
     member_removed: 'bg-orange-50 text-orange-700 dark:bg-orange-900/20 dark:text-orange-300',
     schedule_created: 'bg-teal-50 text-teal-700 dark:bg-teal-900/20 dark:text-teal-300',
     schedule_executed: 'bg-teal-50 text-teal-700 dark:bg-teal-900/20 dark:text-teal-300',
+    schedule_skipped: 'bg-amber-50 text-amber-700 dark:bg-amber-900/20 dark:text-amber-300',
     import: 'bg-amber-50 text-amber-700 dark:bg-amber-900/20 dark:text-amber-300',
     works_config_sync: 'bg-amber-50 text-amber-700 dark:bg-amber-900/20 dark:text-amber-300',
     user_signup: 'bg-emerald-50 text-emerald-700 dark:bg-emerald-900/20 dark:text-emerald-300',
@@ -83,6 +84,8 @@ const TYPE_TO_I18N: Record<string, string> = {
     member_removed: 'memberRemoved',
     schedule_created: 'scheduleCreated',
     schedule_executed: 'scheduleExecuted',
+    // Recurring Tasks overlap limit — a scheduled fire skipped at the open-instance limit.
+    schedule_skipped: 'scheduleSkipped',
     import: 'import',
     user_signup: 'signup',
     user_login: 'login',

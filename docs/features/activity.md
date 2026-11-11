@@ -122,7 +122,7 @@ A single download returns at most 10,000 matching entries, and it gives you no w
 
 The **Schedules** toggle in the page header swaps the log for everything scheduled to run across your account, gathered from every source in one list: **Recurring task**, **Agent heartbeat**, **Work schedule**, **Mission tick**, **Source validation**, **Data sync**, and **Inbound trigger**.
 
-Each row shows **Owner** (a link to the thing that owns the schedule), **Cadence**, **Next run**, and **Status** — Active, Paused, Disabled, Error, or Ended. Filter chips across the top narrow the list by source and carry a count each; a source with nothing scheduled gets no chip at all. An **Active only** checkbox hides everything currently switched off. The list is fetched once when you open the view — there is no polling here; reopen the view to refresh it.
+Each row shows **Owner** (a link to the thing that owns the schedule), **Cadence**, **Next run**, and **Status** — Active, Paused, Disabled, Error, or Ended. A recurring Task whose latest scheduled fire was skipped by its **At most open at a time** limit shows **Skipped** and when in its last-run column (see [Recurring Tasks](./tasks.md#at-most-n-open-at-a-time)). Filter chips across the top narrow the list by source and carry a count each; a source with nothing scheduled gets no chip at all. An **Active only** checkbox hides everything currently switched off. The list is fetched once when you open the view — there is no polling here; reopen the view to refresh it.
 
 :::caution Schedules is a read-only list
 You cannot pause, edit, or delete a schedule from this page. Follow the Owner link to the Work, Agent, Mission, or Task that owns it and change it there. The one exception is Inbound triggers, below.

@@ -1692,6 +1692,9 @@
                 "frequency": "Frekuensi",
                 "endsAt": "Berakhir (opsional)",
                 "maxOccurrences": "Maks. kemunculan (opsional)",
+                "maxOpenInstances": "Paling banyak terbuka sekaligus",
+                "maxOpenInstancesHint": "Melewati eksekusi terjadwal selama sebanyak ini eksekusi sebelumnya masih terbuka (berjalan, atau menunggu pull request yang terbuka). Kosong = tanpa batas.",
+                "maxOpenInstancesInvalid": "Masukkan bilangan bulat dari 1 sampai {max}, atau biarkan kosong untuk tanpa batas.",
                 "rulePreview": "Pratinjau aturan",
                 "ruleInvalid": "tidak valid",
                 "cancel": "Batal",
@@ -1700,6 +1703,7 @@
                 "nextAt": "Berikutnya pada",
                 "ends": "Berakhir",
                 "max": "Maks.",
+                "lastSkipped": "Terakhir dilewati",
                 "stopConfirm": "Hentikan jadwal berulang? Instance yang ada tetap ada; tidak ada yang baru dibuat.",
                 "stopError": "Gagal menghentikan jadwal berulang",
                 "saveError": "Gagal menyimpan jadwal"
@@ -2727,6 +2731,7 @@
                     "memberRemoved": "Anggota Dihapus",
                     "scheduleCreated": "Jadwal Dibuat",
                     "scheduleExecuted": "Jadwal Dieksekusi",
+                    "scheduleSkipped": "Jadwal Dilewati",
                     "import": "Impor",
                     "login": "Masuk",
                     "signup": "Daftar",
@@ -10259,6 +10264,11 @@
                 "title": "Belum ada yang dijadwalkan",
                 "description": "Tugas berulang, heartbeat agen, jadwal karya, tick Mission, validasi sumber, dan sinkronisasi data akan muncul di sini setelah Anda mengaturnya.",
                 "noResults": "Tidak ada jadwal yang cocok dengan filter saat ini."
+            },
+            "lastSkipped": "Dilewati",
+            "lastSkippedHint": "Eksekusi terjadwal terakhir dilewati: terlalu banyak eksekusi sebelumnya dari jadwal ini yang masih terbuka.",
+            "runNow": {
+                "tooManyOpenConfirm": "Terlalu banyak eksekusi sebelumnya dari “{name}” yang masih terbuka, jadi batasnya menahan eksekusi ini. Tetap jalankan?"
             }
         },
         "triggers": {

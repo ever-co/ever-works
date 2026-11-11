@@ -1692,6 +1692,9 @@
                 "frequency": "Tần suất",
                 "endsAt": "Kết thúc (tùy chọn)",
                 "maxOccurrences": "Số lần tối đa (tùy chọn)",
+                "maxOpenInstances": "Tối đa đang mở cùng lúc",
+                "maxOpenInstancesHint": "Bỏ qua một lần chạy theo lịch khi vẫn còn chừng này lần chạy trước đang mở (đang chạy, hoặc đang chờ một pull request đang mở). Để trống = không giới hạn.",
+                "maxOpenInstancesInvalid": "Nhập một số nguyên từ 1 đến {max}, hoặc để trống nếu không giới hạn.",
                 "rulePreview": "Xem trước quy tắc",
                 "ruleInvalid": "không hợp lệ",
                 "cancel": "Hủy",
@@ -1700,6 +1703,7 @@
                 "nextAt": "Kế tiếp lúc",
                 "ends": "Kết thúc",
                 "max": "Tối đa",
+                "lastSkipped": "Lần bỏ qua gần nhất",
                 "stopConfirm": "Dừng lịch định kỳ? Các phiên bản hiện có vẫn giữ nguyên; sẽ không tạo phiên bản mới.",
                 "stopError": "Không thể dừng lịch định kỳ",
                 "saveError": "Không thể lưu lịch"
@@ -2727,6 +2731,7 @@
                     "memberRemoved": "Thành viên Đã Xóa",
                     "scheduleCreated": "Lịch Đã Tạo",
                     "scheduleExecuted": "Lịch Đã Thực thi",
+                    "scheduleSkipped": "Lịch Đã Bỏ qua",
                     "import": "Nhập",
                     "login": "Đăng nhập",
                     "signup": "Đăng ký",
@@ -10259,6 +10264,11 @@
                 "title": "Chưa có gì được lên lịch",
                 "description": "Tác vụ định kỳ, nhịp Agent, lịch công việc, tick Mission, xác thực nguồn và đồng bộ dữ liệu sẽ xuất hiện ở đây sau khi bạn thiết lập.",
                 "noResults": "Không có lịch trình nào khớp với bộ lọc hiện tại."
+            },
+            "lastSkipped": "Đã bỏ qua",
+            "lastSkippedHint": "Lần chạy theo lịch gần nhất đã bị bỏ qua: còn quá nhiều lần chạy trước của lịch này đang mở.",
+            "runNow": {
+                "tooManyOpenConfirm": "Còn quá nhiều lần chạy trước của “{name}” đang mở, nên giới hạn đang giữ lần chạy này lại. Vẫn chạy chứ?"
             }
         },
         "triggers": {

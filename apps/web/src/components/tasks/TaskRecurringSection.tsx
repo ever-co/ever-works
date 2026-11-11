@@ -9,6 +9,8 @@ import { Input } from '@/components/ui/input';
 import { Select } from '@/components/ui/select';
 import type { Task } from '@/lib/api/tasks';
 import { clearTaskRecurringAction, setTaskRecurringAction } from '@/app/actions/tasks';
+import { MaxOpenInstancesEditor, MaxOpenInstancesField } from './TaskRecurringOverlapControl';
+import { parseMaxOpenInstances } from './recurring-overlap';
 
 /**
  * Agents/Skills/Tasks PR #1017 — Phase 17.8 UI.
@@ -22,6 +24,11 @@ import { clearTaskRecurringAction, setTaskRecurringAction } from '@/app/actions/
  *   - Active: shows the current RRULE + nextOccurrenceAt + occurrence
  *     counter, with a "Stop recurring" button that demotes the
  *     template back to a plain Task.
+ *
+ * Both modes carry the overlap limit ("At most N open at a time", blank =
+ * no limit): a scheduled fire while that many earlier instances are still
+ * open is skipped. On an active template it saves on its own, leaving the
+ * cadence alone.
  *
  * The picker emits an RRULE string per RFC 5545 (`FREQ=DAILY` /
  * `FREQ=WEEKLY` / `FREQ=MONTHLY` / custom) or a 5-field cron
@@ -148,7 +155,18 @@ function ActivePanel({ task }: { task: Task }) {
                         </span>
                     </RecurrenceRow>
                 )}
+                {task.recurrenceSkippedAt && (
+                    <RecurrenceRow label={t('lastSkipped')}>
+                        <span
+                            className="text-xs text-text-secondary dark:text-text-secondary-dark"
+                            data-testid="task-recurring-last-skipped"
+                        >
+                            {new Date(task.recurrenceSkippedAt).toLocaleString()}
+                        </span>
+                    </RecurrenceRow>
+                )}
             </dl>
+            <MaxOpenInstancesEditor task={task} />
             <div className="pt-2 border-t border-border/40 dark:border-border-dark/40">
                 <Button
                     type="button"
@@ -203,6 +221,8 @@ function InactivePanel({ task }: { task: Task }) {
     const [cronExpr, setCronExpr] = useState('0 9 * * 1');
     const [endsAt, setEndsAt] = useState('');
     const [maxOccurrences, setMaxOccurrences] = useState('');
+    // Overlap limit — blank = no limit (the template starts without one).
+    const [maxOpenInstances, setMaxOpenInstances] = useState('');
     // FU-7 — friendly RRULE controls. Defaults match the original
     // single-frequency picker behaviour: 9:00, Monday-only for Weekly,
     // 1st-of-month for Monthly, browser timezone if available.
@@ -255,7 +275,10 @@ function InactivePanel({ task }: { task: Task }) {
         );
     };
 
+    const maxOpen = parseMaxOpenInstances(maxOpenInstances);
+
     const handleSave = () => {
+        if (!maxOpen.ok) return;
         if (!isValidRule) {
             setError(
                 frequency === 'WEEKLY' && daysOfWeek.length === 0
@@ -286,6 +309,10 @@ function InactivePanel({ task }: { task: Task }) {
                             maxOccurrences.trim().length > 0
                                 ? Math.max(1, Math.min(9999, parseInt(maxOccurrences, 10) || 1))
                                 : undefined,
+                        // Only sent when set: a new template has no limit to keep or clear.
+                        ...(maxOpen.ok && maxOpen.value !== null
+                            ? { recurrenceMaxOpenInstances: maxOpen.value }
+                            : {}),
                     });
                     setOpen(false);
                     router.refresh();
@@ -490,6 +517,14 @@ function InactivePanel({ task }: { task: Task }) {
                         className={FIELD_CLASS}
                     />
                 </Field>
+                <div className="@md/main:col-span-2">
+                    <MaxOpenInstancesField
+                        id="task-recurring-max-open"
+                        value={maxOpenInstances}
+                        onChange={setMaxOpenInstances}
+                        disabled={pending}
+                    />
+                </div>
             </div>
             <p className="text-[11px] font-mono break-all text-text-muted dark:text-text-muted-dark">
                 {t('rulePreview')}: {ruleString || '—'}
@@ -502,7 +537,7 @@ function InactivePanel({ task }: { task: Task }) {
                     type="button"
                     size="sm"
                     onClick={handleSave}
-                    disabled={pending || !isValidRule}
+                    disabled={pending || !isValidRule || !maxOpen.ok}
                     data-testid="task-recurring-save"
                 >
                     {pending ? '…' : t('save')}

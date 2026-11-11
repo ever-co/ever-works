@@ -1692,6 +1692,9 @@
                 "frequency": "Frequência",
                 "endsAt": "Termina (opcional)",
                 "maxOccurrences": "Máx. de ocorrências (opcional)",
+                "maxOpenInstances": "No máximo abertas ao mesmo tempo",
+                "maxOpenInstancesHint": "Ignora uma execução agendada enquanto esta quantidade de execuções anteriores ainda estiver aberta (em andamento ou aguardando um pull request aberto). Vazio = sem limite.",
+                "maxOpenInstancesInvalid": "Digite um número inteiro de 1 a {max}, ou deixe em branco para não ter limite.",
                 "rulePreview": "Pré-visualização da regra",
                 "ruleInvalid": "inválida",
                 "cancel": "Cancelar",
@@ -1700,6 +1703,7 @@
                 "nextAt": "Próxima em",
                 "ends": "Termina",
                 "max": "Máx.",
+                "lastSkipped": "Última ignorada",
                 "stopConfirm": "Parar a agenda recorrente? As instâncias existentes permanecem; nenhuma nova será criada.",
                 "stopError": "Não foi possível parar a agenda recorrente",
                 "saveError": "Não foi possível salvar a agenda"
@@ -2727,6 +2731,7 @@
                     "memberRemoved": "Membro Removido",
                     "scheduleCreated": "Agendamento Criado",
                     "scheduleExecuted": "Agendamento Executado",
+                    "scheduleSkipped": "Agendamento Ignorado",
                     "import": "Importação",
                     "login": "Login",
                     "signup": "Cadastro",
@@ -10259,6 +10264,11 @@
                 "title": "Nada agendado ainda",
                 "description": "Tarefas recorrentes, heartbeats de agentes, agendamentos de trabalho, ticks de Mission, validação de fontes e sincronização de dados aparecerão aqui assim que você os configurar.",
                 "noResults": "Nenhum agendamento corresponde ao filtro atual."
+            },
+            "lastSkipped": "Ignorada",
+            "lastSkippedHint": "A última execução agendada foi ignorada: muitas execuções anteriores deste agendamento ainda estão abertas.",
+            "runNow": {
+                "tooManyOpenConfirm": "Muitas execuções anteriores de “{name}” ainda estão abertas, por isso o limite segura esta execução. Executar mesmo assim?"
             }
         },
         "triggers": {
