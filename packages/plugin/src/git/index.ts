@@ -39,6 +39,11 @@ export type {
 	GitPullRequestAuthor,
 	GitRepositoryPermissions,
 	GitRepositoryWithPermissions,
+	// Repository Work installation fallback — the id-bound repository read and
+	// the provider's calculated permission for one user.
+	GitRepositoryIdentity,
+	GitUserRepositoryPermissionLevel,
+	GitUserRepositoryPermission,
 	ListRepositoriesOptions,
 	GitPullRequestFile,
 	ListPullRequestsOptions,

@@ -454,6 +454,48 @@ export interface GitRepositoryWithPermissions extends GitRepository {
 	readonly permissions?: GitRepositoryPermissions;
 }
 
+/**
+ * A repository as the PROVIDER identifies it — the answer of the optional
+ * `IGitProviderPlugin.getRepositoryIdentity`.
+ *
+ * A name is not an identity: a repository can be renamed or transferred and a
+ * different repository created under the old name. A caller that holds a
+ * provider id from an earlier read (an installation snapshot, say) compares it
+ * with `id` here to know the name still means the same repository.
+ */
+export interface GitRepositoryIdentity {
+	/** The provider's stable repository id, as a string (GitHub's numeric `id`). Survives renames and transfers. */
+	readonly id: string;
+	/**
+	 * The repository's CURRENT `owner/name`. A provider that follows rename
+	 * redirects reports the RESOLVED name here, not the one that was asked for,
+	 * so a difference from the requested coordinates means the request was
+	 * redirected.
+	 */
+	readonly fullName: string;
+}
+
+/**
+ * The base access level a provider calculates for one user on one repository.
+ * `none` is "no access"; every richer provider role is folded onto these four
+ * by the provider (GitHub maps `maintain` to `write` and `triage` to `read`).
+ */
+export type GitUserRepositoryPermissionLevel = 'admin' | 'write' | 'read' | 'none';
+
+/** The answer of the optional `IGitProviderPlugin.getUserRepositoryPermission`. */
+export interface GitUserRepositoryPermission {
+	readonly permission: GitUserRepositoryPermissionLevel;
+	/**
+	 * The provider's stable id of the user the answer is ABOUT, as a string, or
+	 * `null` when the provider did not report one. A login can be renamed and
+	 * re-registered by somebody else, so a caller that knows the user's id must
+	 * compare it with this before trusting `permission`.
+	 */
+	readonly userId: string | null;
+	/** That user's current login, or `null` when the provider did not report one. */
+	readonly login: string | null;
+}
+
 export interface ListRepositoriesOptions {
 	owner?: string;
 	type?: 'user' | 'org';
@@ -966,6 +1008,31 @@ export interface IGitProviderPlugin extends IPlugin, IGitOperations {
 	createRepository(options: CreateRepoOptions, token: string): Promise<GitRepository>;
 	getRepository(owner: string, repo: string, token: string): Promise<GitRepositoryWithPermissions | null>;
 	hasRepositoryAccess?(owner: string, repo: string, token: string): Promise<boolean>;
+	/**
+	 * The provider's id and CURRENT full name of `owner/repo`, or `null` when
+	 * the token cannot see it. One read, no side effects.
+	 *
+	 * OPTIONAL. Callers MUST read the method off the materialised plugin before
+	 * calling it (the lazy-plugin proxy over-reports optional methods).
+	 */
+	getRepositoryIdentity?(owner: string, repo: string, token: string): Promise<GitRepositoryIdentity | null>;
+	/**
+	 * The access level the provider calculates for `username` on `owner/repo`,
+	 * after every source of grants (the repository, teams, the organization),
+	 * or `null` when the provider does not answer for that user.
+	 *
+	 * `token` is the credential the QUESTION is asked with, not the user's own:
+	 * the point is to learn what a user may do without holding their token.
+	 *
+	 * OPTIONAL. Callers MUST read the method off the materialised plugin before
+	 * calling it (the lazy-plugin proxy over-reports optional methods).
+	 */
+	getUserRepositoryPermission?(
+		owner: string,
+		repo: string,
+		username: string,
+		token: string
+	): Promise<GitUserRepositoryPermission | null>;
 	deleteRepository(owner: string, repo: string, token: string): Promise<void>;
 	updateRepository?(owner: string, repo: string, data: UpdateRepoOptions, token: string): Promise<GitRepository>;
 

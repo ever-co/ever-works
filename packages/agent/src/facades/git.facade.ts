@@ -2645,6 +2645,255 @@ export class GitFacadeService implements IGitFacade {
         return this.createGitHubAppInstallationToken(installation.installationId);
     }
 
+    /**
+     * The LIVE half of the Repository Work installation fallback
+     * (`WorkLifecycleService.resolveRepositoryInstallationAuth`): may this
+     * GitHub App installation stand in for THIS user's own account on THIS
+     * repository, according to GitHub, right now?
+     *
+     * The caller has already decided, from platform rows, that the
+     * installation is the user's (`createdByUserId`), is not deleted or
+     * suspended, and lists the repository in its snapshot. `installationId`
+     * and `githubRepoId` must come from those rows, never from a request.
+     * This method adds what a database cannot answer, and ALL of it must hold:
+     *
+     *   1. **The installation still covers that repository.** An installation
+     *      token is minted narrowed to the snapshot's numeric repository id,
+     *      read-only. GitHub refuses the mint (422) when the installation no
+     *      longer covers the repository, and (404) when the installation is
+     *      gone.
+     *   2. **The name still means that repository.** `owner/repo` is read with
+     *      the narrowed token and GitHub's `id` must equal the snapshot's id,
+     *      and its current full name must equal the requested one. A name is
+     *      not an identity: with a stale snapshot, a renamed repository and a
+     *      new public repository under the old name, a read by name alone
+     *      succeeds for a repository the installation does not cover. A name
+     *      that merely REDIRECTS to the covered repository is refused too —
+     *      the Work would persist coordinates that can be re-registered.
+     *   3. **The user can read it themselves.** The fallback runs exactly when
+     *      GitHub told the user's own token "no", and installation ownership
+     *      is a one-time claim that outlives the user's access (an org owner
+     *      who claimed the installation and was later removed still owns the
+     *      row). So GitHub is asked for the permission it calculates for the
+     *      user's LINKED GitHub account (`getUserRepositoryPermission`), and it
+     *      must be `read` or better. What passes is therefore "this user can
+     *      read the repository according to GitHub; only their OAuth token is
+     *      blocked", e.g. by the organization's OAuth app policy.
+     *
+     * The GitHub identity in (3) is the platform's own stored connection for
+     * that user ({@link findLinkedGitHubIdentity}), never anything a request
+     * carried, and the answer is bound to the account's immutable id: a login
+     * can be renamed and re-registered by somebody else, so the id GitHub
+     * answered ABOUT must equal the stored one.
+     *
+     * The token is the narrowest one that can ask these questions (GitHub
+     * documents `Metadata: read` for both reads; `Contents: read` is what the
+     * mint proves the installation holds on this repository), is NOT put in
+     * the shared installation-token cache (that cache holds the unscoped token
+     * and the two must never be handed out for each other), and never leaves
+     * this method.
+     *
+     * `false` — never a throw — for everything that is not a confirmed yes:
+     * no user id, installation row missing / deleted / suspended, App
+     * credentials unset, no linked GitHub identity, a provider plugin that
+     * cannot answer, GitHub refusing the mint, the read answering 404/403, an
+     * id or name mismatch, a permission below `read`, a transport error.
+     * Which one is written to the log as a fixed reason code; nothing here may
+     * turn an unknown into a yes.
+     */
+    async canInstallationStandInForUser(input: {
+        /** GitHub's installation id, from the platform's own `github_app_installations` row. */
+        installationId: string;
+        /** GitHub's numeric repository id, from the installation snapshot row. */
+        githubRepoId: string;
+        owner: string;
+        repo: string;
+        /** The platform user the installation would stand in for. */
+        userId: string;
+    }): Promise<boolean> {
+        const refuse = (reason: string): false => {
+            // A fixed reason code beside the platform user id: no repository
+            // name, no installation id, nothing GitHub said.
+            this.logger.log(
+                `GitHub App installation stand-in refused for user ${input.userId || '(none)'} (${reason}).`,
+            );
+            return false;
+        };
+
+        try {
+            // TypeORM drops an `undefined` where-value, so every lookup below
+            // would answer for SOME row rather than none.
+            if (!input.userId || !input.installationId || !input.owner || !input.repo) {
+                return refuse('incomplete-request');
+            }
+            const snapshotRepositoryId = String(input.githubRepoId ?? '').trim();
+            if (!/^[1-9][0-9]*$/.test(snapshotRepositoryId)) {
+                return refuse('snapshot-repository-id-invalid');
+            }
+            const wantedFullName = `${input.owner}/${input.repo}`.toLowerCase();
+
+            const installation = await this.gitHubAppInstallationRepository.findByInstallationId(
+                input.installationId,
+            );
+            if (!installation || installation.deletedAt || installation.suspendedAt) {
+                return refuse('installation-not-active');
+            }
+
+            const appId = config.githubApp.getAppId();
+            const privateKey = config.githubApp.getPrivateKey();
+            if (!appId || !privateKey) {
+                return refuse('app-credentials-unset');
+            }
+
+            // Everything that needs no token is settled BEFORE one is minted.
+            const identity = await this.findLinkedGitHubIdentity(input.userId);
+            if (!identity) {
+                return refuse('no-linked-github-identity');
+            }
+
+            // `resolvePlugin` answers the MATERIALISED plugin, so these two
+            // presence checks are real (the lazy-plugin proxy over-reports
+            // optional methods).
+            const plugin = await this.resolvePlugin('github', input.userId);
+            const readRepositoryIdentity = plugin.getRepositoryIdentity;
+            const readUserPermission = plugin.getUserRepositoryPermission;
+            if (
+                typeof readRepositoryIdentity !== 'function' ||
+                typeof readUserPermission !== 'function'
+            ) {
+                return refuse('provider-cannot-answer');
+            }
+
+            const minted = await requestGitHubAppInstallationAccessTokenDetails(
+                installation.installationId,
+                { appId, privateKey },
+                {
+                    repositoryIds: [snapshotRepositoryId],
+                    // Read-only, and nothing else: anything omitted is not granted.
+                    permissions: { contents: 'read', metadata: 'read' },
+                },
+            );
+            if (!minted.token) {
+                return refuse('token-mint-empty');
+            }
+
+            // (2) The name still means the repository the snapshot row is about.
+            const repository = await readRepositoryIdentity.call(
+                plugin,
+                input.owner,
+                input.repo,
+                minted.token,
+            );
+            if (!repository) {
+                return refuse('repository-not-readable');
+            }
+            if (String(repository.id ?? '').trim() !== snapshotRepositoryId) {
+                return refuse('repository-id-mismatch');
+            }
+            if (
+                typeof repository.fullName !== 'string' ||
+                repository.fullName.toLowerCase() !== wantedFullName
+            ) {
+                return refuse('repository-name-redirected');
+            }
+
+            // (3) The user can read it themselves, according to GitHub.
+            const access = await readUserPermission.call(
+                plugin,
+                input.owner,
+                input.repo,
+                identity.login,
+                minted.token,
+            );
+            if (!access) {
+                return refuse('user-permission-unknown');
+            }
+            if (!access.userId || access.userId !== identity.githubUserId) {
+                return refuse('user-identity-mismatch');
+            }
+            if (
+                access.permission !== 'read' &&
+                access.permission !== 'write' &&
+                access.permission !== 'admin'
+            ) {
+                return refuse('user-permission-below-read');
+            }
+
+            return true;
+        } catch (error) {
+            // Error name and HTTP status only: GitHub's answer can name the
+            // installation and the repository; the token is never in it.
+            const status = (error as { status?: unknown } | null)?.status;
+            const mintStatus =
+                error instanceof Error
+                    ? /^Failed to create GitHub App installation token: (\d{3})\b/.exec(
+                          error.message,
+                      )?.[1]
+                    : undefined;
+            const detail = typeof status === 'number' ? `, status ${status}` : '';
+            this.logger.warn(
+                `GitHub App installation stand-in check failed for user ${input?.userId || '(none)'} (${
+                    error instanceof Error ? error.name : 'unknown error'
+                }${mintStatus ? `, token mint status ${mintStatus}` : detail}).`,
+            );
+            return false;
+        }
+    }
+
+    /**
+     * The GitHub account the PLATFORM has on record for `userId`, or `null`.
+     *
+     * Read from the user's stored provider connections only — the
+     * plugin-integration account first (the one git operations use), then
+     * the social sign-in account, the same order {@link findGitProviderAccount}
+     * uses. Each of them was written by a flow in which GitHub itself named
+     * the account (an OAuth code exchange followed by `GET /user`), so
+     * `accountId` is GitHub's immutable numeric user id and the login is the
+     * one GitHub reported at link time. Nothing a request carries is read.
+     *
+     * A connection is NOT required to hold a usable token: an expired token or
+     * one without the `repo` scope still says who the user is on GitHub, which
+     * is the only thing asked of it here.
+     *
+     * `null` when there is no such connection, or when it does not carry a
+     * numeric GitHub id AND a login — a login alone is never enough, because
+     * the caller binds GitHub's answer to the id.
+     */
+    private async findLinkedGitHubIdentity(
+        userId: string,
+    ): Promise<{ githubUserId: string; login: string } | null> {
+        if (!userId) {
+            return null;
+        }
+        for (const providerId of [buildPluginProviderId('github'), 'github']) {
+            const account = await this.authAccountRepository.findProviderAccount(
+                userId,
+                providerId,
+            );
+            if (!account || account.userId !== userId) {
+                continue;
+            }
+            const githubUserId =
+                typeof account.accountId === 'string' ? account.accountId.trim() : '';
+            if (!/^[1-9][0-9]*$/.test(githubUserId)) {
+                continue;
+            }
+            const metadataLogin = (account.metadata as Record<string, unknown> | null | undefined)
+                ?.login;
+            const login =
+                (typeof metadataLogin === 'string' && metadataLogin.trim()) ||
+                (typeof account.username === 'string' && account.username.trim()) ||
+                '';
+            // GitHub logins: letters, digits, hyphens (and `_` for managed
+            // users). Anything else is not a login this code will ask about.
+            if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$/.test(login)) {
+                continue;
+            }
+            return { githubUserId, login };
+        }
+        return null;
+    }
+
     private async getInstallationTokenForWork(options: GitFacadeOptions): Promise<string | null> {
         if (!options.workId || options.providerId !== 'github') {
             return null;
