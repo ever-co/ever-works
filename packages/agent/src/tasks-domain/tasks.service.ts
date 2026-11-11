@@ -1444,6 +1444,15 @@ export class TasksService {
         if (maxOpenInstances === null && current.recurrenceSkippedAt) {
             patch.recurrenceSkippedAt = null;
         }
+        // A Task runs either once at a time or on a cadence — the Schedule
+        // section offers the two as exclusive modes. Turning recurrence on used
+        // to leave the one-time `scheduledAt` in place, and
+        // `findDueScheduledTasks` does not skip templates, so at that time the
+        // TEMPLATE itself was dispatched on top of its recurring copies.
+        if (current.scheduledAt) {
+            patch.scheduledAt = null;
+            patch.scheduleClaimedAt = null;
+        }
         await this.updateTaskRow(id, patch);
         return this.getOne(userId, id, ownershipScope);
     }

@@ -91,10 +91,13 @@ export function WorkSelect({
                             kind: w.kind ?? null,
                             userRole: w.userRole,
                         }))
-                        .filter((w) => !kinds || (w.kind !== null && kinds.includes(w.kind)))
-                        .filter((w) => !ownedOnly || w.userRole === 'owner');
+                        .filter((w) => !kinds || (w.kind !== null && kinds.includes(w.kind)));
                     setWorks(loaded);
-                    onLoaded?.(loaded.length);
+                    onLoaded?.(
+                        ownedOnly
+                            ? loaded.filter((w) => w.userRole === 'owner').length
+                            : loaded.length,
+                    );
                 } else {
                     setLoadError(res.error ?? 'Failed to load Works.');
                 }
@@ -114,9 +117,15 @@ export function WorkSelect({
     }, []);
 
     const options = useMemo(() => {
-        if (!value || works.some((w) => w.id === value)) return works;
-        return [{ id: value, name: `${value.slice(0, 8)}…`, kind: null }, ...works];
-    }, [works, value]);
+        // `ownedOnly`: offer only the caller's own Works (the Task / Goal APIs
+        // accept no other), but keep the CURRENT selection with its name even
+        // when it is a shared Work, so an existing value still reads right.
+        const offered = ownedOnly
+            ? works.filter((w) => w.userRole === 'owner' || w.id === value)
+            : works;
+        if (!value || offered.some((w) => w.id === value)) return offered;
+        return [{ id: value, name: `${value.slice(0, 8)}…`, kind: null }, ...offered];
+    }, [works, value, ownedOnly]);
 
     return (
         <div className="space-y-1">

@@ -204,6 +204,31 @@ describe('TasksService.setRecurring — cron XOR RRULE matrix', () => {
         );
     });
 
+    it('clears a pending one-time schedule — otherwise the template itself ran at that time', async () => {
+        const { service, repos } = makeService();
+        repos.tasks.findByIdAndUser.mockResolvedValue(
+            makeTask({ scheduledAt: new Date(Date.now() + 3_600_000) }),
+        );
+        repos.tasks.findById.mockResolvedValue(makeTask({ isRecurring: true }));
+
+        await service.setRecurring('user-1', 'task-1', { recurrenceRule: 'FREQ=DAILY' });
+
+        expect(repos.tasks.updateById).toHaveBeenCalledWith(
+            'task-1',
+            expect.objectContaining({
+                isRecurring: true,
+                scheduledAt: null,
+                scheduleClaimedAt: null,
+            }),
+        );
+    });
+
+    it('leaves the schedule columns alone when there was no one-time schedule', async () => {
+        const { service, repos } = arm();
+        await service.setRecurring('user-1', 'task-1', { recurrenceRule: 'FREQ=DAILY' });
+        expect(repos.tasks.updateById.mock.calls[0][1]).not.toHaveProperty('scheduledAt');
+    });
+
     it('accepts a cron expression alone', async () => {
         const { service, repos } = arm();
         await service.setRecurring('user-1', 'task-1', { recurrenceCron: '0 9 * * *' });

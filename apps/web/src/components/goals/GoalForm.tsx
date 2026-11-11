@@ -244,6 +244,8 @@ export function GoalForm() {
                         onValueChange={setWorkId}
                         noneLabel={t('work.none')}
                         testId="goal-work-select"
+                        // The API files a Task / Goal only on a Work the caller owns.
+                        ownedOnly
                     />
                     <p className={fieldHint}>{t('work.hint')}</p>
                 </div>

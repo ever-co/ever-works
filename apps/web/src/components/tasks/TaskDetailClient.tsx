@@ -777,6 +777,8 @@ export function TaskDetailClient({
                                     noneLabel={t('workNone')}
                                     placeholder={t('workPlaceholder')}
                                     testId="task-detail-work"
+                                    // The API files a Task / Goal only on a Work the caller owns.
+                                    ownedOnly
                                 />
                             </AssignmentRow>
                             <AssignmentRow

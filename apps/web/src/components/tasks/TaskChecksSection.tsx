@@ -12,6 +12,7 @@ import type { AgentRunSession } from '@/lib/api/agents.shared';
 import { updateTaskAction } from '@/app/actions/tasks';
 import { GateChip } from './GateChip';
 import { ChecksEditor } from './ChecksEditor';
+import { acceptanceChecksForSave } from '@/lib/tasks/acceptance-checks-for-save.shared';
 
 /**
  * Quality gates (Wave 3 M6) — the Task-detail "Checks" section.
@@ -191,8 +192,11 @@ export function TaskChecksSection({
                 try {
                     const nextMax =
                         draftMaxAttempts === 'inherit' ? null : parseInt(draftMaxAttempts, 10);
+                    // Rows the API would refuse (no command, blank name, a
+                    // too-long id, timeout 0) are fixed or dropped here.
+                    const rows = acceptanceChecksForSave(draftChecks);
                     const updated = await updateTaskAction(task.id, {
-                        acceptanceChecks: draftChecks.length > 0 ? draftChecks : null,
+                        acceptanceChecks: rows.length > 0 ? rows : null,
                         maxGateAttempts: nextMax,
                     });
                     setDeclaredChecks(updated.acceptanceChecks ?? null);

@@ -23,12 +23,20 @@ export function TasksScopedSection({
     scopeLabel,
     scopeId,
     runsSummary = null,
+    canFileTasks = true,
 }: {
     tasks: Task[];
     scopeLabel: 'Work' | 'Mission' | 'Idea';
     scopeId: string;
     /** Wave 4 M4 — per-Work AgentRun summary counts (Work scope only). */
     runsSummary?: WorkRunsSummary | null;
+    /**
+     * Whether the viewer may file Tasks on this scope. The Tasks API files a
+     * Task only on a Work the caller OWNS (`TasksService.assertScopeReachable`),
+     * so on a Work shared with them "Add existing" and "New task" could only
+     * end in `400 Work … not found`; the Work page passes false then.
+     */
+    canFileTasks?: boolean;
 }) {
     // Shared with `AddExistingTaskButton` next to it in the header: the
     // two CTAs sit side by side, so they have to speak the same language.
@@ -78,16 +86,18 @@ export function TasksScopedSection({
                     default for an operator who already has a backlog: most of
                     what a scope wants was raised elsewhere long before the
                     scope existed. "Add existing" opens a picker of it. */}
-                <div className="flex items-center gap-2 shrink-0">
-                    <AddExistingTaskButton scopeKey={scopeParam} scopeId={scopeId} />
-                    <Link
-                        href={newTaskHref}
-                        className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-button-primary dark:bg-button-primary-dark text-button-primary-foreground dark:text-button-primary-foreground-dark hover:bg-button-primary-hover dark:hover:bg-button-primary-hover-dark transition-colors whitespace-nowrap shrink-0"
-                    >
-                        <Plus className="w-3.5 h-3.5" />
-                        {t('newTask')}
-                    </Link>
-                </div>
+                {canFileTasks && (
+                    <div className="flex items-center gap-2 shrink-0">
+                        <AddExistingTaskButton scopeKey={scopeParam} scopeId={scopeId} />
+                        <Link
+                            href={newTaskHref}
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-button-primary dark:bg-button-primary-dark text-button-primary-foreground dark:text-button-primary-foreground-dark hover:bg-button-primary-hover dark:hover:bg-button-primary-hover-dark transition-colors whitespace-nowrap shrink-0"
+                        >
+                            <Plus className="w-3.5 h-3.5" />
+                            {t('newTask')}
+                        </Link>
+                    </div>
+                )}
             </div>
 
             {/* ── Progress bar ─────────────────────────────────────────────── */}
