@@ -49,9 +49,13 @@ jobs:
         # Keep in step with SCREEN_HELPER_REQUIRED_TARGETS in the build job.
         target: ${{ fromJSON(vars.SCREEN_HELPER_RELEASE_TARGETS || '["linux-x64","win32-x64","darwin-arm64","darwin-x64"]') }}
     # linux-x64 builds in a pinned container (Docker), so any Linux runner gives the
-    # same bytes; Windows on our own Windows machines (RUNNER_WINDOWS_X64, a JSON
-    # label list); both macOS targets on Apple silicon (darwin-x64 cross-built).
-    runs-on: ${{ matrix.target == 'linux-x64' && (vars.RUNNER_LINUX_X64_4 || 'ubuntu-latest') || matrix.target == 'win32-x64' && (vars.RUNNER_WINDOWS_X64 && fromJSON(vars.RUNNER_WINDOWS_X64) || 'windows-latest') || 'macos-latest' }}
+    # same bytes; both macOS targets on Apple silicon (darwin-x64 cross-built).
+    # win32-x64 is built on a FRESH machine: the hosted image, or the label list in
+    # RUNNER_WINDOWS_X64_RELEASE (JSON) for Windows machines kept for releases. Not
+    # on RUNNER_WINDOWS_X64: those desktops also run pull requests' cargo builds as
+    # SYSTEM with a persistent toolchain, and whatever a release builds there is
+    # baked in as the published Windows helper.
+    runs-on: ${{ matrix.target == 'linux-x64' && (vars.RUNNER_LINUX_X64_4 || 'ubuntu-latest') || matrix.target == 'win32-x64' && (vars.RUNNER_WINDOWS_X64_RELEASE && fromJSON(vars.RUNNER_WINDOWS_X64_RELEASE) || 'windows-latest') || 'macos-latest' }}
     timeout-minutes: 40
     defaults:
       run:
@@ -229,8 +233,13 @@ jobs:
 
   # Hosts the screen helper binaries where the baked manifest points: assets
   # of this tag's GitHub release. Runs before npm publishes, so a published
-  # package never names a download that does not exist yet. Safe to re-run: an
-  # asset already there is compared with the build, never replaced. A dispatch
+  # package never names a download that does not exist yet. The release is
+  # created as a draft and published only once every asset is there (an org
+  # that turns on immutable releases cannot add assets to a published one).
+  # Safe to re-run FAILED jobs: an asset already there is compared with the
+  # build, never replaced. "Re-run all jobs" rebuilds the macOS and Windows
+  # helpers, which may then differ in bytes and stop here (nothing wrong is
+  # published; delete the draft's assets by hand to start over). A dispatch
   # (dry run) only checks and lists them.
   release-screen-helper:
     needs: build
@@ -246,11 +255,23 @@ jobs:
           name: ever-works-node-screen-helper
           path: screen-helper/
 
-      - name: Check them against the baked fingerprints
-        working-directory: screen-helper
+      - name: Download the bundle npm will publish
+        uses: actions/download-artifact@v8
+        with:
+          name: ever-works-node-bundle
+          path: bundle/
+
+      # The assets are the bytes the bundle's baked fingerprints name: the
+      # manifest beside cli.js is the asset copy, and every SHA-256 is in cli.js.
+      - name: Check them against the fingerprints baked into the bundle
         run: |
-          sha256sum --check --strict SHA256SUMS
-          cat helper-manifest.json
+          set -euo pipefail
+          (cd screen-helper && sha256sum --check --strict SHA256SUMS)
+          cmp bundle/helper-manifest.json screen-helper/helper-manifest.json
+          while read -r sha file; do
+            grep -qF "$sha" bundle/cli.js || { echo "::error::$file ($sha) is not baked into cli.js"; exit 1; }
+          done < screen-helper/SHA256SUMS
+          cat screen-helper/helper-manifest.json
 
       - name: Host them on the GitHub release of this tag
         if: startsWith(github.ref, 'refs/tags/node-v')
@@ -277,8 +298,9 @@ jobs:
               cat SHA256SUMS
               echo '```'
             } > "$RUNNER_TEMP/notes.md"
-            # Not "Latest": that stays with the platform's own releases.
-            gh release create "$TAG" --repo "$repo" --verify-tag --latest=false \
+            # A draft until every asset is there. Not "Latest": that stays with
+            # the platform's own releases.
+            gh release create "$TAG" --repo "$repo" --verify-tag --draft --latest=false \
               --title "ever-works-node ${TAG#node-v}" --notes-file "$RUNNER_TEMP/notes.md"
           fi
           existing="$(gh release view "$TAG" --repo "$repo" --json assets --jq '.assets[].name')"
@@ -296,6 +318,10 @@ jobs:
               echo "$file: uploaded"
             fi
           done
+          if [ "$(gh release view "$TAG" --repo "$repo" --json isDraft --jq '.isDraft')" = "true" ]; then
+            gh release edit "$TAG" --repo "$repo" --draft=false --latest=false
+            echo "published the release $TAG"
+          fi
 
       - name: Dry run (dispatch)
         if: ${{ !startsWith(github.ref, 'refs/tags/node-v') }}

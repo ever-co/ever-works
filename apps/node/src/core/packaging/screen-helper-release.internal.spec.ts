@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -32,6 +33,7 @@ interface ReleaseModule {
 }
 interface BuildModule {
 	screenHelperRelease(nodeVersion: string, env: Record<string, string | undefined>): HelperRelease;
+	assertBundleShape(file: string, manifest: HelperRelease['manifest']): void;
 }
 
 const load = <T>(file: string): T => createRequire(__filename)(join(appRoot, file)) as T;
@@ -183,6 +185,43 @@ describe('screen helper release manifest', () => {
 		);
 		expect(sha256(readFileSync(join(out, 'ever-works-screen-0.1.0-linux-x64')))).toBe(hashes['linux-x64']);
 		expect(JSON.parse(readFileSync(join(out, 'helper-manifest.json'), 'utf8'))).toEqual(result.manifest);
+
+		// Writing again over its own earlier output is fine.
+		release.writeHelperReleaseAssets(out, result);
+		expect(readdirSync(out)).toHaveLength(6);
+	});
+
+	it('never empties a folder that holds anything but its own earlier output', () => {
+		const root = tempDir();
+		writeBuild(join(root, 'linux'), 'linux-x64');
+		const result = release.collectHelperRelease({ dir: root, urlBase: BASE });
+		const out = tempDir();
+		writeFileSync(join(out, 'important.txt'), 'keep me');
+
+		expect(() => release.writeHelperReleaseAssets(out, result)).toThrow(/holds other files.*nothing was deleted/);
+		expect(readFileSync(join(out, 'important.txt'), 'utf8')).toBe('keep me');
+	});
+
+	it('runs as the command the Screen Helper workflow calls, and fails with a usage line on bad arguments', () => {
+		const root = tempDir();
+		const linux = writeBuild(join(root, 'linux'), 'linux-x64');
+		const out = join(tempDir(), 'assets');
+		const script = join(appRoot, 'screen-helper-release.js');
+
+		const printed = execFileSync(
+			process.execPath,
+			[script, '--dir', root, '--url-base', BASE, '--require', 'linux-x64', '--out', out],
+			{ encoding: 'utf8' }
+		);
+		expect(JSON.parse(printed).targets['linux-x64'].sha256).toBe(linux);
+		expect(readFileSync(join(out, 'SHA256SUMS'), 'utf8')).toContain(linux);
+
+		expect(() => execFileSync(process.execPath, [script, '--dir', root], { stdio: 'pipe' })).toThrow();
+		expect(() =>
+			execFileSync(process.execPath, [script, '--dir', root, '--url-base', BASE, '--require', 'win32-x64'], {
+				stdio: 'pipe'
+			})
+		).toThrow(/required target/);
 	});
 });
 
@@ -217,6 +256,36 @@ describe('build.js screen helper input', () => {
 		expect(elsewhere.manifest.targets['linux-x64']?.url).toBe(
 			'https://downloads.example.test/helper/ever-works-screen-0.1.0-linux-x64'
 		);
+	});
+
+	it('refuses a bundle whose manifest was not baked in, or that lacks a published fingerprint', () => {
+		const manifest = {
+			schemaVersion: 1 as const,
+			version: '0.1.0',
+			targets: { 'linux-x64': { sha256: 'c'.repeat(64), url: `${BASE}/ever-works-screen-0.1.0-linux-x64` } }
+		};
+		const bundleFile = (body: string): string => {
+			const file = join(tempDir(), 'cli.js');
+			writeFileSync(
+				file,
+				`#!/usr/bin/env node
+require("@napi-rs/keyring");
+${body}
+`
+			);
+			return file;
+		};
+		const baked = `var m = { sha256: "${'c'.repeat(64)}", url: "${manifest.targets['linux-x64'].url}" };`;
+
+		expect(() => build.assertBundleShape(bundleFile(baked), manifest)).not.toThrow();
+		// The define is gone from build.js: the read survives unreplaced.
+		expect(() =>
+			build.assertBundleShape(
+				bundleFile('var RAW = typeof __EVER_WORKS_SCREEN_HELPER_MANIFEST__ === "undefined" ? {} : 1;'),
+				{ ...manifest, targets: {} }
+			)
+		).toThrow(/not replaced/);
+		expect(() => build.assertBundleShape(bundleFile('var m = {};'), manifest)).toThrow(/not baked in/);
 	});
 
 	it('bakes the manifest into the bundle through the define helper-manifest.ts reads', async () => {

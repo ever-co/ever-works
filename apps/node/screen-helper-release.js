@@ -176,9 +176,34 @@ function readHelperCrateVersion(crateDir) {
 	return match[1];
 }
 
-/** Copy the assets to `outDir` under their release names, with `SHA256SUMS` and the manifest. */
+/** A file this module writes into an assets folder (and so may replace there). */
+function isReleaseAssetName(name) {
+	return (
+		name === 'SHA256SUMS' || name === 'helper-manifest.json' || /^ever-works-screen-[A-Za-z0-9.+_-]+$/.test(name)
+	);
+}
+
+/**
+ * Copy the assets to `outDir` under their release names, with `SHA256SUMS` and
+ * the manifest. `outDir` must be new, empty, or an earlier output of this
+ * function: anything else in it is refused, never deleted.
+ */
 function writeHelperReleaseAssets(outDir, { manifest, assets }) {
-	fs.rmSync(outDir, { recursive: true, force: true });
+	if (fs.existsSync(outDir)) {
+		if (!fs.statSync(outDir).isDirectory()) throw new Error(`${outDir} exists and is not a folder`);
+		const foreign = fs
+			.readdirSync(outDir, { withFileTypes: true })
+			.filter((entry) => !entry.isFile() || !isReleaseAssetName(entry.name));
+		if (foreign.length) {
+			throw new Error(
+				`${outDir} holds other files (${foreign
+					.slice(0, 3)
+					.map((entry) => entry.name)
+					.join(', ')}…): pass a new or empty folder; nothing was deleted`
+			);
+		}
+		for (const entry of fs.readdirSync(outDir)) fs.rmSync(path.join(outDir, entry));
+	}
 	fs.mkdirSync(outDir, { recursive: true });
 	const sums = [];
 	for (const asset of assets) {

@@ -263,4 +263,4 @@ if (require.main === module) {
 
 // For the packaging spec (`src/core/packaging/publishable-manifest.internal.spec.ts`);
 // `node build.js` runs `main()` above and ignores these.
-module.exports = { bundleExternals, buildPublishableManifest, screenHelperRelease };
+module.exports = { assertBundleShape, bundleExternals, buildPublishableManifest, screenHelperRelease };

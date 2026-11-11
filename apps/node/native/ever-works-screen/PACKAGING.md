@@ -89,16 +89,22 @@ only with the same linker and system libraries, so for those targets a release t
 `.github/workflows/publish-node.yml`, on the owner's `node-v<version>` tag:
 
 1. `screen-helper` builds every target: linux-x64 in the pinned container, darwin-arm64 and darwin-x64 on Apple
-   silicon, win32-x64 on Windows (the repository variable `SCREEN_HELPER_RELEASE_TARGETS`, a JSON list, narrows them);
+   silicon (hosted, fresh), win32-x64 on a fresh hosted Windows image or the machines named by the variable
+   `RUNNER_WINDOWS_X64_RELEASE` (JSON label list) — never on `RUNNER_WINDOWS_X64`, whose desktops also run pull
+   requests' cargo builds as SYSTEM with a persistent toolchain. The repository variable
+   `SCREEN_HELPER_RELEASE_TARGETS` (a JSON list) narrows the targets;
 2. `build` stages the node bundle with those builds (`apps/node/build.js`, `SCREEN_HELPER_RELEASE_DIR`):
    `apps/node/screen-helper-release.js` checks every binary against its metadata and bakes, per target, its SHA-256
    and the URL
    `https://github.com/ever-co/ever-works/releases/download/node-v<version>/ever-works-screen-<helper version>-<target>`
    (`.exe` on Windows) into `cli.js`, which also ships the manifest as `helper-manifest.json`. A target that was asked
    for and not built fails the release;
-3. `release-screen-helper` uploads the binaries, `SHA256SUMS` and `helper-manifest.json` to that tag's GitHub release
-   (the job's own token, `contents: write`; the release is not marked Latest). A re-run compares an asset already
-   there with the build and never replaces it;
+3. `release-screen-helper` checks the assets against the bundle npm will publish (the same `helper-manifest.json`,
+   every SHA-256 in `cli.js`), uploads the binaries, `SHA256SUMS` and `helper-manifest.json` to a draft GitHub release
+   of that tag and publishes the release once every asset is there (the job's own token, `contents: write`; not marked
+   Latest). A re-run compares an asset already there with the build and never replaces it. Re-run **failed jobs**
+   only: re-running all jobs rebuilds the macOS and Windows helpers, whose bytes may differ on another machine, and
+   the job then stops on the difference (nothing wrong is published; delete the draft's assets to start over);
 4. only then `publish` publishes the npm package that points at them.
 
 On a machine, `ever-works-node helper install` downloads its target's build and keeps it only when it hashes to the

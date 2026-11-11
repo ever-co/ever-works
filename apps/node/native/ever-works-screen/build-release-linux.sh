@@ -18,10 +18,20 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 out_dir="${1:-dist}"
-# Emptied first, so it must be a folder of its own inside this one.
-case "$out_dir" in
-  "" | . | ./ | /* | *..*) echo "out_dir must be a relative folder inside this one: $out_dir" >&2; exit 2 ;;
-esac
+# Emptied first, so it must be a plain folder name inside this one that git
+# tracks nothing in (dist, dist-linux, ...), never a path such as src or C:/x.
+if ! printf '%s' "$out_dir" | grep -Eq '^[A-Za-z0-9_][A-Za-z0-9._-]*$'; then
+  echo "out_dir must be a plain folder name inside this folder (got: $out_dir)" >&2
+  exit 2
+fi
+if [ -n "$(git ls-files -- "$out_dir")" ]; then
+  echo "out_dir $out_dir holds files git tracks; pick another name (nothing was deleted)" >&2
+  exit 2
+fi
+if [ -d "$out_dir" ] && [ -n "$(ls -A "$out_dir")" ] && [ ! -f "$out_dir/unsigned-release-metadata.json" ]; then
+  echo "out_dir $out_dir is not empty and is not an earlier release build; pick another name (nothing was deleted)" >&2
+  exit 2
+fi
 
 # rust:1.88.0-slim-bookworm (the channel rust-toolchain.toml pins). Change both together.
 image="${SCREEN_HELPER_LINUX_IMAGE:-docker.io/library/rust:1.88.0-slim-bookworm@sha256:38bc5a86d998772d4aec2348656ed21438d20fcdce2795b56ca434cf21430d89}"
