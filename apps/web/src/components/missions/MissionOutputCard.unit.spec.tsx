@@ -166,6 +166,40 @@ describe('MissionOutputCard (APW-08 T36)', () => {
         expect(screen.queryByTestId('mission-output-no-app-work')).toBeNull();
     });
 
+    // Only the API can tell these two (they depend on the Agent and the merge policy), so they
+    // are shown from a save's answer, and cleared by the next answer without them.
+    it('shows the Agent and the merge-policy notices from the API’s warnings, and clears them', async () => {
+        updateMissionAction.mockResolvedValueOnce(
+            mission({
+                outputMode: 'tasks',
+                warnings: ['repoWorkAgentCannotOpenPullRequests', 'repoWorkAllowsAgentMerge'],
+            }),
+        );
+        render(<MissionOutputCard mission={mission()} hasTaskWork onMissionChange={vi.fn()} />);
+        fireEvent.click(screen.getByTestId('mission-output-tasks'));
+        expect(screen.queryByTestId('mission-output-repo-agent-cannot-open-prs')).toBeNull();
+        expect(screen.queryByTestId('mission-output-repo-allows-agent-merge')).toBeNull();
+        fireEvent.click(screen.getByTestId('mission-output-save'));
+        await waitFor(() =>
+            expect(
+                screen.getByTestId('mission-output-repo-agent-cannot-open-prs'),
+            ).toHaveTextContent('repoAgentCannotOpenPullRequests'),
+        );
+        expect(screen.getByTestId('mission-output-repo-allows-agent-merge')).toHaveTextContent(
+            'repoAllowsAgentMerge',
+        );
+        // Neither is "no Work attached" or "isolation off".
+        expect(screen.queryByTestId('mission-output-no-app-work')).toBeNull();
+        expect(screen.queryByTestId('mission-output-repo-isolation-off')).toBeNull();
+
+        updateMissionAction.mockResolvedValueOnce(mission({ outputMode: 'tasks', warnings: [] }));
+        fireEvent.click(screen.getByTestId('mission-output-save'));
+        await waitFor(() =>
+            expect(screen.queryByTestId('mission-output-repo-agent-cannot-open-prs')).toBeNull(),
+        );
+        expect(screen.queryByTestId('mission-output-repo-allows-agent-merge')).toBeNull();
+    });
+
     it('a refused save shows the error and leaves the Mission as it was', async () => {
         updateMissionAction.mockRejectedValueOnce(
             new Error('outputMode must be one of ideas, tasks, both.'),

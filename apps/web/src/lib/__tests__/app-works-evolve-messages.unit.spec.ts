@@ -227,6 +227,19 @@ describe('APW-08 evolve copy (T28)', () => {
             ) {
                 problems.push(`${locale}: repoIsolationOff is the English sentence`);
             }
+            // The two notices only the API can raise (the Agent, the merge policy): present, a
+            // real translation, and naming the Repository Work kind the way the bundle does.
+            for (const key of ['repoAgentCannotOpenPullRequests', 'repoAllowsAgentMerge']) {
+                const path = `dashboard.missionDetail.output.${key}`;
+                const value = at(json, path);
+                if (typeof value !== 'string' || value.trim().length === 0) {
+                    problems.push(`${locale}: ${key} missing`);
+                } else if (locale !== 'en' && value === at(en, path)) {
+                    problems.push(`${locale}: ${key} is the English sentence`);
+                } else if (!/Repository|مستودع/.test(value)) {
+                    problems.push(`${locale}: ${key} does not name the Repository Work`);
+                }
+            }
         }
         expect(problems).toEqual([]);
     });
