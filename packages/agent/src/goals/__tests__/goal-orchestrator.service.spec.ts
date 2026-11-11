@@ -464,6 +464,106 @@ describe('GoalOrchestratorService — Definition of Done', () => {
         expect(eventMessages(events).at(-1)).toContain('superseded by the new plan');
     });
 
+    it('rewords an open criterion', async () => {
+        const { service, goals } = build({
+            goal: { dodCriteria: [{ id: 'a', text: 'Ship pricing', status: 'open' }] },
+        });
+        await service.patchDodCriterion('u1', 'g1', 'a', { text: 'Ship pricing with three tiers' });
+        expect(goals._rows[0].dodCriteria[0]).toMatchObject({
+            text: 'Ship pricing with three tiers',
+            status: 'open',
+        });
+    });
+
+    it.each(['done', 'waived'] as const)(
+        'refuses to reword a %s criterion (it keeps the wording it was signed off with)',
+        async (status) => {
+            const { service, goals, events } = build({
+                goal: { dodCriteria: [{ id: 'a', text: 'Ship pricing', status }] },
+            });
+            const before = events._rows.length;
+            await expect(
+                service.patchDodCriterion('u1', 'g1', 'a', { text: 'Something else' }),
+            ).rejects.toBeInstanceOf(BadRequestException);
+            await expect(
+                service.patchDodCriterion('u1', 'g1', 'a', { text: 'Something else', status }),
+            ).rejects.toThrow(/Reopen this criterion before rewording it/);
+            expect(goals._rows[0].dodCriteria[0]).toMatchObject({ text: 'Ship pricing', status });
+            expect(events._rows.length).toBe(before);
+        },
+    );
+
+    it('still lets a closed criterion take evidence, a note, the same text, or a reopen-and-reword', async () => {
+        const { service, goals } = build({
+            goal: { dodCriteria: [{ id: 'a', text: 'Ship pricing', status: 'done' }] },
+        });
+        await service.patchDodCriterion('u1', 'g1', 'a', { evidence: 'https://example.test/pr/1' });
+        await service.patchDodCriterion('u1', 'g1', 'a', { text: ' Ship pricing ' });
+        expect(goals._rows[0].dodCriteria[0]).toMatchObject({ status: 'done' });
+
+        await service.patchDodCriterion('u1', 'g1', 'a', {
+            status: 'open',
+            text: 'Ship pricing v2',
+        });
+        expect(goals._rows[0].dodCriteria[0]).toMatchObject({
+            text: 'Ship pricing v2',
+            status: 'open',
+        });
+    });
+
+    it('drops the old evidence and note when a closed criterion is reopened and reworded', async () => {
+        const { service, goals } = build({
+            goal: {
+                dodCriteria: [
+                    {
+                        id: 'a',
+                        text: 'Ship pricing',
+                        status: 'waived',
+                        evidence: 'https://example.test/pr/1',
+                        note: 'out of scope',
+                    },
+                    {
+                        id: 'b',
+                        text: 'Write docs',
+                        status: 'done',
+                        evidence: 'https://example.test/docs',
+                    },
+                ],
+            },
+        });
+        await service.patchDodCriterion('u1', 'g1', 'a', {
+            status: 'open',
+            text: 'Ship pricing v2',
+        });
+        expect(goals._rows[0].dodCriteria[0].evidence ?? null).toBeNull();
+        expect(goals._rows[0].dodCriteria[0].note ?? null).toBeNull();
+
+        // New evidence in the same patch is kept; reopening WITHOUT rewording keeps the old.
+        await service.patchDodCriterion('u1', 'g1', 'b', {
+            status: 'open',
+            text: 'Write the docs',
+            evidence: 'https://example.test/docs-v2',
+        });
+        expect(goals._rows[0].dodCriteria[1].evidence).toBe('https://example.test/docs-v2');
+    });
+
+    it('keeps evidence when a closed criterion is only reopened', async () => {
+        const { service, goals } = build({
+            goal: {
+                dodCriteria: [
+                    {
+                        id: 'a',
+                        text: 'Ship pricing',
+                        status: 'done',
+                        evidence: 'https://example.test/pr/1',
+                    },
+                ],
+            },
+        });
+        await service.patchDodCriterion('u1', 'g1', 'a', { status: 'open' });
+        expect(goals._rows[0].dodCriteria[0].evidence).toBe('https://example.test/pr/1');
+    });
+
     it('404s an unknown criterion id', async () => {
         const { service } = build({
             goal: { dodCriteria: [{ id: 'a', text: 'x', status: 'open' }] },

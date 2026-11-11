@@ -10,6 +10,7 @@ import { MessageAgentButton } from '@/components/ai/conversations/ConversationEn
 import { Button } from '@/components/ui/button';
 import { ROUTES } from '@/lib/constants';
 import { isFleetEnabled } from '@/lib/fleet-flags';
+import { CollapsibleMarkdown } from '@/components/markdown/CollapsibleMarkdown';
 
 /**
  * Agents/Skills/Tasks PR #1017 — Phase 5. Dashboard tab is the
@@ -204,9 +205,11 @@ export default async function AgentDashboardPage({ params }: { params: Promise<{
                     </h2>
                 </div>
                 {agent.capabilities ? (
-                    <p className="text-sm leading-relaxed text-text-secondary dark:text-text-secondary-dark whitespace-pre-wrap">
-                        {agent.capabilities}
-                    </p>
+                    <CollapsibleMarkdown
+                        content={agent.capabilities}
+                        collapsedHeight={320}
+                        data-testid="agent-capabilities"
+                    />
                 ) : (
                     <p className="text-sm text-text-muted dark:text-text-muted-dark italic">
                         No capabilities set yet.
