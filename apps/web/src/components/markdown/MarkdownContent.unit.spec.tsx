@@ -212,11 +212,48 @@ describe('MarkdownContent — footnotes', () => {
         }
     });
 
-    it('drops footnotes from an inline field instead of leaking "Footnotes" and "↩"', () => {
+    it('does not parse footnotes in an inline field, so "Footnotes" and "↩" never leak', () => {
         const { container } = render(<MarkdownInline content={MD} />);
         expect(container.textContent).not.toContain('Footnotes');
         expect(container.textContent).not.toContain('↩');
-        expect(container.querySelector('sup,section')).toBeNull();
-        expect(container.textContent).toContain('Claim and another');
+        expect(container.querySelector('sup,section,ol,li')).toBeNull();
+        // The reference stays as the author wrote it.
+        expect(container.textContent).toContain('Claim[^1] and another[^note].');
+    });
+});
+
+describe('MarkdownInline — inline Markdown only (PR #3137 closure)', () => {
+    it('renders emphasis, code, links and line breaks', () => {
+        const { container } = render(
+            <MarkdownInline
+                content={'**Ship** _it_ with `pnpm` and [docs](https://x.test)  \nnext'}
+            />,
+        );
+        expect(container.querySelector('strong')?.textContent).toBe('Ship');
+        expect(container.querySelector('em')?.textContent).toBe('it');
+        expect(container.querySelector('code')?.textContent).toBe('pnpm');
+        expect(container.querySelector('a')?.getAttribute('href')).toBe('https://x.test');
+        expect(container.querySelector('br')).not.toBeNull();
+    });
+
+    it.each([
+        ['a table', 'a|b\n-|-\nx|y'],
+        ['a list', '- one\n- two'],
+        ['a heading', '# Title'],
+        ['a quote', '> quoted'],
+        ['a fenced code block', '```\ncode\n```'],
+        ['a rule', 'text\n\n---'],
+    ])('never builds %s: its source reads as text', (_name, md) => {
+        const { container } = render(<MarkdownInline content={md} data-testid="mi" />);
+        expect(
+            container.querySelector('table,ul,ol,li,h1,h2,h3,h4,h5,h6,blockquote,pre,hr'),
+        ).toBeNull();
+        expect(container.querySelector('[data-markdown-fallback]')).toBeNull();
+    });
+
+    it('falls back to plain text over 1,000 characters', () => {
+        const long = 'word '.repeat(201);
+        const { container } = render(<MarkdownInline content={long} />);
+        expect(container.querySelector('[data-markdown-fallback]')?.textContent).toBe(long);
     });
 });

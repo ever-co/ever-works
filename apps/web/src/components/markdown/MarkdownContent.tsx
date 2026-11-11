@@ -17,7 +17,7 @@ import remarkGfm from 'remark-gfm';
 import rehypeSanitize from 'rehype-sanitize';
 import { cn } from '@/lib/utils/cn';
 import { resolveMarkdownHref, resolveMarkdownImageSrc } from '@/lib/markdown/markdown-links';
-import { assessMarkdown } from '@/lib/markdown/markdown-limits';
+import { assessInlineMarkdown, assessMarkdown } from '@/lib/markdown/markdown-limits';
 
 /**
  * The one renderer for Markdown that users and agents write into record
@@ -245,6 +245,40 @@ function rehypeDropFootnotes() {
 }
 
 const REMARK_PLUGINS = [remarkGfm];
+
+/**
+ * Every block construct the tokenizer knows, by its micromark name. The
+ * inline variant switches them off, so a criterion is ONE paragraph of inline
+ * Markdown: a table, list, heading, quote or code block in it is never built
+ * (building a table there took 233 ms per criterion in the PR #3137 review).
+ */
+const BLOCK_CONSTRUCTS = [
+    'blockQuote',
+    'codeFenced',
+    'codeIndented',
+    'definition',
+    'headingAtx',
+    'htmlFlow',
+    'list',
+    'setextUnderline',
+    'thematicBreak',
+    'table',
+    'tasklistCheck',
+    'gfmFootnoteDefinition',
+    'gfmFootnoteCall',
+    'gfmPotentialFootnoteCall',
+];
+
+/** remark plugin: inline Markdown only (see {@link BLOCK_CONSTRUCTS}). */
+function remarkInlineOnly(this: { data(): Record<string, unknown> }) {
+    const data = this.data() as { micromarkExtensions?: unknown[] };
+    data.micromarkExtensions = [
+        ...(data.micromarkExtensions ?? []),
+        { disable: { null: BLOCK_CONSTRUCTS } },
+    ];
+}
+
+const INLINE_REMARK_PLUGINS = [remarkGfm, remarkInlineOnly];
 /**
  * Footnote ids are namespaced by `rehype-sanitize` alone (`user-content-…`,
  * against DOM clobbering); remark-rehype's own prefix is turned off so they
@@ -376,10 +410,10 @@ export const MarkdownInline = memo(function MarkdownInline({
     className,
     'data-testid': testId,
 }: Omit<MarkdownContentProps, 'size' | 'id'>) {
-    const parsed = assessMarkdown(content).render
+    const parsed = assessInlineMarkdown(content).render
         ? parseMarkdown({
               children: content,
-              remarkPlugins: REMARK_PLUGINS,
+              remarkPlugins: INLINE_REMARK_PLUGINS,
               remarkRehypeOptions: REMARK_REHYPE_OPTIONS,
               rehypePlugins: INLINE_REHYPE_PLUGINS,
               components: INLINE_COMPONENTS,
