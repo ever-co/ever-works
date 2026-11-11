@@ -2426,6 +2426,8 @@
                 "appliesTo": "S’applique aux Works attachés en « Améliore » ou « Exploite ».",
                 "noAppWork": "Attachez un App Work ou un Repository Work en « Améliore » ou « Exploite » pour y créer des tâches.",
                 "repoIsolationOff": "« Task isolation » est désactivé sur un Repository Work attaché : aucune tâche n’y est créée. Activez « Task isolation » dans les paramètres de ce Work.",
+                "repoAgentCannotOpenPullRequests": "L’agent qui exécuterait les tâches sur un Repository Work attaché ne peut pas committer et ouvrir des pull requests : aucune tâche n’y est créée. Choisissez un agent disposant des deux autorisations pour la sortie en tâches de cette Mission, ou accordez-les à l’agent du Work.",
+                "repoAllowsAgentMerge": "La politique de fusion d’un Repository Work attaché permet aux agents de fusionner leurs propres pull requests : cette Mission n’y crée aucune tâche. Désactivez les fusions par les agents pour ce Work afin que la Mission puisse y créer des tâches.",
                 "tasksOnWorks": "Tâches sur les Works attachés",
                 "nothingToFile": "Aucun App Work ni Repository Work attaché sur lequel créer des tâches.",
                 "tasksOnWorksEmpty": "Aucune tâche créée pour l’instant.",

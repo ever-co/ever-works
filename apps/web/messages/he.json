@@ -2426,6 +2426,8 @@
                 "appliesTo": "חל על Works המצורפים כ„משפר” או „מפעיל”.",
                 "noAppWork": "צרפו App Work או Repository Work כ„משפר” או „מפעיל” כדי לתייק בו משימות.",
                 "repoIsolationOff": "ההגדרה „Task isolation” כבויה ב-Repository Work מצורף, ולכן לא מתויקות בו משימות. הפעילו את „Task isolation” בהגדרות של אותו Work.",
+                "repoAgentCannotOpenPullRequests": "הסוכן שיריץ משימות ב-Repository Work מצורף אינו מורשה לבצע commit ולפתוח pull requests, ולכן לא מתויקות בו משימות. בחרו לפלט המשימות של המשימה הזו סוכן עם שתי ההרשאות, או העניקו אותן לסוכן של ה-Work.",
+                "repoAllowsAgentMerge": "מדיניות המיזוג של Repository Work מצורף מאפשרת לסוכנים למזג את ה-pull requests שלהם, ולכן המשימה הזו לא מתייקת בו משימות. כבו מיזוג על ידי סוכנים ב-Work הזה כדי שהמשימה תוכל לתייק בו משימות.",
                 "tasksOnWorks": "משימות ב-Works המצורפים",
                 "nothingToFile": "אין App Work או Repository Work מצורף לתיוק משימות.",
                 "tasksOnWorksEmpty": "עדיין לא תויקו משימות.",

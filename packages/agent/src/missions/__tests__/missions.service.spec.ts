@@ -683,16 +683,101 @@ describe('MissionsService — output mode (APW-08 T34)', () => {
     ) => ({
         listForMissionWithWork: jest.fn(async () => rows),
     });
-    const build = (missionWorks?: unknown) =>
+    const build = (missionWorks?: unknown, tickService?: unknown) =>
         new MissionsService(
             repo as unknown as Repository<Mission>,
             new TitlerService(),
-            undefined, // tickService
+            tickService as never,
             undefined, // missionAttachments
             undefined, // uploadsRepo
             missionWorks as never,
         );
     const base = { title: 'Grow Bookings', description: 'd', type: MissionType.ONE_SHOT };
+
+    // The Agent half of a Repository Work's check, asked through the tick (the rule the tick
+    // asks before planning, and dispatch asks again).
+    describe('a Repository Work whose Tasks could not run unattended', () => {
+        const repoOn = {
+            relation: 'improves',
+            workKind: 'repo',
+            workId: 'w-repo',
+            workTaskIsolation: 'worktree',
+        };
+        const tickWith = (blocked: {
+            agentCannotOpenPullRequests: string[];
+            agentMergeAllowed: string[];
+        }) => ({ blockedRepoWorksForMission: jest.fn(async () => blocked) });
+
+        it('warns repoWorkAgentCannotOpenPullRequests and repoWorkAllowsAgentMerge, asked with the stored Task output', async () => {
+            const tick = tickWith({
+                agentCannotOpenPullRequests: ['ever-works'],
+                agentMergeAllowed: ['website'],
+            });
+            const dto = await build(relationsOf([repoOn]), tick).create('u1', {
+                ...base,
+                outputMode: 'tasks',
+                taskOutput: { tasksPerTick: 2 },
+            });
+            expect(dto.warnings).toEqual([
+                'repoWorkAgentCannotOpenPullRequests',
+                'repoWorkAllowsAgentMerge',
+            ]);
+            expect(tick.blockedRepoWorksForMission).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    id: dto.id,
+                    userId: 'u1',
+                    taskOutput: expect.objectContaining({ tasksPerTick: 2 }),
+                }),
+                [repoOn],
+                undefined,
+            );
+        });
+
+        it('nothing more when the Agent and the merge policy are fine, or for an ideas Mission', async () => {
+            const tick = tickWith({ agentCannotOpenPullRequests: [], agentMergeAllowed: [] });
+            const ok = await build(relationsOf([repoOn]), tick).create('u1', {
+                ...base,
+                outputMode: 'both',
+            });
+            expect(ok.warnings).toBeUndefined();
+            const ideas = await build(relationsOf([repoOn]), tick).create('u1', base);
+            expect(ideas.warnings).toBeUndefined();
+            expect(tick.blockedRepoWorksForMission).toHaveBeenCalledTimes(1);
+        });
+
+        it('a check that fails warns nothing more, and the write is accepted', async () => {
+            const tick = {
+                blockedRepoWorksForMission: jest.fn(async () => {
+                    throw new Error('db down');
+                }),
+            };
+            const dto = await build(
+                relationsOf([{ ...repoOn, workTaskIsolation: 'off' }]),
+                tick,
+            ).create('u1', { ...base, outputMode: 'tasks' });
+            expect(dto.outputMode).toBe('tasks');
+            expect(dto.warnings).toEqual(['repoWorkTaskIsolationOff']);
+        });
+    });
+
+    it('keeps an API-only taskOutput.allowAgentMerge opt-in, and only when exactly true', async () => {
+        const opted = await build(relationsOf([])).create('u1', {
+            ...base,
+            taskOutput: { allowAgentMerge: true },
+        });
+        expect(opted.taskOutput).toEqual({
+            tasksPerTick: 1,
+            openTasksCap: 3,
+            allowAgentMerge: true,
+        });
+        for (const allowAgentMerge of [false, 'true', 1]) {
+            const dto = await build(relationsOf([])).create('u1', {
+                ...base,
+                taskOutput: { allowAgentMerge },
+            });
+            expect(dto.taskOutput).toEqual({ tasksPerTick: 1, openTasksCap: 3 });
+        }
+    });
 
     beforeEach(() => {
         repo = makeRepoMock();

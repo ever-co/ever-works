@@ -2395,6 +2395,8 @@
                 "appliesTo": "Geldt voor Works die als ‘Verbetert’ of ‘Beheert’ zijn gekoppeld.",
                 "noAppWork": "Koppel een App Work of Repository Work als ‘Verbetert’ of ‘Beheert’ om er taken op aan te maken.",
                 "repoIsolationOff": "‘Task isolation’ staat uit voor een gekoppeld Repository Work, dus er worden geen taken op aangemaakt. Zet ‘Task isolation’ aan in de instellingen van dat Work.",
+                "repoAgentCannotOpenPullRequests": "De agent die taken op een gekoppeld Repository Work zou uitvoeren, mag niet committen en pull requests openen, dus er worden geen taken op aangemaakt. Kies voor de taakuitvoer van deze Missie een agent met beide rechten, of geef ze aan de agent van het Work.",
+                "repoAllowsAgentMerge": "Het mergebeleid van een gekoppeld Repository Work laat agents hun eigen pull requests mergen, dus deze Missie maakt er geen taken op aan. Zet merges door agents uit voor dat Work zodat de Missie er taken kan aanmaken.",
                 "tasksOnWorks": "Taken op gekoppelde Works",
                 "nothingToFile": "Geen gekoppeld App Work of Repository Work om taken op aan te maken.",
                 "tasksOnWorksEmpty": "Nog geen taken aangemaakt.",

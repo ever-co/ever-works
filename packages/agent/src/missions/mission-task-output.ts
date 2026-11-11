@@ -49,11 +49,34 @@ export const MISSION_NO_APP_WORK_RELATION = 'noAppWorkRelation';
  */
 export const MISSION_REPO_WORK_ISOLATION_OFF = 'repoWorkTaskIsolationOff';
 
+/**
+ * The warning a write answers when an attached Repository Work (isolation on) would get no Task
+ * because the Agent its Tasks would run with — the Mission's Task output Agent, else the Work's
+ * only Agent — may not both commit and open pull requests, or no single Agent resolves. Such a
+ * run would change nothing (no workspace) or end with a pushed branch and no pull request.
+ */
+export const MISSION_REPO_WORK_AGENT_CANNOT_OPEN_PULL_REQUESTS =
+    'repoWorkAgentCannotOpenPullRequests';
+
+/**
+ * The warning a write answers when an attached Repository Work's effective merge policy lets
+ * agents merge their own pull requests and the Mission has not opted in
+ * (`taskOutput.allowAgentMerge: true`): its unattended Tasks are not filed or started there.
+ */
+export const MISSION_REPO_WORK_ALLOWS_AGENT_MERGE = 'repoWorkAllowsAgentMerge';
+
 export interface MissionTaskOutput {
     tasksPerTick: number;
     openTasksCap: number;
     /** The Agent the filed Tasks are dispatched to; absent = the Work's default Agent. */
     agentId?: string;
+    /**
+     * Set over the API only (no form): the Mission's Tasks on a Repository Work may run under a
+     * merge policy that lets agents merge their own pull requests. Absent = not allowed: such a
+     * Work gets no Task (`repoWorkAllowsAgentMerge`). Kept only when exactly `true`; a template
+     * manifest can never set it (`sanitizeTemplateTaskOutput`).
+     */
+    allowAgentMerge?: true;
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -84,7 +107,8 @@ function boundedInt(
 
 /**
  * The Task output of a Mission, read without trusting the column: each field in bounds or its
- * default, an `agentId` kept only when it is a uuid. A non-object is the defaults.
+ * default, an `agentId` kept only when it is a uuid, `allowAgentMerge` only when exactly `true`.
+ * A non-object is the defaults.
  */
 export function normalizeMissionTaskOutput(raw: unknown): MissionTaskOutput {
     const input =
@@ -95,11 +119,13 @@ export function normalizeMissionTaskOutput(raw: unknown): MissionTaskOutput {
         typeof input.agentId === 'string' && UUID.test(input.agentId.trim())
             ? input.agentId.trim().toLowerCase()
             : undefined;
-    return {
+    const output: MissionTaskOutput = {
         tasksPerTick: boundedInt(input.tasksPerTick, MISSION_TASKS_PER_TICK),
         openTasksCap: boundedInt(input.openTasksCap, MISSION_OPEN_TASKS_CAP),
-        ...(agentId ? { agentId } : {}),
     };
+    if (agentId) output.agentId = agentId;
+    if (input.allowAgentMerge === true) output.allowAgentMerge = true;
+    return output;
 }
 
 /** The part of a `mission_works` row (hydrated with its Work) the Task output reads. */
@@ -112,18 +138,23 @@ export interface MissionTaskOutputWorkRow {
 }
 
 /**
- * Whether a Mission's Task output files Tasks on one attached Work:
+ * The FIRST, static half of whether a Mission's Task output files Tasks on one attached Work —
+ * what the relation row alone can say:
  *
  *   - `eligible` — attached as Improves or Operates, of a kind whose Tasks are delivered as pull
- *     requests (`app`, `repo`), and a Task filed there will get its own branch;
+ *     requests (`app`, `repo`), and the Work's own setting isolates its Tasks;
  *   - `isolation-off` — the same, except that the Work's Task isolation is off, so a Task there
  *     would run with no branch and open no pull request. Only a Repository Work can be here: an
  *     App Work's Tasks are always isolated. Nothing is filed on it, and nothing turns the
  *     setting on for the owner;
  *   - `not-applicable` — another relation or another kind: never a target, exactly as before.
  *
- * The isolation half is `resolveTaskIsolation` itself, asked the way a Mission-filed Task will
- * be (a Work, no per-Task override), so this can never disagree with what the run then does.
+ * What this guarantees: the Work's setting, asked through `resolveTaskIsolation` with a Work and
+ * no per-Task override (how a Mission-filed Task is created). What it does NOT see is the Agent:
+ * the worker also turns isolation off for an Agent that may not commit, and opens no pull request
+ * for one that may not open them. For a Repository Work that second half is asked before the
+ * planner runs — `TaskTransitionService.missionRepoRunRefusal`, with the Agent dispatch will
+ * resolve — and again at dispatch, so `eligible` here is necessary, not sufficient.
  */
 export type MissionTaskOutputEligibility = 'eligible' | 'isolation-off' | 'not-applicable';
 

@@ -2294,11 +2294,28 @@ describe('GoalOrchestratorService — the Goal’s Work (APW-08 T32)', () => {
         });
 
         it('a Task with a run in flight is counted as running, not as awaiting a merge', async () => {
-            const { service, tasks, runs } = build({
-                goal: running({ iteration: 3, lastProgressIteration: 3 }),
+            // Two slots: iteration 3 runs (its PR is open too), iteration 2's PR waits for a merge.
+            // The gate fills the second slot with iteration 2 ONLY — iteration 3 is counted once,
+            // as running. Without the gate the second slot would be free (a dispatch); with
+            // iteration 3 double-counted the line would name both iterations.
+            const { service, tasks, runs, tasksService } = build({
+                goal: running({
+                    iteration: 3,
+                    lastProgressIteration: 3,
+                    maxConcurrentIterations: 2,
+                }),
                 works: worksWith(REPO_WORK),
             });
-            tasks._rows.push(openChange());
+            tasks._rows.push(
+                openChange({
+                    id: 'task-it2',
+                    title: '[Goal] Customer self-service — iteration 2',
+                    prNumber: 6,
+                    prUrl: 'https://github.com/acme/bookings/pull/6',
+                    createdAt: new Date('2026-10-31T09:00:00.000Z'),
+                }),
+                openChange(),
+            );
             runs._rows.push({
                 id: 'r-it3',
                 taskId: 'task-it3',
@@ -2306,16 +2323,25 @@ describe('GoalOrchestratorService — the Goal’s Work (APW-08 T32)', () => {
                 costCents: 0,
                 startedAt: new Date('2026-10-31T10:05:00.000Z'),
             });
-            expect((await service.advance('u1', 'g1')).reasonCode).not.toBe('awaiting-merge');
+            expect(await service.advance('u1', 'g1')).toMatchObject({
+                action: 'wait',
+                reasonCode: 'awaiting-merge',
+                reasoning: "Waiting for iteration 2's pull request to be merged or closed.",
+            });
+            expect(tasksService.create).not.toHaveBeenCalled();
         });
 
-        it('pauses when the Repository Work is gone, exactly as for an App Work (FR-48)', async () => {
-            const { service, goals } = build({ goal: running(), works: worksWith(null) });
+        it('pauses when the Repository Work is no longer the owner’s, exactly as for an App Work (FR-48)', async () => {
+            const { service, goals, tasksService } = build({
+                goal: running(),
+                works: worksWith({ ...REPO_WORK, userId: 'someone-else' }),
+            });
             expect(await service.advance('u1', 'g1')).toMatchObject({
                 action: 'pause',
                 reasonCode: 'work-unavailable',
             });
             expect(goals._rows[0].loopStatus).toBe('paused');
+            expect(tasksService.create).not.toHaveBeenCalled();
         });
     });
 

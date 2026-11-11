@@ -37,6 +37,8 @@ export interface MissionTaskOutput {
     tasksPerTick: number;
     openTasksCap: number;
     agentId?: string;
+    /** Set over the API only: Repository Work Tasks under a merge policy that lets agents merge. */
+    allowAgentMerge?: boolean;
 }
 
 export interface Mission {
@@ -69,8 +71,11 @@ export interface Mission {
     taskOutputNoticeAt?: string | null;
     /**
      * APW-08 T34 — on a write's answer only, for a Mission that files Tasks:
-     * `noAppWorkRelation` (no App or Repository Work attached as Improves or Operates) or
-     * `repoWorkTaskIsolationOff` (a Repository Work is attached, with its Task isolation off).
+     * `noAppWorkRelation` (no App or Repository Work attached as Improves or Operates),
+     * `repoWorkTaskIsolationOff` (a Repository Work is attached, with its Task isolation off),
+     * `repoWorkAgentCannotOpenPullRequests` (the Agent its Tasks would run with may not commit
+     * and open pull requests) or `repoWorkAllowsAgentMerge` (its merge policy lets agents merge
+     * and the Mission has not opted in).
      */
     warnings?: string[];
 }

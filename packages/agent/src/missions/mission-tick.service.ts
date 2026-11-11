@@ -1,6 +1,15 @@
 import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, IsNull, Not, Repository, type FindOptionsWhere } from 'typeorm';
+import {
+    In,
+    IsNull,
+    MoreThanOrEqual,
+    Not,
+    Raw,
+    Repository,
+    type FindOperator,
+    type FindOptionsWhere,
+} from 'typeorm';
 import { ModuleRef } from '@nestjs/core';
 import { ActivityLogService } from '../activity-log/activity-log.service';
 import { ActivityActionType, ActivityStatus } from '../entities/activity-log.types';
@@ -24,6 +33,7 @@ import {
 import { isRepositoryWorkKind } from '@ever-works/contracts';
 import { Task, TaskStatus } from '../entities/task.entity';
 import { TasksService } from '../tasks-domain/tasks.service';
+import { MISSION_TASK_LABEL, type MissionRepoRunRefusal } from '../tasks-domain/mission-repo-run';
 import { MissionWorkRepository } from '../database/repositories/mission-work.repository';
 import {
     ownershipRelationScopeOf,
@@ -45,6 +55,7 @@ import {
     normalizeMissionOutputMode,
     normalizeMissionTaskOutput,
     type MissionTaskOutput,
+    type MissionTaskOutputWorkRow,
 } from './mission-task-output';
 import {
     MISSION_PLANNER_RECENT_TASKS,
@@ -65,27 +76,69 @@ export const MISSION_CLOSED_UNMERGED_PR_STATE = 'closed';
 const MISSION_WAITING_ON_PR_STATUSES = [TaskStatus.IN_REVIEW, TaskStatus.BLOCKED];
 
 /**
- * The Mission's Tasks on one Work that count against `openTasksCap`: not Done or Cancelled, and
- * not one that is only waiting on a pull request that was closed without merging.
- *
- * A Task whose pull request is closed unmerged is not open work: nothing completes it (only a
- * MERGE moves a Task to Done, `TaskPrStatusService.completeOnMerge`), so it would sit in review
- * and hold a slot until a person cancelled it, and a Mission with a few rejected pull requests
- * would stop filing for good. It is left out of the count here; its status is not touched.
- *
- * Only while it waits (In review or Blocked): a Task a person moved back to To do or Backlog, or
- * that is running again (In progress), is open work whatever its last pull request did, and an
- * unknown status counts too. `prState` is nullable and SQL's `<>` drops NULLs, so the rule is
- * three OR-ed branches: a status that is not waiting (and not Done or Cancelled); or a waiting
- * status with no pull-request state yet (no pull request, or one the status sweep has not read);
- * or a waiting status with a state other than `closed` (`open`, `draft`, and `merged` — a merged
- * Task that is not Done yet is still waiting on its delivery or an approver, so it still counts).
+ * How long a Task waiting on a closed, unmerged pull request still holds its slot of the cap:
+ * 24 hours after it last changed. So closing a Mission's pull requests throttles it to at most
+ * `openTasksCap` new Tasks per Work per day, instead of freeing a slot the moment each closes.
  */
-export function missionOpenTasksWhere(base: {
-    workId: string;
-    missionId: string;
-}): FindOptionsWhere<Task>[] {
+export const MISSION_CLOSED_PR_SLOT_HOLD_MS = 24 * 60 * 60 * 1000;
+
+/** The run statuses that mean "a run of this Task is queued or running". */
+const MISSION_ACTIVE_RUN_STATUSES = ['queued', 'running'] as const;
+
+/**
+ * `id` EXISTS a queued or running `agent_runs` row for the Task — the operator
+ * {@link missionOpenTasksWhere} uses for "a run is in flight, whatever the status says".
+ * `escape` quotes an identifier for the connection's driver (Postgres, SQLite and MySQL quote
+ * differently); the two statuses are constants, inlined as literals.
+ */
+export function missionActiveRunExists(
+    escape: (name: string) => string = (name) => `"${name}"`,
+): FindOperator<string> {
+    const run = escape('mission_cap_run');
+    const statuses = MISSION_ACTIVE_RUN_STATUSES.map((status) => `'${status}'`).join(', ');
+    return Raw(
+        (alias) =>
+            `EXISTS (SELECT 1 FROM ${escape('agent_runs')} ${run} WHERE ${run}.${escape(
+                'taskId',
+            )} = ${alias} AND ${run}.${escape('status')} IN (${statuses}))`,
+    );
+}
+
+/**
+ * The Mission's Tasks on one Work that count against `openTasksCap`.
+ *
+ * A Task counts while it is open work: not Done or Cancelled — except one that is only WAITING
+ * (In review or Blocked) on a pull request that was closed without merging, and has not changed
+ * for {@link MISSION_CLOSED_PR_SLOT_HOLD_MS}. Nothing completes such a Task (only a MERGE moves a
+ * Task to Done, `TaskPrStatusService.completeOnMerge`), so without this it would sit in review
+ * and hold a slot until a person cancelled it, and a Mission with a few rejected pull requests
+ * would stop filing for good. Its status is not touched.
+ *
+ * Two rules keep that from becoming a loophole:
+ *
+ *  - **A run in flight always counts.** `runTask` does not move a Task out of In review, so a
+ *    Task run again after its pull request closed still reads `in_review` + `closed` while its
+ *    new run works; any Task with a `queued` / `running` run counts, whatever its status or
+ *    pull-request state ({@link missionActiveRunExists}).
+ *  - **A closed pull request frees its slot only a day later.** "Last changed" is the later of
+ *    `updatedAt` (the last write to the Task row) and `ciCheckedAt` (when the status sweep last
+ *    read the pull request — for a closed one, the read that saw it close, since a closed pull
+ *    request is never polled again). Both are compared with `now - 24 h`.
+ *
+ * `prState` is nullable and SQL's `<>` drops NULLs, so the rule is OR-ed branches: a status that
+ * is not waiting (and not Done or Cancelled); a waiting status with no pull-request state yet (no
+ * pull request, or one the sweep has not read); a waiting status with a state other than
+ * `closed` (`open`, `draft`, and `merged` — a merged Task that is not Done yet is still waiting
+ * on its delivery or an approver); a waiting, closed one that changed in the last day (by either
+ * timestamp); and any Task with a run in flight.
+ */
+export function missionOpenTasksWhere(
+    base: { workId: string; missionId: string },
+    opts: { now: Date; activeRunExists?: FindOperator<string> },
+): FindOptionsWhere<Task>[] {
     const waiting = { ...base, status: In(MISSION_WAITING_ON_PR_STATUSES) };
+    const recentlyClosed = { ...waiting, prState: MISSION_CLOSED_UNMERGED_PR_STATE };
+    const since = new Date(opts.now.getTime() - MISSION_CLOSED_PR_SLOT_HOLD_MS);
     return [
         {
             ...base,
@@ -95,11 +148,46 @@ export function missionOpenTasksWhere(base: {
         },
         { ...waiting, prState: IsNull() },
         { ...waiting, prState: Not(In([MISSION_CLOSED_UNMERGED_PR_STATE])) },
+        { ...recentlyClosed, updatedAt: MoreThanOrEqual(since) },
+        { ...recentlyClosed, ciCheckedAt: MoreThanOrEqual(since) },
+        { ...base, id: opts.activeRunExists ?? missionActiveRunExists() },
     ];
 }
 
 /** Why a Task-output tick filed nothing, as the day's Activity entry records it. */
-export type MissionNothingToFileReason = 'no-app-work' | 'repo-isolation-off' | 'nothing-new';
+export type MissionNothingToFileReason =
+    | 'no-app-work'
+    | 'repo-isolation-off'
+    | 'repo-agent-cannot-open-pull-requests'
+    | 'repo-agent-merge-allowed'
+    | 'nothing-new';
+
+/**
+ * The attached Repository Works a tick filed nothing on, by why (their names). Each is the
+ * owner's to fix, so the day's entry names them; a Work in none of them is not blocked.
+ */
+export interface MissionBlockedRepoWorks {
+    /** Task isolation is off (`missionTaskOutputEligibility`). */
+    isolationOff: string[];
+    /** No single Agent, or one that may not both commit and open pull requests. */
+    agentCannotOpenPullRequests: string[];
+    /** The merge policy lets agents merge, and the Mission has not opted in. */
+    agentMergeAllowed: string[];
+}
+
+/** No Repository Work blocked. */
+export function noBlockedRepoWorks(): MissionBlockedRepoWorks {
+    return { isolationOff: [], agentCannotOpenPullRequests: [], agentMergeAllowed: [] };
+}
+
+/** The reason a tick that filed on NO Work records, from the Works it had to skip. */
+function blockedReason(blocked: MissionBlockedRepoWorks): MissionNothingToFileReason | null {
+    if (blocked.isolationOff.length > 0) return 'repo-isolation-off';
+    if (blocked.agentCannotOpenPullRequests.length > 0)
+        return 'repo-agent-cannot-open-pull-requests';
+    if (blocked.agentMergeAllowed.length > 0) return 'repo-agent-merge-allowed';
+    return null;
+}
 
 /** At most this many Work names are spelled out in a "nothing to file" Activity entry. */
 const MISSION_NOTICE_MAX_WORK_NAMES = 3;
@@ -114,35 +202,59 @@ function quotedWorkNames(names: readonly string[]): string {
     return more > 0 ? `${shown.join(', ')} and ${more} more` : shown.join(', ');
 }
 
+/** "the attached Repository Work "a"" / "the attached Repository Works "a", "b"". */
+function attachedRepoWorks(names: readonly string[]): string {
+    return `the attached Repository Work${names.length === 1 ? '' : 's'} ${quotedWorkNames(names)}`;
+}
+
+/** One sentence per kind of block, each naming its Works and the fix. */
+function describeBlockedRepoWorks(blocked: MissionBlockedRepoWorks): string {
+    const sentences: string[] = [];
+    if (blocked.isolationOff.length > 0) {
+        const one = blocked.isolationOff.length === 1;
+        sentences.push(
+            `Task isolation is off on ${attachedRepoWorks(blocked.isolationOff)}, so no Tasks are filed there. ` +
+                (one
+                    ? "Turn on Task isolation in the Work's settings to let this Mission file Tasks on it."
+                    : "Turn on Task isolation in each Work's settings to let this Mission file Tasks on them."),
+        );
+    }
+    if (blocked.agentCannotOpenPullRequests.length > 0) {
+        sentences.push(
+            `The Agent that would run Tasks on ${attachedRepoWorks(blocked.agentCannotOpenPullRequests)} ` +
+                'may not both commit and open pull requests (or no single Agent is set), so no Tasks are filed there. ' +
+                "Choose an Agent with both permissions for this Mission's Task output, or grant them to the Work's Agent.",
+        );
+    }
+    if (blocked.agentMergeAllowed.length > 0) {
+        sentences.push(
+            `The merge policy of ${attachedRepoWorks(blocked.agentMergeAllowed)} lets agents merge their own pull requests, ` +
+                'so this Mission files no unattended Tasks there. Turn agent merges off for it, or opt the Mission in ' +
+                '(taskOutput.allowAgentMerge).',
+        );
+    }
+    return sentences.join(' ');
+}
+
 /**
- * The text of the once-a-day "nothing to file" Activity entry (FR-54). `isolationOffWorkNames`
- * are the attached Repository Works the tick skipped because their Task isolation is off: the
- * entry names them and the setting, because that — not "nothing new" — is what the owner can act
- * on. `no-app-work` keeps its code (stored on earlier entries) and now means "no App or
- * Repository Work".
+ * The text of the once-a-day "nothing to file" Activity entry (FR-54). `blocked` are the
+ * attached Repository Works the tick skipped and why: the entry names them and the fix, because
+ * that — not "nothing new" — is what the owner can act on. `no-app-work` keeps its code (stored
+ * on earlier entries) and now means "no App or Repository Work".
  */
 export function describeMissionNothingToFile(
     reason: MissionNothingToFileReason,
-    isolationOffWorkNames: readonly string[] = [],
+    blocked: MissionBlockedRepoWorks = noBlockedRepoWorks(),
 ): string {
-    const one = isolationOffWorkNames.length === 1;
-    const isolationOff =
-        isolationOffWorkNames.length > 0
-            ? `Task isolation is off on the attached Repository Work${one ? '' : 's'} ${quotedWorkNames(
-                  isolationOffWorkNames,
-              )}, so no Tasks are filed there. ` +
-              (one
-                  ? "Turn on Task isolation in the Work's settings to let this Mission file Tasks on it."
-                  : "Turn on Task isolation in each Work's settings to let this Mission file Tasks on them.")
-            : '';
-    if (reason === 'repo-isolation-off') return `Nothing filed. ${isolationOff}`;
+    const details = describeBlockedRepoWorks(blocked);
     if (reason === 'no-app-work') return 'No attached App or Repository Work to file Tasks on.';
+    if (reason !== 'nothing-new') return `Nothing filed. ${details}`;
     const nothingNew = 'Nothing new to file on the attached App or Repository Works.';
-    return isolationOff ? `${nothingNew} ${isolationOff}` : nothingNew;
+    return details ? `${nothingNew} ${details}` : nothingNew;
 }
 
-/** APW-08 T35 (FR-52) — the label every Mission-filed Task carries. */
-export const MISSION_TASK_LABEL = 'mission-task';
+/** APW-08 T35 (FR-52) — the label every Mission-filed Task carries (declared in the leaf). */
+export { MISSION_TASK_LABEL };
 
 /**
  * Review of #3061 — how long one tick holds a Mission's Task-output lease
@@ -924,9 +1036,9 @@ export class MissionTickService {
         // planner call is paid for it and nothing is filed on it — and a Repository Work is
         // untouched by it.
         const appChangesEnabled = readAppWorkSwitches().changesEnabled;
-        const eligible: MissionTaskOutputTarget[] = [];
+        const candidates: MissionTaskOutputTarget[] = [];
         const seen = new Set<string>();
-        const isolationOffWorkNames: string[] = [];
+        const blocked = noBlockedRepoWorks();
         let pausedAppWorks = 0;
         for (const row of relations) {
             const eligibility = missionTaskOutputEligibility(row);
@@ -937,33 +1049,70 @@ export class MissionTickService {
             const repository = isRepositoryWorkKind(row.workKind ?? null);
             const workName = row.workName ?? (repository ? 'Repository' : 'App');
             if (eligibility === 'isolation-off') {
-                isolationOffWorkNames.push(workName);
+                blocked.isolationOff.push(workName);
                 continue;
             }
             if (missionTaskOutputPausedBySwitch(row, appChangesEnabled)) {
                 pausedAppWorks += 1;
                 continue;
             }
-            if (eligible.length >= MISSION_TASK_OUTPUT_MAX_WORKS) continue;
-            eligible.push({
+            candidates.push({
                 workId: row.workId,
                 workName,
                 workKind: repository ? 'repo' : 'app',
                 relation: row.relation as 'improves' | 'operates',
             });
         }
+
+        // The Agent the filed Tasks will run with (the Mission's own, while its owner can still
+        // use it; else each Work's default), read once and only when there is a Work to file on.
+        const output =
+            candidates.length > 0
+                ? await this.withReachableAgent(
+                      mission,
+                      normalizeMissionTaskOutput(mission.taskOutput),
+                      scope,
+                  )
+                : normalizeMissionTaskOutput(mission.taskOutput);
+        // A Repository Work is filed on only when the Task would really run as a pull request:
+        // the Agent dispatch will resolve may commit AND open pull requests, and a merge policy
+        // that lets agents merge has the Mission's opt-in (`TaskTransitionService
+        // .missionRepoRunRefusal`, the rule dispatch applies again before each run). Asked BEFORE
+        // the planner, so a Work that cannot take a Task costs no planner call, no Task and no run.
+        const eligible: MissionTaskOutputTarget[] = [];
+        for (const target of candidates) {
+            if (eligible.length >= MISSION_TASK_OUTPUT_MAX_WORKS) break;
+            if (target.workKind === 'repo') {
+                const verdict = await this.repoRunVerdict(
+                    mission,
+                    target.workId,
+                    output,
+                    scope,
+                    tasksService,
+                );
+                if (verdict !== null) {
+                    if (verdict === 'agent-cannot-open-pull-requests') {
+                        blocked.agentCannotOpenPullRequests.push(target.workName);
+                    } else if (verdict === 'agent-merge-allowed') {
+                        blocked.agentMergeAllowed.push(target.workName);
+                    } else if (verdict === 'isolation-off') {
+                        blocked.isolationOff.push(target.workName);
+                    }
+                    // `unreadable`: skipped this tick (logged), not reported as the owner's to fix.
+                    continue;
+                }
+            }
+            eligible.push(target);
+        }
+
         if (eligible.length === 0) {
             // A Repository Work the Mission cannot file on is the owner's to fix, so the day's
             // entry says so even while App changes are paused. A pause alone records nothing,
             // as before: it is the operator's doing, and the Mission is not misconfigured.
-            if (isolationOffWorkNames.length > 0) {
-                await this.recordNothingToFile(
-                    mission,
-                    now,
-                    'repo-isolation-off',
-                    isolationOffWorkNames,
-                );
-            } else if (pausedAppWorks === 0) {
+            const reason = blockedReason(blocked);
+            if (reason) {
+                await this.recordNothingToFile(mission, now, reason, blocked);
+            } else if (pausedAppWorks === 0 && candidates.length === 0) {
                 await this.recordNothingToFile(mission, now, 'no-app-work');
             }
             return {
@@ -972,17 +1121,10 @@ export class MissionTickService {
                 message:
                     pausedAppWorks > 0
                         ? 'app-changes-paused'
-                        : isolationOffWorkNames.length > 0
-                          ? 'repo-isolation-off'
-                          : 'no-app-work',
+                        : (reason ?? (candidates.length > 0 ? 'repo-unreadable' : 'no-app-work')),
             };
         }
 
-        const output = await this.withReachableAgent(
-            mission,
-            normalizeMissionTaskOutput(mission.taskOutput),
-            scope,
-        );
         const requireApproval = mission.guardrailsOverride?.requireApprovalBeforeCreate === true;
         let tasksFiled = 0;
         let skippedCap = 0;
@@ -998,6 +1140,7 @@ export class MissionTickService {
                     scope,
                     tasksService,
                     lease,
+                    now,
                 );
                 tasksFiled += result.filed;
                 skippedCap += result.cappedOut ? 1 : 0;
@@ -1029,19 +1172,97 @@ export class MissionTickService {
             mission.userId,
         );
         if (tasksFiled === 0 && !leaseLost) {
-            await this.recordNothingToFile(mission, now, 'nothing-new', isolationOffWorkNames);
+            await this.recordNothingToFile(mission, now, 'nothing-new', blocked);
         }
+        const counts = [
+            ['isolation-off', blocked.isolationOff.length],
+            ['agent-blocked', blocked.agentCannotOpenPullRequests.length],
+            ['merge-allowed', blocked.agentMergeAllowed.length],
+            ['app-paused', pausedAppWorks],
+        ] as const;
         return {
             outcome: tasksFiled > 0 ? 'tasks-filed' : 'no-tasks',
             tasksFiled,
-            message: `works=${eligible.length} filed=${tasksFiled} capped=${skippedCap} duplicates=${skippedDuplicate}${
-                isolationOffWorkNames.length > 0
-                    ? ` isolation-off=${isolationOffWorkNames.length}`
-                    : ''
-            }${pausedAppWorks > 0 ? ` app-paused=${pausedAppWorks}` : ''}${
-                leaseLost ? ' lease-lost' : ''
-            }`,
+            message: `works=${eligible.length} filed=${tasksFiled} capped=${skippedCap} duplicates=${skippedDuplicate}${counts
+                .filter(([, n]) => n > 0)
+                .map(([label, n]) => ` ${label}=${n}`)
+                .join('')}${leaseLost ? ' lease-lost' : ''}`,
         };
+    }
+
+    /**
+     * One Repository Work's verdict before the planner runs: may a Task the Mission files there
+     * run unattended? `null` = yes. The Agent is the one `runTask` will resolve for the new Task
+     * (`TasksService.resolveRunAgentForNewTask`), checked by the rule dispatch applies again.
+     * A failure to decide is `unreadable` (logged): the Work is skipped this tick.
+     */
+    private async repoRunVerdict(
+        mission: Pick<Mission, 'id' | 'userId'>,
+        workId: string,
+        output: MissionTaskOutput,
+        scope: OwnershipScope | undefined,
+        tasksService: TasksService,
+    ): Promise<MissionRepoRunRefusal | 'unreadable' | null> {
+        try {
+            const verdict = await tasksService.missionRepoRunRefusalForNewTask(
+                mission.userId,
+                { workId, missionId: mission.id, agentId: output.agentId ?? null },
+                scope,
+            );
+            if (verdict === 'unreadable') {
+                this.logger.warn(
+                    `Mission ${mission.id}: Work ${workId} could not be read to decide whether a Task can run there; skipped this tick.`,
+                );
+            }
+            return verdict;
+        } catch (err) {
+            this.logger.warn(
+                `Mission ${mission.id}: whether a Task can run on Work ${workId} could not be decided (${
+                    err instanceof Error ? err.message : String(err)
+                }); skipped this tick.`,
+            );
+            return 'unreadable';
+        }
+    }
+
+    /**
+     * The write path's half of the same check (`MissionsService.withTaskOutputWarnings`): which
+     * attached Repository Works with Task isolation on the Mission would still file nothing on,
+     * and why. Empty when Task output is not wired here.
+     */
+    async blockedRepoWorksForMission(
+        mission: Pick<Mission, 'id' | 'userId' | 'taskOutput'>,
+        relations: readonly (MissionTaskOutputWorkRow & { workName?: string | null })[],
+        scope: OwnershipScope | undefined,
+    ): Promise<Pick<MissionBlockedRepoWorks, 'agentCannotOpenPullRequests' | 'agentMergeAllowed'>> {
+        const result = {
+            agentCannotOpenPullRequests: [] as string[],
+            agentMergeAllowed: [] as string[],
+        };
+        const tasksService = this.tasksService();
+        if (!tasksService) return result;
+        const output = normalizeMissionTaskOutput(mission.taskOutput);
+        const seen = new Set<string>();
+        for (const row of relations) {
+            if (!row.workId || seen.has(row.workId)) continue;
+            if (missionTaskOutputEligibility(row) !== 'eligible') continue;
+            if (!isRepositoryWorkKind(row.workKind ?? null)) continue;
+            seen.add(row.workId);
+            const verdict = await this.repoRunVerdict(
+                mission,
+                row.workId,
+                output,
+                scope,
+                tasksService,
+            );
+            const name = row.workName ?? row.workId;
+            if (verdict === 'agent-cannot-open-pull-requests') {
+                result.agentCannotOpenPullRequests.push(name);
+            } else if (verdict === 'agent-merge-allowed') {
+                result.agentMergeAllowed.push(name);
+            }
+        }
+        return result;
     }
 
     /**
@@ -1079,7 +1300,9 @@ export class MissionTickService {
         this.logger.warn(
             `Mission ${mission.id}: its Task output Agent ${agentId} is no longer reachable; filing with each Work's default Agent.`,
         );
-        return { tasksPerTick: output.tasksPerTick, openTasksCap: output.openTasksCap };
+        const withoutAgent: MissionTaskOutput = { ...output };
+        delete withoutAgent.agentId;
+        return withoutAgent;
     }
 
     /**
@@ -1107,6 +1330,19 @@ export class MissionTickService {
         }
     }
 
+    /**
+     * The "a run of this Task is queued or running" operator for the cap's count, quoted for the
+     * connection's own driver (Postgres, SQLite and MySQL quote identifiers differently).
+     */
+    private activeRunExists(): FindOperator<string> {
+        const driver = (
+            this.taskRows as
+                | { manager?: { connection?: { driver?: { escape(name: string): string } } } }
+                | undefined
+        )?.manager?.connection?.driver;
+        return missionActiveRunExists(driver ? (name) => driver.escape(name) : undefined);
+    }
+
     /** One Work's share of a tick (see {@link runTaskOutput}). */
     private async fileOnWork(
         mission: Mission,
@@ -1116,6 +1352,7 @@ export class MissionTickService {
         scope: OwnershipScope | undefined,
         tasksService: TasksService,
         lease: TaskOutputLease,
+        now: Date,
     ): Promise<{ filed: number; cappedOut: boolean; duplicates: number; leaseLost?: boolean }> {
         // Review of #3061 — the lease is renewed before this Work's planner call, so the count
         // below cannot be taken by a second tick while this one waits on the planner.
@@ -1123,11 +1360,14 @@ export class MissionTickService {
             return { filed: 0, cappedOut: false, duplicates: 0, leaseLost: true };
         }
         // Review of #3061 — the cap counts this Mission's open Tasks on the Work in SQL (a count
-        // carries no title, so it needs no visibility filter). "Open" leaves out a Task whose
-        // pull request was closed without merging ({@link missionOpenTasksWhere}): nothing ever
-        // completes that Task, so it must not hold a slot until a person cancels it.
+        // carries no title, so it needs no visibility filter). "Open" leaves out a Task only
+        // waiting on a pull request closed without merging a day ago or more, and always counts
+        // one with a run in flight ({@link missionOpenTasksWhere}).
         const openForMission = await this.taskRows!.count({
-            where: missionOpenTasksWhere({ workId: target.workId, missionId: mission.id }),
+            where: missionOpenTasksWhere(
+                { workId: target.workId, missionId: mission.id },
+                { now, activeRunExists: this.activeRunExists() },
+            ),
         });
         if (openForMission >= output.openTasksCap) {
             return { filed: 0, cappedOut: true, duplicates: 0 };
@@ -1247,7 +1487,7 @@ export class MissionTickService {
         mission: Mission,
         now: Date,
         reason: MissionNothingToFileReason,
-        isolationOffWorkNames: readonly string[] = [],
+        blocked: MissionBlockedRepoWorks = noBlockedRepoWorks(),
     ): Promise<void> {
         const last = mission.taskOutputNoticeAt ? new Date(mission.taskOutputNoticeAt) : null;
         if (last && last.toISOString().slice(0, 10) === now.toISOString().slice(0, 10)) return;
@@ -1261,7 +1501,7 @@ export class MissionTickService {
             'nothing-to-file',
             {
                 reason,
-                message: describeMissionNothingToFile(reason, isolationOffWorkNames),
+                message: describeMissionNothingToFile(reason, blocked),
             },
         );
         if (!written) return;

@@ -2395,6 +2395,8 @@
                 "appliesTo": "「改善」または「運用」として添付された Works に適用されます。",
                 "noAppWork": "タスクを登録するには、App Work または Repository Work を「改善」または「運用」として添付してください。",
                 "repoIsolationOff": "添付された Repository Work で「Task isolation」がオフになっているため、そこにはタスクが登録されません。その Work の設定で「Task isolation」をオンにしてください。",
+                "repoAgentCannotOpenPullRequests": "添付された Repository Work でタスクを実行するエージェントにコミットとプルリクエスト作成の権限がないため、そこにはタスクが登録されません。このミッションのタスク出力に両方の権限を持つエージェントを選ぶか、その Work のエージェントに権限を付与してください。",
+                "repoAllowsAgentMerge": "添付された Repository Work のマージポリシーでエージェントが自分のプルリクエストをマージできるため、このミッションはそこにタスクを登録しません。ミッションがタスクを登録できるよう、その Work でエージェントによるマージをオフにしてください。",
                 "tasksOnWorks": "添付された Works のタスク",
                 "nothingToFile": "タスクを登録できる App Work または Repository Work が添付されていません。",
                 "tasksOnWorksEmpty": "まだタスクは登録されていません。",

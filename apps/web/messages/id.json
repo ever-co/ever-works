@@ -2395,6 +2395,8 @@
                 "appliesTo": "Berlaku untuk Works yang dilampirkan sebagai Meningkatkan atau Mengoperasikan.",
                 "noAppWork": "Lampirkan App Work atau Repository Work sebagai Meningkatkan atau Mengoperasikan untuk mencatat tugas di sana.",
                 "repoIsolationOff": "“Task isolation” nonaktif pada Repository Work yang terlampir, sehingga tidak ada tugas yang dicatat di sana. Aktifkan “Task isolation” di pengaturan Work tersebut.",
+                "repoAgentCannotOpenPullRequests": "Agen yang akan menjalankan tugas di Repository Work yang terlampir tidak boleh melakukan commit dan membuka pull request, sehingga tidak ada tugas yang dicatat di sana. Pilih agen dengan kedua izin untuk keluaran tugas Misi ini, atau berikan izin tersebut kepada agen Work itu.",
+                "repoAllowsAgentMerge": "Kebijakan merge pada Repository Work yang terlampir mengizinkan agen me-merge pull request mereka sendiri, sehingga Misi ini tidak mencatat tugas di sana. Matikan merge oleh agen untuk Work tersebut agar Misi dapat mencatat tugas di sana.",
                 "tasksOnWorks": "Tugas di Works terlampir",
                 "nothingToFile": "Tidak ada App Work atau Repository Work terlampir untuk mencatat tugas.",
                 "tasksOnWorksEmpty": "Belum ada tugas yang dicatat.",

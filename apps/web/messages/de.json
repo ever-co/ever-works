@@ -2426,6 +2426,8 @@
                 "appliesTo": "Gilt für Works, die als „Verbessert“ oder „Betreibt“ angehängt sind.",
                 "noAppWork": "Hängen Sie ein App oder Repository Work als „Verbessert“ oder „Betreibt“ an, um darin Tasks anzulegen.",
                 "repoIsolationOff": "„Task isolation“ ist für ein angehängtes Repository Work ausgeschaltet, daher werden darin keine Tasks angelegt. Schalten Sie „Task isolation“ in den Einstellungen dieses Works ein.",
+                "repoAgentCannotOpenPullRequests": "Der Agent, der Tasks in einem angehängten Repository Work ausführen würde, darf nicht committen und Pull Requests öffnen, daher werden darin keine Tasks angelegt. Wählen Sie für die Task-Ausgabe dieser Mission einen Agenten mit beiden Berechtigungen, oder erteilen Sie sie dem Agenten des Works.",
+                "repoAllowsAgentMerge": "Die Merge-Richtlinie eines angehängten Repository Works erlaubt Agenten, ihre eigenen Pull Requests zu mergen, daher legt diese Mission darin keine Tasks an. Deaktivieren Sie Agenten-Merges für dieses Work, damit die Mission dort Tasks anlegen kann.",
                 "tasksOnWorks": "Tasks in angehängten Works",
                 "nothingToFile": "Kein angehängtes App oder Repository Work, in dem Tasks angelegt werden können.",
                 "tasksOnWorksEmpty": "Noch keine Tasks angelegt.",

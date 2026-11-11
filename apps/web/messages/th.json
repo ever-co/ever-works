@@ -2395,6 +2395,8 @@
                 "appliesTo": "ใช้กับ Works ที่แนบในฐานะ “ปรับปรุง” หรือ “ดูแล”",
                 "noAppWork": "แนบ App Work หรือ Repository Work ในฐานะ “ปรับปรุง” หรือ “ดูแล” เพื่อบันทึกงานลงไป",
                 "repoIsolationOff": "“Task isolation” ปิดอยู่ใน Repository Work ที่แนบไว้ จึงไม่มีการบันทึกงานลงในนั้น เปิด “Task isolation” ในการตั้งค่าของ Work นั้น",
+                "repoAgentCannotOpenPullRequests": "เอเจนต์ที่จะรันงานใน Repository Work ที่แนบไว้ไม่มีสิทธิ์ commit และเปิด pull request จึงไม่มีการบันทึกงานลงในนั้น เลือกเอเจนต์ที่มีทั้งสองสิทธิ์สำหรับผลลัพธ์งานของภารกิจนี้ หรือให้สิทธิ์เหล่านั้นแก่เอเจนต์ของ Work นั้น",
+                "repoAllowsAgentMerge": "นโยบายการ merge ของ Repository Work ที่แนบไว้อนุญาตให้เอเจนต์ merge pull request ของตัวเองได้ ภารกิจนี้จึงไม่บันทึกงานลงในนั้น ปิดการ merge โดยเอเจนต์สำหรับ Work นั้นเพื่อให้ภารกิจบันทึกงานลงไปได้",
                 "tasksOnWorks": "งานใน Works ที่แนบไว้",
                 "nothingToFile": "ไม่มี App Work หรือ Repository Work ที่แนบไว้สำหรับบันทึกงาน",
                 "tasksOnWorksEmpty": "ยังไม่มีงานที่บันทึก",

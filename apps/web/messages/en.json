@@ -3753,6 +3753,8 @@
                 "appliesTo": "Applies to Works attached as Improves or Operates.",
                 "noAppWork": "Attach an App or Repository Work as Improves or Operates to file Tasks on it.",
                 "repoIsolationOff": "Task isolation is off on an attached Repository Work, so no Tasks are filed on it. Turn on Task isolation in that Work’s settings.",
+                "repoAgentCannotOpenPullRequests": "The Agent that would run Tasks on an attached Repository Work may not commit and open pull requests, so no Tasks are filed on it. Choose an Agent with both permissions for this Mission’s Task output, or grant them to the Work’s Agent.",
+                "repoAllowsAgentMerge": "An attached Repository Work’s merge policy lets agents merge their own pull requests, so this Mission files no Tasks on it. Turn agent merges off for that Work to let the Mission file Tasks there.",
                 "tasksOnWorks": "Tasks on attached Works",
                 "nothingToFile": "No attached App or Repository Work to file Tasks on.",
                 "tasksOnWorksEmpty": "No Tasks filed yet.",

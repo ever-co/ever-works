@@ -39,6 +39,11 @@ function clamp(raw: string, bounds: { min: number; max: number }, fallback: numb
  * there would get no branch and no pull request, so the Mission files nothing on them (the API
  * answers `warnings: ['repoWorkTaskIsolationOff']`). The card says so and links to each Work's
  * settings, where the owner turns it on; nothing turns it on for them.
+ *
+ * Two more reasons a Repository Work gets no Task depend on the Agent and the merge policy, so
+ * only a save's answer carries them: `repoWorkAgentCannotOpenPullRequests` (the Agent the Tasks
+ * would run with may not both commit and open pull requests) and `repoWorkAllowsAgentMerge` (the
+ * Work's merge policy lets agents merge, and the Mission has not opted in over the API).
  */
 export function MissionOutputCard({
     mission,
@@ -58,6 +63,10 @@ export function MissionOutputCard({
     const [openCap, setOpenCap] = useState(String(mission.taskOutput?.openTasksCap ?? 3));
     const [warned, setWarned] = useState(false);
     const [warnedIsolationOff, setWarnedIsolationOff] = useState(false);
+    // Only the API can tell these two (they depend on the Agent and the merge policy), so they
+    // come from a save's answer.
+    const [warnedAgent, setWarnedAgent] = useState(false);
+    const [warnedAgentMerge, setWarnedAgentMerge] = useState(false);
     const filesTasks = mode === 'tasks' || mode === 'both';
 
     const save = () => {
@@ -74,10 +83,11 @@ export function MissionOutputCard({
                 onMissionChange(updated);
                 setPerTick(String(updated.taskOutput?.tasksPerTick ?? taskOutput.tasksPerTick));
                 setOpenCap(String(updated.taskOutput?.openTasksCap ?? taskOutput.openTasksCap));
-                setWarned((updated.warnings ?? []).includes('noAppWorkRelation'));
-                setWarnedIsolationOff(
-                    (updated.warnings ?? []).includes('repoWorkTaskIsolationOff'),
-                );
+                const warnings = updated.warnings ?? [];
+                setWarned(warnings.includes('noAppWorkRelation'));
+                setWarnedIsolationOff(warnings.includes('repoWorkTaskIsolationOff'));
+                setWarnedAgent(warnings.includes('repoWorkAgentCannotOpenPullRequests'));
+                setWarnedAgentMerge(warnings.includes('repoWorkAllowsAgentMerge'));
                 toast.success(t('saved'));
             } catch (err) {
                 toast.error(err instanceof Error ? err.message : t('saveError'));
@@ -168,6 +178,24 @@ export function MissionOutputCard({
                                 </ul>
                             ) : null}
                         </div>
+                    ) : null}
+                    {warnedAgent ? (
+                        <p
+                            role="status"
+                            className="text-xs text-text-secondary dark:text-text-secondary-dark"
+                            data-testid="mission-output-repo-agent-cannot-open-prs"
+                        >
+                            {t('repoAgentCannotOpenPullRequests')}
+                        </p>
+                    ) : null}
+                    {warnedAgentMerge ? (
+                        <p
+                            role="status"
+                            className="text-xs text-text-secondary dark:text-text-secondary-dark"
+                            data-testid="mission-output-repo-allows-agent-merge"
+                        >
+                            {t('repoAllowsAgentMerge')}
+                        </p>
                     ) : null}
                 </div>
             ) : null}

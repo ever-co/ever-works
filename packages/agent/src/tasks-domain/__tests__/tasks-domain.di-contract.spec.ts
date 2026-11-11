@@ -8,6 +8,8 @@ import { AppWorkSpecAppliedListener } from '../../app-works/app-spec-applied.lis
 import { AppWorkIsolationBackfillRunner } from '../../app-works/app-work-isolation-backfill.runner';
 import { APP_WORK_CHANGE_GATE } from '../app-work-change-gate.port';
 import { TaskWorkspaceService } from '../task-workspace.service';
+import { TaskTransitionService } from '../task-transition.service';
+import { MergePolicyService } from '../../policy/merge-policy.service';
 import { TasksDomainModule } from '../tasks.module';
 
 /**
@@ -149,6 +151,22 @@ describe('TasksDomainModule — the App Works providers can reach what they inje
     it('exports the T50 runner, so the API can publish it to the backfill task', () => {
         const exported = (Reflect.getMetadata('exports', TasksDomainModule) ?? []) as unknown[];
         expect(exported).toContain(AppWorkIsolationBackfillRunner);
+    });
+
+    // A Mission's unattended Task on a Repository Work is not started under a merge policy that
+    // lets agents merge (`TaskTransitionService.missionRepoRunRefusal`). The service takes the
+    // policy resolver `@Optional()`: unreachable, it would silently read the Work's own policy
+    // only and miss an organization- or tenant-level `allowAgentMerge`.
+    it('TaskTransitionService reaches MergePolicyService', () => {
+        const types = (Reflect.getMetadata('design:paramtypes', TaskTransitionService) ??
+            []) as unknown[];
+        expect(types).toContain(MergePolicyService);
+        expect(resolvable.has(MergePolicyService)).toBe(true);
+        expect(
+            unreachableParams(TaskTransitionService).filter((param) =>
+                param.endsWith(' MergePolicyService'),
+            ),
+        ).toEqual([]);
     });
 
     it('TaskWorkspaceService — every class-typed parameter is reachable', () => {

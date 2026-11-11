@@ -2395,6 +2395,8 @@
                 "appliesTo": "“सुधारता है” या “चलाता है” के रूप में जुड़े Works पर लागू।",
                 "noAppWork": "Tasks दर्ज करने के लिए किसी App या Repository Work को “सुधारता है” या “चलाता है” के रूप में जोड़ें।",
                 "repoIsolationOff": "जुड़े हुए एक Repository Work पर “Task isolation” बंद है, इसलिए उस पर कोई Task दर्ज नहीं किया जाता। उस Work की सेटिंग्स में “Task isolation” चालू करें।",
+                "repoAgentCannotOpenPullRequests": "जुड़े हुए एक Repository Work पर Tasks चलाने वाले Agent को commit करने और pull request खोलने की अनुमति नहीं है, इसलिए उस पर कोई Task दर्ज नहीं किया जाता। इस Mission के Task आउटपुट के लिए दोनों अनुमतियों वाला Agent चुनें, या उस Work के Agent को ये अनुमतियाँ दें।",
+                "repoAllowsAgentMerge": "जुड़े हुए एक Repository Work की merge नीति Agents को अपने ही pull request merge करने देती है, इसलिए यह Mission उस पर कोई Task दर्ज नहीं करता। Mission को वहाँ Tasks दर्ज करने देने के लिए उस Work पर Agents द्वारा merge बंद करें।",
                 "tasksOnWorks": "जुड़े Works पर Tasks",
                 "nothingToFile": "Tasks दर्ज करने के लिए कोई App या Repository Work जुड़ा नहीं है।",
                 "tasksOnWorksEmpty": "अभी तक कोई Task दर्ज नहीं हुआ।",

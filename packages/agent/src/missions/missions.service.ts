@@ -5,6 +5,8 @@ import {
     missionFilesTasks,
     missionTaskOutputWarnings,
     MISSION_OUTPUT_MODES,
+    MISSION_REPO_WORK_AGENT_CANNOT_OPEN_PULL_REQUESTS,
+    MISSION_REPO_WORK_ALLOWS_AGENT_MERGE,
     normalizeMissionTaskOutput,
     type MissionOutputMode,
     type MissionTaskOutput,
@@ -1154,6 +1156,30 @@ export class MissionsService {
             return dto;
         }
         const warnings = missionTaskOutputWarnings(relations);
+        // The Agent half of the same question, asked exactly as the tick asks it before planning
+        // (the Agent dispatch will resolve, its permissions, the Work's merge policy). A failure
+        // to ask warns nothing more: the write is accepted either way, and the tick re-asks.
+        if (this.tickService) {
+            try {
+                const blocked = await this.tickService.blockedRepoWorksForMission(
+                    { id: dto.id, userId, taskOutput: dto.taskOutput },
+                    relations,
+                    scope,
+                );
+                if (blocked.agentCannotOpenPullRequests.length > 0) {
+                    warnings.push(MISSION_REPO_WORK_AGENT_CANNOT_OPEN_PULL_REQUESTS);
+                }
+                if (blocked.agentMergeAllowed.length > 0) {
+                    warnings.push(MISSION_REPO_WORK_ALLOWS_AGENT_MERGE);
+                }
+            } catch (err) {
+                this.logger.warn(
+                    `Mission ${dto.id}: whether its Repository Works can take Tasks could not be checked (${
+                        err instanceof Error ? err.message : String(err)
+                    }).`,
+                );
+            }
+        }
         return warnings.length > 0 ? withWarnings(dto, warnings) : dto;
     }
 

@@ -317,7 +317,13 @@ export class Mission {
      * defaults). NULL = the defaults.
      */
     @Column({ type: 'simple-json', nullable: true })
-    taskOutput?: { tasksPerTick?: number; openTasksCap?: number; agentId?: string } | null;
+    taskOutput?: {
+        tasksPerTick?: number;
+        openTasksCap?: number;
+        agentId?: string;
+        /** API-only opt-in: Repository Work Tasks under a merge policy that lets agents merge. */
+        allowAgentMerge?: boolean;
+    } | null;
 
     /**
      * APW-08 T34 (FR-54, APW08-G21) — when the once-per-day "nothing to file" notice (no

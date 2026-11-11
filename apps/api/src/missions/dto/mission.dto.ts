@@ -99,6 +99,15 @@ export class MissionTaskOutputDto {
     @IsOptional()
     @IsUUID()
     agentId?: string;
+
+    @ApiProperty({
+        required: false,
+        description:
+            "Opt in to filing and starting this Mission's unattended Tasks on Repository Works whose merge policy lets agents merge their own pull requests. Off by default: such a Work gets no Task, and the write answers the `repoWorkAllowsAgentMerge` warning. API only.",
+    })
+    @IsOptional()
+    @IsBoolean()
+    allowAgentMerge?: boolean;
 }
 
 /**
