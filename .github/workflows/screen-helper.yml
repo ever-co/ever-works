@@ -8,12 +8,25 @@ name: Screen Helper
 # WHEN IT RUNS: on a pull request that touches the crate (or this file), and
 # on demand against any branch:
 #   gh workflow run screen-helper.yml --ref <branch>
+# (on GitHub only where Actions is allowed: see WHERE IT RUNS below)
 # It is NOT a required check, and the path filter keeps it off every other
-# pull request, so it can never block one. Linux and macOS: GitHub-hosted
-# runners (rustup is preinstalled on both images). Windows: our own machines
-# since 2026-11-05 (see runs-on below); the setup step gives them rustup and
-# PowerShell 7. The crate needs no secrets. History: the crate was written without a Rust toolchain and
-# first compiled on 2026-10-27; until then this workflow was dispatch-only.
+# pull request, so it can never block one. The crate needs no secrets.
+# History: the crate was written without a Rust toolchain and first compiled
+# on 2026-10-27; until then this workflow was dispatch-only.
+#
+# WHERE IT RUNS (owner, 2026-11-11: GitHub Actions and its artifact storage
+# are not used in ever-co, permanently):
+#   - Linux: in-cluster (k8s-gitops apps/ci-builds, a catalog `prs` entry for
+#     this one leg, status `ci-builds/screen-helper.yml:verify/os:ubuntu-latest`).
+#     By hand: scripts/ci-builds-run.py in the homelab repo with
+#     `--event workflow_dispatch --job verify --matrix os:ubuntu-latest`.
+#   - Windows and macOS: nowhere in ever-co. There is no Windows or macOS
+#     machine outside Actions (the cluster is Linux x64 only), so the job is
+#     gated off on GitHub below. Forks keep all three legs on their own
+#     Actions. To ask GitHub for the Windows (our own machines, see
+#     runs-on) and macOS legs again, both: `stay` for this file in k8s-gitops
+#     apps/ci-builds/tools/policy-overrides.json (else the Actions enforcer
+#     keeps it disabled there), and repo variable RUN_ON_ACTIONS = 'true'.
 on:
   pull_request:
     paths:
@@ -36,10 +49,16 @@ concurrency:
 jobs:
   verify:
     name: verify (${{ matrix.os }})
+    # In ever-co this runs in-cluster only (vars.CI_IN_CLUSTER), unless repo
+    # variable RUN_ON_ACTIONS is 'true'. Forks run it on their own Actions.
+    if: vars.CI_IN_CLUSTER == 'true' || github.repository_owner != 'ever-co' || vars.RUN_ON_ACTIONS == 'true'
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        # In ever-co, GitHub is never asked for the Linux leg: it runs
+        # in-cluster. In-cluster (vars.CI_IN_CLUSTER) and in forks the list
+        # keeps all three; the cluster picks its leg with `--matrix`.
+        os: ${{ fromJSON(vars.CI_IN_CLUSTER != 'true' && github.repository_owner == 'ever-co' && '["windows-latest","macos-latest"]' || '["ubuntu-latest","windows-latest","macos-latest"]') }}
     # Windows runs on our own Windows machines (ever-co org variable
     # RUNNER_WINDOWS_X64, a JSON label list, owner rule 2026-11-04), except for
     # a pull request from a fork: that code never runs on our machines and
