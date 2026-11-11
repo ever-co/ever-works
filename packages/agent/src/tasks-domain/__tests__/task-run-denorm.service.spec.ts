@@ -221,3 +221,54 @@ describe('TaskRunDenormService — Run started. (APW-08 FR-43)', () => {
         );
     });
 });
+
+/**
+ * Review feedback reaches the next run — the terminal write both runtimes
+ * make is where the review findings a fresh run CARRIED are settled:
+ * consumed when it completed, handed back when it failed or was cancelled.
+ */
+describe('TaskRunDenormService.recordTerminal — settles carried review feedback', () => {
+    const TASK_ID = 'task-1111';
+    const RUN_ID = 'run-aaaa';
+
+    const build = (applied = true) => {
+        const tasks = { updateLatestRun: jest.fn().mockResolvedValue(applied) };
+        const reviewFeedback = { settleFeedbackForRun: jest.fn().mockResolvedValue(undefined) };
+        const service = new TaskRunDenormService(
+            tasks as unknown as TaskRepository,
+            undefined,
+            undefined,
+            undefined,
+            reviewFeedback as never,
+        );
+        return { service, reviewFeedback };
+    };
+
+    it.each(['completed', 'failed', 'cancelled'] as const)(
+        'hands the %s outcome to the review-feedback settle',
+        async (status) => {
+            const { service, reviewFeedback } = build();
+            await expect(service.recordTerminal(TASK_ID, RUN_ID, status)).resolves.toBe(true);
+            expect(reviewFeedback.settleFeedbackForRun).toHaveBeenCalledWith(RUN_ID, status);
+        },
+    );
+
+    it('settles even when the run no longer owns the board pointer (a stale run still ends)', async () => {
+        const { service, reviewFeedback } = build(false);
+        await expect(service.recordTerminal(TASK_ID, RUN_ID, 'failed')).resolves.toBe(false);
+        expect(reviewFeedback.settleFeedbackForRun).toHaveBeenCalledWith(RUN_ID, 'failed');
+    });
+
+    it('a settle that throws never escapes the terminal write', async () => {
+        const { service, reviewFeedback } = build();
+        reviewFeedback.settleFeedbackForRun.mockRejectedValueOnce(new Error('db down'));
+        await expect(service.recordTerminal(TASK_ID, RUN_ID, 'completed')).resolves.toBe(true);
+    });
+
+    it('queued and started writes settle nothing', async () => {
+        const { service, reviewFeedback } = build();
+        await service.recordQueued(TASK_ID, RUN_ID);
+        await service.recordStarted(TASK_ID, RUN_ID);
+        expect(reviewFeedback.settleFeedbackForRun).not.toHaveBeenCalled();
+    });
+});

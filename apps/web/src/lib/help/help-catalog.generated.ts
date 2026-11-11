@@ -452,6 +452,11 @@ export const HELP_ARTICLES = [
             { id: 'run', text: 'Run', level: 3 },
             { id: 'moving-to-in-progress', text: 'Moving to In progress', level: 3 },
             {
+                id: 'when-a-reviewer-rejects-the-work',
+                text: 'When a reviewer rejects the work',
+                level: 3,
+            },
+            {
                 id: 'acceptance-checks-quality-gates',
                 text: 'Acceptance checks (quality gates)',
                 level: 2,
