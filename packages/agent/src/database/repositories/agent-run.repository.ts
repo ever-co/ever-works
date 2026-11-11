@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import type { QueryDeepPartialEntity } from 'typeorm/query-builder/QueryPartialEntity';
@@ -16,6 +17,7 @@ import { Mission } from '../../entities/mission.entity';
 import { Task } from '../../entities/task.entity';
 import { Work } from '../../entities/work.entity';
 import { RUN_COST_SETTLER, type RunCostSettler } from '../run-cost-settler';
+import { AGENT_RUN_TERMINAL_EVENT, type AgentRunTerminalEvent } from '../agent-run-terminal.event';
 import { ownershipSqlPredicate, ownershipWhereWith, type OwnershipScope } from '../ownership-scope';
 import { addInsertionOrderTieBreak, isSqliteFamilyDriver } from '../insertion-order';
 import { timeSortKeyColumnSql, timeSortKeyParameterSql } from '../time-sort-key';
@@ -134,7 +136,93 @@ export class AgentRunRepository {
         @Optional()
         @Inject(RUN_COST_SETTLER)
         private readonly runCostSettler?: RunCostSettler,
+        // The terminal-run event (see `agent-run-terminal.event.ts`): the
+        // escalation listener closes a `queued-too-long` card when its run
+        // ends. @Optional() and appended LAST per the positional-spec rule;
+        // bound by the API's global EventEmitterModule (pinned by
+        // `agent-run.terminal-event.nest.spec.ts`), absent in unit tests and
+        // worker contexts, where nothing is emitted.
+        @Optional()
+        private readonly events?: EventEmitter2,
     ) {}
+
+    /**
+     * Everything that hangs off a terminal transition, for every path that
+     * writes one ({@link cancel}, {@link markStuckFailed},
+     * {@link parkStaleRunning}, {@link tryMarkCompleted}, {@link markFailed},
+     * {@link markDispatchFailed}): the run-cost settlement and the terminal
+     * event. Called with the ids the write targeted; ids a concurrent writer
+     * finished first are harmless here (the settlement is idempotent, the
+     * listeners are CAS-guarded). Never throws.
+     *
+     * Deliberately NOT written here: `agents.lastRunAt` / `lastRunStatus`.
+     * Those two columns mean the HEARTBEAT's last run (the Schedules page and
+     * Home's Today read them so), and only the heartbeat claim / release
+     * writes them. The Agents card's "Last run" is read from `agent_runs`
+     * instead (`findLatestEndedRunsByAgent`).
+     */
+    private async afterTerminal(runIds: readonly string[]): Promise<void> {
+        for (const runId of runIds) {
+            await this.settleRunCost(runId);
+        }
+        await this.emitTerminalEvents(runIds);
+    }
+
+    /**
+     * Raise {@link AGENT_RUN_TERMINAL_EVENT} for every run among `runIds`
+     * that is terminal now. Skipped entirely (no read) when no emitter is
+     * bound — unit tests and worker contexts. Best-effort: a failed read or
+     * listener is logged.
+     */
+    private async emitTerminalEvents(runIds: readonly string[]): Promise<void> {
+        if (!this.events || runIds.length === 0) return;
+        let rows: AgentRun[];
+        try {
+            rows = await this.repository.find({
+                where: { id: In([...new Set(runIds)]) },
+                select: [
+                    'id',
+                    'agentId',
+                    'status',
+                    'finishedAt',
+                    'attentionReason',
+                    'queuedReason',
+                ],
+            });
+        } catch (err) {
+            this.logger.warn(
+                `AgentRun terminal event skipped for ${runIds.length} run(s): ${
+                    err instanceof Error ? err.message : String(err)
+                }`,
+            );
+            return;
+        }
+        for (const run of rows ?? []) {
+            if (!RETENTION_TERMINAL.includes(run.status)) continue;
+            await this.emitTerminal(run);
+        }
+    }
+
+    private async emitTerminal(run: AgentRun): Promise<void> {
+        if (!this.events || !run.agentId) return;
+        const event: AgentRunTerminalEvent = {
+            runId: run.id,
+            agentId: run.agentId,
+            status: run.status,
+            finishedAt: run.finishedAt ?? null,
+            attentionReason: run.attentionReason ?? null,
+            queuedReason: run.queuedReason ?? null,
+        };
+        try {
+            await this.events.emitAsync(AGENT_RUN_TERMINAL_EVENT, event);
+        } catch (err) {
+            this.logger.warn(
+                `AgentRun ${run.id}: terminal event listener failed (ignored): ${
+                    err instanceof Error ? err.message : String(err)
+                }`,
+            );
+        }
+    }
 
     /**
      * Fire the run-cost settlement for a run that just went terminal.
@@ -451,7 +539,8 @@ export class AgentRunRepository {
         }
         // Wave 9 M2 — a user-cancelled run consumed provider spend up to
         // the moment it was cancelled; settle what was actually metered.
-        await this.settleRunCost(runId);
+        // (+ the Agent's last-run stamp and the terminal event.)
+        await this.afterTerminal([runId]);
         return {
             found: true,
             previousStatus: run.status,
@@ -574,9 +663,8 @@ export class AgentRunRepository {
         // (either this bulk CAS won or a worker's own terminal write did,
         // which already settled). Settling all ids is safe: settlement is
         // idempotent (`run:{runId}` ledger key) and zero-event runs skip.
-        for (const runId of runIds) {
-            await this.settleRunCost(runId);
-        }
+        // The last-run stamp and terminal event are idempotent too.
+        await this.afterTerminal(runIds);
         return result.affected ?? 0;
     }
 
@@ -623,9 +711,7 @@ export class AgentRunRepository {
             .execute();
         // Same settlement contract as markStuckFailed — every input id is
         // terminal after this statement, settlement is idempotent.
-        for (const runId of runIds) {
-            await this.settleRunCost(runId);
-        }
+        await this.afterTerminal(runIds);
         return result.affected ?? 0;
     }
 
@@ -679,8 +765,11 @@ export class AgentRunRepository {
      *
      * Guarded on `attentionReason IS NULL` when RAISING so the flag — and
      * therefore the notification the caller pairs with it — lands exactly
-     * once even if two sweeper ticks overlap. Clearing is unguarded: a
-     * resolved run must always be clearable.
+     * once even if two sweeper ticks overlap. Also guarded on the run still
+     * being `queued`: the only flag raised this way is `queued-too-long`,
+     * and a run that ended between the sweeper's scan and this write must
+     * not get a card (and a notification) for a wait that is already over.
+     * Clearing is unguarded: a resolved run must always be clearable.
      */
     async setAttention(runId: string, reason: string | null): Promise<boolean> {
         if (reason === null) {
@@ -693,6 +782,9 @@ export class AgentRunRepository {
             .set({ attentionReason: reason, attentionAt: new Date() })
             .where('id = :id', { id: runId })
             .andWhere('attentionReason IS NULL')
+            .andWhere('status = :stillQueued', {
+                stillQueued: 'queued' satisfies AgentRunStatus,
+            })
             .execute();
         return (result.affected ?? 0) > 0;
     }
@@ -942,7 +1034,7 @@ export class AgentRunRepository {
         // Wave 9 M2 — settle metered cost → credits debit on the winning
         // terminal write only; a CAS loser's re-settle would be a
         // harmless idempotent no-op but is skipped to avoid double work.
-        if (ok) await this.settleRunCost(runId);
+        if (ok) await this.afterTerminal([runId]);
         return ok;
     }
 
@@ -951,7 +1043,7 @@ export class AgentRunRepository {
         if (!ok) await this.warnTerminalNoOp(runId, 'markFailed');
         // Wave 9 M2 — failed runs still consumed provider spend; the
         // accumulator sums whatever the run actually metered (often 0).
-        if (ok) await this.settleRunCost(runId);
+        if (ok) await this.afterTerminal([runId]);
     }
 
     /**
@@ -969,7 +1061,7 @@ export class AgentRunRepository {
         // Wave 9 M2 — a dispatch-failed run normally metered nothing (the
         // settler skips runs with zero tagged events); kept for the ONE
         // terminal choke-point invariant.
-        if (ok) await this.settleRunCost(runId);
+        if (ok) await this.afterTerminal([runId]);
     }
 
     /**

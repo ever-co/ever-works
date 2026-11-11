@@ -12,6 +12,7 @@ import type { Mission } from '@/lib/api/missions';
 import type { Team, TeamsOrganization } from '@/lib/api/teams';
 import type { Work } from '@/lib/api/work';
 import type { WorkProposal } from '@/lib/api/work-proposals';
+import { markdownExcerpt } from '@/lib/markdown/markdown-excerpt';
 
 export async function generateMetadata(): Promise<Metadata> {
     const t = await getTranslations('dashboard.agentsPage.newDialog');
@@ -55,7 +56,7 @@ export default async function NewAgentPage() {
     }));
     const ideaOptions = ideas.map((idea) => ({
         id: idea.id,
-        label: idea.title ?? idea.description?.slice(0, 80) ?? idea.id,
+        label: idea.title ?? (markdownExcerpt(idea.description, 80) || idea.id),
     }));
 
     // Teams & Companies spec §4.3 — the Team / Reports-to catalogs are

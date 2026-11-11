@@ -51,6 +51,8 @@ export class HomeController {
             return await this.home.build(auth.userId, {
                 scope: this.scopeContext.getScope(),
                 timezone: query.tz,
+                // Only consulted when the profile has no timezone.
+                browserTimezone: query.browserTz,
                 blocks: query.blocks,
             });
         } catch (error) {

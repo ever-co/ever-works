@@ -1143,7 +1143,17 @@
                 "statusArchived": "נשמר בארכיון",
                 "noTitle": "(ללא כותרת)",
                 "noCadence": "אין פעימת לב",
-                "cadencePrefix": "פעימת לב:"
+                "cadencePrefix": "פעימת לב:",
+                "runsOnSchedule": "Runs on schedule",
+                "runsOnScheduleNext": "Runs on schedule · next {time}",
+                "runsWhenAssigned": "Runs when assigned",
+                "lastRun": "Last run {time} · {status}",
+                "lastRunCompleted": "completed",
+                "lastRunFailed": "failed",
+                "lastRunCancelled": "cancelled",
+                "lastRunDispatchFailed": "could not start",
+                "lastRunRecoveredStuck": "recovered after getting stuck",
+                "lastRunUnknown": "unknown"
             },
             "tabs": {
                 "dashboard": "לוח בקרה",
@@ -1713,6 +1723,9 @@
                 "frequency": "תדירות",
                 "endsAt": "סיום (אופציונלי)",
                 "maxOccurrences": "מספר מופעים מרבי (אופציונלי)",
+                "maxOpenInstances": "לכל היותר פתוחים בו־זמנית",
+                "maxOpenInstancesHint": "מדלג על הרצה מתוזמנת כל עוד מספר כזה של הרצות קודמות עדיין פתוחות (רצות, או ממתינות לבקשת משיכה פתוחה). ריק = ללא הגבלה.",
+                "maxOpenInstancesInvalid": "הזן מספר שלם מ־1 עד {max}, או השאר ריק ללא הגבלה.",
                 "rulePreview": "תצוגה מקדימה של הכלל",
                 "ruleInvalid": "לא תקין",
                 "cancel": "ביטול",
@@ -1721,6 +1734,7 @@
                 "nextAt": "הבא ב־",
                 "ends": "מסתיים",
                 "max": "מרבי",
+                "lastSkipped": "דילוג אחרון",
                 "stopConfirm": "לעצור את לוח הזמנים החוזר? המופעים הקיימים יישארו; לא ייווצרו חדשים.",
                 "stopError": "לא ניתן היה לעצור את לוח הזמנים החוזר",
                 "saveError": "לא ניתן היה לשמור את לוח הזמנים"
@@ -2296,6 +2310,7 @@
                 "outstandingCap": "Outstanding-Ideas cap (-1 = unlimited)"
             },
             "actions": {
+                "edit": "Edit",
                 "saveSettings": "Save settings",
                 "pause": "Pause",
                 "resume": "Resume",
@@ -2311,6 +2326,11 @@
                 "cancel": "ביטול",
                 "deleting": "מוחק…",
                 "error": "מחיקת המשימה נכשלה"
+            },
+            "editDialog": {
+                "title": "Edit Mission",
+                "description": "Change the title and the description. The description is Markdown: switch to Preview to see how it will look on this page.",
+                "saved": "Mission updated"
             },
             "guardrails": {
                 "activeOverride": "Custom guardrail overrides are active on this Mission.",
@@ -2438,6 +2458,21 @@
                 "unavailable": "לא ניתן היה לטעון את המשימות.",
                 "previous": "הקודם",
                 "next": "הבא"
+            },
+            "team": {
+                "title": "Team and agents",
+                "loading": "Loading…",
+                "unavailable": "Could not load who works on this Mission.",
+                "empty": "No Team holds this Mission yet, and no Agent is scoped to it or to its attached Works.",
+                "teamNoAgents": "No agents on this Team that you can see.",
+                "otherAgents": "Other agents",
+                "agents": "Agents",
+                "viaMission": "Scoped to this Mission",
+                "viaWork": "Works on {name}",
+                "viaWorkUnnamed": "Works on an attached Work",
+                "neverRan": "Never ran",
+                "viaStandingTasks": "Standing tasks on {name}",
+                "viaStandingTasksUnnamed": "Standing tasks on an attached Work"
             }
         },
         "ideasPage": {
@@ -2727,6 +2762,11 @@
                 "title": "עדיין לא תוזמן דבר",
                 "description": "משימות חוזרות, פעימות סוכנים, תזמוני עבודה, פעימות Mission, אימות מקורות וסנכרון נתונים יופיעו כאן לאחר שתגדיר אותם.",
                 "noResults": "אין תזמונים התואמים את המסנן הנוכחי."
+            },
+            "lastSkipped": "דולג",
+            "lastSkippedHint": "ההרצה המתוזמנת האחרונה דולגה: יותר מדי הרצות קודמות של לוח הזמנים הזה עדיין פתוחות.",
+            "runNow": {
+                "tooManyOpenConfirm": "יותר מדי הרצות קודמות של \"{name}\" עדיין פתוחות, ולכן המגבלה שלו מעכבת את ההרצה הזו. להריץ בכל זאת?"
             }
         },
         "activity": {
@@ -2769,6 +2809,7 @@
                     "memberRemoved": "חבר הוסר",
                     "scheduleCreated": "לוח זמנים נוצר",
                     "scheduleExecuted": "לוח זמנים בוצע",
+                    "scheduleSkipped": "לוח זמנים דולג",
                     "import": "ייבוא",
                     "login": "כניסה",
                     "signup": "הרשמה",
@@ -9260,12 +9301,18 @@
         "goalDetail": {
             "backToGoals": "Back to Goals",
             "actions": {
+                "edit": "Edit",
                 "evaluateNow": "Evaluate now",
                 "activate": "Activate",
                 "pause": "Pause",
                 "delete": "Delete",
                 "archive": "Archive",
                 "unarchive": "Unarchive"
+            },
+            "editDialog": {
+                "title": "Edit Goal",
+                "description": "Change the title and the description. The description is Markdown: switch to Preview to see how it will look on this page.",
+                "saved": "Goal updated"
             },
             "sections": {
                 "progress": "Progress",
@@ -9390,6 +9437,9 @@
                 "waive": "Waive",
                 "reopen": "Reopen",
                 "remove": "Remove",
+                "edit": "Edit",
+                "editLabel": "Criterion text",
+                "save": "Save",
                 "confirmRemove": "Remove this criterion from the Definition of Done?",
                 "confirmWaive": "Waive it",
                 "cancel": "Cancel",
@@ -11050,6 +11100,31 @@
             "build": "בנייה",
             "web": "אינטרנט",
             "api": "API"
+        },
+        "markdown": {
+            "showMore": "Show more",
+            "showLess": "Show less",
+            "write": "Write",
+            "preview": "Preview",
+            "tabsLabel": "{field}: write or preview",
+            "emptyPreview": "Nothing to preview yet.",
+            "hint": "Markdown: **bold**, _italic_, lists, `code`, tables and links.",
+            "counter": "{count} / {max}",
+            "plainTextFallback": "Shown as plain text: this text is too long or too complex to format safely."
+        },
+        "recordEdit": {
+            "titleLabel": "Title",
+            "descriptionLabel": "Description",
+            "descriptionPlaceholder": "Describe it in Markdown: ## sections, - lists, `code`, [links](https://…)",
+            "save": "Save changes",
+            "saving": "Saving…",
+            "cancel": "Cancel",
+            "titleRequired": "Enter a title.",
+            "titleTooLong": "Keep the title to {max} characters or fewer.",
+            "descriptionRequired": "Enter a description.",
+            "descriptionTooLong": "Keep the description to {max} characters or fewer.",
+            "saveError": "The changes could not be saved. Try again.",
+            "discardConfirm": "Discard your unsaved changes?"
         }
     },
     "organizations": {

@@ -209,6 +209,8 @@ const sidebars: SidebarsConfig = {
 				'features/fleet-checkouts',
 				// Tasks on computers (FL-15) — the hand-off, the Computer block, GitHub things for me, git identity.
 				'features/fleet-tasks-and-github',
+				// What a fleet agent run is told (run context, work in flight) and the pull request it opens.
+				'features/fleet-run-context-and-pull-requests',
 				// Reading a computer's logs through that link.
 				'features/fleet-logs',
 				// Browsing and moving a computer's files through that link (FL-11).

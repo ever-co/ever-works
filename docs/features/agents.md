@@ -78,6 +78,20 @@ Set a `heartbeatCadence` (a cron expression, or `manual`) and the Agent wakes on
 
 This is the loop that makes Ever Works _keep going_. Tune it per Agent with `agent.yml`'s `idleBehavior: propose | observe | noop`.
 
+### Agents without a heartbeat, and the last run
+
+A heartbeat is optional. Many Agents have none on purpose — for example Agents that work through **recurring Tasks** (heartbeat runs execute on the cloud worker, never on a fleet computer, while a recurring Task can run anywhere). The Agent card on the Agents tab says what drives each Agent:
+
+- **Heartbeat: `<cadence>`** — the Agent has a heartbeat cadence (`manual` counts as none).
+- **Runs on schedule · next `<time>`** — no heartbeat, and at least one of your **active** recurring Tasks is assigned to it (as an agent assignee, or as the Task's own Agent when the Task has no agent assignee). The time is the soonest next fire among those Tasks. Paused, ended and exhausted schedules do not count, and only your own Tasks are counted, so a shared Agent never reveals someone else's schedule.
+- **Runs when assigned** — one of **your** Agents with no heartbeat and none of your active recurring Tasks: it runs when work is assigned to it, or when you start it. A teammate's Agent that none of your Tasks drive shows nothing here — its owner's Tasks may drive it, and you cannot count those.
+
+Under that, every card shows **Last run `<time ago>` · `<status>`**: the Agent's most recent run that has **ended**, of any kind — a cloud Task run, a fleet run, a heartbeat, a chat reply, a cancel, or a run the stuck-run sweeper reaped or parked. The time is when it finished; the status is how (`completed`, `failed`, `cancelled`). It is read from the Agent's runs, for the whole list page at once. A run still in progress is not a finished run: the status pill already says **Running** for a heartbeat in flight.
+
+:::note `lastRunAt` is the heartbeat's
+The Agent's own `lastRunAt` / `lastRunStatus` fields (on `GET /api/agents/:id`, and on the Schedules page's heartbeat rows and Home's Today) keep meaning the **heartbeat's** last run — only the heartbeat claim and release write them. The card's "Last run" is a separate value, `latestRun`, on the Agents list response.
+:::
+
 ## Memory
 
 - **Short-term** — the messages within a single run; not persisted.
@@ -99,7 +113,7 @@ Every Agent can have one budget row. Before any AI call, the platform checks the
 
 Two more fuses sit beside the budget:
 
-- **Auto-pause on repeated failures.** The **Pause after failures** field on the Agent's **Settings** tab (default `3`, accepted range 1–20) is how many consecutive failed runs it takes before the Agent is paused rather than retried again.
+- **Auto-pause on repeated failures.** The **Pause after failures** field on the Agent's **Settings** tab (default `3`, accepted range 1–20) is how many consecutive failed **heartbeat** runs it takes before the Agent is paused rather than retried again. Task runs (cloud or fleet) do not count toward it; they update the card's last run only.
 - **The doom-loop detector.** Inside a task run's iterate loop, the platform reads the failure trail and stops early when the run is cycling _without progress_ — either the last three attempts produced one identical failure fingerprint, or the trail reached the retry cap with no progress and at least one repeated failure. It never fails a run on its own account: it ends the loop before another attempt is paid for, posts the reason in the task chat ("the run was cycling without progress"), and files an escalation with reason code `loop-detected` carrying the evidence. Defaults: enabled, repeat threshold `3` (`AGENT_RUN_LOOP_REPEAT_THRESHOLD`, clamped 2–10) and retry cap `4` (`AGENT_RUN_LOOP_MAX_RETRIES`, clamped 1–20); set `AGENT_RUN_LOOP_DETECTOR_ENABLED=false` to fall back to the attempt cap alone. Any attempt that reports measurable progress clears both signals.
 
 Which side-effectful actions an Agent may take alone — and which queue for you first — is a separate per-Agent policy with its own `require_approval` / `autonomous` modes, auto-approve and blocked action-type lists. See **[Approvals, Escalations & Guardrail Modes](./approvals-and-escalations.md)**, which is also where `loop-detected` escalations land.

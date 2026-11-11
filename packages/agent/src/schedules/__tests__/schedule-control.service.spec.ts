@@ -119,6 +119,16 @@ describe('ScheduleControlService', () => {
     });
 
     describe('run now', () => {
+        it('recurring Task: `force` reaches the Task domain only when set', async () => {
+            const { service, tasks } = build([view({})]);
+            await service.runNow(CTX, 'recurring_task:task-1', { force: true });
+            expect(tasks.runRecurringNow).toHaveBeenCalledWith('user-1', 'task-1', SCOPE, {
+                force: true,
+            });
+            await service.runNow(CTX, 'recurring_task:task-1', { force: false });
+            expect(tasks.runRecurringNow).toHaveBeenLastCalledWith('user-1', 'task-1', SCOPE);
+        });
+
         it('recurring Task: delegates to the Task domain and echoes the unchanged next fire', async () => {
             const { service, tasks } = build([view({})]);
             const result = await service.runNow(CTX, 'recurring_task:task-1');

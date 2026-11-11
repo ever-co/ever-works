@@ -1856,7 +1856,17 @@
                 "statusArchived": "Archived",
                 "noTitle": "(no title)",
                 "noCadence": "No heartbeat",
-                "cadencePrefix": "Heartbeat:"
+                "cadencePrefix": "Heartbeat:",
+                "runsOnSchedule": "Runs on schedule",
+                "runsOnScheduleNext": "Runs on schedule · next {time}",
+                "runsWhenAssigned": "Runs when assigned",
+                "lastRun": "Last run {time} · {status}",
+                "lastRunCompleted": "completed",
+                "lastRunFailed": "failed",
+                "lastRunCancelled": "cancelled",
+                "lastRunDispatchFailed": "could not start",
+                "lastRunRecoveredStuck": "recovered after getting stuck",
+                "lastRunUnknown": "unknown"
             },
             "tabs": {
                 "dashboard": "Dashboard",
@@ -2698,6 +2708,9 @@
                 "frequency": "Frequency",
                 "endsAt": "Ends (optional)",
                 "maxOccurrences": "Max occurrences (optional)",
+                "maxOpenInstances": "At most open at a time",
+                "maxOpenInstancesHint": "Skips a scheduled run while this many earlier runs are still open (running, or waiting on an open pull request). Blank = no limit.",
+                "maxOpenInstancesInvalid": "Enter a whole number from 1 to {max}, or leave it blank for no limit.",
                 "rulePreview": "Rule preview",
                 "ruleInvalid": "invalid",
                 "cancel": "Cancel",
@@ -2706,6 +2719,7 @@
                 "nextAt": "Next at",
                 "ends": "Ends",
                 "max": "Max",
+                "lastSkipped": "Last skipped",
                 "stopConfirm": "Stop the recurring schedule? Existing instances stay; no new ones spawn.",
                 "stopError": "Failed to stop the recurring schedule",
                 "saveError": "Failed to save the schedule"
@@ -3623,6 +3637,7 @@
                 "outstandingCap": "Outstanding-Ideas cap (-1 = unlimited)"
             },
             "actions": {
+                "edit": "Edit",
                 "saveSettings": "Save settings",
                 "pause": "Pause",
                 "resume": "Resume",
@@ -3638,6 +3653,11 @@
                 "cancel": "Cancel",
                 "deleting": "Deleting…",
                 "error": "Failed to delete Mission"
+            },
+            "editDialog": {
+                "title": "Edit Mission",
+                "description": "Change the title and the description. The description is Markdown: switch to Preview to see how it will look on this page.",
+                "saved": "Mission updated"
             },
             "guardrails": {
                 "activeOverride": "Custom guardrail overrides are active on this Mission.",
@@ -3765,6 +3785,21 @@
                 "unavailable": "Couldn't load the Tasks.",
                 "previous": "Previous",
                 "next": "Next"
+            },
+            "team": {
+                "title": "Team and agents",
+                "loading": "Loading…",
+                "unavailable": "Could not load who works on this Mission.",
+                "empty": "No Team holds this Mission yet, and no Agent is scoped to it or to its attached Works.",
+                "teamNoAgents": "No agents on this Team that you can see.",
+                "otherAgents": "Other agents",
+                "agents": "Agents",
+                "viaMission": "Scoped to this Mission",
+                "viaWork": "Works on {name}",
+                "viaWorkUnnamed": "Works on an attached Work",
+                "neverRan": "Never ran",
+                "viaStandingTasks": "Standing tasks on {name}",
+                "viaStandingTasksUnnamed": "Standing tasks on an attached Work"
             }
         },
         "ideasPage": {
@@ -4289,6 +4324,8 @@
             "timezoneNote": "UTC ({local} local)",
             "neverRunYet": "never run yet",
             "lastNotTracked": "Not recorded for this source",
+            "lastSkipped": "Skipped",
+            "lastSkippedHint": "The last scheduled run was skipped: too many earlier runs of this schedule are still open.",
             "loadMore": "Load more",
             "loading": "Loading schedules…",
             "showingRange": "Showing {shown} of {total}",
@@ -4377,6 +4414,7 @@
             "runNow": {
                 "queuedToast": "Running now. This does not change the next scheduled fire.",
                 "confirmOnComputer": "Run \"{name}\" on its computer now? These are real machines, not a sandbox.",
+                "tooManyOpenConfirm": "Too many earlier runs of “{name}” are still open, so its limit holds this run back. Run it anyway?",
                 "parkedToast": "Queued behind other runs. This does not change the next scheduled fire.",
                 "creditsToast": "Your credit balance cannot cover another run right now.",
                 "missionTickToast": "Running one tick now. A tick raises ideas rather than a run — open the mission to see what it raised.",
@@ -4466,6 +4504,7 @@
                     "memberRemoved": "Member Removed",
                     "scheduleCreated": "Schedule Created",
                     "scheduleExecuted": "Schedule Executed",
+                    "scheduleSkipped": "Schedule Skipped",
                     "import": "Import",
                     "login": "Login",
                     "signup": "Signup",
@@ -11497,12 +11536,18 @@
         "goalDetail": {
             "backToGoals": "Back to Goals",
             "actions": {
+                "edit": "Edit",
                 "evaluateNow": "Evaluate now",
                 "activate": "Activate",
                 "pause": "Pause",
                 "delete": "Delete",
                 "archive": "Archive",
                 "unarchive": "Unarchive"
+            },
+            "editDialog": {
+                "title": "Edit Goal",
+                "description": "Change the title and the description. The description is Markdown: switch to Preview to see how it will look on this page.",
+                "saved": "Goal updated"
             },
             "sections": {
                 "progress": "Progress",
@@ -11627,6 +11672,9 @@
                 "waive": "Waive",
                 "reopen": "Reopen",
                 "remove": "Remove",
+                "edit": "Edit",
+                "editLabel": "Criterion text",
+                "save": "Save",
                 "confirmRemove": "Remove this criterion from the Definition of Done?",
                 "confirmWaive": "Waive it",
                 "cancel": "Cancel",
@@ -13574,6 +13622,31 @@
             "web": "Web",
             "api": "API",
             "about": "About"
+        },
+        "markdown": {
+            "showMore": "Show more",
+            "showLess": "Show less",
+            "write": "Write",
+            "preview": "Preview",
+            "tabsLabel": "{field}: write or preview",
+            "emptyPreview": "Nothing to preview yet.",
+            "hint": "Markdown: **bold**, _italic_, lists, `code`, tables and links.",
+            "counter": "{count} / {max}",
+            "plainTextFallback": "Shown as plain text: this text is too long or too complex to format safely."
+        },
+        "recordEdit": {
+            "titleLabel": "Title",
+            "descriptionLabel": "Description",
+            "descriptionPlaceholder": "Describe it in Markdown: ## sections, - lists, `code`, [links](https://…)",
+            "save": "Save changes",
+            "saving": "Saving…",
+            "cancel": "Cancel",
+            "titleRequired": "Enter a title.",
+            "titleTooLong": "Keep the title to {max} characters or fewer.",
+            "descriptionRequired": "Enter a description.",
+            "descriptionTooLong": "Keep the description to {max} characters or fewer.",
+            "saveError": "The changes could not be saved. Try again.",
+            "discardConfirm": "Discard your unsaved changes?"
         }
     },
     "organizations": {

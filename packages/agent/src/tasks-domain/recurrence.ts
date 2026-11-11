@@ -211,6 +211,9 @@ export function cloneRecurringTaskAsInstance(template: Task): Partial<Task> {
         recurrenceEndsAt: null,
         recurrenceMaxOccurrences: null,
         recurrenceOccurredCount: 0,
+        // Overlap limit — a template setting, never an instance's.
+        recurrenceMaxOpenInstances: null,
+        recurrenceSkippedAt: null,
         parentRecurringTaskId: template.id,
         // One-shot columns — never inherited.
         scheduledAt: null,

@@ -1,5 +1,7 @@
 import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
+import { InjectRepository } from '@nestjs/typeorm';
+import type { Repository } from 'typeorm';
 import { RunDispatchGateService } from '@ever-works/agent/agents';
 import {
     AgentRepository,
@@ -7,7 +9,7 @@ import {
     AgentRunRepository,
 } from '@ever-works/agent/database';
 import type { AgentRun, FleetNode, Task } from '@ever-works/agent/entities';
-import { PluginUsageCapability } from '@ever-works/agent/entities';
+import { Goal, Mission, PluginUsageCapability } from '@ever-works/agent/entities';
 import {
     FleetJobCompletedEvent,
     FleetJobLeasedEvent,
@@ -35,6 +37,9 @@ import {
 } from '@ever-works/agent/tasks-domain';
 import { redactSecrets } from '@ever-works/agent/utils';
 import {
+    boundRunPullRequestSummary,
+    dropQuotedPrivateText,
+    redactRunSummarySecrets,
     describeFleetModelProvider,
     describeFleetModelUsageLimitWindow,
     FLEET_AGENT_TASK_MODEL_RESUME_OUTCOMES,
@@ -173,7 +178,92 @@ export class FleetAgentTaskReconcilerService {
         @Optional()
         @Inject(APP_WORK_RUN_CONTAINMENT_RECORDER)
         private readonly containmentRecorder?: AppWorkRunContainmentRecorder,
+        // Review of #3145, S3 — the Task's Mission and Goal, read by primary key
+        // (owner predicate included) so a summary that quotes their private text
+        // never reaches the pull request. Both entities are in the DatabaseModule
+        // inventory TasksModule imports. Appended LAST and @Optional() per the
+        // positional-construction rule.
+        @Optional()
+        @InjectRepository(Mission)
+        private readonly missions?: Repository<Mission>,
+        @Optional()
+        @InjectRepository(Goal)
+        private readonly goals?: Repository<Goal>,
     ) {}
+
+    /**
+     * What a fleet run's pull request (title, body) and commit text may be
+     * built from: the CLI's final message, made safe ONCE here, before either
+     * pull request path (`finalizeRemotePush`, `finalizeMountPush`) sees it.
+     *
+     *  1. Bounded (`boundRunPullRequestSummary`: the head a body can show and
+     *     the last line, where `PR-TITLE:` is), so nothing below runs over the
+     *     256 KiB a node may report.
+     *  2. Credentials redacted (`redactRunSummarySecrets`: the shared
+     *     `redactSecrets` the Task-chat copy uses, plus credentials in URLs,
+     *     `Authorization` values and credential-named values).
+     *  3. Private planning text dropped (`dropQuotedPrivateText`): a sentence
+     *     quoting eight or more consecutive words of the Task's Mission or Goal
+     *     description, or of a Goal Definition-of-Done criterion — text the
+     *     planner showed the model as `# RUN CONTEXT` — is not posted.
+     *
+     * FAILS CLOSED: when the Mission or Goal cannot be read (a throw), nothing
+     * of the summary is used and the pull request keeps today's text. `null`
+     * when there is no summary or nothing is left.
+     */
+    private async pullRequestSummaryOf(task: Task | null, raw: unknown): Promise<string | null> {
+        if (typeof raw !== 'string' || !raw.trim()) return null;
+        const redacted = redactRunSummarySecrets(boundRunPullRequestSummary(raw));
+        const privateTexts = task ? await this.privatePlanningTexts(task) : [];
+        if (privateTexts === null) return null;
+        const { text, dropped } = dropQuotedPrivateText(redacted, privateTexts);
+        if (dropped > 0) {
+            this.logger.warn(
+                `Task ${task?.id}: ${dropped} sentence(s) of the run summary quoted the Task's private planning context and were left out of the pull request`,
+            );
+        }
+        return text.trim() ? text : null;
+    }
+
+    /**
+     * The private planning text of a Task: its Mission's and Goal's titles
+     * and descriptions and every Definition-of-Done criterion of the Goal.
+     * `[]` when the Task has neither (or the row is gone or another owner's);
+     * `null` when a read THREW, so the caller fails closed.
+     */
+    private async privatePlanningTexts(task: Task): Promise<string[] | null> {
+        const texts: string[] = [];
+        try {
+            if (task.missionId && this.missions) {
+                const mission = await this.missions.findOne({
+                    where: { id: task.missionId, userId: task.userId },
+                    select: { id: true, title: true, description: true },
+                });
+                if (mission) texts.push(mission.title, mission.description);
+            }
+            if (task.goalId && this.goals) {
+                const goal = await this.goals.findOne({
+                    where: { id: task.goalId, userId: task.userId },
+                    select: { id: true, title: true, description: true, dodCriteria: true },
+                });
+                if (goal) {
+                    texts.push(goal.title, goal.description ?? '');
+                    for (const criterion of Array.isArray(goal.dodCriteria)
+                        ? goal.dodCriteria
+                        : []) {
+                        if (criterion && typeof criterion.text === 'string')
+                            texts.push(criterion.text);
+                    }
+                }
+            }
+        } catch (error) {
+            this.logger.warn(
+                `Task ${task.id}: the Mission or Goal could not be read, so the run summary is not used for the pull request: ${describeError(error)}`,
+            );
+            return null;
+        }
+        return texts.filter((text) => typeof text === 'string' && text.trim() !== '');
+    }
 
     /**
      * The platform identities an `agent-task` job carries, or null for
@@ -536,6 +626,14 @@ export class FleetAgentTaskReconcilerService {
         }
 
         const summary = truncate(result.model?.summary || 'Fleet run finished.', MAX_SUMMARY_CHARS);
+        // Self-explaining pull requests — what the pull request is built from:
+        // the CLI's own final message (its `PR-TITLE:` line is the LAST line,
+        // which `truncate` would cut first), never the placeholder above, the
+        // output tail or anything else the node reported; bounded, credentials
+        // redacted and private planning text dropped ONCE here, before either
+        // pull request path sees it (see `pullRequestSummaryOf`). `null` keeps
+        // today's title and body.
+        const pullRequestSummary = await this.pullRequestSummaryOf(task, result.model?.summary);
         let finalizeNote = '';
         const agent = agentId ? await this.agents.findById(agentId).catch(() => null) : null;
         let primaryPrUrl: string | null = null;
@@ -558,6 +656,7 @@ export class FleetAgentTaskReconcilerService {
                     runId: ctx.runId,
                     ...(checksPassed > 0 ? { gate: { checksPassed } } : {}),
                     gateStatus: toGateStatus(result.gateStatus),
+                    summary: pullRequestSummary,
                 });
                 finalizeNote = describeFinalize(outcome, result.git.branch);
                 // A refused pull request is not one "to review": the Inbox
@@ -650,7 +749,9 @@ export class FleetAgentTaskReconcilerService {
                         baseRef: mount.baseRef,
                         headSha: entry.headSha ?? null,
                         primaryPrUrl,
-                        summary,
+                        // The same text as the primary's, never the
+                        // "Fleet run finished." placeholder.
+                        summary: pullRequestSummary,
                     });
                     mountNotes.push(describeMountOutcome(outcome, mount.branch));
                     // A refused mount's pull request is not one "to review".

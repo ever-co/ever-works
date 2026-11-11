@@ -471,6 +471,37 @@ describe('TaskWorkspaceService.finalizeMountPush', () => {
         });
     });
 
+    it('takes its title from the run summary and posts the summary only sanitized', async () => {
+        await build().finalizeMountPush({
+            ...base(),
+            summary:
+                'Consumed field X in the template. Fixes #4, thanks @octocat <img src="https://evil.example/x">\nPR-TITLE: Consume field X in the template',
+        });
+        const { title, body } = gitFacade.createPullRequest.mock.calls[0]![0] as {
+            title: string;
+            body: string;
+        };
+        expect(title).toBe('feat: consume field X in the template [TSK-9]');
+        expect(body.startsWith('Consumed field X in the template.')).toBe(true);
+        expect(body).toContain(
+            'opened by an agent run in `ever-works/directory-web-template`, one of the repositories the Task spans',
+        );
+        expect(body).toContain('Part of https://github.com/ever-works/ever-works/pull/10.');
+        expect(body).not.toMatch(/@\w|#\d|<img/);
+        expect(body).not.toContain('evil.example');
+        expect(body).not.toContain('PR-TITLE');
+    });
+
+    it('without a summary keeps exactly the body it always had', async () => {
+        await build().finalizeMountPush({ ...base(), summary: null });
+        expect(gitFacade.createPullRequest.mock.calls[0]![0]).toEqual(
+            expect.objectContaining({
+                title: 'Task TSK-9: Add field X (ever-works/directory-web-template)',
+                body: "Automated changes for Task `TSK-9` (agent run) in `ever-works/directory-web-template`, one of the repositories the Task spans. Part of https://github.com/ever-works/ever-works/pull/10. Review before merging — merge policy is governed by the Work's merge-policy settings.",
+            }),
+        );
+    });
+
     it('upserts by repository so a re-run replaces the entry instead of duplicating it', async () => {
         tasks.findById.mockResolvedValue(
             makeTask({

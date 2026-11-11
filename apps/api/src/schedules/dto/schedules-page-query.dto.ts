@@ -76,6 +76,19 @@ export class RunScheduleNowDto {
     @IsOptional()
     @IsBoolean()
     confirm?: boolean;
+
+    /**
+     * A recurring Task only: run it even at its open-instance limit (409
+     * `SCHEDULE_TOO_MANY_OPEN` without it). Every other source ignores the field.
+     */
+    @ApiPropertyOptional({
+        type: Boolean,
+        description:
+            'A recurring Task only: run even at its open-instance limit (recurrenceMaxOpenInstances). Ignored by every other source.',
+    })
+    @IsOptional()
+    @IsBoolean()
+    force?: boolean;
 }
 
 /** Body of `POST /api/schedules/:id/pause`. */

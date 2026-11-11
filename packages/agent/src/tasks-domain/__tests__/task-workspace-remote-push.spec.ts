@@ -212,6 +212,64 @@ describe('TaskWorkspaceService.finalizeRemotePush', () => {
         });
     });
 
+    describe('the run summary names and explains the pull request', () => {
+        const opened = () =>
+            gitFacade.createPullRequest.mock.calls[0]![0] as { title: string; body: string };
+
+        it('without a summary, the title and body are exactly what they were', async () => {
+            await build().finalizeRemotePush(input());
+            expect(opened()).toEqual(
+                expect.objectContaining({
+                    title: 'Task TSK-9: Fix login',
+                    body: "Automated changes for Task `TSK-9` (agent run). Review before merging — merge policy is governed by the Work's merge-policy settings.\n\nQuality gate: all 2 acceptance checks green.",
+                }),
+            );
+        });
+
+        it('with a summary, its PR-TITLE line is the title and the rest is the body', async () => {
+            await build().finalizeRemotePush({
+                ...input(),
+                summary:
+                    'The login guard dropped the return URL.\n\nChanged `src/login.ts`.\n\nPR-TITLE: Fix login redirect losing the return URL',
+            });
+            expect(opened().title).toBe('fix: login redirect losing the return URL [TSK-9]');
+            expect(opened().body).toBe(
+                [
+                    'The login guard dropped the return URL.',
+                    'Changed `src/login.ts`.',
+                    '---',
+                    "Task `TSK-9` · opened by an agent run; the description above is the run's own summary. Review before merging — merge policy is governed by the Work's merge-policy settings.",
+                    'Quality gate: all 2 acceptance checks green.',
+                ].join('\n\n'),
+            );
+        });
+
+        it('posts a hostile summary only after it is neutralised', async () => {
+            await build().finalizeRemotePush({
+                ...input(),
+                summary:
+                    'Fixes #3, cc @octocat <img src="https://evil.example/p?d=1"> [skip ci]\nPR-TITLE: Closes #3 for @octocat',
+            });
+            const { title, body } = opened();
+            expect(title).not.toMatch(/@\w|#\d/);
+            expect(body).not.toMatch(/@\w|#\d|<img|\[skip ci\]/);
+            expect(body).not.toContain('evil.example');
+        });
+
+        it('is not consulted for a Task that already has a pull request', async () => {
+            const withPr = makeTask({
+                prNumber: 5,
+                prUrl: 'https://github.com/acme/site-data/pull/5',
+            });
+            await build().finalizeRemotePush({
+                ...input(),
+                task: withPr,
+                summary: 'x\nPR-TITLE: Fix it',
+            });
+            expect(gitFacade.createPullRequest).not.toHaveBeenCalled();
+        });
+    });
+
     describe('a Task started by `runTask` from backlog (live e2e 2026-10-18, T-40)', () => {
         it('walks backlog → in_review through the sync path instead of an illegal direct move', async () => {
             const backlog = makeTask({ status: TaskStatus.BACKLOG });

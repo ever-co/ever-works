@@ -125,7 +125,20 @@ export function ScheduleWorkspaceRow({
                 <span className="mr-1 text-text-muted dark:text-text-muted-dark @3xl/main:hidden">
                     {t('columns.last')}:
                 </span>
-                {schedule.lastRunAt ? (
+                {schedule.lastRunAt && schedule.lastRunStatus === 'skipped' ? (
+                    // Recurring Tasks overlap limit — the latest scheduled slot was skipped
+                    // because too many earlier runs were still open.
+                    <span
+                        className="inline-flex items-center gap-1"
+                        title={t('lastSkippedHint')}
+                        data-testid="schedule-last-skipped"
+                    >
+                        <span className="rounded-full bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:bg-amber-900/20 dark:text-amber-300">
+                            {t('lastSkipped')}
+                        </span>
+                        <ActivityTimestamp value={schedule.lastRunAt} variant="relative" />
+                    </span>
+                ) : schedule.lastRunAt ? (
                     <ActivityTimestamp value={schedule.lastRunAt} variant="relative" />
                 ) : TRACKS_LAST_RUN.has(schedule.sourceType) ? (
                     <span className="text-text-muted dark:text-text-muted-dark">

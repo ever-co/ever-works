@@ -25,6 +25,7 @@ import { PageHeader } from '@/components/common/PageHeader';
 import { TeamsPageTabs } from '@/components/agents/AgentsPageTabs';
 import { HumanAgentIcon } from '@/components/icons/HumanAgentIcon';
 import { ROUTES } from '@/lib/constants';
+import { markdownExcerpt } from '@/lib/markdown/markdown-excerpt';
 
 export async function generateMetadata(): Promise<Metadata> {
     const t = await getTranslations('dashboard.teamsPage');
@@ -197,7 +198,7 @@ export default async function TeamsPage() {
                                         </h3>
                                         {team.description ? (
                                             <p className="text-xs text-text-muted dark:text-text-muted-dark mt-1 line-clamp-2">
-                                                {team.description}
+                                                {markdownExcerpt(team.description)}
                                             </p>
                                         ) : null}
                                         {parent ? (

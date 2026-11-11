@@ -18,7 +18,8 @@ import { useTranslations } from 'next-intl';
 import { toast } from 'sonner';
 import { Link } from '@/i18n/navigation';
 import { cn } from '@/lib/utils/cn';
-import { pauseSchedule, resumeSchedule, runScheduleNow } from '@/app/actions/dashboard/schedules';
+import { pauseSchedule, resumeSchedule } from '@/app/actions/dashboard/schedules';
+import { runScheduleNowAskingPastLimit } from './run-schedule-now';
 import type {
     ScheduleControlName,
     ScheduleControlReasonKey,
@@ -148,7 +149,14 @@ export function ScheduleRowMenu({
             ) {
                 return;
             }
-            const response = await runScheduleNow(schedule.id, { confirm: isNodeSchedule });
+            // Recurring Tasks overlap limit — too many earlier runs of this schedule are still
+            // open. Running anyway is the owner's call: asked, then sent with `force`.
+            const response = await runScheduleNowAskingPastLimit(
+                schedule.id,
+                { confirm: isNodeSchedule },
+                () => window.confirm(t('runNow.tooManyOpenConfirm', { name: schedule.ownerName })),
+            );
+            if (!response) return;
             if (response.ok) {
                 announceRun(response.result);
                 onChanged?.();

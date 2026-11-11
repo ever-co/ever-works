@@ -684,8 +684,11 @@ export class SchedulesService {
                         ? describeCron(task.recurrenceCron)
                         : describeRrule(task.recurrenceRule),
                     nextRunAt: ended || paused ? null : toIso(task.nextOccurrenceAt),
-                    lastRunAt: null,
-                    lastRunStatus: null,
+                    // A recurring Task does not record its fires, except one: the latest
+                    // scheduled slot SKIPPED by its overlap limit (`recurrenceSkippedAt`,
+                    // cleared by the next fire that spawns), shown as a `skipped` last run.
+                    lastRunAt: toIso(task.recurrenceSkippedAt),
+                    lastRunStatus: task.recurrenceSkippedAt ? 'skipped' : null,
                     status,
                     enabled: !ended && !paused,
                     agentId: attributed?.id ?? null,

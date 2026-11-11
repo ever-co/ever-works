@@ -1112,7 +1112,17 @@
                 "statusArchived": "보관됨",
                 "noTitle": "(제목 없음)",
                 "noCadence": "심박 없음",
-                "cadencePrefix": "심박:"
+                "cadencePrefix": "심박:",
+                "runsOnSchedule": "Runs on schedule",
+                "runsOnScheduleNext": "Runs on schedule · next {time}",
+                "runsWhenAssigned": "Runs when assigned",
+                "lastRun": "Last run {time} · {status}",
+                "lastRunCompleted": "completed",
+                "lastRunFailed": "failed",
+                "lastRunCancelled": "cancelled",
+                "lastRunDispatchFailed": "could not start",
+                "lastRunRecoveredStuck": "recovered after getting stuck",
+                "lastRunUnknown": "unknown"
             },
             "tabs": {
                 "dashboard": "대시보드",
@@ -1682,6 +1692,9 @@
                 "frequency": "빈도",
                 "endsAt": "종료 (선택 사항)",
                 "maxOccurrences": "최대 반복 횟수 (선택 사항)",
+                "maxOpenInstances": "동시에 열려 있을 수 있는 최대 개수",
+                "maxOpenInstancesHint": "이전 실행이 이만큼 아직 열려 있는 동안(실행 중이거나 열린 풀 리퀘스트를 기다리는 중) 예약된 실행을 건너뜁니다. 비워 두면 제한 없음.",
+                "maxOpenInstancesInvalid": "1부터 {max}까지의 정수를 입력하거나, 제한 없이 두려면 비워 두세요.",
                 "rulePreview": "규칙 미리보기",
                 "ruleInvalid": "유효하지 않음",
                 "cancel": "취소",
@@ -1690,6 +1703,7 @@
                 "nextAt": "다음 실행",
                 "ends": "종료",
                 "max": "최대",
+                "lastSkipped": "마지막 건너뜀",
                 "stopConfirm": "반복 일정을 중지할까요? 기존 인스턴스는 유지되며 새 인스턴스는 생성되지 않습니다.",
                 "stopError": "반복 일정을 중지하지 못했습니다",
                 "saveError": "일정을 저장하지 못했습니다"
@@ -2265,6 +2279,7 @@
                 "outstandingCap": "Outstanding-Ideas cap (-1 = unlimited)"
             },
             "actions": {
+                "edit": "Edit",
                 "saveSettings": "Save settings",
                 "pause": "Pause",
                 "resume": "Resume",
@@ -2280,6 +2295,11 @@
                 "cancel": "취소",
                 "deleting": "삭제하는 중…",
                 "error": "미션을 삭제하지 못했습니다"
+            },
+            "editDialog": {
+                "title": "Edit Mission",
+                "description": "Change the title and the description. The description is Markdown: switch to Preview to see how it will look on this page.",
+                "saved": "Mission updated"
             },
             "guardrails": {
                 "activeOverride": "Custom guardrail overrides are active on this Mission.",
@@ -2407,6 +2427,21 @@
                 "unavailable": "작업을 불러오지 못했습니다.",
                 "previous": "이전",
                 "next": "다음"
+            },
+            "team": {
+                "title": "Team and agents",
+                "loading": "Loading…",
+                "unavailable": "Could not load who works on this Mission.",
+                "empty": "No Team holds this Mission yet, and no Agent is scoped to it or to its attached Works.",
+                "teamNoAgents": "No agents on this Team that you can see.",
+                "otherAgents": "Other agents",
+                "agents": "Agents",
+                "viaMission": "Scoped to this Mission",
+                "viaWork": "Works on {name}",
+                "viaWorkUnnamed": "Works on an attached Work",
+                "neverRan": "Never ran",
+                "viaStandingTasks": "Standing tasks on {name}",
+                "viaStandingTasksUnnamed": "Standing tasks on an attached Work"
             }
         },
         "ideasPage": {
@@ -2696,6 +2731,7 @@
                     "memberRemoved": "멤버 제거됨",
                     "scheduleCreated": "스케줄 생성됨",
                     "scheduleExecuted": "스케줄 실행됨",
+                    "scheduleSkipped": "스케줄 건너뜀",
                     "import": "가져오기",
                     "login": "로그인",
                     "signup": "가입",
@@ -9192,12 +9228,18 @@
         "goalDetail": {
             "backToGoals": "Back to Goals",
             "actions": {
+                "edit": "Edit",
                 "evaluateNow": "Evaluate now",
                 "activate": "Activate",
                 "pause": "Pause",
                 "delete": "Delete",
                 "archive": "Archive",
                 "unarchive": "Unarchive"
+            },
+            "editDialog": {
+                "title": "Edit Goal",
+                "description": "Change the title and the description. The description is Markdown: switch to Preview to see how it will look on this page.",
+                "saved": "Goal updated"
             },
             "sections": {
                 "progress": "Progress",
@@ -9322,6 +9364,9 @@
                 "waive": "Waive",
                 "reopen": "Reopen",
                 "remove": "Remove",
+                "edit": "Edit",
+                "editLabel": "Criterion text",
+                "save": "Save",
                 "confirmRemove": "Remove this criterion from the Definition of Done?",
                 "confirmWaive": "Waive it",
                 "cancel": "Cancel",
@@ -10219,6 +10264,11 @@
                 "title": "아직 예약된 항목이 없습니다",
                 "description": "반복 작업, 에이전트 하트비트, 워크 일정, Mission 틱, 소스 검증, 데이터 동기화를 설정하면 여기에 표시됩니다.",
                 "noResults": "현재 필터와 일치하는 일정이 없습니다."
+            },
+            "lastSkipped": "건너뜀",
+            "lastSkippedHint": "마지막 예약 실행을 건너뛰었습니다: 이 스케줄의 이전 실행이 아직 너무 많이 열려 있습니다.",
+            "runNow": {
+                "tooManyOpenConfirm": "“{name}”의 이전 실행이 아직 너무 많이 열려 있어 제한 때문에 이 실행이 보류되었습니다. 그래도 실행할까요?"
             }
         },
         "triggers": {
@@ -11051,6 +11101,31 @@
             "build": "Build",
             "web": "Web",
             "api": "API"
+        },
+        "markdown": {
+            "showMore": "Show more",
+            "showLess": "Show less",
+            "write": "Write",
+            "preview": "Preview",
+            "tabsLabel": "{field}: write or preview",
+            "emptyPreview": "Nothing to preview yet.",
+            "hint": "Markdown: **bold**, _italic_, lists, `code`, tables and links.",
+            "counter": "{count} / {max}",
+            "plainTextFallback": "Shown as plain text: this text is too long or too complex to format safely."
+        },
+        "recordEdit": {
+            "titleLabel": "Title",
+            "descriptionLabel": "Description",
+            "descriptionPlaceholder": "Describe it in Markdown: ## sections, - lists, `code`, [links](https://…)",
+            "save": "Save changes",
+            "saving": "Saving…",
+            "cancel": "Cancel",
+            "titleRequired": "Enter a title.",
+            "titleTooLong": "Keep the title to {max} characters or fewer.",
+            "descriptionRequired": "Enter a description.",
+            "descriptionTooLong": "Keep the description to {max} characters or fewer.",
+            "saveError": "The changes could not be saved. Try again.",
+            "discardConfirm": "Discard your unsaved changes?"
         }
     },
     "organizations": {

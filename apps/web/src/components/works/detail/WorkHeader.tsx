@@ -17,6 +17,7 @@ import { AppSourceRelation } from '../app/AppSourceRelation';
 import type { AppSourceRelationSummary } from '@/lib/works/app-source-relation';
 import type { Agent } from '@/lib/api/agents';
 import { safeWebUrl } from '@/lib/utils/safe-link';
+import { CollapsibleMarkdown } from '@/components/markdown/CollapsibleMarkdown';
 
 interface WorkHeaderProps {
     work: Work;
@@ -117,9 +118,12 @@ export function WorkHeader({
 
                         {/* Description */}
                         {work.description && (
-                            <p className="mt-1.5 text-sm leading-relaxed text-text-secondary dark:text-text-secondary-dark">
-                                {work.description}
-                            </p>
+                            <CollapsibleMarkdown
+                                content={work.description}
+                                collapsedHeight={120}
+                                className="mt-1.5"
+                                data-testid="work-description"
+                            />
                         )}
 
                         {/* Meta row */}

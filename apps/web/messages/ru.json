@@ -1112,7 +1112,17 @@
                 "statusArchived": "Архивирован",
                 "noTitle": "(без названия)",
                 "noCadence": "Нет ритма",
-                "cadencePrefix": "Ритм:"
+                "cadencePrefix": "Ритм:",
+                "runsOnSchedule": "Runs on schedule",
+                "runsOnScheduleNext": "Runs on schedule · next {time}",
+                "runsWhenAssigned": "Runs when assigned",
+                "lastRun": "Last run {time} · {status}",
+                "lastRunCompleted": "completed",
+                "lastRunFailed": "failed",
+                "lastRunCancelled": "cancelled",
+                "lastRunDispatchFailed": "could not start",
+                "lastRunRecoveredStuck": "recovered after getting stuck",
+                "lastRunUnknown": "unknown"
             },
             "tabs": {
                 "dashboard": "Панель управления",
@@ -1682,6 +1692,9 @@
                 "frequency": "Частота",
                 "endsAt": "Окончание (необязательно)",
                 "maxOccurrences": "Макс. повторений (необязательно)",
+                "maxOpenInstances": "Не больше открытых одновременно",
+                "maxOpenInstancesHint": "Пропускает запуск по расписанию, пока столько предыдущих запусков ещё открыты (выполняются или ждут открытый pull request). Пусто = без ограничения.",
+                "maxOpenInstancesInvalid": "Введите целое число от 1 до {max} или оставьте поле пустым, чтобы не ограничивать.",
                 "rulePreview": "Предпросмотр правила",
                 "ruleInvalid": "недопустимо",
                 "cancel": "Отмена",
@@ -1690,6 +1703,7 @@
                 "nextAt": "Следующее",
                 "ends": "Окончание",
                 "max": "Макс.",
+                "lastSkipped": "Последний пропуск",
                 "stopConfirm": "Остановить повторяющееся расписание? Существующие экземпляры сохранятся; новые создаваться не будут.",
                 "stopError": "Не удалось остановить повторяющееся расписание",
                 "saveError": "Не удалось сохранить расписание"
@@ -2265,6 +2279,7 @@
                 "outstandingCap": "Outstanding-Ideas cap (-1 = unlimited)"
             },
             "actions": {
+                "edit": "Edit",
                 "saveSettings": "Save settings",
                 "pause": "Pause",
                 "resume": "Resume",
@@ -2280,6 +2295,11 @@
                 "cancel": "Отмена",
                 "deleting": "Удаление…",
                 "error": "Не удалось удалить Миссию"
+            },
+            "editDialog": {
+                "title": "Edit Mission",
+                "description": "Change the title and the description. The description is Markdown: switch to Preview to see how it will look on this page.",
+                "saved": "Mission updated"
             },
             "guardrails": {
                 "activeOverride": "Custom guardrail overrides are active on this Mission.",
@@ -2407,6 +2427,21 @@
                 "unavailable": "Не удалось загрузить задачи.",
                 "previous": "Назад",
                 "next": "Далее"
+            },
+            "team": {
+                "title": "Team and agents",
+                "loading": "Loading…",
+                "unavailable": "Could not load who works on this Mission.",
+                "empty": "No Team holds this Mission yet, and no Agent is scoped to it or to its attached Works.",
+                "teamNoAgents": "No agents on this Team that you can see.",
+                "otherAgents": "Other agents",
+                "agents": "Agents",
+                "viaMission": "Scoped to this Mission",
+                "viaWork": "Works on {name}",
+                "viaWorkUnnamed": "Works on an attached Work",
+                "neverRan": "Never ran",
+                "viaStandingTasks": "Standing tasks on {name}",
+                "viaStandingTasksUnnamed": "Standing tasks on an attached Work"
             }
         },
         "ideasPage": {
@@ -2696,6 +2731,7 @@
                     "memberRemoved": "Участник удалён",
                     "scheduleCreated": "Расписание создано",
                     "scheduleExecuted": "Расписание выполнено",
+                    "scheduleSkipped": "Расписание пропущено",
                     "import": "Импорт",
                     "login": "Вход",
                     "signup": "Регистрация",
@@ -9192,12 +9228,18 @@
         "goalDetail": {
             "backToGoals": "Back to Goals",
             "actions": {
+                "edit": "Edit",
                 "evaluateNow": "Evaluate now",
                 "activate": "Activate",
                 "pause": "Pause",
                 "delete": "Delete",
                 "archive": "Archive",
                 "unarchive": "Unarchive"
+            },
+            "editDialog": {
+                "title": "Edit Goal",
+                "description": "Change the title and the description. The description is Markdown: switch to Preview to see how it will look on this page.",
+                "saved": "Goal updated"
             },
             "sections": {
                 "progress": "Progress",
@@ -9322,6 +9364,9 @@
                 "waive": "Waive",
                 "reopen": "Reopen",
                 "remove": "Remove",
+                "edit": "Edit",
+                "editLabel": "Criterion text",
+                "save": "Save",
                 "confirmRemove": "Remove this criterion from the Definition of Done?",
                 "confirmWaive": "Waive it",
                 "cancel": "Cancel",
@@ -10219,6 +10264,11 @@
                 "title": "Пока ничего не запланировано",
                 "description": "Повторяющиеся задачи, сигналы агентов, расписания работ, тики Mission, проверка источников и синхронизация данных появятся здесь после настройки.",
                 "noResults": "Нет расписаний, соответствующих текущему фильтру."
+            },
+            "lastSkipped": "Пропущено",
+            "lastSkippedHint": "Последний запуск по расписанию пропущен: слишком много предыдущих запусков этого расписания ещё открыты.",
+            "runNow": {
+                "tooManyOpenConfirm": "Слишком много предыдущих запусков «{name}» ещё открыты, поэтому ограничение задерживает этот запуск. Всё равно запустить?"
             }
         },
         "triggers": {
@@ -11051,6 +11101,31 @@
             "build": "Build",
             "web": "Web",
             "api": "API"
+        },
+        "markdown": {
+            "showMore": "Show more",
+            "showLess": "Show less",
+            "write": "Write",
+            "preview": "Preview",
+            "tabsLabel": "{field}: write or preview",
+            "emptyPreview": "Nothing to preview yet.",
+            "hint": "Markdown: **bold**, _italic_, lists, `code`, tables and links.",
+            "counter": "{count} / {max}",
+            "plainTextFallback": "Shown as plain text: this text is too long or too complex to format safely."
+        },
+        "recordEdit": {
+            "titleLabel": "Title",
+            "descriptionLabel": "Description",
+            "descriptionPlaceholder": "Describe it in Markdown: ## sections, - lists, `code`, [links](https://…)",
+            "save": "Save changes",
+            "saving": "Saving…",
+            "cancel": "Cancel",
+            "titleRequired": "Enter a title.",
+            "titleTooLong": "Keep the title to {max} characters or fewer.",
+            "descriptionRequired": "Enter a description.",
+            "descriptionTooLong": "Keep the description to {max} characters or fewer.",
+            "saveError": "The changes could not be saved. Try again.",
+            "discardConfirm": "Discard your unsaved changes?"
         }
     },
     "organizations": {

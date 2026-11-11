@@ -5,7 +5,9 @@ import { redirect } from 'next/navigation';
 import {
     missionsAPI,
     type CreateMissionInput,
+    type Mission,
     type MissionOutcome,
+    type MissionTeamView,
     type UpdateMissionInput,
 } from '@/lib/api/missions';
 import { tasksAPI, type Task } from '@/lib/api/tasks';
@@ -121,6 +123,18 @@ export async function detachMissionAttachmentAction(missionId: string, attachmen
 }
 
 /**
+ * The Mission page's "Team and agents" panel — who works on this Mission, in
+ * one API read (`GET /me/missions/:id/team`, gated like the Mission read, every
+ * Agent one the caller may read). Rejects on any API failure; the panel says so.
+ */
+export async function getMissionTeamAction(missionId: string): Promise<MissionTeamView> {
+    // Security: verify session server-side before reading data
+    const user = await getAuthFromCookie();
+    if (!user) redirect(ROUTES.AUTH_LOGIN);
+    return missionsAPI.getTeam(missionId);
+}
+
+/**
  * APW-08 T36 (FR-55) — one page of the Tasks a Mission filed on its attached Works (the
  * `mission-task` label), newest first, 20 per page.
  */
@@ -146,4 +160,39 @@ export async function listMissionTasksOnWorksAction(
         offset: Math.max(0, Math.trunc(offset)),
     });
     return { rows: page.data, total: page.meta?.total ?? page.data.length };
+}
+
+/**
+ * What the Mission detail page's Edit dialog gets back. A value, not a throw: a
+ * production build replaces the message of an error THROWN out of a Server Action
+ * with a generic text, and the dialog must show the API's own reason (a length
+ * limit, or a 404 for a Mission the caller may read but not change).
+ */
+export type MissionDetailsResult =
+    | { success: true; mission: Mission }
+    | { success: false; error: string };
+
+/**
+ * Edit a Mission's title and/or Markdown description (`PATCH /api/me/missions/:id`).
+ * Sends only the fields given: an unchanged description must not overwrite one an
+ * agent wrote meanwhile. Owner-only, like every other Mission write: the API
+ * answers 404 to anyone else.
+ */
+export async function updateMissionDetailsAction(
+    id: string,
+    input: { title?: string; description?: string },
+): Promise<MissionDetailsResult> {
+    await requireMissionAuth();
+    const patch: UpdateMissionInput = {};
+    if (typeof input.title === 'string') patch.title = input.title;
+    if (typeof input.description === 'string') patch.description = input.description;
+    if (Object.keys(patch).length === 0) return { success: false, error: '' };
+    try {
+        const mission = await missionsAPI.update(id, patch);
+        revalidateMissionSurfaces();
+        revalidatePath(`/[locale]/(dashboard)/missions/${id}`, 'page');
+        return { success: true, mission };
+    } catch (err) {
+        return { success: false, error: err instanceof Error ? err.message : '' };
+    }
 }

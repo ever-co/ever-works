@@ -61,6 +61,7 @@ import { ShowDateTime } from '@/components/ui/show-datetime';
 import { BUILT_BADGE_STYLE, STATUS_STYLES, deriveIdeaBadge } from './idea-status';
 import { deriveIdeaBuiltState } from './idea-built';
 import { AssignIdeaAgentDialog } from './AssignIdeaAgentDialog';
+import { CollapsibleMarkdown } from '@/components/markdown/CollapsibleMarkdown';
 
 /**
  * Live poll cadence + safety deadline. Mirrors `WorkProposalsSection`
@@ -785,9 +786,11 @@ export function IdeaDetailClient({
                     {/* ── Description ──────────────────────────────────── */}
                     <section className={sectionCard}>
                         <SectionHeader icon={Lightbulb} title={tDetail('sections.description')} />
-                        <p className="whitespace-pre-wrap text-sm leading-6 text-text-secondary dark:text-text-secondary-dark">
-                            {idea.description}
-                        </p>
+                        <CollapsibleMarkdown
+                            content={idea.description}
+                            collapsedHeight={320}
+                            data-testid="idea-description"
+                        />
 
                         {idea.suggestedCategories.length > 0 && (
                             <div className="mt-5">

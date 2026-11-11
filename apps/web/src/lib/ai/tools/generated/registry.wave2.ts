@@ -1511,7 +1511,7 @@ export const WAVE2_OPERATIONS: OperationSpec[] = [
         ],
         body: true,
         bodyHint:
-            'recurrenceRule (required, string), recurrenceTimezone (optional, string), recurrenceEndsAt (optional, ISO 8601 date string), recurrenceMaxOccurrences (optional, number)',
+            'recurrenceRule (required, string), recurrenceTimezone (optional, string), recurrenceEndsAt (optional, ISO 8601 date string), recurrenceMaxOccurrences (optional, number), recurrenceMaxOpenInstances (optional, whole number 1-100 or null for no limit: skip a scheduled run while that many earlier instances are still open)',
         canvas: 'Detail',
         // Works-security: a recurring Task spawns instances on a schedule —
         // each one can dispatch its agents without anyone starting it.

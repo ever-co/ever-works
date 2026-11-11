@@ -390,6 +390,12 @@ export enum ActivityActionType {
     // varchar, so no migration is needed.
     SCHEDULE_PAUSED = 'schedule_paused',
     SCHEDULE_RESUMED = 'schedule_resumed',
+    // Recurring Tasks overlap limit — a scheduled fire of a recurring template SKIPPED because
+    // the template is at its `recurrenceMaxOpenInstances` (the slot passed, nothing spawned).
+    // Written by `TaskRecurrenceDispatcherService` on the template (`details.resourceType =
+    // 'task'`), with `{ scheduleId, reason, scheduledFor, nextOccurrenceAt, maxOpenInstances,
+    // openInstances, openInstanceIds, openInstanceSlugs }`. Plain varchar storage: no migration.
+    SCHEDULE_SKIPPED = 'schedule_skipped',
     // Live Feed — a run starting and a run reaching a terminal state, for
     // every trigger kind other than `heartbeat` (heartbeat runs keep the
     // three `agent_heartbeat_*` members above, unchanged). Declared here so

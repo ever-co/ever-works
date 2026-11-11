@@ -1,5 +1,9 @@
 import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
-import type { AgentEscalationDto, AgentEscalationStatus } from '@ever-works/contracts';
+import type {
+    AgentEscalationDto,
+    AgentEscalationReasonCode,
+    AgentEscalationStatus,
+} from '@ever-works/contracts';
 import { config } from '../config';
 import {
     AgentEscalationRepository,
@@ -32,6 +36,42 @@ export interface ResolveEscalationOptions {
 
 /** Most characters of an agent-proposed note kept on the escalation row. */
 const AGENT_RESOLUTION_NOTE_MAX = 2_000;
+
+/**
+ * The ONLY escalation reasons the platform may close by itself, when the run
+ * behind them ends. Every other reason stays manual, because the run being
+ * over does not answer its question:
+ *
+ * - `awaiting-input`, `run-parked` — the run is ALREADY terminal when these
+ *   are filed (parked on a question / hibernated); "the run ended" is their
+ *   starting state, and closing them would drop the question or the resume.
+ * - `gate-exhausted`, `gate-precheck-red`, `judge-escalated`, `loop-detected`
+ *   — the run ended BECAUSE it gave up; the red checks, the unmet acceptance
+ *   criteria or the loop are still there for a person to judge.
+ * - `guardrail-refusal`, `budget-stop` — a policy or a cap stopped the work;
+ *   only a person can grant the action or raise the cap.
+ * - `merge-refused` — the PR is open and waits for a human merge decision.
+ * - `delivery-failed` — has its own Open / Close anyway / Try once more flow.
+ *
+ * `queued-too-long` asks "raise the limit, cancel, or keep waiting?" — moot
+ * once the run is no longer queued, whichever way it ended.
+ */
+export const SYSTEM_CLOSABLE_ESCALATION_REASONS: readonly AgentEscalationReasonCode[] = [
+    'queued-too-long',
+];
+
+/** The note a self-closed card carries when its run row no longer exists. */
+export const SYSTEM_CLOSE_NOTE_RUN_GONE =
+    'Closed automatically: the run ended and is no longer on record.';
+
+/** The note a self-closed card carries: why it closed, and when the run ended. */
+export function systemCloseNote(status: string | null, endedAt: Date | null): string {
+    const when =
+        endedAt instanceof Date && !Number.isNaN(endedAt.getTime())
+            ? ` at ${endedAt.toISOString()}`
+            : '';
+    return `Closed automatically: the run ended (${status ?? 'unknown'})${when}.`;
+}
 
 /**
  * The note stored for an agent-proposed resolution: prefixed with who wrote
@@ -206,6 +246,99 @@ export class AgentEscalationService {
     }
 
     /**
+     * A run ended: close the `queued-too-long` card it raised, if it is
+     * still open. Called by {@link AgentRunTerminalEscalationListener} for
+     * every terminal run (any path: cloud Task run, fleet run, heartbeat,
+     * cancel, sweeper). Returns whether a card was closed.
+     *
+     * `queued-too-long` is the ONLY reason closed this way, because it is the
+     * only question a run's end answers by itself: "raise the limit, cancel,
+     * or keep waiting?" is moot once the run is no longer queued. Every other
+     * reason stays manual — see {@link SYSTEM_CLOSABLE_ESCALATION_REASONS}.
+     *
+     * Best-effort by contract: never throws.
+     */
+    async closeQueuedTooLongForEndedRun(input: {
+        runId: string;
+        status: string | null;
+        finishedAt: Date | null;
+    }): Promise<boolean> {
+        try {
+            const row = await this.repository.findOpenQueuedTooLongForRun(input.runId);
+            if (!row) return false;
+            return await this.closeBySystem(
+                row,
+                systemCloseNote(input.status, input.finishedAt ?? new Date()),
+            );
+        } catch (error) {
+            this.logger.warn(
+                `Escalation queued-too-long auto-close failed for run=${input.runId}: ${
+                    error instanceof Error ? error.message : String(error)
+                }`,
+            );
+            return false;
+        }
+    }
+
+    /**
+     * The periodic backstop (and the backfill for cards filed before the
+     * terminal hook existed): close every open `queued-too-long` card whose
+     * run has ended or no longer exists, up to `limit` per call. Idempotent
+     * — a closed card never matches again. Returns how many it closed.
+     * Best-effort: never throws.
+     */
+    async closeEndedQueuedTooLong(limit = 100): Promise<number> {
+        let candidates: Awaited<
+            ReturnType<AgentEscalationRepository['findOpenQueuedTooLongWithEndedRun']>
+        >;
+        try {
+            candidates = await this.repository.findOpenQueuedTooLongWithEndedRun(limit);
+        } catch (error) {
+            this.logger.warn(
+                `Escalation queued-too-long sweep failed to read: ${
+                    error instanceof Error ? error.message : String(error)
+                }`,
+            );
+            return 0;
+        }
+        let closed = 0;
+        for (const { escalation, runStatus, runFinishedAt } of candidates) {
+            try {
+                const note =
+                    runStatus === null
+                        ? SYSTEM_CLOSE_NOTE_RUN_GONE
+                        : systemCloseNote(runStatus, runFinishedAt);
+                if (await this.closeBySystem(escalation, note)) closed += 1;
+            } catch (error) {
+                this.logger.warn(
+                    `Escalation ${escalation.id} auto-close failed: ${
+                        error instanceof Error ? error.message : String(error)
+                    }`,
+                );
+            }
+        }
+        if (closed > 0) {
+            this.logger.log(
+                `Escalation queued-too-long: closed ${closed} card(s) whose run ended.`,
+            );
+        }
+        return closed;
+    }
+
+    /** CAS-close one card as the system, then close its Inbox mirror. */
+    private async closeBySystem(row: AgentEscalation, note: string): Promise<boolean> {
+        const resolved = await this.repository.resolveBySystem(
+            row.id,
+            SYSTEM_CLOSABLE_ESCALATION_REASONS,
+            note,
+        );
+        if (resolved) {
+            await this.closeInboxMirror(row.id, null, note, 'system');
+        }
+        return resolved;
+    }
+
+    /**
      * My Decisions — every door that resolves an escalation (this endpoint,
      * the Task page, the chat tool, the Inbox reply) leaves the owner's
      * Inbox and the parked work in the same state: the mirror item closes
@@ -215,9 +348,9 @@ export class AgentEscalationService {
      */
     private async closeInboxMirror(
         escalationId: string,
-        resolvedByUserId: string,
+        resolvedByUserId: string | null,
         note: string | null,
-        resolvedBy: 'human' | 'agent' = 'human',
+        resolvedBy: 'human' | 'agent' | 'system' = 'human',
     ): Promise<void> {
         if (!this.inbox?.escalationResolved) return;
         try {
@@ -227,7 +360,7 @@ export class AgentEscalationService {
                 note,
                 // Only a person's resolution resumes the parked run (see
                 // `InboxEscalationResolvedInput.resolvedBy`).
-                ...(resolvedBy === 'agent' ? { resolvedBy: 'agent' as const } : {}),
+                ...(resolvedBy !== 'human' ? { resolvedBy } : {}),
             });
         } catch (error) {
             this.logger.warn(

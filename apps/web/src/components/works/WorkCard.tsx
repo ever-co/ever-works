@@ -21,6 +21,7 @@ import { ShinyText } from '../ui/ShinyText';
 import { AnimatedClock } from '../ui/AnimatedClock';
 import { HoverPopup } from './detail/items/HoverPopup';
 import { WorkKindBadge } from './shared/WorkKindBadge';
+import { markdownExcerpt } from '@/lib/markdown/markdown-excerpt';
 
 interface WorkCardProps {
     work: Work;
@@ -322,7 +323,7 @@ export function WorkCard({ work }: WorkCardProps) {
                     <p className="text-xs leading-4.5 line-clamp-2 min-h-[2lh]">
                         {work.description ? (
                             <span className="text-text-secondary dark:text-text-secondary-dark">
-                                {work.description}
+                                {markdownExcerpt(work.description)}
                             </span>
                         ) : (
                             <span className="text-text-muted dark:text-text-muted-dark italic">

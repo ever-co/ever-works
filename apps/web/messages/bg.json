@@ -1143,7 +1143,17 @@
                 "statusArchived": "Архивиран",
                 "noTitle": "(без заглавие)",
                 "noCadence": "Няма пулс",
-                "cadencePrefix": "Пулс:"
+                "cadencePrefix": "Пулс:",
+                "runsOnSchedule": "Runs on schedule",
+                "runsOnScheduleNext": "Runs on schedule · next {time}",
+                "runsWhenAssigned": "Runs when assigned",
+                "lastRun": "Last run {time} · {status}",
+                "lastRunCompleted": "completed",
+                "lastRunFailed": "failed",
+                "lastRunCancelled": "cancelled",
+                "lastRunDispatchFailed": "could not start",
+                "lastRunRecoveredStuck": "recovered after getting stuck",
+                "lastRunUnknown": "unknown"
             },
             "tabs": {
                 "dashboard": "Табло",
@@ -1713,6 +1723,9 @@
                 "frequency": "Честота",
                 "endsAt": "Край (по избор)",
                 "maxOccurrences": "Максимум повторения (по избор)",
+                "maxOpenInstances": "Най-много отворени едновременно",
+                "maxOpenInstancesHint": "Пропуска планирано изпълнение, докато толкова по-ранни изпълнения са все още отворени (работят или чакат отворена заявка за сливане). Празно = без ограничение.",
+                "maxOpenInstancesInvalid": "Въведете цяло число от 1 до {max} или оставете празно за без ограничение.",
                 "rulePreview": "Преглед на правилото",
                 "ruleInvalid": "невалидно",
                 "cancel": "Отказ",
@@ -1721,6 +1734,7 @@
                 "nextAt": "Следващо на",
                 "ends": "Край",
                 "max": "Максимум",
+                "lastSkipped": "Последно пропуснато",
                 "stopConfirm": "Да се спре ли повтарящият се график? Съществуващите копия остават; нови няма да се създават.",
                 "stopError": "Повтарящият се график не можа да бъде спрян",
                 "saveError": "Графикът не можа да бъде запазен"
@@ -2296,6 +2310,7 @@
                 "outstandingCap": "Outstanding-Ideas cap (-1 = unlimited)"
             },
             "actions": {
+                "edit": "Edit",
                 "saveSettings": "Save settings",
                 "pause": "Pause",
                 "resume": "Resume",
@@ -2311,6 +2326,11 @@
                 "cancel": "Отказ",
                 "deleting": "Изтриване…",
                 "error": "Неуспешно изтриване на Мисията"
+            },
+            "editDialog": {
+                "title": "Edit Mission",
+                "description": "Change the title and the description. The description is Markdown: switch to Preview to see how it will look on this page.",
+                "saved": "Mission updated"
             },
             "guardrails": {
                 "activeOverride": "Custom guardrail overrides are active on this Mission.",
@@ -2438,6 +2458,21 @@
                 "unavailable": "Задачите не можаха да се заредят.",
                 "previous": "Назад",
                 "next": "Напред"
+            },
+            "team": {
+                "title": "Team and agents",
+                "loading": "Loading…",
+                "unavailable": "Could not load who works on this Mission.",
+                "empty": "No Team holds this Mission yet, and no Agent is scoped to it or to its attached Works.",
+                "teamNoAgents": "No agents on this Team that you can see.",
+                "otherAgents": "Other agents",
+                "agents": "Agents",
+                "viaMission": "Scoped to this Mission",
+                "viaWork": "Works on {name}",
+                "viaWorkUnnamed": "Works on an attached Work",
+                "neverRan": "Never ran",
+                "viaStandingTasks": "Standing tasks on {name}",
+                "viaStandingTasksUnnamed": "Standing tasks on an attached Work"
             }
         },
         "ideasPage": {
@@ -2727,6 +2762,11 @@
                 "title": "Все още няма нищо планирано",
                 "description": "Повтарящите се задачи, пулсовете на агенти, графиците на работа, тактовете на Mission, валидирането на източници и синхронизирането на данни ще се появят тук, след като ги настроите.",
                 "noResults": "Няма графици, отговарящи на текущия филтър."
+            },
+            "lastSkipped": "Пропуснато",
+            "lastSkippedHint": "Последното планирано изпълнение беше пропуснато: твърде много по-ранни изпълнения на този график са все още отворени.",
+            "runNow": {
+                "tooManyOpenConfirm": "Твърде много по-ранни изпълнения на „{name}“ са все още отворени, затова ограничението му задържа това изпълнение. Да се изпълни ли въпреки това?"
             }
         },
         "activity": {
@@ -2769,6 +2809,7 @@
                     "memberRemoved": "Член премахнат",
                     "scheduleCreated": "График създаден",
                     "scheduleExecuted": "График изпълнен",
+                    "scheduleSkipped": "Графикът е пропуснат",
                     "import": "Импорт",
                     "login": "Вход",
                     "signup": "Регистрация",
@@ -9260,12 +9301,18 @@
         "goalDetail": {
             "backToGoals": "Back to Goals",
             "actions": {
+                "edit": "Edit",
                 "evaluateNow": "Evaluate now",
                 "activate": "Activate",
                 "pause": "Pause",
                 "delete": "Delete",
                 "archive": "Archive",
                 "unarchive": "Unarchive"
+            },
+            "editDialog": {
+                "title": "Edit Goal",
+                "description": "Change the title and the description. The description is Markdown: switch to Preview to see how it will look on this page.",
+                "saved": "Goal updated"
             },
             "sections": {
                 "progress": "Progress",
@@ -9390,6 +9437,9 @@
                 "waive": "Waive",
                 "reopen": "Reopen",
                 "remove": "Remove",
+                "edit": "Edit",
+                "editLabel": "Criterion text",
+                "save": "Save",
                 "confirmRemove": "Remove this criterion from the Definition of Done?",
                 "confirmWaive": "Waive it",
                 "cancel": "Cancel",
@@ -11050,6 +11100,31 @@
             "build": "Изграждане",
             "web": "Уеб",
             "api": "API"
+        },
+        "markdown": {
+            "showMore": "Show more",
+            "showLess": "Show less",
+            "write": "Write",
+            "preview": "Preview",
+            "tabsLabel": "{field}: write or preview",
+            "emptyPreview": "Nothing to preview yet.",
+            "hint": "Markdown: **bold**, _italic_, lists, `code`, tables and links.",
+            "counter": "{count} / {max}",
+            "plainTextFallback": "Shown as plain text: this text is too long or too complex to format safely."
+        },
+        "recordEdit": {
+            "titleLabel": "Title",
+            "descriptionLabel": "Description",
+            "descriptionPlaceholder": "Describe it in Markdown: ## sections, - lists, `code`, [links](https://…)",
+            "save": "Save changes",
+            "saving": "Saving…",
+            "cancel": "Cancel",
+            "titleRequired": "Enter a title.",
+            "titleTooLong": "Keep the title to {max} characters or fewer.",
+            "descriptionRequired": "Enter a description.",
+            "descriptionTooLong": "Keep the description to {max} characters or fewer.",
+            "saveError": "The changes could not be saved. Try again.",
+            "discardConfirm": "Discard your unsaved changes?"
         }
     },
     "organizations": {

@@ -132,7 +132,7 @@ On PostgreSQL the count and the row insert happen inside one critical section �
 
 ### When a queue is not moving
 
-A run still `queued` after **60 minutes** (`AGENT_RUN_QUEUED_TOO_LONG_MINUTES`; `0` disables it) is flagged `attentionReason='queued-too-long'` and notifies you once. It is **surfaced, never reaped** — the platform will not fail work just because it waited.
+A run still `queued` after **60 minutes** (`AGENT_RUN_QUEUED_TOO_LONG_MINUTES`; `0` disables it) is flagged `attentionReason='queued-too-long'` and notifies you once. It is **surfaced, never reaped** — the platform will not fail work just because it waited. The `queued-too-long` escalation it files closes itself as soon as the run ends, however it ends (see [Approvals & Escalations](./approvals-and-escalations.md#queued-too-long-closes-itself-when-its-run-ends)).
 
 **How to read a stalled queue**
 
