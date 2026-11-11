@@ -7,9 +7,12 @@ name: Publish Node
 #
 # Triggers:
 #   - a `node-v*` tag push (e.g. `node-v0.2.0`) publishes that version, and is
-#     the ONLY path that publishes. The tagged commit must be on main or
-#     develop (both take changes only through a reviewed pull request): `build`
-#     checks that first and fails otherwise;
+#     the ONLY path that publishes. The tagged commit must already be merged
+#     into main or develop, so an unmerged branch commit cannot be released:
+#     `build` checks that first and fails otherwise. This does not prove a
+#     review (admins can merge without one: enforce_admins is off on both); a
+#     real review gate needs enforce_admins on develop and main plus a tag
+#     ruleset for `node-v*` (owner decision);
 #   - manual dispatch is a dry run, also on a `node-v*` tag ref: build,
 #     smoke-test, `npm publish --dry-run`. The publishing steps below test
 #     `github.event_name == 'push'` as well as the ref.
@@ -77,11 +80,13 @@ jobs:
         with:
           fetch-depth: 0
 
-      # Only a merged commit is released: a `node-v*` tag on any other commit
-      # (an unreviewed branch, a leaked token) fails here, before anything is
-      # built, hosted or published. main and develop take changes only through
-      # a reviewed pull request; releases are tagged on develop's merge commit
-      # (node-v0.2.12) or on main.
+      # Only a merged commit is released: a `node-v*` tag on a commit not yet
+      # merged into main or develop (an unmerged branch, a tag pushed with a
+      # leaked token) fails here, before anything is built, hosted or
+      # published. Releases are tagged on develop's merge commit (node-v0.2.12)
+      # or on main. It does not prove the commit was reviewed: admins can merge
+      # without an approval (enforce_admins is off), so a real review gate
+      # needs enforce_admins on both branches plus a tag ruleset for `node-v*`.
       - name: Check the tagged commit is on main or develop
         if: startsWith(github.ref, 'refs/tags/node-v')
         run: |

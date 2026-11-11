@@ -124,8 +124,10 @@ like the published one but has another fingerprint, so it is admitted as unpubli
 `.github/workflows/publish-node.yml`, on the owner's `node-v<version>` tag. It runs in our cluster, not on GitHub
 Actions (owner, 2026-11-11): the ci-builds engine (Argo Workflows + act, `ever-co/k8s-gitops` `apps/ci-builds`) runs the
 file for every `node-v*` tag, and in ever-co the jobs are gated off GitHub Actions (`vars.CI_IN_CLUSTER`, as in
-`screen-helper.yml`). Only a merged commit is released: `build` first checks that the tagged commit is on `main` or
-`develop` (both take changes only through a reviewed pull request) and fails otherwise, before anything is built.
+`screen-helper.yml`). Only a merged commit is released: `build` first checks that the tagged commit is already merged
+into `main` or `develop` and fails otherwise, before anything is built, so an unmerged branch commit cannot be released.
+This does not prove a review: admins can merge without an approval (`enforce_admins` is off on both branches). A real
+review gate needs `enforce_admins` on `develop` and `main` plus a tag ruleset for `node-v*` (an owner decision).
 
 1. `build` builds the linux-x64 and win32-x64 helpers with `build-release-linux.sh` (pinned container, two builds
    compared, from the committed tree; `dist/linux-x64` and `dist/win32-x64`), then stages the node bundle with them
