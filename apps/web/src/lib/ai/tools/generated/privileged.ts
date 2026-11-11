@@ -175,19 +175,28 @@ export function startsTaskWork(args: Record<string, unknown>): boolean {
 // ── Outbound destinations (works-security, 2026-10-18) ───────────────────────
 
 /**
- * `update_webhook`: confirm when the call moves where (or what) the webhook
- * delivers, or turns delivery back on: `status: 'active'` resumes a paused
- * webhook, so outbound payloads start flowing again. Pausing stays one step.
- * Fails closed: any `status` other than `paused` asks.
+ * The `update_webhook` body fields a call may change WITHOUT confirmation: a
+ * description, or pausing (`status: 'paused'`). Everything else changes where
+ * or what the webhook delivers — `url`, `events`, `secret`, `organizationIds`
+ * (which Organizations' events it receives), `excludeOriginTags` (narrowing
+ * the exclusions widens what it receives) — or resumes delivery.
+ */
+const WEBHOOK_ONE_STEP_FIELDS = new Set(['description', 'status']);
+
+/**
+ * `update_webhook`: confirm unless the call only renames or pauses. An
+ * allowlist, so a field the DTO gains later asks by default (the older
+ * deny-list missed `organizationIds` / `excludeOriginTags`, which widen what
+ * the webhook ships out). Fails closed: any `status` other than `paused`
+ * asks — `active` resumes outbound payloads.
  */
 export function redirectsWebhook(args: Record<string, unknown>): boolean {
     const body = bodyOf(args);
-    return Boolean(
-        body &&
-        (body.url !== undefined ||
-            body.events !== undefined ||
-            body.secret !== undefined ||
-            (body.status !== undefined && body.status !== 'paused')),
+    if (!body) return false;
+    return Object.entries(body).some(
+        ([key, value]) =>
+            value !== undefined &&
+            (!WEBHOOK_ONE_STEP_FIELDS.has(key) || (key === 'status' && value !== 'paused')),
     );
 }
 
