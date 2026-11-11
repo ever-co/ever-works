@@ -5,6 +5,7 @@ import type { Task } from '../entities/task.entity';
 import { TASK_LIFECYCLE_POSTER, type TaskLifecyclePoster } from './task-lifecycle-poster.port';
 import { runStartedPost } from './task-lifecycle-posts';
 import { APP_WORK_RUN_STOP_HANDLER, type AppWorkRunStopHandler } from './task-run-stop.port';
+import { TaskReviewRejectionService } from './task-review-rejection.service';
 
 /**
  * Statuses `TaskRunDenormService` mirrors onto the Task row. Matches the
@@ -70,6 +71,11 @@ export class TaskRunDenormService {
         @Optional()
         @Inject(APP_WORK_RUN_STOP_HANDLER)
         private readonly runStops?: AppWorkRunStopHandler,
+        // Review feedback reaches the next run — told when a run ends, so the review findings a
+        // fresh run carried are consumed (completed) or handed back (failed / cancelled).
+        // Appended LAST + @Optional() (positional-spec arity rule). Absent = a terminal write is
+        // exactly what it was, and the next claim reads the run's status instead.
+        @Optional() private readonly reviewFeedback?: TaskReviewRejectionService,
     ) {}
 
     /** New run dispatched for the Task — unconditional pointer install. */
@@ -138,6 +144,13 @@ export class TaskRunDenormService {
         // the handler never throws and the run's terminal write never waits on it.
         if (applied && this.runStops) {
             void this.runStops.onRunTerminal({ taskId, runId, status }).catch(() => undefined);
+        }
+        // Review feedback reaches the next run — for EVERY run that ends, not only the Task's
+        // current one: a stale run's findings must still be consumed or handed back. Awaited
+        // (it never throws), so a run the drain starts right after this write already sees
+        // findings a failed run handed back.
+        if (this.reviewFeedback) {
+            await this.reviewFeedback.settleFeedbackForRun(runId, status).catch(() => undefined);
         }
         return applied;
     }

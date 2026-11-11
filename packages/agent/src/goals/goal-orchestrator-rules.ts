@@ -25,12 +25,14 @@ export interface GoalRoutingCandidate {
     name?: string | null;
     /**
      * Where the candidate came from — `assigned` (operator pin),
-     * `history` (has already worked an iteration of this goal), or
-     * `scope` (cold start: an eligible agent in the Goal's own
-     * Organization / tenant scope, offered only when there is no pin and
-     * no history — self-build slice AG, finding R1).
+     * `history` (has already worked an iteration of this goal),
+     * `work-default` (cold start on a Goal scoped to a Work: the Agent that
+     * Work names as its default, offered alone and only when there is no pin
+     * and no history), or `scope` (cold start otherwise: an eligible agent
+     * in the Goal's own Organization / tenant scope — self-build slice AG,
+     * finding R1).
      */
-    source: 'assigned' | 'history' | 'scope';
+    source: 'assigned' | 'history' | 'work-default' | 'scope';
 }
 
 export type GoalLoopAction =
@@ -65,6 +67,8 @@ export type GoalLoopReasonCode =
     | 'no-candidate-agent'
     | 'routed-assigned-agent'
     | 'routed-round-robin'
+    /** Cold start on a Goal scoped to a Work: the Agent that Work names as its default. */
+    | 'routed-work-default'
     | 'routed-scope-fallback';
 
 export interface GoalLoopDecision {
@@ -172,8 +176,9 @@ const MS_PER_MINUTE = 60_000;
  *     (The service already widened the pool to the Goal's scope for a
  *     fresh Goal, so reaching here means the scope has no agent at all.)
  *  8. Otherwise → dispatch, pinned agent first, else round-robin over
- *     the history — or, for a fresh unpinned Goal, over the eligible
- *     agents of its scope (`routed-scope-fallback`).
+ *     the history — or, for a fresh unpinned Goal, to the default Agent
+ *     of its Work (`routed-work-default`), else over the eligible agents
+ *     of its scope (`routed-scope-fallback`).
  *
  * `gracePeriodMinutes` extends the WALL-CLOCK limit only, and only while
  * an iteration is actually in flight: the point is to let a session that
@@ -360,6 +365,24 @@ export function decideGoalLoop(input: GoalLoopInput): GoalLoopDecision {
     const chosen = chosenAgents[0];
     const agentIds = chosenAgents.map((candidate) => candidate.agentId);
     const routed = chosenAgents.map((candidate) => label(candidate)).join(', ');
+    if (chosen.source === 'work-default') {
+        // Cold start on a Goal scoped to a Work that names its default Agent: the service offers
+        // that Agent alone, so every free slot goes to it, and from the next tick it is history.
+        return {
+            action: 'dispatch',
+            reasonCode: 'routed-work-default',
+            agentId: chosen.agentId,
+            nextIteration,
+            agentIds,
+            iterations,
+            reasoning: plural
+                ? `Routed iterations ${describeIterations(iterations)} → ${routed}: the Goal pins no ` +
+                  "agent and no agent has worked it yet, so it goes to its Work's default agent; " +
+                  `${slots} of ${maxConcurrent} concurrent slots were free.`
+                : `Routed iteration ${nextIteration} → ${label(chosen)}: the Goal pins no agent and no ` +
+                  "agent has worked it yet, so it goes to its Work's default agent.",
+        };
+    }
     if (chosen.source === 'scope') {
         // Cold start: nobody has worked this Goal yet, so the service
         // offered the eligible agents of the Goal's own scope. The log line

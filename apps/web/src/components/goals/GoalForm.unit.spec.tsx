@@ -342,6 +342,17 @@ describe('goal-form-payload helpers', () => {
         expect(validateGoalFormFields('delivery', fields({ dodText: '\n \n' }))).toBe(
             'errors.dodRequired',
         );
+        // Refused, not cut: the payload kept the first 50 lines of 500
+        // characters and dropped the rest without a word.
+        const lines = (n: number) =>
+            Array.from({ length: n }, (_, i) => `criterion ${i}`).join('\n');
+        expect(validateGoalFormFields('delivery', fields({ dodText: lines(50) }))).toBeNull();
+        expect(validateGoalFormFields('delivery', fields({ dodText: lines(51) }))).toBe(
+            'errors.dodTooLong',
+        );
+        expect(validateGoalFormFields('delivery', fields({ dodText: 'x'.repeat(501) }))).toBe(
+            'errors.dodTooLong',
+        );
         // A delivery Goal ignores the metric fields entirely.
         expect(
             validateGoalFormFields('delivery', fields({ pluginId: '', targetValue: '', unit: '' })),

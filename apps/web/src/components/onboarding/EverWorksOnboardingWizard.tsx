@@ -35,6 +35,7 @@ import type { UserPlugin } from '@/lib/api/plugins';
 import type { OAuthConnectionInfo } from '@/lib/api/plugins-capabilities/oauth';
 import type { GitProviderConnectionInfo } from '@/lib/api/plugins-capabilities/git-providers';
 import type { PluginDeviceAuthStatus } from '@/lib/api/plugins-capabilities/device-auth';
+import { quickCreateSlugFromPrompt } from '@/lib/works/work-slug.shared';
 
 export interface EverWorksOnboardingWizardProps {
     readonly open: boolean;
@@ -654,14 +655,10 @@ function stripHashParam(hash: string, key: string): string {
 // as `CreateWorkDto.slug`, so we strip everything else and bound the
 // length. Adds a short timestamp suffix so two users typing the same
 // prompt don't collide.
+// (`quickCreateSlugFromPrompt` — cut without a trailing hyphen, so a space at
+// the cut can no longer produce `--`, which the API refuses.)
 function slugifyPrompt(prompt: string): string {
-    const base = prompt
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, '-')
-        .replace(/^-+|-+$/g, '')
-        .slice(0, 40);
-    const suffix = Math.random().toString(36).slice(2, 8);
-    return base ? `${base}-${suffix}` : `quick-${suffix}`;
+    return quickCreateSlugFromPrompt(prompt);
 }
 
 // Pull the first ~80 chars of the prompt as a display name. Title-cased

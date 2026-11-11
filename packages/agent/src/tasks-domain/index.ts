@@ -32,6 +32,8 @@ export * from './app-work-change-gate.port';
 export * from './app-work-cloud-push';
 // The repository a Task acts on — the per-kind rule every Task path uses.
 export * from './task-repository';
+// A Work's default Agent — the one rule its write and every Work-Agent resolution share.
+export * from './work-default-agent';
 // PR insights (kanban run cockpit M5/M6) — PR status cache + capped diff.
 export * from './task-pr-status.service';
 // APW-08 T21–T24 — the App Works delivery chain (provided by TasksDomainModule): the merge hook's

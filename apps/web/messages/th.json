@@ -1540,6 +1540,7 @@
                 "priority": "ความสำคัญ",
                 "labels": "ป้ายกำกับ",
                 "labelsPlaceholder": "คั่นด้วยจุลภาค",
+                "labelsTooLong": "ป้ายกำกับที่ยาวเกิน {max} ตัวอักษรจะถูกตัดให้เหลือ {max} ตัวอักษรแรก",
                 "labelsHint": "คั่นป้ายกำกับหลายรายการด้วยจุลภาค",
                 "labelsAutoHint": "สร้างจากชื่อเรื่องจนกว่าคุณจะแก้ไข คั่นป้ายกำกับหลายรายการด้วยจุลภาค",
                 "organize": "จัดระเบียบ",
@@ -3503,7 +3504,8 @@
                     "notManageable": "Seats are adjusted on a paid plan once card payments are enabled.",
                     "save": "Save",
                     "saved": "Seats updated",
-                    "saveError": "Failed to update seats"
+                    "saveError": "Failed to update seats",
+                    "tooMany": "ตั้งค่าที่นั่งได้สูงสุด {max} ที่นั่ง"
                 },
                 "payg": {
                     "title": "Pay-as-you-go",
@@ -9212,6 +9214,7 @@
                 "targetInvalid": "Target value must be a number.",
                 "unitRequired": "Unit is required.",
                 "dodRequired": "A delivery Goal needs at least one Definition-of-Done criterion.",
+                "dodTooLong": "สูงสุด 50 เกณฑ์ แต่ละเกณฑ์ไม่เกิน 500 ตัวอักษร",
                 "deadlineInvalid": "Deadline is not a valid date.",
                 "createFailed": "Couldn't create the Goal. Please try again."
             },
@@ -9420,7 +9423,9 @@
                     "workerModelHelp": "Free text; passed through to iteration runs.",
                     "assignedAgent": "Pinned agent",
                     "assignedAgentNone": "No pin (round-robin)",
-                    "assignedAgentHelp": "Routing always picks this agent. Without a pin the router round-robins over the agents that have already worked this Goal — and, for a brand-new Goal, over the eligible agents in its scope — so the loop can start without one."
+                    "assignedAgentHelp": "Routing always picks this agent. Without a pin the router round-robins over the agents that have already worked this Goal — and, for a brand-new Goal, over the eligible agents in its scope — so the loop can start without one.",
+                    "assignedAgentDeleted": "เอเจนต์ที่ถูกลบ",
+                    "assignedAgentDeletedHelp": "เอเจนต์ที่ปักหมุดไว้ถูกลบหรือไม่พร้อมใช้งานแล้ว จึงไม่มีเอเจนต์ใดรับงานนี้ เลือกเอเจนต์อื่นหรือยกเลิกการปักหมุด"
                 },
                 "executionTargets": {
                     "cloud": "Cloud",
@@ -10946,7 +10951,7 @@
             },
             "prompt": {
                 "minLength": "พรอมต์ต้องมีความยาวอย่างน้อย 10 ตัวอักษร",
-                "maxLength": "พรอมต์ต้องมีความยาวน้อยกว่า 1000 ตัวอักษร"
+                "maxLength": "พรอมต์ต้องมีความยาวน้อยกว่า 4000 ตัวอักษร"
             },
             "oauthRequired": "ต้องเชื่อมต่อ OAuth กรุณาเชื่อมต่อบัญชี {provider} ก่อน",
             "githubRequired": "ต้องเชื่อมต่อ GitHub กรุณาเชื่อมต่อบัญชี GitHub ก่อน",

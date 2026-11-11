@@ -8,7 +8,7 @@ import {
     Optional,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { type FindOptionsWhere, In, IsNull, Not, Repository } from 'typeorm';
+import { type EntityManager, type FindOptionsWhere, In, IsNull, Not, Repository } from 'typeorm';
 import {
     GOAL_EXECUTION_TARGETS,
     Goal,
@@ -32,6 +32,7 @@ import { RunDispatchGateService } from '../agents/run-dispatch-gate.service';
 import { AGENT_RUN_CANCELLER, type AgentRunCanceller } from '../agents/agent-run-canceller';
 import { TasksService } from '../tasks-domain/tasks.service';
 import { TaskTransitionService } from '../tasks-domain/task-transition.service';
+import { resolveWorkDefaultAgent } from '../tasks-domain/work-default-agent';
 import {
     DomainEventPublisher,
     recordAfterWrite,
@@ -50,6 +51,7 @@ import { addInsertionOrderTieBreak, isSqliteFamilyDriver } from '../database/ins
 import {
     dodProgressSignature,
     hasDefinitionOfDone,
+    nextDodCriterionId,
     normalizeDoDCriteria,
     summarizeDoD,
     validateDoDCriteria,
@@ -426,6 +428,139 @@ export class GoalOrchestratorService {
             ...(options.provenance ? { provenance: options.provenance } : {}),
         });
         return toGoalDto(saved);
+    }
+
+    /**
+     * Add ONE operator criterion (approved, open) to the checklist as it is
+     * stored at the write, not to a copy the caller read earlier.
+     *
+     * Review of #3172: the DoD tab read the Goal and then replaced the whole
+     * list (`setDodCriteria`), so a planner proposal or another tab's edit that
+     * landed between the read and the write was overwritten. Here the list is
+     * re-read inside the write's transaction (`FOR UPDATE` where the driver has
+     * row locks) and only this one change is applied to it.
+     */
+    async addDodCriterion(userId: string, goalId: string, text: string): Promise<GoalDto> {
+        const wording = typeof text === 'string' ? text.trim() : '';
+        return this.editDodCriteria(userId, goalId, 'added', (current) => {
+            const taken = new Set(current.map((entry) => entry.id));
+            const criterion: GoalDoDCriterion = {
+                id: nextDodCriterionId(wording, taken),
+                text: wording,
+                status: 'open',
+                source: 'operator',
+            };
+            return { next: [...current, criterion], criterion };
+        });
+    }
+
+    /** Remove ONE criterion from the checklist as stored at the write (see {@link addDodCriterion}). */
+    async removeDodCriterion(
+        userId: string,
+        goalId: string,
+        criterionId: string,
+    ): Promise<GoalDto> {
+        return this.editDodCriteria(userId, goalId, 'removed', (current) => {
+            const criterion = current.find((entry) => entry.id === criterionId);
+            if (!criterion) {
+                throw new NotFoundException(`Criterion not found`);
+            }
+            return { next: current.filter((entry) => entry.id !== criterionId), criterion };
+        });
+    }
+
+    /**
+     * One add / remove applied to the row as stored at the write. Same rules as
+     * {@link setDodCriteria} (shape, size, a delivery Goal keeps an approved
+     * criterion), and the same `goal.updated` in the write's transaction.
+     *
+     * What remains: `proposeDodCriteria`, `approveDodCriteria` and
+     * `patchDodCriterion` still read the row without a lock, so one of them
+     * that read BEFORE this write commits and saves AFTER it can still drop
+     * this change. That window is two statements inside the API, not a page's
+     * lifetime or a web round trip.
+     */
+    private async editDodCriteria(
+        userId: string,
+        goalId: string,
+        verb: 'added' | 'removed',
+        edit: (current: GoalDoDCriterion[]) => {
+            next: GoalDoDCriterion[];
+            criterion: GoalDoDCriterion;
+        },
+    ): Promise<GoalDto> {
+        // Ownership: the same owner-only lookup every Definition-of-Done write makes.
+        const owned = await this.findOrThrow(userId, goalId);
+        const apply = async (
+            repository: Repository<Goal>,
+            goal: Goal,
+        ): Promise<{ saved: Goal; criterion: GoalDoDCriterion }> => {
+            const current = Array.isArray(goal.dodCriteria) ? goal.dodCriteria : [];
+            const { next, criterion } = edit(current);
+            this.assertDod(next);
+            if (isDeliveryGoal(goal) && !hasDefinitionOfDone({ dodCriteria: next })) {
+                throw new BadRequestException(
+                    'A delivery Goal must keep at least one approved Definition-of-Done criterion.',
+                );
+            }
+            const beforeSignature = dodProgressSignature(goal.dodCriteria);
+            goal.dodCriteria = normalizeDoDCriteria(next);
+            this.markProgressIfChanged(goal, beforeSignature);
+            return { saved: await saveGoalColumns(repository, goal, DOD_COLUMNS), criterion };
+        };
+
+        const publisher = this.domainEvents;
+        const manager = this.goals.manager as EntityManager | undefined;
+        const { saved, criterion } = publisher
+            ? await publisher.transaction(async (tx) => {
+                  const goal = await this.reloadGoalForUpdate(tx, owned.id);
+                  const result = await apply(tx.getRepository(Goal), goal);
+                  await publisher.changed(tx, 'goal', result.saved.id, 'goal.updated', {
+                      changedFields: ['dodCriteria', 'progress'],
+                  });
+                  return result;
+              })
+            : manager
+              ? await manager.transaction(async (tx) =>
+                    apply(tx.getRepository(Goal), await this.reloadGoalForUpdate(tx, owned.id)),
+                )
+              : // A repository without a manager (a unit-test double): the row read above.
+                await apply(this.goals, owned);
+
+        const summary = summarizeDoD(saved.dodCriteria);
+        await this.recordEvent(saved, {
+            kind: 'dod',
+            message:
+                `Criterion "${criterion.text}" ${verb} — ${summary.done} done, ` +
+                `${summary.waived} waived, ${summary.open} open` +
+                `${summary.proposed > 0 ? `, ${summary.proposed} awaiting approval` : ''}.`,
+            metadata: { criterionId: criterion.id, summary },
+        });
+        await this.recordActivity(
+            saved,
+            ActivityActionType.GOAL_DOD_UPDATED,
+            verb === 'added' ? 'dod-add' : 'dod-remove',
+            { criterionId: criterion.id, summary },
+        );
+        return toGoalDto(saved);
+    }
+
+    /**
+     * The Goal's current row inside `manager`'s transaction — `FOR UPDATE` on
+     * Postgres and MySQL; SQLite has no row locks and serializes its writers on
+     * one connection (the same rule as `GoalsService`).
+     */
+    private async reloadGoalForUpdate(manager: EntityManager, goalId: string): Promise<Goal> {
+        const type = manager.connection?.options?.type;
+        const locks = type === 'postgres' || type === 'mysql' || type === 'mariadb';
+        const row = await manager.getRepository(Goal).findOne({
+            where: { id: goalId },
+            ...(locks ? { lock: { mode: 'pessimistic_write' as const } } : {}),
+        });
+        if (!row) {
+            throw new NotFoundException(`Goal not found`);
+        }
+        return row;
     }
 
     /**
@@ -1131,8 +1266,13 @@ export class GoalOrchestratorService {
                     createdByType: 'user',
                     createdById: goal.userId,
                     // Review 2026-10-17 F1: the Task carries the Goal's title
-                    // and brief, so a private Goal's iteration stays private.
+                    // and brief, so a private Goal's iteration stays private, and
+                    // a Team Goal's sits on the Goal's Teams with `team`
+                    // visibility (`derivedFrom`, read fresh at create): the
+                    // Goal's Teams, plus the iteration Work's members as for
+                    // any `team` Task.
                     derivedFromPrivate: goal.visibility === 'private',
+                    derivedFrom: { aggregate: 'goal', id: goal.id },
                 };
                 // Lookups follow the relation scope, as routing did to pick `slotAgentId`: a
                 // legacy (null/null) Goal routes to a current-tenant Agent, and its raw stamp as
@@ -1516,6 +1656,11 @@ export class GoalOrchestratorService {
      * The fallback is deliberately NOT taken when a pin exists but failed
      * its scope check: an unhonoured explicit pin is the operator's to
      * fix, not something to route around silently.
+     *
+     * Before that pool, a Goal scoped to a Work routes its first iteration
+     * to the Agent the Work names as its default, when it still resolves
+     * ({@link resolveWorkDefaultCandidate}) — under the same "no pin, no
+     * history" condition.
      */
     private async resolveCandidates(goal: Goal): Promise<GoalRoutingCandidate[]> {
         if (goal.assignedAgentId) {
@@ -1559,7 +1704,34 @@ export class GoalOrchestratorService {
         if (out.size > 0 || goal.assignedAgentId || !this.agents) {
             return [...out.values()];
         }
+        const workDefault = await this.resolveWorkDefaultCandidate(goal);
+        if (workDefault) return [workDefault];
         return this.resolveScopeCandidates(goal);
+    }
+
+    /**
+     * Cold start on a Goal scoped to a Work: the Agent that Work names as its default
+     * (`works.defaultAgentId`), when it still resolves for the Goal's owner inside the Goal's
+     * scope — the same rule `TasksService.runTask` applies (`tasks-domain/work-default-agent.ts`).
+     * `null` (→ the scope pool) when the Goal has no Work, the Work names none, or the one it
+     * names was archived, deleted or left the scope. Taken only where the scope pool would be:
+     * no pin and no history. Once it has run an iteration it is history, so routing stays on
+     * it until an operator pins another Agent. A read failure PROPAGATES, as in
+     * {@link resolveScopeCandidates}: the tick retries instead of round-robining over the scope.
+     */
+    private async resolveWorkDefaultCandidate(goal: Goal): Promise<GoalRoutingCandidate | null> {
+        if (!goal.workId || !this.works || !this.agents) return null;
+        const work = await this.works.findOne({ where: { id: goal.workId } });
+        if (!work || work.userId !== goal.userId || !work.defaultAgentId) return null;
+        const goalScope = ownershipRelationScopeOf(goal);
+        if (goalScope && !ownershipScopeMatches(work, goalScope)) return null;
+        const agent = await resolveWorkDefaultAgent(this.agents, work, goal.userId, goalScope);
+        if (!agent) return null;
+        return {
+            agentId: agent.id,
+            name: agent.name ?? agent.slug ?? null,
+            source: 'work-default',
+        };
     }
 
     /**

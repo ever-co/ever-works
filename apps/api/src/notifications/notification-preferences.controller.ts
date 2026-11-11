@@ -12,7 +12,16 @@ import {
     ParseEnumPipe,
 } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiOperation, ApiParam, ApiProperty } from '@nestjs/swagger';
-import { IsBoolean, IsEnum, IsIn, IsOptional, IsString, Matches } from 'class-validator';
+import {
+    ArrayMaxSize,
+    IsArray,
+    IsBoolean,
+    IsEnum,
+    IsOptional,
+    IsString,
+    Matches,
+    MaxLength,
+} from 'class-validator';
 import { IsIanaTimeZone } from '../common/is-iana-time-zone';
 import { CurrentUser, AuthSessionGuard } from '../auth';
 import { AuthenticatedUser } from '@src/auth/types/auth.types';
@@ -49,6 +58,23 @@ export class QuietHoursBody {
     @IsOptional()
     @IsBoolean()
     urgentBypassesQuietHours?: boolean;
+}
+
+/**
+ * `PUT preferences/event/:eventKey` — the channels one event type is delivered
+ * to (`[]` mutes it). A class, not an inline type: with `{ channelIds }` typed
+ * inline the global ValidationPipe validated nothing, so a body without
+ * `channelIds` (the chat tool's old hint sent `enabled` / `channels`) reached
+ * the service as `undefined` and saved an EMPTY selection — silently muting
+ * the event. Now such a body is a 400.
+ */
+export class SetEventSubscriptionBody {
+    @ApiProperty({ type: [String], description: 'Notification channel ids; [] mutes the event.' })
+    @IsArray()
+    @ArrayMaxSize(50)
+    @IsString({ each: true })
+    @MaxLength(128, { each: true })
+    channelIds: string[];
 }
 
 class MuteBody {
@@ -99,7 +125,7 @@ export class NotificationPreferencesController {
     async setEventSubscription(
         @CurrentUser() auth: AuthenticatedUser,
         @Param('eventKey') eventKey: string,
-        @Body() body: { channelIds: string[] },
+        @Body() body: SetEventSubscriptionBody,
     ) {
         const subscription = await this.service.setEventSubscription(
             auth.userId,

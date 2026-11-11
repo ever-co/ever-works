@@ -17,7 +17,12 @@ import { cn } from '@/lib/utils/cn';
 import { MarkdownInline } from '@/components/markdown/MarkdownContent';
 import { markdownToPlainText } from '@/lib/markdown/markdown-excerpt';
 import { DodProgressBar, DodRollup } from './goal-loop-ui';
-import { approveGoalDodAction, patchGoalDodCriterionAction, setGoalDodAction } from './actions';
+import {
+    addGoalDodCriterionAction,
+    approveGoalDodAction,
+    patchGoalDodCriterionAction,
+    removeGoalDodCriterionAction,
+} from './actions';
 
 interface GoalDodPanelProps {
     goal: Goal;
@@ -35,20 +40,6 @@ type DodToastKey =
     | 'toasts.statusSaved'
     | 'toasts.waived'
     | 'toasts.approved';
-
-/** Slugify a criterion's text into a stable, unique id within the Goal. */
-function nextCriterionId(text: string, taken: Set<string>): string {
-    const base =
-        text
-            .toLowerCase()
-            .replace(/[^a-z0-9]+/g, '-')
-            .replace(/^-+|-+$/g, '')
-            .slice(0, 48) || 'criterion';
-    if (!taken.has(base)) return base;
-    let suffix = 2;
-    while (taken.has(`${base}-${suffix}`)) suffix += 1;
-    return `${base}-${suffix}`;
-}
 
 /**
  * Autonomy layer — the Definition-of-Done tab.
@@ -91,25 +82,14 @@ export function GoalDodPanel({ goal, onGoalChange }: GoalDodPanelProps) {
     const addCriterion = () => {
         const text = draft.trim();
         if (!text) return;
-        const taken = new Set(criteria.map((entry) => entry.id));
-        const next: GoalDoDCriterion[] = [
-            ...criteria,
-            { id: nextCriterionId(text, taken), text, status: 'open', source: 'operator' },
-        ];
         setDraft('');
-        run(() => setGoalDodAction(goal.id, next), 'toasts.added');
+        // Added to the list as stored now, not to this page's copy.
+        run(() => addGoalDodCriterionAction(goal.id, text), 'toasts.added');
     };
 
     const removeCriterion = (criterionId: string) => {
         if (!window.confirm(t('confirmRemove'))) return;
-        run(
-            () =>
-                setGoalDodAction(
-                    goal.id,
-                    criteria.filter((entry) => entry.id !== criterionId),
-                ),
-            'toasts.removed',
-        );
+        run(() => removeGoalDodCriterionAction(goal.id, criterionId), 'toasts.removed');
     };
 
     const setStatus = (criterion: GoalDoDCriterion, status: GoalDoDCriterion['status']) => {

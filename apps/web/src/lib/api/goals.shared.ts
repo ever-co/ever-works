@@ -31,6 +31,8 @@ export const GOAL_KINDS: GoalKind[] = ['metric', 'delivery'];
  * can surface the hint without importing the agent barrel.
  */
 export const MIN_CHECK_FREQUENCY_MINUTES = 15;
+/** One year — the API’s `@Max` for `checkFrequencyMinutes`. */
+export const MAX_CHECK_FREQUENCY_MINUTES = 525_600;
 export const DEFAULT_CHECK_FREQUENCY_MINUTES = 60;
 
 /**

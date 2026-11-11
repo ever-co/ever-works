@@ -83,6 +83,14 @@ export interface WebsiteTemplateOption {
     isDefault: boolean;
     sourceType: 'built_in' | 'custom';
     originType: 'standard' | 'forked' | 'custom_url';
+    /**
+     * The repository the template is built from. The Create-Work picker maps a
+     * manifest blueprint (`template.repo`) to the catalog row of the same
+     * repository (`work-template-picker-options.ts`). Optional: an API that
+     * predates the field sends neither, and no blueprint is offered then.
+     */
+    repositoryOwner?: string | null;
+    repositoryName?: string | null;
 }
 
 export interface CreateWorkDto {
@@ -159,6 +167,8 @@ export interface UpdateWorkDto {
     taskIsolationTargetRepo?: TaskIsolationTargetRepo;
     /** When Task branches are deleted after merge. */
     taskBranchCleanup?: TaskBranchCleanup;
+    /** The Agent that runs this Work's new Tasks when none is named; `null` clears it. */
+    defaultAgentId?: string | null;
     // Quality gates (Wave 3 M6) — Work-level default acceptance checks
     // inherited by agent-executed Tasks; `null` clears the defaults.
     checkDefaults?: TaskAcceptanceCheck[] | null;
@@ -403,6 +413,9 @@ export interface Work {
     taskIsolationBaseBranch?: string | null;
     taskIsolationTargetRepo?: TaskIsolationTargetRepo;
     taskBranchCleanup?: TaskBranchCleanup;
+    // The Agent that runs this Work's new Tasks when none is named (tried before the
+    // Work's only Agent). Absent/null = no default.
+    defaultAgentId?: string | null;
     // Quality gates (Wave 3 M6). Absent on rows written before the
     // columns existed — absent means no defaults / policy 'off' / 2.
     checkDefaults?: TaskAcceptanceCheck[] | null;

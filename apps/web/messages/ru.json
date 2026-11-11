@@ -1540,6 +1540,7 @@
                 "priority": "Приоритет",
                 "labels": "Метки",
                 "labelsPlaceholder": "через запятую",
+                "labelsTooLong": "Метки длиннее {max} символов сокращаются до первых {max}.",
                 "labelsHint": "Разделяйте несколько меток запятыми.",
                 "labelsAutoHint": "Формируются из заголовка, пока вы их не измените. Разделяйте несколько меток запятыми.",
                 "organize": "Организация",
@@ -3503,7 +3504,8 @@
                     "notManageable": "Seats are adjusted on a paid plan once card payments are enabled.",
                     "save": "Save",
                     "saved": "Seats updated",
-                    "saveError": "Failed to update seats"
+                    "saveError": "Failed to update seats",
+                    "tooMany": "Можно задать не более {max} мест."
                 },
                 "payg": {
                     "title": "Pay-as-you-go",
@@ -9212,6 +9214,7 @@
                 "targetInvalid": "Target value must be a number.",
                 "unitRequired": "Unit is required.",
                 "dodRequired": "A delivery Goal needs at least one Definition-of-Done criterion.",
+                "dodTooLong": "Не более 50 критериев, каждый — до 500 символов.",
                 "deadlineInvalid": "Deadline is not a valid date.",
                 "createFailed": "Couldn't create the Goal. Please try again."
             },
@@ -9420,7 +9423,9 @@
                     "workerModelHelp": "Free text; passed through to iteration runs.",
                     "assignedAgent": "Pinned agent",
                     "assignedAgentNone": "No pin (round-robin)",
-                    "assignedAgentHelp": "Routing always picks this agent. Without a pin the router round-robins over the agents that have already worked this Goal — and, for a brand-new Goal, over the eligible agents in its scope — so the loop can start without one."
+                    "assignedAgentHelp": "Routing always picks this agent. Without a pin the router round-robins over the agents that have already worked this Goal — and, for a brand-new Goal, over the eligible agents in its scope — so the loop can start without one.",
+                    "assignedAgentDeleted": "Удалённый агент",
+                    "assignedAgentDeletedHelp": "Закреплённый агент удалён или больше недоступен, поэтому эту работу не берёт ни один агент. Выберите другого агента или снимите закрепление."
                 },
                 "executionTargets": {
                     "cloud": "Cloud",
@@ -10946,7 +10951,7 @@
             },
             "prompt": {
                 "minLength": "Промпт должен содержать не менее 10 символов",
-                "maxLength": "Промпт должен быть менее 1000 символов"
+                "maxLength": "Промпт должен быть менее 4000 символов"
             },
             "oauthRequired": "Требуется подключение OAuth. Пожалуйста, сначала подключите аккаунт {provider}.",
             "githubRequired": "Требуется подключение GitHub. Пожалуйста, сначала подключите аккаунт GitHub.",

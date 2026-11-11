@@ -131,7 +131,7 @@ function makeService(onboardingState: OnboardingWizardStateV2 | null = null): {
         {} as never,
         {} as never,
         ownership as never,
-        {} as never,
+        { isHiddenProvider: (id: string) => id === 'k8s-apps-tier' } as never, // deployFacade
         templateCatalog as never,
         {} as never,
         quota as never,
@@ -231,6 +231,19 @@ describe('WorkLifecycleService.createWork — provider defaults + quota', () => 
         expect(persisted.storageProvider).toBe('user-github');
         expect(persisted.deployProvider).toBe('vercel');
         expect(deps.quota.assertWithinQuota).not.toHaveBeenCalled();
+    });
+
+    it('refuses the App-only managed target (k8s-apps-tier) for a website Work, before any row', async () => {
+        // It was listed in the Create-Work deploy selector: the create
+        // succeeded and every deploy of the Work failed afterwards.
+        const { service, deps } = makeService(null);
+
+        await expect(
+            service.createWork({ ...baseDto, deployProvider: 'k8s-apps-tier' }, baseUser),
+        ).rejects.toMatchObject({
+            response: { message: 'Unsupported deploy provider: k8s-apps-tier' },
+        });
+        expect(deps.workRepo.create).not.toHaveBeenCalled();
     });
 
     it('invokes the Ever Works Deploy quota check when deploy === ever-works', async () => {

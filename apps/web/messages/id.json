@@ -1540,6 +1540,7 @@
                 "priority": "Prioritas",
                 "labels": "Label",
                 "labelsPlaceholder": "dipisahkan koma",
+                "labelsTooLong": "Label yang lebih dari {max} karakter dipendekkan menjadi {max} karakter pertamanya.",
                 "labelsHint": "Pisahkan beberapa label dengan koma.",
                 "labelsAutoHint": "Diambil dari judul sampai Anda mengubahnya. Pisahkan beberapa label dengan koma.",
                 "organize": "Atur",
@@ -3503,7 +3504,8 @@
                     "notManageable": "Seats are adjusted on a paid plan once card payments are enabled.",
                     "save": "Save",
                     "saved": "Seats updated",
-                    "saveError": "Failed to update seats"
+                    "saveError": "Failed to update seats",
+                    "tooMany": "Anda dapat menetapkan paling banyak {max} kursi."
                 },
                 "payg": {
                     "title": "Pay-as-you-go",
@@ -9212,6 +9214,7 @@
                 "targetInvalid": "Target value must be a number.",
                 "unitRequired": "Unit is required.",
                 "dodRequired": "A delivery Goal needs at least one Definition-of-Done criterion.",
+                "dodTooLong": "Paling banyak 50 kriteria, masing-masing hingga 500 karakter.",
                 "deadlineInvalid": "Deadline is not a valid date.",
                 "createFailed": "Couldn't create the Goal. Please try again."
             },
@@ -9420,7 +9423,9 @@
                     "workerModelHelp": "Free text; passed through to iteration runs.",
                     "assignedAgent": "Pinned agent",
                     "assignedAgentNone": "No pin (round-robin)",
-                    "assignedAgentHelp": "Routing always picks this agent. Without a pin the router round-robins over the agents that have already worked this Goal — and, for a brand-new Goal, over the eligible agents in its scope — so the loop can start without one."
+                    "assignedAgentHelp": "Routing always picks this agent. Without a pin the router round-robins over the agents that have already worked this Goal — and, for a brand-new Goal, over the eligible agents in its scope — so the loop can start without one.",
+                    "assignedAgentDeleted": "Agen yang dihapus",
+                    "assignedAgentDeletedHelp": "Agen yang disematkan telah dihapus atau tidak lagi tersedia, sehingga tidak ada Agen yang mengerjakan pekerjaan ini. Pilih Agen lain atau hapus sematan."
                 },
                 "executionTargets": {
                     "cloud": "Cloud",
@@ -10946,7 +10951,7 @@
             },
             "prompt": {
                 "minLength": "Prompt harus setidaknya 10 karakter",
-                "maxLength": "Prompt harus kurang dari 1000 karakter"
+                "maxLength": "Prompt harus kurang dari 4000 karakter"
             },
             "oauthRequired": "Koneksi OAuth diperlukan. Silakan hubungkan akun {provider} Anda terlebih dahulu.",
             "githubRequired": "Koneksi GitHub diperlukan. Silakan hubungkan akun GitHub Anda terlebih dahulu.",

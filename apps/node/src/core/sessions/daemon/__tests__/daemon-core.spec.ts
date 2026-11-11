@@ -107,6 +107,40 @@ describe('DaemonCore', () => {
 		});
 	});
 
+	it('picks up a terminal addon installed after it started, without a restart (throttled retries)', async () => {
+		const pty = fakePtyFactory();
+		let installed = false;
+		let tries = 0;
+		const { core } = makeCore({
+			ptyFactory: null,
+			ptyReason: 'terminal support is missing: not installed',
+			ptyRetryMs: 30_000,
+			reloadPty: () => {
+				tries += 1;
+				return installed ? { factory: pty.factory } : { factory: null, reason: 'still not installed' };
+			}
+		});
+		// Inside the first retry window nothing is retried.
+		expect(core.health()).toMatchObject({
+			pty: 'missing',
+			ptyReason: 'terminal support is missing: not installed'
+		});
+		expect(tries).toBe(0);
+		now += 30_000;
+		expect(core.health()).toMatchObject({ pty: 'missing', ptyReason: 'still not installed' });
+		expect(tries).toBe(1);
+		installed = true;
+		expect(core.health().pty).toBe('missing');
+		expect(tries).toBe(1);
+		now += 30_000;
+		const health = core.health();
+		expect(health.pty).toBe('available');
+		expect(health.ptyReason).toBeUndefined();
+		expect(await core.start(request())).toEqual({ pid: expect.any(Number) });
+		expect(pty.spawned).toHaveLength(1);
+		expect(tries).toBe(2);
+	});
+
 	it('refuses a second start of the same id, even while the first is in flight', async () => {
 		const { core, pty } = makeCore();
 		const [first, second] = await Promise.all([core.start(request()), core.start(request())]);

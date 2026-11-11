@@ -610,6 +610,9 @@ export function FactsPanel({ initial, initialLoadFailed, onTidyUp }: FactsPanelP
                         ref={searchRef}
                         data-testid="memory-facts-search"
                         type="search"
+                        // The API's search cap (`MaxLength(200)`, memory-facts.dto.ts):
+                        // a longer query answered 400 and the panel showed "load failed".
+                        maxLength={200}
                         aria-label={t('searchLabel')}
                         value={query}
                         onChange={(event) => setQuery(event.target.value)}

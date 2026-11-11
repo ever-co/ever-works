@@ -2550,6 +2550,7 @@
                 "priority": "Priority",
                 "labels": "Labels",
                 "labelsPlaceholder": "comma-separated",
+                "labelsTooLong": "Labels longer than {max} characters are shortened to their first {max}.",
                 "dueDate": "Due date",
                 "startDate": "Start date",
                 "estimateMinutes": "Estimate (minutes)",
@@ -5994,7 +5995,8 @@
                     "notManageable": "Seats are adjusted on a paid plan once card payments are enabled.",
                     "save": "Save",
                     "saved": "Seats updated",
-                    "saveError": "Failed to update seats"
+                    "saveError": "Failed to update seats",
+                    "tooMany": "You can set at most {max} seats."
                 },
                 "payg": {
                     "title": "Pay-as-you-go",
@@ -8589,6 +8591,16 @@
                     "saved": "Task isolation settings updated",
                     "saveFailed": "Failed to update task isolation settings"
                 },
+                "defaultAgent": {
+                    "title": "Default Agent",
+                    "subtitle": "The Agent that runs this Work's new Tasks when nobody picks one: Run, a Mission's Tasks, a Goal's first iteration and App changes all try it first.",
+                    "label": "Default Agent",
+                    "description": "Use it for an Agent that serves several Works. Without a default, the Work's only Agent runs its Tasks. An Agent you archive later is skipped.",
+                    "none": "No default (use the Work's only Agent)",
+                    "ownerOnly": "Only the Work's owner can change the default Agent. It runs the owner's Tasks.",
+                    "saved": "Default Agent updated",
+                    "saveFailed": "Failed to update the default Agent"
+                },
                 "websiteConfig": {
                     "title": "Website Configuration",
                     "subtitle": "Customize how your Work's website looks and behaves",
@@ -9352,6 +9364,7 @@
                         },
                         "language": "Language",
                         "languagePlaceholder": "BCP-47 code (e.g. en, en-US)",
+                        "languageInvalid": "Use a language code of 2 to 8 characters (e.g. en, en-US).",
                         "source": "Source",
                         "history": "View Git history",
                         "historyComingSoon": "Coming in slice E",
@@ -11520,6 +11533,7 @@
                 "targetInvalid": "Target value must be a number.",
                 "unitRequired": "Unit is required.",
                 "dodRequired": "A delivery Goal needs at least one Definition-of-Done criterion.",
+                "dodTooLong": "At most 50 criteria, each up to 500 characters.",
                 "deadlineInvalid": "Deadline is not a valid date.",
                 "createFailed": "Couldn't create the Goal. Please try again."
             },
@@ -11728,7 +11742,9 @@
                     "workerModelHelp": "Free text; passed through to iteration runs.",
                     "assignedAgent": "Pinned agent",
                     "assignedAgentNone": "No pin (round-robin)",
-                    "assignedAgentHelp": "Routing always picks this agent. Without a pin the router round-robins over the agents that have already worked this Goal — and, for a brand-new Goal, over the eligible agents in its scope — so the loop can start without one."
+                    "assignedAgentHelp": "Routing always picks this agent. Without a pin the router round-robins over the agents that have already worked this Goal — and, for a brand-new Goal, over the eligible agents in its scope — so the loop can start without one.",
+                    "assignedAgentDeleted": "Deleted Agent",
+                    "assignedAgentDeletedHelp": "The pinned Agent was deleted or is no longer available, so no Agent picks up this work. Pick another Agent or clear the pin."
                 },
                 "executionTargets": {
                     "cloud": "Cloud",
@@ -13465,7 +13481,7 @@
             },
             "prompt": {
                 "minLength": "Prompt must be at least 10 characters",
-                "maxLength": "Prompt must be less than 1000 characters"
+                "maxLength": "Prompt must be less than 4000 characters"
             },
             "oauthRequired": "OAuth connection required. Please connect your {provider} account first.",
             "githubRequired": "GitHub connection required. Please connect your GitHub account first.",

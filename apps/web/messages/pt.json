@@ -1540,6 +1540,7 @@
                 "priority": "Prioridade",
                 "labels": "Etiquetas",
                 "labelsPlaceholder": "separadas por vírgula",
+                "labelsTooLong": "Etiquetas com mais de {max} caracteres são encurtadas para os primeiros {max}.",
                 "labelsHint": "Separe várias etiquetas com vírgulas.",
                 "labelsAutoHint": "Derivadas do título até você editá-las. Separe várias etiquetas com vírgulas.",
                 "organize": "Organizar",
@@ -3503,7 +3504,8 @@
                     "notManageable": "Seats are adjusted on a paid plan once card payments are enabled.",
                     "save": "Save",
                     "saved": "Seats updated",
-                    "saveError": "Failed to update seats"
+                    "saveError": "Failed to update seats",
+                    "tooMany": "Você pode definir no máximo {max} assentos."
                 },
                 "payg": {
                     "title": "Pay-as-you-go",
@@ -9212,6 +9214,7 @@
                 "targetInvalid": "Target value must be a number.",
                 "unitRequired": "Unit is required.",
                 "dodRequired": "A delivery Goal needs at least one Definition-of-Done criterion.",
+                "dodTooLong": "No máximo 50 critérios, cada um com até 500 caracteres.",
                 "deadlineInvalid": "Deadline is not a valid date.",
                 "createFailed": "Couldn't create the Goal. Please try again."
             },
@@ -9420,7 +9423,9 @@
                     "workerModelHelp": "Free text; passed through to iteration runs.",
                     "assignedAgent": "Pinned agent",
                     "assignedAgentNone": "No pin (round-robin)",
-                    "assignedAgentHelp": "Routing always picks this agent. Without a pin the router round-robins over the agents that have already worked this Goal — and, for a brand-new Goal, over the eligible agents in its scope — so the loop can start without one."
+                    "assignedAgentHelp": "Routing always picks this agent. Without a pin the router round-robins over the agents that have already worked this Goal — and, for a brand-new Goal, over the eligible agents in its scope — so the loop can start without one.",
+                    "assignedAgentDeleted": "Agente excluído",
+                    "assignedAgentDeletedHelp": "O agente fixado foi excluído ou não está mais disponível, por isso nenhum agente assume este trabalho. Escolha outro agente ou remova a fixação."
                 },
                 "executionTargets": {
                     "cloud": "Cloud",
@@ -10946,7 +10951,7 @@
             },
             "prompt": {
                 "minLength": "O prompt deve ter pelo menos 10 caracteres",
-                "maxLength": "O prompt deve ter menos de 1000 caracteres"
+                "maxLength": "O prompt deve ter menos de 4000 caracteres"
             },
             "oauthRequired": "Conexão OAuth necessária. Conecte sua conta {provider} primeiro.",
             "githubRequired": "Conexão GitHub necessária. Conecte sua conta GitHub primeiro.",

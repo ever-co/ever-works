@@ -211,6 +211,24 @@ export function validateDoDCriteria(criteria: unknown): GoalDoDValidationError[]
 }
 
 /**
+ * A stable slug id for a new criterion, unique among `taken` (the ids the
+ * Goal's checklist holds at the write): `ship-it`, then `ship-it-2`, … —
+ * `criterion` when the text has no letters or digits.
+ */
+export function nextDodCriterionId(text: string, taken: ReadonlySet<string>): string {
+    const base =
+        text
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, '-')
+            .replace(/^-+|-+$/g, '')
+            .slice(0, 48) || 'criterion';
+    if (!taken.has(base)) return base;
+    let suffix = 2;
+    while (taken.has(`${base}-${suffix}`)) suffix += 1;
+    return `${base}-${suffix}`;
+}
+
+/**
  * Normalize a validated list into the exact shape persisted on the row:
  * trimmed strings, explicit nulls instead of undefined for the optional
  * text fields, an `updatedAt` stamp, and no stray properties from the

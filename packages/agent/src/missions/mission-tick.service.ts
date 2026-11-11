@@ -102,6 +102,16 @@ export function missionActiveRunExists(
 /**
  * The Mission's Tasks on one Work that count against `openTasksCap`.
  *
+ * A recurring TEMPLATE (`isRecurring = true`) is not open work: it is a schedule, and it is
+ * never Done, so a Work with a few standing recurring Tasks linked to the Mission would
+ * otherwise be capped for good. So every status branch below asks `isRecurring = false` (the
+ * same "a recurring row is a template" test the Task board and the fan-out driver use). Every
+ * instance a template spawns is an ordinary Task (`isRecurring = false`, `parentRecurringTaskId`
+ * = the template, the template's `missionId` copied — `cloneRecurringTaskAsInstance`), so the
+ * instances still count. The one exception is a run in flight: a template somebody ran by hand
+ * holds a slot while that run is queued or running, like any other Task, and frees it when the
+ * run ends.
+ *
  * A Task counts while it is open work: not Done or Cancelled — except one that is only WAITING
  * (In review or Blocked) on a pull request that was closed without merging, and has not changed
  * for {@link MISSION_CLOSED_PR_SLOT_HOLD_MS}. Nothing completes such a Task (only a MERGE moves a
@@ -131,12 +141,15 @@ export function missionOpenTasksWhere(
     base: { workId: string; missionId: string },
     opts: { now: Date; activeRunExists?: FindOperator<string> },
 ): FindOptionsWhere<Task>[] {
-    const waiting = { ...base, status: In(MISSION_WAITING_ON_PR_STATUSES) };
+    // A recurring template is never open work by its status (see above). Only the run-in-flight
+    // branch reads `base`: a template someone ran by hand is busy on the Work until that run ends.
+    const work = { ...base, isRecurring: false };
+    const waiting = { ...work, status: In(MISSION_WAITING_ON_PR_STATUSES) };
     const recentlyClosed = { ...waiting, prState: MISSION_CLOSED_UNMERGED_PR_STATE };
     const since = new Date(opts.now.getTime() - MISSION_CLOSED_PR_SLOT_HOLD_MS);
     return [
         {
-            ...base,
+            ...work,
             status: Not(
                 In([TaskStatus.DONE, TaskStatus.CANCELLED, ...MISSION_WAITING_ON_PR_STATUSES]),
             ),
@@ -1428,10 +1441,14 @@ export class MissionTickService {
                 status: requireApproval ? TaskStatus.BACKLOG : TaskStatus.TODO,
                 createdByType: 'user',
                 createdById: mission.userId,
-                // The Task carries text planned from the Mission's description, so a private
-                // Mission's Tasks are private too, as a private Goal's iterations are (review
-                // 2026-10-17 F1). Any other Mission's Tasks keep the insert-time default.
+                // The Task carries text planned from the Mission's description, so it takes the
+                // Mission's sharing: a private Mission's Tasks are private too, as a private
+                // Goal's iterations are (review 2026-10-17 F1), and a Team Mission's sit on the
+                // Mission's Teams with `team` visibility (`derivedFrom`, read fresh at create):
+                // the Mission's Teams, plus the Work's members as for any `team` Task. An
+                // Organization Mission's keep the insert-time default.
                 derivedFromPrivate: mission.visibility === 'private',
+                derivedFrom: { aggregate: 'mission', id: mission.id },
                 ...(output.agentId ? { agentId: output.agentId } : {}),
             };
             const task = scope

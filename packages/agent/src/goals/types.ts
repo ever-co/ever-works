@@ -26,6 +26,8 @@ import { summarizeDoD, type GoalDoDSummary } from './goal-dod';
  * (advance-path re-clamp) can import it without a service-file cycle.
  */
 export const MIN_CHECK_FREQUENCY_MINUTES = 15;
+/** One year. Bounds `goal.check_frequency_minutes` (an int column): 3e9 overflowed it. */
+export const MAX_CHECK_FREQUENCY_MINUTES = 525_600;
 export const DEFAULT_CHECK_FREQUENCY_MINUTES = 60;
 
 /**

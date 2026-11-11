@@ -157,7 +157,8 @@ export interface ExportedTask {
     chat?: ExportedTaskChatMessage[];
     // NOTE — the Task BRANCH columns (`branchRef`, `branchState`,
     // `baseSha`, `prNumber`, `prUrl`, `conflictPaths`), the PR-status
-    // cache (`prState`, `ciState`, `ciCheckedAt`, `prChecks` — kanban M5)
+    // cache (`prState`, `ciState`, `ciCheckedAt`, `prChecks` — kanban M5,
+    // and the sweep's retry memory `prReadRetryAt` / `prNotFoundSince`)
     // and the latest-run denorm (`latestRunId`, `latestRunStatus`) are
     // DELIBERATELY absent,
     // and that omission is correct rather than the usual "new column

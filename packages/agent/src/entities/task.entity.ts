@@ -308,7 +308,13 @@ export class Task {
     // PR. Plan 04 §4.1 put them on AgentRun; this is the same documented
     // deviation Wave 2 already made, kept consistent on purpose.
 
-    /** `open | draft | closed | merged` as last observed from the provider. */
+    /**
+     * `open | draft | closed | merged` as last observed from the provider, or
+     * `not_found` once the provider has kept answering "not found" for the pull
+     * request (`TASK_PR_NOT_FOUND_STATE`). The sweep polls null / open / draft,
+     * and re-reads `not_found` every 6 hours; `closed` / `merged` are terminal.
+     * A read that fails (throws) never writes it (`prReadRetryAt`).
+     */
     @Column({ type: 'varchar', length: 16, nullable: true })
     prState?: string | null;
 
@@ -319,6 +325,28 @@ export class Task {
     /** When the PR status was last refreshed — drives the sync throttle. */
     @PortableDateColumn({ nullable: true })
     ciCheckedAt?: Date | null;
+
+    /**
+     * The PR-status sweep does not read this pull request again before this instant. Set after a
+     * read that did not succeed: the provider call threw (backoff from 2 minutes doubling to 6
+     * hours, `prReadRetryDelayMs`), the owner's connection was rate limited (every pull request
+     * read with it waits for the provider's reset), or a "not found" answer is not confirmed
+     * yet. NULL, the normal case, means the sweep's usual cadence (`ciCheckedAt`). Cleared by a
+     * successful read and by the read that records `not_found`. Never changes `prState`: a failed
+     * read is not an answer about the pull request.
+     */
+    @PortableDateColumn({ nullable: true })
+    prReadRetryAt?: Date | null;
+
+    /**
+     * When the provider FIRST answered "not found" for this pull request since it was last read
+     * successfully. `not_found` is recorded only once this is `TASK_PR_NOT_FOUND_CONFIRM_MS` (30
+     * minutes) old and the provider still answers "not found", however long the sweep went
+     * without reading the pull request before that first answer. Cleared by a successful read and
+     * by the read that records `not_found`; a read that throws leaves it alone.
+     */
+    @PortableDateColumn({ nullable: true })
+    prNotFoundSince?: Date | null;
 
     /** Bounded check summary for the pill tooltip (plain text names only). */
     @Column({ type: 'simple-json', nullable: true })

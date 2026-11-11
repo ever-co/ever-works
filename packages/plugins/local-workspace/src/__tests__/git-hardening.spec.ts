@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
 	checkoutHardeningEntries,
 	checkoutHardeningEnv,
+	FAST_FORWARD_ENV,
+	fastForwardHardeningEntries,
 	finalizeHardeningEntries,
 	gitConfigEnvOverlay,
 	parseFilterDriverConfig
@@ -97,5 +99,37 @@ describe('gitConfigEnvOverlay', () => {
 			GIT_CONFIG_VALUE_2: 'false'
 		});
 		expect(gitConfigEnvOverlay([['a.b', 'c']], { GIT_CONFIG_COUNT: 'junk' }).GIT_CONFIG_KEY_0).toBe('a.b');
+	});
+});
+
+describe('fastForwardHardeningEntries / FAST_FORWARD_ENV — the reused-worktree catch-up', () => {
+	it('pins everything the checkout overlay pins, plus every other program-running key of its commands', () => {
+		const entries = new Map(
+			fastForwardHardeningEntries('/tmp/no-hooks', [
+				{ scope: 'worktree', driver: 'evil', key: 'clean', value: 'run-me' }
+			])
+		);
+		// The checkout overlay, with the driver found FROM THE WORKTREE emptied.
+		expect(entries.get('core.hooksPath')).toBe('/tmp/no-hooks');
+		expect(entries.get('core.fsmonitor')).toBe('false');
+		expect(entries.get('protocol.ext.allow')).toBe('never');
+		expect(entries.get('submodule.recurse')).toBe('false');
+		expect(entries.get('filter.evil.clean')).toBe('');
+		expect(entries.get('filter.evil.required')).toBe('false');
+		expect(entries.get('filter.lfs.smudge')).toBe('');
+		// And the rest: no signature check, no automatic maintenance, no
+		// external diff, no credential program, no env stripping.
+		expect(entries.get('merge.verifySignatures')).toBe('false');
+		expect(entries.get('gc.auto')).toBe('0');
+		expect(entries.get('maintenance.auto')).toBe('false');
+		expect(entries.get('diff.external')).toBe('');
+		expect(entries.get('core.askPass')).toBe('');
+		expect(entries.get('credential.helper')).toBe('');
+		expect(entries.get('core.alternateRefsCommand')).toBe('');
+		expect(entries.get('core.unsetEnvVars')).toBe('PERL5LIB');
+	});
+
+	it('allows no transport and no lazy fetch', () => {
+		expect(FAST_FORWARD_ENV).toMatchObject({ GIT_ALLOW_PROTOCOL: '', GIT_NO_LAZY_FETCH: '1' });
 	});
 });

@@ -328,3 +328,148 @@ describe('KbController — non-session KB writes land proposed', () => {
         expect(kb.updateDocument.mock.calls[0][3].reviewState).toBeUndefined();
     });
 });
+
+describe('KbController — duplicate (the KB tree menu called a route that did not exist)', () => {
+    const auth = { userId: 'u-1', authMethod: 'session' } as AuthenticatedUser;
+    const source = {
+        id: DOC_ID,
+        path: 'brand/voice.md',
+        title: 'Voice',
+        class: 'brand',
+        body: '# Voice\n\nWe write plainly.',
+        description: 'How we write',
+        tags: ['tone'],
+        categories: ['style'],
+        language: 'en',
+        locked: true,
+    };
+    let kb: Record<string, jest.Mock>;
+    let controller: KbController;
+
+    beforeEach(() => {
+        kb = {
+            getDocument: jest.fn().mockResolvedValue(source),
+            createDocument: jest
+                .fn()
+                .mockResolvedValue({ id: 'copy-1', path: 'brand/voice-copy.md' }),
+        };
+        controller = new KbController(kb as unknown as KnowledgeBaseService);
+    });
+
+    it('is a POST on works/:id/kb/documents/:docId/duplicate answering 201', () => {
+        const handler = KbController.prototype.duplicateDocument;
+        expect(Reflect.getMetadata(PATH_METADATA, handler)).toBe(
+            'works/:id/kb/documents/:docId/duplicate',
+        );
+        expect(Reflect.getMetadata(METHOD_METADATA, handler)).toBe(RequestMethod.POST);
+        expect(Reflect.getMetadata(HTTP_CODE_METADATA, handler)).toBe(HttpStatus.CREATED);
+    });
+
+    it('creates a copy through the create path with the source content', async () => {
+        const result = await controller.duplicateDocument(auth, WORK_ID, DOC_ID, {
+            path: 'brand/voice-copy.md',
+        });
+
+        expect(kb.getDocument).toHaveBeenCalledWith(WORK_ID, DOC_ID, 'u-1');
+        expect(kb.createDocument).toHaveBeenCalledWith(
+            expect.objectContaining({
+                workId: WORK_ID,
+                userId: 'u-1',
+                path: 'brand/voice-copy.md',
+                title: 'Voice (copy)',
+                class: 'brand',
+                body: source.body,
+                description: 'How we write',
+                tags: ['tone'],
+                categories: ['style'],
+                language: 'en',
+            }),
+        );
+        // A copy is a new document: the source's lock is not carried over.
+        expect(kb.createDocument.mock.calls[0][0]).not.toHaveProperty('locked');
+        expect(result).toEqual({ id: 'copy-1', path: 'brand/voice-copy.md' });
+    });
+
+    it('defaults the path to the source (the create path picks a free name) and keeps a given title', async () => {
+        await controller.duplicateDocument(auth, WORK_ID, DOC_ID, { title: 'Voice v2' });
+        expect(kb.createDocument.mock.calls[0][0]).toMatchObject({
+            path: 'brand/voice.md',
+            title: 'Voice v2',
+        });
+    });
+
+    // Review of #3167: Duplicate read as a copy, yet it was an approval. An
+    // unreviewed agent document's copy landed accepted and user-authored, and a
+    // draft or archived source's copy landed active — both reached agent context.
+    it('keeps an unreviewed agent source unreviewed and agent-authored', async () => {
+        kb.getDocument.mockResolvedValue({
+            ...source,
+            status: 'active',
+            source: 'agent',
+            reviewState: 'proposed',
+        });
+        await controller.duplicateDocument(auth, WORK_ID, DOC_ID, {}, {});
+        expect(kb.createDocument.mock.calls[0][0]).toMatchObject({
+            reviewState: 'proposed',
+            source: 'agent',
+            status: 'active',
+        });
+    });
+
+    it.each(['draft', 'archived'])(
+        'the copy of a source in status %s keeps it (out of agent context)',
+        async (status) => {
+            kb.getDocument.mockResolvedValue({ ...source, status, source: 'user' });
+            await controller.duplicateDocument(auth, WORK_ID, DOC_ID, {}, {});
+            expect(kb.createDocument.mock.calls[0][0].status).toBe(status);
+        },
+    );
+
+    it('keeps an accepted agent source accepted (agent provenance alone would make it proposed)', async () => {
+        kb.getDocument.mockResolvedValue({
+            ...source,
+            status: 'active',
+            source: 'agent',
+            reviewState: 'accepted',
+        });
+        await controller.duplicateDocument(auth, WORK_ID, DOC_ID, {}, {});
+        expect(kb.createDocument.mock.calls[0][0]).toMatchObject({
+            reviewState: 'accepted',
+            source: 'agent',
+            status: 'active',
+        });
+    });
+
+    it('never raises a copy: an accepted source copied with a personal key lands proposed', async () => {
+        const personalKey = { userId: 'u-1', authMethod: 'api-key' } as AuthenticatedUser;
+        const previous = process.env.KB_NON_SESSION_WRITES_PROPOSED;
+        delete process.env.KB_NON_SESSION_WRITES_PROPOSED;
+        try {
+            kb.getDocument.mockResolvedValue({
+                ...source,
+                status: 'active',
+                source: 'agent',
+                reviewState: 'accepted',
+            });
+            await controller.duplicateDocument(personalKey, WORK_ID, DOC_ID, {}, {});
+            expect(kb.createDocument.mock.calls[0][0].reviewState).toBe('proposed');
+        } finally {
+            if (previous === undefined) delete process.env.KB_NON_SESSION_WRITES_PROPOSED;
+            else process.env.KB_NON_SESSION_WRITES_PROPOSED = previous;
+        }
+    });
+
+    it('a human copy of an accepted user document stays accepted (no override)', async () => {
+        kb.getDocument.mockResolvedValue({
+            ...source,
+            status: 'active',
+            source: 'user',
+            reviewState: 'accepted',
+        });
+        await controller.duplicateDocument(auth, WORK_ID, DOC_ID, {}, {});
+        const input = kb.createDocument.mock.calls[0][0];
+        expect(input.reviewState).toBeUndefined();
+        expect(input.source).toBeUndefined();
+        expect(input.status).toBe('active');
+    });
+});

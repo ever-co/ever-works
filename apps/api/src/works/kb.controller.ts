@@ -50,6 +50,7 @@ import {
     type MachinePrincipalRequest,
 } from '../auth/machine-principal';
 import { AuthenticatedUser } from '@src/auth/types/auth.types';
+import { DuplicateKbDocumentDto } from './dto/duplicate-kb-document.dto';
 import type {
     KbDecisionStatus,
     KbDocumentClass,
@@ -295,6 +296,60 @@ export class KbController {
         @Param('docIdOrPath') docIdOrPath: string,
     ) {
         return this.kb.getDocument(workId, docIdOrPath, auth.userId);
+    }
+
+    /**
+     * Copy a KB document — the KB tree's "Duplicate". Composed from the read
+     * and create paths, so the copy gets everything a new document gets (path
+     * validation and collision handling, the git mirror, embeddings, authoring
+     * fields). The copy is a new, unlocked document: body, class, description,
+     * tags, categories and language are copied; history and assets are not.
+     *
+     * A copy keeps the source's standing, so Duplicate is never an approval
+     * or a restore: its `status` (a draft or archived source stays out of
+     * agent context), its review state (a `proposed` source's copy is
+     * `proposed`) and its `agent` provenance. The usual authoring rules still
+     * apply on top, so a machine or non-session caller's copy lands
+     * `proposed` whatever the source was.
+     */
+    @Post('works/:id/kb/documents/:docId/duplicate')
+    @HttpCode(HttpStatus.CREATED)
+    @ApiOperation({ summary: 'Duplicate a KB document' })
+    @ApiResponse({ status: 201, description: 'The copy' })
+    async duplicateDocument(
+        @CurrentUser() auth: AuthenticatedUser,
+        @Param('id', new ParseUUIDPipe()) workId: string,
+        @Param('docId', new ParseUUIDPipe()) docId: string,
+        @Body() body: DuplicateKbDocumentDto,
+        @Req() req?: MachinePrincipalRequest,
+    ) {
+        const source = await this.kb.getDocument(workId, docId, auth.userId);
+        // `authoredKbFields` only ever honours `proposed` and `agent`: it can
+        // lower the copy's standing, never raise it.
+        const authored = authoredKbFields(auth, req, {
+            reviewState: source.reviewState ?? undefined,
+            source: source.source,
+        });
+        // `source: 'agent'` alone makes the create path derive `proposed`; a
+        // copy of an agent document a person already accepted stays accepted
+        // (unless a rule above made it `proposed`).
+        if (authored.source === 'agent' && !authored.reviewState) {
+            authored.reviewState = 'accepted' as KbReviewState;
+        }
+        return this.kb.createDocument({
+            workId,
+            userId: auth.userId,
+            path: body.path?.trim() || source.path,
+            title: (body.title?.trim() || `${source.title} (copy)`).slice(0, 255),
+            class: source.class as KbDocumentClass,
+            body: source.body,
+            description: source.description ?? null,
+            tags: source.tags,
+            categories: source.categories,
+            language: source.language,
+            status: source.status as KbDocumentStatus,
+            ...authored,
+        });
     }
 
     @Patch('works/:id/kb/documents/:docId')

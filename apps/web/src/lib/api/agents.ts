@@ -4,7 +4,7 @@ import type {
     MergePolicyOverride,
     RecordListView,
 } from '@ever-works/contracts';
-import { serverFetch, serverMutation } from './server-api';
+import { ApiResponseError, serverFetch, serverMutation } from './server-api';
 
 /**
  * Agents/Skills/Tasks PR #1017 — Phase 5 web client mirroring the
@@ -377,6 +377,25 @@ export const agentsAPI = {
             return await serverFetch<Agent>(`/agents/${id}`, { method: 'GET' });
         } catch {
             return null;
+        }
+    },
+
+    /**
+     * {@link get} that tells a 404 (`missing`: deleted, or no longer the caller's)
+     * from a read that failed (`unknown`), which `get` answers alike as `null`.
+     */
+    async lookup(
+        id: string,
+    ): Promise<{ status: 'found'; agent: Agent } | { status: 'missing' } | { status: 'unknown' }> {
+        try {
+            const agent = await serverFetch<Agent>(`/agents/${encodeURIComponent(id)}`, {
+                method: 'GET',
+            });
+            return { status: 'found', agent };
+        } catch (error) {
+            return error instanceof ApiResponseError && error.statusCode === 404
+                ? { status: 'missing' }
+                : { status: 'unknown' };
         }
     },
 

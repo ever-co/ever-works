@@ -1,5 +1,6 @@
 import { NotFoundException } from '@nestjs/common';
 import { PR_STATUS_REFRESH_FLOOR_SECONDS, TaskPrStatusService } from '../task-pr-status.service';
+import { TASK_PR_NOT_FOUND_CONFIRM_MS } from '../task-open-work';
 import { TaskStatus } from '../../entities/task.entity';
 import type { Task } from '../../entities/task.entity';
 import type { TaskRepository } from '../../database/repositories/task.repository';
@@ -36,6 +37,8 @@ describe('TaskPrStatusService', () => {
         updatePrStatusCache: jest.Mock;
         updateById: jest.Mock;
         recordCiHead: jest.Mock;
+        findOpenPrReadsOfOwner: jest.Mock;
+        deferPrReads: jest.Mock;
     };
     let autoResume: { onCheckResult: jest.Mock };
     let works: { findById: jest.Mock };
@@ -88,6 +91,9 @@ describe('TaskPrStatusService', () => {
             // poll is the second writer of the head pair, through the same
             // monotonic compare-and-set the webhook uses.
             recordCiHead: jest.fn().mockResolvedValue(true),
+            // A rate limit defers the owner's reads made with the same credential (rule 4).
+            findOpenPrReadsOfOwner: jest.fn().mockResolvedValue([]),
+            deferPrReads: jest.fn(async (ids: string[]) => ids.length),
         };
         works = {
             findById: jest.fn().mockResolvedValue({
@@ -233,21 +239,220 @@ describe('TaskPrStatusService', () => {
         const view = await service.getForTask(USER, 'task-1', { refresh: true });
 
         expect(view.ciState).toBe('failing');
-        expect(tasks.updatePrStatusCache).not.toHaveBeenCalled();
+        // Only when to try again: nothing the read would have answered.
+        expect(tasks.updatePrStatusCache).toHaveBeenCalledTimes(1);
+        expect(tasks.updatePrStatusCache.mock.calls[0][1]).toEqual({
+            prReadRetryAt: expect.any(Date),
+        });
     });
 
-    it('stamps the read time (not the state) when the PR vanished upstream', async () => {
-        tasks.findByIdAndUser.mockResolvedValue(makeTask({ ciCheckedAt: new Date(0) }));
+    it('records "not found" once it has persisted, clearing the CI cache of the PR nobody can see', async () => {
+        // The FIRST "not found" was more than the confirm window ago, and it still answers so.
+        tasks.findByIdAndUser.mockResolvedValue(
+            makeTask({
+                ciCheckedAt: new Date(0),
+                prNotFoundSince: new Date(Date.now() - TASK_PR_NOT_FOUND_CONFIRM_MS - 60_000),
+                ciState: 'failing',
+                prChecks: [{ name: 'build', status: 'completed', conclusion: 'failure' }],
+            }),
+        );
         git.getPullRequestStatus.mockResolvedValue(null);
 
-        await service.getForTask(USER, 'task-1', { refresh: true });
+        const view = await service.getForTask(USER, 'task-1', { refresh: true });
+
+        expect(tasks.updatePrStatusCache).toHaveBeenCalledTimes(1);
+        const patch = tasks.updatePrStatusCache.mock.calls[0][1];
+        expect(patch).toEqual({
+            prState: 'not_found',
+            ciState: null,
+            prChecks: null,
+            ciCheckedAt: expect.any(Date),
+            prReadRetryAt: null,
+            prNotFoundSince: null,
+        });
+        expect(view).toMatchObject({ prState: 'not_found', ciState: null, checks: [] });
+        // No head, no merge, no branch chip.
+        expect(tasks.recordCiHead).not.toHaveBeenCalled();
+        expect(tasks.updateById).not.toHaveBeenCalled();
+        expect(mergeGate.onPullRequestStatusRefreshed).not.toHaveBeenCalled();
+    });
+
+    it('writes only the first answer and the next read for a "not found" that has not persisted: the cache is untouched', async () => {
+        // Last read successfully hours ago: what counts is the FIRST "not found", which is this one.
+        const now = new Date('2026-11-11T10:00:00.000Z');
+        service.clock = () => now;
+        tasks.findDuePrStatusSync.mockResolvedValue([
+            makeTask({ ciCheckedAt: new Date(now.getTime() - 3 * 3_600_000), ciState: 'passing' }),
+        ]);
+        git.getPullRequestStatus.mockResolvedValue(null);
+
+        const summary = await service.syncDuePrStatuses();
+
+        expect(git.getPullRequestStatus).toHaveBeenCalledTimes(1);
+        expect(tasks.updatePrStatusCache).toHaveBeenCalledTimes(1);
+        // Asked again when the 30 minutes since that answer are up (the backoff would be 3 h).
+        expect(tasks.updatePrStatusCache.mock.calls[0][1]).toEqual({
+            prNotFoundSince: now,
+            prReadRetryAt: new Date(now.getTime() + TASK_PR_NOT_FOUND_CONFIRM_MS),
+        });
+        expect(summary).toMatchObject({ scanned: 1, refreshed: 1, failed: 0 });
+
+        // Found again on the next read: an ordinary refresh, which ends the "not found" run.
+        git.getPullRequestStatus.mockResolvedValue(openStatus);
+        await service.syncDuePrStatuses();
+        expect(tasks.updatePrStatusCache).toHaveBeenLastCalledWith(
+            'task-1',
+            expect.objectContaining({
+                prState: 'open',
+                ciState: 'passing',
+                prReadRetryAt: null,
+                prNotFoundSince: null,
+            }),
+        );
+    });
+
+    it('never offers a "not found" read to the CI fix loop, even with a stale failing cache', async () => {
+        const failingChecks = [
+            {
+                name: 'build',
+                status: 'completed',
+                conclusion: 'failure',
+                appSlug: 'github-actions',
+            },
+        ];
+        const recently = new Date(Date.now() - 60_000);
+        // Everything the re-offer needs (a red cache from an allow-listed app, a recorded head):
+        // only the "not found" answer stands between these Tasks and the fix loop.
+        tasks.findDuePrStatusSync.mockResolvedValue([
+            // Not persisted yet: the cache (red) is left as it was.
+            makeTask({
+                ciCheckedAt: recently,
+                ciState: 'failing',
+                prChecks: failingChecks,
+                ciHeadSha: 'deadbeef',
+            }),
+            // Persisted: recorded `not_found`.
+            makeTask({
+                id: 'task-2',
+                ciCheckedAt: new Date(0),
+                prNotFoundSince: new Date(0),
+                ciState: 'failing',
+                prChecks: failingChecks,
+                ciHeadSha: 'deadbeef',
+            }),
+        ]);
+        git.getPullRequestStatus.mockResolvedValue(null);
+
+        await service.syncDuePrStatuses();
+
+        expect(autoResume.onCheckResult).not.toHaveBeenCalled();
+
+        // Control: the same red Task, answered for, IS re-offered.
+        git.getPullRequestStatus.mockResolvedValue({
+            ...openStatus,
+            ciState: 'failing',
+            headSha: 'deadbeef',
+            checks: failingChecks as never,
+        });
+        tasks.findDuePrStatusSync.mockResolvedValue([
+            makeTask({
+                ciCheckedAt: recently,
+                ciState: 'failing',
+                prChecks: failingChecks,
+                ciHeadSha: 'deadbeef',
+            }),
+        ]);
+        await service.syncDuePrStatuses();
+        expect(autoResume.onCheckResult).toHaveBeenCalledTimes(1);
+    });
+
+    it('re-reads a "not found" PR on the sweep only to stamp the read while it stays gone', async () => {
+        tasks.findDuePrStatusSync.mockResolvedValue([
+            makeTask({ prState: 'not_found', ciState: null, ciCheckedAt: new Date(0) }),
+        ]);
+        git.getPullRequestStatus.mockResolvedValue(null);
+
+        await service.syncDuePrStatuses();
+
+        expect(tasks.updatePrStatusCache).toHaveBeenCalledTimes(1);
+        expect(tasks.updatePrStatusCache.mock.calls[0][1]).toEqual({
+            ciCheckedAt: expect.any(Date),
+            prReadRetryAt: null,
+            prNotFoundSince: null,
+        });
+    });
+
+    it('a "not found" PR the sweep finds merged again completes its Task', async () => {
+        tasks.findDuePrStatusSync.mockResolvedValue([
+            makeTask({ prState: 'not_found', ciState: null, ciCheckedAt: new Date(0) }),
+        ]);
+        git.getPullRequestStatus.mockResolvedValue({
+            ...openStatus,
+            state: 'merged',
+            merged: true,
+        });
+
+        const summary = await service.syncDuePrStatuses();
 
         expect(tasks.updatePrStatusCache).toHaveBeenCalledWith(
             'task-1',
-            expect.objectContaining({ ciCheckedAt: expect.any(Date) }),
+            expect.objectContaining({ prState: 'merged' }),
         );
-        const patch = tasks.updatePrStatusCache.mock.calls[0][1];
-        expect(patch.prState).toBeUndefined();
+        expect(transitions.transition).toHaveBeenCalledWith(
+            expect.objectContaining({ id: 'task-1', prState: 'merged' }),
+            TaskStatus.DONE,
+            expect.objectContaining({ actorType: 'agent' }),
+        );
+        expect(summary).toMatchObject({ merged: 1, completed: 1 });
+    });
+
+    it('serves a "not found" PR from the cache on demand: the sweep is its recovery path', async () => {
+        tasks.findByIdAndUser.mockResolvedValue(
+            makeTask({ prState: 'not_found', ciState: null, ciCheckedAt: new Date(0) }),
+        );
+
+        const view = await service.getForTask(USER, 'task-1', { refresh: true });
+
+        expect(git.getPullRequestStatus).not.toHaveBeenCalled();
+        expect(view).toMatchObject({ prState: 'not_found', cached: true });
+    });
+
+    it('records task.runtime_updated when a PR goes "not found", and not again while it stays gone', async () => {
+        const runtime = jest.fn().mockResolvedValue(undefined);
+        const domainEvents = {
+            transaction: jest.fn(async (fn: (manager: unknown) => Promise<unknown>) => fn({})),
+            runtime,
+        };
+        const withEvents = new TaskPrStatusService(
+            tasks as unknown as TaskRepository,
+            works as unknown as WorkRepository,
+            git as unknown as GitFacadeService,
+            transitions as unknown as TaskTransitionService,
+            mergeGate as unknown as TaskMergeGateService,
+            autoResume as unknown as TaskCiAutoResumeService,
+            undefined,
+            domainEvents as never,
+        );
+        git.getPullRequestStatus.mockResolvedValue(null);
+
+        tasks.findDuePrStatusSync.mockResolvedValue([
+            makeTask({ ciCheckedAt: new Date(0), prNotFoundSince: new Date(0) }),
+        ]);
+        await withEvents.syncDuePrStatuses();
+        expect(runtime).toHaveBeenCalledTimes(1);
+        expect(runtime).toHaveBeenCalledWith(
+            {},
+            'task-1',
+            expect.objectContaining({
+                previous: { runtime: { prState: 'open', ciState: 'pending' } },
+            }),
+        );
+
+        tasks.findDuePrStatusSync.mockResolvedValue([
+            makeTask({ prState: 'not_found', ciState: null, ciCheckedAt: new Date(0) }),
+        ]);
+        await withEvents.syncDuePrStatuses();
+        expect(runtime).toHaveBeenCalledTimes(1);
     });
 
     it('mirrors a landed PR onto the branch chip', async () => {
@@ -338,7 +543,13 @@ describe('TaskPrStatusService', () => {
 
         const summary = await service.syncDuePrStatuses({ limit: 10, staleSeconds: 60 });
 
-        expect(tasks.findDuePrStatusSync).toHaveBeenCalledWith(expect.any(Date), 10);
+        // The tick's instants: stale before, batch, the "not found" lane, and retries due by now.
+        expect(tasks.findDuePrStatusSync).toHaveBeenCalledWith(
+            expect.any(Date),
+            10,
+            expect.any(Date),
+            expect.any(Date),
+        );
         expect(summary).toMatchObject({ scanned: 2, refreshed: 2, merged: 0, failed: 0 });
     });
 
@@ -408,7 +619,160 @@ describe('TaskPrStatusService', () => {
 
         const summary = await service.syncDuePrStatuses();
 
-        expect(summary).toMatchObject({ scanned: 2, refreshed: 1, failed: 1 });
+        expect(summary).toMatchObject({ scanned: 2, refreshed: 1, failed: 1, deferred: 0 });
+        // "rate limited" in a message with no status is an ordinary failure: one row backs off.
+        expect(tasks.deferPrReads).not.toHaveBeenCalled();
+        expect(tasks.updatePrStatusCache).toHaveBeenCalledWith('task-a', {
+            prReadRetryAt: expect.any(Date),
+        });
+    });
+
+    // ── A read that does not succeed (rule 4) ────────────────────────
+
+    describe('a read that does not succeed', () => {
+        const NOW = new Date('2026-11-11T10:00:00.000Z');
+        const MINUTE = 60_000;
+        beforeEach(() => {
+            service.clock = () => NOW;
+        });
+
+        it('backs the row off by as long as the pull request has gone unseen, and writes nothing it would have answered', async () => {
+            tasks.findDuePrStatusSync.mockResolvedValue([
+                makeTask({
+                    ciCheckedAt: new Date(NOW.getTime() - 10 * MINUTE),
+                    ciState: 'failing',
+                }),
+            ]);
+            git.getPullRequestStatus.mockRejectedValue(
+                Object.assign(new Error('Bad credentials'), { status: 401 }),
+            );
+
+            const summary = await service.syncDuePrStatuses();
+
+            expect(summary).toMatchObject({ scanned: 1, refreshed: 0, failed: 1, deferred: 0 });
+            expect(tasks.updatePrStatusCache).toHaveBeenCalledTimes(1);
+            expect(tasks.updatePrStatusCache).toHaveBeenCalledWith('task-1', {
+                prReadRetryAt: new Date(NOW.getTime() + 10 * MINUTE),
+            });
+            expect(tasks.deferPrReads).not.toHaveBeenCalled();
+            expect(mergeGate.onPullRequestStatusRefreshed).not.toHaveBeenCalled();
+        });
+
+        it('a Work that cannot be resolved backs off too, instead of heading every batch', async () => {
+            works.findById.mockResolvedValue(null);
+            tasks.findDuePrStatusSync.mockResolvedValue([makeTask({ ciCheckedAt: null })]);
+
+            const summary = await service.syncDuePrStatuses();
+
+            expect(git.getPullRequestStatus).not.toHaveBeenCalled();
+            expect(summary).toMatchObject({ failed: 1 });
+            expect(tasks.updatePrStatusCache).toHaveBeenCalledWith('task-1', {
+                prReadRetryAt: expect.any(Date),
+            });
+        });
+
+        it('never moves a wait already set further out (a rate-limit deferral) sooner', async () => {
+            const later = new Date(NOW.getTime() + 50 * MINUTE);
+            tasks.findByIdAndUser.mockResolvedValue(
+                makeTask({
+                    ciCheckedAt: new Date(NOW.getTime() - 3 * MINUTE),
+                    prReadRetryAt: later,
+                }),
+            );
+            git.getPullRequestStatus.mockRejectedValue(
+                Object.assign(new Error('Bad gateway'), { status: 502 }),
+            );
+
+            await service.getForTask(USER, 'task-1', { refresh: true });
+
+            expect(git.getPullRequestStatus).toHaveBeenCalledTimes(1);
+            expect(tasks.updatePrStatusCache).not.toHaveBeenCalled();
+        });
+
+        it('a rate limit defers the owner’s reads made with the same credential, skips them without a call, and refills the batch once', async () => {
+            const resetAt = new Date(NOW.getTime() + 30 * MINUTE);
+            // The owner's open pull requests: task-a and task-b on the failing Work, task-e on
+            // another installation, task-f already backing off past the reset.
+            const installation = (installationId: string) => ({
+                id: `work-${installationId}`,
+                gitProvider: 'github',
+                taskIsolationBaseBranch: 'develop',
+                sourceRepository: {
+                    auth: { mode: 'github_app_installation', providerId: 'github', installationId },
+                },
+                getRepoOwner: () => 'acme',
+                getDataRepo: () => 'widgets',
+            });
+            works.findById.mockImplementation(async (id: string) =>
+                id === 'work-other' ? installation('other') : installation('spent'),
+            );
+            tasks.findOpenPrReadsOfOwner.mockResolvedValue([
+                { id: 'task-a', workId: WORK, prState: 'open', ciCheckedAt: null },
+                { id: 'task-b', workId: WORK, prState: 'open', ciCheckedAt: null },
+                { id: 'task-e', workId: 'work-other', prState: 'open', ciCheckedAt: null },
+                {
+                    id: 'task-f',
+                    workId: WORK,
+                    prState: 'open',
+                    ciCheckedAt: null,
+                    prReadRetryAt: new Date(resetAt.getTime() + MINUTE),
+                },
+            ]);
+            tasks.findDuePrStatusSync
+                .mockResolvedValueOnce([
+                    makeTask({ id: 'task-a' }),
+                    makeTask({ id: 'task-b' }),
+                    makeTask({ id: 'task-c', userId: 'user-2' }),
+                ])
+                .mockResolvedValueOnce([makeTask({ id: 'task-d', userId: 'user-3' })]);
+            git.getPullRequestStatus
+                .mockRejectedValueOnce(
+                    Object.assign(new Error('API rate limit exceeded'), {
+                        status: 403,
+                        response: {
+                            headers: {
+                                'x-ratelimit-remaining': '0',
+                                'x-ratelimit-reset': String(resetAt.getTime() / 1000),
+                            },
+                        },
+                    }),
+                )
+                .mockResolvedValue(openStatus);
+
+            const summary = await service.syncDuePrStatuses({ limit: 3 });
+
+            expect(tasks.findOpenPrReadsOfOwner).toHaveBeenCalledWith(USER);
+            expect(tasks.deferPrReads).toHaveBeenCalledWith(['task-a', 'task-b'], resetAt);
+            // task-a hit the limit; task-b (same owner) is not asked; task-c and the refill's
+            // task-d are.
+            expect(git.getPullRequestStatus).toHaveBeenCalledTimes(3);
+            expect(tasks.findDuePrStatusSync).toHaveBeenCalledTimes(2);
+            expect(tasks.findDuePrStatusSync.mock.calls[1][1]).toBe(1);
+            expect(summary).toMatchObject({
+                scanned: 4,
+                refreshed: 2,
+                failed: 1,
+                deferred: 1,
+            });
+            // A rate limit is about the credential: this row gets no backoff of its own.
+            expect(tasks.updatePrStatusCache).not.toHaveBeenCalledWith('task-a', expect.anything());
+        });
+
+        it('serves the cache on demand while a failed read backs off; an explicit refresh still asks', async () => {
+            tasks.findByIdAndUser.mockResolvedValue(
+                makeTask({
+                    ciCheckedAt: new Date(NOW.getTime() - 3 * MINUTE),
+                    prReadRetryAt: new Date(NOW.getTime() + MINUTE),
+                }),
+            );
+
+            const cached = await service.getForTask(USER, 'task-1');
+            expect(cached.cached).toBe(true);
+            expect(git.getPullRequestStatus).not.toHaveBeenCalled();
+
+            await service.getForTask(USER, 'task-1', { refresh: true });
+            expect(git.getPullRequestStatus).toHaveBeenCalledTimes(1);
+        });
     });
 
     /**

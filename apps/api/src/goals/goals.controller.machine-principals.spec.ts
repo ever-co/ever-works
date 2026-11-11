@@ -32,6 +32,8 @@ function build() {
         setDodCriteria: jest.fn().mockResolvedValue({ id: GOAL }),
         approveDodCriteria: jest.fn().mockResolvedValue({ id: GOAL }),
         patchDodCriterion: jest.fn().mockResolvedValue({ id: GOAL }),
+        addDodCriterion: jest.fn().mockResolvedValue({ id: GOAL }),
+        removeDodCriterion: jest.fn().mockResolvedValue({ id: GOAL }),
     };
     const controller = new GoalsController(service as never, orchestrator as never);
     return { controller, service, orchestrator };
@@ -274,6 +276,57 @@ describe('GoalsController — run-token scope (Goal fields, DoD sign-off)', () =
         await controller.patchDodCriterion(personalKey, GOAL, 'c1', { text: 'Clearer' } as never);
         await controller.patchDodCriterion(session, GOAL, 'c1', { status: 'done' } as never);
         expect(orchestrator.patchDodCriterion).toHaveBeenCalledTimes(3);
+    });
+
+    describe('add / remove ONE criterion (review of #3172)', () => {
+        const current = [
+            { id: 'a', text: 'A', status: 'done' },
+            { id: 'b', text: 'B', status: 'open' },
+            { id: 'p', text: 'P', status: 'open', proposed: true, source: 'planner' },
+        ];
+        function withCurrent() {
+            const built = build();
+            built.service.getForUser.mockResolvedValue({ id: GOAL, dodCriteria: current });
+            return built;
+        }
+
+        it('hands the one change to the service, which applies it to the list as stored', async () => {
+            const { controller, orchestrator } = withCurrent();
+            await controller.addDodCriterion(session, GOAL, { text: 'Write docs' } as never);
+            expect(orchestrator.addDodCriterion).toHaveBeenCalledWith('u1', GOAL, 'Write docs');
+            await controller.removeDodCriterion(session, GOAL, 'b');
+            expect(orchestrator.removeDodCriterion).toHaveBeenCalledWith('u1', GOAL, 'b');
+            // Never the whole-list replace.
+            expect(orchestrator.setDodCriteria).not.toHaveBeenCalled();
+        });
+
+        it('refuses both from a fleet run', async () => {
+            const { controller, orchestrator } = withCurrent();
+            await expect(
+                controller.addDodCriterion(personalKey, GOAL, { text: 'X' } as never, runToken),
+            ).rejects.toBeInstanceOf(ForbiddenException);
+            await expect(
+                controller.removeDodCriterion(personalKey, GOAL, 'p', runToken),
+            ).rejects.toBeInstanceOf(ForbiddenException);
+            expect(orchestrator.addDodCriterion).not.toHaveBeenCalled();
+            expect(orchestrator.removeDodCriterion).not.toHaveBeenCalled();
+        });
+
+        it('a personal key may add, and remove what signs nothing off; dropping an open criterion needs a session', async () => {
+            const { controller, orchestrator } = withCurrent();
+            await controller.addDodCriterion(personalKey, GOAL, { text: 'X' } as never);
+            await controller.removeDodCriterion(personalKey, GOAL, 'p');
+            await controller.removeDodCriterion(personalKey, GOAL, 'a');
+            expect(orchestrator.addDodCriterion).toHaveBeenCalledTimes(1);
+            expect(orchestrator.removeDodCriterion).toHaveBeenCalledTimes(2);
+
+            await expect(
+                controller.removeDodCriterion(personalKey, GOAL, 'b'),
+            ).rejects.toMatchObject({ status: 403 });
+            expect(orchestrator.removeDodCriterion).toHaveBeenCalledTimes(2);
+            await controller.removeDodCriterion(session, GOAL, 'b');
+            expect(orchestrator.removeDodCriterion).toHaveBeenCalledTimes(3);
+        });
     });
 });
 

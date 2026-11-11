@@ -660,7 +660,7 @@ export class RunSteeringService implements RunSteeringPort {
             // Best-effort by contract: a resume must never fail because the
             // feedback lookup hiccuped — the run still resumes, just without
             // the prepend, which is exactly today's behavior.
-            replayed = await this.claimRejectionFeedback(run.taskId, next.id);
+            replayed = await this.claimRejectionFeedback(run.taskId, next.id, run);
 
             // The conversation lifetime survives the process lifetime: hand the
             // pipeline plugin its own resume id, and seed the first message so
@@ -1026,12 +1026,32 @@ export class RunSteeringService implements RunSteeringPort {
      * of replaying the same rejection forever. The rejection text is still
      * on the record and in the run's seeded input, so nothing is lost —
      * only the automatic replay is.
+     *
+     * Review feedback reaches the next run: a FRESH run carries findings
+     * (`consumedByRunId` set, `consumedAt` not yet). When that run parked on
+     * an owner question, its settle hands them back; should that settle have
+     * been missed, the findings it carries are handed back HERE, before the
+     * read — so the run the owner's answer starts replays them, instead of
+     * them staying "carried" by a run that will never finish them (review of
+     * #3150). Only for a parked source: a source that completed normally
+     * (the CI fix loop resumes those) consumed what it carried. Best-effort
+     * and separate, so a failure here never costs the replay itself.
      */
     private async claimRejectionFeedback(
         taskId: string,
         newRunId: string,
+        source?: Pick<AgentRun, 'id' | 'awaitingInput'>,
     ): Promise<{ message: string | null; count: number }> {
         if (!this.rejections) return { message: null, count: 0 };
+        if (source?.awaitingInput === true) {
+            try {
+                await this.rejections.releaseCarried(source.id);
+            } catch (err) {
+                this.logger.warn(
+                    `Run ${newRunId}: could not hand back the findings parked run ${source.id} carried: ${err}`,
+                );
+            }
+        }
         try {
             const pending = await this.rejections.findPendingForTask(
                 taskId,
