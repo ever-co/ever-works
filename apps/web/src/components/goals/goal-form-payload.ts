@@ -20,7 +20,8 @@ export type GoalFormErrorKey =
     | 'errors.metricSourceRequired'
     | 'errors.targetInvalid'
     | 'errors.unitRequired'
-    | 'errors.dodRequired';
+    | 'errors.dodRequired'
+    | 'errors.dodTooLong';
 
 export interface GoalFormFields {
     title: string;
@@ -85,7 +86,21 @@ export function validateGoalFormFields(
 ): GoalFormErrorKey | null {
     if (fields.title.trim().length < 1) return 'errors.titleRequired';
     if (kind === 'delivery') {
-        return parseDodLines(fields.dodText).length === 0 ? 'errors.dodRequired' : null;
+        // Refused, not cut: `parseDodLines` keeps the first 50 lines of at most
+        // 500 characters, which used to drop the rest of a longer list without
+        // a word.
+        const lines = fields.dodText
+            .split(/\r?\n/)
+            .map((line) => line.trim())
+            .filter((line) => line.length > 0);
+        if (lines.length === 0) return 'errors.dodRequired';
+        if (
+            lines.length > MAX_GOAL_DOD_CRITERIA ||
+            lines.some((line) => line.length > MAX_DOD_TEXT_CHARS)
+        ) {
+            return 'errors.dodTooLong';
+        }
+        return null;
     }
     if (!fields.pluginId.trim() || !fields.metricId.trim()) return 'errors.metricSourceRequired';
     if (!targetValueIsAcceptable(fields.targetValue)) return 'errors.targetInvalid';

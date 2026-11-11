@@ -9212,6 +9212,7 @@
                 "targetInvalid": "Target value must be a number.",
                 "unitRequired": "Unit is required.",
                 "dodRequired": "A delivery Goal needs at least one Definition-of-Done criterion.",
+                "dodTooLong": "最多 50 条标准，每条不超过 500 个字符。",
                 "deadlineInvalid": "Deadline is not a valid date.",
                 "createFailed": "Couldn't create the Goal. Please try again."
             },

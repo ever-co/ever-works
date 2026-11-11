@@ -129,11 +129,16 @@ export function GoalLimitsDialog({
                 executionTarget === '' ? null : (executionTarget as GoalExecutionTarget),
             plannerModelHint: toNullableText(plannerModel),
             workerModelHint: toNullableText(workerModel),
-            // `null` unpins and restores round-robin over the Goal's history,
-            // which is why this is sent even when empty: omitting it would
-            // make the pin one-way.
-            assignedAgentId: assignedAgent === '' ? null : assignedAgent,
         };
+        // Sent only when the pin CHANGED: `null` unpins and restores
+        // round-robin over the Goal's history, so an unpin is still sent. An
+        // unchanged pin is left out (the API keeps it): re-sending it on every
+        // save meant that once the pinned Agent was deleted, every limits save
+        // answered 404 — even with no Agents left to pick another one.
+        const nextAgent = assignedAgent === '' ? null : assignedAgent;
+        if (nextAgent !== (goal.assignedAgentId ?? null)) {
+            input.assignedAgentId = nextAgent;
+        }
 
         startTransition(async () => {
             try {

@@ -9212,6 +9212,7 @@
                 "targetInvalid": "Target value must be a number.",
                 "unitRequired": "Unit is required.",
                 "dodRequired": "A delivery Goal needs at least one Definition-of-Done criterion.",
+                "dodTooLong": "Paling banyak 50 kriteria, masing-masing hingga 500 karakter.",
                 "deadlineInvalid": "Deadline is not a valid date.",
                 "createFailed": "Couldn't create the Goal. Please try again."
             },

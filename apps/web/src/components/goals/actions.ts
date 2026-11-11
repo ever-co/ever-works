@@ -12,6 +12,7 @@ import {
     type UpdateGoalLimitsInput,
 } from '@/lib/api/goals';
 import { getAuthFromCookie } from '@/lib/auth';
+import { withAddedDodCriterion, withoutDodCriterion } from './goal-dod.shared';
 import { ROUTES } from '@/lib/constants';
 
 /**
@@ -104,6 +105,32 @@ export async function updateGoalLimitsAction(id: string, input: UpdateGoalLimits
 export async function setGoalDodAction(id: string, criteria: GoalDoDCriterion[] | null) {
     await requireGoalAuth();
     const goal = await goalsAPI.setDod(id, criteria);
+    revalidatePath(GOALS_LIST_PATH, 'page');
+    revalidateGoalDetail(id);
+    return goal;
+}
+
+/**
+ * Add one operator criterion to a Goal's Definition of Done. The list is read
+ * from the API right before the write: the panel used to PUT its own copy, so
+ * criteria the Goal's planner proposed after the page loaded were wiped.
+ */
+export async function addGoalDodCriterionAction(id: string, text: string) {
+    await requireGoalAuth();
+    const current = await goalsAPI.get(id);
+    if (!current) throw new Error('Goal not found.');
+    const goal = await goalsAPI.setDod(id, withAddedDodCriterion(current.dodCriteria, text));
+    revalidatePath(GOALS_LIST_PATH, 'page');
+    revalidateGoalDetail(id);
+    return goal;
+}
+
+/** Remove one criterion — from the stored list, for the same reason. */
+export async function removeGoalDodCriterionAction(id: string, criterionId: string) {
+    await requireGoalAuth();
+    const current = await goalsAPI.get(id);
+    if (!current) throw new Error('Goal not found.');
+    const goal = await goalsAPI.setDod(id, withoutDodCriterion(current.dodCriteria, criterionId));
     revalidatePath(GOALS_LIST_PATH, 'page');
     revalidateGoalDetail(id);
     return goal;

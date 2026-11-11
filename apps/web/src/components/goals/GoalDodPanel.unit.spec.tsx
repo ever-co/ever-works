@@ -23,10 +23,13 @@ vi.mock('@/i18n/navigation', () => ({
 }));
 
 const patchCriterion = vi.fn();
+const addCriterion = vi.fn();
 vi.mock('./actions', () => ({
     approveGoalDodAction: vi.fn(),
     patchGoalDodCriterionAction: (...args: unknown[]) => patchCriterion(...args),
     setGoalDodAction: vi.fn(),
+    addGoalDodCriterionAction: (...args: unknown[]) => addCriterion(...args),
+    removeGoalDodCriterionAction: vi.fn(),
 }));
 
 import { GoalDodPanel } from './GoalDodPanel';
