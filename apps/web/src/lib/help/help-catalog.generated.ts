@@ -623,6 +623,11 @@ export const HELP_ARTICLES = [
                 text: 'Who runs a brand-new Goal',
                 level: 3,
             },
+            {
+                id: 'who-can-see-a-goals-iterations',
+                text: 'Who can see a Goal\'s iterations',
+                level: 3,
+            },
             { id: 'concurrent-iterations', text: 'Concurrent iterations', level: 2 },
             { id: 'the-metric-source', text: 'The metric source', level: 2 },
             { id: 'lifecycle', text: 'Lifecycle', level: 2 },

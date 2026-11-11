@@ -224,6 +224,14 @@ function harness(
 		out: (line) => stdout.push(line),
 		secrets: null,
 		workspaceHousekeeping: { scan, reap },
+		// The real addon check loads a native module in the test process; doctor's terminal specs set their own.
+		terminalAddon: () => ({
+			available: true,
+			addon: '@homebridge/node-pty-prebuilt-multiarch',
+			range: '^0.15.0',
+			version: '0.15.0',
+			node: 'v26.10.0 (linux-x64)'
+		}),
 		now: () => NOW
 	};
 	return {
@@ -361,6 +369,39 @@ describe('workspace reaper policy flags', () => {
 });
 
 describe('ever-works-node doctor', () => {
+	describe('the terminal addon (checked in this process, daemon or not)', () => {
+		const missing = {
+			available: false,
+			addon: '@homebridge/node-pty-prebuilt-multiarch',
+			range: '^0.15.0',
+			version: null,
+			node: 'v26.13.0 (linux-x64)',
+			reason: 'terminal support is missing: npm did not install the optional addon @homebridge/node-pty-prebuilt-multiarch@^0.15.0 for Node v26.13.0 (linux-x64). Fix: npm install -g "@homebridge/node-pty-prebuilt-multiarch@^0.15.0" as the user who installed ever-works-node (no restart needed).'
+		};
+
+		it('prints a terminal line with the version when the addon loads', async () => {
+			const h = harness({ files: { [CONFIG_PATH]: storedConfig } });
+			expect(await runCli(['doctor', '--workspace-root', '/srv/fleet'], h.deps)).toBe(EXIT_OK);
+			expect(h.output()).toContain(
+				'terminal     @homebridge/node-pty-prebuilt-multiarch 0.15.0 loads on Node v26.10.0 (linux-x64)'
+			);
+		});
+
+		it('prints the reason with the install command when it does not', async () => {
+			const h = harness({ files: { [CONFIG_PATH]: storedConfig } });
+			h.deps.terminalAddon = () => missing;
+			expect(await runCli(['doctor', '--workspace-root', '/srv/fleet'], h.deps)).toBe(EXIT_OK);
+			expect(h.output()).toContain(`terminal     ${missing.reason}`);
+		});
+
+		it('--json carries the same report under `terminal`', async () => {
+			const h = harness({ files: { [CONFIG_PATH]: storedConfig } });
+			h.deps.terminalAddon = () => missing;
+			expect(await runCli(['doctor', '--workspace-root', '/srv/fleet', '--json'], h.deps)).toBe(EXIT_OK);
+			expect((JSON.parse(h.output()) as Record<string, unknown>).terminal).toEqual(missing);
+		});
+	});
+
 	const mixed = () =>
 		inventory([
 			record(),

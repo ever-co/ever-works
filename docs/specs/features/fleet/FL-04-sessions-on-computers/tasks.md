@@ -46,7 +46,7 @@
 
 ## P1.C — The daemon (`apps/node`)
 
-- [x] **T-09**. Add dependencies to `apps/node/package.json`: `@homebridge/node-pty-prebuilt-multiarch ^0.13.1` (optional, as `pty-local` does), `@xterm/headless ^5.5.0`, `@xterm/addon-serialize ^0.13.0`. Confirm `apps/node/build.js` bundles them and leaves the native prebuild external.
+- [x] **T-09**. Add dependencies to `apps/node/package.json`: `@homebridge/node-pty-prebuilt-multiarch ^0.13.1` (optional, as `pty-local` does; bumped to `^0.15.0` on 2026-11-11 for Node 26), `@xterm/headless ^5.5.0`, `@xterm/addon-serialize ^0.13.0`. Confirm `apps/node/build.js` bundles them and leaves the native prebuild external.
     - **Test**: `pnpm --filter ever-works-node build` emits a `cli.js` that starts with `--help`; `doctor --json` reports `sessions.pty: available|missing`.
 - [x] **T-10**. Write `apps/node/src/core/sessions/daemon/daemon-protocol.ts`: NDJSON op schemas (`hello health list start attach resize rename end screen block-input warn ack-ended watch`), reply/error shapes, and the frame kinds re-exported from `@ever-works/contracts` (`DATA=1 RESIZE=2 EXIT=3 JSON=10 CLOSE=11`).
     - **Test**: `apps/node/src/core/sessions/daemon/__tests__/daemon-protocol.spec.ts` — malformed ops are refused with `invalid`, never thrown.

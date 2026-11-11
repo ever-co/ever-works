@@ -6,14 +6,36 @@ name: Publish Node
 # monorepo checkout. See `apps/node/build.js` for what the bundle contains.
 #
 # Triggers:
-#   - a `node-v*` tag (e.g. `node-v0.2.0`) publishes that version, with an
-#     npm provenance attestation, and is the ONLY path that publishes;
+#   - a `node-v*` tag (e.g. `node-v0.2.0`) publishes that version, and is the
+#     ONLY path that publishes;
 #   - manual dispatch is a dry run: build, smoke-test, `npm publish --dry-run`.
+#
+# Where it runs: in our cluster, not on GitHub Actions (owner, 2026-11-11: the
+# org's Actions billing block is permanent). The ci-builds engine (Argo
+# Workflows + act, `ever-co/k8s-gitops` apps/ci-builds) runs this file unchanged
+# for every `node-v*` tag (catalog `tags`), all jobs in one pod, artifacts on
+# act's own server. A dry run by hand:
+#   python scripts/ci-builds-run.py ever-co/ever-works <branch> publish-node.yml 4 --event workflow_dispatch --no-push
+# (homelab repo). npm provenance needs GitHub's OIDC token, which only a
+# GitHub-hosted runner has, so an in-cluster release publishes without it.
 #
 # Release flow: bump `apps/node/package.json` AND `apps/node/src/version.ts`
 # together in a PR (`src/version.spec.ts` pins them to each other), merge it,
 # then tag the merge commit `node-v<version>`. The tag must equal the
 # package version, so every published version maps to exactly one commit.
+#
+# The screen helper (FL-07, `apps/node/native/ever-works-screen`) ships with
+# every release, for linux-x64: `build` builds it reproducibly in a pinned
+# container (Docker; the same bytes on any machine) and bakes its SHA-256 and
+# download URL into the bundle (the manifest `ever-works-node helper install`
+# checks a download against), and `release-screen-helper` hosts it as an asset
+# of this tag's GitHub release
+# (`https://github.com/<repo>/releases/download/node-v<version>/...`) BEFORE npm
+# publishes the package that points at them. Release assets of this public
+# repository: no Actions storage, uploaded with the build's own token. The
+# macOS and Windows helpers need macOS and Windows build machines, which the
+# in-cluster engine does not have: until one builds them, those platforms keep
+# building and admitting the helper themselves (PACKAGING.md).
 
 on:
   push:
@@ -31,7 +53,7 @@ concurrency:
 jobs:
   build:
     runs-on: ${{ vars.RUNNER_LINUX_X64_4 || 'ubuntu-latest' }}
-    timeout-minutes: 30
+    timeout-minutes: 45
 
     steps:
       - name: Checkout repository
@@ -86,9 +108,26 @@ jobs:
         working-directory: apps/node
         run: npx vitest run src/version.spec.ts src/cli/program.spec.ts src/cli/program.workspace-root.spec.ts
 
+      # Two clean builds, compared, in rust:1.88.0-slim-bookworm pinned by
+      # digest, from the committed tree: prints the SHA-256 anyone can check
+      # by running the same script at this commit.
+      - name: Reproducible release build of the screen helper (linux-x64, pinned container)
+        working-directory: apps/node/native/ever-works-screen
+        run: bash ./build-release-linux.sh dist
+
+      # Bakes the helper build's SHA-256 and URL into cli.js and stages the
+      # binary under its release name in apps/node/dist-screen-helper/.
       - name: Stage the publishable bundle
         working-directory: apps/node
-        run: pnpm build:bundle
+        env:
+          SCREEN_HELPER_RELEASE_DIR: native/ever-works-screen/dist
+          SCREEN_HELPER_REQUIRED_TARGETS: linux-x64
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          export SCREEN_HELPER_URL_BASE="https://github.com/${GITHUB_REPOSITORY}/releases/download/node-v${version}"
+          pnpm build:bundle
+          cat dist-bundle/helper-manifest.json
+          cat dist-screen-helper/SHA256SUMS
 
       - name: Smoke-test the bundle
         working-directory: apps/node/dist-bundle
@@ -101,6 +140,15 @@ jobs:
           code=$?
           set -e
           if [ "$code" != "3" ]; then echo "expected exit 3 for an un-enrolled node, got $code" >&2; exit 1; fi
+          # The baked manifest publishes this runner's helper (linux-x64) when the release builds it.
+          status="$(EVER_WORKS_NODE_CONFIG="$(mktemp -d)/node-config.json" node cli.js helper status --json)"
+          echo "$status"
+          if grep -q '"linux-x64"' helper-manifest.json; then
+            echo "$status" | grep -q '"manifestPublishesThisTarget":true' || {
+              echo "the bundle does not publish the linux-x64 screen helper it was built with" >&2
+              exit 1
+            }
+          fi
 
       - name: Upload bundle artifact
         uses: actions/upload-artifact@v7
@@ -108,13 +156,118 @@ jobs:
           name: ever-works-node-bundle
           path: apps/node/dist-bundle/
 
-  publish:
+      - name: Upload the screen helper release assets
+        uses: actions/upload-artifact@v7
+        with:
+          name: ever-works-node-screen-helper
+          path: apps/node/dist-screen-helper/
+          if-no-files-found: error
+
+  # Hosts the screen helper binaries where the baked manifest points: assets
+  # of this tag's GitHub release. Runs before npm publishes, so a published
+  # package never names a download that does not exist yet. The release is
+  # created as a draft and published only once every asset is there (an org
+  # that turns on immutable releases cannot add assets to a published one).
+  # Safe to re-run FAILED jobs: an asset already there is compared with the
+  # build, never replaced. "Re-run all jobs" rebuilds the macOS and Windows
+  # helpers, which may then differ in bytes and stop here (nothing wrong is
+  # published; delete the draft's assets by hand to start over). A dispatch
+  # (dry run) only checks and lists them.
+  release-screen-helper:
     needs: build
-    # GitHub-HOSTED on purpose. npm verifies the provenance bundle and refuses one minted on a
-    # self-hosted runner: the first real release (node-v0.2.0, run 37966885221) failed with
-    # `E422 ... Unsupported GitHub Actions runner environment: "self-hosted". Only "github-hosted"
-    # runners are supported when publishing with provenance.` The heavy build stays on our ARC
-    # runners; this job only downloads the staged bundle and runs `npm publish`, so it is cheap.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download the screen helper release assets
+        uses: actions/download-artifact@v8
+        with:
+          name: ever-works-node-screen-helper
+          path: screen-helper/
+
+      - name: Download the bundle npm will publish
+        uses: actions/download-artifact@v8
+        with:
+          name: ever-works-node-bundle
+          path: bundle/
+
+      # The assets are the bytes the bundle's baked fingerprints name: the
+      # manifest beside cli.js is the asset copy, and every SHA-256 is in cli.js.
+      - name: Check them against the fingerprints baked into the bundle
+        run: |
+          set -euo pipefail
+          (cd screen-helper && sha256sum --check --strict SHA256SUMS)
+          cmp bundle/helper-manifest.json screen-helper/helper-manifest.json
+          while read -r sha file; do
+            grep -qF "$sha" bundle/cli.js || { echo "::error::$file ($sha) is not baked into cli.js"; exit 1; }
+          done < screen-helper/SHA256SUMS
+          cat screen-helper/helper-manifest.json
+
+      - name: Host them on the GitHub release of this tag
+        if: startsWith(github.ref, 'refs/tags/node-v')
+        working-directory: screen-helper
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          repo="$GITHUB_REPOSITORY"
+          if ! gh release view "$TAG" --repo "$repo" >/dev/null 2>&1; then
+            {
+              echo "The fleet node ever-works-node ${TAG#node-v} (npm). The assets are the native screen helper"
+              echo "builds this version publishes; the node downloads and checks them itself:"
+              echo
+              echo '```'
+              echo 'ever-works-node helper install'
+              echo 'ever-works-node helper admit'
+              echo '```'
+              echo
+              echo 'SHA-256 (the same fingerprints are baked into the package, see helper-manifest.json):'
+              echo
+              echo '```'
+              cat SHA256SUMS
+              echo '```'
+            } > "$RUNNER_TEMP/notes.md"
+            # A draft until every asset is there. Not "Latest": that stays with
+            # the platform's own releases.
+            gh release create "$TAG" --repo "$repo" --verify-tag --draft --latest=false \
+              --title "ever-works-node ${TAG#node-v}" --notes-file "$RUNNER_TEMP/notes.md"
+          fi
+          existing="$(gh release view "$TAG" --repo "$repo" --json assets --jq '.assets[].name')"
+          for file in *; do
+            if grep -qxF "$file" <<<"$existing"; then
+              check="$(mktemp -d)"
+              gh release download "$TAG" --repo "$repo" --pattern "$file" --dir "$check"
+              if ! cmp -s "$file" "$check/$file"; then
+                echo "::error::$TAG already hosts a different $file; nothing was replaced. Delete that asset by hand if it is wrong, then re-run."
+                exit 1
+              fi
+              echo "$file: already hosted, identical"
+            else
+              gh release upload "$TAG" "$file" --repo "$repo"
+              echo "$file: uploaded"
+            fi
+          done
+          if [ "$(gh release view "$TAG" --repo "$repo" --json isDraft --jq '.isDraft')" = "true" ]; then
+            gh release edit "$TAG" --repo "$repo" --draft=false --latest=false
+            echo "published the release $TAG"
+          fi
+
+      - name: Dry run (dispatch)
+        if: ${{ !startsWith(github.ref, 'refs/tags/node-v') }}
+        working-directory: screen-helper
+        run: |
+          echo "A node-v* tag would host these on its GitHub release:"
+          ls -l
+
+  publish:
+    needs: [build, release-screen-helper]
+    # On GitHub this had to be GitHub-HOSTED: npm verifies the provenance bundle and refuses one
+    # minted on a self-hosted runner (node-v0.2.0, run 37966885221: `E422 ... Unsupported GitHub
+    # Actions runner environment: "self-hosted"`). In the cluster there is no OIDC token at all,
+    # so the publish step below leaves provenance out there.
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -146,9 +299,19 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
-      - name: Publish to npm (public, with provenance)
+      # With a provenance attestation where GitHub's OIDC token exists (a
+      # GitHub-hosted runner); without one in the cluster, where `--provenance`
+      # fails (node-v0.2.11, 2026-11-10: `Provenance generation in GitHub
+      # Actions requires "write" access to the "id-token" permission`).
+      - name: Publish to npm (public)
         if: startsWith(github.ref, 'refs/tags/node-v')
         working-directory: dist-bundle
-        run: npm publish --access public --provenance
+        run: |
+          if [ -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
+            npm publish --access public --provenance
+          else
+            echo "::notice::no GitHub OIDC token here (in-cluster build): publishing without a provenance attestation"
+            npm publish --access public
+          fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

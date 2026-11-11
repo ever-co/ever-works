@@ -153,9 +153,12 @@ function build(
         find: jest.fn(async () => {
             throw new Error('the tick must not read Task rows past the visibility predicate');
         }),
+        // `tasks.isRecurring` is NOT NULL DEFAULT false: a seeded row that does not say is not a
+        // recurring template, as in the database.
         count: jest.fn(
             async (opts: { where: Row | Row[] }) =>
-                taskRows.filter((row) => matches(row, opts.where)).length,
+                taskRows.filter((row) => matches({ isRecurring: false, ...row }, opts.where))
+                    .length,
         ),
     };
     const planner = {
@@ -333,8 +336,11 @@ describe('MissionTickService — Task output (APW-08 T35)', () => {
         async (visibility, derived) => {
             const t = build({ visibility } as Partial<Mission>);
             await t.service.runOnce('m1', 'u1');
+            // `derivedFrom` names the Mission whatever its visibility: `TasksService.create`
+            // reads it fresh and puts a Team Mission's Task on its Teams.
             expect(t.tasksService.create.mock.calls[0][1]).toMatchObject({
                 derivedFromPrivate: derived,
+                derivedFrom: { aggregate: 'mission', id: 'm1' },
             });
         },
     );
@@ -1174,6 +1180,7 @@ describe('MissionTickService — Task output (APW-08 T35)', () => {
             workId: 'w-1',
             missionId: 'm1',
             status: 'in_review',
+            isRecurring: false,
             ...over,
         });
         const old = { updatedAt: hoursAgo(25), ciCheckedAt: hoursAgo(25) };
@@ -1203,6 +1210,16 @@ describe('MissionTickService — Task output (APW-08 T35)', () => {
         expect(matches(row({ missionId: 'other' }), where)).toBe(false);
         expect(matches(row({ workId: 'w-2' }), where)).toBe(false);
         expect(matches(row({ workId: 'w-2', activeRun: true }), where)).toBe(false);
+        // A recurring template is a schedule, not open work, whatever its status or PR state;
+        // only a run of it in flight holds a slot. Its instances are ordinary Tasks.
+        for (const status of ['todo', 'backlog', 'in_progress', 'in_review', 'blocked']) {
+            expect(matches(row({ status, isRecurring: true }), where)).toBe(false);
+            expect(matches(row({ status, isRecurring: true, prState: 'open' }), where)).toBe(false);
+        }
+        expect(matches(row({ status: 'todo', isRecurring: true, activeRun: true }), where)).toBe(
+            true,
+        );
+        expect(matches(row({ status: 'todo', parentRecurringTaskId: 'tpl-1' }), where)).toBe(true);
     });
 
     // The same rule against the REAL Task entity: what the count asks the database.
@@ -1241,6 +1258,11 @@ describe('MissionTickService — Task output (APW-08 T35)', () => {
             expect(branch).toContain('"task"."workId" = ');
             expect(branch).toContain('"task"."missionId" = ');
         }
+        // 1-5 never count a recurring template; 6 (a run in flight) counts any Task.
+        for (const branch of branches.slice(0, 5)) {
+            expect(branch).toContain('"task"."isRecurring" = ');
+        }
+        expect(branches[5]).not.toContain('"task"."isRecurring"');
         // 1: any status but Done, Cancelled and the two waiting ones — whatever the PR did.
         expect(branches[0]).toContain('NOT("task"."status" IN (');
         expect(branches[0]).not.toContain('"task"."prState"');
@@ -1265,6 +1287,7 @@ describe('MissionTickService — Task output (APW-08 T35)', () => {
             expect.arrayContaining([
                 'w-1',
                 'm1',
+                false,
                 'done',
                 'cancelled',
                 'in_review',

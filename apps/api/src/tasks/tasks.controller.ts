@@ -1216,7 +1216,7 @@ export class TasksController {
         summary:
             "Pull-request state + CI verdict for this Task's branch — the board's review pill.",
         description:
-            'Serves the cached `prState`/`ciState`/`checks` written by the `task-pr-status-sync` cron, refreshing from the git provider only when the cache is older than the 60s floor (single-flight per Task, so a board full of review cards makes one call per PR). Owner-scoped: a Task the caller does not own 404s. A merged or closed PR is terminal and is never re-read. `409` when the connected git provider has no PR-status capability.',
+            'Serves the cached `prState`/`ciState`/`checks` written by the `task-pr-status-sync` cron, refreshing from the git provider only when the cache is older than the 60s floor and no failed read is backing off (single-flight per Task, so a board full of review cards makes one call per PR). A read that fails (credentials removed, a refusal, an outage) never changes the cached state: the cron retries it after as long as the PR has gone unread, from 2 minutes doubling to 6 hours, and a rate limit pauses every read made with the same credential until the provider resets its limit. Owner-scoped: a Task the caller does not own 404s. A merged or closed PR is terminal and is never re-read. `prState: not_found` means the provider has kept answering "not found" for the PR for 30 minutes counted from its first such answer (deleted, or no longer visible to the connection); this read serves it from the cache and the cron re-checks it every 6 hours. `409` when the connected git provider has no PR-status capability.',
     })
     @HttpCode(HttpStatus.OK)
     @Throttle({ long: { limit: 120, ttl: 60_000 } })
@@ -1224,7 +1224,7 @@ export class TasksController {
         name: 'refresh',
         required: false,
         description:
-            "'true' re-reads the git provider instead of the cache (the 60s floor still applies)",
+            "'true' re-reads the git provider now, skipping the 60s floor and any backoff (a merged, closed or `not_found` PR is still served from the cache)",
     })
     async prStatus(
         @CurrentUser() auth: AuthenticatedUser,

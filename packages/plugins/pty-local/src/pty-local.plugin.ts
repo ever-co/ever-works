@@ -13,6 +13,7 @@ import type {
 	TerminalTransport
 } from '@ever-works/plugin';
 import { TerminalNotProvisionedError } from '@ever-works/plugin';
+import { muslBlocksPtyAddon } from './musl.js';
 
 /**
  * Minimal structural view of the node-pty API we use — typed locally so
@@ -58,7 +59,8 @@ const DEFAULT_ROWS = 32;
  * reported none rather than pretending to know it.
  */
 export function makePtyLocalSessionId(runId: string, pid?: number): string {
-	const suffix = typeof pid === 'number' && Number.isFinite(pid) ? String(pid) : 'no-pid';
+	// 0 is not a pid: on Windows the addon reports 0 until ConPTY has connected.
+	const suffix = typeof pid === 'number' && Number.isInteger(pid) && pid > 0 ? String(pid) : 'no-pid';
 	return `pty-local:${runId}:${suffix}`;
 }
 
@@ -335,6 +337,11 @@ export class PtyLocalPlugin implements IPlugin, ITerminalStreamPlugin {
 	// ── runtime require ─────────────────────────────────────────────
 
 	private tryLoadPty(): PtyModuleLike | null {
+		// 0.15's loader picks its glibc prebuild on musl Linux (Alpine) and the
+		// first spawn() segfaults the process: stay on the pipe floor there.
+		if (muslBlocksPtyAddon(() => require.resolve('@homebridge/node-pty-prebuilt-multiarch/package.json'))) {
+			return null;
+		}
 		try {
 			// eslint-disable-next-line @typescript-eslint/no-require-imports
 			const required = require('@homebridge/node-pty-prebuilt-multiarch') as PtyModuleLike;

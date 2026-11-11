@@ -63,7 +63,8 @@ import { API_BASE, authedHeaders, registerUserViaAPI } from './helpers/api';
  *        classic: customizable:false, betaBranch:'stage'; minimal: customizable:true
  *   GET  /api/works/website-templates →
  *        { status:'success', templates:[{ id,name,description,
- *          sourceType:'built_in',originType:'standard',isDefault }] } (2 rows)
+ *          sourceType:'built_in',originType:'standard',repositoryOwner,
+ *          repositoryName,isDefault }] } (2 rows)
  *   GET  /api/templates/:id/customizations → 200 { status:'success',
  *          customizations:[] } (200 empty even for unknown template id)
  *   GET  /api/templates/customizations/:id (valid-but-unknown UUID) → 200
@@ -452,7 +453,10 @@ test.describe('Flow: rich catalog contract vs lean works-facing list', () => {
         expect(richDefaults[0].id).toBe('classic');
 
         // --- Lean works-facing list (the create-work UI). Same template ids,
-        // but a trimmed projection: NO repository/branch internals leak. ---
+        // but a trimmed projection: no branch internals. It does carry the
+        // repository (the same values the rich catalog above shows this user):
+        // the Create-Work picker matches a manifest blueprint to the catalog
+        // row built from the same repository and submits that row's id. ---
         const wtRes = await request.get(`${API_BASE}/api/works/website-templates`, {
             headers: authedHeaders(user.access_token),
         });
@@ -465,8 +469,11 @@ test.describe('Flow: rich catalog contract vs lean works-facing list', () => {
         const leanMinimal = lean.find((t) => t.id === 'minimal');
         expect(leanClassic, 'classic in lean list').toBeTruthy();
         expect(leanMinimal, 'minimal in lean list').toBeTruthy();
-        // The lean projection deliberately omits repository internals.
-        expect(leanClassic!.repositoryName, 'lean list hides repo name').toBeUndefined();
+        // The lean projection carries the repository and omits branch internals.
+        expect(leanClassic!.repositoryOwner, 'lean list names the repo owner').toBe('ever-works');
+        expect(leanClassic!.repositoryName, 'lean list names the repo').toBe(
+            'directory-web-template',
+        );
         expect(leanClassic!.branch, 'lean list hides branch').toBeUndefined();
         expect(leanClassic!.syncBranches, 'lean list hides sync branches').toBeUndefined();
         // But keeps the user-facing fields + the default flag.

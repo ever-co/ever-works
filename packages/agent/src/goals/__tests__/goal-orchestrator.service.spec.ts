@@ -845,6 +845,12 @@ describe('GoalOrchestratorService — advance', () => {
         await service.advance('u1', 'g1');
 
         expect(tasksService.create.mock.calls[0][1].derivedFromPrivate).toBe(false);
+        // Named as the source whatever its visibility: `TasksService.create` reads it fresh
+        // and puts a Team Goal's iteration on its Teams.
+        expect(tasksService.create.mock.calls[0][1].derivedFrom).toEqual({
+            aggregate: 'goal',
+            id: 'g1',
+        });
     });
 
     it('routes a pinned known Agent UUID only through the Goal persisted Ever scope', async () => {

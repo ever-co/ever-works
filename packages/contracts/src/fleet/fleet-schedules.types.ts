@@ -640,6 +640,23 @@ export function fleetZonedInstant(
 /** How far the clock looks for a fire: eight years and a day covers a 29 February across 2100. */
 const MAX_SEARCH_DAYS = 366 * 8 + 1;
 
+/**
+ * How far, in minutes, a wall time can land AFTER the wall time it was written
+ * at: a spring-forward gap moves a skipped minute past the jump (02:15 → 02:45
+ * in a 30-minute gap, 02:30 → 03:30 in an hour). Two hours covers every gap.
+ */
+const GAP_SLACK_MINUTES = 120;
+
+/**
+ * True when the zone keeps one UTC offset around a wall-clock day, so its
+ * minutes stay in order and a minute earlier than "now" really is in the past.
+ * On the days either side of a transition (and on it) this answers false.
+ */
+function isOrdinaryZoneDay(year: number, month: number, day: number, zone: string): boolean {
+	const wall = Date.UTC(year, month - 1, day);
+	return zoneOffsetMs(wall - 86_400_000, zone) === zoneOffsetMs(wall + 2 * 86_400_000, zone);
+}
+
 function dayMatches(fields: FleetCronFields, month: number, day: number, weekday: number): boolean {
 	if (!fields.months.includes(month)) return false;
 	if (fields.dayRestricted && fields.weekdayRestricted) {
@@ -665,6 +682,11 @@ export function nextFleetScheduleFire(
 	const zone = fleetScheduleZone(timeZone);
 	const startMs = Math.floor(afterMs / 60_000) * 60_000 + 60_000;
 	const start = fleetZonedParts(startMs, zone);
+	// Minutes before "now" on the first day cannot fire — except on a transition
+	// day, where a minute inside a spring-forward gap fires AFTER the jump (so
+	// 02:30 is still owed at 03:10): keep a margin there instead of skipping.
+	const startMinuteOfDay = start.hour * 60 + start.minute;
+	const slack = isOrdinaryZoneDay(start.year, start.month, start.day, zone) ? 0 : GAP_SLACK_MINUTES;
 	for (let offset = 0; offset <= MAX_SEARCH_DAYS; offset += 1) {
 		const date = new Date(Date.UTC(start.year, start.month - 1, start.day + offset));
 		const year = date.getUTCFullYear();
@@ -672,9 +694,8 @@ export function nextFleetScheduleFire(
 		const day = date.getUTCDate();
 		if (!dayMatches(fields, month, day, date.getUTCDay())) continue;
 		for (const hour of fields.hours) {
-			if (offset === 0 && hour < start.hour) continue;
 			for (const minute of fields.minutes) {
-				if (offset === 0 && hour === start.hour && minute < start.minute) continue;
+				if (offset === 0 && hour * 60 + minute < startMinuteOfDay - slack) continue;
 				const at = fleetZonedInstant(year, month, day, hour, minute, zone);
 				if (at > afterMs) return at;
 			}
@@ -698,6 +719,10 @@ export function previousFleetScheduleFire(
 	const end = fleetZonedParts(Math.floor(atMs / 60_000) * 60_000, zone);
 	const hours = [...fields.hours].reverse();
 	const minutes = [...fields.minutes].reverse();
+	// Later minutes of the current hour are in the future — except on a
+	// transition day, where the second pass of a repeated hour (02:10 CET) is
+	// AFTER a wall minute of that hour (02:30 CEST) that already happened.
+	const endOrdinary = isOrdinaryZoneDay(end.year, end.month, end.day, zone);
 	for (let offset = 0; offset <= MAX_SEARCH_DAYS; offset += 1) {
 		const date = new Date(Date.UTC(end.year, end.month - 1, end.day - offset));
 		const year = date.getUTCFullYear();
@@ -707,7 +732,7 @@ export function previousFleetScheduleFire(
 		for (const hour of hours) {
 			if (offset === 0 && hour > end.hour) continue;
 			for (const minute of minutes) {
-				if (offset === 0 && hour === end.hour && minute > end.minute) continue;
+				if (offset === 0 && endOrdinary && hour === end.hour && minute > end.minute) continue;
 				const at = fleetZonedInstant(year, month, day, hour, minute, zone);
 				if (at <= atMs) return at;
 			}
