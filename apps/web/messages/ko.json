@@ -3503,7 +3503,8 @@
                     "notManageable": "Seats are adjusted on a paid plan once card payments are enabled.",
                     "save": "Save",
                     "saved": "Seats updated",
-                    "saveError": "Failed to update seats"
+                    "saveError": "Failed to update seats",
+                    "tooMany": "좌석은 최대 {max}개까지 설정할 수 있습니다."
                 },
                 "payg": {
                     "title": "Pay-as-you-go",

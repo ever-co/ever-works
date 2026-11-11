@@ -105,6 +105,9 @@ interface BillingSettingsProps {
 
 const LEDGER_PAGE_SIZE = 10;
 
+/** The API's seat cap (`SetSeatsDto`, `@Max(10_000)` in apps/api/src/billing/dto/seats.dto.ts). */
+const MAX_SEATS = 10_000;
+
 const KIND_TONE_CLASSES: Record<ReturnType<typeof ledgerKindTone>, string> = {
     positive:
         'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20',
@@ -380,6 +383,12 @@ export function BillingSettings({
     const handleSaveSeats = useCallback(async () => {
         const wanted = Number(seatsInput);
         if (!Number.isFinite(wanted) || wanted < 0) {
+            return;
+        }
+        // The input's `max` only bounds its spinner (it is in no form), so a
+        // typed 15000 reached the API, whose `@Max` answered a generic 400.
+        if (Math.round(wanted) > MAX_SEATS) {
+            toast.error(t('seats.tooMany', { max: MAX_SEATS.toLocaleString('en-US') }));
             return;
         }
         setSeatsSaving(true);
@@ -1317,8 +1326,7 @@ export function BillingSettings({
                                     <input
                                         type="number"
                                         min={seats.used}
-                                        // The API's `SetSeatsDto` cap (`@Max(10_000)`).
-                                        max={10_000}
+                                        max={MAX_SEATS}
                                         step="1"
                                         inputMode="numeric"
                                         value={seatsInput}
