@@ -339,6 +339,70 @@ describe('TaskWorkspaceService', () => {
             });
         });
 
+        // Review feedback reaches the next run — same branch, same pull request. A
+        // fix run on a Task whose pull request is still open pushed onto that pull
+        // request's head; asking the provider for a second one was refused AFTER the
+        // push had landed, and the run whose work was on the pull request failed.
+        describe('a re-run of a Task whose pull request is still open (a review fix run)', () => {
+            const PR_URL = 'https://github.com/acme/site-data/pull/5038';
+            const openPrTask = (overrides: Record<string, unknown> = {}) =>
+                makeTask({
+                    branchRef: workspace.branch,
+                    branchState: 'pr-open',
+                    prNumber: 5038,
+                    prUrl: PR_URL,
+                    prState: 'open',
+                    ...overrides,
+                });
+            const buildWithPr = () => {
+                const createPullRequest = jest.fn().mockResolvedValue({
+                    number: 9,
+                    url: 'https://github.com/acme/site-data/pull/9',
+                });
+                const svc = new TaskWorkspaceService(
+                    works as any,
+                    { ...tasks, findById: jest.fn().mockResolvedValue(openPrTask()) } as any,
+                    runs as any,
+                    facadeExt as any,
+                    { ...gitFacade, createPullRequest } as any,
+                    transitions as any,
+                    taskChat as any,
+                );
+                return { svc, createPullRequest };
+            };
+
+            it('publishes to the Task branch and opens NO second pull request', async () => {
+                const { svc, createPullRequest } = buildWithPr();
+                const result = await svc.finalizeRun({ ...finalizeInput(), task: openPrTask() });
+
+                expect(result).toEqual({ outcome: 'pr-opened', prNumber: 5038, prUrl: PR_URL });
+                expect(createPullRequest).not.toHaveBeenCalled();
+                // Every commit/publish went to the existing Task branch.
+                expect(facadeExt.finalize).toHaveBeenCalled();
+                for (const [publishedHandle] of facadeExt.finalize.mock.calls) {
+                    expect(publishedHandle.branch).toBe(workspace.branch);
+                }
+                expect(tasks.updateById).toHaveBeenLastCalledWith(expect.any(String), {
+                    branchState: 'pr-open',
+                });
+            });
+
+            it.each(['merged', 'closed'])(
+                'a %s pull request is followed by a new one, exactly as before',
+                async (prState) => {
+                    const { svc, createPullRequest } = buildWithPr();
+                    const result = await svc.finalizeRun({
+                        ...finalizeInput(),
+                        task: openPrTask({ prState }),
+                    });
+                    expect(createPullRequest).toHaveBeenCalledTimes(1);
+                    expect(result).toEqual(
+                        expect.objectContaining({ outcome: 'pr-opened', prNumber: 9 }),
+                    );
+                },
+            );
+        });
+
         // Review of #2769 (CodeRabbit, outside the diff): a check-first push needs
         // a provider that reports the commit's changes AND promises to publish
         // exactly that commit — asked BEFORE anything is committed or pushed.
