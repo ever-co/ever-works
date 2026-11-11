@@ -30,6 +30,10 @@ const CHUNK = 200;
  * status. Two runs that ended in the same instant are rare and equivalent for
  * this purpose; the first returned is kept.
  *
+ * Both halves read `idx_agent_runs_agent_finished (agentId, finishedAt)`
+ * (migration `1797700000000-AddAgentRunLatestEndedIndex`): the join back is one
+ * index seek per Agent. Keep that join on exactly those two columns.
+ *
  * Agents with no ended run are absent from the map.
  */
 export async function findLatestEndedRunsByAgent(

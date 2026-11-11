@@ -94,6 +94,11 @@ export type AgentRunStatus = 'queued' | 'running' | 'completed' | 'failed' | 'ca
 // id when the node's transcript scan reports it. Migration:
 // `1796200000000-AddFleetSessionUsage`.
 @Index('idx_agent_runs_cli_session', ['cliSessionId'])
+// The Agents list's "Last run" — per Agent on the page, a grouped
+// `MAX(finishedAt)` joined back to its run on (agentId, finishedAt)
+// (`latest-agent-run.query.ts`). Migration:
+// `1797700000000-AddAgentRunLatestEndedIndex`.
+@Index('idx_agent_runs_agent_finished', ['agentId', 'finishedAt'])
 export class AgentRun {
     @PrimaryGeneratedColumn('uuid')
     id: string;

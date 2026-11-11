@@ -48,6 +48,12 @@ describe('AgentRun entity', () => {
         expect(indices.some((i) => i.name === 'idx_agent_runs_task')).toBe(true);
         expect(indices.some((i) => i.name === 'idx_agent_runs_chat_message')).toBe(true);
     });
+
+    it('declares the (agentId, finishedAt) index the Agents list reads "Last run" through', () => {
+        // Migration `1797700000000-AddAgentRunLatestEndedIndex`.
+        const index = indices.find((i) => i.name === 'idx_agent_runs_agent_finished');
+        expect(index?.columns).toEqual(['agentId', 'finishedAt']);
+    });
 });
 
 describe('AgentRunLog entity', () => {
