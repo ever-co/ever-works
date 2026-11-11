@@ -6,9 +6,13 @@ name: Publish Node
 # monorepo checkout. See `apps/node/build.js` for what the bundle contains.
 #
 # Triggers:
-#   - a `node-v*` tag (e.g. `node-v0.2.0`) publishes that version, and is the
-#     ONLY path that publishes;
-#   - manual dispatch is a dry run: build, smoke-test, `npm publish --dry-run`.
+#   - a `node-v*` tag push (e.g. `node-v0.2.0`) publishes that version, and is
+#     the ONLY path that publishes. The tagged commit must be on main or
+#     develop (both take changes only through a reviewed pull request): `build`
+#     checks that first and fails otherwise;
+#   - manual dispatch is a dry run, also on a `node-v*` tag ref: build,
+#     smoke-test, `npm publish --dry-run`. The publishing steps below test
+#     `github.event_name == 'push'` as well as the ref.
 #
 # Where it runs: in our cluster, not on GitHub Actions (owner, 2026-11-11: the
 # org's Actions billing block is permanent). The ci-builds engine (Argo
@@ -18,11 +22,18 @@ name: Publish Node
 #   python scripts/ci-builds-run.py ever-co/ever-works <branch> publish-node.yml 4 --event workflow_dispatch --no-push
 # (homelab repo). npm provenance needs GitHub's OIDC token, which only a
 # GitHub-hosted runner has, so an in-cluster release publishes without it.
+# On GitHub the jobs run only in forks: `build` is gated like the jobs of
+# screen-helper.yml (#3174) and the other two need it. Back on GitHub in
+# ever-co takes both `stay` for this file in k8s-gitops
+# apps/ci-builds/tools/policy-overrides.json (else the Actions enforcer keeps
+# it disabled there) and repo variable RUN_ON_ACTIONS = 'true'; a tag would
+# then also run here, and the two runs would race to publish.
 #
 # Release flow: bump `apps/node/package.json` AND `apps/node/src/version.ts`
 # together in a PR (`src/version.spec.ts` pins them to each other), merge it,
 # then tag the merge commit `node-v<version>`. The tag must equal the
-# package version, so every published version maps to exactly one commit.
+# package version, so every published version maps to exactly one commit, and
+# that commit must already be on develop or main.
 #
 # The screen helper (FL-07, `apps/node/native/ever-works-screen`) ships with
 # every release, for linux-x64 and win32-x64: `build` builds both reproducibly
@@ -53,6 +64,10 @@ concurrency:
 
 jobs:
   build:
+    # In ever-co this runs in-cluster only (vars.CI_IN_CLUSTER), unless repo
+    # variable RUN_ON_ACTIONS is 'true'. Forks run it on their own Actions.
+    # release-screen-helper and publish need this job, so they skip with it.
+    if: vars.CI_IN_CLUSTER == 'true' || github.repository_owner != 'ever-co' || vars.RUN_ON_ACTIONS == 'true'
     runs-on: ${{ vars.RUNNER_LINUX_X64_4 || 'ubuntu-latest' }}
     timeout-minutes: 45
 
@@ -61,6 +76,28 @@ jobs:
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
+
+      # Only a merged commit is released: a `node-v*` tag on any other commit
+      # (an unreviewed branch, a leaked token) fails here, before anything is
+      # built, hosted or published. main and develop take changes only through
+      # a reviewed pull request; releases are tagged on develop's merge commit
+      # (node-v0.2.12) or on main.
+      - name: Check the tagged commit is on main or develop
+        if: startsWith(github.ref, 'refs/tags/node-v')
+        run: |
+          set -euo pipefail
+          commit="$(git rev-parse --verify 'HEAD^{commit}')"
+          git fetch --no-tags --quiet origin \
+            '+refs/heads/main:refs/remotes/origin/main' \
+            '+refs/heads/develop:refs/remotes/origin/develop'
+          for branch in main develop; do
+            if git merge-base --is-ancestor "$commit" "refs/remotes/origin/$branch"; then
+              echo "$GITHUB_REF_NAME ($commit) is on $branch"
+              exit 0
+            fi
+          done
+          echo "::error::$GITHUB_REF_NAME points at $commit, which is on neither main nor develop: only a merged commit is released. Delete the tag and tag the merge commit instead."
+          exit 1
 
       - name: Install pnpm
         uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v3
@@ -223,8 +260,9 @@ jobs:
           done < screen-helper/SHA256SUMS
           cat screen-helper/helper-manifest.json
 
+      # A tag push only: a dispatch on a tag ref is a dry run like any other.
       - name: Host them on the GitHub release of this tag
-        if: startsWith(github.ref, 'refs/tags/node-v')
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/node-v')
         working-directory: screen-helper
         env:
           GH_TOKEN: ${{ github.token }}
@@ -274,7 +312,7 @@ jobs:
           fi
 
       - name: Dry run (dispatch)
-        if: ${{ !startsWith(github.ref, 'refs/tags/node-v') }}
+        if: ${{ !(github.event_name == 'push' && startsWith(github.ref, 'refs/tags/node-v')) }}
         working-directory: screen-helper
         run: |
           echo "A node-v* tag would host these on its GitHub release:"
@@ -311,7 +349,7 @@ jobs:
           path: dist-bundle/
 
       - name: Publish (dry run)
-        if: github.event_name == 'workflow_dispatch'
+        if: ${{ !(github.event_name == 'push' && startsWith(github.ref, 'refs/tags/node-v')) }}
         working-directory: dist-bundle
         run: npm publish --access public --dry-run
         env:
@@ -322,7 +360,7 @@ jobs:
       # fails (node-v0.2.11, 2026-11-10: `Provenance generation in GitHub
       # Actions requires "write" access to the "id-token" permission`).
       - name: Publish to npm (public)
-        if: startsWith(github.ref, 'refs/tags/node-v')
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/node-v')
         working-directory: dist-bundle
         run: |
           if [ -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
