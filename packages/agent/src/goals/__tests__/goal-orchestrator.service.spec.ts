@@ -819,10 +819,11 @@ describe('GoalOrchestratorService — propose / approve / patch keep a concurren
             { id: 'p1', text: 'Also add a FAQ', status: 'open' },
         ]);
 
-        expect(goals.findOne).toHaveBeenLastCalledWith(locked);
         expect(stored(goals).map((c) => c.id)).toEqual(['a', 'b', 'p1']);
         expect(stored(goals)[2]).toMatchObject({ source: 'planner', proposed: true });
         expect(dto.dodCriteria?.map((c) => c.id)).toEqual(['a', 'b', 'p1']);
+        // The write re-read the row inside its transaction, under a row lock.
+        expect(goals.findOne).toHaveBeenLastCalledWith(locked);
         expect(publisher.changed).toHaveBeenCalledWith(...goalUpdated);
     });
 
@@ -848,11 +849,11 @@ describe('GoalOrchestratorService — propose / approve / patch keep a concurren
 
         const dto = await service.approveDodCriteria('u1', 'g1');
 
-        expect(goals.findOne).toHaveBeenLastCalledWith(locked);
         expect(stored(goals)[0]).toMatchObject({ id: 'a', status: 'done', evidence: 'PR #1' });
         expect(stored(goals)[1].id).toBe('p1');
         expect(stored(goals)[1].proposed).toBeUndefined();
         expect(dto.dodSummary).toMatchObject({ total: 2, done: 1, proposed: 0 });
+        expect(goals.findOne).toHaveBeenLastCalledWith(locked);
         expect(publisher.changed).toHaveBeenCalledWith(...goalUpdated);
     });
 
@@ -878,7 +879,6 @@ describe('GoalOrchestratorService — propose / approve / patch keep a concurren
 
         const dto = await service.patchDodCriterion('u1', 'g1', 'b', { status: 'done' });
 
-        expect(goals.findOne).toHaveBeenLastCalledWith(locked);
         expect(stored(goals).map((c) => [c.id, c.status])).toEqual([
             ['a', 'open'],
             ['b', 'done'],
@@ -886,6 +886,7 @@ describe('GoalOrchestratorService — propose / approve / patch keep a concurren
         ]);
         expect(stored(goals)[2].proposed).toBe(true);
         expect(dto.dodCriteria?.map((c) => c.id)).toEqual(['a', 'b', 'p1']);
+        expect(goals.findOne).toHaveBeenLastCalledWith(locked);
         expect(publisher.changed).toHaveBeenCalledWith(...goalUpdated);
     });
 
