@@ -95,12 +95,30 @@ describe('TaskRecurringSection', () => {
         await user.click(screen.getByTestId('task-recurring-promote'));
         await user.clear(document.getElementById('task-recurring-time') as HTMLInputElement);
 
-        expect(screen.getByTestId('task-recurring-time-required').textContent).toBe(
-            'dashboard.tasksPage.recurring.errorTimeRequired',
-        );
+        const hint = screen.getByTestId('task-recurring-time-required');
+        expect(hint.getAttribute('role')).toBe('alert');
+        expect(hint.textContent).toBe('dashboard.tasksPage.recurring.errorTimeRequired');
         const save = screen.getByTestId('task-recurring-save') as HTMLButtonElement;
         expect(save.disabled).toBe(true);
         await user.click(save);
         expect(setTaskRecurringAction).not.toHaveBeenCalled();
+    });
+
+    it('does not hold a Custom rule hostage to the hidden time field', async () => {
+        // Clear the time under Daily, then switch to Custom: the field is
+        // hidden there, so it must not keep Save disabled.
+        const user = userEvent.setup();
+        render(<TaskRecurringSection task={makeTask()} />);
+
+        await user.click(screen.getByTestId('task-recurring-promote'));
+        await user.clear(document.getElementById('task-recurring-time') as HTMLInputElement);
+        await user.click(screen.getByTestId('task-recurring-frequency'));
+        await user.click(await screen.findByRole('option', { name: /custom/i }));
+
+        expect(document.getElementById('task-recurring-time')).toBeNull();
+        expect(screen.queryByTestId('task-recurring-time-required')).toBeNull();
+        expect((screen.getByTestId('task-recurring-save') as HTMLButtonElement).disabled).toBe(
+            false,
+        );
     });
 });

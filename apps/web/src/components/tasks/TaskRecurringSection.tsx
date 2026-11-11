@@ -273,7 +273,8 @@ function InactivePanel({ task }: { task: Task }) {
             return false;
         }
         if (frequency === 'WEEKLY' && daysOfWeek.length === 0) return false;
-        if (!TIME_OF_DAY_PATTERN.test(timeOfDay.trim())) return false;
+        // Custom carries its own BYHOUR (the time field is hidden there).
+        if (frequency !== 'CUSTOM' && !TIME_OF_DAY_PATTERN.test(timeOfDay.trim())) return false;
         return true;
     }, [ruleString, frequency, daysOfWeek, timeOfDay]);
 
@@ -448,6 +449,7 @@ function InactivePanel({ task }: { task: Task }) {
                         {!TIME_OF_DAY_PATTERN.test(timeOfDay.trim()) && (
                             <p
                                 id="task-recurring-time-required"
+                                role="alert"
                                 className="mt-1 text-[10px] leading-relaxed text-danger"
                                 data-testid="task-recurring-time-required"
                             >
