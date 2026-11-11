@@ -22,7 +22,18 @@
  *   - `@napi-rs/keyring` — the secret store; without it the credential
  *     stays in the owner-locked config file instead of the keychain;
  *   - the PTY prebuild — the `pty-local` terminal host; without it a live
- *     view's terminal channel runs on that plugin's pipe floor.
+ *     view's terminal channel runs on that plugin's pipe floor, and the
+ *     session daemon withdraws `sessions`.
+ *
+ * Optional, not regular, on purpose: the PTY addon's install falls back to
+ * `node-gyp rebuild` on a platform it has no prebuild for, and as a regular
+ * dependency that failure would abort `npm install -g ever-works-node` on
+ * that machine instead of degrading it. The price is that npm skips an
+ * optional dependency without a word (0.2.10 pinned `^0.13.1`, whose
+ * engines stop below Node 25, so every Node 26 machine lost its terminal
+ * silently). The node names the skipped package, its range and the install
+ * command itself instead: the session daemon's reason, the heartbeat the
+ * app shows, and `ever-works-node doctor` (see `pty-host.ts`).
  *
  * Run `pnpm --filter ever-works-node build` first (type-check + the
  * workspace dependencies must be built); `build:bundle` then calls this.
@@ -151,8 +162,8 @@ function buildPublishableManifest(manifest, version, externals) {
  * not on the first machine that runs `npm install -g`: exactly one shebang
  * on line 1 (esbuild keeps the source one; a banner would double it),
  * no `workspace:` specifier left behind (every workspace package must be
- * inlined), and the keyring still required by name (it stays external,
- * shipped as an optional dependency).
+ * inlined), and the keyring and the PTY addon still required by name (they
+ * stay external, shipped as optional dependencies).
  */
 function assertBundleShape(file) {
 	const bundle = fs.readFileSync(file, 'utf8');
@@ -165,6 +176,9 @@ function assertBundleShape(file) {
 	}
 	if (!/require\(["']@napi-rs\/keyring["']\)/.test(bundle)) {
 		throw new Error(`${file}: @napi-rs/keyring is no longer required by name (it must stay external)`);
+	}
+	if (!bundle.includes(`require("${PTY_ADDON}")`) && !bundle.includes(`require('${PTY_ADDON}')`)) {
+		throw new Error(`${file}: ${PTY_ADDON} is no longer required by name (it must stay external)`);
 	}
 }
 

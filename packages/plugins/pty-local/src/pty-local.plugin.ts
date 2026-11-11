@@ -45,6 +45,23 @@ interface PtyModuleLike {
 }
 
 const DEFAULT_COLS = 120;
+
+/**
+ * True on Linux with musl libc (Alpine): Node's diagnostic report names the
+ * glibc it runs on and has no such field on musl. Never throws.
+ */
+export function isMuslLinux(
+	platform: string = process.platform,
+	getReport: () => unknown = () => process.report?.getReport?.()
+): boolean {
+	if (platform !== 'linux') return false;
+	try {
+		const report = getReport() as { header?: { glibcVersionRuntime?: unknown } } | undefined;
+		return Boolean(report?.header) && !report?.header?.glibcVersionRuntime;
+	} catch {
+		return false;
+	}
+}
 const DEFAULT_ROWS = 32;
 
 /**
@@ -58,7 +75,8 @@ const DEFAULT_ROWS = 32;
  * reported none rather than pretending to know it.
  */
 export function makePtyLocalSessionId(runId: string, pid?: number): string {
-	const suffix = typeof pid === 'number' && Number.isFinite(pid) ? String(pid) : 'no-pid';
+	// 0 is not a pid: on Windows the addon reports 0 until ConPTY has connected.
+	const suffix = typeof pid === 'number' && Number.isInteger(pid) && pid > 0 ? String(pid) : 'no-pid';
 	return `pty-local:${runId}:${suffix}`;
 }
 
@@ -335,6 +353,9 @@ export class PtyLocalPlugin implements IPlugin, ITerminalStreamPlugin {
 	// ── runtime require ─────────────────────────────────────────────
 
 	private tryLoadPty(): PtyModuleLike | null {
+		// 0.15's loader picks its glibc prebuild on musl Linux (Alpine) and the
+		// first spawn() segfaults the process: stay on the pipe floor there.
+		if (isMuslLinux()) return null;
 		try {
 			// eslint-disable-next-line @typescript-eslint/no-require-imports
 			const required = require('@homebridge/node-pty-prebuilt-multiarch') as PtyModuleLike;

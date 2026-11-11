@@ -19,9 +19,23 @@ ever-works-node --version
 ever-works-node capabilities       # what this machine would advertise, before enrolling
 ```
 
-The published package is a single bundled `cli.js` (see `build.js`); the only runtime dependency is
-the optional `@napi-rs/keyring` native addon for the OS keychain — where its prebuilt binary is
-unavailable the install still works, with the credential in the owner-locked config file instead.
+The published package is a single bundled `cli.js` (see `build.js`); its only runtime dependencies are
+two optional native addons, so an install never fails on a machine one of them cannot run on:
+
+- `@napi-rs/keyring` for the OS keychain — where its prebuilt binary is unavailable the install still
+  works, with the credential in the owner-locked config file instead;
+- `@homebridge/node-pty-prebuilt-multiarch` (`^0.15.0`), the terminal behind sessions and a live view's
+  terminal channel. Without it the node runs, but without the `sessions` capability.
+
+npm skips an optional dependency it cannot install without a word (0.2.10 pinned the terminal addon at
+`^0.13.1`, whose engines stop below Node 25, so on Node 26 it was never installed). `ever-works-node
+doctor` prints a `terminal` line either way; when the addon is missing it names the package, the Node
+and the fix — `npm install -g "@homebridge/node-pty-prebuilt-multiarch@^0.15.0"` as the user who
+installed `ever-works-node`, then restart the node — and the app shows the same reason on the computer's
+Sessions tab. npm 11 may print `npm warn install-scripts` for the terminal addon: harmless, its
+prebuilt binaries ship inside the package and need no install script. On musl Linux (Alpine) the node
+refuses the terminal addon (0.15 loads its glibc build there and crashes on spawn): run it on a glibc
+distribution for sessions.
 
 The unattended-run scripts ship inside the package. After a global install the Windows installer is
 at:

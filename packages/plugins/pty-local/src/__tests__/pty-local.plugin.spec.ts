@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { TerminalFrame, TerminalTransport } from '@ever-works/plugin';
-import { PtyLocalPlugin, makePtyLocalSessionId } from '../pty-local.plugin.js';
+import { PtyLocalPlugin, isMuslLinux, makePtyLocalSessionId } from '../pty-local.plugin.js';
 
 /**
  * The suite exercises the full pump contract against PLAIN child
@@ -72,6 +72,14 @@ function decodeStdout(frames: TerminalFrame[]): string {
 }
 
 const NODE = process.execPath;
+/**
+ * The child's environment. Empty, except on Windows: once the real PTY loads
+ * there (0.15 does on Node 26), ConPTY refuses an empty environment block
+ * (exit 87), where the pipe floor never cared. Real callers pass the node's
+ * allowlisted env, which carries `SystemRoot`.
+ */
+const ENV: Record<string, string> =
+	process.platform === 'win32' ? { SystemRoot: process.env.SystemRoot ?? 'C:\Windows' } : {};
 
 describe('PtyLocalPlugin', () => {
 	it('streams stdout as sequenced frames and publishes the exit frame BEFORE resolving', async () => {
@@ -83,7 +91,7 @@ describe('PtyLocalPlugin', () => {
 				runId: '2f9d1f2a-9c7e-4b1a-8f0d-0a1b2c3d4e5f',
 				command: [NODE, '-e', 'process.stdout.write("hello-terminal")'],
 				cwd: process.cwd(),
-				env: {},
+				env: ENV,
 				preamble: [{ kind: 'error', message: 'starting…' }]
 			},
 			h.transport
@@ -122,7 +130,7 @@ describe('PtyLocalPlugin', () => {
 				runId,
 				command: [NODE, '-e', 'process.exit(0)'],
 				cwd: process.cwd(),
-				env: {}
+				env: ENV
 			},
 			h.transport
 		);
@@ -138,6 +146,18 @@ describe('PtyLocalPlugin', () => {
 		expect(makePtyLocalSessionId('run-1', 4242)).toBe('pty-local:run-1:4242');
 		expect(makePtyLocalSessionId('run-1', undefined)).toBe('pty-local:run-1:no-pid');
 		expect(makePtyLocalSessionId('run-1', Number.NaN)).toBe('pty-local:run-1:no-pid');
+		expect(makePtyLocalSessionId('run-1', 0)).toBe('pty-local:run-1:no-pid');
+	});
+
+	it('isMuslLinux: musl only on Linux without a glibc in the report, never throwing', () => {
+		expect(isMuslLinux('linux', () => ({ header: { glibcVersionRuntime: '2.36' } }))).toBe(false);
+		expect(isMuslLinux('linux', () => ({ header: {} }))).toBe(true);
+		expect(isMuslLinux('win32', () => ({ header: {} }))).toBe(false);
+		expect(
+			isMuslLinux('linux', () => {
+				throw new Error('no report');
+			})
+		).toBe(false);
 	});
 
 	it('a non-zero exit is reported as crashed', async () => {
@@ -148,7 +168,7 @@ describe('PtyLocalPlugin', () => {
 				runId: '2f9d1f2a-9c7e-4b1a-8f0d-0a1b2c3d4e5f',
 				command: [NODE, '-e', 'process.exit(3)'],
 				cwd: process.cwd(),
-				env: {}
+				env: ENV
 			},
 			h.transport
 		);
@@ -171,7 +191,7 @@ describe('PtyLocalPlugin', () => {
 					'process.stdin.once("data",(d)=>{process.stdout.write("echo:"+d.toString().trim());process.exit(0);})'
 				],
 				cwd: process.cwd(),
-				env: {}
+				env: ENV
 			},
 			h.transport
 		);
@@ -191,7 +211,7 @@ describe('PtyLocalPlugin', () => {
 				runId: '2f9d1f2a-9c7e-4b1a-8f0d-0a1b2c3d4e5f',
 				command: [NODE, '-e', 'setInterval(()=>{},1000)'],
 				cwd: process.cwd(),
-				env: {}
+				env: ENV
 			},
 			h.transport
 		);
@@ -208,7 +228,7 @@ describe('PtyLocalPlugin', () => {
 				runId: '2f9d1f2a-9c7e-4b1a-8f0d-0a1b2c3d4e5f',
 				command: [NODE, '-e', 'process.stderr.write("warn-line");process.exit(0)'],
 				cwd: process.cwd(),
-				env: {}
+				env: ENV
 			},
 			h.transport
 		);
@@ -230,7 +250,7 @@ describe('PtyLocalPlugin', () => {
 					runId: '2f9d1f2a-9c7e-4b1a-8f0d-0a1b2c3d4e5f',
 					command: [],
 					cwd: process.cwd(),
-					env: {}
+					env: ENV
 				},
 				h.transport
 			)
@@ -263,7 +283,7 @@ describe('PtyLocalPlugin', () => {
 					runId: '2f9d1f2a-9c7e-4b1a-8f0d-0a1b2c3d4e5f',
 					command: [NODE, '-e', 'process.stdout.write("floor-ok")'],
 					cwd: process.cwd(),
-					env: {}
+					env: ENV
 				},
 				h.transport
 			);
@@ -299,7 +319,7 @@ describe('PtyLocalPlugin', () => {
 					runId: '2f9d1f2a-9c7e-4b1a-8f0d-0a1b2c3d4e5f',
 					command: [NODE, '-e', 'process.stdout.write("degraded")'],
 					cwd: process.cwd(),
-					env: {}
+					env: ENV
 				},
 				h.transport
 			);

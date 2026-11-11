@@ -46,7 +46,7 @@
 		"commander": "^14.0.2"
 	},
 	"optionalDependencies": {
-		"@homebridge/node-pty-prebuilt-multiarch": "^0.13.1"
+		"@homebridge/node-pty-prebuilt-multiarch": "^0.15.0"
 	},
 	"devDependencies": {
 		"@types/node": "^26.6.4",
