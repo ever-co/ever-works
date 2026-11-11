@@ -105,6 +105,20 @@ describe('AgentRunRepository — attention + spend (M6/M7)', () => {
             expect(JSON.stringify(guards)).toContain('attentionReason IS NULL');
         });
 
+        it('raises the flag only on a run that is STILL queued — never a card for an ended wait', async () => {
+            // The sweeper scans, then flags; a run that ended in between must
+            // not be filed as "queued too long".
+            const qb = makeQueryBuilder();
+            repository.createQueryBuilder.mockReturnValue(qb);
+
+            await makeRepo().setAttention('r1', ATTENTION_REASON_QUEUED_TOO_LONG);
+
+            expect((qb as never as { andWhere: jest.Mock }).andWhere.mock.calls).toContainEqual([
+                'status = :stillQueued',
+                { stillQueued: 'queued' },
+            ]);
+        });
+
         it('reports false when another writer already raised the flag', async () => {
             repository.createQueryBuilder.mockReturnValue(
                 makeQueryBuilder({ execute: jest.fn().mockResolvedValue({ affected: 0 }) }),

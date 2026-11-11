@@ -73,6 +73,55 @@ describe('home server actions', () => {
         expect(summary).toHaveBeenNthCalledWith(2);
     });
 
+    it("sends the browser's zone as the hint the profile wins over", async () => {
+        summary.mockResolvedValue({ timezone: 'America/Los_Angeles' });
+
+        await getHomeSummaryAction(null, 'America/Los_Angeles');
+
+        expect(summary).toHaveBeenCalledTimes(1);
+        expect(summary).toHaveBeenCalledWith({ browserTz: 'America/Los_Angeles' });
+    });
+
+    it('retries without browserTz when an API older than the parameter refuses it (400)', async () => {
+        // An API without `browserTz` answers 400: `forbidNonWhitelisted`.
+        summary
+            .mockRejectedValueOnce(
+                new FakeApiResponseError('property browserTz should not exist', 400),
+            )
+            .mockResolvedValueOnce({ timezone: 'UTC', timezoneFallback: true });
+
+        await expect(getHomeSummaryAction(null, 'America/Los_Angeles')).resolves.toMatchObject({
+            timezone: 'UTC',
+        });
+        expect(summary).toHaveBeenNthCalledWith(1, { browserTz: 'America/Los_Angeles' });
+        expect(summary).toHaveBeenNthCalledWith(2);
+    });
+
+    it('with both, drops the refused tz first, then browserTz, then answers bare', async () => {
+        summary
+            .mockRejectedValueOnce(new FakeApiResponseError('tz', 400))
+            .mockRejectedValueOnce(new FakeApiResponseError('browserTz', 400))
+            .mockRejectedValueOnce(new FakeApiResponseError('tz', 400))
+            .mockResolvedValueOnce({ timezone: 'UTC', timezoneFallback: true });
+
+        await expect(getHomeSummaryAction('Mars/Base', 'Europe/Kyiv')).resolves.toMatchObject({
+            timezone: 'UTC',
+        });
+        expect(summary.mock.calls).toEqual([
+            [{ tz: 'Mars/Base', browserTz: 'Europe/Kyiv' }],
+            [{ browserTz: 'Europe/Kyiv' }],
+            [{ tz: 'Mars/Base' }],
+            [],
+        ]);
+    });
+
+    it('gives up after the last attempt and rejects with its error', async () => {
+        summary.mockRejectedValue(new FakeApiResponseError('still refused', 400));
+
+        await expect(getHomeSummaryAction(null, 'Europe/Kyiv')).rejects.toThrow('still refused');
+        expect(summary).toHaveBeenCalledTimes(2);
+    });
+
     it('lets any other failure reject', async () => {
         summary.mockRejectedValue(new FakeApiResponseError('down', 500));
         await expect(getHomeSummaryAction('UTC')).rejects.toThrow('down');

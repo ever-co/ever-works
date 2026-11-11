@@ -60,8 +60,11 @@ export interface InboxProposalPendingInput {
  */
 export interface InboxEscalationResolvedInput {
     escalationId: string;
-    /** The human who resolved it (recorded in the activity trail). */
-    resolvedByUserId: string;
+    /**
+     * The human who resolved it (recorded in the activity trail). `null` only
+     * for a `'system'` resolution, which no person made.
+     */
+    resolvedByUserId: string | null;
     note?: string | null;
     /**
      * Who actually wrote the resolution. `'human'` (the default, and every
@@ -71,8 +74,12 @@ export interface InboxEscalationResolvedInput {
      * closing it — closes the mirror but NEVER steers or resumes the linked
      * run: the note was written by a model, and a resumed fleet run renders
      * the message under `# OWNER ANSWER`. Prompt-injection hardening.
+     * `'system'` — the platform closed a card whose question its run's end
+     * already answered (a `queued-too-long` run that finished): closes the
+     * mirror, never steers or resumes anything, and is not a person's look
+     * at the item.
      */
-    resolvedBy?: 'human' | 'agent';
+    resolvedBy?: 'human' | 'agent' | 'system';
 }
 
 /**

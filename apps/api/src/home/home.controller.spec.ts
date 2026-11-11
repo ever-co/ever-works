@@ -111,6 +111,19 @@ describe('HomeController', () => {
         });
     });
 
+    it("forwards the browser's timezone as the hint the profile wins over", async () => {
+        const { controller, home } = createController();
+
+        await controller.getSummary(auth, { browserTz: 'America/Los_Angeles' });
+
+        expect(home.build).toHaveBeenCalledWith('user-1', {
+            scope: SCOPE,
+            timezone: undefined,
+            browserTimezone: 'America/Los_Angeles',
+            blocks: undefined,
+        });
+    });
+
     it('reads a different scope when the request scope changes, never a query parameter', async () => {
         const { controller, home, scopeContext } = createController();
         const personal = { tenantId: SCOPE.tenantId, organizationId: null };

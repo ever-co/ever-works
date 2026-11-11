@@ -57,6 +57,7 @@ import { MissionTasksOnWorksPanel } from './MissionTasksOnWorksPanel';
 import { MissionGoalsPanel, type AttachableGoalOption } from './MissionGoalsPanel';
 import { BudgetSummaryCard } from '@/components/budgets';
 import { EntityAttachmentsSection } from '@/components/common/EntityAttachmentsSection';
+import { MissionTeamPanel } from './MissionTeamPanel';
 import {
     Dialog,
     DialogClose,
@@ -706,6 +707,8 @@ export function MissionDetailClient({
                     <section className={sectionCard} data-testid="mission-visibility">
                         <RecordVisibilityPanel aggregate="mission" id={mission.id} />
                     </section>
+                    {/* ── Team and agents: who works on this Mission ───── */}
+                    <MissionTeamPanel missionId={mission.id} />
                     {/* ── Spend ────────────────────────────────────────── */}
                     <section className={sectionCard}>
                         <SectionHeader icon={BarChart3} title={t('sections.spend')} />

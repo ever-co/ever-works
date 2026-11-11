@@ -31,6 +31,45 @@ describe('Home day window', () => {
             });
             expect(resolveHomeTimezone(null, null)).toEqual({ timezone: 'UTC', fallback: true });
         });
+
+        describe('the browser hint (?browserTz=)', () => {
+            it('is used when the profile has no timezone — no more UTC "today"', () => {
+                expect(resolveHomeTimezone(undefined, null, 'Europe/Kyiv')).toEqual({
+                    timezone: 'Europe/Kyiv',
+                    fallback: false,
+                });
+            });
+
+            it('never beats the profile timezone: the account choice wins over the device', () => {
+                expect(resolveHomeTimezone(undefined, 'Asia/Tokyo', 'Europe/Kyiv')).toEqual({
+                    timezone: 'Asia/Tokyo',
+                    fallback: false,
+                });
+            });
+
+            it('never beats an explicit ?tz= override', () => {
+                expect(
+                    resolveHomeTimezone('America/New_York', 'Asia/Tokyo', 'Europe/Kyiv'),
+                ).toEqual({ timezone: 'America/New_York', fallback: false });
+            });
+
+            it('stands in for a stale profile value', () => {
+                expect(resolveHomeTimezone(null, 'not-a-zone', 'Europe/Kyiv').timezone).toBe(
+                    'Europe/Kyiv',
+                );
+            });
+
+            it('is ignored, never refused, when it is not a real zone', () => {
+                expect(resolveHomeTimezone(null, null, 'Mars/Olympus_Mons')).toEqual({
+                    timezone: 'UTC',
+                    fallback: true,
+                });
+                expect(resolveHomeTimezone(null, null, '   ')).toEqual({
+                    timezone: 'UTC',
+                    fallback: true,
+                });
+            });
+        });
     });
 
     describe('buildHomeDay', () => {

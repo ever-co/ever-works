@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import {
     AGENT_ESCALATION_MAX_ATTEMPT_ENTRIES,
     AGENT_ESCALATION_MAX_DECISION_CHARS,
@@ -12,7 +12,22 @@ import {
     type AgentEscalationStatus,
 } from '@ever-works/contracts';
 import { AgentEscalation } from '../../entities/agent-escalation.entity';
+import { AgentRun, type AgentRunStatus } from '../../entities/agent-run.entity';
 import { ownershipSqlPredicate, type OwnershipScope } from '../ownership-scope';
+
+/** The one reason a run's end can answer by itself (see `AgentEscalationService`). */
+const QUEUED_TOO_LONG: AgentEscalationReasonCode = 'queued-too-long';
+
+/**
+ * `agent_runs.queuedReason` of a run parked for capacity
+ * (`QUEUED_REASON_CONCURRENCY` in `agents/run-admission-chain.ts`; repeated
+ * here because the database layer does not import the agents layer). A card
+ * whose run ended while still parked for it keeps asking "raise the limit?".
+ */
+const STARVED_BY_CONCURRENCY = 'concurrency-limit';
+
+/** Run statuses that mean "this run is over". */
+const ENDED_RUN_STATUSES: readonly AgentRunStatus[] = ['completed', 'failed', 'cancelled'];
 
 export interface RecordEscalationInput {
     userId: string;
@@ -241,6 +256,107 @@ export class AgentEscalationRepository {
             .where('id = :id', { id })
             .andWhere('userId = :userId', { userId })
             .andWhere('status = :open', { open: 'open' })
+            .execute();
+        return (result.affected ?? 0) > 0;
+    }
+
+    /**
+     * The open `queued-too-long` escalation of one run, if any. Read by its
+     * `dedupKey` — the sweeper files these with the derived default key
+     * (`queued-too-long:<runId>`), which is UNIQUE-indexed, so this is one
+     * index probe per finished run.
+     */
+    async findOpenQueuedTooLongForRun(runId: string): Promise<AgentEscalation | null> {
+        return this.repository.findOne({
+            where: {
+                dedupKey: `${QUEUED_TOO_LONG}:${runId}`,
+                reasonCode: QUEUED_TOO_LONG,
+                status: 'open' as AgentEscalationStatus,
+            },
+        });
+    }
+
+    /**
+     * Open `queued-too-long` escalations whose run has ENDED (completed /
+     * failed / cancelled) or no longer exists — the cards that can close
+     * themselves. A run row is only ever deleted by the retention pass, which
+     * deletes terminal runs only, so a missing run also means "it ended".
+     * A run that ended while still parked for capacity
+     * (`queuedReason = 'concurrency-limit'`) is excluded: that card's question
+     * ("raise the limit?") stands, and a person answers it.
+     *
+     * Oldest first, bounded: the periodic sweep drains a backlog a batch per
+     * tick. Returns the run's final status and finish time alongside, so the
+     * caller can write a precise note without a second read.
+     */
+    async findOpenQueuedTooLongWithEndedRun(limit: number): Promise<
+        Array<{
+            escalation: AgentEscalation;
+            runStatus: string | null;
+            runFinishedAt: Date | null;
+        }>
+    > {
+        const rows = await this.repository
+            .createQueryBuilder('esc')
+            // 1:1 on the run's primary key, so `limit` (not `take`) is exact.
+            .leftJoin(AgentRun, 'run', 'run.id = esc.runId')
+            .where('esc.reasonCode = :reasonCode', { reasonCode: QUEUED_TOO_LONG })
+            .andWhere('esc.status = :open', { open: 'open' })
+            .andWhere('esc.runId IS NOT NULL')
+            .andWhere(
+                '(run.id IS NULL OR (run.status IN (:...ended) AND (run.queuedReason IS NULL OR run.queuedReason != :starved)))',
+                { ended: [...ENDED_RUN_STATUSES], starved: STARVED_BY_CONCURRENCY },
+            )
+            .orderBy('esc.createdAt', 'ASC')
+            .limit(Math.max(1, Math.min(500, limit)))
+            .getMany();
+        if (rows.length === 0) return [];
+        // The entity declares no relation to the run, so its final status and
+        // finish time are read back in one keyed query.
+        const runIds = rows.map((row) => row.runId).filter((id): id is string => !!id);
+        const runs = await this.repository.manager.find(AgentRun, {
+            where: { id: In(runIds) },
+            select: ['id', 'status', 'finishedAt'],
+        });
+        const byId = new Map(runs.map((run) => [run.id, run]));
+        return rows.map((escalation) => {
+            const run = escalation.runId ? byId.get(escalation.runId) : undefined;
+            return {
+                escalation,
+                runStatus: run?.status ?? null,
+                runFinishedAt: run?.finishedAt ?? null,
+            };
+        });
+    }
+
+    /**
+     * Close one escalation on the SYSTEM's behalf: no user id is recorded
+     * (`resolvedByUserId` stays NULL), the note says why. CAS on
+     * `status='open'` AND on the reason codes the caller names, so this can
+     * never close a reason that must stay manual, and a card a person closed
+     * first keeps the person's resolution.
+     *
+     * Deliberately not reachable from any HTTP route: every human door
+     * (`resolve`, `resolveForTask`) still requires a signed-in person.
+     */
+    async resolveBySystem(
+        id: string,
+        reasonCodes: readonly AgentEscalationReasonCode[],
+        resolutionNote: string,
+    ): Promise<boolean> {
+        if (reasonCodes.length === 0) return false;
+        const result = await this.repository
+            .createQueryBuilder()
+            .update(AgentEscalation)
+            .set({
+                status: 'resolved' as AgentEscalationStatus,
+                resolvedByUserId: null,
+                resolutionNote: resolutionNote.slice(0, AGENT_ESCALATION_MAX_DECISION_CHARS),
+                resolvedAt: new Date(),
+            })
+            .where('id = :id', { id })
+            .andWhere('status = :open', { open: 'open' })
+            .andWhere('reasonCode IN (:...reasonCodes)', { reasonCodes: [...reasonCodes] })
             .execute();
         return (result.affected ?? 0) > 0;
     }

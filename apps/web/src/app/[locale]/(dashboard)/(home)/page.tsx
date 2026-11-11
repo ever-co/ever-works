@@ -24,6 +24,10 @@ import { composeAttentionItems, getTeamsTotal } from './dashboard-data';
 // Home (AW-19) — the composed morning read, plus the job-runtime health flag
 // the dashboard layout already reads (React-cache()d, so no second request).
 import { getHomeSummaryAction } from '@/app/actions/dashboard/home';
+// The browser's IANA timezone, written by `BrowserTimezoneCookie` on the
+// client: Home's "today" uses it when the profile has no timezone.
+import { cookies } from 'next/headers';
+import { BROWSER_TIMEZONE_COOKIE, parseBrowserTimezone } from '@/lib/browser-timezone';
 import { healthAPI } from '@/lib/api/health';
 // Owner 2026-09-18 — the Dashboard composer is the `/new` prompt + kind chips,
 // so it resolves the same `works-<value>` PostHog flags the `/new` page does
@@ -63,6 +67,9 @@ interface DashboardPageProps {
 const MATCH_CANDIDATE_LIMIT = 100;
 
 export default async function Dashboard({ searchParams }: DashboardPageProps) {
+    const browserTimezone = parseBrowserTimezone(
+        (await cookies()).get(BROWSER_TIMEZONE_COOKIE)?.value,
+    );
     const [
         { newUser },
         user,
@@ -171,7 +178,9 @@ export default async function Dashboard({ searchParams }: DashboardPageProps) {
         // status. A failed read degrades to `null`: the stack says it could
         // not load, the composer still works and everything below renders
         // from its own fetches above.
-        getHomeSummaryAction().catch((error: unknown) => {
+        // No `tz` override: the profile timezone wins when set, and the
+        // browser's zone (cookie) is only the hint for an account without one.
+        getHomeSummaryAction(null, browserTimezone).catch((error: unknown) => {
             console.error('[dashboard] Home: GET /api/home/summary failed', error);
             return null;
         }),

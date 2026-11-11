@@ -44,6 +44,17 @@ flowchart TD
 
 Every number on the page is fetched in parallel when the page loads, and every fetch is caught individually: if one backend call fails you see a zero or a missing block, never a broken home page.
 
+### Which "today" the page uses
+
+The morning read at the top of the page (**Today**, **Needs you**, **Working now**, the done / failed today counters) is computed for one local calendar day, read from `GET /api/home/summary`. The day's timezone is chosen in this order:
+
+1. an explicit `?tz=` on the API call (an override; an unknown zone is a `400`);
+2. your **profile time zone** (Settings → Profile → Time zone) — when you have set one, it always wins, on every device;
+3. your **browser's** time zone, when the profile has none. The dashboard keeps it in a small `ew-browser-tz` cookie, so the server-rendered page already uses it on the first paint, and sends it as `?browserTz=`. An unknown zone there is simply ignored;
+4. UTC, reported as `timezoneFallback: true`.
+
+Before the browser zone was sent, an account without a profile time zone saw UTC's day, so late in the UTC evening nothing was "today" and the panel said _Nothing scheduled today_ while schedules were active. The dashboard never writes your profile: set the profile time zone if you want one fixed zone everywhere.
+
 ### The nine stat tiles
 
 Each tile is two lines — the icon and count, then the label with an optional qualifier in parentheses. Tiles with a link open the matching catalog.

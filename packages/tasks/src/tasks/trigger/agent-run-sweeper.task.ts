@@ -78,6 +78,13 @@ export const agentRunSweeperTask = schedules.task({
                 // problem, and capacity problems do not need per-minute
                 // detection, they need to stop being invisible.
                 const queuedTooLong = await svc.sweepQueuedTooLong();
+                // The cards whose run has since ended close themselves (no
+                // person needed: their question is moot).
+                if ((queuedTooLong.closed ?? 0) > 0) {
+                    logger.info('agent-run-sweeper closed queued-too-long escalations', {
+                        closed: queuedTooLong.closed,
+                    });
+                }
                 if (queuedTooLong.flagged > 0) {
                     logger.warn('agent-run-sweeper flagged queued-too-long runs', {
                         flagged: queuedTooLong.flagged,
