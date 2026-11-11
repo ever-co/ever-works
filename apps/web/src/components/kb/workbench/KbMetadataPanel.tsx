@@ -24,6 +24,8 @@ import { classifyServerError } from '@/lib/kb/use-autosave-status';
 const KB_TAGS_MAX = 32;
 const KB_TAG_MAX_LENGTH = 64;
 const KB_DESCRIPTION_MAX_LENGTH = 2000;
+/** `language`: `@Length(2, 8)`. */
+const KB_LANGUAGE_MIN_LENGTH = 2;
 const KB_LANGUAGE_MAX_LENGTH = 8;
 
 /**
@@ -200,6 +202,7 @@ export function KbMetadataPanel({
                 labels={{
                     label: tMeta('language'),
                     placeholder: tMeta('languagePlaceholder'),
+                    invalid: tMeta('languageInvalid'),
                     saveFailed: tMeta('saveFailed'),
                 }}
             />
@@ -817,7 +820,7 @@ function LanguageField({
     labels,
 }: SharedFieldArgs & {
     debounceMs: number;
-    labels: { label: string; placeholder: string; saveFailed: string };
+    labels: { label: string; placeholder: string; invalid: string; saveFailed: string };
 }) {
     const [value, setValue] = useState<string>(document.language || '');
     const { error, setError } = useInlineError();
@@ -839,9 +842,11 @@ function LanguageField({
     const flush = useCallback(async () => {
         const candidate = pendingRef.current.trim();
         if (candidate === lastSavedRef.current) return;
-        if (candidate.length < 2) {
+        if (candidate.length < KB_LANGUAGE_MIN_LENGTH) {
             // The backend enforces `Length(2, 8)` — short-circuit and
-            // surface a local validation hint instead of round-tripping.
+            // surface a local validation hint instead of round-tripping
+            // (it used to drop the edit without a word).
+            setError(labels.invalid);
             return;
         }
         const result = await updateKbDocumentAction({
@@ -856,7 +861,7 @@ function LanguageField({
             setError(result.error ?? labels.saveFailed);
             if (classifyServerError(result.error) === 'locked') onLocked?.();
         }
-    }, [workId, document.id, onPatched, setError, onLocked, labels.saveFailed]);
+    }, [workId, document.id, onPatched, setError, onLocked, labels.invalid, labels.saveFailed]);
 
     const schedule = useCallback(
         (next: string) => {
@@ -888,6 +893,7 @@ function LanguageField({
             <input
                 type="text"
                 data-testid="kb-workbench-metadata-language-input"
+                minLength={KB_LANGUAGE_MIN_LENGTH}
                 maxLength={KB_LANGUAGE_MAX_LENGTH}
                 value={value}
                 onChange={(e) => {
