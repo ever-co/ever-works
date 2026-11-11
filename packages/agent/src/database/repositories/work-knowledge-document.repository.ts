@@ -324,6 +324,17 @@ export class WorkKnowledgeDocumentRepository {
             qb.andWhere('doc.language = :language', { language: opts.language });
         }
 
+        // `tag` was declared (and passed by the KB list / search / palette) but
+        // never applied, so the Tag chip filtered nothing. `tags` is a
+        // `simple-json` array, stored as JSON text on every driver: a document
+        // carries the tag when that text holds the tag's exact JSON string
+        // (`"gdpr"`, quotes included, so `gdpr` never matches `gdpr-eu`).
+        if (opts.tag) {
+            qb.andWhere(`doc.tags LIKE :tagPattern ESCAPE '\\'`, {
+                tagPattern: `%${sanitizeLikePattern(JSON.stringify(opts.tag))}%`,
+            });
+        }
+
         if (opts.source) {
             qb.andWhere('doc.source = :source', { source: opts.source });
         }
