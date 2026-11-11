@@ -524,6 +524,27 @@ describe('Mission Task output files a Task the database accepts (real SQLite)', 
                 expect(await taskRows.count()).toBe(1);
             });
 
+            it("refuses the parent's Team for a sub-task stamped into another Organization", async () => {
+                const design = await team('Design');
+                const { tasksService } = await tick(
+                    ORG_SCOPE,
+                    { visibility: 'team' },
+                    {
+                        teams: [design],
+                    },
+                );
+                const [parent] = await taskRows.find();
+
+                // No request scope (so the parent is found by its owner alone), but the new row
+                // would be written into OTHER_ORG: the parent's Team does not vouch for that.
+                await expect(
+                    tasksService.create(OWNER, subTask(parent, design.id), undefined, {
+                        ownershipStamp: { tenantId: TENANT, organizationId: OTHER_ORG },
+                    }),
+                ).rejects.toThrow(`Team ${design.id} not found.`);
+                expect(await taskRows.count()).toBe(1);
+            });
+
             it("still refuses a Task (not a sub-task) naming a colleague's Team", async () => {
                 const design = await team('Design');
                 const { tasksService } = await tick(

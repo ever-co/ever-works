@@ -966,7 +966,12 @@ export class TasksService {
         // Work and a Team and have been raised by a Mission at the same
         // time; the previous "exactly zero or one of missionId/ideaId/workId"
         // rule made that impossible to express.
-        await this.assertScopeReachable(userId, input, ownershipScope);
+        await this.assertScopeReachable(
+            userId,
+            input,
+            ownershipScope,
+            (options.ownershipStamp ?? ownershipScope)?.organizationId,
+        );
         this.assertTitle(input.title);
         if (input.description) assertNoSecrets(input.description, 'task.description');
         // Works-security — a restricted caller files no Task already carrying a
@@ -3097,18 +3102,22 @@ export class TasksService {
 
     /**
      * The Organization of the caller's own parent Task when the new sub-task names the
-     * parent's own Team (`teamId` equal to the parent's), else `null`. The parent is looked up
-     * exactly as `create` looks it up for the scope check (`findByIdAndUser` in the request
-     * scope). A personal parent answers `null`: its Team stays the caller's own.
+     * parent's own Team (`teamId` equal to the parent's) and is stamped into that same
+     * Organization (`stampOrganizationId`, the scope the new row is written with), else
+     * `null`. The parent is looked up exactly as `create` looks it up for the scope check
+     * (`findByIdAndUser` in the request scope). A personal parent, or a sub-task stamped
+     * anywhere else (or not stamped at all), answers `null`: its Team stays the caller's own.
      */
     private async parentTeamOrganization(
         userId: string,
         input: CreateTaskInput,
         ownershipScope?: OwnershipScope,
+        stampOrganizationId?: string | null,
     ): Promise<string | null> {
-        if (!input.parentTaskId || !input.teamId) return null;
+        if (!input.parentTaskId || !input.teamId || !stampOrganizationId) return null;
         const parent = await this.tasks.findByIdAndUser(input.parentTaskId, userId, ownershipScope);
         if (!parent || !parent.organizationId || parent.teamId !== input.teamId) return null;
+        if (parent.organizationId !== stampOrganizationId) return null;
         return parent.organizationId;
     }
 
@@ -3125,6 +3134,8 @@ export class TasksService {
         userId: string,
         input: CreateTaskInput,
         ownershipScope?: OwnershipScope,
+        /** `create` only: the Organization the new row is stamped with (sub-task Team rule). */
+        stampOrganizationId?: string | null,
     ): Promise<void> {
         if (input.workId) {
             if (!this.works) {
@@ -3178,6 +3189,7 @@ export class TasksService {
                 userId,
                 input,
                 ownershipScope,
+                stampOrganizationId,
             );
             const team = await this.teams.findOne({
                 where: parentOrganizationId
