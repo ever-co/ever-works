@@ -211,6 +211,11 @@ export function WatchedTargetsEditor({
                         type="button"
                         onClick={() => save(list)}
                         loading={pending}
+                        // The default list holds every target with runners and
+                        // may exceed the API's FLEET_ACTIONS_MAX_WATCHED_TARGETS
+                        // (`@ArrayMaxSize`): saving it answered 400. The limit
+                        // note above shows while the list is that long.
+                        disabled={list.length > FLEET_ACTIONS_MAX_WATCHED_TARGETS}
                         data-testid="fleet-actions-watched-save"
                     >
                         {t('save')}

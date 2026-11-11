@@ -191,6 +191,15 @@ describe('GoalsService', () => {
             expect(dto.checkFrequencyMinutes).toBe(120);
         });
 
+        it('clamps checkFrequencyMinutes above a year down to a year (the column is an int)', async () => {
+            // 3e9 used to reach the int column and overflow it.
+            const dto = await service.create(
+                'u1',
+                validInput({ checkFrequencyMinutes: 3_000_000_000 }),
+            );
+            expect(dto.checkFrequencyMinutes).toBe(525_600);
+        });
+
         it('rejects a non-integer checkFrequencyMinutes', async () => {
             await expect(
                 service.create('u1', validInput({ checkFrequencyMinutes: 15.5 })),
