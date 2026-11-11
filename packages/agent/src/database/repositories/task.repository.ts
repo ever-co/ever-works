@@ -1061,6 +1061,11 @@ export class TaskRepository {
      * Schedule modes — one-shot Tasks due to dispatch: `scheduledAt` has
      * passed and no dispatcher has claimed them yet.
      *
+     * `isRecurring = false`: a recurring row is a TEMPLATE, fired only by the
+     * recurrence scan. A template that still carries a one-time `scheduledAt`
+     * (made recurring before `setRecurring` cleared it) would otherwise be
+     * dispatched itself, on top of its recurring copies.
+     *
      * @internal CRON-ONLY — fetches across ALL tenants/users by design.
      * Do NOT call from user-facing request handlers; doing so would expose
      * tasks across tenant boundaries.
@@ -1071,6 +1076,7 @@ export class TaskRepository {
             .where('task.scheduledAt IS NOT NULL')
             .andWhere('task.scheduledAt <= :now', { now })
             .andWhere('task.scheduleClaimedAt IS NULL')
+            .andWhere('task.isRecurring = :recurring', { recurring: false })
             .orderBy('task.scheduledAt', 'ASC')
             .take(limit)
             .getMany();
