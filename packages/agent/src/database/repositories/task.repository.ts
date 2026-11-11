@@ -29,6 +29,10 @@ import {
     type OpenRecurrenceInstances,
     type RecurrenceTemplateRef,
 } from '../../tasks-domain/recurrence-overlap';
+import {
+    TASK_PR_NOT_FOUND_RECHECK_MS,
+    TASK_PR_NOT_FOUND_STATE,
+} from '../../tasks-domain/task-open-work';
 import { visibleToPredicate } from '../../record-visibility/visible-to';
 
 export interface ListTasksFilter {
@@ -640,6 +644,13 @@ export class TaskRepository {
      * `updatedAt` (`updatePrStatusCache`, `recordCiHead`), so they are read
      * here by name: an open pull request still waiting for review is not
      * abandoned, and deleting its branch would close it.
+     *
+     * A Task whose pull request is `not_found` is never abandoned while it
+     * is not Done or Cancelled: "not found" can be a connection that cannot
+     * see a private repository for a while, and the pull request may still
+     * be open behind it. The branch GC never collected one before
+     * `not_found` existed (every read moved `updatedAt`), and it still
+     * does not.
      */
     async findBranchCleanupCandidates(staleDays: number): Promise<Task[]> {
         const cutoff = new Date(Date.now() - staleDays * 24 * 60 * 60 * 1000);
@@ -651,9 +662,14 @@ export class TaskRepository {
             })
             .andWhere(
                 '(task.status IN (:...terminal) OR (task.updatedAt < :cutoff' +
+                    ' AND (task.prState IS NULL OR task.prState <> :prNotFound)' +
                     ' AND (task.ciCheckedAt IS NULL OR task.ciCheckedAt < :cutoff)' +
                     ' AND (task.ciHeadSeenAt IS NULL OR task.ciHeadSeenAt < :cutoff)))',
-                { terminal: ['done', 'cancelled'], cutoff },
+                {
+                    terminal: ['done', 'cancelled'],
+                    cutoff,
+                    prNotFound: TASK_PR_NOT_FOUND_STATE,
+                },
             )
             .take(200)
             .getMany();
@@ -670,23 +686,44 @@ export class TaskRepository {
      *  - `prState` is null / `open` / `draft` — a merged or closed PR is
      *    TERMINAL. Once observed, we never poll it again; the plan's
      *    "only while the PR is open" rule is enforced here rather than
-     *    left to the caller. So is one the provider answered "not found"
-     *    for (`not_found`, `TASK_PR_NOT_FOUND_STATE`): the on-demand read
-     *    (`GET /api/tasks/:id/pr-status`) still re-checks it.
+     *    left to the caller.
+     *
+     * One slow lane: a pull request recorded `not_found`
+     * (`TASK_PR_NOT_FOUND_STATE`) is NOT terminal. "Not found" is also what
+     * a provider answers while the connection cannot see a private
+     * repository, so it is re-read once its last read is older than
+     * `notFoundBefore` (default: `TASK_PR_NOT_FOUND_RECHECK_MS`, 6 h ago),
+     * and a pull request that comes back returns to `open` / `merged` /
+     * `closed` and to everything the sweep drives.
      *
      * Never-checked rows (`ciCheckedAt IS NULL`) sort first, then the
      * stalest — so a newly opened PR gets its dot quickly and a long
      * backlog drains in age order. Hits `idx_tasks_pr_status_sync`.
      */
-    async findDuePrStatusSync(staleBefore: Date, limit = 50): Promise<Task[]> {
+    async findDuePrStatusSync(
+        staleBefore: Date,
+        limit = 50,
+        notFoundBefore: Date = new Date(Date.now() - TASK_PR_NOT_FOUND_RECHECK_MS),
+    ): Promise<Task[]> {
         return this.repository
             .createQueryBuilder('task')
             .where('task.prNumber IS NOT NULL')
             .andWhere('task.workId IS NOT NULL')
-            .andWhere("(task.prState IS NULL OR task.prState IN ('open', 'draft'))")
-            .andWhere('(task.ciCheckedAt IS NULL OR task.ciCheckedAt < :staleBefore)', {
-                staleBefore,
-            })
+            .andWhere(
+                new Brackets((due) =>
+                    due
+                        .where(
+                            "(task.prState IS NULL OR task.prState IN ('open', 'draft'))" +
+                                ' AND (task.ciCheckedAt IS NULL OR task.ciCheckedAt < :staleBefore)',
+                            { staleBefore },
+                        )
+                        .orWhere(
+                            'task.prState = :prNotFound' +
+                                ' AND (task.ciCheckedAt IS NULL OR task.ciCheckedAt < :notFoundBefore)',
+                            { prNotFound: TASK_PR_NOT_FOUND_STATE, notFoundBefore },
+                        ),
+                ),
+            )
             .orderBy('task.ciCheckedAt', 'ASC', 'NULLS FIRST')
             .take(Math.max(1, Math.min(limit, 200)))
             .getMany();

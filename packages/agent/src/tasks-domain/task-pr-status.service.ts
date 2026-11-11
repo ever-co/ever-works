@@ -22,7 +22,7 @@ import { TASK_LIFECYCLE_POSTER, type TaskLifecyclePoster } from './task-lifecycl
 import { checksSettledPost } from './task-lifecycle-posts';
 import { TASK_APP_CHECKS, type TaskAppChecks } from './task-app-checks.port';
 import { hasAppCheckLeg, isAdvisoryAppCheckLeg, withAppCheckRollUp } from './app-check-legs';
-import { TASK_PR_NOT_FOUND_STATE } from './task-open-work';
+import { TASK_PR_NOT_FOUND_CONFIRM_MS, TASK_PR_NOT_FOUND_STATE } from './task-open-work';
 
 /**
  * PR insights (kanban run cockpit, plan 04 M5 + M6 + the merged half of
@@ -46,9 +46,13 @@ import { TASK_PR_NOT_FOUND_STATE } from './task-open-work';
  *     cron tick landing at the same moment still makes one call per PR.
  *  3. **Terminal states are never re-polled.** Once a PR reads `merged`
  *     or `closed`, the sweep predicate excludes it forever (the plan's
- *     "only while the PR is open"). The sweep also stops at `not_found`
- *     (the provider no longer answers for the PR); the on-demand read
- *     re-checks that one, since lost access can come back.
+ *     "only while the PR is open"). `not_found` is NOT terminal: the
+ *     provider also answers "not found" while the connection cannot see a
+ *     private repository. It is recorded only once the answer has persisted
+ *     (`TASK_PR_NOT_FOUND_CONFIRM_MS`), and the SWEEP re-reads it every
+ *     `TASK_PR_NOT_FOUND_RECHECK_MS`; that is its recovery path, so a pull
+ *     request that comes back drives the merge gate and `completeOnMerge`
+ *     again. The on-demand read serves it from the cache.
  *  4. **A provider failure is not a Task failure.** Every write is
  *     best-effort; a rate-limited sync leaves the previous verdict in
  *     place and tries again next tick.
@@ -213,8 +217,13 @@ export class TaskPrStatusService {
             return this.toView(task, true);
         }
         // A terminal PR never changes again — serve the cache forever. A `not_found` one is
-        // re-checked here (throttled by the floor above): access can come back.
-        if (task.prState === 'merged' || task.prState === 'closed') {
+        // served from the cache too: the sweep re-reads it (every 6 h), and only the sweep goes
+        // on to complete a Task whose pull request turns out merged (this read never does).
+        if (
+            task.prState === 'merged' ||
+            task.prState === 'closed' ||
+            task.prState === TASK_PR_NOT_FOUND_STATE
+        ) {
             return this.toView(task, true);
         }
 
@@ -351,7 +360,9 @@ export class TaskPrStatusService {
                     } else if (await this.completeOnMerge(after)) {
                         summary.completed += 1;
                     }
-                } else {
+                } else if (status) {
+                    // Only a pull request the provider just answered for: a "not found" read
+                    // (`status` null) has no checks to fix and possibly no pull request at all.
                     await this.offerRedGateToFixLoop(after, workKind);
                 }
             } catch (error) {
@@ -553,17 +564,7 @@ export class TaskPrStatusService {
                 target.gitOptions,
             );
             const checkedAt = new Date();
-            if (!status) {
-                // The provider answered "not found" (the repository or the pull request
-                // was deleted, or this connection can no longer see it). Recorded as its
-                // own state, so nothing reads it as a pull request still waiting for
-                // review, and the sweep stops polling it (`findDuePrStatusSync` reads only
-                // null / open / draft). The on-demand read still re-checks it.
-                const patch = { prState: TASK_PR_NOT_FOUND_STATE, ciCheckedAt: checkedAt };
-                await this.tasks.updatePrStatusCache(task.id, patch);
-                await this.recordRuntimeChange(task, patch);
-                return { task: Object.assign(task, patch), status: null };
-            }
+            if (!status) return this.recordNotFound(task, checkedAt);
             // APW-08 T16 (FR-16) — an App Work's advisory legs, read at the PR base, so a failing
             // advisory `Ever Works check: {name}` leg reds neither the roll-up nor the merge gate
             // nor the **Checks failed** post. `null` (and `effective === status`) for every other
@@ -742,6 +743,48 @@ export class TaskPrStatusService {
 
         this.inFlight.set(task.id, work);
         return work;
+    }
+
+    /**
+     * The provider answered "not found" for the Task's pull request: the repository or the pull
+     * request was deleted, or this connection cannot see it (a provider answers "not found" for a
+     * private repository it does not show you, which can last minutes). Three cases:
+     *
+     *  - **Already `not_found`** (the sweep's 6-hourly re-check): stamp the read, nothing else.
+     *  - **Not persisted yet**: the last successful read (`ciCheckedAt`; the last write when the
+     *    pull request was never read) is younger than {@link TASK_PR_NOT_FOUND_CONFIRM_MS}. Nothing
+     *    is written, so the cache keeps describing the pull request as last seen and the sweep reads
+     *    it again on its next tick: a brief loss of access never touches the Task.
+     *  - **Persisted**: record `prState = 'not_found'` and clear the CI cache of a pull request
+     *    nobody can see (`ciState`, `prChecks`), so no failing checks are shown or handed to the CI
+     *    fix loop. One `task.runtime_updated`. `updatedAt` is kept, like every cache write.
+     */
+    private async recordNotFound(task: Task, checkedAt: Date): Promise<TaskPrRefresh> {
+        if (task.prState === TASK_PR_NOT_FOUND_STATE) {
+            await this.tasks.updatePrStatusCache(task.id, { ciCheckedAt: checkedAt });
+            return { task: Object.assign(task, { ciCheckedAt: checkedAt }), status: null };
+        }
+        const lastSeen = task.ciCheckedAt ?? task.updatedAt ?? task.createdAt ?? null;
+        const lastSeenMs = lastSeen ? new Date(lastSeen).getTime() : Number.NaN;
+        if (
+            Number.isFinite(lastSeenMs) &&
+            checkedAt.getTime() - lastSeenMs < TASK_PR_NOT_FOUND_CONFIRM_MS
+        ) {
+            this.logger.log(
+                `Task ${task.id}: the provider answered "not found" for PR #${task.prNumber}; ` +
+                    'not recorded until it persists.',
+            );
+            return { task, status: null };
+        }
+        const patch = {
+            prState: TASK_PR_NOT_FOUND_STATE,
+            ciState: null,
+            prChecks: null,
+            ciCheckedAt: checkedAt,
+        };
+        await this.tasks.updatePrStatusCache(task.id, patch);
+        await this.recordRuntimeChange(task, patch);
+        return { task: Object.assign(task, patch), status: null };
     }
 
     /**

@@ -98,23 +98,31 @@ export function TaskPrPill({ task }: { task: Task }) {
     const guardRefused = activeGuardRefusal(task) !== null;
     const tone = guardRefused ? GUARD_REFUSED_TONE : (PR_TONES[prState] ?? FALLBACK_TONE);
     const href = safePrUrl(task.prUrl);
-    const title = `Pull request #${task.prNumber} — ${prState === 'not_found' ? 'not found' : prState}${
+    // The provider keeps answering "not found" for it: there are no checks to show, only that
+    // (the platform re-checks it on its own and the pill returns once it is found again).
+    const notFound = prState === 'not_found';
+    const stateText = notFound
+        ? 'not found by the git provider (deleted, or no longer visible to the connection)'
+        : prState;
+    const title = `Pull request #${task.prNumber} — ${stateText}${
         guardRefused ? " · blocked by an App Work's change guard, do not merge it as it stands" : ''
-    } · ${describeChecks(task)}`;
+    }${notFound ? '' : ` · ${describeChecks(task)}`}`;
 
     const body = (
         <>
-            <span
-                data-testid="task-pr-pill-ci-dot"
-                data-ci-state={ciState}
-                aria-hidden="true"
-                className={cn('w-1.5 h-1.5 rounded-full shrink-0', CI_DOT[ciState])}
-            />
+            {!notFound && (
+                <span
+                    data-testid="task-pr-pill-ci-dot"
+                    data-ci-state={ciState}
+                    aria-hidden="true"
+                    className={cn('w-1.5 h-1.5 rounded-full shrink-0', CI_DOT[ciState])}
+                />
+            )}
             <span className="truncate">#{task.prNumber}</span>
             {prState === 'draft' && <span className="shrink-0 opacity-70">draft</span>}
             {prState === 'merged' && <span className="shrink-0 opacity-70">merged</span>}
             {prState === 'closed' && <span className="shrink-0 opacity-70">closed</span>}
-            {prState === 'not_found' && <span className="shrink-0 opacity-70">not found</span>}
+            {notFound && <span className="shrink-0 opacity-70">not found</span>}
             {guardRefused && <span className="shrink-0 font-semibold">refused</span>}
         </>
     );

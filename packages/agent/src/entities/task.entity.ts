@@ -310,8 +310,9 @@ export class Task {
 
     /**
      * `open | draft | closed | merged` as last observed from the provider, or
-     * `not_found` once the provider answered "not found" for the pull request
-     * (`TASK_PR_NOT_FOUND_STATE`). The sweep polls only null / open / draft.
+     * `not_found` once the provider has kept answering "not found" for the pull
+     * request (`TASK_PR_NOT_FOUND_STATE`). The sweep polls null / open / draft,
+     * and re-reads `not_found` every 6 hours; `closed` / `merged` are terminal.
      */
     @Column({ type: 'varchar', length: 16, nullable: true })
     prState?: string | null;

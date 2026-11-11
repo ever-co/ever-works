@@ -48,9 +48,10 @@ export const RECURRENCE_OPEN_PR_STATES = ['open', 'draft'] as const;
 
 /**
  * Pull-request states (`tasks.prState`) that hold a slot for {@link TASK_CLOSED_PR_SLOT_HOLD_MS}
- * after the instance last changed, then free it: closed without merging, and "not found" (the
- * provider no longer answers for the pull request). The sweep never polls either again, so the
- * read that saw it is the last `ciCheckedAt`.
+ * after the instance last changed (`updatedAt`), then free it: closed without merging, and "not
+ * found" (the provider has kept answering "not found" for at least 30 minutes). A closed pull
+ * request is never polled again, so the read that saw it close (`ciCheckedAt`) also holds it; a
+ * `not_found` one is re-read every 6 hours, so its `ciCheckedAt` cannot (it would hold it for good).
  */
 export const RECURRENCE_CLOSED_OR_GONE_PR_STATES = [
     TASK_CLOSED_UNMERGED_PR_STATE,
@@ -124,19 +125,22 @@ export type RecurrenceTemplateRef = Pick<Task, 'id'> & { workId?: string | null 
  *  4. **it is not Done or Cancelled, has no pull-request outcome yet (`prState` NULL: no pull
  *     request, or one the status sweep has not read) and was spawned in the last 7 days**;
  *  5. **it is not Done or Cancelled, its pull request was closed without merging or the provider
- *     answered "not found" for it ({@link RECURRENCE_CLOSED_OR_GONE_PR_STATES}), and it changed in
- *     the last 24 hours** (by `updatedAt` or by `ciCheckedAt`, the read that saw it close or go;
- *     the sweep never polls either again): the hold a Mission's open-Tasks cap uses for a closed
- *     one ({@link TASK_CLOSED_PR_SLOT_HOLD_MS}), two branches because SQL has no GREATEST on
- *     every driver.
+ *     has kept answering "not found" for it ({@link RECURRENCE_CLOSED_OR_GONE_PR_STATES}), and it
+ *     changed in the last 24 hours**: by `updatedAt`, or, for a closed one only, by `ciCheckedAt`
+ *     (the read that saw it close; a closed pull request is never polled again, while a
+ *     `not_found` one is re-read every 6 hours). The hold a Mission's open-Tasks cap uses for a
+ *     closed one ({@link TASK_CLOSED_PR_SLOT_HOLD_MS}); two branches because SQL has no GREATEST
+ *     on every driver.
  *
  * A merged pull request frees the slot at once (the review happened), and so does Done or
  * Cancelled.
  *
  * What ends by itself: 1 a week after the run started, 4 a week after the spawn, 5 a day after the
- * read that saw the pull request close or go, 3 a week after the instance last changed, and 2 once
- * the sweep sees the pull request merged, closed or gone (or a week after its last successful
- * read, when reads keep failing).
+ * read that saw the pull request close (or, for `not_found`, a day after the instance last
+ * changed), 3 a week after the instance last changed, and 2 once the sweep sees the pull request
+ * merged, closed or persistently not found (or a week after its last successful read, when reads
+ * keep failing). A `not_found` pull request the connection can see again is read as open again
+ * and counts again.
  *
  * What does NOT end by itself, on purpose: an open pull request on the template's Work that the
  * sweep keeps reading as open. That is the review backlog the limit exists for; merging or closing
@@ -170,6 +174,10 @@ export function recurrenceOpenInstancesWhere(
         ...unfinished,
         prState: In([...RECURRENCE_CLOSED_OR_GONE_PR_STATES]),
     };
+    const closed: FindOptionsWhere<Task> = {
+        ...unfinished,
+        prState: TASK_CLOSED_UNMERGED_PR_STATE,
+    };
     const branches: FindOptionsWhere<Task>[] = [
         { ...base, id: recurrenceActiveRunExists(opts.escape, opts.now) },
     ];
@@ -184,7 +192,7 @@ export function recurrenceOpenInstancesWhere(
         { ...openPr, updatedAt: MoreThanOrEqual(windowSince) },
         { ...unfinished, prState: IsNull(), createdAt: MoreThanOrEqual(windowSince) },
         { ...closedOrGone, updatedAt: MoreThanOrEqual(closedSince) },
-        { ...closedOrGone, ciCheckedAt: MoreThanOrEqual(closedSince) },
+        { ...closed, ciCheckedAt: MoreThanOrEqual(closedSince) },
     );
     return branches;
 }

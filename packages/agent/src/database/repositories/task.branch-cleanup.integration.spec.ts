@@ -1,6 +1,11 @@
 import { DataSource, type Repository } from 'typeorm';
+import type { GitPullRequestStatus } from '@ever-works/plugin';
 import { ENTITIES } from '../_entities-inventory';
 import { Task, TaskPriority, TaskStatus } from '../../entities/task.entity';
+import type { GitFacadeService } from '../../facades/git.facade';
+import { TASK_PR_NOT_FOUND_STATE } from '../../tasks-domain/task-open-work';
+import { TaskPrStatusService } from '../../tasks-domain/task-pr-status.service';
+import type { WorkRepository } from './work.repository';
 import { TaskRepository } from './task.repository';
 
 /**
@@ -79,6 +84,71 @@ describe('TaskRepository.findBranchCleanupCandidates (real SQLite)', () => {
 
     const candidateIds = async () =>
         (await repository.findBranchCleanupCandidates(STALE_DAYS)).map((task) => task.id).sort();
+
+    /** The real PR-status sweep against a provider that answers `status` (`null` = "not found"). */
+    async function sweepWithProvider(status: GitPullRequestStatus | null) {
+        const works = {
+            findById: async (id: string) => ({
+                id,
+                gitProvider: 'github',
+                taskIsolationBaseBranch: null,
+                getRepoOwner: () => 'acme',
+                getDataRepo: () => 'widgets',
+            }),
+        };
+        const git = { getPullRequestStatus: jest.fn(async () => status) };
+        const service = new TaskPrStatusService(
+            repository,
+            works as unknown as WorkRepository,
+            git as unknown as GitFacadeService,
+        );
+        const summary = await service.syncDuePrStatuses({ staleSeconds: 0 });
+        return { summary, git };
+    }
+
+    /**
+     * The review of #3158: one "not found" answer (a connection that briefly cannot see a private
+     * repository), then the pull request waits 14 days for review with no push. Its branch must
+     * survive: deleting it would close the pull request. Passes on `develop` too (every read moved
+     * `updatedAt` there), so it pins that this change did not make the GC more eager.
+     */
+    it('one "not found", then 14 days: the sweep reads the pull request again, finds it open, and keeps its branch', async () => {
+        const waiting = await openPrTask(ago(30 * DAY));
+        await repository.updatePrStatusCache(waiting.id, { ciCheckedAt: ago(5 * 60_000) });
+        const blip = await sweepWithProvider(null);
+        expect(blip.summary.scanned).toBe(1);
+
+        // 15 days later: the last stamp the sweep left is old, and access is back.
+        await repository.updatePrStatusCache(waiting.id, { ciCheckedAt: ago(15 * DAY) });
+        const recovered = await sweepWithProvider({
+            number: waiting.prNumber!,
+            state: 'open',
+            merged: false,
+            headSha: 'e'.repeat(40),
+            ciState: 'pending',
+            checks: [],
+        });
+        expect(recovered.summary.scanned).toBe(1);
+        expect(recovered.git.getPullRequestStatus).toHaveBeenCalledTimes(1);
+        expect((await taskRows.findOneByOrFail({ id: waiting.id })).prState).toBe('open');
+        expect(await candidateIds()).toEqual([]);
+    });
+
+    it('never collects a Task whose pull request is "not found" while it is not Done or Cancelled', async () => {
+        // Recorded `not_found`, and (say the sweep was down) not read for 15 days.
+        const gone = await openPrTask(ago(30 * DAY));
+        await repository.updatePrStatusCache(gone.id, {
+            prState: TASK_PR_NOT_FOUND_STATE,
+            ciCheckedAt: ago(15 * DAY),
+        });
+        const cancelled = await openPrTask(ago(30 * DAY), { status: TaskStatus.CANCELLED });
+        await repository.updatePrStatusCache(cancelled.id, {
+            prState: TASK_PR_NOT_FOUND_STATE,
+            ciCheckedAt: ago(15 * DAY),
+        });
+
+        expect(await candidateIds()).toEqual([cancelled.id]);
+    });
 
     it('keeps the branch of an open pull request the sweep still reads, however old its last change', async () => {
         const lastChanged = ago(30 * DAY);

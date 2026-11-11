@@ -11,8 +11,14 @@ import {
     recurrenceFireLockKey,
     recurrenceOpenInstancesWhere,
 } from '../../tasks-domain/recurrence-overlap';
-import { TASK_PR_NOT_FOUND_STATE } from '../../tasks-domain/task-open-work';
+import {
+    TASK_PR_NOT_FOUND_CONFIRM_MS,
+    TASK_PR_NOT_FOUND_RECHECK_MS,
+    TASK_PR_NOT_FOUND_STATE,
+} from '../../tasks-domain/task-open-work';
 import { TaskPrStatusService } from '../../tasks-domain/task-pr-status.service';
+import type { TaskTransitionService } from '../../tasks-domain/task-transition.service';
+import { missionOpenTasksWhere } from '../../missions/mission-tick.service';
 import type { GitPullRequestStatus } from '@ever-works/plugin';
 import type { GitFacadeService } from '../../facades/git.facade';
 import type { WorkRepository } from './work.repository';
@@ -154,7 +160,8 @@ describe('Recurring Tasks overlap limit (real SQLite)', () => {
     /**
      * The PR-status read the sweep makes, end to end (`TaskPrStatusService.syncDuePrStatuses`
      * through the real repository), against a provider that answers `status` for every pull
-     * request: `null` is "not found".
+     * request: `null` is "not found". The transition double moves the status the way
+     * `TaskTransitionService` does for `completeOnMerge` (a real write, so `updatedAt` moves).
      */
     async function sweepWithProvider(status: GitPullRequestStatus | null) {
         const works = {
@@ -167,13 +174,41 @@ describe('Recurring Tasks overlap limit (real SQLite)', () => {
             }),
         };
         const git = { getPullRequestStatus: jest.fn(async () => status) };
+        const transitions = {
+            transition: jest.fn(async (task: Task, to: TaskStatus) =>
+                repository.updateById(task.id, { status: to }),
+            ),
+        };
         const service = new TaskPrStatusService(
             repository,
             works as unknown as WorkRepository,
             git as unknown as GitFacadeService,
+            transitions as unknown as TaskTransitionService,
         );
         const summary = await service.syncDuePrStatuses({ staleSeconds: 0 });
-        return { summary, git };
+        return { summary, git, transitions };
+    }
+
+    /** The provider's answer for an open pull request (or `state` for another one). */
+    const providerSays = (
+        number: number,
+        state: GitPullRequestStatus['state'] = 'open',
+    ): GitPullRequestStatus => ({
+        number,
+        state,
+        merged: state === 'merged',
+        headSha: 'c'.repeat(40),
+        ciState: 'pending',
+        checks: [],
+    });
+
+    /**
+     * Record a "not found" the way production does: the last successful read was more than the
+     * confirm window ago, and the sweep's next read answers "not found".
+     */
+    async function goNotFound(taskId: string) {
+        await sweepRead(taskId, { ciCheckedAt: ago(TASK_PR_NOT_FOUND_CONFIRM_MS + 60_000) });
+        return sweepWithProvider(null);
     }
 
     const readRow = (id: string) => taskRows.findOneByOrFail({ id });
@@ -343,33 +378,126 @@ describe('Recurring Tasks overlap limit (real SQLite)', () => {
         });
 
         /**
-         * #3146 closure review, follow-up 2: a pull request the provider answers "not found" for
-         * is recorded as `not_found` by the real sweep, holds its slot for the day after that read
-         * like a closed one, and is never polled again.
+         * #3146 closure review, follow-up 2 (and the review of this PR): a "not found" is
+         * recorded only once it has persisted, so a brief loss of access (a provider answers "not
+         * found" for a private repository it does not show you) never touches the Task.
          */
-        it('a pull request the provider answers "not found" for holds its slot for a day after the read, then frees it', async () => {
+        it('a single "not found" changes nothing: the next read finds the pull request and it keeps its slot', async () => {
             const parent = await template({ workId: WORK });
             const old = ago(30 * DAY);
-            const gone = await instance(
+            const blip = await instance(
                 parent,
                 { status: TaskStatus.IN_REVIEW, prNumber: 34, prState: 'open', workId: WORK },
                 { createdAt: old, updatedAt: old },
             );
+            const lastRead = ago(5 * 60_000);
+            await sweepRead(blip.id, { ciCheckedAt: lastRead, ciState: 'passing' });
+
             const { summary, git } = await sweepWithProvider(null);
             expect(summary).toMatchObject({ scanned: 1, refreshed: 1, failed: 0 });
             expect(git.getPullRequestStatus).toHaveBeenCalledTimes(1);
+            const untouched = await readRow(blip.id);
+            expect(untouched).toMatchObject({ prState: 'open', ciState: 'passing' });
+            expect(untouched.ciCheckedAt!.getTime()).toBe(lastRead.getTime());
+            expect(await openIds(parent)).toEqual([blip.id]);
 
-            const row = await readRow(gone.id);
-            expect(row.prState).toBe(TASK_PR_NOT_FOUND_STATE);
+            // Access is back on the next tick.
+            await sweepWithProvider(providerSays(34));
+            expect((await readRow(blip.id)).prState).toBe('open');
+            expect(await openIds(parent, new Date(NOW.getTime() + 2 * DAY))).toEqual([blip.id]);
+        });
+
+        it('a "not found" that persists is recorded, frees the slot a day after the instance last changed, and is re-read every 6 hours', async () => {
+            const parent = await template({ workId: WORK });
+            const old = ago(30 * DAY);
+            const idle = await instance(
+                parent,
+                { status: TaskStatus.IN_REVIEW, prNumber: 37, prState: 'open', workId: WORK },
+                { createdAt: old, updatedAt: old },
+            );
+            const touched = await instance(
+                parent,
+                { status: TaskStatus.IN_REVIEW, prNumber: 38, prState: 'open', workId: WORK },
+                { createdAt: old, updatedAt: ago(2 * HOUR) },
+            );
+            await sweepRead(idle.id, {
+                ciCheckedAt: ago(TASK_PR_NOT_FOUND_CONFIRM_MS + 60_000),
+                ciState: 'failing',
+                prChecks: [{ name: 'build', status: 'completed', conclusion: 'failure' }],
+            });
+            await goNotFound(touched.id);
+
+            const row = await readRow(idle.id);
+            expect(row).toMatchObject({
+                prState: TASK_PR_NOT_FOUND_STATE,
+                ciState: null,
+                prChecks: null,
+            });
             expect(row.updatedAt.getTime()).toBe(old.getTime());
-            expect(await openIds(parent)).toEqual([gone.id]);
-            expect(await openIds(parent, new Date(NOW.getTime() + 23 * HOUR))).toEqual([gone.id]);
-            expect(await openIds(parent, new Date(NOW.getTime() + 25 * HOUR))).toEqual([]);
+            expect((await readRow(touched.id)).prState).toBe(TASK_PR_NOT_FOUND_STATE);
+            // The idle one is free at once (no change in a day); the one changed 2 h ago holds its
+            // slot until a day after that change, whatever the re-reads stamp.
+            expect(await openIds(parent)).toEqual([touched.id]);
+            expect(await openIds(parent, new Date(NOW.getTime() + 21 * HOUR))).toEqual([
+                touched.id,
+            ]);
+            expect(await openIds(parent, new Date(NOW.getTime() + 23 * HOUR))).toEqual([]);
 
-            // The sweep never selects it again, so nothing re-stamps the hold.
-            const again = await sweepWithProvider(null);
-            expect(again.summary.scanned).toBe(0);
-            expect(again.git.getPullRequestStatus).not.toHaveBeenCalled();
+            // Not due again until 6 hours after the read that recorded it.
+            const soon = await sweepWithProvider(null);
+            expect(soon.summary.scanned).toBe(0);
+            await sweepRead(idle.id, { ciCheckedAt: ago(TASK_PR_NOT_FOUND_RECHECK_MS + 60_000) });
+            const later = await sweepWithProvider(null);
+            expect(later.summary.scanned).toBe(1);
+            expect(later.git.getPullRequestStatus).toHaveBeenCalledTimes(1);
+            const reread = await readRow(idle.id);
+            expect(reread.prState).toBe(TASK_PR_NOT_FOUND_STATE);
+            expect(reread.ciCheckedAt!.getTime()).toBeGreaterThan(ago(HOUR).getTime());
+            expect(reread.updatedAt.getTime()).toBe(old.getTime());
+        });
+
+        it('a "not found" pull request the 6-hourly re-read finds merged completes its Task and frees the Mission slot', async () => {
+            const MISSION = '66666666-6666-4666-8666-666666666666';
+            const parent = await template({ workId: WORK });
+            const old = ago(30 * DAY);
+            const back = await instance(
+                parent,
+                {
+                    status: TaskStatus.IN_REVIEW,
+                    prNumber: 39,
+                    prState: 'open',
+                    workId: WORK,
+                    missionId: MISSION,
+                },
+                { createdAt: old, updatedAt: old },
+            );
+            await goNotFound(back.id);
+            expect((await readRow(back.id)).prState).toBe(TASK_PR_NOT_FOUND_STATE);
+            const missionCount = () =>
+                taskRows.count({
+                    where: missionOpenTasksWhere({ workId: WORK, missionId: MISSION }, { now: NOW }),
+                });
+            expect(await missionCount()).toBe(1);
+
+            await sweepRead(back.id, { ciCheckedAt: ago(TASK_PR_NOT_FOUND_RECHECK_MS + 60_000) });
+            const { summary, transitions } = await sweepWithProvider(providerSays(39, 'merged'));
+
+            expect(summary).toMatchObject({ scanned: 1, merged: 1, completed: 1, failed: 0 });
+            expect(transitions.transition).toHaveBeenCalledWith(
+                expect.objectContaining({ id: back.id, prState: 'merged' }),
+                TaskStatus.DONE,
+                expect.objectContaining({ actorType: 'agent' }),
+            );
+            const done = await readRow(back.id);
+            // `prState` merged is what the Goal wait-for-merge gate reads; Done is what the
+            // Mission cap and the overlap count read.
+            expect(done).toMatchObject({
+                status: TaskStatus.DONE,
+                prState: 'merged',
+                branchState: 'merged',
+            });
+            expect(await missionCount()).toBe(0);
+            expect(await count(parent)).toBe(0);
         });
 
         it('(counter-example) a pull request the provider still answers for as open keeps its slot past that day', async () => {
@@ -380,14 +508,7 @@ describe('Recurring Tasks overlap limit (real SQLite)', () => {
                 { status: TaskStatus.IN_REVIEW, prNumber: 36, prState: 'open', workId: WORK },
                 { createdAt: old, updatedAt: old },
             );
-            const { summary } = await sweepWithProvider({
-                number: 36,
-                state: 'open',
-                merged: false,
-                headSha: 'c'.repeat(40),
-                ciState: 'pending',
-                checks: [],
-            });
+            const { summary } = await sweepWithProvider(providerSays(36));
             expect(summary).toMatchObject({ scanned: 1, refreshed: 1, failed: 0 });
 
             const row = await readRow(waiting.id);
