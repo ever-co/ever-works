@@ -100,7 +100,11 @@ const PATTERNS: ReadonlyArray<{ name: string; re: RegExp }> = [
  * only; the patterns themselves are unchanged.
  */
 function normalizeForScan(s: string): string {
-	return s.normalize('NFKC').replace(/[\u200B\u200C\u200D\u00AD\uFEFF\u2060]/g, '');
+	// Every format character (`\p{Cf}`), not only the common joiners: U+2062
+	// (invisible times), U+180E (Mongolian vowel separator) and the tag
+	// characters U+E0000 to U+E007F split a token just as well and render as
+	// nothing (review of #3145).
+	return s.normalize('NFKC').replace(/\p{Cf}/gu, '');
 }
 
 /**

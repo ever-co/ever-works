@@ -49,6 +49,7 @@ import { TaskChatService } from './task-chat.service';
 import { renderTaskThreadPost, type TaskThreadPost } from './task-thread-posts';
 import { TASK_LIFECYCLE_POSTER, type TaskLifecyclePoster } from './task-lifecycle-poster.port';
 import { pullRequestOpenedPost } from './task-lifecycle-posts';
+import { composeTaskPullRequestText } from './task-pull-request-text';
 import { MergePolicyService } from '../policy/merge-policy.service';
 import { ActivityLogService } from '../activity-log/activity-log.service';
 import { ActivityActionType, ActivityStatus } from '../entities/activity-log.types';
@@ -1175,6 +1176,10 @@ export class TaskWorkspaceService {
         headSha?: string | null;
         /** The primary pull request, for the cross-link in the body. */
         primaryPrUrl?: string | null;
+        /**
+         * The run's final message (model-authored): the pull request's title
+         * (its `PR-TITLE:` line) and sanitized body. Absent → today's text.
+         */
         summary?: string | null;
     }): Promise<TaskMountPushOutcome> {
         const { task, userId, repositoryId } = input;
@@ -1291,16 +1296,22 @@ export class TaskWorkspaceService {
                 }
                 baseRef = remote.defaultBranch;
             }
-            const primaryNote = input.primaryPrUrl ? ` Part of ${input.primaryPrUrl}.` : '';
-            const summaryNote = input.summary ? `\n\n${input.summary}` : '';
+            // The run summary is model-authored and posted under the owner's
+            // identity: sanitized, never appended as written (see
+            // `composeTaskPullRequestText`).
+            const text = composeTaskPullRequestText({
+                task,
+                summary: input.summary,
+                mount: { repositoryId, primaryPrUrl: input.primaryPrUrl },
+            });
             const pr = await this.gitFacade.createPullRequest(
                 {
                     owner,
                     repo,
-                    title: `Task ${task.slug}: ${task.title ?? 'agent run output'} (${repositoryId})`,
+                    title: text.title,
                     head: branch,
                     base: baseRef,
-                    body: `Automated changes for Task \`${task.slug}\` (agent run) in \`${repositoryId}\`, one of the repositories the Task spans.${primaryNote} Review before merging — merge policy is governed by the Work's merge-policy settings.${summaryNote}`,
+                    body: text.body,
                 },
                 gitOptions,
             );
@@ -1782,6 +1793,12 @@ export class TaskWorkspaceService {
          * as an unknown gate, which a `requireGreenGate` policy refuses.
          */
         gateStatus?: GateStatus | null;
+        /**
+         * The run's final message, presentation only: the pull request's
+         * title (its `PR-TITLE:` line) and sanitized body. Omitted (today's
+         * cloud caller) → today's title and body, unchanged.
+         */
+        summary?: string | null;
     }): Promise<TaskWorkspaceFinalizeOutcome> {
         const { task, userId, workspace } = input;
         if (!this.workspaceFacade || !this.gitFacade) {
@@ -2016,6 +2033,7 @@ export class TaskWorkspaceService {
             branch: workspace.branch,
             gate: input.gate,
             gateStatus: input.gateStatus ?? null,
+            summary: input.summary ?? null,
         });
     }
 
@@ -2046,6 +2064,12 @@ export class TaskWorkspaceService {
         runId?: string;
         gate?: { checksPassed: number };
         gateStatus?: GateStatus | null;
+        /**
+         * The run's final message as the node reported it (model-authored,
+         * never its log tail): the pull request's title and sanitized body.
+         * Absent → today's text. Used only when a pull request is opened.
+         */
+        summary?: string | null;
     }): Promise<TaskWorkspaceFinalizeOutcome> {
         const { task, userId } = input;
         if (!this.gitFacade) {
@@ -2173,6 +2197,7 @@ export class TaskWorkspaceService {
             branch,
             gate: input.gate,
             gateStatus: input.gateStatus ?? null,
+            summary: input.summary ?? null,
         });
     }
 
@@ -2240,6 +2265,8 @@ export class TaskWorkspaceService {
         branch: string;
         gate?: { checksPassed: number };
         gateStatus: GateStatus | null;
+        /** The run's final message, when the caller has one (see `composeTaskPullRequestText`). */
+        summary?: string | null;
     }): Promise<TaskWorkspaceFinalizeOutcome> {
         const { task, work, userId, owner, repo, gitOptions, baseRef, branch } = args;
         if (!this.gitFacade) {
@@ -2280,17 +2307,22 @@ export class TaskWorkspaceService {
             return { outcome: 'pushed-no-pr' };
         }
 
-        const gateNote = args.gate
-            ? `\n\nQuality gate: all ${args.gate.checksPassed} acceptance checks green.`
-            : '';
+        // The run's summary names the change (title) and explains it (body);
+        // without one the text is exactly what it always was. Sanitized:
+        // model-authored text, posted under the owner's identity.
+        const text = composeTaskPullRequestText({
+            task,
+            summary: args.summary,
+            gate: args.gate,
+        });
         const pr = await this.gitFacade.createPullRequest(
             {
                 owner,
                 repo,
-                title: `Task ${task.slug}: ${task.title ?? 'agent run output'}`,
+                title: text.title,
                 head: branch,
                 base: baseRef,
-                body: `Automated changes for Task \`${task.slug}\` (agent run). Review before merging — merge policy is governed by the Work's merge-policy settings.${gateNote}`,
+                body: text.body,
             },
             gitOptions,
         );
