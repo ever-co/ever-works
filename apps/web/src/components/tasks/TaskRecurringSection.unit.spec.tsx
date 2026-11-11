@@ -26,6 +26,7 @@ vi.mock('@/app/actions/tasks', () => ({
 
 import { TaskRecurringSection } from './TaskRecurringSection';
 import type { Task } from '@/lib/api/tasks';
+import { setTaskRecurringAction } from '@/app/actions/tasks';
 
 function makeTask(overrides: Partial<Task> = {}): Task {
     return {
@@ -82,5 +83,42 @@ describe('TaskRecurringSection', () => {
         expect(screen.getByText('FREQ=WEEKLY;BYDAY=MO')).toBeTruthy();
         expect(screen.getByText('Europe/Berlin')).toBeTruthy();
         expect(screen.getByTestId('task-recurring-demote')).toBeTruthy();
+    });
+
+    it('refuses a Daily schedule with no time of day instead of saving a time-less rule', async () => {
+        // Without BYHOUR a rule takes its time from the slot that last fired,
+        // and a slot moved by a spring-forward gap would keep the moved time.
+        const user = userEvent.setup();
+        vi.mocked(setTaskRecurringAction).mockClear();
+        render(<TaskRecurringSection task={makeTask()} />);
+
+        await user.click(screen.getByTestId('task-recurring-promote'));
+        await user.clear(document.getElementById('task-recurring-time') as HTMLInputElement);
+
+        const hint = screen.getByTestId('task-recurring-time-required');
+        expect(hint.getAttribute('role')).toBe('alert');
+        expect(hint.textContent).toBe('dashboard.tasksPage.recurring.errorTimeRequired');
+        const save = screen.getByTestId('task-recurring-save') as HTMLButtonElement;
+        expect(save.disabled).toBe(true);
+        await user.click(save);
+        expect(setTaskRecurringAction).not.toHaveBeenCalled();
+    });
+
+    it('does not hold a Custom rule hostage to the hidden time field', async () => {
+        // Clear the time under Daily, then switch to Custom: the field is
+        // hidden there, so it must not keep Save disabled.
+        const user = userEvent.setup();
+        render(<TaskRecurringSection task={makeTask()} />);
+
+        await user.click(screen.getByTestId('task-recurring-promote'));
+        await user.clear(document.getElementById('task-recurring-time') as HTMLInputElement);
+        await user.click(screen.getByTestId('task-recurring-frequency'));
+        await user.click(await screen.findByRole('option', { name: /custom/i }));
+
+        expect(document.getElementById('task-recurring-time')).toBeNull();
+        expect(screen.queryByTestId('task-recurring-time-required')).toBeNull();
+        expect((screen.getByTestId('task-recurring-save') as HTMLButtonElement).disabled).toBe(
+            false,
+        );
     });
 });
