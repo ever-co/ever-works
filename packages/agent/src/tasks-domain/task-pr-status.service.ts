@@ -22,7 +22,12 @@ import { TASK_LIFECYCLE_POSTER, type TaskLifecyclePoster } from './task-lifecycl
 import { checksSettledPost } from './task-lifecycle-posts';
 import { TASK_APP_CHECKS, type TaskAppChecks } from './task-app-checks.port';
 import { hasAppCheckLeg, isAdvisoryAppCheckLeg, withAppCheckRollUp } from './app-check-legs';
-import { TASK_PR_NOT_FOUND_CONFIRM_MS, TASK_PR_NOT_FOUND_STATE } from './task-open-work';
+import {
+    TASK_PR_NOT_FOUND_CONFIRM_MS,
+    TASK_PR_NOT_FOUND_RECHECK_MS,
+    TASK_PR_NOT_FOUND_STATE,
+} from './task-open-work';
+import { prReadRateLimitedUntil, prReadRetryDelayMs } from './task-pr-read-retry';
 
 /**
  * PR insights (kanban run cockpit, plan 04 M5 + M6 + the merged half of
@@ -39,8 +44,9 @@ import { TASK_PR_NOT_FOUND_CONFIRM_MS, TASK_PR_NOT_FOUND_STATE } from './task-op
  *
  *  1. **Throttled by the cache, not by the caller.** Every refresh path
  *     goes through `refreshIfStale`, which returns the cached row
- *     untouched when `ciCheckedAt` is younger than the floor. A user
- *     hammering the pill cannot amplify into provider calls.
+ *     untouched when `ciCheckedAt` is younger than the floor, or while a
+ *     failed read is backing off (`prReadRetryAt`). A user hammering the
+ *     pill cannot amplify into provider calls.
  *  2. **Single-flight per Task.** Concurrent refreshes for one Task share
  *     one in-flight promise, so a board with ten cards in review and a
  *     cron tick landing at the same moment still makes one call per PR.
@@ -48,14 +54,22 @@ import { TASK_PR_NOT_FOUND_CONFIRM_MS, TASK_PR_NOT_FOUND_STATE } from './task-op
  *     or `closed`, the sweep predicate excludes it forever (the plan's
  *     "only while the PR is open"). `not_found` is NOT terminal: the
  *     provider also answers "not found" while the connection cannot see a
- *     private repository. It is recorded only once the answer has persisted
- *     (`TASK_PR_NOT_FOUND_CONFIRM_MS`), and the SWEEP re-reads it every
- *     `TASK_PR_NOT_FOUND_RECHECK_MS`; that is its recovery path, so a pull
- *     request that comes back drives the merge gate and `completeOnMerge`
- *     again. The on-demand read serves it from the cache.
- *  4. **A provider failure is not a Task failure.** Every write is
- *     best-effort; a rate-limited sync leaves the previous verdict in
- *     place and tries again next tick.
+ *     private repository. It is recorded only once the provider has kept
+ *     answering "not found" for `TASK_PR_NOT_FOUND_CONFIRM_MS` counted from
+ *     its FIRST such answer (`prNotFoundSince`), and the SWEEP re-reads it
+ *     every `TASK_PR_NOT_FOUND_RECHECK_MS`; that is its recovery path, so a
+ *     pull request that comes back drives the merge gate and
+ *     `completeOnMerge` again. The on-demand read serves it from the cache.
+ *  4. **A provider failure is not a Task failure, and not an answer.** A
+ *     read that throws leaves the previous verdict in place (never
+ *     `not_found`, never a `prState` change) and backs off: the next read
+ *     waits as long as the pull request has gone unseen, from one tick
+ *     doubling up to 6 hours (`prReadRetryAt`, `task-pr-read-retry.ts`), so
+ *     rows that keep failing cannot take every slot of the sweep's batch
+ *     from other owners. A RATE LIMIT defers every read made with the
+ *     owner's connection to that provider until the provider's reset, and
+ *     the sweep skips the owner's other rows in that tick and refills the
+ *     batch once.
  *  5. **Merged ⇒ done goes through `TaskTransitionService`**, never a raw
  *     status write, so the approver + blocker gates keep holding. A Task
  *     whose approvals are still pending simply stays in review — the
@@ -116,10 +130,25 @@ export interface PrStatusSyncSummary {
     completed: number;
     failed: number;
     /**
+     * Rows of this batch NOT read because their owner's connection was rate limited earlier in
+     * the tick (the read that hit the limit deferred them all). Not failures: nothing was asked.
+     */
+    deferred: number;
+    /**
      * APW-08 T22 — merges the App Works delivery chain took over: recorded as `merged` and NOT
      * completed here (the Task closes when its change is live). Always `0` without the chain.
      */
     deliveryTracked: number;
+}
+
+/** Where a Task's pull request lives, and how to reach it (`TaskPrStatusService.resolveRepo`). */
+interface TaskPrRepoTarget {
+    owner: string;
+    repo: string;
+    baseRef: string;
+    gitOptions: { userId: string; providerId: string; workId: string };
+    /** APW-08 FR-43 — the Work's kind, so the thread post needs no second Work read. */
+    workKind: string | null;
 }
 
 /** What {@link TaskPrStatusService.refreshTask} answers: the Task, and the provider read behind it. */
@@ -140,6 +169,13 @@ export class TaskPrStatusService {
 
     /** Single-flight map, keyed by task id (rule 2 above). */
     private readonly inFlight = new Map<string, Promise<TaskPrRefresh>>();
+
+    /**
+     * Overridable clock, for tests: the read stamps, the sweep's due instants and the backoff all
+     * read it. (Faking the global `Date` instead would make TypeORM hand `Date` columns back as
+     * strings on SQLite, so a test could not read its own stamps.)
+     */
+    clock: () => Date = () => new Date();
 
     constructor(
         private readonly tasks: TaskRepository,
@@ -212,8 +248,15 @@ export class TaskPrStatusService {
         }
 
         const floorMs = PR_STATUS_REFRESH_FLOOR_SECONDS * 1000;
-        const age = task.ciCheckedAt ? Date.now() - new Date(task.ciCheckedAt).getTime() : Infinity;
+        const nowMs = this.clock().getTime();
+        const age = task.ciCheckedAt ? nowMs - new Date(task.ciCheckedAt).getTime() : Infinity;
         if (!opts.refresh && age < floorMs) {
+            return this.toView(task, true);
+        }
+        // A read that did not succeed is backing off (rule 1): a failed read stamps no
+        // `ciCheckedAt`, so the floor alone would let every request reach the provider again.
+        // An explicit refresh still asks.
+        if (!opts.refresh && this.isLater(task.prReadRetryAt, new Date(nowMs))) {
             return this.toView(task, true);
         }
         // A terminal PR never changes again — serve the cache forever. A `not_found` one is
@@ -325,7 +368,16 @@ export class TaskPrStatusService {
      * the merged ones.
      *
      * Per-Task isolation is total: one Task's provider error, missing
-     * credentials or refused transition never stops the sweep.
+     * credentials or refused transition never stops the sweep. A read that
+     * fails backs its own row off (rule 4), so it does not come back at the
+     * head of the next batch.
+     *
+     * A RATE LIMIT is about the owner's connection, not one pull request:
+     * the read that hits it defers every pull request of that owner on that
+     * provider (`recordReadFailure`), the rest of the owner's rows in this
+     * batch are skipped without a call, and the batch is refilled ONCE from
+     * the rows still due, so one rate-limited owner costs the other owners
+     * neither this tick nor the next.
      */
     async syncDuePrStatuses(
         opts: { limit?: number; staleSeconds?: number } = {},
@@ -336,43 +388,66 @@ export class TaskPrStatusService {
             merged: 0,
             completed: 0,
             failed: 0,
+            deferred: 0,
             deliveryTracked: 0,
         };
         if (!this.gitFacade) return summary;
 
         const staleSeconds = opts.staleSeconds ?? PR_STATUS_SYNC_STALE_SECONDS;
-        const staleBefore = new Date(Date.now() - staleSeconds * 1000);
-        const due = await this.tasks.findDuePrStatusSync(
-            staleBefore,
-            opts.limit ?? PR_STATUS_SYNC_BATCH,
-        );
-        summary.scanned = due.length;
+        const tickAt = this.clock();
+        const staleBefore = new Date(tickAt.getTime() - staleSeconds * 1000);
+        const notFoundBefore = new Date(tickAt.getTime() - TASK_PR_NOT_FOUND_RECHECK_MS);
+        const rateLimitedOwners = new Set<string>();
+        const seen = new Set<string>();
+        let budget = opts.limit ?? PR_STATUS_SYNC_BATCH;
 
-        for (const task of due) {
-            try {
-                const before = task.prState;
-                const { task: after, status, workKind } = await this.refreshTask(task, task.userId);
-                summary.refreshed += 1;
-                if (after.prState === 'merged' && before !== 'merged') {
-                    summary.merged += 1;
-                    if (await this.recordTrackedMerge(after, status)) {
-                        summary.deliveryTracked += 1;
-                    } else if (await this.completeOnMerge(after)) {
-                        summary.completed += 1;
-                    }
-                } else if (status) {
-                    // Only a pull request the provider just answered for: a "not found" read
-                    // (`status` null) has no checks to fix and possibly no pull request at all.
-                    await this.offerRedGateToFixLoop(after, workKind);
+        for (let pass = 0; pass < 2 && budget > 0; pass += 1) {
+            const due = (
+                await this.tasks.findDuePrStatusSync(staleBefore, budget, notFoundBefore, tickAt)
+            ).filter((task) => !seen.has(task.id));
+            summary.scanned += due.length;
+            let skipped = 0;
+            for (const task of due) {
+                seen.add(task.id);
+                if (rateLimitedOwners.has(task.userId)) {
+                    skipped += 1;
+                    summary.deferred += 1;
+                    continue;
                 }
-            } catch (error) {
-                summary.failed += 1;
-                this.logger.warn(
-                    `PR status sync failed for task ${task.id}: ${
-                        error instanceof Error ? error.message : String(error)
-                    }`,
-                );
+                try {
+                    const before = task.prState;
+                    const {
+                        task: after,
+                        status,
+                        workKind,
+                    } = await this.refreshTask(task, task.userId);
+                    summary.refreshed += 1;
+                    if (after.prState === 'merged' && before !== 'merged') {
+                        summary.merged += 1;
+                        if (await this.recordTrackedMerge(after, status)) {
+                            summary.deliveryTracked += 1;
+                        } else if (await this.completeOnMerge(after)) {
+                            summary.completed += 1;
+                        }
+                    } else if (status) {
+                        // Only a pull request the provider just answered for: a "not found" read
+                        // (`status` null) has no checks to fix and possibly no pull request at all.
+                        await this.offerRedGateToFixLoop(after, workKind);
+                    }
+                } catch (error) {
+                    summary.failed += 1;
+                    if (prReadRateLimitedUntil(error, this.clock())) {
+                        rateLimitedOwners.add(task.userId);
+                    }
+                    this.logger.warn(
+                        `PR status sync failed for task ${task.id}: ${
+                            error instanceof Error ? error.message : String(error)
+                        }`,
+                    );
+                }
             }
+            // Refill only the slots a rate limit emptied; the deferred rows are no longer due.
+            budget = skipped;
         }
 
         return summary;
@@ -555,15 +630,27 @@ export class TaskPrStatusService {
         if (existing) return existing;
 
         const work = (async () => {
-            if (!this.gitFacade || !task.prNumber || !task.workId) return { task, status: null };
-            const target = await this.resolveRepo(task, userId);
-            const status = await this.gitFacade.getPullRequestStatus(
-                target.owner,
-                target.repo,
-                task.prNumber,
-                target.gitOptions,
-            );
-            const checkedAt = new Date();
+            const gitFacade = this.gitFacade;
+            const prNumber = task.prNumber;
+            if (!gitFacade || !prNumber || !task.workId) return { task, status: null };
+            let providerId: string | null = null;
+            let target: TaskPrRepoTarget;
+            let status: GitPullRequestStatus | null;
+            try {
+                target = await this.resolveRepo(task, userId);
+                providerId = target.gitOptions.providerId;
+                status = await gitFacade.getPullRequestStatus(
+                    target.owner,
+                    target.repo,
+                    prNumber,
+                    target.gitOptions,
+                );
+            } catch (error) {
+                // Rule 4: a failed read is not an answer. Back off, then fail as before.
+                await this.recordReadFailure(task, error, providerId);
+                throw error;
+            }
+            const checkedAt = this.clock();
             if (!status) return this.recordNotFound(task, checkedAt);
             // APW-08 T16 (FR-16) — an App Work's advisory legs, read at the PR base, so a failing
             // advisory `Ever Works check: {name}` leg reds neither the roll-up nor the merge gate
@@ -571,7 +658,13 @@ export class TaskPrStatusService {
             // kind and whenever the rules cannot be read: then nothing is reclassified.
             const advisory = await this.appAdvisoryLegs(task, target, status);
             const effective = withAppCheckRollUp(status, advisory);
-            const patch = this.toCachePatch(effective, checkedAt, advisory);
+            const patch = {
+                ...this.toCachePatch(effective, checkedAt, advisory),
+                // A successful read ends any run of failed or "not found" reads: back to the
+                // usual cadence, and a later "not found" starts its 30 minutes afresh.
+                prReadRetryAt: null,
+                prNotFoundSince: null,
+            };
             // Reviewer agent stage (slice AD) — the head this Task had
             // recorded BEFORE this read, so a moved head is detectable below.
             const previousPrHead = task.prHeadSha ?? null;
@@ -750,41 +843,127 @@ export class TaskPrStatusService {
      * request was deleted, or this connection cannot see it (a provider answers "not found" for a
      * private repository it does not show you, which can last minutes). Three cases:
      *
-     *  - **Already `not_found`** (the sweep's 6-hourly re-check): stamp the read, nothing else.
-     *  - **Not persisted yet**: the last successful read (`ciCheckedAt`; the last write when the
-     *    pull request was never read) is younger than {@link TASK_PR_NOT_FOUND_CONFIRM_MS}. Nothing
-     *    is written, so the cache keeps describing the pull request as last seen and the sweep reads
-     *    it again on its next tick: a brief loss of access never touches the Task.
-     *  - **Persisted**: record `prState = 'not_found'` and clear the CI cache of a pull request
+     *  - **Already `not_found`** (the sweep's 6-hourly re-check): stamp the read, nothing else
+     *    (and end any backoff an earlier failed re-check left).
+     *  - **Not confirmed yet**: the FIRST "not found" since the last successful read
+     *    (`prNotFoundSince`, this answer when there was none) is younger than
+     *    {@link TASK_PR_NOT_FOUND_CONFIRM_MS}. Only that first answer and the next read
+     *    (`prReadRetryAt`) are written, never the cache: it keeps describing the pull request as
+     *    last seen, so a brief loss of access never touches what the Task shows. The next read
+     *    backs off like a failed one (`prReadRetryDelayMs`) but never past the instant the 30
+     *    minutes are up, so a pull request that stays gone is confirmed on time.
+     *  - **Confirmed**: record `prState = 'not_found'` and clear the CI cache of a pull request
      *    nobody can see (`ciState`, `prChecks`), so no failing checks are shown or handed to the CI
      *    fix loop. One `task.runtime_updated`. `updatedAt` is kept, like every cache write.
+     *
+     * Counting from the first answer, not from the last successful read, is what keeps one answer
+     * from confirming at once after a long gap in reads (the sweep down, or more open pull
+     * requests than it reads in 30 minutes). A read that THROWS in between leaves
+     * `prNotFoundSince` alone: it says nothing about whether the pull request exists.
      */
     private async recordNotFound(task: Task, checkedAt: Date): Promise<TaskPrRefresh> {
         if (task.prState === TASK_PR_NOT_FOUND_STATE) {
-            await this.tasks.updatePrStatusCache(task.id, { ciCheckedAt: checkedAt });
-            return { task: Object.assign(task, { ciCheckedAt: checkedAt }), status: null };
+            const stamp = { ciCheckedAt: checkedAt, prReadRetryAt: null, prNotFoundSince: null };
+            await this.tasks.updatePrStatusCache(task.id, stamp);
+            return { task: Object.assign(task, stamp), status: null };
         }
-        const lastSeen = task.ciCheckedAt ?? task.updatedAt ?? task.createdAt ?? null;
-        const lastSeenMs = lastSeen ? new Date(lastSeen).getTime() : Number.NaN;
-        if (
-            Number.isFinite(lastSeenMs) &&
-            checkedAt.getTime() - lastSeenMs < TASK_PR_NOT_FOUND_CONFIRM_MS
-        ) {
-            this.logger.log(
-                `Task ${task.id}: the provider answered "not found" for PR #${task.prNumber}; ` +
-                    'not recorded until it persists.',
+        const firstMs = task.prNotFoundSince
+            ? new Date(task.prNotFoundSince).getTime()
+            : Number.NaN;
+        const firstAnswer = Number.isFinite(firstMs) ? new Date(firstMs) : checkedAt;
+        const confirmAtMs = firstAnswer.getTime() + TASK_PR_NOT_FOUND_CONFIRM_MS;
+        if (checkedAt.getTime() < confirmAtMs) {
+            const retryAt = new Date(
+                Math.min(
+                    checkedAt.getTime() + prReadRetryDelayMs(checkedAt, this.lastSeen(task)),
+                    confirmAtMs,
+                ),
             );
-            return { task, status: null };
+            const pending = { prNotFoundSince: firstAnswer, prReadRetryAt: retryAt };
+            await this.tasks.updatePrStatusCache(task.id, pending);
+            this.logger.log(
+                `Task ${task.id}: the provider answered "not found" for PR #${task.prNumber} ` +
+                    `(first at ${firstAnswer.toISOString()}); not recorded unless it still does at ` +
+                    `${new Date(confirmAtMs).toISOString()}. Next read at ${retryAt.toISOString()}.`,
+            );
+            return { task: Object.assign(task, pending), status: null };
         }
         const patch = {
             prState: TASK_PR_NOT_FOUND_STATE,
             ciState: null,
             prChecks: null,
             ciCheckedAt: checkedAt,
+            prReadRetryAt: null,
+            prNotFoundSince: null,
         };
         await this.tasks.updatePrStatusCache(task.id, patch);
         await this.recordRuntimeChange(task, patch);
         return { task: Object.assign(task, patch), status: null };
+    }
+
+    /**
+     * Rule 4 — a provider read that THREW (or a Work that could not be resolved for it). Nothing
+     * the read would have answered is written: not `prState`, not the CI cache, not `ciCheckedAt`
+     * (readers take it as "the pull request was last seen"), not `prNotFoundSince`. Only when to
+     * try again:
+     *
+     *  - a **rate limit** defers every pull request of the owner on that provider until the
+     *    provider's reset (`TaskRepository.deferPrReadsForOwner`): the connection is spent, not
+     *    this pull request;
+     *  - **anything else** backs this row off by {@link prReadRetryDelayMs}: as long as the pull
+     *    request has gone unseen, from one tick doubling to 6 hours, never sooner than a wait
+     *    already set.
+     *
+     * Best-effort: a failed write is logged and the read's own error still propagates.
+     */
+    private async recordReadFailure(
+        task: Task,
+        error: unknown,
+        providerId: string | null,
+    ): Promise<void> {
+        const now = this.clock();
+        try {
+            const limitedUntil = prReadRateLimitedUntil(error, now);
+            if (limitedUntil && providerId) {
+                const deferred = await this.tasks.deferPrReadsForOwner(
+                    task.userId,
+                    providerId,
+                    limitedUntil,
+                );
+                this.logger.warn(
+                    `Task ${task.id}: its owner's ${providerId} connection is rate limited; ` +
+                        `${deferred} pull-request read(s) deferred to ${limitedUntil.toISOString()}.`,
+                );
+                if (!this.isLater(task.prReadRetryAt, limitedUntil)) {
+                    Object.assign(task, { prReadRetryAt: limitedUntil });
+                }
+                return;
+            }
+            const backoff = new Date(now.getTime() + prReadRetryDelayMs(now, this.lastSeen(task)));
+            if (this.isLater(task.prReadRetryAt, backoff)) return;
+            await this.tasks.updatePrStatusCache(task.id, { prReadRetryAt: backoff });
+            Object.assign(task, { prReadRetryAt: backoff });
+        } catch (writeError) {
+            this.logger.warn(
+                `Task ${task.id}: could not record the PR read failure: ${
+                    writeError instanceof Error ? writeError.message : String(writeError)
+                }`,
+            );
+        }
+    }
+
+    /**
+     * When the pull request was last seen: its last successful read, or, never read, the last
+     * change to the Task (the write that recorded the pull request moved `updatedAt`).
+     */
+    private lastSeen(task: Task): Date | null {
+        return task.ciCheckedAt ?? task.updatedAt ?? task.createdAt ?? null;
+    }
+
+    /** Whether `current` is a real instant strictly later than `than`. */
+    private isLater(current: Date | null | undefined, than: Date): boolean {
+        const ms = current ? new Date(current).getTime() : Number.NaN;
+        return Number.isFinite(ms) && ms > than.getTime();
     }
 
     /**
@@ -892,17 +1071,7 @@ export class TaskPrStatusService {
     }
 
     /** Work → (owner, repo, baseRef, facade options). Mirrors TaskWorkspaceService. */
-    private async resolveRepo(
-        task: Task,
-        userId: string,
-    ): Promise<{
-        owner: string;
-        repo: string;
-        baseRef: string;
-        gitOptions: { userId: string; providerId: string; workId: string };
-        /** APW-08 FR-43 — the Work's kind, so the thread post needs no second Work read. */
-        workKind: string | null;
-    }> {
+    private async resolveRepo(task: Task, userId: string): Promise<TaskPrRepoTarget> {
         const work = await this.works.findById(task.workId as string);
         if (!work) {
             throw new NotFoundException(`Task ${task.id} has no reachable Work.`);

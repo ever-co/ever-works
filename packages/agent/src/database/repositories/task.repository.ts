@@ -699,16 +699,31 @@ export class TaskRepository {
      * Never-checked rows (`ciCheckedAt IS NULL`) sort first, then the
      * stalest — so a newly opened PR gets its dot quickly and a long
      * backlog drains in age order. Hits `idx_tasks_pr_status_sync`.
+     *
+     * A row whose last read did not succeed (`prReadRetryAt` set: the read
+     * threw, the owner's connection was rate limited, or a "not found" is
+     * not confirmed yet) is NOT in that order. It is due once
+     * `prReadRetryAt` has passed (`retryBefore`, default now), whatever its
+     * lane, and waits its turn by that instant. Two reads, each walking its
+     * own index (`idx_tasks_pr_status_sync`, `idx_tasks_pr_read_retry`),
+     * merged first-due-first: a row read at `ciCheckedAt` against a row due
+     * again at `prReadRetryAt`, so a retry waits behind every row last read
+     * before its retry instant, and none of them waits forever. Before this
+     * split a failed read stamped nothing, kept its stale `ciCheckedAt` and
+     * sorted first on every tick: a batch of them read nothing else.
      */
     async findDuePrStatusSync(
         staleBefore: Date,
         limit = 50,
         notFoundBefore: Date = new Date(Date.now() - TASK_PR_NOT_FOUND_RECHECK_MS),
+        retryBefore: Date = new Date(),
     ): Promise<Task[]> {
-        return this.repository
+        const take = Math.max(1, Math.min(limit, 200));
+        const regular = await this.repository
             .createQueryBuilder('task')
             .where('task.prNumber IS NOT NULL')
             .andWhere('task.workId IS NOT NULL')
+            .andWhere('task.prReadRetryAt IS NULL')
             .andWhere(
                 new Brackets((due) =>
                     due
@@ -725,8 +740,56 @@ export class TaskRepository {
                 ),
             )
             .orderBy('task.ciCheckedAt', 'ASC', 'NULLS FIRST')
-            .take(Math.max(1, Math.min(limit, 200)))
+            .take(take)
             .getMany();
+        const retrying = await this.repository
+            .createQueryBuilder('task')
+            .where('task.prReadRetryAt <= :retryBefore', { retryBefore })
+            .andWhere('task.prNumber IS NOT NULL')
+            .andWhere('task.workId IS NOT NULL')
+            .andWhere("(task.prState IS NULL OR task.prState IN ('open', 'draft', :prNotFound))", {
+                prNotFound: TASK_PR_NOT_FOUND_STATE,
+            })
+            .orderBy('task.prReadRetryAt', 'ASC')
+            .take(take)
+            .getMany();
+        return mergeFirstDue(regular, retrying, take);
+    }
+
+    /**
+     * A rate limit on the owner's connection to `gitProvider`: no pull request
+     * of theirs on that provider is read again before `until` (the
+     * provider's reset). One read learnt it, so every other read with the
+     * same connection would only spend a call to learn it again, and would
+     * keep taking the sweep's batch from every other owner meanwhile.
+     *
+     * The scope is the owner's Works on that provider: the platform cannot
+     * see from here whether the call used the owner's own token or a narrower
+     * installation, so it may defer a little more than needed, never longer
+     * than the provider's reset. Rows already deferred further are left
+     * alone, and terminal pull requests are not touched. Keeps `updatedAt`
+     * (a sweep write, as `updatePrStatusCache`). Returns the rows deferred.
+     */
+    async deferPrReadsForOwner(userId: string, gitProvider: string, until: Date): Promise<number> {
+        const escape = (name: string) => this.repository.manager.connection.driver.escape(name);
+        const keepUpdatedAt = escape('updatedAt');
+        const result = await this.repository
+            .createQueryBuilder()
+            .update(Task)
+            .set({ prReadRetryAt: until, updatedAt: () => keepUpdatedAt })
+            .where('userId = :userId', { userId })
+            .andWhere('prNumber IS NOT NULL')
+            .andWhere("(prState IS NULL OR prState IN ('open', 'draft', :prNotFound))", {
+                prNotFound: TASK_PR_NOT_FOUND_STATE,
+            })
+            .andWhere('(prReadRetryAt IS NULL OR prReadRetryAt < :until)', { until })
+            .andWhere(
+                `${escape('workId')} IN (SELECT ${escape('id')} FROM ${escape('works')}` +
+                    ` WHERE ${escape('gitProvider')} = :gitProvider)`,
+                { gitProvider },
+            )
+            .execute();
+        return result.affected ?? 0;
     }
 
     /**
@@ -738,12 +801,23 @@ export class TaskRepository {
      * would read a sweep that merely re-read an open pull request as a
      * change. TypeORM's update builder sets an `@UpdateDateColumn` to
      * CURRENT_TIMESTAMP unless the SET names it, so `updatedAt` is set to
-     * its own value. `ciCheckedAt` is the sweep's own stamp.
+     * its own value. `ciCheckedAt` is the sweep's own stamp, and
+     * `prReadRetryAt` / `prNotFoundSince` its memory of reads that did not
+     * succeed.
      */
     async updatePrStatusCache(
         taskId: string,
         patch: Partial<
-            Pick<Task, 'prState' | 'ciState' | 'ciCheckedAt' | 'prChecks' | 'prHeadSha'>
+            Pick<
+                Task,
+                | 'prState'
+                | 'ciState'
+                | 'ciCheckedAt'
+                | 'prChecks'
+                | 'prHeadSha'
+                | 'prReadRetryAt'
+                | 'prNotFoundSince'
+            >
         >,
     ): Promise<void> {
         const keepUpdatedAt = this.repository.manager.connection.driver.escape('updatedAt');
@@ -1588,4 +1662,29 @@ export class TaskRepository {
             .execute();
         return (result.affected ?? 0) > 0;
     }
+}
+
+/**
+ * The PR-status sweep's two due lists as ONE batch of at most `take` rows, first-due-first. Each
+ * list arrives in its own order: `regular` by `ciCheckedAt` (never read first), `retrying` by
+ * `prReadRetryAt`. A regular row is ranked by its last read and a retrying row by the instant its
+ * retry became due; on a tie the regular row goes first.
+ */
+function mergeFirstDue(regular: Task[], retrying: Task[], take: number): Task[] {
+    const rank = (at: Date | null | undefined): number => {
+        const ms = at ? new Date(at).getTime() : Number.NaN;
+        return Number.isFinite(ms) ? ms : Number.NEGATIVE_INFINITY;
+    };
+    const batch: Task[] = [];
+    let r = 0;
+    let s = 0;
+    while (batch.length < take && (r < regular.length || s < retrying.length)) {
+        const next =
+            s >= retrying.length ||
+            (r < regular.length && rank(regular[r].ciCheckedAt) <= rank(retrying[s].prReadRetryAt))
+                ? regular[r++]
+                : retrying[s++];
+        batch.push(next);
+    }
+    return batch;
 }
