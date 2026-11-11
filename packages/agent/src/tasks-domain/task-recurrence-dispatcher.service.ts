@@ -587,10 +587,11 @@ export class TaskRecurrenceDispatcherService {
         try {
             const scope = ownershipScopeOf(template);
             await this.activityLog.log({
+                // Same posture as every other task-domain activity row: owner + scope, the Task in
+                // `details` (the Task page reads `resourceType` / `resourceId`), no `workId`.
                 userId: template.userId,
                 tenantId: scope.tenantId,
                 organizationId: scope.organizationId,
-                workId: template.workId ?? undefined,
                 actionType: ActivityActionType.SCHEDULE_SKIPPED,
                 action: ActivityActionType.SCHEDULE_SKIPPED,
                 status: ActivityStatus.CANCELLED,
