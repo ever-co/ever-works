@@ -270,7 +270,7 @@ const BLOCK_CONSTRUCTS = [
 ];
 
 /** remark plugin: inline Markdown only (see {@link BLOCK_CONSTRUCTS}). */
-function remarkInlineOnly(this: { data(): Record<string, unknown> }) {
+function remarkInlineOnly(this: { data(): unknown }) {
     const data = this.data() as { micromarkExtensions?: unknown[] };
     data.micromarkExtensions = [
         ...(data.micromarkExtensions ?? []),
