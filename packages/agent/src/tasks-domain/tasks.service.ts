@@ -6,11 +6,12 @@ import {
     Logger,
     NotFoundException,
     Optional,
+    ServiceUnavailableException,
 } from '@nestjs/common';
 import type { TaskIsolationMode } from './task-isolation';
 import type { MissionRepoRunRefusal } from './mission-repo-run';
 import { InjectRepository } from '@nestjs/typeorm';
-import type { EntityManager, Repository } from 'typeorm';
+import { In, type EntityManager, type Repository } from 'typeorm';
 import {
     reservedTaskLabelChanges,
     reservedTaskLabelRefusal,
@@ -75,7 +76,10 @@ import {
     recurrenceFireLockKey,
 } from './recurrence-overlap';
 import { RecordAccessPolicy } from '../record-visibility/record-access-policy.service';
-import { RecordVisibilityService } from '../record-visibility/record-visibility.service';
+import {
+    RecordVisibilityService,
+    type TeamSideChange,
+} from '../record-visibility/record-visibility.service';
 import { AgentRepository } from '../database/repositories/agent.repository';
 import { AgentStatus, type Agent } from '../entities/agent.entity';
 import { AgentRunRepository } from '../database/repositories/agent-run.repository';
@@ -99,6 +103,7 @@ import {
     type OwnershipScope,
 } from '../database/ownership-scope';
 import { isAwaitingOwner, withoutAwaitingOwner } from './awaiting-owner';
+import { resolveWorkDefaultAgent } from './work-default-agent';
 
 /**
  * Options of {@link TasksService.create} (T17a). `withinCreate` runs right
@@ -232,6 +237,32 @@ export interface CreateTaskInput {
      * without it (the parent is loaded for the scope check anyway).
      */
     derivedFromPrivate?: boolean;
+    /**
+     * The record this Task is derived from — a Mission's planned Task, a Goal's loop
+     * iteration — whose title, brief or description it carries. Its visibility is read
+     * fresh at create and the Task takes it instead of the insert-time default, which it
+     * only ever narrows:
+     *
+     *  - `private` → the Task is private (as {@link derivedFromPrivate}).
+     *  - `team` → the Task sits on the record's Teams (the first as `teamId`, the rest as
+     *    `team_resources`, as `RecordVisibilityService.setTeams` stores them) with `team`
+     *    visibility and the record's `visibilityExplicit`, instead of the insert-time
+     *    `organization` default. Readers: the parent's Teams, plus the members of the Task's
+     *    Work as for any `team` Task. For a Mission those can read the Mission too (its
+     *    `mission_works`); a Goal has no Work rule, so a member of a Team Goal's Work who is
+     *    on none of its Teams reads the iteration but not the Goal (review of #3165, kept:
+     *    still far narrower than `organization`). Only Teams of the Task's own Organization are used; a
+     *    `team` record with none (a value picked by hand) files a `team` Task on no Team,
+     *    explicit, so it never widens on its own. A `teamId` the caller passes wins over
+     *    the record's Teams, as it does without a source, and a sub-task keeps its
+     *    parent's Team.
+     *  - `organization` → the insert-time default, as before.
+     *
+     * Ignored when the record is not the Task owner's own, or the record visibility service
+     * is not bound (every read is then owner-only anyway). SERVER-WRITTEN ONLY, like
+     * {@link derivedFromPrivate}: absent from `CreateTaskDto`.
+     */
+    derivedFrom?: { aggregate: 'mission' | 'goal'; id: string } | null;
     /**
      * Works-security (2026-10-18) — which platform flow filed this Task
      * (`Task.origin`). SERVER-WRITTEN ONLY, like `delegationDepth`: absent from
@@ -935,7 +966,12 @@ export class TasksService {
         // Work and a Team and have been raised by a Mission at the same
         // time; the previous "exactly zero or one of missionId/ideaId/workId"
         // rule made that impossible to express.
-        await this.assertScopeReachable(userId, input, ownershipScope);
+        await this.assertScopeReachable(
+            userId,
+            input,
+            ownershipScope,
+            (options.ownershipStamp ?? ownershipScope)?.organizationId,
+        );
         this.assertTitle(input.title);
         if (input.description) assertNoSecrets(input.description, 'task.description');
         // Works-security — a restricted caller files no Task already carrying a
@@ -1002,6 +1038,13 @@ export class TasksService {
             }
         }
 
+        // Record visibility: a Task derived from a Team-shared record sits on that record's
+        // Teams instead of the whole Organization (see `CreateTaskInput.derivedFrom`).
+        const stamp = options.ownershipStamp ?? ownershipScope;
+        const derived = await this.derivedVisibility(userId, input, stamp?.organizationId ?? null);
+        if (derived?.private) privateSource = true;
+        const derivedTeams = !privateSource && derived?.teams ? derived.teams : null;
+
         if (input.scheduledAt) this.assertFutureSchedule(input.scheduledAt);
         this.assertPlanning(
             input.startAt ?? null,
@@ -1013,6 +1056,11 @@ export class TasksService {
         const slug = `T-${nextNumber}`;
         const extraRepos = await this.normalizeExtraRepos(userId, input.extraRepos);
 
+        // The derived Teams beyond the first are `team_resources` rows, written in the
+        // create's transaction when there is one (as `MissionsService.create` does).
+        const extraTeams = derivedTeams ? derivedTeams.teamIds.length > 1 : false;
+        let teamSide: TeamSideChange | null = null;
+        let teamsPending = false;
         const created = await this.withTaskEvent(
             async (manager) => {
                 const row = await this.tasks.create(
@@ -1029,7 +1077,9 @@ export class TasksService {
                         missionId: input.missionId ?? null,
                         ideaId: input.ideaId ?? null,
                         workId: input.workId ?? null,
-                        teamId: input.teamId ?? null,
+                        teamId: derivedTeams
+                            ? (derivedTeams.teamIds[0] ?? null)
+                            : (input.teamId ?? null),
                         agentId: input.agentId ?? null,
                         goalId: input.goalId ?? null,
                         parentTaskId: input.parentTaskId ?? null,
@@ -1050,23 +1100,58 @@ export class TasksService {
                         hiddenFromBoard: input.hiddenFromBoard ?? false,
                         ...(privateSource
                             ? { visibility: 'private' as const, visibilityExplicit: true }
-                            : {}),
+                            : derivedTeams
+                              ? {
+                                    visibility: 'team' as const,
+                                    visibilityExplicit: derivedTeams.explicit,
+                                }
+                              : {}),
                     },
                     ...managerArg(manager),
                 );
+                if (extraTeams && derivedTeams && this.visibility) {
+                    if (manager) {
+                        const teams = await this.visibility.setTeamsIn(
+                            manager,
+                            'task',
+                            row.id,
+                            derivedTeams.teamIds,
+                            userId,
+                        );
+                        teamSide = teams?.teamSide ?? null;
+                    } else {
+                        teamsPending = true;
+                    }
+                }
                 // T17a — e.g. the integration API's externalRef link, in this
                 // transaction: a failure here rolls the task back.
                 if (options.withinCreate) await options.withinCreate(row, manager);
                 return row;
             },
-            (publisher, manager, row) =>
-                publisher.created(manager, 'task', row.id, 'task.created', {
+            async (publisher, manager, row) => {
+                await publisher.created(manager, 'task', row.id, 'task.created', {
                     actor:
                         input.createdByType === 'agent'
                             ? { type: 'agent', id: input.createdById, label: null }
                             : undefined,
-                }),
+                });
+                // Review 2026-10-17 F34: the Teams' `team.resource.added`, after the Task's.
+                if (teamSide) await this.visibility!.recordTeamSideIn(manager, teamSide);
+            },
         );
+        // No domain-event transaction to write them in: the remaining Teams go in their own
+        // (the Task is already `team` on its first Team, so it is never wider meanwhile).
+        if (teamsPending && derivedTeams && this.visibility) {
+            try {
+                await this.visibility.setTeams('task', created.id, derivedTeams.teamIds, userId);
+            } catch (err) {
+                this.logger.warn(
+                    `Task ${created.id}: its remaining Teams could not be attached (${
+                        err instanceof Error ? err.message : String(err)
+                    }); it stays on its first Team.`,
+                );
+            }
+        }
 
         await this.logActivity({
             userId,
@@ -1891,17 +1976,43 @@ export class TasksService {
      *   1. its Agent assignees (the fan-out set a drag-to-in-progress
      *      would dispatch), then
      *   2. its own `agentId` column, then
-     *   3. the Works's Work-scoped Agents — "the Work's default agent".
+     *   3. the Agent its Work names as default (`works.defaultAgentId`,
+     *      when it still resolves for this owner in this scope), then
+     *   4. the Works's Work-scoped Agents.
      *
-     * Deduped by id, owner-scoped throughout, never throws (a lookup
-     * failure degrades to the candidates gathered so far, so the picker
-     * still opens with whatever is knowable).
+     * 3 and 4 are both offered as `work-default`. Deduped by id,
+     * owner-scoped throughout, never throws (a lookup failure degrades to
+     * the candidates gathered so far, so the picker still opens with
+     * whatever is knowable).
      */
     async listRunCandidates(
         userId: string,
         taskId: string,
         ownershipScope?: OwnershipScope,
     ): Promise<RunCandidateAgent[]> {
+        return (await this.gatherRunCandidates(userId, taskId, ownershipScope)).candidates;
+    }
+
+    /**
+     * {@link listRunCandidates}, plus what {@link resolveRunAgentId} needs to apply the Work's
+     * default Agent without changing the rule it applied before that existed:
+     *
+     *   - `workDefault` — the Work's default Agent, or `null` (none set, or it no longer
+     *     resolves); `'unreadable'` when it could not be read;
+     *   - `ownCount` — how many candidates the Task itself names (assignees + its `agentId`);
+     *   - `ruleCandidates` — the candidates the older rule counts: every one EXCEPT a Work
+     *     default that is neither the Task's own Agent nor one of the Work's Work-scoped Agents.
+     */
+    private async gatherRunCandidates(
+        userId: string,
+        taskId: string,
+        ownershipScope?: OwnershipScope,
+    ): Promise<{
+        candidates: RunCandidateAgent[];
+        ruleCandidates: RunCandidateAgent[];
+        ownCount: number;
+        workDefault: Agent | null | 'unreadable';
+    }> {
         const task = await this.getOne(userId, taskId, ownershipScope);
         const out = new Map<string, RunCandidateAgent>();
 
@@ -1939,7 +2050,24 @@ export class TasksService {
                 .catch(() => null);
             if (agent) push(task.agentId, 'task', agent);
         }
+        const ownCount = out.size;
 
+        let workDefault: Agent | null | 'unreadable' = null;
+        if (task.workId) {
+            try {
+                workDefault = await this.workDefaultAgent(userId, task.workId, ownershipScope);
+            } catch (err) {
+                workDefault = 'unreadable';
+                this.logger.warn(
+                    `Run candidates: the default Agent of Work ${task.workId} could not be read for ${taskId}: ${err}`,
+                );
+            }
+            if (workDefault && workDefault !== 'unreadable') {
+                push(workDefault.id, 'work-default', workDefault);
+            }
+        }
+
+        const workScopedIds = new Set<string>();
         if (task.workId && this.agents) {
             try {
                 const { rows } = await this.agents.findByUserIdScoped(
@@ -1950,20 +2078,58 @@ export class TasksService {
                     },
                     ownershipScope,
                 );
-                for (const agent of rows) push(agent.id, 'work-default', agent);
+                for (const agent of rows) {
+                    workScopedIds.add(agent.id);
+                    push(agent.id, 'work-default', agent);
+                }
             } catch (err) {
                 this.logger.warn(`Run candidates: Work-agent lookup failed for ${taskId}: ${err}`);
             }
         }
 
-        return [...out.values()];
+        const candidates = [...out.values()];
+        const defaultId = workDefault && workDefault !== 'unreadable' ? workDefault.id : null;
+        return {
+            candidates,
+            // Leave the default out ONLY where it entered as the Work default. When it is also
+            // the Task's own Agent (an assignee or its `agentId` — `push` dedupes by id, so it
+            // keeps that source) it is one of the Task's candidates, and dropping it would let
+            // Run start a Work-scoped Agent the Task never named (review of #3159).
+            ruleCandidates: candidates.filter(
+                (candidate) =>
+                    candidate.id !== defaultId ||
+                    candidate.source !== 'work-default' ||
+                    workScopedIds.has(candidate.id),
+            ),
+            ownCount,
+            workDefault,
+        };
+    }
+
+    /**
+     * The Agent `workId` names as its default (`works.defaultAgentId`) when `userId` may still use
+     * it in `ownershipScope` — owned, not archived, inside the Work's and the caller's scope
+     * (`resolveWorkDefaultAgent`); `null` when none is set, it no longer resolves, or this service
+     * has no Work / Agent repository. A failed READ throws: each caller decides whether it may
+     * fall back to the older rule (the picker does, Run does not).
+     */
+    private async workDefaultAgent(
+        userId: string,
+        workId: string,
+        ownershipScope?: OwnershipScope,
+    ): Promise<Agent | null> {
+        if (!this.agents || !this.works) return null;
+        const work = await this.works.findById(workId);
+        if (!work?.defaultAgentId) return null;
+        return resolveWorkDefaultAgent(this.agents, work, userId, ownershipScope);
     }
 
     /**
      * Board dispatch (kanban M3) — run this Task now.
      *
      * Resolution order is `agentId` (explicit) → the Task's assigned
-     * Agent → the Work's default Agent, and an AMBIGUOUS or EMPTY
+     * Agent → the Agent its Work names as default → the Work's only
+     * Agent ({@link resolveRunAgentId}), and an AMBIGUOUS or EMPTY
      * resolution is a 400 carrying the candidate list, which is exactly
      * what the board's agent picker renders. Dispatch itself goes
      * through `TaskTransitionService.dispatchAgentRun` — the same path
@@ -2090,8 +2256,11 @@ export class TasksService {
      * The Agent {@link runTask} will start a NEW Task with, before the Task exists: the one a
      * caller passes (owned by `userId` in `ownershipScope`, as `resolveRunAgentId` checks it),
      * else — a new Task has no assignee rows, and its own `agentId` is that same explicit one —
-     * the Work's only Agent (`listRunCandidates`' Work lookup: the same query, the same page).
-     * `null` exactly where `runTask` would refuse with a 400: no such Agent, none, or several.
+     * the Agent the Work names as default when it still resolves (`works.defaultAgentId`, the
+     * same lookup `resolveRunAgentId` makes), else the Work's only Agent (`listRunCandidates`'
+     * Work lookup: the same query, the same page). `null` exactly where `runTask` would refuse
+     * with a 400: no such Agent, none, or several. A Work that cannot be read throws, as
+     * `runTask` does, so a Mission skips the Work this tick instead of judging another Agent.
      */
     async resolveRunAgentForNewTask(
         userId: string,
@@ -2103,6 +2272,8 @@ export class TasksService {
             const agent = await this.agents.findByIdAndUser(input.agentId, userId, ownershipScope);
             return agent && ownershipScopeMatches(agent, ownershipScope) ? agent : null;
         }
+        const workDefault = await this.workDefaultAgent(userId, input.workId, ownershipScope);
+        if (workDefault) return workDefault;
         const { rows } = await this.agents.findByUserIdScoped(
             userId,
             { workId: input.workId, limit: 25 },
@@ -2134,7 +2305,15 @@ export class TasksService {
         );
     }
 
-    /** Explicit → assignee → Work default, with the picker-shaped 400s. */
+    /**
+     * Explicit → assignee / the Task's Agent → the Work's default Agent → the Work's only Agent,
+     * with the picker-shaped 400s.
+     *
+     * The Work's default applies only to a Task that names no Agent of its own: one that does
+     * keeps exactly the rule it had (its own candidates plus the Work-scoped Agents, exactly one
+     * runs), so naming a default never turns a Task that ran into an ambiguous one. A default
+     * that could not be READ refuses the run rather than silently starting another Agent.
+     */
     private async resolveRunAgentId(
         userId: string,
         taskId: string,
@@ -2162,8 +2341,17 @@ export class TasksService {
             return explicitAgentId;
         }
 
-        const candidates = await this.listRunCandidates(userId, taskId, ownershipScope);
-        if (candidates.length === 1) return candidates[0].id;
+        const { candidates, ruleCandidates, ownCount, workDefault } =
+            await this.gatherRunCandidates(userId, taskId, ownershipScope);
+        if (ownCount === 0) {
+            if (workDefault === 'unreadable') {
+                throw new ServiceUnavailableException(
+                    "This Task's Work could not be read to find its default Agent. Try again, or pass agentId.",
+                );
+            }
+            if (workDefault) return workDefault.id;
+        }
+        if (ruleCandidates.length === 1) return ruleCandidates[0].id;
         if (candidates.length === 0) {
             throw new BadRequestException({
                 code: RUN_NO_AGENT,
@@ -2852,6 +3040,87 @@ export class TasksService {
 
     // ── internals ─────────────────────────────────────────────────
 
+    /**
+     * {@link CreateTaskInput.derivedFrom}: what the new Task takes from the record it is
+     * derived from, read fresh. It only ever narrows the insert-time default: `private`, or
+     * `team` (the parent's Teams, plus the Work's members as for any `team` Task) on the record's
+     * Teams that belong to the Task's own Organization (`organizationId`, the scope the Task
+     * is stamped with). A `teamId` the caller chose wins over the record's Teams, exactly as
+     * without a source, so a source never adds a Team the caller did not ask for, and a
+     * sub-task keeps its parent's Team. `null` = the
+     * insert-time default: no source, the record is gone, not the Task owner's, or
+     * `organization`, the Task has no Organization, or the visibility service is not bound.
+     */
+    private async derivedVisibility(
+        userId: string,
+        input: CreateTaskInput,
+        organizationId: string | null,
+    ): Promise<{
+        private: boolean;
+        teams: { teamIds: string[]; explicit: boolean } | null;
+    } | null> {
+        const source = input.derivedFrom;
+        if (!source || !this.visibility) return null;
+        // Defence in depth (the field is server-written only): the record must be the Task
+        // owner's own, so a source can never read another account's Teams onto a Task.
+        const owned =
+            source.aggregate === 'mission'
+                ? await this.missions?.count({ where: { id: source.id, userId } })
+                : await this.goals?.count({ where: { id: source.id, userId } });
+        if (!owned) return null;
+        const state = await this.visibility.getState(source.aggregate, source.id);
+        if (!state) return null;
+        if (state.visibility === 'private') return { private: true, teams: null };
+        if (state.visibility !== 'team' || !organizationId) return null;
+        let teamIds: string[];
+        if (input.teamId) {
+            // The caller's own Team (checked by `assertScopeReachable`) wins, as without a source.
+            teamIds = [input.teamId];
+        } else if (input.parentTaskId) {
+            // A sub-task keeps its parent's Team (`assertParentScopeMatches` already compared
+            // them), so it takes the `team` visibility alone.
+            teamIds = [];
+        } else {
+            const wanted = [...new Set(state.teamIds)];
+            const found =
+                wanted.length > 0 && this.teams
+                    ? await this.teams.find({
+                          where: { id: In(wanted), organizationId },
+                          select: ['id'],
+                      })
+                    : [];
+            const inOrganization = new Set(found.map((team) => team.id));
+            teamIds = wanted.filter((id) => inOrganization.has(id));
+        }
+        // The record's own flag; with no Team left the Task is `team` by hand, so an automatic
+        // recompute (no Team → `organization`) can never widen it.
+        return {
+            private: false,
+            teams: { teamIds, explicit: state.visibilityExplicit || teamIds.length === 0 },
+        };
+    }
+
+    /**
+     * The Organization of the caller's own parent Task when the new sub-task names the
+     * parent's own Team (`teamId` equal to the parent's) and is stamped into that same
+     * Organization (`stampOrganizationId`, the scope the new row is written with), else
+     * `null`. The parent is looked up exactly as `create` looks it up for the scope check
+     * (`findByIdAndUser` in the request scope). A personal parent, or a sub-task stamped
+     * anywhere else (or not stamped at all), answers `null`: its Team stays the caller's own.
+     */
+    private async parentTeamOrganization(
+        userId: string,
+        input: CreateTaskInput,
+        ownershipScope?: OwnershipScope,
+        stampOrganizationId?: string | null,
+    ): Promise<string | null> {
+        if (!input.parentTaskId || !input.teamId || !stampOrganizationId) return null;
+        const parent = await this.tasks.findByIdAndUser(input.parentTaskId, userId, ownershipScope);
+        if (!parent || !parent.organizationId || parent.teamId !== input.teamId) return null;
+        if (parent.organizationId !== stampOrganizationId) return null;
+        return parent.organizationId;
+    }
+
     private assertTitle(title: string): void {
         if (!title || title.trim().length < 1) {
             throw new BadRequestException('Task title is required.');
@@ -2865,6 +3134,8 @@ export class TasksService {
         userId: string,
         input: CreateTaskInput,
         ownershipScope?: OwnershipScope,
+        /** `create` only: the Organization the new row is stamped with (sub-task Team rule). */
+        stampOrganizationId?: string | null,
     ): Promise<void> {
         if (input.workId) {
             if (!this.works) {
@@ -2908,8 +3179,22 @@ export class TasksService {
             if (!this.teams) {
                 throw new BadRequestException('Team repository not wired in this context.');
             }
+            // A sub-task must carry its parent's `teamId` (`assertParentScopeMatches`), and a
+            // Task filed by a Team Mission or Goal sits on that record's Team, which a colleague
+            // may own. The caller's own parent Task (loaded in this scope, as the parent check
+            // below loads it) already holds that Team, so it only has to be a Team of the
+            // parent's Organization: the caller-owns-the-Team rule would refuse every sub-task
+            // of such a Task. Any other Team is still the caller's own.
+            const parentOrganizationId = await this.parentTeamOrganization(
+                userId,
+                input,
+                ownershipScope,
+                stampOrganizationId,
+            );
             const team = await this.teams.findOne({
-                where: ownershipWhereWith<Team>(userId, ownershipScope, { id: input.teamId }),
+                where: parentOrganizationId
+                    ? { id: input.teamId, organizationId: parentOrganizationId }
+                    : ownershipWhereWith<Team>(userId, ownershipScope, { id: input.teamId }),
                 select: ['id'],
             });
             if (!team) {

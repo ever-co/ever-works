@@ -287,9 +287,31 @@ There are two different paths that start a run, and they resolve the Agent diffe
 1. the Agent you pick explicitly in the picker,
 2. an Agent **assignee** on the Task,
 3. the Task's own **Agent** field,
-4. an Agent scoped to the Task's Work.
+4. the Work's **default Agent**, when the Work names one ([below](#the-works-default-agent)),
+5. an Agent scoped to the Task's Work.
 
 If exactly one candidate resolves, the run starts. If several do, or none, the picker opens and tells you which it is — each option is tagged **Assigned**, **Task agent** or **Work default**. With no candidate at all you get: _"No Agent is assigned to this Task and its Work has no default Agent."_
+
+The Work's default Agent only applies to a Task that has no Agent of its own (steps 2 and 3). A Task that has one resolves exactly as it did before the default existed, also when its own Agent is the default itself (for example the first iteration of a [Goal](./goals.md#who-runs-a-brand-new-goal), which records the default as its Agent). Naming a default never makes such a Task ambiguous and never starts a different Agent for it. The picker still lists the default, tagged **Work default**, first among the Work's Agents.
+
+### The Work's default Agent
+
+A Work can name the Agent that runs its new Tasks when nobody picks one. Set it under **Work → Settings → Default Agent**, or with `PATCH /api/works/:id` and `{ "defaultAgentId": "<agent id>" }`; `null` clears it. Use it for an Agent that serves several Works: an Agent pinned to no single Work is never "an Agent scoped to the Task's Work", so before this setting such an Agent was only used when someone picked it.
+
+Every path that starts a Task without a named Agent tries the default before its older rule:
+
+- **Run** (step 4 above), including a [Mission](./missions.md#output) starting the Tasks it files;
+- the [Mission](./missions.md#output) check that decides whether a Repository Work can take Tasks at all;
+- a [Goal](./goals.md#who-runs-a-brand-new-goal)'s first iteration, when the Goal is scoped to the Work;
+- a change requested on an [App Work](./app-works-evolve.md), before the Agent of its most recent Task (it must still be allowed to commit).
+
+Only the Work's **owner** can set or clear it: a shared Work has one default, and it decides what the owner's Tasks, Missions and Goals start. Any other editor gets `403` with the code `workDefaultAgentOwnerOnly`, and the settings card is read-only for them. A save that sends the value already stored is accepted and changes nothing. The default only ever runs the owner's Tasks; a Task another member starts falls back to the Work's only Agent. Automated credentials (a fleet-run token, an integration key) cannot change it.
+
+The setting only accepts an Agent the owner owns, that is not archived, in the same tenant and organization as the Work. A Work with no tenant or organization recorded accepts only a personal Agent (one that belongs to no organization). Any other id answers `404 Agent not found`, the same for an Agent of another organization as for one that does not exist. The default is checked again every time it is used, by every path including background ones: an Agent you archive, delete or move out of the Work's scope later is skipped, and the Work falls back to its only Agent until you pick another default.
+
+An Agent that is still usable but loses a permission the Task needs is not skipped. For a Repository Work, a default that may no longer commit or open pull requests keeps resolving, so a Mission files nothing on that Work and its save warns `repoWorkAgentCannotOpenPullRequests` until you grant the permission or pick another default.
+
+Moving a Task to **In progress** and recurring Tasks do not use it: both start only the Task's own assignees or Agent.
 
 ### Moving to In progress
 
@@ -298,7 +320,7 @@ Entering **In progress** — by drag, by the Move menu, or by the status buttons
 The right rail's **Agent** picker on Task detail writes that Task-level Agent, so assigning there is enough to make the move start a run.
 
 :::caution The Work's default Agent is not part of this fan-out
-**Run** will fall back to a Work-scoped Agent; moving the Task to In progress will not. That is why the board opens the agent picker whenever you move a card into In Progress — by drag or from the card's **Move →** menu, both go through the same handler — unless the Task has an assignee row or its own Agent. A Work default alone would move the card and start nothing.
+**Run** will fall back to the Work's default Agent or a Work-scoped Agent; moving the Task to In progress will not. That is why the board opens the agent picker whenever you move a card into In Progress — by drag or from the card's **Move →** menu, both go through the same handler — unless the Task has an assignee row or its own Agent. A Work default alone would move the card and start nothing.
 :::
 
 :::note This path was silently broken until EW-054
@@ -309,6 +331,45 @@ Other things that happen around a run:
 
 - **A run already in flight** for the same Task and Agent is a refusal, not a second run: _"A run is already in flight for this Agent."_ Steer or cancel the live run instead.
 - If too many runs are already in flight, the run is accepted but **parked**, and it starts when a slot frees. Clicking **Run** reports _"Queued — waiting for capacity"_ in the run menu; a run parked by the move-to-In-progress fan-out says nothing about capacity — the card shows only a **Queued** chip.
+
+### When a reviewer rejects the work
+
+When a run's work has problems, record them on the Task. One finding per rejection reads best:
+
+```http
+POST /api/tasks/:id/reject
+{ "feedback": "The retry path drops the auth header: add it back and cover it with a test.", "runNow": true }
+```
+
+| Field      | Required             | Meaning                                                                                                                                                         |
+| ---------- | -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `feedback` | Yes                  | The finding, up to 8,000 characters.                                                                                                                            |
+| `runId`    | No                   | The run whose output you are rejecting, when you know it.                                                                                                       |
+| `runNow`   | No (default `false`) | Start the fix run right after recording, exactly as **Run** (`POST /api/tasks/:id/run`) would: the same Agent resolution, the same refusals, the same capacity. |
+
+The answer is `201` with the recorded rejection: `id`, `taskId`, `source` and `createdAt`. With `runNow: true` it also carries `run` — `{ "ok": true, "run": { "runId", "agentId", "dispatched", "parked" } }`, or `{ "ok": false, "error": { "code", "message" } }` when the run could not start (`RUN_ALREADY_IN_FLIGHT`, or no single Agent to run it). The rejection is recorded either way, so do not send it again; start the run later with **Run**. A fleet-run credential cannot record a rejection, with or without `runNow`.
+
+Changes requested on the pull request itself — by a repository collaborator or an allow-listed review bot — are recorded the same way by the review bridge; see [CI feedback and the fix loop](./ci-auto-resume.md#reviewer-rejections).
+
+**The next run is a fix run.** The next run of the Task — **Run**, `runNow`, a move to In progress, a recurring re-run, on the platform or on one of your computers — carries a `# REVIEW FEEDBACK TO ADDRESS` section with the findings recorded since the Task's last finished run, oldest first. It tells the run to:
+
+- fix exactly those findings, on top of the commits already on the Task's branch;
+- start nothing new: the Task's own description is the work that is already done;
+- explain in its final message any finding it believes is wrong, instead of changing code for it, and account for every finding.
+
+The findings are data, not instructions: they sit between fence markers carrying a code their authors cannot know, and nothing inside them can change the run's rules, grant it permissions or send its push anywhere else.
+
+**Same branch, same pull request.** A fix run checks out the Task's branch at its pushed head (on another computer too, and on the same one when someone pushed to the branch since), pushes to that branch, and the open pull request picks the commits up. No second pull request is opened, and the Task moves back to **In review**. Whether the pull request is still open is checked when the run finishes: one merged or closed while the run worked gets a new pull request for the new commits, as before.
+
+**Each finding is fixed once.** A run carries the findings it was given. When it completes they are used up, and a later run is not told about them again. When it fails, is cancelled, or stops to ask you a question, they go back: the next run gets them, and so does the run your answer starts (as its first message, like any resumed run).
+
+- A finding stays waiting until a run that was given it completes. Nothing else retires it — not its age, and not another run finishing in the meantime. (The one exception was a single step on the deploy that introduced fix runs: findings recorded on the Task itself before it were retired then, so they did not all come due at once; findings on a still-open pull request were kept.)
+- A finding recorded on a pull request follows that pull request: once it is merged or closed, or the Task moves on to a new one, its findings are no longer given to runs. Findings recorded on the Task itself (`POST /api/tasks/:id/reject`) always are.
+- One run carries at most **10** findings, each cut at 4 KiB and 24 KiB in all. The rest wait for the next run, and the run is told how many are waiting. On one of your computers, a Task whose description leaves too little room carries fewer, and the ones left out wait too.
+
+:::note A resumed run
+Resuming a parked run — its Inbox answer, or **Resume** — replays the pending findings as the first message of the resumed run.
+:::
 
 :::warning No screen assigns a person
 The Task detail page has an **Agent** picker and nothing else. Reviewers, approvers, blockers, relations, and assignees of either kind (`user` or `agent`) exist in the data model and in the API, but no screen creates them. Add an assignee with `POST /api/tasks/:id/assignees`, passing `assigneeType` (`user` or `agent`) and `assigneeId`. Watchers exist as a table only — there is no endpoint for them either.
@@ -400,11 +461,13 @@ Every fire of a recurring template spawns a **new** instance with its own run, b
 - **What counts as open.** An instance is open while any of these holds:
     - a run of it is queued or running, and that run started (or, never started, was queued) in the **last 7 days**. That includes a run waiting on your answer and a run held behind a paused Agent, the global stop switch or a fleet usage limit: the run sweeper never reaps those, so they stop counting a week after they started instead;
     - it is not Done or Cancelled, its pull request is open or a draft, it is still on the template's Work, and the PR-status sweep read the pull request in the **last 7 days**. While the sweep keeps confirming it, this has **no time limit**: an unreviewed pull request is exactly the backlog the limit is for, so merging or closing it (or cancelling the instance) is what frees the slot;
-    - it is not Done or Cancelled, its pull request is open or a draft, and the instance was written in the **last 7 days**. Every PR-status sweep read also writes the instance, so this only ages out for an instance the sweep no longer reads: one taken out of its Work, an instance of a template with no Work, or one whose reads keep failing;
+    - it is not Done or Cancelled, its pull request is open or a draft, and the instance **changed** in the **last 7 days** (a person or a run wrote it). The PR-status sweep's reads do not count as a change, so this covers an instance the sweep does not read on the template's Work: one taken out of its Work or moved to another Work, an instance of a template with no Work, or one whose reads keep failing;
     - it is not Done or Cancelled, has no pull request yet (or one the PR-status sweep has not read), and was spawned in the **last 7 days**;
-    - it is not Done or Cancelled, its pull request was **closed without merging**, and it changed in the **last 24 hours** (the same hold a Mission's open-Tasks cap uses).
-- **What frees a slot.** Merging the pull request frees it at once, and so does moving the instance to Done or Cancelled. A pull request closed without merging frees it a day later. These end by themselves within a week, even if nobody touches them: a run that has been waiting or held for 7 days, an instance that failed without opening a pull request, and an open pull request the sweep no longer reads (an instance taken out of its Work, or reads that keep failing).
-- **What does not end by itself.** An open pull request the platform keeps reading but can never see merged or closed holds its slot until someone **cancels the instance** or **forces Run now**. That covers an instance moved to another Work, or a pull request the git provider answers "not found" for (the repository was deleted, the app was removed, or access was lost). The daily `schedule_skipped` row names it.
+    - it is not Done or Cancelled, its pull request was **closed without merging**, and it changed in the **last 24 hours**, counting the read that saw it close (the same hold a Mission's open-Tasks cap uses);
+    - it is not Done or Cancelled, the git provider keeps answering **"not found"** for its pull request (see below), and the instance changed in the **last 24 hours**. The platform keeps re-reading such a pull request, so those reads do not extend the hold.
+- **What frees a slot.** Merging the pull request frees it at once, and so does moving the instance to Done or Cancelled. A pull request closed without merging frees it a day later; one the provider keeps answering "not found" for frees it a day after the instance last changed (at once if that was more than a day ago). These end by themselves within a week, even if nobody touches them: a run that has been waiting or held for 7 days, an instance that failed without opening a pull request, and an open pull request the sweep does not read on the template's Work (an instance taken out of its Work or moved to another one, or reads that keep failing).
+- **What does not end by itself.** Only an open pull request on the template's Work that the sweep keeps reading as open: that is the review backlog the limit is for. Merging or closing it, **cancelling the instance** or **forcing Run now** frees the slot, and the daily `schedule_skipped` row names it.
+- **A "not found" pull request.** A git provider also answers "not found" while the connection cannot see a private repository (for example while the app's repository access is being edited), so a single answer changes nothing: the next read decides. Only once the provider has kept answering "not found" for **30 minutes** does the Task's pull request show **not found**, without its old checks. The PR-status sweep then re-reads it every **6 hours** instead of every few minutes. When the pull request can be seen again it is open (or merged, or closed) once more, and everything the sweep does resumes: a merged one completes its Task. The sweep is the only thing that re-checks it (`GET /api/tasks/:id/pr-status` serves it from the cache), and a new pull request on the Task starts over. Its branch is never cleaned up while the Task is not Done or Cancelled.
 - **What a skip does.** The slot passes: the next fire is computed as usual, but the occurrence count does not move, so a **Max occurrences** cap still gets every fire it promised. The template's activity gets a `schedule_skipped` row (_"Skipped: 3 instances still open (T-12, T-15, T-18); at most 3 at a time."_) on the first skip of a stall, then on the first skip of each UTC day the stall lasts, so a long stall shows up every day without a fast schedule writing a row per minute. **Activity → Schedules** shows **Skipped** with the time of the latest skip in the row's last-run column. That goes away when an instance is spawned again (by the schedule or by **Run now**, forced or not) or when the limit is cleared.
 - **Run now** honours the limit too: at the limit it answers _"At most 3 instances of this schedule may be open at a time, and 3 instances are still open (…)"_ (`409 SCHEDULE_TOO_MANY_OPEN`, with the open instances in the body). From **Activity → Schedules** and from a computer's **Schedules** tab you are asked whether to run it anyway; through the API send `{ "force": true }` to `POST /api/tasks/:id/recurring/run-now` (any other body fields are ignored, as before). Forcing bypasses only this limit, never the refusal for a fire whose previous run is still queued or running.
 

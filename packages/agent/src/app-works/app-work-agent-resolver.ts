@@ -1,9 +1,11 @@
-import { Injectable, Logger, Optional } from '@nestjs/common';
+import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import { ownershipScopeMatches, type OwnershipScope } from '../database/ownership-scope';
 import { AgentRepository } from '../database/repositories/agent.repository';
 import { TaskRepository } from '../database/repositories/task.repository';
+import { WorkRepository } from '../database/repositories/work.repository';
 import { AgentScope, AgentStatus, type Agent } from '../entities/agent.entity';
 import { TaskStatus } from '../entities/task.entity';
+import { resolveWorkDefaultAgent } from '../tasks-domain/work-default-agent';
 
 /**
  * APW-08 T25 — the agent-resolution rule (plan §2.8, Resolution R-21).
@@ -18,6 +20,10 @@ import { TaskStatus } from '../entities/task.entity';
  *
  * ## The rule — first match wins
  *
+ *   0. `work-default` — the Agent the Work names as its default (`works.defaultAgentId`),
+ *      while it still resolves for the owner in the Work's scope
+ *      (`tasks-domain/work-default-agent.ts`) and is eligible. An owner's explicit choice
+ *      beats every heuristic below; one that stopped qualifying is skipped, not obeyed;
  *   1. `recent-task` — the Agent of the most recently updated `in_review` / `done` Task on
  *      the Work, while that Agent still exists and is eligible;
  *   2. `pinned` — the ONLY eligible Agent pinned to the Work (`scope: work`);
@@ -36,7 +42,12 @@ import { TaskStatus } from '../entities/task.entity';
  */
 
 /** Where the resolved Agent came from. */
-export type AppWorkAgentSource = 'recent-task' | 'pinned' | 'assigned' | 'tenant-default';
+export type AppWorkAgentSource =
+    | 'work-default'
+    | 'recent-task'
+    | 'pinned'
+    | 'assigned'
+    | 'tenant-default';
 
 /** The resolver's answer. */
 export interface AppWorkAgentResolution {
@@ -83,6 +94,9 @@ export class AppWorkAgentResolverService implements AppWorkAgentResolver {
     constructor(
         @Optional() private readonly tasks?: TaskRepository,
         @Optional() private readonly agents?: AgentRepository,
+        // Appended LAST + `@Optional()`, self-declared so an emitted `Object` type can never
+        // silently drop it: step 0 reads the Work's `defaultAgentId`. Absent, step 0 is skipped.
+        @Optional() @Inject(WorkRepository) private readonly works?: WorkRepository,
     ) {}
 
     async resolve(input: {
@@ -94,6 +108,9 @@ export class AppWorkAgentResolverService implements AppWorkAgentResolver {
         if (!userId || !workId || !this.agents) {
             return null;
         }
+
+        const named = await this.fromWorkDefault(userId, workId, scope);
+        if (named) return { agentId: named, source: 'work-default' };
 
         const recent = await this.fromRecentTask(userId, workId, scope);
         if (recent) return { agentId: recent, source: 'recent-task' };
@@ -133,6 +150,24 @@ export class AppWorkAgentResolverService implements AppWorkAgentResolver {
         } catch (error) {
             this.logger.warn(`Agent candidates for user ${userId} failed: ${errorText(error)}`);
             return [];
+        }
+    }
+
+    /** Step 0 — the Work's own default Agent, when it still qualifies and may commit. */
+    private async fromWorkDefault(
+        userId: string,
+        workId: string,
+        scope?: OwnershipScope,
+    ): Promise<string | null> {
+        if (!this.works || !this.agents) return null;
+        try {
+            const work = await this.works.findById(workId);
+            if (!work?.defaultAgentId) return null;
+            const agent = await resolveWorkDefaultAgent(this.agents, work, userId, scope);
+            return isCommittingAgent(agent) ? (agent as Agent).id : null;
+        } catch (error) {
+            this.logger.warn(`Default-Agent lookup for work ${workId} failed: ${errorText(error)}`);
+            return null;
         }
     }
 

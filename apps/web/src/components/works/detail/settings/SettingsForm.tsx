@@ -17,6 +17,7 @@ import { ItemImportExportSettings } from './ItemImportExportSettings';
 import { CommitterSettings } from './CommitterSettings';
 import { ActivitySyncSettings } from './ActivitySyncSettings';
 import { TaskIsolationSettings } from './TaskIsolationSettings';
+import { DefaultAgentSettings } from './DefaultAgentSettings';
 import { QualityGatesSettings } from './QualityGatesSettings';
 import { MergePolicySettings } from './MergePolicySettings';
 import { ExternalRefsSettings } from './ExternalRefsSettings';
@@ -71,6 +72,9 @@ export function SettingsForm({
 
                 {/* Wave 2 M7 — worktree-per-Task isolation */}
                 <TaskIsolationSettings />
+
+                {/* The Agent that runs this Work's new Tasks when nobody picks one */}
+                <DefaultAgentSettings />
 
                 {/* Wave 3 M6 — quality gates (acceptance-check defaults) */}
                 <QualityGatesSettings />

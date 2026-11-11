@@ -52,6 +52,9 @@ vi.mock('./ActivitySyncSettings', () => ({
 vi.mock('./TaskIsolationSettings', () => ({
     TaskIsolationSettings: () => <div data-testid="card-task-isolation" />,
 }));
+vi.mock('./DefaultAgentSettings', () => ({
+    DefaultAgentSettings: () => <div data-testid="card-default-agent" />,
+}));
 vi.mock('./QualityGatesSettings', () => ({
     QualityGatesSettings: () => <div data-testid="card-quality-gates" />,
 }));
@@ -77,6 +80,16 @@ describe('SettingsForm — cards per Work kind', () => {
         expect(screen.getByTestId('card-repo-visibility')).toBeInTheDocument();
         expect(screen.getByTestId('card-community-pr')).toBeInTheDocument();
         expect(screen.getByTestId('card-delete')).toBeInTheDocument();
+    });
+
+    it('mounts the default-Agent card for every kind', () => {
+        for (const kind of ['default', 'repo', 'app']) {
+            const { unmount } = render(
+                <SettingsForm work={makeWork(kind)} user={USER} initialRepositories={[]} />,
+            );
+            expect(screen.getByTestId('card-default-agent')).toBeInTheDocument();
+            unmount();
+        }
     });
 
     // Self-build slice D (EW-766): the API refuses to flip the visibility of

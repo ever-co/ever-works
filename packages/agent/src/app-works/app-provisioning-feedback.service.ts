@@ -262,9 +262,7 @@ export class AppProvisioningFeedbackService {
         return (
             [...rows]
                 .filter((task) => task.status !== TaskStatus.CANCELLED)
-                .filter(
-                    (task) => now - timeOf(task.updatedAt ?? task.createdAt) <= RELEVANT_WINDOW_MS,
-                )
+                .filter((task) => now - lastSignOfLife(task) <= RELEVANT_WINDOW_MS)
                 .sort((a, b) => timeOf(b.createdAt) - timeOf(a.createdAt))[0] ?? null
         );
     }
@@ -372,6 +370,21 @@ function timeOf(value: Date | string | null | undefined): number {
     if (!value) return 0;
     const time = new Date(value).getTime();
     return Number.isFinite(time) ? time : 0;
+}
+
+/**
+ * When the provisioning Task last showed a sign of life: the later of its last write
+ * (`updatedAt`), the PR-status sweep's last read of its pull request (`ciCheckedAt`) and the last
+ * CI result for its head (`ciHeadSeenAt`). The last two keep `updatedAt` (machine-only writes), so
+ * a provisioning pull request still open and still being read stays relevant however long it waits
+ * for review.
+ */
+function lastSignOfLife(task: Task): number {
+    return Math.max(
+        timeOf(task.updatedAt ?? task.createdAt),
+        timeOf(task.ciCheckedAt),
+        timeOf(task.ciHeadSeenAt),
+    );
 }
 
 function errorText(error: unknown): string {

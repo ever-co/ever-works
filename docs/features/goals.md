@@ -114,10 +114,26 @@ the catalog card and the detail header.
 
 The loop routes each iteration to the Goal's **pinned agent** if one is set, otherwise round-robin over
 the agents that have already worked the Goal. A brand-new Goal has neither — so, when no agent is
-pinned and none has worked it yet, the router falls back to the **eligible agents in the Goal's own
-scope** (the same Organization / tenant ownership rule the rest of the platform applies) and
-round-robins over them, oldest first. It never picks an agent outside the Goal's scope, and a scope
+pinned and none has worked it yet, a Goal scoped to a Work goes to that Work's
+[default Agent](./tasks.md#the-works-default-agent) when it names one that is still usable; from the
+next iteration that Agent is part of the Goal's history. Otherwise the router falls back to the
+**eligible agents in the Goal's own scope** (the same Organization / tenant ownership rule the rest of
+the platform applies) and round-robins over them, oldest first. It never picks an agent outside the Goal's scope, and a scope
 with no agent still leaves the loop **stuck** with `no-candidate-agent` until you create or assign one.
+
+### Who can see a Goal's iterations
+
+Each iteration is a Task that carries the Goal's title and brief. It is filed with the Goal's own sharing: on the Goal's Teams when the Goal is shared with a Team, plus the members of the iteration's Work, as for any Team Task:
+
+| The Goal is                      | Its iteration Tasks are                                                                                                                                                                                                                                           |
+| -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Private**                      | Private: you and the Task's participants.                                                                                                                                                                                                                         |
+| Shared with a **Team**           | Filed on the Goal's Teams (the first is the Task's Team) with **Team** visibility. The members of those Teams can read them, plus the members of the iteration's Work (the Goal's Work, if it has one) as for any Team Task. The rest of the Organization cannot. |
+| Shared with the **Organization** | Shared with the Organization, like any new Task there.                                                                                                                                                                                                            |
+
+A Goal itself has no Work rule: a member of the Goal's Work who is on none of its Teams can read its iterations, but not the Goal.
+
+The Goal's visibility is read again as each iteration is filed, so a change applies from the next iteration. Iterations already filed keep their visibility; change one on its own Task page. If you set a Goal to **Team** by hand, its iterations are set to **Team** by hand too, so a later Team change never widens them on its own.
 
 ## Concurrent iterations
 

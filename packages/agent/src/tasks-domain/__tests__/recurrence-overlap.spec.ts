@@ -146,8 +146,13 @@ describe('recurrence overlap rules', () => {
         // 4: no pull-request outcome yet, spawned in the window.
         expect(branches[3]).toContain('"task"."prState" IS NULL');
         expect(branches[3]).toContain('"task"."createdAt" >= ');
-        // 5-6: closed unmerged, changed in the last day by either timestamp.
+        // 5: closed unmerged or "not found", changed in the last day (`updatedAt`).
+        expect(branches[4]).toContain('"task"."prState" IN (');
         expect(branches[4]).toContain('"task"."updatedAt" >= ');
+        // 6: closed unmerged only, read closed in the last day. Never "not found": the sweep
+        // re-reads that one every 6 hours, so its read stamp would hold the slot for good.
+        expect(branches[5]).toContain('"task"."prState" = ');
+        expect(branches[5]).not.toContain('"task"."prState" IN (');
         expect(branches[5]).toContain('"task"."ciCheckedAt" >= ');
 
         expect(parameters).toEqual(
@@ -159,6 +164,7 @@ describe('recurrence overlap rules', () => {
                 'open',
                 'draft',
                 'closed',
+                'not_found',
             ]),
         );
         // Four week-long bounds (run, sweep read, last change, spawn) and the two-sided day hold.

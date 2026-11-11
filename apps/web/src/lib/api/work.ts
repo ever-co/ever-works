@@ -159,6 +159,8 @@ export interface UpdateWorkDto {
     taskIsolationTargetRepo?: TaskIsolationTargetRepo;
     /** When Task branches are deleted after merge. */
     taskBranchCleanup?: TaskBranchCleanup;
+    /** The Agent that runs this Work's new Tasks when none is named; `null` clears it. */
+    defaultAgentId?: string | null;
     // Quality gates (Wave 3 M6) — Work-level default acceptance checks
     // inherited by agent-executed Tasks; `null` clears the defaults.
     checkDefaults?: TaskAcceptanceCheck[] | null;
@@ -403,6 +405,9 @@ export interface Work {
     taskIsolationBaseBranch?: string | null;
     taskIsolationTargetRepo?: TaskIsolationTargetRepo;
     taskBranchCleanup?: TaskBranchCleanup;
+    // The Agent that runs this Work's new Tasks when none is named (tried before the
+    // Work's only Agent). Absent/null = no default.
+    defaultAgentId?: string | null;
     // Quality gates (Wave 3 M6). Absent on rows written before the
     // columns existed — absent means no defaults / policy 'off' / 2.
     checkDefaults?: TaskAcceptanceCheck[] | null;

@@ -32,6 +32,7 @@ import { RunDispatchGateService } from '../agents/run-dispatch-gate.service';
 import { AGENT_RUN_CANCELLER, type AgentRunCanceller } from '../agents/agent-run-canceller';
 import { TasksService } from '../tasks-domain/tasks.service';
 import { TaskTransitionService } from '../tasks-domain/task-transition.service';
+import { resolveWorkDefaultAgent } from '../tasks-domain/work-default-agent';
 import {
     DomainEventPublisher,
     recordAfterWrite,
@@ -1131,8 +1132,13 @@ export class GoalOrchestratorService {
                     createdByType: 'user',
                     createdById: goal.userId,
                     // Review 2026-10-17 F1: the Task carries the Goal's title
-                    // and brief, so a private Goal's iteration stays private.
+                    // and brief, so a private Goal's iteration stays private, and
+                    // a Team Goal's sits on the Goal's Teams with `team`
+                    // visibility (`derivedFrom`, read fresh at create): the
+                    // Goal's Teams, plus the iteration Work's members as for
+                    // any `team` Task.
                     derivedFromPrivate: goal.visibility === 'private',
+                    derivedFrom: { aggregate: 'goal', id: goal.id },
                 };
                 // Lookups follow the relation scope, as routing did to pick `slotAgentId`: a
                 // legacy (null/null) Goal routes to a current-tenant Agent, and its raw stamp as
@@ -1516,6 +1522,11 @@ export class GoalOrchestratorService {
      * The fallback is deliberately NOT taken when a pin exists but failed
      * its scope check: an unhonoured explicit pin is the operator's to
      * fix, not something to route around silently.
+     *
+     * Before that pool, a Goal scoped to a Work routes its first iteration
+     * to the Agent the Work names as its default, when it still resolves
+     * ({@link resolveWorkDefaultCandidate}) — under the same "no pin, no
+     * history" condition.
      */
     private async resolveCandidates(goal: Goal): Promise<GoalRoutingCandidate[]> {
         if (goal.assignedAgentId) {
@@ -1559,7 +1570,34 @@ export class GoalOrchestratorService {
         if (out.size > 0 || goal.assignedAgentId || !this.agents) {
             return [...out.values()];
         }
+        const workDefault = await this.resolveWorkDefaultCandidate(goal);
+        if (workDefault) return [workDefault];
         return this.resolveScopeCandidates(goal);
+    }
+
+    /**
+     * Cold start on a Goal scoped to a Work: the Agent that Work names as its default
+     * (`works.defaultAgentId`), when it still resolves for the Goal's owner inside the Goal's
+     * scope — the same rule `TasksService.runTask` applies (`tasks-domain/work-default-agent.ts`).
+     * `null` (→ the scope pool) when the Goal has no Work, the Work names none, or the one it
+     * names was archived, deleted or left the scope. Taken only where the scope pool would be:
+     * no pin and no history. Once it has run an iteration it is history, so routing stays on
+     * it until an operator pins another Agent. A read failure PROPAGATES, as in
+     * {@link resolveScopeCandidates}: the tick retries instead of round-robining over the scope.
+     */
+    private async resolveWorkDefaultCandidate(goal: Goal): Promise<GoalRoutingCandidate | null> {
+        if (!goal.workId || !this.works || !this.agents) return null;
+        const work = await this.works.findOne({ where: { id: goal.workId } });
+        if (!work || work.userId !== goal.userId || !work.defaultAgentId) return null;
+        const goalScope = ownershipRelationScopeOf(goal);
+        if (goalScope && !ownershipScopeMatches(work, goalScope)) return null;
+        const agent = await resolveWorkDefaultAgent(this.agents, work, goal.userId, goalScope);
+        if (!agent) return null;
+        return {
+            agentId: agent.id,
+            name: agent.name ?? agent.slug ?? null,
+            source: 'work-default',
+        };
     }
 
     /**
