@@ -17,10 +17,13 @@ name: Desktop App Build
 # cell: GitHub-hosted runners do not start for the org.
 #
 # Since 2026-11-11 (owner: GitHub Actions and its artifact storage are not
-# used in ever-co, permanently) the job runs on GitHub only in forks, or when
-# the repo variable RUN_ON_ACTIONS is 'true'. In ever-co that leaves the linux
-# cell, in-cluster; there is no Windows or macOS machine outside Actions, so
-# those two cells do not run.
+# used in ever-co, permanently) the job runs on GitHub only in forks. In
+# ever-co that leaves the linux cell, in-cluster; there is no Windows or macOS
+# machine outside Actions, so those two cells do not run, and the dispatch
+# below works only in forks. To bring them back on GitHub, both: `stay` for
+# this file in k8s-gitops apps/ci-builds/tools/policy-overrides.json (else the
+# Actions enforcer keeps it disabled there), and repo variable
+# RUN_ON_ACTIONS = 'true'.
 #
 # Code signing (A11): certificates are read from repository secrets and mapped
 # to env vars by the `Resolve code signing` step below. When those secrets are

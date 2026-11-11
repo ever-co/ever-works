@@ -50,11 +50,15 @@ permissions:
 jobs:
   inspect:
     # OFF ON GITHUB IN EVER-CO since 2026-11-11 (owner: GitHub Actions is not
-    # used, permanently); forks and RUN_ON_ACTIONS = 'true' (repo variable)
-    # still run it there. In-cluster by hand it needs DIGITALOCEAN_ACCESS_TOKEN
-    # in OpenBao kv/ci-builds/ever-works/ever-works (absent on 2026-11-11), then
-    # homelab scripts/ci-builds-run.py ever-co/ever-works <branch> ops-diagnose.yml
-    # --event workflow_dispatch --extra '{"inputs":{"cluster":"k8s-works","action":"pods"}}'.
+    # used, permanently): the `gh workflow run` above works only in forks.
+    # Back on GitHub takes both `stay` for this file in k8s-gitops
+    # apps/ci-builds/tools/policy-overrides.json (else the Actions enforcer
+    # keeps it disabled) and repo variable RUN_ON_ACTIONS = 'true'.
+    # In-cluster by hand it needs DIGITALOCEAN_ACCESS_TOKEN in OpenBao
+    # kv/ci-builds/ever-works/ever-works (absent on 2026-11-11), then homelab
+    # scripts/ci-builds-run.py ever-co/ever-works <branch> ops-diagnose.yml 4
+    # --secret ci-repo-ever-works-ever-works --event workflow_dispatch
+    # --extra '{"inputs":{"cluster":"k8s-works","action":"pods"}}'.
     if: vars.CI_IN_CLUSTER == 'true' || github.repository_owner != 'ever-co' || vars.RUN_ON_ACTIONS == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15

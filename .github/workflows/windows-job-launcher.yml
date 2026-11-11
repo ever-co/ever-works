@@ -21,8 +21,11 @@ name: Windows Job Launcher
 # next to that node's helper-trust check.
 #
 # OFF IN EVER-CO since 2026-11-11 (owner: GitHub Actions and its artifact
-# storage are not used, permanently). The job runs only in forks, or when the
-# repo variable RUN_ON_ACTIONS is 'true'. It has no other home: the cluster is
+# storage are not used, permanently). The job runs only in forks (the dispatch
+# above too). Back on GitHub takes both `stay` for this file in k8s-gitops
+# apps/ci-builds/tools/policy-overrides.json (else the Actions enforcer keeps
+# it disabled) and repo variable RUN_ON_ACTIONS = 'true'. It has no other
+# home: the cluster is
 # Linux x64 only, and this build targets x86_64-pc-windows-msvc and exercises
 # Authenticode and the machine certificate store. The platform-neutral
 # adapter specs (src/core/windows-job-launcher/*.internal.spec.ts,
