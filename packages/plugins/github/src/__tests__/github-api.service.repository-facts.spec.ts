@@ -613,3 +613,29 @@ describe('APW-02 T16 — getRepository failures are typed (plan §4.2)', () => {
 		}
 	});
 });
+
+describe('a caller-supplied AbortSignal reaches Octokit', () => {
+	it('getRepository and repositoryExists pass it as request.signal', async () => {
+		const signal = new AbortController().signal;
+
+		await svc.getRepository(OWNER, REPO, 'tok', undefined, { signal });
+		expect(reposGetMock).toHaveBeenLastCalledWith({ owner: OWNER, repo: REPO, request: { signal } });
+
+		await svc.repositoryExists(OWNER, REPO, 'tok', undefined, { signal });
+		expect(reposGetMock).toHaveBeenLastCalledWith({ owner: OWNER, repo: REPO, request: { signal } });
+	});
+
+	it('the empty-repository probe carries it too', async () => {
+		const signal = new AbortController().signal;
+		reposGetMock.mockResolvedValue({ data: repositoryPayload({ size: 0 }) });
+
+		await svc.getRepository(OWNER, REPO, 'tok', undefined, { signal });
+
+		expect(getBranchMock).toHaveBeenCalledWith(expect.objectContaining({ request: { signal } }));
+	});
+
+	it('sends no request option at all when the caller gave none (unchanged calls)', async () => {
+		await svc.getRepository(OWNER, REPO, 'tok');
+		expect(reposGetMock).toHaveBeenLastCalledWith({ owner: OWNER, repo: REPO });
+	});
+});

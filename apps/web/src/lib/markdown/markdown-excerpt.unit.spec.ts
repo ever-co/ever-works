@@ -7,6 +7,7 @@ import {
     markdownExcerpt,
     markdownToPlainText,
 } from './markdown-excerpt';
+import { expectLinearTime } from '@/lib/__tests__/time-budget';
 
 const MISSION = `## Goal
 
@@ -104,8 +105,12 @@ describe('markdownExcerpt', () => {
 });
 
 describe('markdownToPlainText — cost (PR #3137 review B2)', () => {
-    const MB = 1024 * 1024;
     // Before the fix a 64 KB line of `[` took 11.5 s on every render of the Task list.
+    // Linear from 256 characters to 1 MB, not a wall-clock budget ("1 MB in under
+    // 50 ms" failed on a busy CI runner with nothing wrong): see `expectLinearTime`.
+    // No costlier path past the 4 KB cap: growth stays under 1.5× on every step,
+    // idle or under load, so the bound is tighter than the default.
+    const maxGrowth = 4;
     it.each([
         '[',
         '](',
@@ -123,14 +128,18 @@ describe('markdownToPlainText — cost (PR #3137 review B2)', () => {
         '\\',
         '<!--',
         '|',
-    ])('1 MB of %j takes under 50 ms (one line and many lines)', (unit) => {
-        const oneLine = unit.repeat(Math.ceil(MB / unit.length));
-        const manyLines = (unit.repeat(200) + '\n').repeat(Math.ceil(MB / (unit.length * 200 + 1)));
-        for (const input of [oneLine, manyLines]) {
-            const started = performance.now();
-            markdownToPlainText(input);
-            markdownExcerpt(input);
-            expect(performance.now() - started).toBeLessThan(50);
+    ])('1 MB of %j takes linear time (one line and many lines)', (unit) => {
+        const oneLine = (size: number) => unit.repeat(Math.ceil(size / unit.length)).slice(0, size);
+        const manyLines = (size: number) =>
+            (unit.repeat(200) + '\n')
+                .repeat(Math.ceil(size / (unit.length * 200 + 1)))
+                .slice(0, size);
+        for (const build of [oneLine, manyLines]) {
+            expectLinearTime(
+                build,
+                (input) => [markdownToPlainText(input), markdownExcerpt(input)],
+                { maxGrowth },
+            );
         }
     });
 

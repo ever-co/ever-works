@@ -267,9 +267,18 @@ describe('privileged / run-starting generated tools are gated on every call', ()
     it('update_webhook / update_notification_channel gate only a destination change', async () => {
         const tools = unconfirmedTools();
         expect(
-            (await run(tools.update_webhook, { id: 'w', body: { enabled: false } }))
+            // A pause (the DTO has `status`, not `enabled`) stays one step.
+            (await run(tools.update_webhook, { id: 'w', body: { status: 'paused' } }))
                 .__confirmationRequired,
         ).toBeUndefined();
+        expect(
+            (
+                await run(tools.update_webhook, {
+                    id: 'w',
+                    body: { organizationIds: ['00000000-0000-4000-8000-000000000001'] },
+                })
+            ).__confirmationRequired,
+        ).toBe(true);
         expect(
             (await run(tools.update_webhook, { id: 'w', body: { url: 'https://evil.example' } }))
                 .__confirmationRequired,

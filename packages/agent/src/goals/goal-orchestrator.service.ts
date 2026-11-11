@@ -385,32 +385,24 @@ export class GoalOrchestratorService {
         // Optional and appended LAST; every existing caller is unchanged.
         options: DodWriteProvenance = {},
     ): Promise<GoalDto> {
-        const goal = await this.findOrThrow(userId, goalId);
+        const owned = await this.findOrThrow(userId, goalId);
         this.assertDod(criteria);
-        if (
-            isDeliveryGoal(goal) &&
-            (criteria === null || !hasDefinitionOfDone({ dodCriteria: criteria }))
-        ) {
-            throw new BadRequestException(
-                'A delivery Goal must keep at least one approved Definition-of-Done criterion.',
-            );
-        }
-        const beforeSignature = dodProgressSignature(goal.dodCriteria);
-        goal.dodCriteria = criteria === null ? null : normalizeDoDCriteria(criteria);
-        this.markProgressIfChanged(goal, beforeSignature);
-
-        // EW-P2-2 — the write and its `goal.updated` commit together, so an
-        // integration's `If-Match` (re-checked at the version bump) can refuse it.
-        const publisher = this.domainEvents;
-        const saved = publisher
-            ? await publisher.transaction(async (manager) => {
-                  const row = await saveGoalColumns(manager.getRepository(Goal), goal, DOD_COLUMNS);
-                  await publisher.changed(manager, 'goal', row.id, 'goal.updated', {
-                      changedFields: ['dodCriteria', 'progress'],
-                  });
-                  return row;
-              })
-            : await saveGoalColumns(this.goals, goal, DOD_COLUMNS);
+        // The caller's list replaces the stored one (that is what this write is for),
+        // but the progress stamp compares against the list it replaces as stored at
+        // the write, not an older copy.
+        const { saved } = await this.writeDodAsStored(owned, (goal) => {
+            if (
+                isDeliveryGoal(goal) &&
+                (criteria === null || !hasDefinitionOfDone({ dodCriteria: criteria }))
+            ) {
+                throw new BadRequestException(
+                    'A delivery Goal must keep at least one approved Definition-of-Done criterion.',
+                );
+            }
+            const beforeSignature = dodProgressSignature(goal.dodCriteria);
+            goal.dodCriteria = criteria === null ? null : normalizeDoDCriteria(criteria);
+            this.markProgressIfChanged(goal, beforeSignature);
+        });
         const summary = summarizeDoD(saved.dodCriteria);
         await this.recordEvent(saved, {
             kind: 'dod',
@@ -473,12 +465,6 @@ export class GoalOrchestratorService {
      * One add / remove applied to the row as stored at the write. Same rules as
      * {@link setDodCriteria} (shape, size, a delivery Goal keeps an approved
      * criterion), and the same `goal.updated` in the write's transaction.
-     *
-     * What remains: `proposeDodCriteria`, `approveDodCriteria` and
-     * `patchDodCriterion` still read the row without a lock, so one of them
-     * that read BEFORE this write commits and saves AFTER it can still drop
-     * this change. That window is two statements inside the API, not a page's
-     * lifetime or a web round trip.
      */
     private async editDodCriteria(
         userId: string,
@@ -491,10 +477,7 @@ export class GoalOrchestratorService {
     ): Promise<GoalDto> {
         // Ownership: the same owner-only lookup every Definition-of-Done write makes.
         const owned = await this.findOrThrow(userId, goalId);
-        const apply = async (
-            repository: Repository<Goal>,
-            goal: Goal,
-        ): Promise<{ saved: Goal; criterion: GoalDoDCriterion }> => {
+        const { saved, result: criterion } = await this.writeDodAsStored(owned, (goal) => {
             const current = Array.isArray(goal.dodCriteria) ? goal.dodCriteria : [];
             const { next, criterion } = edit(current);
             this.assertDod(next);
@@ -506,26 +489,8 @@ export class GoalOrchestratorService {
             const beforeSignature = dodProgressSignature(goal.dodCriteria);
             goal.dodCriteria = normalizeDoDCriteria(next);
             this.markProgressIfChanged(goal, beforeSignature);
-            return { saved: await saveGoalColumns(repository, goal, DOD_COLUMNS), criterion };
-        };
-
-        const publisher = this.domainEvents;
-        const manager = this.goals.manager as EntityManager | undefined;
-        const { saved, criterion } = publisher
-            ? await publisher.transaction(async (tx) => {
-                  const goal = await this.reloadGoalForUpdate(tx, owned.id);
-                  const result = await apply(tx.getRepository(Goal), goal);
-                  await publisher.changed(tx, 'goal', result.saved.id, 'goal.updated', {
-                      changedFields: ['dodCriteria', 'progress'],
-                  });
-                  return result;
-              })
-            : manager
-              ? await manager.transaction(async (tx) =>
-                    apply(tx.getRepository(Goal), await this.reloadGoalForUpdate(tx, owned.id)),
-                )
-              : // A repository without a manager (a unit-test double): the row read above.
-                await apply(this.goals, owned);
+            return criterion;
+        });
 
         const summary = summarizeDoD(saved.dodCriteria);
         await this.recordEvent(saved, {
@@ -543,6 +508,48 @@ export class GoalOrchestratorService {
             { criterionId: criterion.id, summary },
         );
         return toGoalDto(saved);
+    }
+
+    /**
+     * Every Definition-of-Done write after creation: `change` is applied to the
+     * Goal as it is stored AT THE WRITE, not to `owned` (the copy the ownership
+     * read returned), so a write that lands between that read and this one is
+     * kept, not overwritten (review of #3172). The row is re-read inside the
+     * write's transaction ({@link reloadGoalForUpdate}); `change` sets its
+     * `dodCriteria` (and `lastProgressIteration`) or throws to refuse the write,
+     * and only those columns are saved. With the publisher, the `goal.updated`
+     * commits in that same transaction (EW-P2-2: an integration's `If-Match`,
+     * re-checked at the version bump, can refuse the write).
+     */
+    private async writeDodAsStored<T>(
+        owned: Goal,
+        change: (goal: Goal) => T,
+    ): Promise<{ saved: Goal; result: T }> {
+        const apply = async (
+            repository: Repository<Goal>,
+            goal: Goal,
+        ): Promise<{ saved: Goal; result: T }> => {
+            const result = change(goal);
+            return { saved: await saveGoalColumns(repository, goal, DOD_COLUMNS), result };
+        };
+
+        const publisher = this.domainEvents;
+        const manager = this.goals.manager as EntityManager | undefined;
+        return publisher
+            ? publisher.transaction(async (tx) => {
+                  const goal = await this.reloadGoalForUpdate(tx, owned.id);
+                  const written = await apply(tx.getRepository(Goal), goal);
+                  await publisher.changed(tx, 'goal', written.saved.id, 'goal.updated', {
+                      changedFields: ['dodCriteria', 'progress'],
+                  });
+                  return written;
+              })
+            : manager
+              ? manager.transaction(async (tx) =>
+                    apply(tx.getRepository(Goal), await this.reloadGoalForUpdate(tx, owned.id)),
+                )
+              : // A repository without a manager (a unit-test double): the row read above.
+                apply(this.goals, owned);
     }
 
     /**
@@ -581,11 +588,10 @@ export class GoalOrchestratorService {
         // "a planning run". Optional and appended LAST.
         options: DodWriteProvenance & { proposedBy?: string } = {},
     ): Promise<GoalDto> {
-        const goal = await this.findOrThrow(userId, goalId);
+        const owned = await this.findOrThrow(userId, goalId);
         if (!Array.isArray(criteria) || criteria.length === 0) {
             throw new BadRequestException('At least one proposed criterion is required.');
         }
-        const existing = Array.isArray(goal.dodCriteria) ? goal.dodCriteria : [];
         const proposed = normalizeDoDCriteria(
             criteria.map((entry) => ({
                 ...entry,
@@ -594,12 +600,13 @@ export class GoalOrchestratorService {
                 proposed: true,
             })),
         );
-        const merged = [...existing, ...proposed];
-        this.assertDod(merged);
-        goal.dodCriteria = merged;
-
-        const saved = await saveGoalColumns(this.goals, goal, DOD_COLUMNS);
-        await this.recordGoalEvent(saved.id, 'goal.updated', ['dodCriteria', 'progress']);
+        // Appended to the list as stored at the write (see writeDodAsStored).
+        const { saved } = await this.writeDodAsStored(owned, (goal) => {
+            const existing = Array.isArray(goal.dodCriteria) ? goal.dodCriteria : [];
+            const merged = [...existing, ...proposed];
+            this.assertDod(merged);
+            goal.dodCriteria = merged;
+        });
         await this.recordEvent(saved, {
             kind: 'dod',
             message:
@@ -624,34 +631,35 @@ export class GoalOrchestratorService {
         goalId: string,
         criterionIds?: string[] | null,
     ): Promise<GoalDto> {
-        const goal = await this.findOrThrow(userId, goalId);
-        const existing = Array.isArray(goal.dodCriteria) ? goal.dodCriteria : [];
+        const owned = await this.findOrThrow(userId, goalId);
         const wanted = criterionIds && criterionIds.length > 0 ? new Set(criterionIds) : null;
 
-        if (wanted) {
-            const known = new Set(existing.map((entry) => entry.id));
-            const unknown = [...wanted].filter((id) => !known.has(id));
-            if (unknown.length > 0) {
-                throw new NotFoundException(`Unknown criterion id(s): ${unknown.join(', ')}`);
+        // Approved in the list as stored at the write (see writeDodAsStored).
+        const { saved, result: approved } = await this.writeDodAsStored(owned, (goal) => {
+            const existing = Array.isArray(goal.dodCriteria) ? goal.dodCriteria : [];
+            if (wanted) {
+                const known = new Set(existing.map((entry) => entry.id));
+                const unknown = [...wanted].filter((id) => !known.has(id));
+                if (unknown.length > 0) {
+                    throw new NotFoundException(`Unknown criterion id(s): ${unknown.join(', ')}`);
+                }
             }
-        }
 
-        let approved = 0;
-        const beforeSignature = dodProgressSignature(existing);
-        goal.dodCriteria = existing.map((entry) => {
-            if (entry.proposed !== true) return entry;
-            if (wanted && !wanted.has(entry.id)) return entry;
-            approved += 1;
-            const { proposed: _proposed, ...rest } = entry;
-            return { ...rest, updatedAt: new Date().toISOString() };
+            let count = 0;
+            const beforeSignature = dodProgressSignature(existing);
+            goal.dodCriteria = existing.map((entry) => {
+                if (entry.proposed !== true) return entry;
+                if (wanted && !wanted.has(entry.id)) return entry;
+                count += 1;
+                const { proposed: _proposed, ...rest } = entry;
+                return { ...rest, updatedAt: new Date().toISOString() };
+            });
+            if (count === 0) {
+                throw new BadRequestException('No proposed criteria to approve.');
+            }
+            this.markProgressIfChanged(goal, beforeSignature);
+            return count;
         });
-        if (approved === 0) {
-            throw new BadRequestException('No proposed criteria to approve.');
-        }
-        this.markProgressIfChanged(goal, beforeSignature);
-
-        const saved = await saveGoalColumns(this.goals, goal, DOD_COLUMNS);
-        await this.recordGoalEvent(saved.id, 'goal.updated', ['dodCriteria', 'progress']);
         await this.recordEvent(saved, {
             kind: 'dod',
             message: `Operator approved ${approved} proposed Definition-of-Done criteria.`,
@@ -679,50 +687,51 @@ export class GoalOrchestratorService {
         criterionId: string,
         patch: PatchGoalDoDCriterionInput,
     ): Promise<GoalDto> {
-        const goal = await this.findOrThrow(userId, goalId);
-        const existing = Array.isArray(goal.dodCriteria) ? goal.dodCriteria : [];
-        const target = existing.find((entry) => entry.id === criterionId);
-        if (!target) {
-            throw new NotFoundException(`Criterion not found`);
-        }
-        // A done or waived criterion keeps the wording it was signed off with:
-        // rewording it in place would make the log read as if the NEW wording
-        // had been signed off. Reopening it in the same patch is allowed, and
-        // so is resending the same text (status, evidence and note are unaffected).
-        if (
-            patch.text !== undefined &&
-            patch.text.trim() !== target.text.trim() &&
-            target.status !== 'open' &&
-            patch.status !== 'open'
-        ) {
-            throw new BadRequestException(
-                `Reopen this criterion before rewording it: a ${target.status} criterion keeps the wording it was signed off with.`,
-            );
-        }
+        const owned = await this.findOrThrow(userId, goalId);
+        // Applied to the criterion as stored at the write (see writeDodAsStored).
+        const { saved, result: updated } = await this.writeDodAsStored(owned, (goal) => {
+            const existing = Array.isArray(goal.dodCriteria) ? goal.dodCriteria : [];
+            const target = existing.find((entry) => entry.id === criterionId);
+            if (!target) {
+                throw new NotFoundException(`Criterion not found`);
+            }
+            // A done or waived criterion keeps the wording it was signed off with:
+            // rewording it in place would make the log read as if the NEW wording
+            // had been signed off. Reopening it in the same patch is allowed, and
+            // so is resending the same text (status, evidence and note are unaffected).
+            if (
+                patch.text !== undefined &&
+                patch.text.trim() !== target.text.trim() &&
+                target.status !== 'open' &&
+                patch.status !== 'open'
+            ) {
+                throw new BadRequestException(
+                    `Reopen this criterion before rewording it: a ${target.status} criterion keeps the wording it was signed off with.`,
+                );
+            }
 
-        // Reopening AND rewording a closed criterion: its evidence and note were
-        // about the old wording, so they go unless this patch brings new ones.
-        const rewordsClosed =
-            patch.text !== undefined &&
-            patch.text.trim() !== target.text.trim() &&
-            target.status !== 'open';
-        const beforeSignature = dodProgressSignature(existing);
-        const updated: GoalDoDCriterion = {
-            ...target,
-            ...(rewordsClosed ? { evidence: null, note: null } : {}),
-            ...(patch.status !== undefined ? { status: patch.status } : {}),
-            ...(patch.text !== undefined ? { text: patch.text } : {}),
-            ...(patch.evidence !== undefined ? { evidence: patch.evidence } : {}),
-            ...(patch.note !== undefined ? { note: patch.note } : {}),
-            updatedAt: new Date().toISOString(),
-        };
-        const next = existing.map((entry) => (entry.id === criterionId ? updated : entry));
-        this.assertDod(next);
-        goal.dodCriteria = normalizeDoDCriteria(next);
-        this.markProgressIfChanged(goal, beforeSignature);
-
-        const saved = await saveGoalColumns(this.goals, goal, DOD_COLUMNS);
-        await this.recordGoalEvent(saved.id, 'goal.updated', ['dodCriteria', 'progress']);
+            // Reopening AND rewording a closed criterion: its evidence and note were
+            // about the old wording, so they go unless this patch brings new ones.
+            const rewordsClosed =
+                patch.text !== undefined &&
+                patch.text.trim() !== target.text.trim() &&
+                target.status !== 'open';
+            const beforeSignature = dodProgressSignature(existing);
+            const criterion: GoalDoDCriterion = {
+                ...target,
+                ...(rewordsClosed ? { evidence: null, note: null } : {}),
+                ...(patch.status !== undefined ? { status: patch.status } : {}),
+                ...(patch.text !== undefined ? { text: patch.text } : {}),
+                ...(patch.evidence !== undefined ? { evidence: patch.evidence } : {}),
+                ...(patch.note !== undefined ? { note: patch.note } : {}),
+                updatedAt: new Date().toISOString(),
+            };
+            const next = existing.map((entry) => (entry.id === criterionId ? criterion : entry));
+            this.assertDod(next);
+            goal.dodCriteria = normalizeDoDCriteria(next);
+            this.markProgressIfChanged(goal, beforeSignature);
+            return criterion;
+        });
         const summary = summarizeDoD(saved.dodCriteria);
         await this.recordEvent(saved, {
             kind: 'dod',
