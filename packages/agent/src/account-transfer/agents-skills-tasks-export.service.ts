@@ -185,6 +185,7 @@ export class AgentsSkillsTasksExportService {
                 recurrenceTimezone: task.recurrenceTimezone ?? null,
                 recurrenceEndsAt: task.recurrenceEndsAt?.toISOString() ?? null,
                 recurrenceMaxOccurrences: task.recurrenceMaxOccurrences ?? null,
+                recurrenceMaxOpenInstances: task.recurrenceMaxOpenInstances ?? null,
                 parentRecurringTaskSlug: task.parentRecurringTaskId
                     ? (idToSlug.get(task.parentRecurringTaskId) ?? null)
                     : null,

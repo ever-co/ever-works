@@ -153,7 +153,9 @@ export class ScheduleControlService {
     async runNow(
         ctx: ScheduleControlContext,
         id: string,
-        opts: { confirm?: boolean } = {},
+        // `force` — a recurring Task only: run it even at its open-instance limit
+        // (an owner action; every other source ignores it, like `confirm`).
+        opts: { confirm?: boolean; force?: boolean } = {},
     ): Promise<ScheduleRunNowResult> {
         const { parsed, row } = await this.resolve(ctx, id);
         this.assertAllowed(row, 'runNow');
@@ -184,7 +186,12 @@ export class ScheduleControlService {
             }
             case 'recurring_task': {
                 const tasks = this.require(this.tasks, 'recurring tasks');
-                const result = await tasks.runRecurringNow(ctx.userId, parsed.ownerKey, scope);
+                const result =
+                    opts.force === true
+                        ? await tasks.runRecurringNow(ctx.userId, parsed.ownerKey, scope, {
+                              force: true,
+                          })
+                        : await tasks.runRecurringNow(ctx.userId, parsed.ownerKey, scope);
                 if (
                     result.runs.length > 0 &&
                     result.runs.every((run) => run.error === 'no-dispatcher')

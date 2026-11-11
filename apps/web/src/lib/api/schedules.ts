@@ -246,15 +246,19 @@ export const schedulesAPI = {
 
     runNow: async (
         id: string,
-        options: { confirm?: boolean } = {},
+        options: { confirm?: boolean; force?: boolean } = {},
     ): Promise<ScheduleRunNowResult> =>
         serverFetch<ScheduleRunNowResult>(`/schedules/${encodeURIComponent(id)}/run-now`, {
             method: 'POST',
-            // FL-13: a Command schedule on a computer runs only with `confirm` (FR-25).
-            ...(options.confirm
+            // FL-13: a Command schedule on a computer runs only with `confirm` (FR-25). A
+            // recurring Task at its open-instance limit runs only with `force` (owner's choice).
+            ...(options.confirm || options.force
                 ? {
                       headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({ confirm: true }),
+                      body: JSON.stringify({
+                          ...(options.confirm ? { confirm: true } : {}),
+                          ...(options.force ? { force: true } : {}),
+                      }),
                   }
                 : {}),
         }),

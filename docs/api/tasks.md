@@ -71,15 +71,26 @@ cancelled → (terminal)
 
 ## Recurring tasks (Phase 17)
 
-| Method | Path                       | Description                                                                                                               |
-| ------ | -------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| POST   | `/api/tasks/:id/recurring` | Body: `{recurrenceRule, recurrenceTimezone?, recurrenceEndsAt?, recurrenceMaxOccurrences?}`. RRULE per RFC 5545. (30/min) |
-| DELETE | `/api/tasks/:id/recurring` | Stop recurrence on a template. Existing spawned instances are kept.                                                       |
+| Method | Path                               | Description                                                                                                                                                                                                                                                                                 |
+| ------ | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| POST   | `/api/tasks/:id/recurring`         | Body: `{recurrenceRule \| recurrenceCron, recurrenceTimezone?, recurrenceEndsAt?, recurrenceMaxOccurrences?, recurrenceMaxOpenInstances?}`. RRULE per RFC 5545. `recurrenceMaxOpenInstances`: 1–100, `null` = no limit, omitted = keep; a body of it alone updates only the limit. (30/min) |
+| POST   | `/api/tasks/:id/recurring/run-now` | Fire the template now. Body (optional): `{force?: boolean}` runs it even at its open-instance limit; any other field is ignored. 409 `SCHEDULE_ALREADY_RUNNING` / `SCHEDULE_NO_AGENT` / `SCHEDULE_OWNER_ARCHIVED` / `SCHEDULE_TOO_MANY_OPEN`. (10/min)                                      |
+| DELETE | `/api/tasks/:id/recurring`         | Stop recurrence on a template. Existing spawned instances are kept.                                                                                                                                                                                                                         |
 
 The `task-recurrence-dispatcher` Trigger.dev cron walks templates
 where `nextOccurrenceAt <= now`, CAS-claims each one, clones a
 fresh instance via `cloneRecurringTaskAsInstance`, and advances
 `nextOccurrenceAt` to the next computed slot.
+
+A template with `recurrenceMaxOpenInstances` set is counted first
+(`TaskRepository.countOpenRecurrenceInstances`, under the
+per-template claim run-now also holds). At the limit the slot is
+SKIPPED: `nextOccurrenceAt` advances, `recurrenceOccurredCount`
+does not, `recurrenceSkippedAt` is stamped and a `schedule_skipped`
+activity row names the open instances. The rule is
+`recurrenceOpenInstancesWhere` in
+`packages/agent/src/tasks-domain/recurrence-overlap.ts`; see
+[Recurring Tasks](../features/tasks.md#at-most-n-open-at-a-time).
 
 ## Spend
 

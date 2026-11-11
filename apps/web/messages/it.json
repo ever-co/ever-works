@@ -1692,6 +1692,9 @@
                 "frequency": "Frequenza",
                 "endsAt": "Fine (facoltativo)",
                 "maxOccurrences": "Occorrenze max (facoltativo)",
+                "maxOpenInstances": "Al massimo aperte contemporaneamente",
+                "maxOpenInstancesHint": "Salta un’esecuzione programmata finché questo numero di esecuzioni precedenti è ancora aperto (in corso, o in attesa di una pull request aperta). Vuoto = nessun limite.",
+                "maxOpenInstancesInvalid": "Inserisci un numero intero da 1 a {max}, oppure lascia vuoto per nessun limite.",
                 "rulePreview": "Anteprima della regola",
                 "ruleInvalid": "non valida",
                 "cancel": "Annulla",
@@ -1700,6 +1703,7 @@
                 "nextAt": "Prossima il",
                 "ends": "Fine",
                 "max": "Max",
+                "lastSkipped": "Ultima saltata",
                 "stopConfirm": "Interrompere il programma ricorrente? Le istanze esistenti restano; non ne verranno create di nuove.",
                 "stopError": "Impossibile interrompere il programma ricorrente",
                 "saveError": "Impossibile salvare il programma"
@@ -2727,6 +2731,7 @@
                     "memberRemoved": "Membro Rimosso",
                     "scheduleCreated": "Programma Creato",
                     "scheduleExecuted": "Programma Eseguito",
+                    "scheduleSkipped": "Programma Saltato",
                     "import": "Importazione",
                     "login": "Accesso",
                     "signup": "Registrazione",
@@ -10259,6 +10264,11 @@
                 "title": "Ancora nulla di pianificato",
                 "description": "Task ricorrenti, heartbeat degli agenti, pianificazioni dei lavori, tick delle Mission, validazione delle sorgenti e sincronizzazione dei dati appariranno qui una volta configurati.",
                 "noResults": "Nessuna pianificazione corrisponde al filtro corrente."
+            },
+            "lastSkipped": "Saltata",
+            "lastSkippedHint": "L’ultima esecuzione programmata è stata saltata: troppe esecuzioni precedenti di questo programma sono ancora aperte.",
+            "runNow": {
+                "tooManyOpenConfirm": "Troppe esecuzioni precedenti di «{name}» sono ancora aperte, quindi il suo limite trattiene questa esecuzione. Eseguirla comunque?"
             }
         },
         "triggers": {

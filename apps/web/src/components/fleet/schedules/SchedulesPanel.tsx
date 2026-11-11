@@ -11,6 +11,7 @@ import {
 } from '@ever-works/contracts';
 import { getFleetUsageTaskCostsAction } from '@/app/actions/fleet/usage';
 import { pauseSchedule, resumeSchedule, runScheduleNow } from '@/app/actions/dashboard/schedules';
+import { runScheduleNowAskingPastLimit } from '@/components/schedules/run-schedule-now';
 import { Button } from '@/components/ui/button';
 import { NewNodeScheduleDialog } from './NewNodeScheduleDialog';
 import { ScheduleRunHistory } from './ScheduleRunHistory';
@@ -53,6 +54,8 @@ export function SchedulesPanel({
     usage?: boolean;
 }) {
     const t = useTranslations('fleet.schedules');
+    // The Schedules workspace's own wording for a recurring Task at its open-instance limit.
+    const tSchedules = useTranslations('dashboard.schedules');
     const search = useSearchParams();
     const [rows, setRows] = useState<FleetScheduleView[] | null>(null);
     // FL-13 P2 — Agent-session schedules (pinned recurring Tasks) and the breaker's Undo.
@@ -216,7 +219,12 @@ export function SchedulesPanel({
             if (action === 'run') {
                 if (!window.confirm(t('confirmRun', { name: row.name, computer: node.name })))
                     return;
-                const result = await runScheduleNow(row.id);
+                // Recurring Tasks overlap limit — like the Schedules menu: too many earlier runs
+                // still open, so ask whether to run it anyway, and only then send `force`.
+                const result = await runScheduleNowAskingPastLimit(row.id, {}, () =>
+                    window.confirm(tSchedules('runNow.tooManyOpenConfirm', { name: row.name })),
+                );
+                if (!result) return;
                 setNotice(result.ok ? t('runStarted', { name: row.name }) : t('errors.run'));
             } else if (action === 'pause') {
                 const result = await pauseSchedule(row.id);

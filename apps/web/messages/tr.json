@@ -1692,6 +1692,9 @@
                 "frequency": "Sıklık",
                 "endsAt": "Bitiş (isteğe bağlı)",
                 "maxOccurrences": "Maks. tekrar (isteğe bağlı)",
+                "maxOpenInstances": "Aynı anda en fazla açık",
+                "maxOpenInstancesHint": "Bu kadar önceki çalıştırma hâlâ açıkken (çalışıyor ya da açık bir pull request bekliyor) zamanlanmış çalıştırmayı atlar. Boş = sınır yok.",
+                "maxOpenInstancesInvalid": "1 ile {max} arasında bir tam sayı girin ya da sınır olmaması için boş bırakın.",
                 "rulePreview": "Kural önizlemesi",
                 "ruleInvalid": "geçersiz",
                 "cancel": "İptal",
@@ -1700,6 +1703,7 @@
                 "nextAt": "Sonraki",
                 "ends": "Bitiş",
                 "max": "Maks.",
+                "lastSkipped": "Son atlanan",
                 "stopConfirm": "Tekrarlayan zamanlama durdurulsun mu? Mevcut örnekler kalır; yenileri oluşturulmaz.",
                 "stopError": "Tekrarlayan zamanlama durdurulamadı",
                 "saveError": "Zamanlama kaydedilemedi"
@@ -2727,6 +2731,7 @@
                     "memberRemoved": "Üye Kaldırıldı",
                     "scheduleCreated": "Zamanlama Oluşturuldu",
                     "scheduleExecuted": "Zamanlama Yürütüldü",
+                    "scheduleSkipped": "Zamanlama Atlandı",
                     "import": "İçe Aktar",
                     "login": "Oturum Açma",
                     "signup": "Kaydolma",
@@ -10259,6 +10264,11 @@
                 "title": "Henüz hiçbir şey zamanlanmadı",
                 "description": "Yinelenen görevler, ajan sinyalleri, iş zamanlamaları, Mission tik'leri, kaynak doğrulama ve veri senkronizasyonu, bunları ayarladığınızda burada görünecek.",
                 "noResults": "Geçerli filtreyle eşleşen zamanlama yok."
+            },
+            "lastSkipped": "Atlandı",
+            "lastSkippedHint": "Son zamanlanmış çalıştırma atlandı: bu zamanlamanın çok fazla önceki çalıştırması hâlâ açık.",
+            "runNow": {
+                "tooManyOpenConfirm": "“{name}” için çok fazla önceki çalıştırma hâlâ açık, bu yüzden sınırı bu çalıştırmayı bekletiyor. Yine de çalıştırılsın mı?"
             }
         },
         "triggers": {

@@ -5,7 +5,6 @@ import {
     IsNull,
     MoreThanOrEqual,
     Not,
-    Raw,
     Repository,
     type FindOperator,
     type FindOptionsWhere,
@@ -32,8 +31,13 @@ import {
 } from '../domain-events/domain-event-publisher.service';
 import { isRepositoryWorkKind } from '@ever-works/contracts';
 import { Task, TaskStatus } from '../entities/task.entity';
-import { TasksService } from '../tasks-domain/tasks.service';
+import { TasksService, type CreateTaskInput } from '../tasks-domain/tasks.service';
 import { MISSION_TASK_LABEL, type MissionRepoRunRefusal } from '../tasks-domain/mission-repo-run';
+import {
+    TASK_CLOSED_PR_SLOT_HOLD_MS,
+    TASK_CLOSED_UNMERGED_PR_STATE,
+    taskActiveRunExists,
+} from '../tasks-domain/task-open-work';
 import { MissionWorkRepository } from '../database/repositories/mission-work.repository';
 import {
     ownershipRelationScopeOf,
@@ -67,7 +71,7 @@ import {
 export const MISSION_TASK_OUTPUT_MAX_WORKS = 5;
 
 /** A Task's cached pull-request state once the pull request was closed WITHOUT merging. */
-export const MISSION_CLOSED_UNMERGED_PR_STATE = 'closed';
+export const MISSION_CLOSED_UNMERGED_PR_STATE = TASK_CLOSED_UNMERGED_PR_STATE;
 
 /**
  * The statuses in which a Task with a closed, unmerged pull request is only WAITING on it: In
@@ -80,28 +84,19 @@ const MISSION_WAITING_ON_PR_STATUSES = [TaskStatus.IN_REVIEW, TaskStatus.BLOCKED
  * 24 hours after it last changed. So closing a Mission's pull requests throttles it to at most
  * `openTasksCap` new Tasks per Work per day, instead of freeing a slot the moment each closes.
  */
-export const MISSION_CLOSED_PR_SLOT_HOLD_MS = 24 * 60 * 60 * 1000;
-
-/** The run statuses that mean "a run of this Task is queued or running". */
-const MISSION_ACTIVE_RUN_STATUSES = ['queued', 'running'] as const;
+export const MISSION_CLOSED_PR_SLOT_HOLD_MS = TASK_CLOSED_PR_SLOT_HOLD_MS;
 
 /**
  * `id` EXISTS a queued or running `agent_runs` row for the Task — the operator
  * {@link missionOpenTasksWhere} uses for "a run is in flight, whatever the status says".
  * `escape` quotes an identifier for the connection's driver (Postgres, SQLite and MySQL quote
- * differently); the two statuses are constants, inlined as literals.
+ * differently); the two statuses are constants, inlined as literals. Shared with a recurring
+ * template's open-instance limit (`tasks-domain/task-open-work.ts`).
  */
 export function missionActiveRunExists(
     escape: (name: string) => string = (name) => `"${name}"`,
 ): FindOperator<string> {
-    const run = escape('mission_cap_run');
-    const statuses = MISSION_ACTIVE_RUN_STATUSES.map((status) => `'${status}'`).join(', ');
-    return Raw(
-        (alias) =>
-            `EXISTS (SELECT 1 FROM ${escape('agent_runs')} ${run} WHERE ${run}.${escape(
-                'taskId',
-            )} = ${alias} AND ${run}.${escape('status')} IN (${statuses}))`,
-    );
+    return taskActiveRunExists(escape, 'mission_cap_run');
 }
 
 /**
@@ -1421,15 +1416,24 @@ export class MissionTickService {
                 duplicates += 1;
                 continue;
             }
-            const input = {
+            // Typed, never cast: a cast hid the missing author, and every Task insert failed
+            // on `tasks.createdByType` NOT NULL. A Mission files on behalf of its owner, as a
+            // Goal files its iterations (`GoalOrchestratorService`): the owner is the author.
+            const input: CreateTaskInput = {
                 title: proposal.title,
                 description: proposal.description || null,
                 missionId: mission.id,
                 workId: target.workId,
                 labels: [MISSION_TASK_LABEL],
                 status: requireApproval ? TaskStatus.BACKLOG : TaskStatus.TODO,
+                createdByType: 'user',
+                createdById: mission.userId,
+                // The Task carries text planned from the Mission's description, so a private
+                // Mission's Tasks are private too, as a private Goal's iterations are (review
+                // 2026-10-17 F1). Any other Mission's Tasks keep the insert-time default.
+                derivedFromPrivate: mission.visibility === 'private',
                 ...(output.agentId ? { agentId: output.agentId } : {}),
-            } as Parameters<TasksService['create']>[1];
+            };
             const task = scope
                 ? await tasksService.create(mission.userId, input, scope)
                 : await tasksService.create(mission.userId, input, undefined, {

@@ -31,7 +31,7 @@ import {
     Req,
     ServiceUnavailableException,
 } from '@nestjs/common';
-import { ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
+import { ApiBody, ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import {
     TasksService,
@@ -123,6 +123,7 @@ import {
     RunTasksBatchDto,
     ScheduleTaskDto,
     SetTaskRecurringDto,
+    RunRecurringNowDto,
     TaskBoardColumnQueryDto,
     TaskBoardQueryDto,
     TransitionTaskDto,
@@ -915,7 +916,7 @@ export class TasksController {
     @Post(':id/recurring')
     @ApiOperation({
         summary:
-            'Make this Task recurring (or update its cadence). Body: exactly one of {recurrenceRule (RFC 5545 RRULE)} or {recurrenceCron (5-field cron)}, plus recurrenceTimezone?, recurrenceEndsAt?, recurrenceMaxOccurrences?.',
+            'Make this Task recurring (or update its cadence). Body: exactly one of {recurrenceRule (RFC 5545 RRULE)} or {recurrenceCron (5-field cron)}, plus recurrenceTimezone?, recurrenceEndsAt?, recurrenceMaxOccurrences?, recurrenceMaxOpenInstances? (1..100, null = no limit). A body with only recurrenceMaxOpenInstances updates just the limit of a Task that is already recurring.',
     })
     @HttpCode(HttpStatus.OK)
     @Throttle({ long: { limit: 30, ttl: 60_000 } })
@@ -929,28 +930,53 @@ export class TasksController {
         refuseMachinePrincipalAction(auth, req, 'make a Task recurring', RUN_TOKEN_NO_DISPATCH, [
             'fleet-run',
         ]);
+        // Recurring Tasks overlap limit — a body carrying only the limit updates just the limit
+        // (the service refuses it on a Task that is not already a recurring template).
+        // Only a body consisting of `recurrenceMaxOpenInstances` ALONE skips the cadence: one that
+        // also names any other recurrence field without a cadence stays a 400, as it always was.
+        const named = Object.entries(body ?? {})
+            .filter(([, value]) => value !== undefined)
+            .map(([key]) => key);
+        const limitOnly = named.length === 1 && named[0] === 'recurrenceMaxOpenInstances';
+        if (limitOnly) {
+            return this.service.setRecurring(
+                auth.userId,
+                id,
+                { recurrenceMaxOpenInstances: body.recurrenceMaxOpenInstances ?? null },
+                this.scopeContext.getScope(),
+            );
+        }
         if (!body?.recurrenceRule && !body?.recurrenceCron) {
             throw new BadRequestException('recurrenceRule or recurrenceCron is required.');
         }
-        return this.service.setRecurring(
-            auth.userId,
-            id,
-            {
-                recurrenceRule: body.recurrenceRule ?? null,
-                recurrenceCron: body.recurrenceCron ?? null,
-                recurrenceTimezone: body.recurrenceTimezone,
-                recurrenceEndsAt: body.recurrenceEndsAt ? new Date(body.recurrenceEndsAt) : null,
-                recurrenceMaxOccurrences: body.recurrenceMaxOccurrences ?? null,
-            },
-            this.scopeContext.getScope(),
-        );
+        const input: {
+            recurrenceRule: string | null;
+            recurrenceCron: string | null;
+            recurrenceTimezone?: string;
+            recurrenceEndsAt: Date | null;
+            recurrenceMaxOccurrences: number | null;
+            recurrenceMaxOpenInstances?: number | null;
+        } = {
+            recurrenceRule: body.recurrenceRule ?? null,
+            recurrenceCron: body.recurrenceCron ?? null,
+            recurrenceTimezone: body.recurrenceTimezone,
+            recurrenceEndsAt: body.recurrenceEndsAt ? new Date(body.recurrenceEndsAt) : null,
+            recurrenceMaxOccurrences: body.recurrenceMaxOccurrences ?? null,
+        };
+        // Omitted = keep the template's limit; only a body that names it changes it.
+        if (body.recurrenceMaxOpenInstances !== undefined) {
+            input.recurrenceMaxOpenInstances = body.recurrenceMaxOpenInstances;
+        }
+        return this.service.setRecurring(auth.userId, id, input, this.scopeContext.getScope());
     }
 
     @Post(':id/recurring/run-now')
     @ApiOperation({
         summary:
-            'Fire this recurring template now, out of band. Spawns one instance and dispatches it through the same gated path a scheduled fire uses; the next scheduled fire is NOT moved. Allowed on a paused template (does not resume it). 409 SCHEDULE_ALREADY_RUNNING / SCHEDULE_NO_AGENT / SCHEDULE_OWNER_ARCHIVED; 400 SCHEDULE_NOT_RECURRING.',
+            "Fire this recurring template now, out of band. Spawns one instance and dispatches it through the same gated path a scheduled fire uses; the next scheduled fire is NOT moved. Allowed on a paused template (does not resume it). Body (optional): {force?: boolean} runs it even at the template's open-instance limit. 409 SCHEDULE_ALREADY_RUNNING / SCHEDULE_NO_AGENT / SCHEDULE_OWNER_ARCHIVED / SCHEDULE_TOO_MANY_OPEN (names the open instances); 400 SCHEDULE_NOT_RECURRING.",
     })
+    // Documents the optional body; the handler reads only `force` (see the parameter below).
+    @ApiBody({ type: RunRecurringNowDto, required: false })
     @HttpCode(HttpStatus.ACCEPTED)
     @Throttle({ long: { limit: 10, ttl: 60_000 } })
     async runRecurringNow(
@@ -958,10 +984,20 @@ export class TasksController {
         @Param('id', ParseUUIDPipe) id: string,
         // Appended LAST so positional callers (specs) keep their meaning.
         @Req() req?: MachinePrincipalRequest,
+        // Recurring Tasks overlap limit — appended after `req` for the same reason. Read as the
+        // ONE `force` property, never as a whole-body DTO: run-now took no body before, and the
+        // global `forbidNonWhitelisted` pipe would start refusing whatever callers already send.
+        // Only a literal `true` forces; anything else is ignored, like every other field.
+        @Body('force') force?: unknown,
     ) {
         refuseMachinePrincipalAction(auth, req, 'fire a recurring Task', RUN_TOKEN_NO_DISPATCH, [
             'fleet-run',
         ]);
+        if (force === true) {
+            return this.service.runRecurringNow(auth.userId, id, this.scopeContext.getScope(), {
+                force: true,
+            });
+        }
         return this.service.runRecurringNow(auth.userId, id, this.scopeContext.getScope());
     }
 

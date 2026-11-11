@@ -478,6 +478,7 @@ export const HELP_ARTICLES = [
             },
             { id: 'scheduled-one-shot', text: 'Scheduled (one-shot)', level: 3 },
             { id: 'recurring-tasks', text: 'Recurring Tasks', level: 2 },
+            { id: 'at-most-n-open-at-a-time', text: 'At most N open at a time', level: 3 },
             {
                 id: 'starting-unblocked-tasks-automatically',
                 text: 'Starting unblocked Tasks automatically',
