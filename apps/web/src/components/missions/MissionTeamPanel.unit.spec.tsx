@@ -34,8 +34,7 @@ const builder = {
     id: 'a1',
     name: 'Builder',
     status: 'active',
-    lastRunAt: '2026-11-10T21:00:00.000Z',
-    lastRunStatus: 'completed',
+    latestRun: { status: 'completed', finishedAt: '2026-11-10T21:04:00.000Z' },
 };
 
 beforeEach(() => vi.clearAllMocks());
@@ -57,7 +56,7 @@ describe('MissionTeamPanel', () => {
         expect(within(row).getByText('statusActive')).toBeTruthy();
         expect(
             within(row).getByText(
-                'lastRun {"time":"rel(2026-11-10T21:00:00.000Z)","status":"lastRunCompleted"}',
+                'lastRun {"time":"rel(2026-11-10T21:04:00.000Z)","status":"lastRunCompleted"}',
             ),
         ).toBeTruthy();
     });
@@ -78,8 +77,16 @@ describe('MissionTeamPanel', () => {
                     ...builder,
                     id: 'a3',
                     name: 'Site Bot',
-                    lastRunAt: null,
+                    latestRun: null,
                     via: 'work',
+                    workId: 'w1',
+                    workName: 'ever.co website',
+                },
+                {
+                    ...builder,
+                    id: 'a4',
+                    name: 'Ever Docs Writer',
+                    via: 'standing-tasks',
                     workId: 'w1',
                     workName: 'ever.co website',
                 },
@@ -93,6 +100,7 @@ describe('MissionTeamPanel', () => {
         expect(screen.getByText('otherAgents')).toBeTruthy();
         expect(screen.getByText('viaMission')).toBeTruthy();
         expect(screen.getByText('viaWork {"name":"ever.co website"}')).toBeTruthy();
+        expect(screen.getByText('viaStandingTasks {"name":"ever.co website"}')).toBeTruthy();
         expect(screen.getByText('neverRan')).toBeTruthy();
     });
 

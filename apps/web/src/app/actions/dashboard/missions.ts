@@ -123,8 +123,8 @@ export async function detachMissionAttachmentAction(missionId: string, attachmen
 
 /**
  * The Mission page's "Team and agents" panel — who works on this Mission, in
- * one API read (`GET /me/missions/:id/team`, owner-gated, every Agent one the
- * caller may read). Rejects on any API failure; the panel says so.
+ * one API read (`GET /me/missions/:id/team`, gated like the Mission read, every
+ * Agent one the caller may read). Rejects on any API failure; the panel says so.
  */
 export async function getMissionTeamAction(missionId: string): Promise<MissionTeamView> {
     // Security: verify session server-side before reading data

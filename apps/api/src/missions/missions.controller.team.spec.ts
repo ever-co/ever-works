@@ -24,16 +24,17 @@ import { MissionsController } from './missions.controller';
 
 /**
  * `GET /api/me/missions/:id/team` — the Mission page's "Team and agents"
- * panel in one read. Owner-gated in the request scope exactly like
- * `GET :id/works`; the agent-side service filters every Agent through
- * `visibleTo(caller)` (pinned by `mission-team.service.spec.ts`).
+ * panel in one read. Gated like `GET :id` (`getReadable`: the owner, or a
+ * viewer the Mission's visibility admits) in the request scope; the agent-side
+ * service filters every Agent (and Work) through what the caller may read
+ * (pinned by `mission-team.service.spec.ts`).
  */
 const MISSION = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 const SCOPE = { tenantId: 't1', organizationId: 'o1' };
 const session = { userId: 'u1', authMethod: 'session' } as never;
 
 function build(teamService?: { getForUser: jest.Mock }) {
-    const service = { getForUser: jest.fn(async () => ({ id: MISSION })) };
+    const service = { getReadable: jest.fn(async () => ({ id: MISSION })) };
     const scopeContext = { getScope: jest.fn(() => SCOPE) };
     const controller = new (MissionsController as unknown as new (
         ...args: unknown[]
@@ -63,13 +64,13 @@ describe('MissionsController — GET :id/team', () => {
         await expect(controller.team(session, MISSION)).rejects.toBeInstanceOf(NotFoundException);
     });
 
-    it('unwired: still gates on the Mission, then answers an honest empty panel', async () => {
+    it('unwired: still gates on the Mission READ (like GET :id), then answers an empty panel', async () => {
         const { controller, service } = build(undefined);
 
         await expect(controller.team(session, MISSION)).resolves.toEqual({
             teams: [],
             agents: [],
         });
-        expect(service.getForUser).toHaveBeenCalledWith('u1', MISSION, SCOPE);
+        expect(service.getReadable).toHaveBeenCalledWith('u1', MISSION, SCOPE);
     });
 });

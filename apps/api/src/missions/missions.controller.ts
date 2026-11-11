@@ -368,9 +368,11 @@ export class MissionsController {
 
     /**
      * Who works on this Mission: the Teams that hold it as a resource (with
-     * their Agent members) and the Agents scoped to it or to one of its
-     * attached Works that no listed Team shows. Same owner gate as
-     * `GET :id/works`; every Agent is filtered through `visibleTo(caller)`.
+     * their Agent members) and the Agents scoped or assigned to it or to one
+     * of its attached Works, or driving a standing Task on one, that no listed
+     * Team shows. Same READ gate as `GET :id` (`getReadable`), so a viewer who
+     * can open a shared Mission sees the panel; every Agent is filtered
+     * through `visibleTo(caller)`.
      */
     @Get(':id/team')
     @ApiOperation({
@@ -385,7 +387,7 @@ export class MissionsController {
         if (!this.teamService) {
             // Unwired (a partial test module): still gate on the Mission, and
             // answer an honest empty panel rather than a 500.
-            await this.service.getForUser(auth.userId, id, this.scopeContext?.getScope());
+            await this.service.getReadable(auth.userId, id, this.scopeContext?.getScope());
             return { teams: [], agents: [] };
         }
         return this.teamService.getForUser(auth.userId, id, this.scopeContext?.getScope());

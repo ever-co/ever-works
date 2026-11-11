@@ -2429,7 +2429,9 @@
                 "viaMission": "Scoped to this Mission",
                 "viaWork": "Works on {name}",
                 "viaWorkUnnamed": "Works on an attached Work",
-                "neverRan": "Never ran"
+                "neverRan": "Never ran",
+                "viaStandingTasks": "Standing tasks on {name}",
+                "viaStandingTasksUnnamed": "Standing tasks on an attached Work"
             }
         },
         "ideasPage": {

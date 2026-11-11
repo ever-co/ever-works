@@ -356,9 +356,9 @@ export const missionsAPI = {
 
     /**
      * `GET /me/missions/:id/team` → who works on this Mission: the Teams that
-     * hold it (with their Agents) and the other Agents scoped to it or to one
-     * of its attached Works. Owner-gated like `listWorks`; every Agent is one
-     * the caller may read.
+     * hold it (with their Agents) and the other Agents tied to it or to one of
+     * its attached Works. Readable-gated like `get`; every Agent is one the
+     * caller may read.
      */
     async getTeam(id: string): Promise<MissionTeamView> {
         return serverFetch<MissionTeamView>(`/me/missions/${id}/team`, { method: 'GET' });
@@ -523,10 +523,16 @@ export interface MissionTeamAgentDto {
     readonly id: string;
     readonly name: string;
     readonly status: string;
-    /** When its most recent run began (ISO), or `null` when it never ran. */
-    readonly lastRunAt: string | null;
-    readonly lastRunStatus: string | null;
+    /** Its most recent ENDED run of any kind: when it finished (ISO) and how; `null` = never. */
+    readonly latestRun: { readonly status: string; readonly finishedAt: string } | null;
 }
+
+/**
+ * How an Agent on no listed Team is tied to the Mission: scoped or assigned to
+ * it (`mission`), to one of its attached Works (`work`), or the assigned Agent
+ * of an active recurring Task on one of those Works (`standing-tasks`).
+ */
+export type MissionTeamAgentVia = 'mission' | 'work' | 'standing-tasks';
 
 /** `GET /me/missions/:id/team` (agent-side `MissionTeamView`). */
 export interface MissionTeamView {
@@ -537,10 +543,10 @@ export interface MissionTeamView {
         readonly slug: string;
         readonly agents: ReadonlyArray<MissionTeamAgentDto>;
     }>;
-    /** Agents on no listed Team: scoped to this Mission, or to one of its attached Works. */
+    /** Agents on no listed Team, with what ties them to the Mission. */
     readonly agents: ReadonlyArray<
         MissionTeamAgentDto & {
-            readonly via: 'mission' | 'work';
+            readonly via: MissionTeamAgentVia;
             readonly workId: string | null;
             readonly workName: string | null;
         }

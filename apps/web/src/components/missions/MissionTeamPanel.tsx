@@ -62,13 +62,24 @@ export function MissionTeamPanel({ missionId }: { missionId: string }) {
         status in STATUS_KEYS ? card(STATUS_KEYS[status as keyof typeof STATUS_KEYS]) : status;
 
     const lastRunLabel = (agent: MissionTeamAgentDto): string => {
-        const at = agent.lastRunAt ? new Date(agent.lastRunAt) : null;
-        if (!at || Number.isNaN(at.getTime())) return t('neverRan');
-        const key = agentLastRunStatusKey(agent.lastRunStatus);
+        const run = agent.latestRun;
+        const at = run ? new Date(run.finishedAt) : null;
+        if (!run || !at || Number.isNaN(at.getTime())) return t('neverRan');
+        const key = agentLastRunStatusKey(run.status);
         return card('lastRun', {
             time: format.relativeTime(at),
-            status: key ? card(key) : (agent.lastRunStatus ?? card('lastRunUnknown')),
+            status: key ? card(key) : (run.status ?? card('lastRunUnknown')),
         });
+    };
+
+    const tieLabel = (agent: MissionTeamView['agents'][number]): string => {
+        if (agent.via === 'mission') return t('viaMission');
+        if (agent.via === 'standing-tasks') {
+            return agent.workName
+                ? t('viaStandingTasks', { name: agent.workName })
+                : t('viaStandingTasksUnnamed');
+        }
+        return agent.workName ? t('viaWork', { name: agent.workName }) : t('viaWorkUnnamed');
     };
 
     const agentRow = (agent: MissionTeamAgentDto, detail?: string | null) => (
@@ -157,16 +168,7 @@ export function MissionTeamPanel({ missionId }: { missionId: string }) {
                                 {view.teams.length > 0 ? t('otherAgents') : t('agents')}
                             </h3>
                             <ul className="divide-y divide-border/40 dark:divide-border-dark/40">
-                                {view.agents.map((agent) =>
-                                    agentRow(
-                                        agent,
-                                        agent.via === 'mission'
-                                            ? t('viaMission')
-                                            : agent.workName
-                                              ? t('viaWork', { name: agent.workName })
-                                              : t('viaWorkUnnamed'),
-                                    ),
-                                )}
+                                {view.agents.map((agent) => agentRow(agent, tieLabel(agent)))}
                             </ul>
                         </div>
                     ) : null}

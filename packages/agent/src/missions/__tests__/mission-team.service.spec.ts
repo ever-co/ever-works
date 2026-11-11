@@ -16,7 +16,12 @@ jest.mock('../../facades/facades.module', () => ({ FacadesModule: class FacadesM
 
 import { ENTITIES } from '../../database/_entities-inventory';
 import { Agent, AgentScope, AgentStatus } from '../../entities/agent.entity';
+import { AgentMembership } from '../../entities/agent-membership.entity';
+import { AgentRun } from '../../entities/agent-run.entity';
+import { Mission, MissionStatus, MissionType } from '../../entities/mission.entity';
 import { OrganizationMember } from '../../entities/organization-member.entity';
+import { Task, TaskPriority, TaskStatus } from '../../entities/task.entity';
+import { TaskAssignee } from '../../entities/task-assignee.entity';
 import { Team } from '../../entities/team.entity';
 import { TeamMember } from '../../entities/team-member.entity';
 import { TeamResource } from '../../entities/team-resource.entity';
@@ -26,12 +31,13 @@ import { MissionsModule } from '../missions.module';
 
 /**
  * The Mission page's "Team and agents" panel: who works on a Mission, in one
- * read — the Teams that hold it (with their Agents), then the Agents scoped
- * to it or to one of its attached Works that no listed Team shows.
+ * read — the Teams that hold it (with their Agents), then the Agents tied to
+ * it or to one of its attached Works (scoped, assigned through
+ * `agent_memberships`, or driving a standing Task) that no listed Team shows.
  *
  * Run against a real database with the real `RecordAccessPolicy`, because the
  * claim that matters most is a visibility claim: a viewer never sees an Agent
- * (or a Team) here that they could not open elsewhere.
+ * (or a Work) here that they could not open elsewhere.
  */
 describe('MissionTeamService', () => {
     let dataSource: DataSource;
@@ -39,6 +45,8 @@ describe('MissionTeamService', () => {
     let teams: Repository<Team>;
     let members: Repository<TeamMember>;
     let resources: Repository<TeamResource>;
+    let missionRows: Repository<Mission>;
+    let slugSeq = 0;
 
     const OWNER = '11111111-1111-4111-8111-111111111111';
     const TEAMMATE = '22222222-2222-4222-8222-222222222222';
@@ -47,9 +55,10 @@ describe('MissionTeamService', () => {
     const OTHER_ORG = '66666666-6666-4666-8666-666666666666';
     const MISSION = '33333333-3333-4333-8333-333333333333';
     const WORK = '44444444-4444-4444-8444-444444444444';
+    const OTHER_WORK = '77777777-7777-4777-8777-777777777777';
     const SCOPE = { tenantId: TENANT, organizationId: ORG };
 
-    let missionsGate: { getForUser: jest.Mock };
+    let missionsGate: { getReadable: jest.Mock };
     let missionWorks: { listForMissionWithWork: jest.Mock };
 
     function service(withPolicy = true): MissionTeamService {
@@ -85,6 +94,7 @@ describe('MissionTeamService', () => {
             agents,
             missionWorks as never,
             policy,
+            missionRows,
         );
     }
 
@@ -101,6 +111,19 @@ describe('MissionTeamService', () => {
         teams = dataSource.getRepository(Team);
         members = dataSource.getRepository(TeamMember);
         resources = dataSource.getRepository(TeamResource);
+        missionRows = dataSource.getRepository(Mission);
+        await missionRows.save(
+            missionRows.create({
+                id: MISSION,
+                userId: OWNER,
+                tenantId: TENANT,
+                organizationId: ORG,
+                title: 'Grow ever.co',
+                description: 'More visitors',
+                type: MissionType.ONE_SHOT,
+                status: MissionStatus.ACTIVE,
+            } as Partial<Mission>),
+        );
         const roster = dataSource.getRepository(OrganizationMember);
         await roster.save([
             roster.create({
@@ -123,9 +146,20 @@ describe('MissionTeamService', () => {
     });
 
     beforeEach(async () => {
-        for (const repo of [agents, teams, members, resources]) await repo.clear();
+        for (const entity of [
+            Agent,
+            Team,
+            TeamMember,
+            TeamResource,
+            AgentMembership,
+            AgentRun,
+            Task,
+            TaskAssignee,
+        ]) {
+            await dataSource.getRepository(entity).clear();
+        }
         missionsGate = {
-            getForUser: jest.fn().mockResolvedValue({
+            getReadable: jest.fn().mockResolvedValue({
                 id: MISSION,
                 tenantId: TENANT,
                 organizationId: ORG,
@@ -182,15 +216,69 @@ describe('MissionTeamService', () => {
         await members.save(members.create({ teamId, memberType: 'agent', memberId: agentId }));
     }
 
+    async function assign(
+        agentId: string,
+        targetType: 'mission' | 'work',
+        targetId: string,
+    ): Promise<void> {
+        const repo = dataSource.getRepository(AgentMembership);
+        await repo.save(
+            repo.create({ agentId, targetType, targetId, tenantId: TENANT, organizationId: ORG }),
+        );
+    }
+
+    async function standingTask(over: Partial<Task>): Promise<Task> {
+        slugSeq += 1;
+        const repo = dataSource.getRepository(Task);
+        return repo.save(
+            repo.create({
+                userId: OWNER,
+                slug: `T-${slugSeq}`,
+                title: `Weekly ${slugSeq}`,
+                status: TaskStatus.TODO,
+                priority: TaskPriority.P3,
+                createdByType: 'user',
+                createdById: OWNER,
+                isRecurring: true,
+                recurrenceCron: '0 3 * * 1',
+                nextOccurrenceAt: new Date('2099-01-05T03:00:00.000Z'),
+                recurrenceOccurredCount: 0,
+                workId: WORK,
+                tenantId: TENANT,
+                organizationId: ORG,
+                ...over,
+            } as Partial<Task>),
+        );
+    }
+
+    async function endedRun(
+        agentId: string,
+        status: AgentRun['status'],
+        finishedAt: string,
+    ): Promise<void> {
+        const repo = dataSource.getRepository(AgentRun);
+        await repo.save(
+            repo.create({
+                agentId,
+                userId: OWNER,
+                triggerKind: 'task',
+                status,
+                finishedAt: new Date(finishedAt),
+            }),
+        );
+    }
+
     it('lists the Teams holding the Mission with their Agents, then the Work agents not already shown', async () => {
         const product = await team('Product');
         await holdsMission(product.id);
         const builder = await agent({
             name: 'Builder',
             slug: 'builder',
-            lastRunAt: new Date('2026-11-10T21:00:00.000Z'),
-            lastRunStatus: 'completed',
+            // The HEARTBEAT's last run: not what the panel shows.
+            lastRunAt: new Date('2026-11-01T09:00:00.000Z'),
+            lastRunStatus: 'failed',
         });
+        await endedRun(builder.id, 'completed', '2026-11-10T21:04:00.000Z');
         const reviewer = await agent({ name: 'Reviewer', slug: 'reviewer' });
         await onTeam(product.id, builder.id);
         await onTeam(product.id, reviewer.id);
@@ -217,7 +305,7 @@ describe('MissionTeamService', () => {
 
         const view = await service().getForUser(OWNER, MISSION, SCOPE);
 
-        expect(missionsGate.getForUser).toHaveBeenCalledWith(OWNER, MISSION, SCOPE);
+        expect(missionsGate.getReadable).toHaveBeenCalledWith(OWNER, MISSION, SCOPE);
         expect(missionWorks.listForMissionWithWork).toHaveBeenCalledWith(MISSION, OWNER, SCOPE);
         expect(view.teams).toHaveLength(1);
         expect(view.teams[0]).toMatchObject({ id: product.id, name: 'Product', slug: 'product' });
@@ -230,9 +318,9 @@ describe('MissionTeamService', () => {
             id: builder.id,
             name: 'Builder',
             status: 'active',
-            lastRunAt: '2026-11-10T21:00:00.000Z',
-            lastRunStatus: 'completed',
+            latestRun: { status: 'completed', finishedAt: '2026-11-10T21:04:00.000Z' },
         });
+        expect(view.teams[0].agents[1].latestRun).toBeNull();
         expect(view.agents).toEqual([
             expect.objectContaining({
                 id: missionScoped.id,
@@ -249,6 +337,47 @@ describe('MissionTeamService', () => {
         ]);
     });
 
+    it('lists Agents ASSIGNED through memberships — to the Mission or to an attached Work', async () => {
+        const toMission = await agent({ name: 'Planner', slug: 'planner' });
+        const toWork = await agent({ name: 'Site Editor', slug: 'site-editor' });
+        const elsewhere = await agent({ name: 'Elsewhere', slug: 'elsewhere' });
+        await assign(toMission.id, 'mission', MISSION);
+        await assign(toWork.id, 'work', WORK);
+        await assign(elsewhere.id, 'work', OTHER_WORK);
+
+        const view = await service().getForUser(OWNER, MISSION, SCOPE);
+
+        expect(view.agents).toEqual([
+            expect.objectContaining({ id: toMission.id, via: 'mission', workId: null }),
+            expect.objectContaining({
+                id: toWork.id,
+                via: 'work',
+                workId: WORK,
+                workName: 'ever.co website',
+            }),
+        ]);
+    });
+
+    it('lists a shared workspace Agent that drives an active standing Task on an attached Work', async () => {
+        const editor = await agent({ name: 'Ever Web & Content Editor', slug: 'web-editor' });
+        const writer = await agent({ name: 'Ever Docs Writer', slug: 'docs-writer' });
+        const paused = await agent({ name: 'Paused Bot', slug: 'paused-bot' });
+        const assignedTask = await standingTask({ agentId: null });
+        await dataSource
+            .getRepository(TaskAssignee)
+            .save({ taskId: assignedTask.id, assigneeType: 'agent', assigneeId: writer.id });
+        await standingTask({ agentId: editor.id });
+        await standingTask({ agentId: paused.id, recurrencePausedAt: new Date('2026-11-01') });
+        await standingTask({ agentId: paused.id, workId: OTHER_WORK });
+
+        const view = await service().getForUser(OWNER, MISSION, SCOPE);
+
+        expect(view.agents.map((a) => [a.name, a.via, a.workName])).toEqual([
+            ['Ever Docs Writer', 'standing-tasks', 'ever.co website'],
+            ['Ever Web & Content Editor', 'standing-tasks', 'ever.co website'],
+        ]);
+    });
+
     it("never lists another member's PRIVATE Agent — the same rule as everywhere else", async () => {
         const product = await team('Product');
         await holdsMission(product.id);
@@ -261,7 +390,7 @@ describe('MissionTeamService', () => {
         });
         const mine = await agent({ name: 'Mine', slug: 'mine', visibility: 'private' });
         for (const a of [shared, hidden, mine]) await onTeam(product.id, a.id);
-        await agent({
+        const privateWorkBot = await agent({
             name: 'Private Work Bot',
             slug: 'private-work-bot',
             userId: TEAMMATE,
@@ -269,10 +398,30 @@ describe('MissionTeamService', () => {
             scope: AgentScope.WORK,
             workId: WORK,
         });
+        // A private Agent reached through a membership or a standing Task stays hidden too.
+        await assign(privateWorkBot.id, 'mission', MISSION);
+        await standingTask({ agentId: hidden.id });
 
         const view = await service().getForUser(OWNER, MISSION, SCOPE);
 
         expect(view.teams[0].agents.map((a) => a.name)).toEqual(['Mine', 'Shared']);
+        expect(view.agents).toEqual([]);
+    });
+
+    it('a viewer who may read a shared Mission sees its Teams — but no Work they cannot reach', async () => {
+        const product = await team('Product');
+        await holdsMission(product.id);
+        const builder = await agent({ name: 'Builder', slug: 'builder' });
+        await onTeam(product.id, builder.id);
+        await agent({ name: 'Docs Bot', slug: 'docs-bot', scope: AgentScope.WORK, workId: WORK });
+
+        const view = await service().getForUser(TEAMMATE, MISSION, SCOPE);
+
+        expect(missionsGate.getReadable).toHaveBeenCalledWith(TEAMMATE, MISSION, SCOPE);
+        // The Works are the OWNER's edges; the viewer neither owns nor is a
+        // member of this one, so its name (and its Agents) stay out.
+        expect(missionWorks.listForMissionWithWork).toHaveBeenCalledWith(MISSION, OWNER, SCOPE);
+        expect(view.teams[0].agents.map((a) => a.name)).toEqual(['Builder']);
         expect(view.agents).toEqual([]);
     });
 
@@ -308,7 +457,7 @@ describe('MissionTeamService', () => {
     });
 
     it('a personal Mission has no Teams', async () => {
-        missionsGate.getForUser.mockResolvedValue({
+        missionsGate.getReadable.mockResolvedValue({
             id: MISSION,
             tenantId: TENANT,
             organizationId: null,
@@ -324,8 +473,8 @@ describe('MissionTeamService', () => {
         expect(view.teams).toEqual([]);
     });
 
-    it('is a 404 for a Mission the caller does not own — the gate runs first', async () => {
-        missionsGate.getForUser.mockRejectedValue(new NotFoundException('Mission not found'));
+    it('is a 404 for a Mission the caller may not read — the gate runs first', async () => {
+        missionsGate.getReadable.mockRejectedValue(new NotFoundException('Mission not found'));
 
         await expect(service().getForUser(TEAMMATE, MISSION, SCOPE)).rejects.toBeInstanceOf(
             NotFoundException,
@@ -340,7 +489,7 @@ describe('MissionTeamService', () => {
             const tokens = imports.flatMap((entry) =>
                 Array.isArray(entry?.providers) ? entry.providers.map((p) => p?.provide) : [],
             );
-            for (const entity of [Team, TeamMember, TeamResource, Agent]) {
+            for (const entity of [Team, TeamMember, TeamResource, Agent, Mission]) {
                 expect(tokens).toContain(getRepositoryToken(entity));
             }
             expect(Reflect.getMetadata(MODULE_METADATA.PROVIDERS, MissionsModule)).toContain(
