@@ -1317,6 +1317,8 @@ export function BillingSettings({
                                     <input
                                         type="number"
                                         min={seats.used}
+                                        // The API's `SetSeatsDto` cap (`@Max(10_000)`).
+                                        max={10_000}
                                         step="1"
                                         inputMode="numeric"
                                         value={seatsInput}

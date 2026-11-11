@@ -1907,7 +1907,13 @@ export class FleetCloudService {
                 .sort((a, b) => a.priceMonthlyCents - b.priceMonthlyCents),
             software: FLEET_CLOUD_SOFTWARE_IDS.filter(
                 (id) => id !== 'overlay-vpn' || this.overlayVpnInstallUrl() !== null,
-            ).map((id) => ({ id, default: id !== 'overlay-vpn' })),
+            ).map((id) =>
+                // The dialog shows the auth-key field only where create accepts a
+                // key: without a join command it refuses one ("leave the key empty").
+                id === 'overlay-vpn'
+                    ? { id, default: false, acceptsAuthKey: this.overlayVpnJoinCommand() !== null }
+                    : { id, default: true },
+            ),
             billsWhileOff: raw.billsWhileOff !== false,
             currency: typeof raw.currency === 'string' && raw.currency ? raw.currency : 'USD',
             account: { label: String(raw.account?.label ?? '') },

@@ -329,9 +329,12 @@ export function NewTaskForm({ createTask }: { createTask: CreateTaskFn }) {
         startTransition(() => {
             void (async () => {
                 try {
+                    // Each label within the API's 80 characters
+                    // (`@MaxLength(80, { each: true })`): a longer one failed
+                    // the whole create with a generic error.
                     const labels = labelsValue
                         .split(',')
-                        .map((l) => l.trim())
+                        .map((l) => l.trim().slice(0, 80).trim())
                         .filter(Boolean);
                     const planning = planningPayload(dueDate, startDate, estimateRaw);
                     if (planning.error) {
