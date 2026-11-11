@@ -160,19 +160,22 @@ export type MissionDetailsResult =
     | { success: false; error: string };
 
 /**
- * Edit a Mission's title and Markdown description (`PATCH /api/me/missions/:id`).
- * Owner-only, like every other Mission write: the API answers 404 to anyone else.
+ * Edit a Mission's title and/or Markdown description (`PATCH /api/me/missions/:id`).
+ * Sends only the fields given: an unchanged description must not overwrite one an
+ * agent wrote meanwhile. Owner-only, like every other Mission write: the API
+ * answers 404 to anyone else.
  */
 export async function updateMissionDetailsAction(
     id: string,
-    input: { title: string; description: string },
+    input: { title?: string; description?: string },
 ): Promise<MissionDetailsResult> {
     await requireMissionAuth();
+    const patch: UpdateMissionInput = {};
+    if (typeof input.title === 'string') patch.title = input.title;
+    if (typeof input.description === 'string') patch.description = input.description;
+    if (Object.keys(patch).length === 0) return { success: false, error: '' };
     try {
-        const mission = await missionsAPI.update(id, {
-            title: input.title,
-            description: input.description,
-        });
+        const mission = await missionsAPI.update(id, patch);
         revalidateMissionSurfaces();
         revalidatePath(`/[locale]/(dashboard)/missions/${id}`, 'page');
         return { success: true, mission };

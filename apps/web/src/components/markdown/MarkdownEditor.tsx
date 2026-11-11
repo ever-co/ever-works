@@ -4,6 +4,7 @@ import { useRef, useState, type KeyboardEvent } from 'react';
 import { useTranslations } from 'next-intl';
 import { Eye, Pencil } from 'lucide-react';
 import { cn } from '@/lib/utils/cn';
+import { validatorLength } from '@/lib/utils/text-length';
 import { MarkdownContent } from './MarkdownContent';
 
 type EditorMode = 'write' | 'preview';
@@ -78,7 +79,9 @@ export function MarkdownEditor({
     const hintId = `${id}-hint`;
     const counterId = `${id}-counter`;
     const errorId = `${id}-error`;
-    const overLimit = typeof maxLength === 'number' && value.length > maxLength;
+    // Counted like the API's `@MaxLength` (an emoji is one character, not two).
+    const length = validatorLength(value);
+    const overLimit = typeof maxLength === 'number' && length > maxLength;
 
     const select = (next: EditorMode, focus: boolean) => {
         setMode(next);
@@ -218,7 +221,7 @@ export function MarkdownEditor({
                             overLimit && 'text-danger font-medium',
                         )}
                     >
-                        {t('counter', { count: value.length, max: maxLength })}
+                        {t('counter', { count: length, max: maxLength })}
                     </span>
                 ) : null}
             </div>

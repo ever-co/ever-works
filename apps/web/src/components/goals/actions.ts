@@ -184,19 +184,24 @@ export async function unarchiveGoalAction(id: string) {
 export type GoalDetailsResult = { success: true; goal: Goal } | { success: false; error: string };
 
 /**
- * Edit a Goal's title and Markdown description (`PATCH /api/me/goals/:id`). An
- * empty description clears it (`null`), which the API accepts.
+ * Edit a Goal's title and/or Markdown description (`PATCH /api/me/goals/:id`).
+ * Sends only the fields given (an unchanged description must not overwrite one
+ * an agent wrote meanwhile); an empty description clears it (`null`), which the
+ * API accepts.
  */
 export async function updateGoalDetailsAction(
     id: string,
-    input: { title: string; description: string },
+    input: { title?: string; description?: string },
 ): Promise<GoalDetailsResult> {
     await requireGoalAuth();
+    const patch: UpdateGoalInput = {};
+    if (typeof input.title === 'string') patch.title = input.title;
+    if (typeof input.description === 'string') {
+        patch.description = input.description.length > 0 ? input.description : null;
+    }
+    if (Object.keys(patch).length === 0) return { success: false, error: '' };
     try {
-        const goal = await goalsAPI.update(id, {
-            title: input.title,
-            description: input.description.length > 0 ? input.description : null,
-        });
+        const goal = await goalsAPI.update(id, patch);
         revalidatePath(GOALS_LIST_PATH, 'page');
         revalidateGoalDetail(id);
         return { success: true, goal };

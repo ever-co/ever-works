@@ -186,12 +186,92 @@ describe('MissionEditDialog', () => {
         expect(updateDetails).not.toHaveBeenCalled();
     });
 
-    it('Cancel closes without saving and the next opening starts from the record again', () => {
+    it('sends only the title when only the title changed (a stale description never overwrites a newer one)', async () => {
+        updateDetails.mockResolvedValueOnce({
+            success: true,
+            mission: { ...MISSION, title: 'Renamed' } as Mission,
+        });
+        const { onOpenChange } = renderDialog();
+        fireEvent.change(screen.getByTestId('mission-edit-title'), {
+            target: { value: 'Renamed' },
+        });
+        fireEvent.click(screen.getByTestId('mission-edit-save'));
+        await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+        expect(updateDetails).toHaveBeenCalledWith('m1', { title: 'Renamed' });
+    });
+
+    it('sends only the description when only the description changed', async () => {
+        updateDetails.mockResolvedValueOnce({ success: true, mission: MISSION as Mission });
+        renderDialog();
+        fireEvent.change(screen.getByTestId('mission-edit-description-textarea'), {
+            target: { value: '## New' },
+        });
+        fireEvent.click(screen.getByTestId('mission-edit-save'));
+        await waitFor(() =>
+            expect(updateDetails).toHaveBeenCalledWith('m1', { description: '## New' }),
+        );
+    });
+
+    it('makes no request when nothing changed (whitespace only)', async () => {
+        const { onOpenChange } = renderDialog();
+        fireEvent.change(screen.getByTestId('mission-edit-title'), {
+            target: { value: '  Cats Business  ' },
+        });
+        fireEvent.submit(screen.getByTestId('mission-edit-dialog'));
+        await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+        expect(updateDetails).not.toHaveBeenCalled();
+    });
+
+    it('counts length like the API validator: 200 emoji fit a 200-character title', async () => {
+        updateDetails.mockResolvedValue({ success: true, mission: MISSION as Mission });
+        renderDialog();
+        // 200 astral emoji = 400 UTF-16 units, 200 for class-validator.
+        fireEvent.change(screen.getByTestId('mission-edit-title'), {
+            target: { value: '🚀'.repeat(200) },
+        });
+        fireEvent.click(screen.getByTestId('mission-edit-save'));
+        await waitFor(() => expect(updateDetails).toHaveBeenCalledTimes(1));
+        expect(screen.queryByText('titleTooLong:{"max":200}')).toBeNull();
+
+        fireEvent.change(screen.getByTestId('mission-edit-title'), {
+            target: { value: '🚀'.repeat(201) },
+        });
+        fireEvent.click(screen.getByTestId('mission-edit-save'));
+        expect(await screen.findByText('titleTooLong:{"max":200}')).toBeTruthy();
+        expect(updateDetails).toHaveBeenCalledTimes(1);
+    });
+
+    it('asks before discarding unsaved changes, and keeps the draft when the answer is no', () => {
+        const confirm = vi.spyOn(window, 'confirm').mockReturnValueOnce(false);
+        const { onOpenChange } = renderDialog();
+        fireEvent.change(screen.getByTestId('mission-edit-title'), { target: { value: 'Draft' } });
+
+        // The close button (and Escape / backdrop, which take the same path).
+        fireEvent.click(screen.getByText('close'));
+        expect(confirm).toHaveBeenCalledWith('discardConfirm');
+        expect(onOpenChange).not.toHaveBeenCalled();
+        expect((screen.getByTestId('mission-edit-title') as HTMLInputElement).value).toBe('Draft');
+        confirm.mockRestore();
+    });
+
+    it('closes an unchanged dialog without asking', () => {
+        const confirm = vi.spyOn(window, 'confirm');
+        const { onOpenChange } = renderDialog();
+        fireEvent.click(screen.getByTestId('mission-edit-cancel'));
+        expect(confirm).not.toHaveBeenCalled();
+        expect(onOpenChange).toHaveBeenCalledWith(false);
+        confirm.mockRestore();
+    });
+
+    it('Cancel with a confirmed discard closes without saving, and the next opening starts from the record again', () => {
+        const confirm = vi.spyOn(window, 'confirm').mockReturnValueOnce(true);
         const { onOpenChange, rerender, onSaved } = renderDialog();
         fireEvent.change(screen.getByTestId('mission-edit-title'), { target: { value: 'Draft' } });
         fireEvent.click(screen.getByTestId('mission-edit-cancel'));
+        expect(confirm).toHaveBeenCalledTimes(1);
         expect(onOpenChange).toHaveBeenCalledWith(false);
         expect(updateDetails).not.toHaveBeenCalled();
+        confirm.mockRestore();
 
         rerender(
             <MissionEditDialog

@@ -70,10 +70,8 @@ describe('GoalEditDialog', () => {
         fireEvent.click(screen.getByTestId('goal-edit-save'));
 
         await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
-        expect(updateDetails).toHaveBeenCalledWith('g1', {
-            title: 'Ship pricing',
-            description: '- three tiers',
-        });
+        // Only the field that changed is sent.
+        expect(updateDetails).toHaveBeenCalledWith('g1', { description: '- three tiers' });
         expect(onSaved).toHaveBeenCalledWith(saved);
         expect(refresh).toHaveBeenCalled();
     });
@@ -96,9 +94,7 @@ describe('GoalEditDialog', () => {
             target: { value: '' },
         });
         fireEvent.click(screen.getByTestId('goal-edit-save'));
-        await waitFor(() =>
-            expect(updateDetails).toHaveBeenCalledWith('g1', { title: 'T', description: '' }),
-        );
+        await waitFor(() => expect(updateDetails).toHaveBeenCalledWith('g1', { description: '' }));
         expect(screen.queryByText('descriptionRequired')).toBeNull();
     });
 

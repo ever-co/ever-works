@@ -4,6 +4,7 @@ import { useId, useState, useTransition, type FormEvent } from 'react';
 import { useTranslations } from 'next-intl';
 import { Pencil } from 'lucide-react';
 import { cn } from '@/lib/utils/cn';
+import { validatorLength } from '@/lib/utils/text-length';
 import { Button } from '@/components/ui/button';
 import {
     Dialog,
@@ -36,8 +37,12 @@ export interface RecordEditDialogProps {
     descriptionMaxLength: number;
     /** `true` when the API rejects an empty description (`@MinLength(1)`). */
     descriptionRequired?: boolean;
-    /** Receives trimmed values; only called when something changed. */
-    onSave: (values: RecordEditValues) => Promise<RecordEditResult>;
+    /**
+     * Receives ONLY the fields that changed, trimmed (at least one). Sending an
+     * unchanged description would overwrite a newer one an agent wrote while
+     * the dialog was open, when the owner only fixed the title.
+     */
+    onSave: (changes: Partial<RecordEditValues>) => Promise<RecordEditResult>;
     /** Prefix for every `data-testid` in the dialog (e.g. `mission-edit`). */
     testIdPrefix: string;
 }
@@ -53,8 +58,13 @@ const inputClass =
  * it refuses (a server action that THROWS loses its message in a production
  * build, so `onSave` answers a value instead), and stays open on failure so
  * nothing typed is lost. Focus is trapped by the Headless UI dialog under
- * `ui/dialog`, like every other dialog in the app; Escape and Cancel close it
- * unless a save is in flight.
+ * `ui/dialog`, like every other dialog in the app.
+ *
+ * Closing (Cancel, the close button, Escape, a click on the backdrop) with
+ * unsaved changes asks first — the app's `window.confirm` pattern — and a
+ * confirmed close discards the draft: the next opening starts from the record
+ * as it is then. Nothing closes while a save is in flight. Lengths are counted
+ * like the API's validators count them (`validatorLength`).
  */
 export function RecordEditDialog({
     open,
@@ -99,24 +109,32 @@ export function RecordEditDialog({
 
     const title = titleDraft.trim();
     const description = descriptionDraft.trim();
-    const changed = title !== initialTitle.trim() || description !== initialDescription.trim();
+    const titleChanged = title !== initialTitle.trim();
+    const descriptionChanged = description !== initialDescription.trim();
+    const changed = titleChanged || descriptionChanged;
 
     const close = () => {
         if (pending) return;
+        if (changed && !window.confirm(t('discardConfirm'))) return;
         onOpenChange(false);
     };
 
+    /** Validates only what will be sent: an unchanged field is not the user's to fix here. */
     const validate = (): boolean => {
         let nextTitleError: string | null = null;
         let nextDescriptionError: string | null = null;
-        if (title.length === 0) nextTitleError = t('titleRequired');
-        else if (title.length > titleMaxLength) {
-            nextTitleError = t('titleTooLong', { max: titleMaxLength });
+        if (titleChanged) {
+            if (title.length === 0) nextTitleError = t('titleRequired');
+            else if (validatorLength(title) > titleMaxLength) {
+                nextTitleError = t('titleTooLong', { max: titleMaxLength });
+            }
         }
-        if (descriptionRequired && description.length === 0) {
-            nextDescriptionError = t('descriptionRequired');
-        } else if (description.length > descriptionMaxLength) {
-            nextDescriptionError = t('descriptionTooLong', { max: descriptionMaxLength });
+        if (descriptionChanged) {
+            if (descriptionRequired && description.length === 0) {
+                nextDescriptionError = t('descriptionRequired');
+            } else if (validatorLength(description) > descriptionMaxLength) {
+                nextDescriptionError = t('descriptionTooLong', { max: descriptionMaxLength });
+            }
         }
         setTitleError(nextTitleError);
         setDescriptionError(nextDescriptionError);
@@ -127,14 +145,17 @@ export function RecordEditDialog({
         event.preventDefault();
         if (pending) return;
         setSaveError(null);
-        if (!validate()) return;
         if (!changed) {
             onOpenChange(false);
             return;
         }
+        if (!validate()) return;
+        const changes: Partial<RecordEditValues> = {};
+        if (titleChanged) changes.title = title;
+        if (descriptionChanged) changes.description = description;
         startSave(async () => {
             try {
-                const result = await onSave({ title, description });
+                const result = await onSave(changes);
                 if (result.ok) {
                     onOpenChange(false);
                 } else {
