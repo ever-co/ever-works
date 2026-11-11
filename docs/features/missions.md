@@ -181,11 +181,14 @@ When the Mission↔Work relation table shipped, a one-time backfill walked the h
 The **Team and agents** panel in the right-hand rail of `/missions/:id` (under _Visibility_) answers "who works on this?" in one read:
 
 - the **Teams** that hold this Mission as a team resource (attached on the Team's page), each linking to `/teams/:id`, with the **Agents** on that Team;
-- then the **other Agents** working on it that no listed Team already shows: Agents scoped to this Mission, and Agents scoped to one of its [attached Works](#attached-works-and-relations), each with the Work it works on.
+- then the **other Agents** working on it that no listed Team already shows:
+    - Agents **scoped** to this Mission, or **assigned** to it;
+    - Agents scoped or assigned to one of its [attached Works](#attached-works-and-relations), with the Work they work on;
+    - Agents that drive an **active recurring Task** on one of those Works (_Standing tasks on `<Work>`_) — how shared workspace Agents, which have no Work scope or assignment, reach a Work.
 
-Every Agent row shows its status and **Last run `<time ago>` · `<status>`** (or _Never ran_) — the same last run the [Agent card](./agents.md#agents-without-a-heartbeat-and-the-last-run) shows. Archived Agents are left out.
+Every Agent row shows its status and **Last run `<time ago>` · `<status>`** (or _Never ran_) — the same last run the [Agent card](./agents.md#agents-without-a-heartbeat-and-the-last-run) shows: its most recent ended run of any kind. Archived Agents are left out.
 
-`GET /api/me/missions/:id/team` serves it: `{ teams: [{ id, name, slug, agents }], agents: [{ …, via: 'mission' | 'work', workId, workName }] }`. It is owner-gated in the active workspace exactly like `GET /api/me/missions/:id/works` (a foreign or out-of-scope Mission is a `404`), Teams are read only in the Mission's own Organization, and every Agent goes through the same visibility rule as the Agents list's _Organization_ tab — so another member's **private** Agent on a shared Team is never listed.
+`GET /api/me/missions/:id/team` serves it: `{ teams: [{ id, name, slug, agents }], agents: [{ …, via: 'mission' | 'work' | 'standing-tasks', workId, workName }] }`, each Agent with `latestRun: { status, finishedAt } | null`. It is gated like `GET /api/me/missions/:id`: the owner, or anyone the Mission's visibility lets open it (anyone else gets a `404`). Teams are read only in the Mission's own Organization; the attached Works are the owner's, and a viewer who is not the owner only sees those they own or are a member of; and every Agent goes through the same visibility rule as the Agents list's _Organization_ tab — so another member's **private** Agent on a shared Team is never listed.
 
 ## Attachments
 

@@ -84,14 +84,13 @@ A heartbeat is optional. Many Agents have none on purpose — for example Agents
 
 - **Heartbeat: `<cadence>`** — the Agent has a heartbeat cadence (`manual` counts as none).
 - **Runs on schedule · next `<time>`** — no heartbeat, and at least one of your **active** recurring Tasks is assigned to it (as an agent assignee, or as the Task's own Agent when the Task has no agent assignee). The time is the soonest next fire among those Tasks. Paused, ended and exhausted schedules do not count, and only your own Tasks are counted, so a shared Agent never reveals someone else's schedule.
-- **Runs when assigned** — no heartbeat and no active recurring Task: it runs when work is assigned to it, or when you start it.
+- **Runs when assigned** — one of **your** Agents with no heartbeat and none of your active recurring Tasks: it runs when work is assigned to it, or when you start it. A teammate's Agent that none of your Tasks drive shows nothing here — its owner's Tasks may drive it, and you cannot count those.
 
-Under that, every card shows **Last run `<time ago>` · `<status>`** once the Agent has run. The last run is written by **every** run that ends — a cloud Task run, a fleet run, a heartbeat, a cancel, or a run the stuck-run sweeper reaped or parked — not only by heartbeats:
+Under that, every card shows **Last run `<time ago>` · `<status>`**: the Agent's most recent run that has **ended**, of any kind — a cloud Task run, a fleet run, a heartbeat, a chat reply, a cancel, or a run the stuck-run sweeper reaped or parked. The time is when it finished; the status is how (`completed`, `failed`, `cancelled`). It is read from the Agent's runs, for the whole list page at once. A run still in progress is not a finished run: the status pill already says **Running** for a heartbeat in flight.
 
-- `lastRunAt` is when that run **began** (or, for a run that never started, when it was asked for), the same meaning the heartbeat has always given it; `lastRunStatus` is how it ended (`completed`, `failed`, `cancelled`, plus the heartbeat's own `dispatch-failed` / `recovered-stuck`).
-- It is **monotonic**: a run that started earlier but finishes later never overwrites a newer one.
-- While a heartbeat (or **Run heartbeat now**) holds the Agent in `running`, that claim owns both fields until it releases; a Task run that ends inside that window is not stamped.
-- Writing it never changes the Agent's `updatedAt`, so the Agents list order does not shuffle as runs finish.
+:::note `lastRunAt` is the heartbeat's
+The Agent's own `lastRunAt` / `lastRunStatus` fields (on `GET /api/agents/:id`, and on the Schedules page's heartbeat rows and Home's Today) keep meaning the **heartbeat's** last run — only the heartbeat claim and release write them. The card's "Last run" is a separate value, `latestRun`, on the Agents list response.
+:::
 
 ## Memory
 

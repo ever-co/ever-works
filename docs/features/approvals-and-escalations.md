@@ -177,7 +177,11 @@ Resolving an escalation by hand — through `POST /api/escalations/:id/resolve`,
 A `queued-too-long` card asks whether to raise the concurrency limit, cancel the run, or let it keep waiting. Once that run has **ended** — completed, failed or cancelled, by any path (a cloud Task run, a fleet run, a heartbeat, your cancel, the stuck-run sweeper) — the question is moot, so the platform closes the card itself:
 
 - the escalation is resolved with **no user** recorded (`resolvedByUserId` stays empty) and a fixed note such as _"Closed automatically: the run ended (failed) at 2026-11-10T21:04:00.000Z."_;
-- its Inbox item (the **Needs you** row on the dashboard) closes with it; nothing is resumed or steered, and it does not count as you having looked at the item.
+- its Inbox item (the **Needs you** row on the dashboard) closes with it; nothing is resumed or steered, and it does not count as you having looked at the item. The Live Feed shows the platform closing it, not you.
+
+One exception stays with a person: a run that ended while still **parked for capacity** (`queuedReason = concurrency-limit` — reaped or cancelled before a slot freed). Its card's question, "raise the limit?", still stands. A run that waited with no parking reason (for example a fleet run whose computer is gone: the fleet job, not the run, carries `waiting-for-runner`) closes like any other.
+
+The sweeper also only flags a run that is **still** queued when it writes the flag, so a card is never filed for a wait that already ended.
 
 It happens the moment the run ends, and the stuck-run sweeper's queued pass (every 2 hours) closes any card that was still open — including cards filed before this behaviour existed, and cards whose run has since been deleted by retention. A card a person already resolved keeps the person's resolution.
 
