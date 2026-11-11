@@ -117,11 +117,14 @@ export async function getScheduleHealth(): Promise<
 
 export async function runScheduleNow(
     id: string,
-    options: { confirm?: boolean } = {},
+    options: { confirm?: boolean; force?: boolean } = {},
 ): Promise<{ ok: true; result: ScheduleRunNowResult } | ScheduleActionFailure> {
     await requireSession();
     try {
-        const result = await schedulesAPI.runNow(id, { confirm: options.confirm === true });
+        const result = await schedulesAPI.runNow(id, {
+            confirm: options.confirm === true,
+            ...(options.force === true ? { force: true } : {}),
+        });
         revalidatePath(ROUTES.DASHBOARD_ACTIVITY);
         revalidatePath(ROUTES.DASHBOARD_SCHEDULES);
         return { ok: true, result };

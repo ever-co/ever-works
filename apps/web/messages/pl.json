@@ -1692,6 +1692,9 @@
                 "frequency": "Częstotliwość",
                 "endsAt": "Koniec (opcjonalnie)",
                 "maxOccurrences": "Maks. wystąpień (opcjonalnie)",
+                "maxOpenInstances": "Najwyżej otwartych jednocześnie",
+                "maxOpenInstancesHint": "Pomija zaplanowane uruchomienie, dopóki tyle wcześniejszych uruchomień jest nadal otwartych (trwa lub czeka na otwarty pull request). Puste = bez limitu.",
+                "maxOpenInstancesInvalid": "Wpisz liczbę całkowitą od 1 do {max} albo zostaw puste, aby nie ustawiać limitu.",
                 "rulePreview": "Podgląd reguły",
                 "ruleInvalid": "nieprawidłowa",
                 "cancel": "Anuluj",
@@ -1700,6 +1703,7 @@
                 "nextAt": "Następne o",
                 "ends": "Koniec",
                 "max": "Maks.",
+                "lastSkipped": "Ostatnio pominięte",
                 "stopConfirm": "Zatrzymać harmonogram cykliczny? Istniejące wystąpienia pozostaną; nowe nie będą tworzone.",
                 "stopError": "Nie udało się zatrzymać harmonogramu cyklicznego",
                 "saveError": "Nie udało się zapisać harmonogramu"
@@ -2721,6 +2725,7 @@
                     "memberRemoved": "Członek usunięty",
                     "scheduleCreated": "Harmonogram utworzony",
                     "scheduleExecuted": "Harmonogram wykonany",
+                    "scheduleSkipped": "Harmonogram pominięty",
                     "import": "Import",
                     "login": "Logowanie",
                     "signup": "Rejestracja",
@@ -10244,6 +10249,11 @@
                 "title": "Nic jeszcze nie zaplanowano",
                 "description": "Zadania cykliczne, pulsy agentów, harmonogramy pracy, takty Mission, walidacja źródeł i synchronizacja danych pojawią się tutaj po ich skonfigurowaniu.",
                 "noResults": "Żadne harmonogramy nie pasują do bieżącego filtra."
+            },
+            "lastSkipped": "Pominięte",
+            "lastSkippedHint": "Ostatnie zaplanowane uruchomienie zostało pominięte: zbyt wiele wcześniejszych uruchomień tego harmonogramu jest nadal otwartych.",
+            "runNow": {
+                "tooManyOpenConfirm": "Zbyt wiele wcześniejszych uruchomień „{name}” jest nadal otwartych, więc limit wstrzymuje to uruchomienie. Uruchomić mimo to?"
             }
         },
         "triggers": {

@@ -1692,6 +1692,9 @@
                 "frequency": "빈도",
                 "endsAt": "종료 (선택 사항)",
                 "maxOccurrences": "최대 반복 횟수 (선택 사항)",
+                "maxOpenInstances": "동시에 열려 있을 수 있는 최대 개수",
+                "maxOpenInstancesHint": "이전 실행이 이만큼 아직 열려 있는 동안(실행 중이거나 열린 풀 리퀘스트를 기다리는 중) 예약된 실행을 건너뜁니다. 비워 두면 제한 없음.",
+                "maxOpenInstancesInvalid": "1부터 {max}까지의 정수를 입력하거나, 제한 없이 두려면 비워 두세요.",
                 "rulePreview": "규칙 미리보기",
                 "ruleInvalid": "유효하지 않음",
                 "cancel": "취소",
@@ -1700,6 +1703,7 @@
                 "nextAt": "다음 실행",
                 "ends": "종료",
                 "max": "최대",
+                "lastSkipped": "마지막 건너뜀",
                 "stopConfirm": "반복 일정을 중지할까요? 기존 인스턴스는 유지되며 새 인스턴스는 생성되지 않습니다.",
                 "stopError": "반복 일정을 중지하지 못했습니다",
                 "saveError": "일정을 저장하지 못했습니다"
@@ -2721,6 +2725,7 @@
                     "memberRemoved": "멤버 제거됨",
                     "scheduleCreated": "스케줄 생성됨",
                     "scheduleExecuted": "스케줄 실행됨",
+                    "scheduleSkipped": "스케줄 건너뜀",
                     "import": "가져오기",
                     "login": "로그인",
                     "signup": "가입",
@@ -10244,6 +10249,11 @@
                 "title": "아직 예약된 항목이 없습니다",
                 "description": "반복 작업, 에이전트 하트비트, 워크 일정, Mission 틱, 소스 검증, 데이터 동기화를 설정하면 여기에 표시됩니다.",
                 "noResults": "현재 필터와 일치하는 일정이 없습니다."
+            },
+            "lastSkipped": "건너뜀",
+            "lastSkippedHint": "마지막 예약 실행을 건너뛰었습니다: 이 스케줄의 이전 실행이 아직 너무 많이 열려 있습니다.",
+            "runNow": {
+                "tooManyOpenConfirm": "“{name}”의 이전 실행이 아직 너무 많이 열려 있어 제한 때문에 이 실행이 보류되었습니다. 그래도 실행할까요?"
             }
         },
         "triggers": {

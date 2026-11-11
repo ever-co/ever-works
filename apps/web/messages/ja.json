@@ -1692,6 +1692,9 @@
                 "frequency": "頻度",
                 "endsAt": "終了（任意）",
                 "maxOccurrences": "最大実行回数（任意）",
+                "maxOpenInstances": "同時に開いておける上限",
+                "maxOpenInstancesHint": "以前の実行がこの数だけまだ開いている間（実行中、または開いているプルリクエストの待機中）は、予定された実行をスキップします。空欄 = 上限なし。",
+                "maxOpenInstancesInvalid": "1 から {max} までの整数を入力するか、上限なしにする場合は空欄のままにしてください。",
                 "rulePreview": "ルールのプレビュー",
                 "ruleInvalid": "無効",
                 "cancel": "キャンセル",
@@ -1700,6 +1703,7 @@
                 "nextAt": "次回",
                 "ends": "終了",
                 "max": "最大",
+                "lastSkipped": "最後のスキップ",
                 "stopConfirm": "繰り返しスケジュールを停止しますか？既存のインスタンスは残り、新しいものは作成されません。",
                 "stopError": "繰り返しスケジュールを停止できませんでした",
                 "saveError": "スケジュールを保存できませんでした"
@@ -2721,6 +2725,7 @@
                     "memberRemoved": "メンバー削除",
                     "scheduleCreated": "スケジュール作成",
                     "scheduleExecuted": "スケジュール実行",
+                    "scheduleSkipped": "スケジュールのスキップ",
                     "import": "インポート",
                     "login": "ログイン",
                     "signup": "サインアップ",
@@ -10244,6 +10249,11 @@
                 "title": "まだ何も予定されていません",
                 "description": "定期タスク、エージェントのハートビート、ワークのスケジュール、Mission のティック、ソースの検証、データ同期を設定すると、ここに表示されます。",
                 "noResults": "現在のフィルターに一致するスケジュールはありません。"
+            },
+            "lastSkipped": "スキップ",
+            "lastSkippedHint": "最後の予定された実行はスキップされました。このスケジュールの以前の実行がまだ多く開いています。",
+            "runNow": {
+                "tooManyOpenConfirm": "「{name}」の以前の実行がまだ多く開いているため、上限によりこの実行が保留されています。それでも実行しますか？"
             }
         },
         "triggers": {

@@ -231,6 +231,13 @@ export interface Task {
     recurrenceEndsAt: string | null;
     recurrenceMaxOccurrences: number | null;
     recurrenceOccurredCount: number;
+    /**
+     * Recurring Tasks overlap limit — at most this many instances of the template may be open at
+     * once; a scheduled fire at the limit is skipped. `null` = no limit. Older API responses omit it.
+     */
+    recurrenceMaxOpenInstances?: number | null;
+    /** When the latest scheduled fire was skipped by that limit (cleared by the next spawn). */
+    recurrenceSkippedAt?: string | null;
     parentRecurringTaskId: string | null;
     /** Schedule mode "Scheduled" — run once at this instant. */
     scheduledAt?: string | null;
@@ -725,6 +732,11 @@ export const tasksAPI = {
             recurrenceTimezone?: string;
             recurrenceEndsAt?: string;
             recurrenceMaxOccurrences?: number;
+            /**
+             * Overlap limit: a whole number 1..100 sets it, `null` clears it, omitted keeps it. Sent
+             * without a cadence it updates only the limit of a Task that is already recurring.
+             */
+            recurrenceMaxOpenInstances?: number | null;
         },
     ) {
         return serverMutation<Task>({

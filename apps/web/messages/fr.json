@@ -1723,6 +1723,9 @@
                 "frequency": "Fréquence",
                 "endsAt": "Fin (facultatif)",
                 "maxOccurrences": "Occurrences max. (facultatif)",
+                "maxOpenInstances": "Au plus ouvertes à la fois",
+                "maxOpenInstancesHint": "Ignore une exécution planifiée tant que ce nombre d’exécutions précédentes est encore ouvert (en cours, ou en attente d’une pull request ouverte). Vide = aucune limite.",
+                "maxOpenInstancesInvalid": "Saisissez un nombre entier de 1 à {max}, ou laissez vide pour aucune limite.",
                 "rulePreview": "Aperçu de la règle",
                 "ruleInvalid": "non valide",
                 "cancel": "Annuler",
@@ -1731,6 +1734,7 @@
                 "nextAt": "Prochaine le",
                 "ends": "Fin",
                 "max": "Max",
+                "lastSkipped": "Dernière ignorée",
                 "stopConfirm": "Arrêter le calendrier récurrent ? Les instances existantes sont conservées ; aucune nouvelle ne sera créée.",
                 "stopError": "Impossible d'arrêter le calendrier récurrent",
                 "saveError": "Impossible d'enregistrer le calendrier"
@@ -2752,6 +2756,11 @@
                 "title": "Rien de planifié pour l'instant",
                 "description": "Les tâches récurrentes, les battements d'agents, les planifications de travail, les ticks de Mission, la validation des sources et la synchronisation des données apparaîtront ici une fois que vous les aurez configurés.",
                 "noResults": "Aucune planification ne correspond au filtre actuel."
+            },
+            "lastSkipped": "Ignorée",
+            "lastSkippedHint": "La dernière exécution planifiée a été ignorée : trop d’exécutions précédentes de ce planning sont encore ouvertes.",
+            "runNow": {
+                "tooManyOpenConfirm": "Trop d’exécutions précédentes de « {name} » sont encore ouvertes, sa limite retient donc cette exécution. L’exécuter quand même ?"
             }
         },
         "activity": {
@@ -2794,6 +2803,7 @@
                     "memberRemoved": "Membre supprimé",
                     "scheduleCreated": "Planning créé",
                     "scheduleExecuted": "Planning exécuté",
+                    "scheduleSkipped": "Planning ignoré",
                     "import": "Import",
                     "login": "Connexion",
                     "signup": "Inscription",

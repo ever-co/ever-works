@@ -236,6 +236,72 @@ describe('ScheduleRowMenu', () => {
         );
     });
 
+    // Recurring Tasks overlap limit — the owner may run past the limit, but is asked first.
+    function overLimitTask() {
+        return schedule(
+            { id: 'recurring_task:t-1', sourceType: 'recurring_task', ownerName: 'Quality loop' },
+            { runNow: true, pause: true, disabledReasons: {} },
+        );
+    }
+
+    it('asks before running past the open-instance limit, then sends force', async () => {
+        const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+        vi.mocked(runScheduleNow)
+            .mockResolvedValueOnce({
+                ok: false,
+                code: 'SCHEDULE_TOO_MANY_OPEN',
+                reasonKey: null,
+                status: 409,
+                runId: null,
+            })
+            .mockResolvedValueOnce({
+                ok: true,
+                result: {
+                    kind: 'run',
+                    scheduleId: 'recurring_task:t-1',
+                    runIds: ['run-3'],
+                    parked: false,
+                    queuedReason: null,
+                    taskId: 'instance-3',
+                    nextRunAt: null,
+                },
+            });
+        render(<ScheduleRowMenu schedule={overLimitTask()} />);
+        await openMenu('Quality loop');
+        fireEvent.click(screen.getByTestId('schedule-control-runNow'));
+
+        await waitFor(() => expect(toastSuccess).toHaveBeenCalledWith(`${T}.runNow.queuedToast`));
+        expect(confirm).toHaveBeenCalledWith(
+            `${T}.runNow.tooManyOpenConfirm({"name":"Quality loop"})`,
+        );
+        expect(runScheduleNow).toHaveBeenNthCalledWith(1, 'recurring_task:t-1', { confirm: false });
+        expect(runScheduleNow).toHaveBeenNthCalledWith(2, 'recurring_task:t-1', {
+            confirm: false,
+            force: true,
+        });
+        confirm.mockRestore();
+    });
+
+    it('runs nothing more when the owner declines to run past the limit', async () => {
+        const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+        vi.mocked(runScheduleNow).mockResolvedValue({
+            ok: false,
+            code: 'SCHEDULE_TOO_MANY_OPEN',
+            reasonKey: null,
+            status: 409,
+            runId: null,
+        });
+        render(<ScheduleRowMenu schedule={overLimitTask()} />);
+        await openMenu('Quality loop');
+        fireEvent.click(screen.getByTestId('schedule-control-runNow'));
+
+        await waitFor(() => expect(confirm).toHaveBeenCalledTimes(1));
+        expect(runScheduleNow).toHaveBeenCalledTimes(1);
+        expect(toastError).not.toHaveBeenCalled();
+        expect(toastSuccess).not.toHaveBeenCalled();
+        confirm.mockRestore();
+    });
+
     it('a Mission tick run-now points at the Mission, not a run', async () => {
         vi.mocked(runScheduleNow).mockResolvedValue({
             ok: true,

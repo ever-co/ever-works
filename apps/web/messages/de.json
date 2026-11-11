@@ -1723,6 +1723,9 @@
                 "frequency": "Häufigkeit",
                 "endsAt": "Ende (optional)",
                 "maxOccurrences": "Max. Wiederholungen (optional)",
+                "maxOpenInstances": "Höchstens gleichzeitig offen",
+                "maxOpenInstancesHint": "Überspringt einen geplanten Lauf, solange so viele frühere Läufe noch offen sind (laufen oder auf einen offenen Pull Request warten). Leer = keine Begrenzung.",
+                "maxOpenInstancesInvalid": "Geben Sie eine ganze Zahl von 1 bis {max} ein, oder lassen Sie das Feld für keine Begrenzung leer.",
                 "rulePreview": "Regelvorschau",
                 "ruleInvalid": "ungültig",
                 "cancel": "Abbrechen",
@@ -1731,6 +1734,7 @@
                 "nextAt": "Nächste am",
                 "ends": "Endet",
                 "max": "Max.",
+                "lastSkipped": "Zuletzt übersprungen",
                 "stopConfirm": "Wiederkehrenden Zeitplan beenden? Bestehende Instanzen bleiben erhalten; es werden keine neuen erzeugt.",
                 "stopError": "Wiederkehrender Zeitplan konnte nicht beendet werden",
                 "saveError": "Zeitplan konnte nicht gespeichert werden"
@@ -2752,6 +2756,11 @@
                 "title": "Noch nichts geplant",
                 "description": "Wiederkehrende Aufgaben, Agent-Heartbeats, Werk-Zeitpläne, Mission-Ticks, Quellenvalidierung und Datensynchronisierung erscheinen hier, sobald Sie sie eingerichtet haben.",
                 "noResults": "Keine Zeitpläne entsprechen dem aktuellen Filter."
+            },
+            "lastSkipped": "Übersprungen",
+            "lastSkippedHint": "Der letzte geplante Lauf wurde übersprungen: Zu viele frühere Läufe dieses Zeitplans sind noch offen.",
+            "runNow": {
+                "tooManyOpenConfirm": "Zu viele frühere Läufe von „{name}“ sind noch offen, daher hält das Limit diesen Lauf zurück. Trotzdem ausführen?"
             }
         },
         "activity": {
@@ -2794,6 +2803,7 @@
                     "memberRemoved": "Mitglied entfernt",
                     "scheduleCreated": "Zeitplan erstellt",
                     "scheduleExecuted": "Zeitplan ausgeführt",
+                    "scheduleSkipped": "Zeitplan übersprungen",
                     "import": "Import",
                     "login": "Anmeldung",
                     "signup": "Registrierung",

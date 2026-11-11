@@ -1692,6 +1692,9 @@
                 "frequency": "频率",
                 "endsAt": "结束（可选）",
                 "maxOccurrences": "最大次数（可选）",
+                "maxOpenInstances": "同时最多未完成",
+                "maxOpenInstancesHint": "只要仍有这么多之前的运行未完成（正在运行，或在等待一个未关闭的拉取请求），就跳过计划的运行。留空 = 不限制。",
+                "maxOpenInstancesInvalid": "请输入 1 到 {max} 之间的整数，或留空表示不限制。",
                 "rulePreview": "规则预览",
                 "ruleInvalid": "无效",
                 "cancel": "取消",
@@ -1700,6 +1703,7 @@
                 "nextAt": "下次时间",
                 "ends": "结束",
                 "max": "上限",
+                "lastSkipped": "上次跳过",
                 "stopConfirm": "停止周期性计划？现有实例将保留，不会再生成新实例。",
                 "stopError": "无法停止周期性计划",
                 "saveError": "无法保存计划"
@@ -2721,6 +2725,7 @@
                     "memberRemoved": "成员已移除",
                     "scheduleCreated": "计划已创建",
                     "scheduleExecuted": "计划已执行",
+                    "scheduleSkipped": "计划已跳过",
                     "import": "导入",
                     "login": "登录",
                     "signup": "注册",
@@ -10244,6 +10249,11 @@
                 "title": "暂无计划任务",
                 "description": "设置后，定期任务、代理心跳、作品计划、Mission 滴答、来源验证和数据同步将显示在此处。",
                 "noResults": "没有符合当前筛选条件的计划任务。"
+            },
+            "lastSkipped": "已跳过",
+            "lastSkippedHint": "上一次计划的运行已被跳过：此计划之前的运行仍有太多未完成。",
+            "runNow": {
+                "tooManyOpenConfirm": "“{name}”之前的运行仍有太多未完成，因此其限制暂缓了这次运行。仍要运行吗？"
             }
         },
         "triggers": {

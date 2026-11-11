@@ -148,7 +148,18 @@ export function ScheduleRowMenu({
             ) {
                 return;
             }
-            const response = await runScheduleNow(schedule.id, { confirm: isNodeSchedule });
+            let response = await runScheduleNow(schedule.id, { confirm: isNodeSchedule });
+            // Recurring Tasks overlap limit — too many earlier runs of this schedule are still
+            // open. Running anyway is the owner's call, so ask, then send it with `force`.
+            if (!response.ok && response.code === 'SCHEDULE_TOO_MANY_OPEN') {
+                if (!window.confirm(t('runNow.tooManyOpenConfirm', { name: schedule.ownerName }))) {
+                    return;
+                }
+                response = await runScheduleNow(schedule.id, {
+                    confirm: isNodeSchedule,
+                    force: true,
+                });
+            }
             if (response.ok) {
                 announceRun(response.result);
                 onChanged?.();
