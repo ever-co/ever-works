@@ -15,6 +15,8 @@
  * the daemon is testable with any process host.
  */
 
+import { muslBlocksPtyAddon } from '@ever-works/pty-local-plugin';
+
 /** One running terminal process. */
 export interface PtyProcess {
 	readonly pid: number | null;
@@ -82,7 +84,11 @@ export const PTY_ADDON_RANGE = '^0.15.0';
  */
 export const PTY_INSTALL_COMMAND = `npm install -g "${PTY_ADDON}@${PTY_ADDON_RANGE}"`;
 
-const PTY_FIX = `Fix: ${PTY_INSTALL_COMMAND} as the user who installed ever-works-node, then restart ever-works-node`;
+/**
+ * No restart: the session daemon retries the load (`DaemonCore` `reloadPty`),
+ * and a daemon that predates that is retired by the node's supervisor.
+ */
+const PTY_FIX = `Fix: ${PTY_INSTALL_COMMAND} as the user who installed ever-works-node (no restart needed)`;
 
 /** The fix a person can apply when the addon is missing and there is no loader error to explain why. */
 export const PTY_MISSING_HINT = `terminal support is missing on this computer: the terminal addon ${PTY_ADDON}@${PTY_ADDON_RANGE} is not usable. ${PTY_FIX}.`;
@@ -92,42 +98,22 @@ export interface PtyRuntime {
 	node: string;
 	platform: string;
 	arch: string;
-	/** Linux with musl libc (Alpine). Absent means glibc or not Linux. */
+	/** The addon must not be loaded: musl Linux without a source build (see `muslBlocksPtyAddon`). */
 	musl?: boolean;
-}
-
-/**
- * True on Linux with musl libc. Node's diagnostic report names the glibc it
- * runs on (`header.glibcVersionRuntime`) and has no such field on musl — the
- * check `detect-libc` makes. Never throws.
- */
-export function isMuslLinux(
-	platform: string = process.platform,
-	getReport: () => unknown = () => process.report?.getReport?.()
-): boolean {
-	if (platform !== 'linux') return false;
-	try {
-		const report = getReport() as { header?: { glibcVersionRuntime?: unknown } } | undefined;
-		return Boolean(report?.header) && !report?.header?.glibcVersionRuntime;
-	} catch {
-		return false;
-	}
 }
 
 const currentRuntime = (): PtyRuntime => ({
 	node: process.version,
 	platform: process.platform,
 	arch: process.arch,
-	...(isMuslLinux() ? { musl: true } : {})
+	...(muslBlocksPtyAddon(() => require.resolve(`${PTY_ADDON}/package.json`)) ? { musl: true } : {})
 });
 
 /**
- * Why the addon is refused on musl Linux. 0.15 ships `linux-musl-*`
- * prebuilds, but its loader (`lib/utils.js` `loadNativeModule`) only looks in
- * `prebuilds/<platform>-<arch>`, so on Alpine it loads the glibc build: the
- * require succeeds and the first `spawn()` segfaults the whole process (seen
- * on `node:26-alpine`, 2026-11-11). Refusing keeps the node up, without
- * `sessions`, and says why. The fleet runs on glibc (Debian VMs, the
+ * Why the addon is refused on musl Linux: 0.15 loads its glibc prebuild there
+ * and the first `spawn()` segfaults the whole process (`pty-local`'s
+ * `musl.ts` has the detail). Refusing keeps the node up, without `sessions`,
+ * and says why. The fleet runs on glibc (Debian VMs, the
  * `node:26-bookworm-slim` image, the Trigger.dev bookworm worker).
  */
 export const PTY_MUSL_REASON = `terminal support is missing: ${PTY_ADDON} ${PTY_ADDON_RANGE} has no working build for musl Linux (Alpine) — it loads its glibc build there and crashes on spawn. Run ever-works-node on a glibc Linux (Debian, Ubuntu, Fedora) for terminal sessions.`;
@@ -142,12 +128,16 @@ export const PTY_MUSL_REASON = `terminal support is missing: ${PTY_ADDON} ${PTY_
 export function describePtyLoadFailure(
 	error: unknown,
 	runtime: PtyRuntime = currentRuntime(),
-	installedVersion?: string | null
+	installedVersion?: string | null,
+	/** What the addon's loader printed itself (node-pty `console.error`s the real dlopen error). */
+	loaderDetail?: string
 ): string {
 	const where = `Node ${runtime.node} (${runtime.platform}-${runtime.arch})`;
 	const message = error instanceof Error ? error.message : error === undefined ? '' : String(error);
-	const first = message.split(/\r?\n/, 1)[0].slice(0, 160);
 	const code = (error as { code?: unknown } | null | undefined)?.code;
+	const first = (code !== 'MODULE_NOT_FOUND' && loaderDetail ? loaderDetail : message)
+		.split(/\r?\n/, 1)[0]
+		.slice(0, 160);
 	if (code === 'MODULE_NOT_FOUND' && first.includes(PTY_ADDON)) {
 		// Not installed. npm prints nothing when it skips an optional dependency
 		// (engines that exclude this Node, or no prebuild and no compiler), so
@@ -169,38 +159,49 @@ export function readPtyAddonVersion(require_: (id: string) => unknown = require)
 	}
 }
 
-let cached: { module: NodePtyModule | null; reason?: string } | null = null;
+let cachedModule: NodePtyModule | null = null;
 
 /**
- * Load the addon once. A load that fails — not installed, installed without
- * its native binary, built for another Node — is remembered as missing with
- * a reason that names the package, the range and the install command
- * ({@link describePtyLoadFailure}), never thrown.
+ * Load the addon. A load that fails — not installed, installed without its
+ * native binary, built for another Node, refused on musl — answers missing
+ * with a reason that names the package, the range and the install command
+ * ({@link describePtyLoadFailure}), never thrown. Only a SUCCESS is
+ * remembered: a later call retries, so an addon installed after the fact is
+ * picked up without a restart.
  */
 export function loadNodePty(
 	require_: (id: string) => unknown = require,
-	runtime: PtyRuntime = currentRuntime()
+	runtime?: PtyRuntime
 ): {
 	module: NodePtyModule | null;
 	reason?: string;
 } {
-	if (cached && require_ === require) return cached;
+	if (cachedModule && require_ === require) return { module: cachedModule };
+	const where = runtime ?? currentRuntime();
+	if (where.musl === true) return { module: null, reason: PTY_MUSL_REASON };
+	// node-pty prints the real loader error (e.g. a missing GLIBC symbol) with
+	// console.error before throwing a generic one: keep it for the reason, off stderr.
+	const printed: string[] = [];
+	const consoleError = console.error;
+	console.error = (...args: unknown[]) => {
+		printed.push(args.map((arg) => (arg instanceof Error ? arg.message : String(arg))).join(' '));
+	};
 	let result: { module: NodePtyModule | null; reason?: string };
-	if (runtime.musl === true) {
-		result = { module: null, reason: PTY_MUSL_REASON };
-		if (require_ === require) cached = result;
-		return result;
-	}
 	try {
 		const loaded = require_(PTY_ADDON) as Partial<NodePtyModule> | undefined;
 		result =
 			loaded && typeof loaded.spawn === 'function'
 				? { module: loaded as NodePtyModule }
-				: { module: null, reason: describePtyLoadFailure(undefined, runtime, readPtyAddonVersion(require_)) };
+				: { module: null, reason: describePtyLoadFailure(undefined, where, readPtyAddonVersion(require_)) };
 	} catch (error) {
-		result = { module: null, reason: describePtyLoadFailure(error, runtime, readPtyAddonVersion(require_)) };
+		result = {
+			module: null,
+			reason: describePtyLoadFailure(error, where, readPtyAddonVersion(require_), printed[0])
+		};
+	} finally {
+		console.error = consoleError;
 	}
-	if (require_ === require) cached = result;
+	if (result.module && require_ === require) cachedModule = result.module;
 	return result;
 }
 

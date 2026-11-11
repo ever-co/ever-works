@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { TerminalFrame, TerminalTransport } from '@ever-works/plugin';
-import { PtyLocalPlugin, isMuslLinux, makePtyLocalSessionId } from '../pty-local.plugin.js';
+import { PtyLocalPlugin, makePtyLocalSessionId } from '../pty-local.plugin.js';
+import { detectMuslLinux, muslBlocksPtyAddon, type MuslProbe } from '../musl.js';
 
 /**
  * The suite exercises the full pump contract against PLAIN child
@@ -79,7 +80,7 @@ const NODE = process.execPath;
  * allowlisted env, which carries `SystemRoot`.
  */
 const ENV: Record<string, string> =
-	process.platform === 'win32' ? { SystemRoot: process.env.SystemRoot ?? 'C:\Windows' } : {};
+	process.platform === 'win32' ? { SystemRoot: process.env.SystemRoot ?? 'C:\\Windows' } : {};
 
 describe('PtyLocalPlugin', () => {
 	it('streams stdout as sequenced frames and publishes the exit frame BEFORE resolving', async () => {
@@ -149,15 +150,39 @@ describe('PtyLocalPlugin', () => {
 		expect(makePtyLocalSessionId('run-1', 0)).toBe('pty-local:run-1:no-pid');
 	});
 
-	it('isMuslLinux: musl only on Linux without a glibc in the report, never throwing', () => {
-		expect(isMuslLinux('linux', () => ({ header: { glibcVersionRuntime: '2.36' } }))).toBe(false);
-		expect(isMuslLinux('linux', () => ({ header: {} }))).toBe(true);
-		expect(isMuslLinux('win32', () => ({ header: {} }))).toBe(false);
+	it('detectMuslLinux: files first, the report only when they say nothing, never throwing', () => {
+		const probe = (over: Partial<MuslProbe>): MuslProbe => ({
+			platform: 'linux',
+			readFile: () => null,
+			readDir: () => [],
+			reportHeader: () => {
+				throw new Error('the report must not be read');
+			},
+			...over
+		});
+		expect(detectMuslLinux(probe({ readDir: () => ['ld-musl-x86_64.so.1'] }))).toBe(true);
+		expect(detectMuslLinux(probe({ readFile: () => 'exec /lib/ld-musl-x86_64.so.1 --list "$@"' }))).toBe(true);
+		expect(detectMuslLinux(probe({ readFile: () => '#! /bin/bash\n# GNU C Library ldd' }))).toBe(false);
+		expect(detectMuslLinux(probe({ reportHeader: () => ({ glibcVersionRuntime: '2.36' }) }))).toBe(false);
+		expect(detectMuslLinux(probe({ reportHeader: () => ({}) }))).toBe(true);
+		expect(detectMuslLinux(probe({ platform: 'win32', readDir: () => ['ld-musl-x86_64.so.1'] }))).toBe(false);
+		expect(detectMuslLinux(probe({}))).toBe(false);
+	});
+
+	it('muslBlocksPtyAddon: only on musl, and not when a source build of the addon exists', () => {
+		const pkg = () => '/app/node_modules/@homebridge/node-pty-prebuilt-multiarch/package.json';
+		expect(muslBlocksPtyAddon(pkg, false, () => false)).toBe(false);
+		expect(muslBlocksPtyAddon(pkg, true, () => false)).toBe(true);
+		expect(muslBlocksPtyAddon(pkg, true, (path) => /build[\\/]Release[\\/]pty\.node$/.test(path))).toBe(false);
 		expect(
-			isMuslLinux('linux', () => {
-				throw new Error('no report');
-			})
-		).toBe(false);
+			muslBlocksPtyAddon(
+				() => {
+					throw new Error('not installed');
+				},
+				true,
+				() => true
+			)
+		).toBe(true);
 	});
 
 	it('a non-zero exit is reported as crashed', async () => {

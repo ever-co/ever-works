@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { FLEET_SESSION_DAEMON_REASON_MAX_LENGTH } from '@ever-works/contracts';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
 	PTY_ADDON,
 	PTY_ADDON_RANGE,
@@ -11,7 +11,6 @@ import {
 	createNodePtyFactory,
 	describePtyLoadFailure,
 	describeTerminalAddon,
-	isMuslLinux,
 	loadNodePty,
 	readPtyAddonVersion,
 	type PtyProcess
@@ -61,8 +60,8 @@ describe('describePtyLoadFailure', () => {
 		const reason = describePtyLoadFailure(notFound(), RUNTIME);
 		expect(reason).toBe(
 			`terminal support is missing: npm did not install the optional addon ${PTY_ADDON}@${PTY_ADDON_RANGE} ` +
-				`for Node v26.10.0 (linux-x64). Fix: ${PTY_INSTALL_COMMAND} as the user who installed ever-works-node, ` +
-				'then restart ever-works-node.'
+				`for Node v26.10.0 (linux-x64). Fix: ${PTY_INSTALL_COMMAND} as the user who installed ever-works-node ` +
+				'(no restart needed).'
 		);
 		expect(PTY_INSTALL_COMMAND).toBe(`npm install -g "${PTY_ADDON}@${PTY_ADDON_RANGE}"`);
 	});
@@ -130,15 +129,32 @@ describe('loadNodePty / describeTerminalAddon with an injected loader', () => {
 		expect(PTY_MUSL_REASON.length).toBeLessThanOrEqual(FLEET_SESSION_DAEMON_REASON_MAX_LENGTH);
 	});
 
-	it('isMuslLinux: musl only on Linux without a glibc in the report, never throwing', () => {
-		expect(isMuslLinux('linux', () => ({ header: { glibcVersionRuntime: '2.36' } }))).toBe(false);
-		expect(isMuslLinux('linux', () => ({ header: {} }))).toBe(true);
-		expect(isMuslLinux('win32', () => ({ header: {} }))).toBe(false);
-		expect(
-			isMuslLinux('linux', () => {
-				throw new Error('no report');
-			})
-		).toBe(false);
+	it("keeps the addon loader's own console.error off stderr and puts its words in the reason", () => {
+		const spy = vi.spyOn(console, 'error');
+		const require_ = (id: string): unknown => {
+			if (id.endsWith('/package.json')) return { version: '0.15.0' };
+			console.error(new Error('/lib/x86_64-linux-gnu/libc.so.6: version `GLIBC_2.28` not found'));
+			throw new Error('Failed to load native module pty.node. Checked: ../build/Release/pty.node');
+		};
+		const { module, reason } = loadNodePty(require_, RUNTIME);
+		const printedToStderr = spy.mock.calls.length;
+		const restored = console.error === spy;
+		spy.mockRestore();
+		expect(restored).toBe(true);
+		expect(module).toBeNull();
+		expect(printedToStderr).toBe(0);
+		expect(reason).toContain('Loader: /lib/x86_64-linux-gnu/libc.so.6: version `GLIBC_2.28` not found');
+	});
+
+	it('does not remember a failure: an addon installed later is picked up on the next load', () => {
+		let installed = false;
+		const require_ = (id: string): unknown => {
+			if (!installed) throw notFound();
+			return id.endsWith('/package.json') ? { version: '0.15.0' } : { spawn: () => undefined };
+		};
+		expect(loadNodePty(require_, RUNTIME).module).toBeNull();
+		installed = true;
+		expect(loadNodePty(require_, RUNTIME).module).not.toBeNull();
 	});
 
 	it('reports a loadable addon with its version', () => {

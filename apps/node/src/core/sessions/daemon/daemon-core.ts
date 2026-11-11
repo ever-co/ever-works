@@ -47,6 +47,15 @@ export interface DaemonCoreOptions {
 	ptyFactory: PtyFactory | null;
 	/** Why there is no PTY, when there is none. */
 	ptyReason?: string;
+	/**
+	 * Try the PTY again while there is none — an addon installed after the
+	 * daemon started is picked up without a restart (the daemon outlives node
+	 * restarts, so a restart would not reload it). At most once per
+	 * {@link DaemonCoreOptions.ptyRetryMs}.
+	 */
+	reloadPty?: () => { factory: PtyFactory | null; reason?: string };
+	/** Minimum gap between two {@link DaemonCoreOptions.reloadPty} tries; default 30 s. */
+	ptyRetryMs?: number;
 	store: SessionStore;
 	now?: () => number;
 	/** The folder check (tests); defaults to the real filesystem. */
@@ -88,12 +97,39 @@ export class DaemonCore {
 	private inputBlocked = false;
 	private inputBlockedReason: string | undefined;
 	private idleNotified = false;
+	private ptyFactory: PtyFactory | null;
+	private ptyReason: string | undefined;
+	private lastPtyTryAt: number;
 
 	constructor(private readonly options: DaemonCoreOptions) {
 		this.now = options.now ?? (() => Date.now());
 		this.isDirectory = options.isDirectory ?? realIsDirectory;
 		this.bootedAt = this.now();
 		this.lastNodeSeenAt = this.bootedAt;
+		this.ptyFactory = options.ptyFactory;
+		this.ptyReason = options.ptyReason;
+		this.lastPtyTryAt = this.bootedAt;
+	}
+
+	/** The PTY, retried (throttled) while there is none. */
+	private currentPty(): PtyFactory | null {
+		if (this.ptyFactory || !this.options.reloadPty) return this.ptyFactory;
+		const now = this.now();
+		if (now - this.lastPtyTryAt < (this.options.ptyRetryMs ?? 30_000)) return null;
+		this.lastPtyTryAt = now;
+		try {
+			const loaded = this.options.reloadPty();
+			if (loaded.factory) {
+				this.ptyFactory = loaded.factory;
+				this.ptyReason = undefined;
+				this.options.log?.('terminal support is available now (the terminal addon loaded)');
+			} else if (loaded.reason) {
+				this.ptyReason = loaded.reason;
+			}
+		} catch {
+			// a loader that throws stays "missing"; the next try may do better
+		}
+		return this.ptyFactory;
 	}
 
 	// ─── Boot ──────────────────────────────────────────────────────────────
@@ -127,12 +163,12 @@ export class DaemonCore {
 			ok: true,
 			daemonVersion: this.options.version,
 			protocol: DAEMON_PROTOCOL_VERSION,
-			pty: this.options.ptyFactory ? 'available' : 'missing',
+			pty: this.currentPty() ? 'available' : 'missing',
 			sessions: this.sessions.size,
 			uptimeSec: Math.max(0, Math.round((this.now() - this.bootedAt) / 1000)),
 			storage: this.options.store.storage
 		};
-		if (!this.options.ptyFactory && this.options.ptyReason) health.ptyReason = this.options.ptyReason;
+		if (!this.ptyFactory && this.ptyReason) health.ptyReason = this.ptyReason;
 		return health;
 	}
 
@@ -166,10 +202,11 @@ export class DaemonCore {
 	// ─── Writes ────────────────────────────────────────────────────────────
 
 	async start(request: DaemonStartRequest): Promise<{ pid: number | null } | DaemonError> {
-		if (!this.options.ptyFactory) {
+		const ptyFactory = this.currentPty();
+		if (!ptyFactory) {
 			return {
 				code: 'unsupported_on_node',
-				hint: this.options.ptyReason ?? 'terminal support is missing on this computer'
+				hint: this.ptyReason ?? 'terminal support is missing on this computer'
 			};
 		}
 		if (this.sessions.has(request.id) || this.starting.has(request.id)) {
@@ -177,7 +214,7 @@ export class DaemonCore {
 		}
 		this.starting.add(request.id);
 		try {
-			return await this.startReserved(request, this.options.ptyFactory);
+			return await this.startReserved(request, ptyFactory);
 		} finally {
 			this.starting.delete(request.id);
 		}

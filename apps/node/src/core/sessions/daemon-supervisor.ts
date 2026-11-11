@@ -1,4 +1,8 @@
-import type { FleetSessionAttachRole, FleetSessionDaemonReport } from '@ever-works/contracts';
+import {
+	FLEET_SESSION_DAEMON_IDLE_EXIT_MS,
+	type FleetSessionAttachRole,
+	type FleetSessionDaemonReport
+} from '@ever-works/contracts';
 import { systemScheduler, type Scheduler } from '../heartbeat';
 import type { Logger } from '../logger';
 import {
@@ -53,6 +57,18 @@ export interface SessionDaemonSupervisorOptions {
 	healthIntervalMs?: number;
 	spawnWaitMs?: number;
 	random?: () => number;
+	/**
+	 * Whether THIS process can load the terminal addon. When it can, a daemon
+	 * that answers `pty: missing` with no session started before the addon
+	 * was installed (a daemon outlives node restarts and upgrades, and one
+	 * from 0.2.10 never retries the load): the supervisor lets it go — it
+	 * stays away for the daemon's idle window, so the daemon's own idle rule
+	 * ends it — and then starts a fresh one. Once per supervisor. Absent:
+	 * never.
+	 */
+	terminalAvailableHere?: () => boolean;
+	/** How long to stay away from such a daemon; default the idle window + 15 s. */
+	staleDaemonWaitMs?: number;
 }
 
 type SupervisorPhase = 'idle' | 'connecting' | 'connected' | 'failed' | 'stopped';
@@ -67,6 +83,7 @@ export class SessionDaemonSupervisor {
 	private attempts = 0;
 	private timer: unknown = null;
 	private stopped = false;
+	private retiredStaleDaemon = false;
 	private readonly scheduler: Scheduler;
 	private readonly connectedListeners = new Set<(client: DaemonControlClient) => void>();
 	private readonly eventListeners = new Set<(event: DaemonWatchEvent) => void>();
@@ -240,6 +257,10 @@ export class SessionDaemonSupervisor {
 			client.close();
 			return;
 		}
+		if (this.isStaleWithoutTerminal(client.welcome)) {
+			this.retireStaleDaemon(client);
+			return;
+		}
 		this.client = client;
 		this.health = client.welcome;
 		this.misses = 0;
@@ -277,6 +298,38 @@ export class SessionDaemonSupervisor {
 			}
 		}
 		this.scheduleHealth();
+	}
+
+	/** A daemon with no terminal and no session, while this process has the addon (once). */
+	private isStaleWithoutTerminal(welcome: DaemonHealth): boolean {
+		if (this.retiredStaleDaemon || welcome.pty === 'available' || welcome.sessions !== 0) return false;
+		try {
+			return this.options.terminalAvailableHere?.() === true;
+		} catch {
+			return false;
+		}
+	}
+
+	/**
+	 * Close the connection and stay away for the daemon's idle window: with no
+	 * session and no node it exits on its own (every daemon version has that
+	 * rule), and the next attempt spawns a fresh one that loads the addon.
+	 */
+	private retireStaleDaemon(client: DaemonControlClient): void {
+		this.retiredStaleDaemon = true;
+		client.close();
+		const waitMs = this.options.staleDaemonWaitMs ?? FLEET_SESSION_DAEMON_IDLE_EXIT_MS + 15_000;
+		const reason = `restarting the session daemon: it started before terminal support was installed (about ${Math.max(1, Math.round(waitMs / 60_000))} min)`;
+		this.options.logger?.warn(
+			`The session daemon (${client.welcome.daemonVersion}) has no terminal, but this computer has one now — letting it exit and starting a new one.`
+		);
+		this.failure = reason;
+		this.setPhase('connecting');
+		this.clearTimer();
+		this.timer = this.scheduler.setTimeout(() => {
+			this.timer = null;
+			void this.connectOrSpawn();
+		}, waitMs);
 	}
 
 	private scheduleHealth(): void {
