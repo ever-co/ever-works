@@ -119,6 +119,18 @@ scope** (the same Organization / tenant ownership rule the rest of the platform 
 round-robins over them, oldest first. It never picks an agent outside the Goal's scope, and a scope
 with no agent still leaves the loop **stuck** with `no-candidate-agent` until you create or assign one.
 
+### Who can see a Goal's iterations
+
+Each iteration is a Task that carries the Goal's title and brief, so it is never shared more widely than the Goal:
+
+| The Goal is                      | Its iteration Tasks are                                                                                                                                                           |
+| -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Private**                      | Private: you and the Task's participants.                                                                                                                                         |
+| Shared with a **Team**           | Filed on the Goal's Teams (the first is the Task's Team) with **Team** visibility: the members of those Teams and of the Goal's Work (if it has one), not the whole Organization. |
+| Shared with the **Organization** | Shared with the Organization, like any new Task there.                                                                                                                            |
+
+The Goal's visibility is read again as each iteration is filed, so a change applies from the next iteration. Iterations already filed keep their visibility; change one on its own Task page. If you set a Goal to **Team** by hand, its iterations are set to **Team** by hand too, so a later Team change never widens them on its own.
+
 ## Concurrent iterations
 
 By default the loop runs **one iteration at a time**: while an iteration's run is queued or running,

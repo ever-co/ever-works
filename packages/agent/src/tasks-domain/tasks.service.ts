@@ -10,7 +10,7 @@ import {
 import type { TaskIsolationMode } from './task-isolation';
 import type { MissionRepoRunRefusal } from './mission-repo-run';
 import { InjectRepository } from '@nestjs/typeorm';
-import type { EntityManager, Repository } from 'typeorm';
+import { In, type EntityManager, type Repository } from 'typeorm';
 import {
     reservedTaskLabelChanges,
     reservedTaskLabelRefusal,
@@ -75,7 +75,10 @@ import {
     recurrenceFireLockKey,
 } from './recurrence-overlap';
 import { RecordAccessPolicy } from '../record-visibility/record-access-policy.service';
-import { RecordVisibilityService } from '../record-visibility/record-visibility.service';
+import {
+    RecordVisibilityService,
+    type TeamSideChange,
+} from '../record-visibility/record-visibility.service';
 import { AgentRepository } from '../database/repositories/agent.repository';
 import { AgentStatus, type Agent } from '../entities/agent.entity';
 import { AgentRunRepository } from '../database/repositories/agent-run.repository';
@@ -232,6 +235,27 @@ export interface CreateTaskInput {
      * without it (the parent is loaded for the scope check anyway).
      */
     derivedFromPrivate?: boolean;
+    /**
+     * The record this Task is derived from — a Mission's planned Task, a Goal's loop
+     * iteration — whose title, brief or description it carries. Its visibility is read
+     * fresh at create and the Task is never wider than it:
+     *
+     *  - `private` → the Task is private (as {@link derivedFromPrivate}).
+     *  - `team` → the Task sits on the record's Teams (the first as `teamId`, the rest as
+     *    `team_resources`, as `RecordVisibilityService.setTeams` stores them) with `team`
+     *    visibility and the record's `visibilityExplicit`, instead of the insert-time
+     *    `organization` default. Only Teams of the Task's own Organization are used; a
+     *    `team` record with none (a value picked by hand) files a `team` Task on no Team,
+     *    explicit, so it never widens on its own. A `teamId` the caller passes wins over
+     *    the record's Teams, as it does without a source, and a sub-task keeps its
+     *    parent's Team.
+     *  - `organization` → the insert-time default, as before.
+     *
+     * Ignored when the record is not the Task owner's own, or the record visibility service
+     * is not bound (every read is then owner-only anyway). SERVER-WRITTEN ONLY, like
+     * {@link derivedFromPrivate}: absent from `CreateTaskDto`.
+     */
+    derivedFrom?: { aggregate: 'mission' | 'goal'; id: string } | null;
     /**
      * Works-security (2026-10-18) — which platform flow filed this Task
      * (`Task.origin`). SERVER-WRITTEN ONLY, like `delegationDepth`: absent from
@@ -1002,6 +1026,13 @@ export class TasksService {
             }
         }
 
+        // Record visibility: a Task derived from a Team-shared record sits on that record's
+        // Teams, never wider than it (see `CreateTaskInput.derivedFrom`).
+        const stamp = options.ownershipStamp ?? ownershipScope;
+        const derived = await this.derivedVisibility(userId, input, stamp?.organizationId ?? null);
+        if (derived?.private) privateSource = true;
+        const derivedTeams = !privateSource && derived?.teams ? derived.teams : null;
+
         if (input.scheduledAt) this.assertFutureSchedule(input.scheduledAt);
         this.assertPlanning(
             input.startAt ?? null,
@@ -1013,6 +1044,11 @@ export class TasksService {
         const slug = `T-${nextNumber}`;
         const extraRepos = await this.normalizeExtraRepos(userId, input.extraRepos);
 
+        // The derived Teams beyond the first are `team_resources` rows, written in the
+        // create's transaction when there is one (as `MissionsService.create` does).
+        const extraTeams = derivedTeams ? derivedTeams.teamIds.length > 1 : false;
+        let teamSide: TeamSideChange | null = null;
+        let teamsPending = false;
         const created = await this.withTaskEvent(
             async (manager) => {
                 const row = await this.tasks.create(
@@ -1029,7 +1065,9 @@ export class TasksService {
                         missionId: input.missionId ?? null,
                         ideaId: input.ideaId ?? null,
                         workId: input.workId ?? null,
-                        teamId: input.teamId ?? null,
+                        teamId: derivedTeams
+                            ? (derivedTeams.teamIds[0] ?? null)
+                            : (input.teamId ?? null),
                         agentId: input.agentId ?? null,
                         goalId: input.goalId ?? null,
                         parentTaskId: input.parentTaskId ?? null,
@@ -1050,23 +1088,58 @@ export class TasksService {
                         hiddenFromBoard: input.hiddenFromBoard ?? false,
                         ...(privateSource
                             ? { visibility: 'private' as const, visibilityExplicit: true }
-                            : {}),
+                            : derivedTeams
+                              ? {
+                                    visibility: 'team' as const,
+                                    visibilityExplicit: derivedTeams.explicit,
+                                }
+                              : {}),
                     },
                     ...managerArg(manager),
                 );
+                if (extraTeams && derivedTeams && this.visibility) {
+                    if (manager) {
+                        const teams = await this.visibility.setTeamsIn(
+                            manager,
+                            'task',
+                            row.id,
+                            derivedTeams.teamIds,
+                            userId,
+                        );
+                        teamSide = teams?.teamSide ?? null;
+                    } else {
+                        teamsPending = true;
+                    }
+                }
                 // T17a — e.g. the integration API's externalRef link, in this
                 // transaction: a failure here rolls the task back.
                 if (options.withinCreate) await options.withinCreate(row, manager);
                 return row;
             },
-            (publisher, manager, row) =>
-                publisher.created(manager, 'task', row.id, 'task.created', {
+            async (publisher, manager, row) => {
+                await publisher.created(manager, 'task', row.id, 'task.created', {
                     actor:
                         input.createdByType === 'agent'
                             ? { type: 'agent', id: input.createdById, label: null }
                             : undefined,
-                }),
+                });
+                // Review 2026-10-17 F34: the Teams' `team.resource.added`, after the Task's.
+                if (teamSide) await this.visibility!.recordTeamSideIn(manager, teamSide);
+            },
         );
+        // No domain-event transaction to write them in: the remaining Teams go in their own
+        // (the Task is already `team` on its first Team, so it is never wider meanwhile).
+        if (teamsPending && derivedTeams && this.visibility) {
+            try {
+                await this.visibility.setTeams('task', created.id, derivedTeams.teamIds, userId);
+            } catch (err) {
+                this.logger.warn(
+                    `Task ${created.id}: its remaining Teams could not be attached (${
+                        err instanceof Error ? err.message : String(err)
+                    }); it stays on its first Team.`,
+                );
+            }
+        }
 
         await this.logActivity({
             userId,
@@ -2851,6 +2924,65 @@ export class TasksService {
     }
 
     // ── internals ─────────────────────────────────────────────────
+
+    /**
+     * {@link CreateTaskInput.derivedFrom}: what the new Task takes from the record it is
+     * derived from, read fresh. It only ever narrows: `private`, or `team` on the record's
+     * Teams that belong to the Task's own Organization (`organizationId`, the scope the Task
+     * is stamped with). A `teamId` the caller chose wins over the record's Teams, exactly as
+     * without a source, so a source never adds a Team the caller did not ask for, and a
+     * sub-task keeps its parent's Team. `null` = the
+     * insert-time default: no source, the record is gone, not the Task owner's, or
+     * `organization`, the Task has no Organization, or the visibility service is not bound.
+     */
+    private async derivedVisibility(
+        userId: string,
+        input: CreateTaskInput,
+        organizationId: string | null,
+    ): Promise<{
+        private: boolean;
+        teams: { teamIds: string[]; explicit: boolean } | null;
+    } | null> {
+        const source = input.derivedFrom;
+        if (!source || !this.visibility) return null;
+        // Defence in depth (the field is server-written only): the record must be the Task
+        // owner's own, so a source can never read another account's Teams onto a Task.
+        const owned =
+            source.aggregate === 'mission'
+                ? await this.missions?.count({ where: { id: source.id, userId } })
+                : await this.goals?.count({ where: { id: source.id, userId } });
+        if (!owned) return null;
+        const state = await this.visibility.getState(source.aggregate, source.id);
+        if (!state) return null;
+        if (state.visibility === 'private') return { private: true, teams: null };
+        if (state.visibility !== 'team' || !organizationId) return null;
+        let teamIds: string[];
+        if (input.teamId) {
+            // The caller's own Team (checked by `assertScopeReachable`) wins, as without a source.
+            teamIds = [input.teamId];
+        } else if (input.parentTaskId) {
+            // A sub-task keeps its parent's Team (`assertParentScopeMatches` already compared
+            // them), so it takes the `team` visibility alone.
+            teamIds = [];
+        } else {
+            const wanted = [...new Set(state.teamIds)];
+            const found =
+                wanted.length > 0 && this.teams
+                    ? await this.teams.find({
+                          where: { id: In(wanted), organizationId },
+                          select: ['id'],
+                      })
+                    : [];
+            const inOrganization = new Set(found.map((team) => team.id));
+            teamIds = wanted.filter((id) => inOrganization.has(id));
+        }
+        // The record's own flag; with no Team left the Task is `team` by hand, so an automatic
+        // recompute (no Team → `organization`) can never widen it.
+        return {
+            private: false,
+            teams: { teamIds, explicit: state.visibilityExplicit || teamIds.length === 0 },
+        };
+    }
 
     private assertTitle(title: string): void {
         if (!title || title.trim().length < 1) {

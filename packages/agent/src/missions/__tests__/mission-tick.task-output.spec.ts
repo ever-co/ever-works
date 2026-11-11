@@ -333,8 +333,11 @@ describe('MissionTickService — Task output (APW-08 T35)', () => {
         async (visibility, derived) => {
             const t = build({ visibility } as Partial<Mission>);
             await t.service.runOnce('m1', 'u1');
+            // `derivedFrom` names the Mission whatever its visibility: `TasksService.create`
+            // reads it fresh and puts a Team Mission's Task on its Teams.
             expect(t.tasksService.create.mock.calls[0][1]).toMatchObject({
                 derivedFromPrivate: derived,
+                derivedFrom: { aggregate: 'mission', id: 'm1' },
             });
         },
     );
