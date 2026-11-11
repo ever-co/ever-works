@@ -1,3 +1,5 @@
+import { setFlagsFromString } from 'node:v8';
+import { runInNewContext } from 'node:vm';
 import { expect } from 'vitest';
 
 /**
@@ -15,10 +17,11 @@ import { expect } from 'vitest';
  *    of the same shape: the same number of characters, so a linear function
  *    answers about 1 and a quadratic one about 16, however fast the machine is
  *    right now. A step starts at every ×4 from {@link DEFAULT_MIN_SIZE}
- *    characters, smallest first, so a quadratic under an input cap (a function
- *    that reads only the first 24,000 characters) is measured just below the
- *    cap, and a failing step fails before the large inputs run. A step that
- *    shows the cost flat (the input is past every cap) ends the ladder.
+ *    characters up to the full size, smallest first, so a quadratic under an
+ *    input cap (a function that reads only the first 24,000 characters) is
+ *    measured just below the cap, and a failing step fails before the large
+ *    inputs run. Every step runs: a path that only starts past a size (a
+ *    branch for summaries over 32,000 characters) is timed too.
  *  - A ceiling. One run on the full input stays under {@link DEFAULT_CEILING_MS}:
  *    far above what a linear pass over 1 MB costs on any machine.
  *
@@ -26,10 +29,12 @@ import { expect } from 'vitest';
  * {@link MIN_SAMPLE_MS}), are timed alternately, and only the best of each
  * side over a few rounds counts, so a descheduled slice or a garbage
  * collection on one side is not read as growth; a step over its bound is timed
- * once more from a clean heap (see {@link collect}). Both sides read the same
- * shape, so they allocate alike too: comparing hostile input with DIFFERENT
- * (ordinary) input of the same size was tried and is not load-proof — on two
- * busy CPUs the ratio of the two moved from 1.2× to 14×.
+ * once more from a clean heap (see {@link collect}). Noise can also make a
+ * step look CHEAPER: a stall in the small side's batches. So a step may stop
+ * early only on the fastest small batch, which a stall cannot lower. Both
+ * sides read the same shape, so they allocate alike too: comparing hostile
+ * input with DIFFERENT (ordinary) input of the same size was tried and is not
+ * load-proof — on two busy CPUs the ratio of the two moved from 1.2× to 14×.
  *
  * {@link DEFAULT_MAX_GROWTH} sits between the two: a function that switches
  * to a costlier path past an input cap grows up to ~3× on the step that
@@ -41,10 +46,12 @@ import { expect } from 'vitest';
 const FACTOR = 16;
 /** A growth step starts at every ×4 (see above). */
 const RUNG = 4;
-/** A step under this growth is flat: the input is past every cap, the larger steps measure nothing new. */
-const FLAT = 1 / RUNG;
 /** Shortest timed sample, in ms: short runs are batched until a sample lasts this long. */
 const MIN_SAMPLE_MS = 3;
+/** Runs of the large input that size the batch: the best one counts, not one slow cold run. */
+const SIZING_RUNS = 2;
+/** Light slices a round times before it may stop early (see `costRatio`). */
+const EARLY_EXIT_SLICES = 3;
 /** Rounds of (heavy batch, light batches); only the best of each side counts. */
 const MIN_ROUNDS = 2;
 const MAX_ROUNDS = 7;
@@ -70,14 +77,26 @@ export interface LinearTimeOptions {
 /** Keeps every result reachable, so no engine can drop a run as dead code. */
 let sink: unknown;
 
+/** The engine's own `gc`, made reachable on first use; `null` where it cannot be. */
+let gcFunction: (() => void) | null | undefined;
+
 /**
- * A full collection, when the runner exposes one (`--expose-gc`, see
- * `vitest.config.ts`); a no-op without the flag. On two busy CPUs a
- * collection cycle that earlier work left running landed in the timed batches
- * of one side and read 5–17× growth on a linear function.
+ * A full collection. On two busy CPUs a collection cycle that earlier work
+ * left running landed in the timed batches of one side and read 5–17× growth
+ * on a linear function. `gc` is made reachable here (`--expose-gc` set at run
+ * time, then read from a fresh context) rather than by a worker flag, which a
+ * thread pool refuses; where neither works, this is a no-op.
  */
 function collect(): void {
-	(globalThis as { gc?: () => void }).gc?.();
+	if (gcFunction === undefined) {
+		try {
+			setFlagsFromString('--expose-gc');
+			gcFunction = runInNewContext('gc') as () => void;
+		} catch {
+			gcFunction = null;
+		}
+	}
+	gcFunction?.();
 }
 
 function timed(work: () => void): number {
@@ -107,8 +126,11 @@ function expectUnderCeiling(work: () => unknown, ceilingMs: number, what: string
 
 /**
  * The best time of `heavy` over the best time of `repeats` runs of `light`,
- * timed side by side in rounds; stops as soon as the answer is clearly under
- * `bound`. Over the bound, the rounds run once more from a clean heap: a
+ * timed side by side in rounds. A round stops early when even the FASTEST of
+ * at least {@link EARLY_EXIT_SLICES} light slices puts the ratio clearly under
+ * `bound`: a stall in a light slice makes the light side look slower and the
+ * ratio look lower, and the fastest slice is the one number a stall cannot
+ * move. Over the bound, the rounds run once more from a clean heap: a
  * collection cycle that earlier work left running is not the function's cost,
  * a super-linear cost is over again. Fails first when warm runs of `heavy`
  * stay over the ceiling.
@@ -123,24 +145,40 @@ function costRatio(
 ): number {
 	// Warm-up: compiles the patterns, flattens the built strings, settles the JIT.
 	sink = light();
-	const single = expectUnderCeiling(heavy, ceilingMs, what);
+	let single = expectUnderCeiling(heavy, ceilingMs, what);
+	for (let run = 1; run < SIZING_RUNS; run += 1) {
+		single = Math.min(
+			single,
+			timed(() => {
+				sink = heavy();
+			})
+		);
+	}
 	const batch = Math.min(1000, Math.max(1, Math.ceil(MIN_SAMPLE_MS / Math.max(single, 0.001))));
 	const timeBatch = (work: () => unknown): number =>
 		timed(() => {
 			for (let index = 0; index < batch; index += 1) sink = work();
 		});
-	const rounds = (): number => {
-		let bestHeavy = Number.POSITIVE_INFINITY;
+	// A batch of one run is what the sizing runs timed already: the first
+	// round counts them instead of timing the large input again.
+	const rounds = (timedHeavy = Number.POSITIVE_INFINITY): number => {
+		let bestHeavy = timedHeavy;
 		let bestLight = Number.POSITIVE_INFINITY;
+		let fastestSlice = Number.POSITIVE_INFINITY;
 		for (let round = 1; round <= MAX_ROUNDS; round += 1) {
-			bestHeavy = Math.min(bestHeavy, timeBatch(heavy));
-			// `repeats` slices of light work. Once the slices so far put the ratio
-			// under half the bound, the rest could only lower it: skipped, and the
-			// ratio answered is extrapolated from the slices timed.
+			if (round > 1 || !Number.isFinite(timedHeavy)) bestHeavy = Math.min(bestHeavy, timeBatch(heavy));
 			let lightTotal = 0;
 			for (let slice = 1; slice <= repeats; slice += 1) {
-				lightTotal += timeBatch(light);
-				if (bestHeavy < (bound / 2) * lightTotal) return (bestHeavy * slice) / (lightTotal * repeats);
+				const lightSlice = timeBatch(light);
+				lightTotal += lightSlice;
+				fastestSlice = Math.min(fastestSlice, lightSlice);
+				// `slice` slices at the fastest pace are a floor for the light time
+				// so far; clearly under the bound against it: the rest is skipped.
+				// Never on fewer slices than EARLY_EXIT_SLICES, so one or two stalled
+				// slices cannot be the fastest.
+				if (slice >= EARLY_EXIT_SLICES && bestHeavy < (bound / 2) * fastestSlice * slice) {
+					return bestHeavy / (fastestSlice * repeats);
+				}
 			}
 			bestLight = Math.min(bestLight, lightTotal);
 			// Within the bound on two rounds: done. Anything else is timed again.
@@ -148,7 +186,7 @@ function costRatio(
 		}
 		return bestHeavy / bestLight;
 	};
-	const ratio = rounds();
+	const ratio = rounds(batch === 1 ? single : Number.POSITIVE_INFINITY);
 	if (ratio < bound) return ratio;
 	collect();
 	return Math.min(ratio, rounds());
@@ -171,6 +209,7 @@ export function expectLinearTime<T>(
 
 	const smallSizes: number[] = [];
 	for (let small = size / FACTOR; small >= minSize; small /= RUNG) smallSizes.unshift(Math.floor(small));
+	let fullSizeChecked = false;
 	for (const small of smallSizes) {
 		const smallInput = build(small);
 		const largeInput = build(small * FACTOR);
@@ -187,10 +226,13 @@ export function expectLinearTime<T>(
 			`cost per character grew ${growth.toFixed(1)}× from ${small} to ${small * FACTOR} characters ` +
 				`(linear ≈ 1×, quadratic ≈ ${FACTOR}×)`
 		).toBeLessThan(maxGrowth);
-		if (growth < FLAT) break;
+		// The warm runs of every step are held to the ceiling (see `costRatio`).
+		if (small * FACTOR === size) fullSizeChecked = true;
 	}
 
-	const full = build(size);
-	expectUnderCeiling(() => run(full), ceilingMs, `${size} characters`);
+	if (!fullSizeChecked) {
+		const full = build(size);
+		expectUnderCeiling(() => run(full), ceilingMs, `${size} characters`);
+	}
 	void sink;
 }

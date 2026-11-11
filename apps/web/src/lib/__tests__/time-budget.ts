@@ -1,3 +1,5 @@
+import { setFlagsFromString } from 'node:v8';
+import { runInNewContext } from 'node:vm';
 import { expect } from 'vitest';
 
 /**
@@ -14,25 +16,41 @@ import { expect } from 'vitest';
  *    work of the same kind timed in the same process. For limits that are
  *    absolute by nature ("every description the renderer accepts renders in
  *    a fraction of a second"), where the code under them is allowed to be
- *    super-linear below a cap.
+ *    super-linear below a cap. The reference itself gets an absolute ceiling
+ *    from the spec, so a regression that slows ordinary work too cannot raise
+ *    its own budget unseen.
  *
  * Every comparison times both sides over the same span of wall clock,
  * alternately, and keeps only the best of each side over a few rounds (or,
  * for a budget, times both again side by side), so a descheduled slice or a
  * garbage collection on one side is not read as a regression; a comparison
  * over its bound is timed once more from a clean heap (see {@link collect}).
+ * Noise can also make work look CHEAPER (a stall on the side it is compared
+ * with), so every early decision rests on the fastest timing of that side.
  */
 
 let sink: unknown;
 
+/** The engine's own `gc`, made reachable on first use; `null` where it cannot be. */
+let gcFunction: (() => void) | null | undefined;
+
 /**
- * A full collection, when the runner exposes one (`--expose-gc`, see
- * `vitest.config.ts`); a no-op without the flag. On two busy CPUs a
- * collection cycle that earlier work left running landed in the timed batches
- * of one side and read 5–17× growth on a linear function.
+ * A full collection. On two busy CPUs a collection cycle that earlier work
+ * left running landed in the timed batches of one side and read 5–17× growth
+ * on a linear function. `gc` is made reachable here (`--expose-gc` set at run
+ * time, then read from a fresh context) rather than by a worker flag, which a
+ * thread pool refuses; where neither works, this is a no-op.
  */
 function collect(): void {
-    (globalThis as { gc?: () => void }).gc?.();
+    if (gcFunction === undefined) {
+        try {
+            setFlagsFromString('--expose-gc');
+            gcFunction = runInNewContext('gc') as () => void;
+        } catch {
+            gcFunction = null;
+        }
+    }
+    gcFunction?.();
 }
 
 function timed(work: () => void): number {
@@ -46,15 +64,18 @@ function timed(work: () => void): number {
 /** Size ratio between the two inputs of one growth step. */
 const FACTOR = 16;
 /**
- * A growth step starts at every ×4 from the smallest size, so whatever an
- * input cap is, one step ends between a quarter of the cap and the cap: a
- * quadratic under it is measured where it has grown most.
+ * A growth step starts at every ×4 from the smallest size up to the full
+ * size, so whatever an input cap is, one step ends between a quarter of the
+ * cap and the cap: a quadratic under it is measured where it has grown most.
+ * Every step runs: a path that only starts past a size is timed too.
  */
 const RUNG = 4;
-/** A step under this growth is flat: the input is past every cap, the larger steps measure nothing new. */
-const FLAT = 1 / RUNG;
 /** Shortest timed sample, in ms: short runs are batched until a sample lasts this long. */
 const MIN_SAMPLE_MS = 3;
+/** Runs of the large input that size the batch: the best one counts, not one slow cold run. */
+const SIZING_RUNS = 2;
+/** Light slices a round times before it may stop early (see `costRatio`). */
+const EARLY_EXIT_SLICES = 3;
 /** Rounds of (heavy batch, light batches); only the best of each side counts. */
 const MIN_ROUNDS = 2;
 const MAX_ROUNDS = 7;
@@ -103,8 +124,11 @@ function expectUnderCeiling(work: () => unknown, ceilingMs: number, what: string
 
 /**
  * The best time of `heavy` over the best time of `repeats` runs of `light`,
- * timed side by side in rounds; stops as soon as the answer is clearly under
- * `bound`. Over the bound, the rounds run once more from a clean heap: a
+ * timed side by side in rounds. A round stops early when even the FASTEST of
+ * at least {@link EARLY_EXIT_SLICES} light slices puts the ratio clearly under
+ * `bound`: a stall in a light slice makes the light side look slower and the
+ * ratio look lower, and the fastest slice is the one number a stall cannot
+ * move. Over the bound, the rounds run once more from a clean heap: a
  * collection cycle that earlier work left running is not the function's cost,
  * a super-linear cost is over again. Fails first when warm runs of `heavy`
  * stay over the ceiling.
@@ -119,25 +143,41 @@ function costRatio(
 ): number {
     // Warm-up: compiles the patterns, flattens the built strings, settles the JIT.
     sink = light();
-    const single = expectUnderCeiling(heavy, ceilingMs, what);
+    let single = expectUnderCeiling(heavy, ceilingMs, what);
+    for (let run = 1; run < SIZING_RUNS; run += 1) {
+        single = Math.min(
+            single,
+            timed(() => {
+                sink = heavy();
+            }),
+        );
+    }
     const batch = Math.min(1000, Math.max(1, Math.ceil(MIN_SAMPLE_MS / Math.max(single, 0.001))));
     const timeBatch = (work: () => unknown): number =>
         timed(() => {
             for (let index = 0; index < batch; index += 1) sink = work();
         });
-    const rounds = (): number => {
-        let bestHeavy = Number.POSITIVE_INFINITY;
+    // A batch of one run is what the sizing runs timed already: the first
+    // round counts them instead of timing the large input again.
+    const rounds = (timedHeavy = Number.POSITIVE_INFINITY): number => {
+        let bestHeavy = timedHeavy;
         let bestLight = Number.POSITIVE_INFINITY;
+        let fastestSlice = Number.POSITIVE_INFINITY;
         for (let round = 1; round <= MAX_ROUNDS; round += 1) {
-            bestHeavy = Math.min(bestHeavy, timeBatch(heavy));
-            // `repeats` slices of light work. Once the slices so far put the ratio
-            // under half the bound, the rest could only lower it: skipped, and the
-            // ratio answered is extrapolated from the slices timed.
+            if (round > 1 || !Number.isFinite(timedHeavy)) {
+                bestHeavy = Math.min(bestHeavy, timeBatch(heavy));
+            }
             let lightTotal = 0;
             for (let slice = 1; slice <= repeats; slice += 1) {
-                lightTotal += timeBatch(light);
-                if (bestHeavy < (bound / 2) * lightTotal) {
-                    return (bestHeavy * slice) / (lightTotal * repeats);
+                const lightSlice = timeBatch(light);
+                lightTotal += lightSlice;
+                fastestSlice = Math.min(fastestSlice, lightSlice);
+                // `slice` slices at the fastest pace are a floor for the light time
+                // so far; clearly under the bound against it: the rest is skipped.
+                // Never on fewer slices than EARLY_EXIT_SLICES, so one or two stalled
+                // slices cannot be the fastest.
+                if (slice >= EARLY_EXIT_SLICES && bestHeavy < (bound / 2) * fastestSlice * slice) {
+                    return bestHeavy / (fastestSlice * repeats);
                 }
             }
             bestLight = Math.min(bestLight, lightTotal);
@@ -146,7 +186,7 @@ function costRatio(
         }
         return bestHeavy / bestLight;
     };
-    const ratio = rounds();
+    const ratio = rounds(batch === 1 ? single : Number.POSITIVE_INFINITY);
     if (ratio < bound) return ratio;
     collect();
     return Math.min(ratio, rounds());
@@ -163,12 +203,11 @@ function costRatio(
  * and a quadratic one about 16, however fast the machine is right now. A step
  * starts at every ×4 from {@link DEFAULT_MIN_SIZE} characters, smallest first,
  * so a quadratic under an input cap (a function that reads only the first
- * 4 KB) is measured just below the cap and fails before the large inputs run;
- * a step that shows the cost flat (the input is past every cap) ends the
- * ladder. Both sides read the same shape, so they allocate alike too:
- * comparing hostile input with DIFFERENT (ordinary) input of the same size was
- * tried and is not load-proof — on two busy CPUs the ratio of the two moved
- * from 0.8× to 3.9×.
+ * 4 KB) is measured just below the cap and fails before the large inputs run.
+ * Both sides read the same shape, so they allocate alike too: comparing
+ * hostile input with DIFFERENT (ordinary) input of the same size was tried and
+ * is not load-proof — on two busy CPUs the ratio of the two moved from 0.8× to
+ * 3.9×.
  */
 export function expectLinearTime<T>(
     build: (size: number) => T,
@@ -184,6 +223,7 @@ export function expectLinearTime<T>(
     for (let small = size / FACTOR; small >= minSize; small /= RUNG) {
         smallSizes.unshift(Math.floor(small));
     }
+    let fullSizeChecked = false;
     for (const small of smallSizes) {
         const smallInput = build(small);
         const largeInput = build(small * FACTOR);
@@ -200,11 +240,14 @@ export function expectLinearTime<T>(
             `cost per character grew ${growth.toFixed(1)}× from ${small} to ` +
                 `${small * FACTOR} characters (linear ≈ 1×, quadratic ≈ ${FACTOR}×)`,
         ).toBeLessThan(maxGrowth);
-        if (growth < FLAT) break;
+        // The warm runs of every step are held to the ceiling (see `costRatio`).
+        if (small * FACTOR === size) fullSizeChecked = true;
     }
 
-    const full = build(size);
-    expectUnderCeiling(() => run(full), ceilingMs, `${size} characters`);
+    if (!fullSizeChecked) {
+        const full = build(size);
+        expectUnderCeiling(() => run(full), ceilingMs, `${size} characters`);
+    }
     void sink;
 }
 
@@ -227,13 +270,19 @@ export interface BudgetedRun<T> {
 }
 
 export interface RelativeBudget {
-    /** Times the reference {@link UNIT_SAMPLES} times. Answers the unit, in ms. */
+    /**
+     * Times the reference {@link UNIT_SAMPLES} times. Answers the FASTEST of
+     * them, in ms: what to hold against an absolute ceiling, so a regression
+     * that slows the reference itself cannot raise every budget unseen.
+     */
     calibrate(): number;
     /**
-     * Times `work` against `units` references. Over budget, the reference and
-     * the work are timed again side by side (up to {@link RETRIES} times), so a
-     * burst of load between the two is not read as a regression; the attempt
-     * with the best ratio is answered. Assert `ms < budgetMs`.
+     * Times `work` against `units` references. Over budget, the work is timed
+     * again between two fresh timings of the reference (up to {@link RETRIES}
+     * times) and judged against the FASTER of the two: a burst of load between
+     * the work and the unit is not read as a regression, and one burst on a
+     * reference timing cannot raise the budget either. The attempt with the
+     * best ratio is answered. Assert `ms < budgetMs`.
      */
     measure<T>(units: number, work: () => T): BudgetedRun<T>;
 }
@@ -268,8 +317,11 @@ export function relativeBudget(reference: () => unknown): RelativeBudget {
         return sorted[Math.floor(sorted.length / 2)];
     };
     const calibrate = (): number => {
-        for (let run = 0; run < UNIT_SAMPLES; run += 1) sampleReference();
-        return unit();
+        let fastest = Number.POSITIVE_INFINITY;
+        for (let run = 0; run < UNIT_SAMPLES; run += 1) {
+            fastest = Math.min(fastest, sampleReference());
+        }
+        return fastest;
     };
     return {
         calibrate,
@@ -282,14 +334,16 @@ export function relativeBudget(reference: () => unknown): RelativeBudget {
             });
             let best: BudgetedRun<T> = { value, ms, budgetMs: units * unit() };
             for (let retry = 0; retry < RETRIES && best.ms >= best.budgetMs; retry += 1) {
-                // The machine may be busier than when the unit was timed: time
-                // both again, next to each other, and judge them together.
+                // The machine may be busier than when the unit was timed: time the
+                // work again between two reference timings and judge it against
+                // the faster one.
                 collect();
-                const unitMs = sampleReference();
+                const before = sampleReference();
                 const again = timed(() => {
                     value = work();
                 });
-                const attempt = { value, ms: again, budgetMs: units * unitMs };
+                const after = sampleReference();
+                const attempt = { value, ms: again, budgetMs: units * Math.min(before, after) };
                 if (attempt.ms / attempt.budgetMs < best.ms / best.budgetMs) best = attempt;
             }
             return best;

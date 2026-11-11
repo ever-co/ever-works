@@ -72,9 +72,16 @@ function renderOnce(md: string): boolean {
  * page ~4, and ~12 at twenty times. The budgets leave room above that and
  * scale with the machine. A regression is still over on every attempt: a cap
  * raised past what the parser can take costs seconds, not units.
+ *
+ * The unit itself has an absolute ceiling, {@link REFERENCE_CEILING_MS}: a
+ * regression that slows ORDINARY rendering (a pass quadratic in the length of
+ * a description, the 10,000-character reference its worst case) would raise
+ * every budget with it. ~33 units idle; the fastest of three reference renders
+ * stayed under ~1.2 s with the machine twenty times slower.
  */
 const BUDGET_UNITS = 12;
 const GOAL_PAGE_BUDGET_UNITS = 20;
+const REFERENCE_CEILING_MS = 2000;
 const budget = relativeBudget(() => renderOnce(MISSION_DESCRIPTION));
 
 /** One render of `md`, judged against {@link BUDGET_UNITS} (assert `ms < budgetMs`). */
@@ -408,13 +415,14 @@ describe('each construct at, just under and just over its limit', () => {
         expect(over.ms).toBeLessThan(over.budgetMs);
     });
 
-    it('a full 10,000-character Mission description renders as Markdown', () => {
+    it('a full 10,000-character Mission description renders as Markdown, under an absolute ceiling', () => {
         // Sections of prose, lists, code and a table: the Mission/Goal maximum
         // (and the unit the budgets are counted in).
         expect(MISSION_DESCRIPTION).toHaveLength(10000);
-        const { ms, budgetMs, fallback } = renderBlock(MISSION_DESCRIPTION);
+        const { fallback } = renderBlock(MISSION_DESCRIPTION);
         expect(fallback).toBe(false);
-        expect(ms).toBeLessThan(budgetMs);
+        // Not in units of itself: the fastest of three renders, in milliseconds.
+        expect(budget.calibrate()).toBeLessThan(REFERENCE_CEILING_MS);
     });
 });
 

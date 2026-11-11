@@ -951,12 +951,14 @@ describe('bounded on adversarial input', () => {
 	];
 
 	it.each(HOSTILE)('sanitizes 1 MB of %s in linear time, inert and capped', (_what, build) => {
+		// The ladder first: a quadratic fails at 256 characters instead of
+		// running for minutes on the full input below.
+		expectLinearTime(build, (text) => sanitizeRunPullRequestBody(text), { maxGrowth });
 		const input = build(MB);
 		expect(input.length).toBeGreaterThanOrEqual(MB);
 		const output = sanitizeRunPullRequestBody(input);
 		expect(Array.from(output).length).toBeLessThanOrEqual(RUN_PULL_REQUEST_BODY_MAX_LENGTH);
 		expectInert(output);
-		expectLinearTime(build, (text) => sanitizeRunPullRequestBody(text), { maxGrowth });
 	});
 
 	it.each(HOSTILE)('reads the title and the one-line summary of 1 MB of %s in linear time', (_what, build) => {

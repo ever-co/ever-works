@@ -9,11 +9,6 @@ export default defineConfig({
 		testTimeout: 30000,
 		hookTimeout: 30000,
 		environment: 'node',
-		// `gc()` for the time guards (`src/__tests__/linear-time.ts`): a step
-		// over its bound is timed again from a full collection, so a collection
-		// cycle that earlier work left running is not read as growth. On two
-		// busy CPUs that alone read 5–17× growth on a linear function.
-		execArgv: ['--expose-gc'],
 		globals: true,
 		include: ['src/**/*.{test,spec}.ts'],
 		typecheck: {
