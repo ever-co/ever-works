@@ -12,7 +12,6 @@ import {
     type UpdateGoalLimitsInput,
 } from '@/lib/api/goals';
 import { getAuthFromCookie } from '@/lib/auth';
-import { withAddedDodCriterion, withoutDodCriterion } from './goal-dod.shared';
 import { ROUTES } from '@/lib/constants';
 
 /**
@@ -111,26 +110,23 @@ export async function setGoalDodAction(id: string, criteria: GoalDoDCriterion[] 
 }
 
 /**
- * Add one operator criterion to a Goal's Definition of Done. The list is read
- * from the API right before the write: the panel used to PUT its own copy, so
- * criteria the Goal's planner proposed after the page loaded were wiped.
+ * Add one operator criterion to a Goal's Definition of Done. The API applies
+ * it to the list as stored at the write (`POST …/dod/criteria`): replacing the
+ * whole list from a copy — the page's, or one read a moment earlier — wiped a
+ * criterion the Goal's planner proposed in between.
  */
 export async function addGoalDodCriterionAction(id: string, text: string) {
     await requireGoalAuth();
-    const current = await goalsAPI.get(id);
-    if (!current) throw new Error('Goal not found.');
-    const goal = await goalsAPI.setDod(id, withAddedDodCriterion(current.dodCriteria, text));
+    const goal = await goalsAPI.addDodCriterion(id, text);
     revalidatePath(GOALS_LIST_PATH, 'page');
     revalidateGoalDetail(id);
     return goal;
 }
 
-/** Remove one criterion — from the stored list, for the same reason. */
+/** Remove one criterion (`DELETE …/dod/:criterionId`), for the same reason. */
 export async function removeGoalDodCriterionAction(id: string, criterionId: string) {
     await requireGoalAuth();
-    const current = await goalsAPI.get(id);
-    if (!current) throw new Error('Goal not found.');
-    const goal = await goalsAPI.setDod(id, withoutDodCriterion(current.dodCriteria, criterionId));
+    const goal = await goalsAPI.removeDodCriterion(id, criterionId);
     revalidatePath(GOALS_LIST_PATH, 'page');
     revalidateGoalDetail(id);
     return goal;

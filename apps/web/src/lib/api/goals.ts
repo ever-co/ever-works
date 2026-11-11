@@ -394,6 +394,26 @@ export const goalsAPI = {
         });
     },
 
+    /** Add ONE operator criterion; the API applies it to the list as stored at the write. */
+    async addDodCriterion(id: string, text: string): Promise<Goal> {
+        return serverMutation<Goal>({
+            endpoint: `/me/goals/${id}/dod/criteria`,
+            data: { text },
+            method: 'POST',
+            wrapInData: false,
+        });
+    },
+
+    /** Remove ONE criterion; the API applies it to the list as stored at the write. */
+    async removeDodCriterion(id: string, criterionId: string): Promise<Goal> {
+        return serverMutation<Goal>({
+            endpoint: `/me/goals/${id}/dod/${encodeURIComponent(criterionId)}`,
+            data: {},
+            method: 'DELETE',
+            wrapInData: false,
+        });
+    },
+
     async patchDodCriterion(
         id: string,
         criterionId: string,

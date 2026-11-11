@@ -24,12 +24,14 @@ vi.mock('@/i18n/navigation', () => ({
 
 const patchCriterion = vi.fn();
 const addCriterion = vi.fn();
+const removeCriterion = vi.fn();
+const setDod = vi.fn();
 vi.mock('./actions', () => ({
     approveGoalDodAction: vi.fn(),
     patchGoalDodCriterionAction: (...args: unknown[]) => patchCriterion(...args),
-    setGoalDodAction: vi.fn(),
+    setGoalDodAction: (...args: unknown[]) => setDod(...args),
     addGoalDodCriterionAction: (...args: unknown[]) => addCriterion(...args),
-    removeGoalDodCriterionAction: vi.fn(),
+    removeGoalDodCriterionAction: (...args: unknown[]) => removeCriterion(...args),
 }));
 
 import { GoalDodPanel } from './GoalDodPanel';
@@ -127,5 +129,54 @@ describe('GoalDodPanel — Markdown criteria', () => {
         expect((screen.getByTestId('goal-dod-edit-input') as HTMLInputElement).value).toBe(
             'A better wording',
         );
+    });
+});
+
+/**
+ * Review of #3172 — Add and Remove send ONE change, which the API applies to
+ * the checklist as stored at the write. The panel used to replace the whole
+ * list from its own copy (`setGoalDodAction`), wiping a criterion the Goal's
+ * planner proposed after the page loaded.
+ */
+describe('GoalDodPanel — add / remove send one change, never the page’s list', () => {
+    beforeEach(() => {
+        addCriterion.mockReset();
+        removeCriterion.mockReset();
+        setDod.mockReset();
+        toastSuccess.mockReset();
+        toastError.mockReset();
+    });
+
+    it('Add calls addGoalDodCriterionAction with the Goal id and the trimmed text', async () => {
+        const updated = mkGoal('Pricing page ships');
+        addCriterion.mockResolvedValueOnce(updated);
+        const onGoalChange = vi.fn();
+        render(<GoalDodPanel goal={mkGoal('Pricing page ships')} onGoalChange={onGoalChange} />);
+
+        fireEvent.change(screen.getByLabelText('addLabel'), {
+            target: { value: '  Write the docs ' },
+        });
+        fireEvent.click(screen.getByRole('button', { name: 'add' }));
+
+        await waitFor(() => expect(onGoalChange).toHaveBeenCalledWith(updated));
+        expect(addCriterion).toHaveBeenCalledWith('g1', 'Write the docs');
+        expect(setDod).not.toHaveBeenCalled();
+        expect(toastSuccess).toHaveBeenCalledWith('toasts.added');
+    });
+
+    it('Remove calls removeGoalDodCriterionAction with the Goal and criterion ids', async () => {
+        const updated = { ...mkGoal('x'), dodCriteria: [] } as unknown as Goal;
+        removeCriterion.mockResolvedValueOnce(updated);
+        const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+        const onGoalChange = vi.fn();
+        render(<GoalDodPanel goal={mkGoal('Pricing page ships')} onGoalChange={onGoalChange} />);
+
+        fireEvent.click(screen.getByRole('button', { name: 'remove' }));
+
+        await waitFor(() => expect(onGoalChange).toHaveBeenCalledWith(updated));
+        expect(removeCriterion).toHaveBeenCalledWith('g1', 'c1');
+        expect(setDod).not.toHaveBeenCalled();
+        expect(toastSuccess).toHaveBeenCalledWith('toasts.removed');
+        confirm.mockRestore();
     });
 });

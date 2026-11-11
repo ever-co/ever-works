@@ -4,6 +4,7 @@ import {
     MAX_GOAL_DOD_CRITERIA,
     dodProgressSignature,
     hasDefinitionOfDone,
+    nextDodCriterionId,
     normalizeDoDCriteria,
     summarizeDoD,
     validateDoDCriteria,
@@ -208,5 +209,14 @@ describe('normalizeDoDCriteria', () => {
             now,
         );
         expect(normalized).not.toHaveProperty('hacked');
+    });
+});
+
+describe('nextDodCriterionId', () => {
+    it('slugs the text and stays unique among the ids taken', () => {
+        expect(nextDodCriterionId('Ship it!', new Set())).toBe('ship-it');
+        expect(nextDodCriterionId('Ship it!', new Set(['ship-it', 'ship-it-2']))).toBe('ship-it-3');
+        expect(nextDodCriterionId('!!!', new Set())).toBe('criterion');
+        expect(nextDodCriterionId('x'.repeat(80), new Set())).toHaveLength(48);
     });
 });

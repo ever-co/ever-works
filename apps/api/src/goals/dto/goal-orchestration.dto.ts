@@ -144,6 +144,18 @@ export class SetGoalDodDto {
     criteria?: GoalDoDCriterionDto[] | null;
 }
 
+/**
+ * Body for `POST /api/me/goals/:id/dod/criteria` — add ONE operator criterion
+ * to the checklist as stored at the write (the id is made by the service).
+ */
+export class AddGoalDodCriterionDto {
+    @ApiProperty({ maxLength: MAX_DOD_TEXT_CHARS, description: 'The completion statement.' })
+    @IsString()
+    @MinLength(1)
+    @MaxLength(MAX_DOD_TEXT_CHARS)
+    text: string;
+}
+
 /** Body for `POST /api/me/goals/:id/dod/propose` — planner-authored entries. */
 export class ProposeGoalDodDto {
     @ApiProperty({ type: [GoalDoDCriterionDto] })
