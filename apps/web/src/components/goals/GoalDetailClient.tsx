@@ -344,17 +344,15 @@ export function GoalDetailClient({
                         each one answered 404 (all Goal writes are owner-only). */}
                     {canEdit ? (
                         <div className="flex flex-wrap items-center gap-2 shrink-0">
-                            {canEdit ? (
-                                <button
-                                    type="button"
-                                    data-testid="goal-edit-button"
-                                    onClick={() => setEditOpen(true)}
-                                    className={btn}
-                                >
-                                    <Pencil className="w-3.5 h-3.5" />
-                                    {t('actions.edit')}
-                                </button>
-                            ) : null}
+                            <button
+                                type="button"
+                                data-testid="goal-edit-button"
+                                onClick={() => setEditOpen(true)}
+                                className={btn}
+                            >
+                                <Pencil className="w-3.5 h-3.5" />
+                                {t('actions.edit')}
+                            </button>
                             {loopStartable ? (
                                 <button
                                     type="button"
@@ -785,7 +783,9 @@ export function GoalDetailClient({
                             <Select
                                 value={goal.outcome ?? ''}
                                 onValueChange={overrideOutcome}
-                                disabled={pendingOutcome}
+                                // Owner-only like every Goal write: a viewer the Goal is
+                                // shared with got a 404.
+                                disabled={pendingOutcome || !canEdit}
                                 placeholder={t('outcome.none')}
                                 data-testid="goal-detail-outcome-select"
                             >
