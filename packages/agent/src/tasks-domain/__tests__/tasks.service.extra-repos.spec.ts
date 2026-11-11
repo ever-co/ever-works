@@ -123,6 +123,147 @@ describe('TasksService — extraRepos (multi-repo Task workspaces, PR C2)', () =
         ).rejects.toThrow(/is disabled/);
     });
 
+    describe('an update with a connection that went stale since it was added', () => {
+        const taskWith = (extraRepos: unknown[]) => ({
+            id: 'task-1',
+            title: 'T',
+            userId: 'user-1',
+            extraRepos,
+        });
+
+        it('drops a deleted connection instead of refusing every later edit of the list', async () => {
+            // The editor sends the whole list; the picker no longer shows the
+            // deleted connection, so the user could not untick it and every
+            // save answered "not found".
+            const repoConnections = {
+                findByIdAndUser: jest.fn(async (id: string) =>
+                    id === 'gone' ? null : connection({ id }),
+                ),
+            };
+            const { service, patches } = makeService(
+                repoConnections,
+                taskWith([{ repoConnectionId: 'gone' }, { repoConnectionId: 'conn-1' }]),
+            );
+
+            await service.update('user-1', 'task-1', {
+                extraRepos: [
+                    { repoConnectionId: 'gone' },
+                    { repoConnectionId: 'conn-1' },
+                    { repoConnectionId: 'conn-2' },
+                ],
+            } as never);
+
+            expect(patches[0]?.extraRepos).toEqual([
+                { repoConnectionId: 'conn-1' },
+                { repoConnectionId: 'conn-2' },
+            ]);
+        });
+
+        it('keeps a disabled connection the Task already had, as stored', async () => {
+            const { service, patches } = makeService(
+                registry({ off: { enabled: false } }),
+                taskWith([{ repoConnectionId: 'off', mountDir: 'legacy' }]),
+            );
+
+            await service.update('user-1', 'task-1', {
+                extraRepos: [
+                    { repoConnectionId: 'off', mountDir: 'legacy' },
+                    { repoConnectionId: 'conn-1' },
+                ],
+            } as never);
+
+            expect(patches[0]?.extraRepos).toEqual([
+                { repoConnectionId: 'off', mountDir: 'legacy' },
+                { repoConnectionId: 'conn-1' },
+            ]);
+        });
+
+        // Review of #3166, finding 5: a kept disabled entry mounts again once its
+        // connection is re-enabled, so it still counts for the duplicate checks —
+        // wherever it sits in the list.
+        it.each([
+            ['after the new entry', 'new-first'],
+            ['before the new entry', 'kept-first'],
+        ])(
+            'refuses a new entry on the mount directory of a kept disabled one (%s)',
+            async (_label, order) => {
+                const kept = { repoConnectionId: 'off', mountDir: 'shared' };
+                const added = { repoConnectionId: 'conn-1', mountDir: 'shared' };
+                const { service, patches } = makeService(
+                    registry({ off: { enabled: false } }),
+                    taskWith([kept]),
+                );
+
+                await expect(
+                    service.update('user-1', 'task-1', {
+                        extraRepos: order === 'new-first' ? [added, kept] : [kept, added],
+                    } as never),
+                ).rejects.toThrow(/mount directory 'shared' is used twice/);
+                expect(patches).toEqual([]);
+            },
+        );
+
+        it.each([
+            ['after the new entry', 'new-first'],
+            ['before the new entry', 'kept-first'],
+        ])(
+            'refuses a new connection to the repository of a kept disabled one (%s)',
+            async (_label, order) => {
+                const sameRepo = 'https://github.com/ever-works/app.git';
+                const kept = { repoConnectionId: 'off', mountDir: 'old' };
+                const added = { repoConnectionId: 'conn-1', mountDir: 'new' };
+                const { service, patches } = makeService(
+                    registry({
+                        off: { enabled: false, url: sameRepo },
+                        'conn-1': { url: sameRepo },
+                    }),
+                    taskWith([kept]),
+                );
+
+                await expect(
+                    service.update('user-1', 'task-1', {
+                        extraRepos: order === 'new-first' ? [added, kept] : [kept, added],
+                    } as never),
+                ).rejects.toThrow(/both point at ever-works\/app/);
+                expect(patches).toEqual([]);
+            },
+        );
+
+        it('still refuses to ADD a deleted or disabled connection', async () => {
+            const repoConnections = {
+                findByIdAndUser: jest.fn(async (id: string) =>
+                    id === 'gone' ? null : connection({ id, enabled: id !== 'off' }),
+                ),
+            };
+            const { service } = makeService(repoConnections, taskWith([]));
+
+            await expect(
+                service.update('user-1', 'task-1', {
+                    extraRepos: [{ repoConnectionId: 'gone' }],
+                } as never),
+            ).rejects.toThrow(/not found/);
+            await expect(
+                service.update('user-1', 'task-1', {
+                    extraRepos: [{ repoConnectionId: 'off' }],
+                } as never),
+            ).rejects.toThrow(/is disabled/);
+        });
+
+        it('stores null when the only entry left was a deleted connection', async () => {
+            const repoConnections = { findByIdAndUser: jest.fn().mockResolvedValue(null) };
+            const { service, patches } = makeService(
+                repoConnections,
+                taskWith([{ repoConnectionId: 'gone' }]),
+            );
+
+            await service.update('user-1', 'task-1', {
+                extraRepos: [{ repoConnectionId: 'gone' }],
+            } as never);
+
+            expect(patches[0]?.extraRepos).toBeNull();
+        });
+    });
+
     it.each([
         ['a path', 'tools/template'],
         ['a leading dot', '.hidden'],

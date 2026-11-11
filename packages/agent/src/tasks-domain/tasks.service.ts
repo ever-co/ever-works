@@ -947,12 +947,14 @@ export class TasksService {
         ownerId: string,
         raw: TaskExtraRepo[] | null | undefined,
         editorId: string = ownerId,
+        current: readonly TaskExtraRepo[] | null = null,
     ): Promise<TaskExtraRepo[] | null> {
         return normalizeTaskExtraRepos(
             { repoConnections: this.repoConnections },
             ownerId,
             raw,
             editorId,
+            current,
         );
     }
 
@@ -1198,6 +1200,7 @@ export class TasksService {
                 task.userId,
                 input.extraRepos,
                 userId,
+                task.extraRepos ?? null,
             );
         }
         if (input.requireAllApprovers !== undefined)
@@ -1502,6 +1505,7 @@ export class TasksService {
             rule: input.recurrenceRule ?? null,
             cron: input.recurrenceCron ?? null,
             from: new Date(),
+            timezone: input.recurrenceTimezone ?? null,
             recurrenceEndsAt: input.recurrenceEndsAt ?? null,
             recurrenceMaxOccurrences: input.recurrenceMaxOccurrences ?? null,
             recurrenceOccurredCount: 0,
@@ -1664,6 +1668,7 @@ export class TasksService {
                     rule: task.recurrenceRule ?? null,
                     cron: task.recurrenceCron ?? null,
                     from: now,
+                    timezone: task.recurrenceTimezone ?? null,
                     recurrenceEndsAt: task.recurrenceEndsAt ?? null,
                     recurrenceMaxOccurrences: task.recurrenceMaxOccurrences ?? null,
                     recurrenceOccurredCount: task.recurrenceOccurredCount ?? 0,

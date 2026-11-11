@@ -333,6 +333,36 @@ describe('TaskTemplatesService', () => {
             },
         );
 
+        it.each([
+            'my feature',
+            'feat..x',
+            'fix:it',
+            '-x',
+            'feature/',
+            'x.lock',
+            'a/.hidden',
+            'HEAD',
+        ])(
+            'refuses %j, which is not a git branch name, before anything is created',
+            async (branchName) => {
+                // It was stored, and every run then failed at `git worktree add -B`.
+                const { saved } = arm();
+                await expect(
+                    svc.instantiateTemplate('u1', 'tpl-1', { title: 'T', branchName }),
+                ).rejects.toThrow(/not a valid git branch name/);
+                expect(saved).toHaveLength(0);
+            },
+        );
+
+        it.each(['feature/ship-x', 'fix-123', 'user/ana/ui_refresh', 'v1.2.3'])(
+            'accepts the git branch name %s',
+            async (branchName) => {
+                const { saved } = arm();
+                await svc.instantiateTemplate('u1', 'tpl-1', { title: 'T', branchName });
+                expect(saved.filter((s) => s.entity === Task)[0].row.branchRef).toBe(branchName);
+            },
+        );
+
         // CodeRabbit on #2769: the Work's configured base branch is refused
         // at creation too, not only when the Task runs.
         it("refuses the Work's own base branch as branchName before anything is created", async () => {
