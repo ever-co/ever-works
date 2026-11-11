@@ -737,6 +737,10 @@ describe('WorkLifecycleService', () => {
                     ),
                 ).rejects.toThrow(retry);
                 expect(seen?.aborted).toBe(true);
+                // Octokit rethrows only an `AbortError` as is; any other reason
+                // becomes a retried RequestError 500.
+                expect((seen?.reason as { name?: string } | undefined)?.name).toBe('AbortError');
+                expect(String((seen?.reason as Error).message)).toContain('did not answer within');
             });
 
             it('one deadline bounds the whole check, not only each call', async () => {

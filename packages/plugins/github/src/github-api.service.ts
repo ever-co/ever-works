@@ -1008,6 +1008,11 @@ export class GitHubApiService {
 			if (err instanceof RequestError && err.status === 404) {
 				return null;
 			}
+			// The caller cancelled (`requestOptions.signal`): say so, rather than
+			// mapping it to a provider failure reason.
+			if (err instanceof Error && err.name === 'AbortError') {
+				throw err;
+			}
 			// `repos.get` needs the Metadata permission (mandatory for a GitHub App
 			// installation), so that is the permission a refusal names. Every other
 			// reason comes straight from plan §4.2's table.

@@ -131,15 +131,26 @@ import {
  */
 const APP_WORK_KIND = 'app';
 
-/** Is this Work an App Work (spec FR-19: App Works default to exposed)? */
 /** One bounded, abortable ownership check (see `startOwnershipCheck`). */
 interface OwnershipCheck {
     readonly signal: AbortSignal;
     readonly deadlineAt: number;
-    abort(reason: Error): void;
+    /** Abort every provider call of the check (with an `AbortError` reason). */
+    abort(message: string): void;
     dispose(): void;
 }
 
+/**
+ * The reason an ownership check aborts with. It MUST be named `AbortError`:
+ * `@octokit/request` rethrows only that name as is; any other reason (a plain
+ * `Error`) comes back as a `RequestError` 500, which `plugin-retry` retries
+ * three times (1 s / 4 s / 9 s) — the very lingering the abort is there to stop.
+ */
+function ownershipCheckAbortReason(message: string): DOMException {
+    return new DOMException(message, 'AbortError');
+}
+
+/** Is this Work an App Work (spec FR-19: App Works default to exposed)? */
 function isAppWorkKind(kind: string | null | undefined): boolean {
     return typeof kind === 'string' && kind.trim().toLowerCase() === APP_WORK_KIND;
 }
@@ -1746,13 +1757,14 @@ export class WorkLifecycleService {
         const controller = new AbortController();
         const deadlineAt = Date.now() + this.ownershipCheckDeadlineMs;
         const deadline = setTimeout(
-            () => controller.abort(new Error('The ownership check ran out of time')),
+            () =>
+                controller.abort(ownershipCheckAbortReason('The ownership check ran out of time')),
             this.ownershipCheckDeadlineMs,
         );
         return {
             signal: controller.signal,
             deadlineAt,
-            abort: (reason: Error) => controller.abort(reason),
+            abort: (message: string) => controller.abort(ownershipCheckAbortReason(message)),
             dispose: () => clearTimeout(deadline),
         };
     }
@@ -1772,16 +1784,18 @@ export class WorkLifecycleService {
         }
         const budget = Math.min(this.ownershipCheckTimeoutMs, check.deadlineAt - Date.now());
         if (budget <= 0) {
-            check.abort(new Error('The ownership check ran out of time'));
+            check.abort('The ownership check ran out of time');
             return Promise.reject(new Error(`${what} was not attempted: out of time`));
         }
         let timer: ReturnType<typeof setTimeout> | undefined;
         let onAbort: (() => void) | undefined;
         const stop = new Promise<never>((_, reject) => {
             timer = setTimeout(() => {
-                const error = new Error(`${what} did not answer within ${budget} ms`);
-                check.abort(error);
-                reject(error);
+                const message = `${what} did not answer within ${budget} ms`;
+                // Reject FIRST: aborting dispatches `abort` synchronously, and
+                // `onAbort` below would otherwise reject with the deadline message.
+                reject(new Error(message));
+                check.abort(message);
             }, budget);
             onAbort = () => reject(new Error(`${what} was cancelled: the check ran out of time`));
             check.signal.addEventListener('abort', onAbort, { once: true });
