@@ -40,6 +40,12 @@ vi.mock('@/app/actions/dashboard/work-proposals', () => ({
     dismissProposalAction: vi.fn(),
 }));
 
+// The "Team and agents" panel fetches its own data and has its own spec;
+// here it is only a placeholder (as in MissionDetailClient.unit.spec.tsx).
+vi.mock('./MissionTeamPanel', () => ({
+    MissionTeamPanel: () => <div data-testid="mission-team-stub" />,
+}));
+
 import { MissionDetailClient } from './MissionDetailClient';
 import type { Mission } from '@/lib/api/missions';
 
