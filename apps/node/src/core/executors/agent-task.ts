@@ -33,6 +33,7 @@ import {
 	FLEET_AGENT_TASK_SETUP_MAX_TIMEOUT_SEC,
 	FLEET_RUN_SECRETS_UNAVAILABLE_REASON,
 	FLEET_RUN_SECRETS_UNRESOLVED_REASON,
+	applyRunPullRequestTitleToCommitMessage,
 	detectFleetModelUsageLimit,
 	FLEET_JOB_FAILURE_KIND_MODEL_USAGE_LIMIT,
 	FleetAgentExecutionError,
@@ -1111,7 +1112,19 @@ async function runResolvedAgentTask(
 		throwIfAgentTaskAborted(signal);
 		// Multi-repo (slice C): mounts first, the primary last, so the primary
 		// pull request the platform opens can already link the others.
-		mountGit = await finalizeMounts(taskId, workspaceResolution.descriptor, payload, io, publishFence, signal);
+		// Self-explaining commits: the run's own `PR-TITLE:` line (the last line
+		// of its final message) replaces the planned subject; without one the
+		// planned message is committed exactly as before.
+		const runSummary = model?.summary ?? null;
+		mountGit = await finalizeMounts(
+			taskId,
+			workspaceResolution.descriptor,
+			payload,
+			io,
+			publishFence,
+			signal,
+			runSummary
+		);
 		for (const entry of mountGit ?? []) {
 			if (entry.error) {
 				failures.push(`git finalize failed for mount ${entry.mountDir ?? entry.repositoryId}: ${entry.error}`);
@@ -1122,7 +1135,15 @@ async function runResolvedAgentTask(
 				io.onPublishWithheld?.(entry.publishWithheld);
 			}
 		}
-		git = await finalizeWorkspace(taskId, workspaceResolution.descriptor, payload, io, publishFence, signal);
+		git = await finalizeWorkspace(
+			taskId,
+			workspaceResolution.descriptor,
+			payload,
+			io,
+			publishFence,
+			signal,
+			runSummary
+		);
 		if (git.error) {
 			failures.push(`git finalize failed: ${git.error}`);
 		} else if (git.publishWithheld) {
@@ -2280,13 +2301,33 @@ function describeBridgeFailure(error: unknown, io: AgentTaskIo): string {
 	return io.logger?.redact(raw) ?? raw;
 }
 
+/**
+ * The commit message a run commits with: the planner's (or the default when
+ * the payload carries none), its subject replaced by the conventional commit
+ * the run's `PR-TITLE:` line names (`applyRunPullRequestTitleToCommitMessage`:
+ * one cleaned line, body and trailers kept byte-for-byte). The workspace still
+ * re-types it from the staged paths and neutralises CI-skip directives.
+ */
+export function agentTaskCommitMessage(
+	taskId: string,
+	payload: FleetAgentTaskPayload,
+	runSummary?: string | null
+): string {
+	const planned =
+		typeof payload.git?.commitMessage === 'string' && payload.git.commitMessage.trim()
+			? payload.git.commitMessage.trim()
+			: defaultAgentTaskCommitMessage(taskId);
+	return applyRunPullRequestTitleToCommitMessage(planned, runSummary);
+}
+
 async function finalizeWorkspace(
 	taskId: string,
 	descriptor: FleetTaskWorkspaceDescriptor,
 	payload: FleetAgentTaskPayload,
 	io: AgentTaskIo,
 	publishFence: WorkspacePublishFence | null,
-	signal?: AbortSignal
+	signal?: AbortSignal,
+	runSummary?: string | null
 ): Promise<FleetAgentTaskGitResult> {
 	const base: FleetAgentTaskGitResult = {
 		branch: descriptor.branch,
@@ -2298,10 +2339,7 @@ async function finalizeWorkspace(
 	if (!io.finalizeWorkspace) {
 		return { ...base, error: 'this node has no workspace finalizer configured' };
 	}
-	const commitMessage =
-		typeof payload.git?.commitMessage === 'string' && payload.git.commitMessage.trim()
-			? payload.git.commitMessage.trim()
-			: defaultAgentTaskCommitMessage(taskId);
+	const commitMessage = agentTaskCommitMessage(taskId, payload, runSummary);
 	try {
 		const finalized = await io.finalizeWorkspace(
 			taskId,
@@ -2338,7 +2376,8 @@ async function finalizeMounts(
 	payload: FleetAgentTaskPayload,
 	io: AgentTaskIo,
 	publishFence: WorkspacePublishFence | null,
-	signal?: AbortSignal
+	signal?: AbortSignal,
+	runSummary?: string | null
 ): Promise<FleetAgentTaskGitResult[] | null> {
 	const writable = (descriptor.mounts ?? []).filter((mount) => mount.writable);
 	if (writable.length === 0) return null;
@@ -2354,10 +2393,7 @@ async function finalizeMounts(
 	if (!io.finalizeMounts) {
 		return writable.map((mount) => ({ ...toBase(mount), error: 'this node has no mount finalizer configured' }));
 	}
-	const commitMessage =
-		typeof payload.git?.commitMessage === 'string' && payload.git.commitMessage.trim()
-			? payload.git.commitMessage.trim()
-			: defaultAgentTaskCommitMessage(taskId);
+	const commitMessage = agentTaskCommitMessage(taskId, payload, runSummary);
 	try {
 		const results = await io.finalizeMounts(
 			taskId,

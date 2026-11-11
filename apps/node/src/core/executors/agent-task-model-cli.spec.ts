@@ -249,6 +249,47 @@ const payload = {
 };
 
 describe('runAgentTaskJob — model-cli execution', () => {
+	it('commits under the subject the run named on its last PR-TITLE line, keeping the planned body', async () => {
+		const { spawnFn } = recordingSpawn([]);
+		const envelope = JSON.stringify({
+			type: 'result',
+			subtype: 'success',
+			is_error: false,
+			result: 'The salary filter dropped zero-minimum jobs.\n\nPR-TITLE: Fix salary filter dropping zero-minimum jobs [skip ci] @octocat',
+			total_cost_usd: 0.5,
+			num_turns: 3,
+			session_id: 'sess-1'
+		});
+		const io = baseIo({ spawnFn, scratchFs: scratchFs(envelope) });
+
+		await runAgentTaskJob(
+			job({ ...payload, git: { commitMessage: 'feat: quality loop: fix one real defect\n\nTask: T-2286' } }),
+			io
+		);
+
+		expect(io.finalizeWorkspace).toHaveBeenCalledWith(
+			't1',
+			descriptor,
+			{
+				commitMessage: 'fix: salary filter dropping zero-minimum jobs (skip ci) octocat\n\nTask: T-2286',
+				push: true
+			},
+			undefined
+		);
+	});
+
+	it('commits the planned message unchanged when the run named no title', async () => {
+		const { spawnFn } = recordingSpawn([]);
+		const io = baseIo({ spawnFn, scratchFs: scratchFs(claudeEnvelope) });
+		await runAgentTaskJob(job({ ...payload, git: { commitMessage: 'feat: planned\n\nTask: T-1' } }), io);
+		expect(io.finalizeWorkspace).toHaveBeenCalledWith(
+			't1',
+			descriptor,
+			{ commitMessage: 'feat: planned\n\nTask: T-1', push: true },
+			undefined
+		);
+	});
+
 	it('runs the model in the worktree, grades the checks, commits and pushes, and reports success', async () => {
 		const spawnEnvs: Array<Record<string, string>> = [];
 		const { commands, spawnFn } = recordingSpawn([], undefined, (env) => spawnEnvs.push(env));

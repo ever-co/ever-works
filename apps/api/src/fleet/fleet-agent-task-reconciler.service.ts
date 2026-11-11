@@ -536,6 +536,17 @@ export class FleetAgentTaskReconcilerService {
         }
 
         const summary = truncate(result.model?.summary || 'Fleet run finished.', MAX_SUMMARY_CHARS);
+        // Self-explaining pull requests — what the pull request is built from:
+        // the CLI's own final message, untruncated (its `PR-TITLE:` line is the
+        // LAST line, which `truncate` would cut first) and never the
+        // placeholder above, the output tail or anything else the node
+        // reported. `null` when the model wrote none, which keeps today's
+        // title and body. Sanitized where it is turned into text for the
+        // provider (`composeTaskPullRequestText`), which bounds it too.
+        const pullRequestSummary =
+            typeof result.model?.summary === 'string' && result.model.summary.trim()
+                ? result.model.summary
+                : null;
         let finalizeNote = '';
         const agent = agentId ? await this.agents.findById(agentId).catch(() => null) : null;
         let primaryPrUrl: string | null = null;
@@ -558,6 +569,7 @@ export class FleetAgentTaskReconcilerService {
                     runId: ctx.runId,
                     ...(checksPassed > 0 ? { gate: { checksPassed } } : {}),
                     gateStatus: toGateStatus(result.gateStatus),
+                    summary: pullRequestSummary,
                 });
                 finalizeNote = describeFinalize(outcome, result.git.branch);
                 // A refused pull request is not one "to review": the Inbox
@@ -650,7 +662,9 @@ export class FleetAgentTaskReconcilerService {
                         baseRef: mount.baseRef,
                         headSha: entry.headSha ?? null,
                         primaryPrUrl,
-                        summary,
+                        // The same text as the primary's, never the
+                        // "Fleet run finished." placeholder.
+                        summary: pullRequestSummary,
                     });
                     mountNotes.push(describeMountOutcome(outcome, mount.branch));
                     // A refused mount's pull request is not one "to review".
