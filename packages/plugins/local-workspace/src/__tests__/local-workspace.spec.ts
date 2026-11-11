@@ -173,9 +173,9 @@ describe('provision (persistent pool + worktree)', () => {
 		expect(existsSync(join(h2.path, 'unrelated.txt'))).toBe(false);
 	});
 
-	it('leaves a reused worktree exactly as it was when catching up is not a clean fast-forward', async () => {
-		// Diverged: this machine has a commit the remote does not, and the
-		// remote has one this machine does not.
+	it('leaves a reused worktree alone when it has diverged from the pushed branch', async () => {
+		// This machine has a commit the remote does not, and the remote has one
+		// this machine does not: catching up would not be a fast-forward.
 		const branch = 'task/diverged-eeee5555';
 		const h1 = await plugin.provision(spec('lw-catch-up-2', branch));
 		writeFileSync(join(h1.path, 'diverged-agent.txt'), 'agent\n');
@@ -193,8 +193,9 @@ describe('provision (persistent pool + worktree)', () => {
 
 		const h2 = await plugin.provision(spec('lw-catch-up-2', branch));
 		expect(git(h2.path, 'rev-parse', 'HEAD')).toBe(localHead);
+	});
 
-		// Dirty: a modified tracked file is never overwritten by a catch-up.
+	it('never catches up a reused worktree whose tracked files are modified', async () => {
 		const branch3 = 'task/dirty-ffff6666';
 		const h3 = await plugin.provision(spec('lw-catch-up-3', branch3));
 		writeFileSync(join(h3.path, 'dirty-agent.txt'), 'agent\n');
