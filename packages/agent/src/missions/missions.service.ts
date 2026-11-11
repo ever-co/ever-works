@@ -59,7 +59,16 @@ import { GoalsService } from '../goals/goals.service';
 import { getOptionalProvider } from '../utils/optional-provider.util';
 import { MissionTickService } from './mission-tick.service';
 import { toMissionDto, type MissionDto } from './types';
-import { findMissionTemplateConfig, type MissionTemplateConfig } from './mission-template.config';
+import {
+    findMissionTemplateConfig,
+    isCustomMissionTemplateId,
+    MISSION_TEMPLATE_DEFAULT_GIT_PROVIDER,
+    type MissionTemplateConfig,
+} from './mission-template.config';
+import {
+    TemplateCatalogService,
+    type TemplateCatalogItem,
+} from '../template-catalog/template-catalog.service';
 import {
     MissionTemplateManifestService,
     type MissionTemplateManifest,
@@ -101,7 +110,9 @@ const TEMPLATE_REPO_SLUG_RE = /^[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)+$/;
 // catalog: the product's mission-create flow stores the chosen catalog id
 // (e.g. `starter-business` — see `NewPageClient` + `MISSION_TEMPLATES`)
 // directly in this column, and a scaffolder resolves it via
-// `findMissionTemplateConfig()` rather than cloning the raw string. A bare
+// `findMissionTemplateConfig()` rather than cloning the raw string (a person's
+// own custom Mission template, `custom-<uuid>`, is resolved through the
+// template catalog for the caller: `MissionsService.findTemplateConfig`). A bare
 // single-segment slug (`[A-Za-z0-9._-]+`, no `/`) therefore must be accepted
 // too. It is SSRF-safe by construction: with no `:`, `/`, `@`, whitespace or
 // backslash it cannot encode a scheme, host, port or credential — the exact
@@ -232,6 +243,38 @@ function fillTemplateText(text: string, inputs: ResolvedTemplateInputs): string 
 /** One line of the person's text: trimmed, inner whitespace collapsed. */
 function cleanTemplateInput(value: unknown): string {
     return typeof value === 'string' ? value.replace(/\s+/g, ' ').trim() : '';
+}
+
+/** `404 templateNotFound` — a Mission template the caller may not use, or none at all. */
+function missionTemplateNotFound(): NotFoundException {
+    return new NotFoundException({
+        code: 'templateNotFound',
+        message: 'Mission template not found.',
+    });
+}
+
+/**
+ * A custom Mission template's catalog row as the manifest reader and a create read a template:
+ * its OWN repository and branch (a fork lives in the account it was forked into). The catalog
+ * only accepts GitHub repositories for a custom template (`addCustomTemplate` parses a GitHub URL,
+ * a fork is made on GitHub), so the default provider is the right one. It takes an App Work when
+ * the built-in it was forked from does (`baseTemplateId`) — fixed by the row, like a built-in's
+ * `takesAppWork`, never by whether its manifest could be read.
+ */
+function customMissionTemplateConfig(row: TemplateCatalogItem): MissionTemplateConfig {
+    const base = row.baseTemplateId ? findMissionTemplateConfig(row.baseTemplateId) : null;
+    return {
+        id: row.id,
+        name: row.name,
+        description: row.description ?? '',
+        owner: row.repositoryOwner,
+        repo: row.repositoryName,
+        branch: row.branch,
+        syncBranches: [...(row.syncBranches ?? [])],
+        betaBranch: row.betaBranch ?? null,
+        gitProvider: MISSION_TEMPLATE_DEFAULT_GIT_PROVIDER,
+        takesAppWork: base?.takesAppWork === true,
+    };
 }
 
 /**
@@ -426,7 +469,9 @@ export class MissionsService {
         @Optional() private readonly templateManifests?: MissionTemplateManifestReader,
         // APW-08 T39 — GoalsService is resolved lazily (GoalsModule is not imported here: it pulls
         // in the Agents and Tasks modules). TRAILING + @Optional(): absent, a template's draft
-        // Goals are not created and the write says so.
+        // Goals are not created and the write says so. TemplateCatalogService (a custom Mission
+        // template's catalog row, `custom-<uuid>`) is resolved the same way: absent, a custom
+        // template is not applied.
         @Optional() private readonly moduleRef?: ModuleRef,
     ) {}
 
@@ -655,21 +700,17 @@ export class MissionsService {
 
     /**
      * APW-08 T40 — a catalog template's manifest, as the create form shows it. `404
-     * templateNotFound` for an id that is not a catalog template; a manifest that cannot be read
-     * answers `templateManifestUnreadable` with nothing else (the form falls back to its own fields).
+     * templateNotFound` for an id that is not a catalog template the caller may use (a built-in
+     * one, or their own custom Mission template); a manifest that cannot be read answers
+     * `templateManifestUnreadable` with nothing else (the form falls back to its own fields).
      */
     async readTemplateManifest(
         userId: string,
         templateId: string,
     ): Promise<MissionTemplateManifestView> {
-        const config = findMissionTemplateConfig(templateId);
-        if (!config) {
-            throw new NotFoundException({
-                code: 'templateNotFound',
-                message: 'Mission template not found.',
-            });
-        }
-        const resolved = await this.resolveTemplate(userId, config.id);
+        const resolved = await this.resolveTemplate(userId, templateId);
+        const config = resolved.config;
+        if (!config) throw missionTemplateNotFound();
         const manifest = resolved.manifest;
         const view: MissionTemplateManifestView = {
             templateId: config.id,
@@ -693,7 +734,11 @@ export class MissionsService {
                 outstandingIdeasCap: defaults.outstandingIdeasCap ?? null,
             };
         }
-        if (manifest.appWork) {
+        // The form adds its App Work fields only when a create would accept them
+        // (`resolveTemplateInputs`): a template that takes no App Work never shows them, whatever
+        // its manifest says (Build on an open-source app takes one; a custom template takes one
+        // when the built-in it was forked from does).
+        if (manifest.appWork && config.takesAppWork) {
             const spec = manifest.appWork.recommendedAppSpec;
             view.appWork = {
                 requiredRelation: manifest.appWork.requiredRelation ?? 'improves',
@@ -712,7 +757,9 @@ export class MissionsService {
     /**
      * APW-08 T38 — the catalog template `missionTemplateRepo` names, and its manifest read through
      * the git facade at the template's branch. Not a catalog id (an `owner/repo` slug, a URL, an
-     * unknown id), or no reader in this graph: nothing is read and nothing changes.
+     * unknown id), or no reader in this graph: nothing is read and nothing changes. A custom
+     * template id the caller may not use is refused (`404 templateNotFound`, see
+     * {@link findTemplateConfig}).
      */
     private async resolveTemplate(
         userId: string,
@@ -720,7 +767,7 @@ export class MissionsService {
     ): Promise<ResolvedMissionTemplate> {
         const config =
             typeof missionTemplateRepo === 'string'
-                ? findMissionTemplateConfig(missionTemplateRepo.trim())
+                ? await this.findTemplateConfig(userId, missionTemplateRepo.trim())
                 : null;
         if (!config || !this.templateManifests) return { config, manifest: null, warnings: [] };
         const read = await this.templateManifests.read(config, userId);
@@ -730,6 +777,39 @@ export class MissionsService {
             `Mission template ${config.id}: manifest ${read.reason} (${read.message}); the Mission keeps its explicit values.`,
         );
         return { config, manifest: null, warnings: [MISSION_TEMPLATE_MANIFEST_UNREADABLE] };
+    }
+
+    /**
+     * The Mission template `templateId` names for `userId`: a built-in catalog row, or a custom
+     * Mission template (`custom-<uuid>`, added by URL or forked) the caller may use, read from the
+     * catalog with the catalog's own visibility rule (`getVisibleTemplateForUser`: an active
+     * custom row is visible to its owner only). A custom template resolves to its own repository
+     * and branch, so its manifest is read and applied exactly like a built-in's.
+     *
+     * A `custom-` id that names nothing the caller may use (no such row, another person's,
+     * archived, or not a Mission template) is `404 templateNotFound`, the answer the manifest
+     * endpoint gives for an unknown id: before this, the Mission was created with none of the
+     * template applied and no word of it. Any other value that is not a built-in id (an
+     * `owner/repo` slug, a URL, another bare id) answers `null` as before.
+     */
+    private async findTemplateConfig(
+        userId: string,
+        templateId: string,
+    ): Promise<MissionTemplateConfig | null> {
+        const builtIn = findMissionTemplateConfig(templateId);
+        if (builtIn || !isCustomMissionTemplateId(templateId)) return builtIn;
+        const catalog = this.moduleRef
+            ? getOptionalProvider<TemplateCatalogService>(this.moduleRef, TemplateCatalogService)
+            : undefined;
+        if (!catalog) {
+            this.logger.warn(
+                `Mission template ${templateId}: TemplateCatalogService is not in this graph; the custom template is not applied.`,
+            );
+            return null;
+        }
+        const row = await catalog.getVisibleTemplateForUser('mission', templateId, userId);
+        if (!row || row.sourceType !== 'custom') throw missionTemplateNotFound();
+        return customMissionTemplateConfig(row);
     }
 
     /**
