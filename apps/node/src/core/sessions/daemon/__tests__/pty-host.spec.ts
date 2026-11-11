@@ -146,6 +146,29 @@ describe('loadNodePty / describeTerminalAddon with an injected loader', () => {
 		expect(reason).toContain('Loader: /lib/x86_64-linux-gnu/libc.so.6: version `GLIBC_2.28` not found');
 	});
 
+	it('loads an addon installed into the running process even though Node still says the package is missing', () => {
+		// Node's package.json reader remembers a missing manifest, so the bare specifier keeps
+		// failing after the install; `<addon>/package.json` resolves and names the entry file.
+		const addonDir = mkdtempSync(join(tmpdir(), 'ewn-addon-'));
+		writeFileSync(join(addonDir, 'package.json'), JSON.stringify({ version: '0.15.0', main: './lib/index.js' }));
+		const entry = join(addonDir, 'lib', 'index.js');
+		const spawn = () => undefined;
+		const require_ = Object.assign(
+			(id: string): unknown => {
+				if (id === PTY_ADDON) throw notFound();
+				if (id === `${PTY_ADDON}/package.json`) return { version: '0.15.0' };
+				if (id === entry) return { spawn };
+				throw new Error(`unexpected require ${id}`);
+			},
+			{ resolve: (id: string) => (id === `${PTY_ADDON}/package.json` ? join(addonDir, 'package.json') : id) }
+		);
+		try {
+			expect(loadNodePty(require_, RUNTIME)).toEqual({ module: { spawn } });
+		} finally {
+			rmSync(addonDir, { recursive: true, force: true });
+		}
+	});
+
 	it('does not remember a failure: an addon installed later is picked up on the next load', () => {
 		let installed = false;
 		const require_ = (id: string): unknown => {

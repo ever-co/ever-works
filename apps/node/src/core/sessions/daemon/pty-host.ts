@@ -15,6 +15,8 @@
  * the daemon is testable with any process host.
  */
 
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { muslBlocksPtyAddon } from '@ever-works/pty-local-plugin';
 
 /** One running terminal process. */
@@ -162,6 +164,33 @@ export function readPtyAddonVersion(require_: (id: string) => unknown = require)
 let cachedModule: NodePtyModule | null = null;
 
 /**
+ * `require` the addon, also when it was installed into this running process
+ * after a failed attempt: Node's package.json reader remembers a manifest it
+ * once found missing, so the bare specifier keeps failing for the life of the
+ * process (Node 26, reproduced 2026-11-11), while `<addon>/package.json`
+ * still resolves. Then the entry file that manifest names is loaded by path.
+ */
+function requireAddon(require_: (id: string) => unknown): unknown {
+	try {
+		return require_(PTY_ADDON);
+	} catch (error) {
+		const resolve = (require_ as { resolve?: (id: string) => string }).resolve;
+		if ((error as { code?: unknown } | null)?.code !== 'MODULE_NOT_FOUND' || typeof resolve !== 'function') {
+			throw error;
+		}
+		let manifestPath: string;
+		try {
+			manifestPath = resolve(`${PTY_ADDON}/package.json`);
+		} catch {
+			throw error;
+		}
+		const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as { main?: unknown };
+		const main = typeof manifest.main === 'string' && manifest.main ? manifest.main : 'index.js';
+		return require_(join(dirname(manifestPath), main));
+	}
+}
+
+/**
  * Load the addon. A load that fails — not installed, installed without its
  * native binary, built for another Node, refused on musl — answers missing
  * with a reason that names the package, the range and the install command
@@ -188,7 +217,7 @@ export function loadNodePty(
 	};
 	let result: { module: NodePtyModule | null; reason?: string };
 	try {
-		const loaded = require_(PTY_ADDON) as Partial<NodePtyModule> | undefined;
+		const loaded = requireAddon(require_) as Partial<NodePtyModule> | undefined;
 		result =
 			loaded && typeof loaded.spawn === 'function'
 				? { module: loaded as NodePtyModule }
