@@ -564,9 +564,16 @@ export class GoalOrchestratorService {
             );
         }
 
+        // Reopening AND rewording a closed criterion: its evidence and note were
+        // about the old wording, so they go unless this patch brings new ones.
+        const rewordsClosed =
+            patch.text !== undefined &&
+            patch.text.trim() !== target.text.trim() &&
+            target.status !== 'open';
         const beforeSignature = dodProgressSignature(existing);
         const updated: GoalDoDCriterion = {
             ...target,
+            ...(rewordsClosed ? { evidence: null, note: null } : {}),
             ...(patch.status !== undefined ? { status: patch.status } : {}),
             ...(patch.text !== undefined ? { text: patch.text } : {}),
             ...(patch.evidence !== undefined ? { evidence: patch.evidence } : {}),
