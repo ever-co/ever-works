@@ -9422,7 +9422,9 @@
                     "workerModelHelp": "Free text; passed through to iteration runs.",
                     "assignedAgent": "Pinned agent",
                     "assignedAgentNone": "No pin (round-robin)",
-                    "assignedAgentHelp": "Routing always picks this agent. Without a pin the router round-robins over the agents that have already worked this Goal — and, for a brand-new Goal, over the eligible agents in its scope — so the loop can start without one."
+                    "assignedAgentHelp": "Routing always picks this agent. Without a pin the router round-robins over the agents that have already worked this Goal — and, for a brand-new Goal, over the eligible agents in its scope — so the loop can start without one.",
+                    "assignedAgentDeleted": "已删除的代理",
+                    "assignedAgentDeletedHelp": "固定的代理已被删除或不再可用，因此没有代理承接这项工作。请选择其他代理，或取消固定。"
                 },
                 "executionTargets": {
                     "cloud": "Cloud",

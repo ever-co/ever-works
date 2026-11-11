@@ -9422,7 +9422,9 @@
                     "workerModelHelp": "Free text; passed through to iteration runs.",
                     "assignedAgent": "Pinned agent",
                     "assignedAgentNone": "No pin (round-robin)",
-                    "assignedAgentHelp": "Routing always picks this agent. Without a pin the router round-robins over the agents that have already worked this Goal — and, for a brand-new Goal, over the eligible agents in its scope — so the loop can start without one."
+                    "assignedAgentHelp": "Routing always picks this agent. Without a pin the router round-robins over the agents that have already worked this Goal — and, for a brand-new Goal, over the eligible agents in its scope — so the loop can start without one.",
+                    "assignedAgentDeleted": "삭제된 에이전트",
+                    "assignedAgentDeletedHelp": "고정된 에이전트가 삭제되었거나 더 이상 사용할 수 없어 이 작업을 맡는 에이전트가 없습니다. 다른 에이전트를 선택하거나 고정을 해제하세요."
                 },
                 "executionTargets": {
                     "cloud": "Cloud",

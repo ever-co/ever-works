@@ -9422,7 +9422,9 @@
                     "workerModelHelp": "Free text; passed through to iteration runs.",
                     "assignedAgent": "Pinned agent",
                     "assignedAgentNone": "No pin (round-robin)",
-                    "assignedAgentHelp": "Routing always picks this agent. Without a pin the router round-robins over the agents that have already worked this Goal — and, for a brand-new Goal, over the eligible agents in its scope — so the loop can start without one."
+                    "assignedAgentHelp": "Routing always picks this agent. Without a pin the router round-robins over the agents that have already worked this Goal — and, for a brand-new Goal, over the eligible agents in its scope — so the loop can start without one.",
+                    "assignedAgentDeleted": "削除されたエージェント",
+                    "assignedAgentDeletedHelp": "固定されたエージェントは削除されたか利用できなくなったため、この作業を担当するエージェントがいません。別のエージェントを選ぶか、固定を解除してください。"
                 },
                 "executionTargets": {
                     "cloud": "Cloud",

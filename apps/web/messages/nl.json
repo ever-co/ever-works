@@ -9422,7 +9422,9 @@
                     "workerModelHelp": "Free text; passed through to iteration runs.",
                     "assignedAgent": "Pinned agent",
                     "assignedAgentNone": "No pin (round-robin)",
-                    "assignedAgentHelp": "Routing always picks this agent. Without a pin the router round-robins over the agents that have already worked this Goal — and, for a brand-new Goal, over the eligible agents in its scope — so the loop can start without one."
+                    "assignedAgentHelp": "Routing always picks this agent. Without a pin the router round-robins over the agents that have already worked this Goal — and, for a brand-new Goal, over the eligible agents in its scope — so the loop can start without one.",
+                    "assignedAgentDeleted": "Verwijderde agent",
+                    "assignedAgentDeletedHelp": "De vastgezette agent is verwijderd of niet meer beschikbaar, dus geen enkele agent pakt dit werk op. Kies een andere agent of hef de vastzetting op."
                 },
                 "executionTargets": {
                     "cloud": "Cloud",

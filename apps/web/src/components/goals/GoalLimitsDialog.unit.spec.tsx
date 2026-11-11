@@ -55,7 +55,11 @@ const goal = (overrides: Partial<Goal> = {}): Goal =>
         ...overrides,
     }) as Goal;
 
-const open = (props: { goal: Goal; agents?: Array<{ id: string; name: string }> }) =>
+const open = (props: {
+    goal: Goal;
+    agents?: Array<{ id: string; name: string }>;
+    missingAgentId?: string | null;
+}) =>
     render(
         <GoalLimitsDialog
             open
@@ -105,5 +109,52 @@ describe('GoalLimitsDialog — the routing pin', () => {
         });
         const input = await save();
         expect(input.assignedAgentId).toBeNull();
+    });
+});
+
+/**
+ * Review of #3172 — a pin to an Agent the API answered 404 for read "No pin"
+ * while it was still stored (and, with no history, routed the Goal to no
+ * Agent). It now reads as a deleted Agent, with a warning, and can be cleared —
+ * even when there is no other Agent to offer.
+ */
+describe('GoalLimitsDialog — a pin to a deleted Agent', () => {
+    beforeEach(() => {
+        updateLimits.mockReset();
+        updateLimits.mockResolvedValue(goal());
+    });
+
+    const pinSelect = () => screen.getByLabelText('fields.assignedAgentNone') as HTMLSelectElement;
+
+    it('shows the stored pin as a deleted Agent, with a warning, even with no Agents left', () => {
+        open({
+            goal: goal({ assignedAgentId: 'gone-agent' }),
+            agents: [],
+            missingAgentId: 'gone-agent',
+        });
+        expect(pinSelect().value).toBe('gone-agent');
+        expect(pinSelect().selectedOptions[0]?.textContent).toBe('fields.assignedAgentDeleted');
+        expect(screen.getByTestId('goal-limits-pin-deleted').textContent).toBe(
+            'fields.assignedAgentDeletedHelp',
+        );
+    });
+
+    it('lets the owner clear it: None sends null and the warning goes', async () => {
+        open({
+            goal: goal({ assignedAgentId: 'gone-agent' }),
+            agents: [{ id: 'agent-1', name: 'Builder' }],
+            missingAgentId: 'gone-agent',
+        });
+        fireEvent.change(pinSelect(), { target: { value: '' } });
+        expect(screen.queryByTestId('goal-limits-pin-deleted')).toBeNull();
+        const input = await save();
+        expect(input.assignedAgentId).toBeNull();
+    });
+
+    it('shows an unlisted pin the API did not report missing by its id, without the warning', () => {
+        open({ goal: goal({ assignedAgentId: 'agent-x' }), agents: [], missingAgentId: null });
+        expect(pinSelect().value).toBe('agent-x');
+        expect(pinSelect().selectedOptions[0]?.textContent).toBe('agent-x');
+        expect(screen.queryByTestId('goal-limits-pin-deleted')).toBeNull();
     });
 });

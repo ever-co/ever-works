@@ -9422,7 +9422,9 @@
                     "workerModelHelp": "Free text; passed through to iteration runs.",
                     "assignedAgent": "Pinned agent",
                     "assignedAgentNone": "No pin (round-robin)",
-                    "assignedAgentHelp": "Routing always picks this agent. Without a pin the router round-robins over the agents that have already worked this Goal — and, for a brand-new Goal, over the eligible agents in its scope — so the loop can start without one."
+                    "assignedAgentHelp": "Routing always picks this agent. Without a pin the router round-robins over the agents that have already worked this Goal — and, for a brand-new Goal, over the eligible agents in its scope — so the loop can start without one.",
+                    "assignedAgentDeleted": "Usunięty agent",
+                    "assignedAgentDeletedHelp": "Przypięty agent został usunięty lub nie jest już dostępny, więc żaden agent nie podejmuje tej pracy. Wybierz innego agenta lub usuń przypięcie."
                 },
                 "executionTargets": {
                     "cloud": "Cloud",
