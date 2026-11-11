@@ -1216,7 +1216,7 @@ export class TasksController {
         summary:
             "Pull-request state + CI verdict for this Task's branch — the board's review pill.",
         description:
-            'Serves the cached `prState`/`ciState`/`checks` written by the `task-pr-status-sync` cron, refreshing from the git provider only when the cache is older than the 60s floor (single-flight per Task, so a board full of review cards makes one call per PR). Owner-scoped: a Task the caller does not own 404s. A merged or closed PR is terminal and is never re-read. `409` when the connected git provider has no PR-status capability.',
+            'Serves the cached `prState`/`ciState`/`checks` written by the `task-pr-status-sync` cron, refreshing from the git provider only when the cache is older than the 60s floor (single-flight per Task, so a board full of review cards makes one call per PR). Owner-scoped: a Task the caller does not own 404s. A merged or closed PR is terminal and is never re-read. `prState: not_found` means the provider has kept answering "not found" for the PR for 30 minutes (deleted, or no longer visible to the connection); this read serves it from the cache and the cron re-checks it every 6 hours. `409` when the connected git provider has no PR-status capability.',
     })
     @HttpCode(HttpStatus.OK)
     @Throttle({ long: { limit: 120, ttl: 60_000 } })

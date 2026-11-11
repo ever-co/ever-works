@@ -6,11 +6,13 @@
  * are already on the Task row, so no new stored state is needed.
  *
  * WHAT THIS COSTS: "has not changed" is read from `updatedAt`, which moves
- * on ANY edit to the row — a title change, a pull-request status refresh.
- * So the predicate UNDER-reports (a touched stalled Task loses its flag until
- * the threshold elapses again) and NEVER over-reports (it cannot call a Task
- * stalled while something runs or something changed). That asymmetry is the
- * reason the signal is derived rather than stored in a new column.
+ * on ANY edit to the row by a person or a run — a title change, a move.
+ * Machine-only writes keep it (the pull-request status sweep, CI results,
+ * the latest-run mirror). So the predicate UNDER-reports (a touched stalled
+ * Task loses its flag until the threshold elapses again) and NEVER
+ * over-reports (it cannot call a Task stalled while something runs or
+ * something changed). That asymmetry is the reason the signal is derived
+ * rather than stored in a new column.
  *
  * The API orders columns with the same rule in SQL; the web board recomputes
  * the flag with this function, so ordering and flag cannot drift.

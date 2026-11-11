@@ -65,7 +65,9 @@ export function changeChainSteps(chain: TaskChangeChain): Record<ChangeStep, Cha
 
     let pullRequest: ChangeStepState = 'pending';
     if (merged || chain.prState === 'open' || chain.prState === 'draft') pullRequest = 'done';
-    else if (chain.prState === 'closed') pullRequest = 'failed';
+    // `not_found`: the git provider keeps answering "not found" for it (deleted, or no longer
+    // visible); never shown as a delivered pull request. It returns to `open` if found again.
+    else if (chain.prState === 'closed' || chain.prState === 'not_found') pullRequest = 'failed';
     else if (chain.prNumber) pullRequest = 'done';
 
     let build: ChangeStepState = 'pending';

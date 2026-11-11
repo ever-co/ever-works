@@ -82,8 +82,11 @@ export interface TaskRun {
 /** Rolled-up CI verdict for the PR head, as the board's dot renders it. */
 export type TaskCiState = 'passing' | 'failing' | 'pending' | 'unknown';
 
-/** PR lifecycle as last observed from the git provider. */
-export type TaskPrState = 'open' | 'draft' | 'closed' | 'merged';
+/**
+ * PR lifecycle as last observed from the git provider. `not_found`: the provider answered "not
+ * found" for the pull request (deleted, or no longer visible to the connection).
+ */
+export type TaskPrState = 'open' | 'draft' | 'closed' | 'merged' | 'not_found';
 
 /** One CI check on the PR head. All strings are PLAIN TEXT by contract. */
 export interface TaskPrCheck {

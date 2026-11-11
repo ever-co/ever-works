@@ -68,7 +68,7 @@ If the base branch moves on and the Task branch can no longer merge, the branch 
 
 ## Cleanup
 
-With `taskBranchCleanup: on-merge`, a nightly sweep deletes the remote branches of Tasks that reached a terminal state (done or cancelled), plus any abandoned branch past a hard staleness cutoff — in every repository the Task spans, so a multi-repo Task does not leave one branch behind per extra repository. With `manual`, branches are never auto-deleted — use **Discard branch**.
+With `taskBranchCleanup: on-merge`, a nightly sweep deletes the remote branches of Tasks that reached a terminal state (done or cancelled), plus any abandoned branch past a hard staleness cutoff (14 days by default, `TASK_BRANCH_GC_STALE_DAYS`: no change to the Task, no pull-request status read and no CI result for its head in that time, so a pull request still open for review keeps its branch; a Task whose pull request the provider answers "not found" for is never cleaned up this way) — in every repository the Task spans, so a multi-repo Task does not leave one branch behind per extra repository. With `manual`, branches are never auto-deleted — use **Discard branch**.
 
 ## Related
 
