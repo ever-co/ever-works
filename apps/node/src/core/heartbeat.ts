@@ -71,7 +71,13 @@ export interface HeartbeatCapableClient {
  * it talks to a platform older than itself.
  */
 const OPTIONAL_DESCRIPTION_FIELD_TIERS = [
-	// NEWEST first. Desktop view & control (FL-07): the screen helper's trust and
+	// NEWEST first. Fleet agent readiness: the per-CLI report (installed, signed
+	// in, ready or why not, usage). Its own tier, newest of all (it reached
+	// `develop` after FL-07's desktop fields): a platform that predates it costs
+	// exactly this field — the node keeps beating with everything older, and
+	// Fleet shows "unknown" for its agents, as it does for an older daemon.
+	['agents'],
+	// Desktop view & control (FL-07): the screen helper's trust and
 	// state, the displays, the desktop reasons and the admission events — one
 	// tier (they reached `develop` together, after FL-13's time zone): a platform
 	// that predates the Desktop source costs exactly these five.
@@ -496,6 +502,9 @@ function describeStrippedTiers(tiers: number): string {
 	}
 	if (dropped.has('helperTrust')) {
 		return 'Platform rejected the screen helper fields; it predates the Desktop source. Still reporting everything else; the desktop stays unavailable in Fleet until this node restarts.';
+	}
+	if (dropped.has('agents')) {
+		return "Platform rejected the agent readiness report; it predates it. Still reporting everything else; Fleet shows this computer's agents as unknown until this node restarts.";
 	}
 	return 'Platform rejected the hardware address and network identity; it predates Wake-on-LAN. Still reporting everything else; this computer cannot be woken from Fleet until this node restarts.';
 }

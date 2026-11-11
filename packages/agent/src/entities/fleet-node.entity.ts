@@ -1,6 +1,7 @@
 import { Column, CreateDateColumn, Entity, Index, PrimaryGeneratedColumn } from 'typeorm';
 import type {
     ComputerControlPolicy,
+    FleetAgentReadinessStored,
     FleetNodeHealthStored,
     FleetConsents,
     FleetSessionDaemonReport,
@@ -810,6 +811,29 @@ export class FleetNode {
      */
     @Column({ type: 'simple-json', nullable: true })
     desktopFacts?: FleetNodeDesktopFacts | null;
+
+    /**
+     * Fleet agent readiness — the agent CLIs the node last reported on its
+     * heartbeat (`agents`): per CLI whether it is installed, how it is signed
+     * in, whether it can take work and why not, the usage windows last
+     * observed and the last successful run; stamped with the platform's
+     * receipt time (`at`). NULL = never reported (a daemon older than the
+     * field), which every surface shows as "unknown — update the node",
+     * never as "no agent can work".
+     *
+     * Its own column rather than a key of {@link health}: that snapshot is
+     * shared whole with Organization viewers on the promise that it holds no
+     * text the node wrote, and this report carries the account label and the
+     * CLI's own sentence. Display labels and statuses only — never a token,
+     * a key or a credential file's content (the contract's normaliser masks
+     * anything credential-shaped on the way in). Read it through
+     * `resolveFleetNodeAgentReadiness`.
+     *
+     * `simple-json` in a `text` column like {@link consents}.
+     * Migration: `1797600000000-AddFleetNodeAgentReadiness`.
+     */
+    @Column({ type: 'simple-json', nullable: true })
+    agentReadiness?: FleetAgentReadinessStored | null;
 
     @CreateDateColumn()
     createdAt: Date;

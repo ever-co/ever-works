@@ -1,0 +1,1960 @@
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { execFile, execFileSync } from 'node:child_process';
+import { promises as fs } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { pathToFileURL } from 'node:url';
+import { promisify } from 'node:util';
+import { effectiveRemoteUrls, isAllowedRepositoryConfigKey, parseScopedConfigList } from '../credentialed-command.js';
+import { LocalWorkspacePlugin } from '../local-workspace.plugin.js';
+import type { WorkspaceHandle, WorkspaceProvisionSpec } from '@ever-works/plugin';
+
+/**
+ * A repository's own Git config against a credentialed child — every case
+ * here is an ATTACK, run with real git, and judged by what a planted
+ * program actually got to read.
+ *
+ * WHY THIS FILE EXISTS. The scoped fetch credential first judged the pool's
+ * config with a denylist. An independent review planted two keys that are
+ * on no denylist — `remote.<url>.url` (a local path) and
+ * `remote.<url>.uploadpack` (a harvester) — and read the token out of the
+ * transport's environment; the merged scoped PUSH had the same hole through
+ * `remote.<url>.receivepack`, with a `contents: write` token. Both are the
+ * first cases below.
+ *
+ * HOW A CASE IS JUDGED. Each planted program appends every environment line
+ * mentioning `Authorization` to a RECEIPT file and a line to a RAN file. So
+ * "the token did not leak" is read off the receipt (absent or empty), never
+ * off a verdict the code under test produced, and "the program did not even
+ * run" is a separate, stronger fact.
+ *
+ * Every vector is run three ways:
+ *
+ *  - **control** — plain `git`, with the header in its environment and none
+ *    of this provider's protections: the program runs and the receipt holds
+ *    the header. Without this a case could pass because the plant was inert
+ *    on this machine's git.
+ *  - **planted before the run** — the allowlist sees it. A fetch withholds
+ *    its credential (and runs as it always did); a push refuses.
+ *  - **planted between the check and the command** — what a concurrent job
+ *    on the same pool can do. The allowlist saw a clean config, the
+ *    credential IS used, and only the exec-time layer stands: the program
+ *    must not run at all.
+ */
+
+const git = (cwd: string, ...args: string[]): string =>
+	execFileSync('git', args, { cwd, encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+const execFileAsync = promisify(execFile);
+
+type Invocation = { args: string[]; env: NodeJS.ProcessEnv };
+
+const TOKEN = 'ghs_attackSpecTokenSentinel0123456789abcdef';
+const BASIC = Buffer.from(`x-access-token:${TOKEN}`, 'utf8').toString('base64');
+const HEADER = `Authorization: Basic ${BASIC}`;
+/**
+ * What the fleet really sends: an https URL. Nothing listens there — port 1
+ * on loopback refuses at once — so a command that correctly ignores a
+ * planted redirect fails fast instead of reaching a network.
+ */
+const HTTPS_REMOTE = 'https://127.0.0.1:1/ever-works/credentialed-command-fixture.git';
+
+let root: string;
+let originDir: string;
+let originUrl: string;
+let decoyDir: string;
+let originHead: string;
+let decoyHead: string;
+let caseCounter = 0;
+
+const slash = (path: string): string => path.replace(/\\/g, '/');
+
+/** A fresh, isolated place for one case: its own pool, receipt and marker. */
+function scene() {
+	caseCounter += 1;
+	const dir = mkdtempSync(join(root, `case-${caseCounter}-`));
+	const receipt = slash(join(dir, 'receipt.txt'));
+	const ran = slash(join(dir, 'ran.txt'));
+	/** Shell that records what it can see of the credential, then that it ran. */
+	const harvest = `env | grep -F Authorization >> '${receipt}'; echo ran >> '${ran}';`;
+	let programs = 0;
+	return {
+		dir,
+		baseDir: join(dir, 'workspaces'),
+		harvest,
+		/**
+		 * The same harvester as a PROGRAM FILE that records `tag` — for config
+		 * keys Git executes directly rather than through a shell (a signing
+		 * program), and so a case that plants many can say which one ran.
+		 */
+		program: (tag: string): string => {
+			programs += 1;
+			const file = join(dir, `harvest-${programs}.sh`);
+			writeFileSync(
+				file,
+				`#!/bin/sh\nenv | grep -F Authorization >> '${receipt}'\necho '${tag}' >> '${ran}'\nexit 1\n`,
+				{ mode: 0o755 }
+			);
+			return slash(file);
+		},
+		/** Everything a planted program managed to read of the credential. */
+		leaked: (): string => (existsSync(receipt) ? readFileSync(receipt, 'utf8') : ''),
+		didRun: (): boolean => existsSync(ran),
+		/** The tags of the programs that ran, one per line. */
+		ranBy: (): string => (existsSync(ran) ? readFileSync(ran, 'utf8') : '')
+	};
+}
+type Scene = ReturnType<typeof scene>;
+
+/** Real `execFile`, every invocation recorded; `afterConfigCheck` fires once the allowlist read has returned. */
+function recordingGit(invocations: Invocation[], afterConfigCheck?: () => void): typeof execFile {
+	let fired = false;
+	return ((
+		command: string,
+		args: string[],
+		options: { env?: NodeJS.ProcessEnv },
+		callback: (error: Error | null, stdout: string, stderr: string) => void
+	) => {
+		invocations.push({ args: [...args], env: { ...(options.env ?? {}) } });
+		const isConfigCheck = args.includes('--show-scope') && args.includes('--list');
+		const done =
+			isConfigCheck && afterConfigCheck && !fired
+				? (error: Error | null, stdout: string, stderr: string): void => {
+						// The config has been READ and judged clean. What is
+						// written now is what a concurrent job can write.
+						fired = true;
+						afterConfigCheck();
+						callback(error, stdout, stderr);
+					}
+				: callback;
+		return (execFile as unknown as (...rest: unknown[]) => unknown)(command, args, options, done) as never;
+	}) as never;
+}
+
+const carriesHeader = (entry: Invocation): boolean => JSON.stringify(entry.env).includes(BASIC);
+
+const provisionSpec = (
+	baseDir: string,
+	repoUrl: string,
+	bindingKey: string,
+	extra: Partial<WorkspaceProvisionSpec> = {}
+): WorkspaceProvisionSpec => ({
+	repoUrl,
+	baseRef: 'main',
+	branch: `task/${bindingKey}`,
+	bindingKey,
+	hardenRepoHooks: true,
+	settings: { baseDir, fetchDepth: 1 },
+	...extra
+});
+
+/** The one bare pool a scene's provisions share. */
+function poolOf(baseDir: string): string {
+	const repos = join(baseDir, 'repos');
+	const [only] = readdirSync(repos);
+	return join(repos, only);
+}
+
+/** Create the pool (uncredentialed, nothing planted yet) and return it. */
+async function seedPool(baseDir: string, repoUrl: string): Promise<string> {
+	await new LocalWorkspacePlugin().provision(provisionSpec(baseDir, repoUrl, 'seed'));
+	return poolOf(baseDir);
+}
+
+/**
+ * The CONTROL: what git does with a planted pool when it is handed a
+ * credential the way the first version of this code handed it over — by
+ * URL, with the header in the environment, and nothing else.
+ */
+function controlFetch(pool: string, remoteUrl: string): void {
+	try {
+		execFileSync('git', ['fetch', '--depth', '1', remoteUrl, '+refs/heads/main:refs/remotes/origin/control'], {
+			cwd: pool,
+			windowsHide: true,
+			stdio: ['ignore', 'pipe', 'pipe'],
+			env: {
+				...process.env,
+				GIT_TERMINAL_PROMPT: '0',
+				GIT_CONFIG_COUNT: '1',
+				GIT_CONFIG_KEY_0: `http.${remoteUrl}.extraheader`,
+				GIT_CONFIG_VALUE_0: HEADER
+			}
+		});
+	} catch {
+		// Most plants break the transfer itself; the receipt is the verdict.
+	}
+}
+
+/** A scratch bare repository to run a control in, so the provider's own pool stays untouched. */
+function scratchPool(dir: string, remoteUrl: string): string {
+	const pool = join(dir, 'control.git');
+	mkdirSync(pool, { recursive: true });
+	git(pool, 'init', '--bare');
+	git(pool, 'remote', 'add', 'origin', remoteUrl);
+	return pool;
+}
+
+interface FetchVector {
+	readonly name: string;
+	/** Write the attack into `pool`'s config, for a command addressed to `remoteUrl`. */
+	plant(pool: string, remoteUrl: string, at: Scene): void;
+	/** `section.variable` names the allowlist must report for it. */
+	readonly reported: readonly string[];
+	/**
+	 * What the credentialed fetch does when the plant lands AFTER the check.
+	 * `ignored` (the default): the plant has no say and the fetch succeeds
+	 * against the real remote. `refused`: the plant moves the request onto a
+	 * transport the child is not allowed to speak, and the fetch fails closed.
+	 */
+	readonly raced?: 'ignored' | 'refused';
+}
+
+/** `ext::` splits its command on spaces; `% ` is a literal one. */
+const extEscape = (text: string): string => text.replace(/%/g, '%%').replace(/ /g, '% ');
+
+const fetchVectors: FetchVector[] = [
+	{
+		// The review's finding, key for key.
+		name: 'remote.<url>.url → a local path, with remote.<url>.uploadpack → a harvester',
+		plant: (pool, remoteUrl, at) => {
+			git(pool, 'config', `remote.${remoteUrl}.url`, slash(originDir));
+			git(pool, 'config', `remote.${remoteUrl}.uploadpack`, `${at.harvest} git-upload-pack`);
+		},
+		reported: ['remote.<…>.url', 'remote.<…>.uploadpack']
+	},
+	{
+		name: 'remote.<url>.uploadpack alone',
+		plant: (pool, remoteUrl, at) => {
+			git(pool, 'config', `remote.${remoteUrl}.uploadpack`, `${at.harvest} git-upload-pack`);
+		},
+		reported: ['remote.<…>.uploadpack']
+	},
+	{
+		name: 'remote.<url>.vcs → a remote helper that runs a command',
+		plant: (pool, remoteUrl, at) => {
+			git(pool, 'config', `remote.${remoteUrl}.vcs`, 'ext');
+			git(pool, 'config', `remote.${remoteUrl}.url`, `sh -c ${extEscape(`${at.harvest} :`)}`);
+			git(pool, 'config', 'protocol.ext.allow', 'always');
+		},
+		reported: ['remote.<…>.vcs', 'remote.<…>.url', 'protocol.<…>.allow']
+	},
+	{
+		name: 'core.sshCommand, with remote.<url>.url → an ssh URL',
+		plant: (pool, remoteUrl, at) => {
+			git(pool, 'config', `remote.${remoteUrl}.url`, 'ssh://nowhere.invalid/x/y');
+			git(pool, 'config', 'core.sshCommand', `${at.harvest} false`);
+		},
+		reported: ['remote.<…>.url', 'core.sshcommand']
+	},
+	{
+		name: 'include.path → a file that holds the uploadpack attack',
+		plant: (pool, remoteUrl, at) => {
+			const included = join(at.dir, 'planted.gitconfig');
+			writeFileSync(
+				included,
+				`[remote "${remoteUrl}"]\n\turl = ${slash(originDir)}\n\tuploadpack = "${at.harvest} git-upload-pack"\n`
+			);
+			git(pool, 'config', 'include.path', slash(included));
+		},
+		reported: ['include.path', 'remote.<…>.url', 'remote.<…>.uploadpack']
+	},
+	{
+		name: 'core.alternateRefsCommand, with an alternates file',
+		plant: (pool, _remoteUrl, at) => {
+			mkdirSync(join(pool, 'objects', 'info'), { recursive: true });
+			writeFileSync(join(pool, 'objects', 'info', 'alternates'), `${slash(join(originDir, 'objects'))}\n`);
+			git(pool, 'config', 'core.alternateRefsCommand', `${at.harvest} :`);
+		},
+		reported: ['core.alternaterefscommand']
+	},
+	{
+		// Not a `remote.<url>.*` key, so the private remote name does not
+		// cover it: a URL rewrite applies to that remote's URL too. Only the
+		// transport pin stands between this and `core.sshCommand`.
+		name: 'url.<base>.insteadOf → an ssh URL, with core.sshCommand',
+		plant: (pool, remoteUrl, at) => {
+			git(pool, 'config', 'url.ssh://nowhere.invalid/x/.insteadOf', remoteUrl);
+			git(pool, 'config', 'core.sshCommand', `${at.harvest} false`);
+		},
+		reported: ['url.<…>.insteadof', 'core.sshcommand'],
+		raced: 'refused'
+	},
+	{
+		// A GRANDCHILD, and one that names a remote the config does describe.
+		// With a promisor remote configured, an object that is missing makes
+		// the fetch start `git fetch <that remote>` to go and get it — so the
+		// private remote name is no help here. This one goes over ssh; the
+		// file-transport form, and `GIT_NO_LAZY_FETCH`, are the describe
+		// "the lazy fetch of a promisor remote" below.
+		name: 'a promisor remote → ssh with core.sshCommand, and a ref whose object is missing',
+		plant: (pool, _remoteUrl, at) => {
+			git(pool, 'config', 'extensions.partialclone', 'ew-planted');
+			git(pool, 'config', 'remote.ew-planted.promisor', 'true');
+			git(pool, 'config', 'remote.ew-planted.url', 'ssh://nowhere.invalid/x/y');
+			git(pool, 'config', 'core.sshCommand', `${at.harvest} false`);
+			missingTrackingRefs(pool);
+		},
+		reported: ['extensions.partialclone', 'remote.<…>.promisor', 'core.sshcommand']
+	}
+];
+
+/**
+ * What sends Git looking for a missing object: the tracking refs the fetch is
+ * about to move point at one that is not there.
+ */
+function missingTrackingRefs(pool: string): void {
+	const tracking = join(pool, 'refs', 'remotes', 'origin');
+	mkdirSync(tracking, { recursive: true });
+	for (const ref of ['main', 'control']) writeFileSync(join(tracking, ref), `${'1'.repeat(40)}\n`);
+}
+
+beforeAll(() => {
+	root = mkdtempSync(join(tmpdir(), 'ew-lw-attack-'));
+	originDir = join(root, 'origin.git');
+	decoyDir = join(root, 'decoy.git');
+	const seedDir = join(root, 'seed');
+	for (const dir of [originDir, decoyDir, seedDir]) mkdirSync(dir, { recursive: true });
+	git(originDir, 'init', '--bare', '--initial-branch', 'main');
+	git(decoyDir, 'init', '--bare', '--initial-branch', 'main');
+	git(seedDir, 'init', '--initial-branch', 'main');
+	const commit = (message: string): void => {
+		writeFileSync(join(seedDir, 'README.md'), `${message}\n`);
+		git(seedDir, 'add', '-A');
+		git(seedDir, '-c', 'user.name=Seed', '-c', 'user.email=seed@test.local', 'commit', '-m', message);
+	};
+	commit('the real repository');
+	git(seedDir, 'push', pathToFileURL(originDir).toString(), 'HEAD:refs/heads/main');
+	originHead = git(seedDir, 'rev-parse', 'HEAD');
+	// Somewhere a redirect could land instead: different content, same branch.
+	commit('a decoy');
+	git(seedDir, 'push', pathToFileURL(decoyDir).toString(), 'HEAD:refs/heads/main');
+	decoyHead = git(seedDir, 'rev-parse', 'HEAD');
+	originUrl = pathToFileURL(originDir).toString();
+});
+
+afterAll(async () => {
+	await fs.rm(root, { recursive: true, force: true, maxRetries: 3 });
+});
+
+describe('scoped FETCH credential — a planted pool config cannot read it', () => {
+	describe.each(fetchVectors)('$name', (vector) => {
+		it('CONTROL: without this provider’s protections the planted program reads the header', () => {
+			const at = scene();
+			const pool = scratchPool(at.dir, originUrl);
+			vector.plant(pool, originUrl, at);
+
+			controlFetch(pool, originUrl);
+
+			expect(at.didRun()).toBe(true);
+			expect(at.leaked()).toContain(BASIC);
+		});
+
+		it('planted BEFORE the run: the credential is withheld, and nothing reads it', async () => {
+			const at = scene();
+			const pool = await seedPool(at.baseDir, originUrl);
+			vector.plant(pool, originUrl, at);
+			const invocations: Invocation[] = [];
+			const reasons: string[] = [];
+			const plugin = new LocalWorkspacePlugin({ execFile: recordingGit(invocations) });
+
+			// What the uncredentialed fetch then does with this pool is what it
+			// always did — some of these plants break it — so only the
+			// credential is judged here.
+			await plugin
+				.provision(
+					provisionSpec(at.baseDir, originUrl, 'withheld', {
+						fetchCredential: { username: 'x-access-token', token: TOKEN, remoteUrl: originUrl },
+						onFetchCredentialWithheld: (reason) => reasons.push(reason)
+					})
+				)
+				.catch(() => undefined);
+
+			expect(reasons).toHaveLength(1);
+			for (const name of vector.reported) expect(reasons[0]).toContain(name);
+			// Named for an operator, never quoted: no subsection, no value.
+			expect(reasons[0]).not.toContain(slash(originDir));
+			expect(reasons[0]).not.toContain('Authorization');
+			// And with the way out, for the repository it was found in.
+			expect(reasons[0]).toMatch(/To clear it on this machine: git -C "[^"]+" config /);
+			// Git never held the token, in any child…
+			expect(invocations.some(carriesHeader)).toBe(false);
+			// …so whatever ran, it read nothing.
+			expect(at.leaked()).toBe('');
+		});
+
+		it('planted BETWEEN the check and the fetch: the credential is used, and the program never runs', async () => {
+			const at = scene();
+			const pool = await seedPool(at.baseDir, originUrl);
+			const invocations: Invocation[] = [];
+			const reasons: string[] = [];
+			const plugin = new LocalWorkspacePlugin({
+				execFile: recordingGit(invocations, () => vector.plant(pool, originUrl, at))
+			});
+
+			const outcome = await plugin
+				.provision(
+					provisionSpec(at.baseDir, originUrl, 'raced', {
+						fetchCredential: { username: 'x-access-token', token: TOKEN, remoteUrl: originUrl },
+						onFetchCredentialWithheld: (reason) => reasons.push(reason)
+					})
+				)
+				.then(
+					(handle) => ({ handle, error: null as Error | null }),
+					(error: Error) => ({ handle: null, error })
+				);
+
+			// The allowlist saw a clean pool, so the credential WAS handed to
+			// git — this is the case the allowlist cannot help with.
+			expect(reasons).toEqual([]);
+			const fetches = invocations.filter((entry) => entry.args[0] === 'fetch');
+			expect(fetches.length).toBeGreaterThan(0);
+			expect(fetches.every(carriesHeader)).toBe(true);
+			// And the planted program did not run, let alone read it.
+			expect(at.didRun()).toBe(false);
+			expect(at.leaked()).toBe('');
+			if (vector.raced === 'refused') {
+				// The plant put the request on a transport this child may not
+				// speak. It fails closed, and says nothing of the credential.
+				expect(outcome.error?.message).toMatch(/fetch of base ref 'main' failed.*not allowed/s);
+				expect(outcome.error?.message).not.toContain(TOKEN);
+				expect(outcome.error?.message).not.toContain(BASIC);
+			} else {
+				// The fetch went to the REAL remote, redirect or not.
+				expect(outcome.error).toBeNull();
+				expect(fetches).toHaveLength(2);
+				expect(outcome.handle?.baseSha).toBe(originHead);
+			}
+		});
+	});
+
+	describe('remote.<url>.url → a local path alone', () => {
+		// No program is planted, so there is no receipt to read: on its own a
+		// `url` runs nothing. What it does is MOVE the fetch — the run would
+		// be built on whatever repository the plant names, with the
+		// credential in the environment of a transport it was not issued
+		// for. Judged by which repository the base commit came from.
+		const plant = (pool: string): void => {
+			git(pool, 'config', `remote.${originUrl}.url`, slash(decoyDir));
+		};
+
+		it('CONTROL: a fetch by URL lands on the planted repository', () => {
+			const at = scene();
+			const pool = scratchPool(at.dir, originUrl);
+			plant(pool);
+
+			controlFetch(pool, originUrl);
+
+			expect(git(pool, 'rev-parse', 'refs/remotes/origin/control')).toBe(decoyHead);
+		});
+
+		it('planted BEFORE the run: the credential is withheld', async () => {
+			const at = scene();
+			const pool = await seedPool(at.baseDir, originUrl);
+			plant(pool);
+			const invocations: Invocation[] = [];
+			const reasons: string[] = [];
+			const plugin = new LocalWorkspacePlugin({ execFile: recordingGit(invocations) });
+
+			await plugin
+				.provision(
+					provisionSpec(at.baseDir, originUrl, 'withheld', {
+						fetchCredential: { username: 'x-access-token', token: TOKEN, remoteUrl: originUrl },
+						onFetchCredentialWithheld: (reason) => reasons.push(reason)
+					})
+				)
+				.catch(() => undefined);
+
+			expect(reasons).toHaveLength(1);
+			expect(reasons[0]).toContain('remote.<…>.url');
+			expect(reasons[0]).not.toContain(slash(decoyDir));
+			expect(invocations.some(carriesHeader)).toBe(false);
+		});
+
+		it('planted BETWEEN the check and the fetch: the credentialed fetch is not moved', async () => {
+			const at = scene();
+			const pool = await seedPool(at.baseDir, originUrl);
+			const invocations: Invocation[] = [];
+			const reasons: string[] = [];
+			const plugin = new LocalWorkspacePlugin({ execFile: recordingGit(invocations, () => plant(pool)) });
+
+			const handle = await plugin.provision(
+				provisionSpec(at.baseDir, originUrl, 'raced', {
+					fetchCredential: { username: 'x-access-token', token: TOKEN, remoteUrl: originUrl },
+					onFetchCredentialWithheld: (reason) => reasons.push(reason)
+				})
+			);
+
+			expect(reasons).toEqual([]);
+			const fetches = invocations.filter((entry) => entry.args[0] === 'fetch');
+			expect(fetches).toHaveLength(2);
+			expect(fetches.every(carriesHeader)).toBe(true);
+			// The real repository, not the one the plant names.
+			expect(handle.baseSha).toBe(originHead);
+			expect(handle.baseSha).not.toBe(decoyHead);
+		});
+	});
+
+	describe('the review’s reproduction, against an https remote as the fleet sends it', () => {
+		const plant = (pool: string, at: Scene): void => {
+			git(pool, 'config', `remote.${HTTPS_REMOTE}.url`, slash(originDir));
+			git(pool, 'config', `remote.${HTTPS_REMOTE}.uploadpack`, `${at.harvest} git-upload-pack`);
+			// What an attacker who had read this fix would add: re-allow the
+			// file transport, and (Git for Windows) strip the variable that
+			// forbids it from git's children.
+			git(pool, 'config', 'protocol.file.allow', 'always');
+			git(pool, 'config', 'protocol.allow', 'always');
+			git(pool, 'config', 'core.unsetenvvars', 'PERL5LIB,GIT_ALLOW_PROTOCOL');
+		};
+
+		it('CONTROL: the planted uploadpack reads the header', () => {
+			const at = scene();
+			const pool = scratchPool(at.dir, HTTPS_REMOTE);
+			plant(pool, at);
+
+			controlFetch(pool, HTTPS_REMOTE);
+
+			expect(at.didRun()).toBe(true);
+			expect(at.leaked()).toContain(BASIC);
+		});
+
+		it('planted BEFORE the run: withheld — the old fetch still follows the redirect, and reads nothing', async () => {
+			const at = scene();
+			const httpsBase = join(at.dir, 'https-workspaces');
+			// First contact creates the pool and then fails to reach the
+			// remote (nothing listens there) — which is all this needs.
+			await new LocalWorkspacePlugin()
+				.provision(provisionSpec(httpsBase, HTTPS_REMOTE, 'seed'))
+				.catch(() => undefined);
+			const httpsPool = poolOf(httpsBase);
+			plant(httpsPool, at);
+			const invocations: Invocation[] = [];
+			const reasons: string[] = [];
+			const plugin = new LocalWorkspacePlugin({ execFile: recordingGit(invocations) });
+
+			const handle = await plugin.provision(
+				provisionSpec(httpsBase, HTTPS_REMOTE, 'withheld', {
+					fetchCredential: { username: 'x-access-token', token: TOKEN, remoteUrl: HTTPS_REMOTE },
+					onFetchCredentialWithheld: (reason) => reasons.push(reason)
+				})
+			);
+
+			expect(reasons).toHaveLength(1);
+			expect(reasons[0]).toContain('remote.<…>.uploadpack');
+			expect(reasons[0]).toContain('core.unsetenvvars');
+			expect(invocations.some(carriesHeader)).toBe(false);
+			// The uncredentialed fetch is the one this provider always ran: it
+			// follows the planted redirect and runs the planted program…
+			expect(handle.baseSha).toBe(originHead);
+			expect(at.didRun()).toBe(true);
+			// …which finds no credential to read.
+			expect(at.leaked()).toBe('');
+		});
+
+		it('planted BETWEEN the check and the fetch: https only — the redirect is refused and the program never runs', async () => {
+			const at = scene();
+			const httpsBase = join(at.dir, 'https-workspaces');
+			await new LocalWorkspacePlugin()
+				.provision(provisionSpec(httpsBase, HTTPS_REMOTE, 'seed'))
+				.catch(() => undefined);
+			const httpsPool = poolOf(httpsBase);
+			const invocations: Invocation[] = [];
+			const plugin = new LocalWorkspacePlugin({
+				execFile: recordingGit(invocations, () => plant(httpsPool, at))
+			});
+
+			const error = await plugin
+				.provision(
+					provisionSpec(httpsBase, HTTPS_REMOTE, 'raced', {
+						fetchCredential: { username: 'x-access-token', token: TOKEN, remoteUrl: HTTPS_REMOTE }
+					})
+				)
+				.then(
+					() => null,
+					(caught: Error) => caught
+				);
+
+			// The credentialed fetch ran, bound to https and to its own remote…
+			const fetch = invocations.find((entry) => entry.args[0] === 'fetch');
+			expect(fetch && carriesHeader(fetch)).toBe(true);
+			expect(fetch?.env.GIT_ALLOW_PROTOCOL).toBe('https');
+			expect(fetch?.args).not.toContain(HTTPS_REMOTE);
+			// …so it went to the https remote (where nothing listens) instead of
+			// the planted local path, and failed there, closed.
+			expect(error?.message).toMatch(/fetch of base ref 'main' failed/);
+			expect(at.didRun()).toBe(false);
+			expect(at.leaked()).toBe('');
+			expect(error?.message).not.toContain(TOKEN);
+			expect(error?.message).not.toContain(BASIC);
+		});
+	});
+
+	it('a pool that ordinary tooling has written to still gets its credential', async () => {
+		// The other half of an allowlist: every key here is one real tools
+		// write into a checkout's shared config — husky, git-lfs, `git
+		// submodule init`, the GitHub CLI, an agent setting its identity. If
+		// any of them withheld the credential, the first `pnpm install` in a
+		// worktree would switch scoped fetches off for that repository.
+		const at = scene();
+		const pool = await seedPool(at.baseDir, originUrl);
+		for (const [key, value] of [
+			['user.name', 'Refactor Bot'],
+			['user.email', 'bot@agents.ever.works'],
+			['core.hooksPath', '.husky/_'],
+			['core.autocrlf', 'input'],
+			['core.longpaths', 'true'],
+			['commit.gpgsign', 'false'],
+			['pull.rebase', 'true'],
+			['push.autoSetupRemote', 'true'],
+			['fetch.prune', 'true'],
+			['gc.auto', '0'],
+			['http.postBuffer', '524288000'],
+			['lfs.repositoryformatversion', '0'],
+			['filter.lfs.clean', 'git-lfs clean -- %f'],
+			['filter.lfs.smudge', 'git-lfs smudge -- %f'],
+			['filter.lfs.process', 'git-lfs filter-process'],
+			['filter.lfs.required', 'true'],
+			['submodule.vendor/lib.url', 'https://github.com/ever-works/lib.git'],
+			['submodule.vendor/lib.active', 'true'],
+			['remote.upstream.url', 'https://github.com/ever-works/upstream.git'],
+			['remote.upstream.fetch', '+refs/heads/*:refs/remotes/upstream/*'],
+			['remote.origin.gh-resolved', 'base'],
+			['branch.main.gh-merge-base', 'main'],
+			['merge.conflictstyle', 'zdiff3']
+		] as const) {
+			git(pool, 'config', key, value);
+		}
+		const invocations: Invocation[] = [];
+		const reasons: string[] = [];
+		const plugin = new LocalWorkspacePlugin({ execFile: recordingGit(invocations) });
+
+		const handle = await plugin.provision(
+			provisionSpec(at.baseDir, originUrl, 'tooling', {
+				fetchCredential: { username: 'x-access-token', token: TOKEN, remoteUrl: originUrl },
+				onFetchCredentialWithheld: (reason) => reasons.push(reason)
+			})
+		);
+
+		expect(reasons).toEqual([]);
+		expect(invocations.filter((entry) => entry.args[0] === 'fetch').every(carriesHeader)).toBe(true);
+		expect(handle.baseSha).toBe(originHead);
+	});
+});
+
+describe('scoped PUSH credential — the merged path had the same hole', () => {
+	interface PushVector {
+		readonly name: string;
+		plant(worktree: string, remoteUrl: string, at: Scene): void;
+		readonly reported: readonly string[];
+	}
+
+	// Planted from the WORKTREE with plain `git config`, which is all a run
+	// needs: in a linked worktree that lands in the shared pool config.
+	const pushVectors: PushVector[] = [
+		{
+			name: 'remote.<url>.receivepack → a harvester, with remote.<url>.pushurl → a decoy',
+			plant: (worktree, remoteUrl, at) => {
+				git(worktree, 'config', `remote.${remoteUrl}.receivepack`, `${at.harvest} git-receive-pack`);
+				git(worktree, 'config', `remote.${remoteUrl}.pushurl`, slash(decoyDir));
+			},
+			reported: ['remote.<…>.receivepack', 'remote.<…>.pushurl']
+		},
+		{
+			name: 'core.sshCommand, with remote.<url>.pushurl → an ssh URL',
+			plant: (worktree, remoteUrl, at) => {
+				git(worktree, 'config', `remote.${remoteUrl}.pushurl`, 'ssh://nowhere.invalid/x/y');
+				git(worktree, 'config', 'core.sshCommand', `${at.harvest} false`);
+			},
+			reported: ['remote.<…>.pushurl', 'core.sshcommand']
+		},
+		{
+			name: 'include.path → a file that holds the receivepack attack',
+			plant: (worktree, remoteUrl, at) => {
+				const included = join(at.dir, 'planted.gitconfig');
+				writeFileSync(
+					included,
+					`[remote "${remoteUrl}"]\n\treceivepack = "${at.harvest} git-receive-pack"\n\tpushurl = ${slash(decoyDir)}\n`
+				);
+				git(worktree, 'config', 'include.path', slash(included));
+			},
+			reported: ['include.path', 'remote.<…>.receivepack']
+		},
+		{
+			// The push names its private remote — and with negotiation on, it
+			// first runs `git fetch --negotiate-only … <URL>`: BY URL, so the
+			// `[remote "<url>"]` section applies to that grandchild after all.
+			name: 'push.negotiate, with remote.<url>.uploadpack → a harvester',
+			plant: (worktree, remoteUrl, at) => {
+				git(worktree, 'config', 'push.negotiate', 'true');
+				git(worktree, 'config', `remote.${remoteUrl}.uploadpack`, `${at.harvest} git-upload-pack`);
+			},
+			reported: ['remote.<…>.uploadpack']
+		}
+	];
+
+	const credential = (): { username: string; token: string; remoteUrl: string } => ({
+		username: 'x-access-token',
+		token: TOKEN,
+		remoteUrl: originUrl
+	});
+
+	async function worktreeWithWork(at: Scene, bindingKey: string): Promise<WorkspaceHandle> {
+		const handle = await new LocalWorkspacePlugin().provision(provisionSpec(at.baseDir, originUrl, bindingKey));
+		writeFileSync(join(handle.path, 'work.txt'), `${bindingKey}\n`);
+		return handle;
+	}
+
+	const onRemote = (repository: string, branch: string): string =>
+		git(repository, 'for-each-ref', `refs/heads/${branch}`);
+
+	describe.each(pushVectors)('$name', (vector) => {
+		it('CONTROL: a push by URL with the header in its environment hands it to the planted program', async () => {
+			// Exactly what `pushRef` ran before this change: `git push
+			// --no-verify <url> HEAD:refs/heads/<branch>` with the four
+			// credential entries in the environment.
+			const at = scene();
+			const handle = await worktreeWithWork(at, 'control');
+			git(handle.path, 'add', '-A');
+			git(handle.path, '-c', 'user.name=T', '-c', 'user.email=t@test.local', 'commit', '-m', 'work');
+			vector.plant(handle.path, originUrl, at);
+
+			try {
+				execFileSync('git', ['push', '--no-verify', originUrl, `HEAD:refs/heads/${handle.branch}`], {
+					cwd: handle.path,
+					windowsHide: true,
+					stdio: ['ignore', 'pipe', 'pipe'],
+					env: {
+						...process.env,
+						GIT_TERMINAL_PROMPT: '0',
+						GIT_CONFIG_COUNT: '4',
+						GIT_CONFIG_KEY_0: 'credential.helper',
+						GIT_CONFIG_VALUE_0: '',
+						GIT_CONFIG_KEY_1: 'core.askpass',
+						GIT_CONFIG_VALUE_1: '',
+						GIT_CONFIG_KEY_2: 'core.hooksPath',
+						GIT_CONFIG_VALUE_2: '',
+						GIT_CONFIG_KEY_3: `http.${originUrl}.extraheader`,
+						GIT_CONFIG_VALUE_3: HEADER
+					}
+				});
+			} catch {
+				// The receipt is the verdict.
+			}
+
+			expect(at.didRun()).toBe(true);
+			expect(at.leaked()).toContain(BASIC);
+		});
+
+		it('planted BEFORE the publish: the push is REFUSED, and nothing runs', async () => {
+			const at = scene();
+			const handle = await worktreeWithWork(at, 'refused');
+			vector.plant(handle.path, originUrl, at);
+			const invocations: Invocation[] = [];
+			const plugin = new LocalWorkspacePlugin({ execFile: recordingGit(invocations) });
+
+			const error = await plugin
+				.finalize(handle, { commitMessage: 'feat: work', push: true, pushCredential: credential() })
+				.then(
+					() => null,
+					(caught: Error) => caught
+				);
+
+			// Fail closed, as a publish always has: refused, not pushed some
+			// other way.
+			expect(error?.message).toMatch(/^refusing to publish: this repository's Git config carries settings/);
+			for (const name of vector.reported) expect(error?.message).toContain(name);
+			expect(error?.message).toMatch(/To clear it on this machine: git -C "[^"]+" config /);
+			expect(error?.message).not.toContain(slash(decoyDir));
+			expect(invocations.some((entry) => entry.args[0] === 'push')).toBe(false);
+			expect(invocations.some(carriesHeader)).toBe(false);
+			expect(at.didRun()).toBe(false);
+			expect(at.leaked()).toBe('');
+			expect(onRemote(originDir, handle.branch)).toBe('');
+			expect(onRemote(decoyDir, handle.branch)).toBe('');
+		});
+
+		it('planted BETWEEN the check and the push: the push reaches the REAL remote, and the program never runs', async () => {
+			const at = scene();
+			const handle = await worktreeWithWork(at, 'raced');
+			const invocations: Invocation[] = [];
+			const plugin = new LocalWorkspacePlugin({
+				execFile: recordingGit(invocations, () => vector.plant(handle.path, originUrl, at))
+			});
+
+			const result = await plugin
+				.finalize(handle, { commitMessage: 'feat: work', push: true, pushCredential: credential() })
+				.then(
+					(value) => ({ value, error: null as Error | null }),
+					(error: Error) => ({ value: null, error })
+				);
+
+			// The credentialed push ran — the allowlist had passed…
+			const push = invocations.find((entry) => entry.args[0] === 'push');
+			expect(push && carriesHeader(push)).toBe(true);
+			expect(push?.args).not.toContain(originUrl);
+			// …and neither the planted program nor the planted destination was
+			// ever used: the branch is on the real remote, and only there.
+			expect(at.didRun()).toBe(false);
+			expect(at.leaked()).toBe('');
+			expect(onRemote(originDir, handle.branch)).not.toBe('');
+			expect(onRemote(decoyDir, handle.branch)).toBe('');
+			// The existing post-push probe still reports a pool it finds
+			// changed; what it must never do is hide that the push landed.
+			if (result.error) expect(result.error.message).not.toContain(TOKEN);
+			else expect(result.value?.pushed).toBe(true);
+		});
+	});
+
+	it('a worktree whose shared config ordinary tooling has written to still publishes', async () => {
+		// The same guard as for the fetch, and it matters more here: a push
+		// has no fallback, so a key wrongly left off the allowlist is a
+		// refused publish for every later run on that repository.
+		const at = scene();
+		const handle = await worktreeWithWork(at, 'tooling');
+		for (const [key, value] of [
+			['user.name', 'Refactor Bot'],
+			['user.email', 'bot@agents.ever.works'],
+			['core.hooksPath', '.husky/_'],
+			['core.autocrlf', 'input'],
+			['commit.gpgsign', 'false'],
+			['push.autoSetupRemote', 'true'],
+			['http.postBuffer', '524288000'],
+			['lfs.repositoryformatversion', '0'],
+			['filter.lfs.process', 'git-lfs filter-process'],
+			['submodule.vendor/lib.url', 'https://github.com/ever-works/lib.git'],
+			['remote.upstream.url', 'https://github.com/ever-works/upstream.git'],
+			['branch.main.gh-merge-base', 'main']
+		] as const) {
+			git(handle.path, 'config', key, value);
+		}
+		const plugin = new LocalWorkspacePlugin();
+
+		const result = await plugin.finalize(handle, {
+			commitMessage: 'feat: work',
+			push: true,
+			pushCredential: credential()
+		});
+
+		expect(result.pushed).toBe(true);
+		expect(onRemote(originDir, handle.branch)).not.toBe('');
+	});
+
+	it('REFUSES a credential whose remote no header can authenticate', async () => {
+		// An HTTP header means nothing to ssh, and `http` would put it on the
+		// wire in clear. Refused before the repository is even read.
+		const at = scene();
+		const handle = await worktreeWithWork(at, 'scheme');
+		git(poolOf(at.baseDir), 'config', 'remote.origin.url', 'http://git.example.test/owner/repo.git');
+		const invocations: Invocation[] = [];
+		const plugin = new LocalWorkspacePlugin({ execFile: recordingGit(invocations) });
+
+		await expect(
+			plugin.finalize(handle, {
+				commitMessage: 'feat: work',
+				push: true,
+				pushCredential: { ...credential(), remoteUrl: 'http://git.example.test/owner/repo.git' }
+			})
+		).rejects.toThrow(
+			/refusing to publish: a scoped credential is an HTTP header, and its remote is not an https URL/
+		);
+		expect(invocations.some((entry) => entry.args[0] === 'push')).toBe(false);
+		expect(invocations.some(carriesHeader)).toBe(false);
+	});
+});
+
+/** Run `body` with these variables in this process's environment — what every `git` child inherits. */
+async function withEnvironment<T>(variables: Record<string, string>, body: () => Promise<T>): Promise<T> {
+	const previous = new Map(Object.keys(variables).map((name) => [name, process.env[name]] as const));
+	Object.assign(process.env, variables);
+	try {
+		return await body();
+	} finally {
+		for (const [name, value] of previous) {
+			if (value === undefined) delete process.env[name];
+			else process.env[name] = value;
+		}
+	}
+}
+
+/** Run `body` with `content` as the machine's GLOBAL Git config — the operator's own scope. */
+function withGlobalConfig<T>(at: Scene, content: string, body: () => Promise<T>): Promise<T> {
+	const file = join(at.dir, `global-${Math.random().toString(16).slice(2)}.gitconfig`);
+	writeFileSync(file, content);
+	return withEnvironment({ GIT_CONFIG_GLOBAL: slash(file) }, body);
+}
+
+const branchOn = (repository: string, branch: string): string =>
+	git(repository, 'for-each-ref', `refs/heads/${branch}`);
+
+describe('keys that name a program a fetch or a push never starts', () => {
+	// The other half of an allowlist. These keys DO name programs, and a run
+	// that sets one (`git config core.editor true` is an everyday thing for
+	// an agent to do; bun's documented lockfile recipe is a
+	// `diff.<x>.textconv`) must not cost the repository its fetch
+	// credential, or every later publish. They are allowed because neither
+	// command can reach the code that would start them. Each one is proved
+	// on its own: planted in the pool with a harvester, together with what
+	// would make Git reach for it (the attributes that select a driver,
+	// `push.gpgSign`, `gpg.format`, …); then a credentialed fetch AND a
+	// credentialed push are run, and the harvester must not have run at all.
+
+	/** How Git starts the program a key names. */
+	type Form = 'shell' | 'exec' | 'bang';
+	interface ProgramKey {
+		readonly key: string;
+		readonly form: Form;
+		/** What else would make Git reach for it, were it reachable. */
+		readonly with?: ReadonlyArray<readonly [string, string]>;
+	}
+	const signedPush: ReadonlyArray<readonly [string, string]> = [['push.gpgSign', 'true']];
+	const programKeys: readonly ProgramKey[] = [
+		{ key: 'core.editor', form: 'shell' },
+		{ key: 'core.pager', form: 'shell' },
+		{ key: 'pager.fetch', form: 'shell' },
+		{ key: 'pager.push', form: 'shell' },
+		{ key: 'sequence.editor', form: 'shell' },
+		{ key: 'diff.external', form: 'shell' },
+		{ key: 'diff.ewplanted.textconv', form: 'shell' },
+		{ key: 'diff.ewplanted.command', form: 'shell' },
+		{ key: 'merge.ewplanted.driver', form: 'shell' },
+		{ key: 'filter.ewplanted.clean', form: 'shell' },
+		{ key: 'filter.ewplanted.smudge', form: 'shell' },
+		{ key: 'filter.ewplanted.process', form: 'shell' },
+		{ key: 'mergetool.ewplanted.cmd', form: 'shell', with: [['merge.tool', 'ewplanted']] },
+		{ key: 'difftool.ewplanted.cmd', form: 'shell', with: [['diff.tool', 'ewplanted']] },
+		{ key: 'gpg.program', form: 'exec', with: signedPush },
+		{ key: 'gpg.openpgp.program', form: 'exec', with: [...signedPush, ['gpg.format', 'openpgp']] },
+		{ key: 'gpg.x509.program', form: 'exec', with: [...signedPush, ['gpg.format', 'x509']] },
+		{
+			key: 'gpg.ssh.program',
+			form: 'exec',
+			with: [...signedPush, ['gpg.format', 'ssh'], ['user.signingKey', 'key::ssh-ed25519 AAAAewplanted']]
+		},
+		{ key: 'gpg.ssh.defaultKeyCommand', form: 'exec', with: [...signedPush, ['gpg.format', 'ssh']] },
+		{ key: 'submodule.ewplanted.update', form: 'bang' },
+		{ key: 'lfs.customtransfer.ewplanted.path', form: 'exec', with: [['lfs.standalonetransferagent', 'ewplanted']] }
+	];
+	/**
+	 * `alias.*` as one family: an alias of every command a credentialed fetch
+	 * or push starts, and of the maintenance that follows. Git never lets an
+	 * alias stand in for a command that exists.
+	 */
+	const aliasedCommands = [
+		'fetch',
+		'push',
+		'fetch-pack',
+		'send-pack',
+		'index-pack',
+		'unpack-objects',
+		'rev-list',
+		'pack-objects',
+		'upload-pack',
+		'receive-pack',
+		'remote-https',
+		'maintenance',
+		'gc'
+	];
+
+	const valueFor = (form: Form, program: string): string =>
+		form === 'shell' ? `'${program}'` : form === 'bang' ? `!'${program}'` : program;
+
+	/** Every key, value and supporting setting of `keys`, each program recording its key. */
+	function plantings(keys: readonly ProgramKey[], at: Scene): Array<readonly [string, string]> {
+		const planted: Array<readonly [string, string]> = [];
+		for (const { key, form, with: supports = [] } of keys) {
+			planted.push([key, valueFor(form, at.program(key))]);
+			for (const support of supports) {
+				if (!planted.some(([name]) => name === support[0])) planted.push(support);
+			}
+		}
+		return planted;
+	}
+
+	/** Provision with a fetch credential, then publish with a push credential — and require both used. */
+	async function fetchAndPush(baseDir: string, bindingKey: string): Promise<void> {
+		const invocations: Invocation[] = [];
+		const reasons: string[] = [];
+		const plugin = new LocalWorkspacePlugin({ execFile: recordingGit(invocations) });
+
+		const handle = await plugin.provision(
+			provisionSpec(baseDir, originUrl, bindingKey, {
+				fetchCredential: { username: 'x-access-token', token: TOKEN, remoteUrl: originUrl },
+				onFetchCredentialWithheld: (reason) => reasons.push(reason)
+			})
+		);
+		writeFileSync(join(handle.path, 'work.txt'), `${bindingKey}\n`);
+		const result = await plugin.finalize(handle, {
+			commitMessage: 'feat: work',
+			push: true,
+			// As the fleet node publishes (`fleet-task-workspace.ts`). Without it
+			// the node's own `git add -A` — a child with no credential — runs a
+			// clean filter the pool defines, which is slice AL's business, not
+			// this file's.
+			hardenRepoHooks: true,
+			pushCredential: { username: 'x-access-token', token: TOKEN, remoteUrl: originUrl }
+		});
+
+		// Neither credential was withheld or refused for it…
+		expect(reasons).toEqual([]);
+		const fetches = invocations.filter((entry) => entry.args[0] === 'fetch');
+		expect(fetches).toHaveLength(2);
+		expect(fetches.every(carriesHeader)).toBe(true);
+		expect(handle.baseSha).toBe(originHead);
+		const push = invocations.find((entry) => entry.args[0] === 'push');
+		expect(push && carriesHeader(push)).toBe(true);
+		expect(result.pushed).toBe(true);
+		expect(branchOn(originDir, handle.branch)).not.toBe('');
+	}
+
+	it('CONTROL: these are live programs — git starts each one for the command it belongs to', () => {
+		// Without this a case below could pass because a planted value was one
+		// git cannot run at all. Every key that can be started without a
+		// terminal or extra tooling is started here, by its own command, in
+		// the form it is planted in below. Not here: the pagers (Git starts
+		// one only on a terminal — which is the whole argument for them),
+		// `submodule.<x>.update` (needs a submodule) and git-lfs's transfer
+		// agent (needs git-lfs); those are the shell, `!` and direct forms
+		// shown live here.
+		const at = scene();
+		const repository = join(at.dir, 'control');
+		mkdirSync(repository, { recursive: true });
+		const emptyGlobal = join(at.dir, 'empty.gitconfig');
+		writeFileSync(emptyGlobal, '');
+		// Only what this case sets: no machine signing key, editor or pager.
+		const env: NodeJS.ProcessEnv = {
+			...process.env,
+			GIT_CONFIG_NOSYSTEM: '1',
+			GIT_CONFIG_GLOBAL: slash(emptyGlobal)
+		};
+		for (const name of [
+			'GIT_EDITOR',
+			'VISUAL',
+			'EDITOR',
+			'GIT_SEQUENCE_EDITOR',
+			'GIT_EXTERNAL_DIFF',
+			'GIT_PAGER',
+			'PAGER'
+		]) {
+			delete env[name];
+		}
+		const run = (...args: string[]): void => {
+			try {
+				execFileSync('git', ['-c', 'user.name=T', '-c', 'user.email=t@test.local', ...args], {
+					cwd: repository,
+					env,
+					windowsHide: true,
+					stdio: ['ignore', 'pipe', 'pipe']
+				});
+			} catch {
+				// Each program exits 1 on purpose; whether it RAN is the verdict.
+			}
+		};
+		const planted = (key: string, form: Form = 'shell'): string => `${key}=${valueFor(form, at.program(key))}`;
+		const write = (text: string): void => writeFileSync(join(repository, 'a.txt'), text);
+		const signed = ['commit', '--allow-empty', '-S', '-m', 'signed'];
+
+		run('init', '--initial-branch', 'main');
+		writeFileSync(join(repository, '.gitattributes'), '*.txt diff=ewplanted merge=ewplanted filter=ewplanted\n');
+		write('base\n');
+		run('add', '-A');
+		run('commit', '-m', 'base');
+		run('branch', 'side');
+		// Content into the index runs a clean filter, or a process filter.
+		write('main\n');
+		run('-c', planted('filter.ewplanted.clean'), 'add', 'a.txt');
+		run('-c', planted('filter.ewplanted.process'), 'add', '--renormalize', 'a.txt');
+		run('commit', '-m', 'main');
+		// Showing a change runs the diff drivers and the difftool.
+		write('changed\n');
+		run('-c', planted('diff.external'), 'diff');
+		run('-c', planted('diff.ewplanted.command'), 'diff');
+		run('-c', planted('diff.ewplanted.textconv'), 'diff');
+		run('-c', 'diff.tool=ewplanted', '-c', planted('difftool.ewplanted.cmd'), 'difftool', '-y');
+		// Checking content out runs a smudge filter.
+		run('-c', planted('filter.ewplanted.smudge'), 'checkout', '--', 'a.txt');
+		// A three-way merge of the file runs its merge driver, and a conflict
+		// left behind runs the mergetool.
+		run('checkout', 'side');
+		write('side\n');
+		run('commit', '-am', 'side');
+		run('-c', planted('merge.ewplanted.driver'), 'merge', 'main');
+		run('-c', 'merge.tool=ewplanted', '-c', planted('mergetool.ewplanted.cmd'), 'mergetool', '-y');
+		run('merge', '--abort');
+		// An interactive rebase runs the sequence editor; a commit with no
+		// message runs the editor.
+		run('-c', planted('sequence.editor'), 'rebase', '-i', 'HEAD~1');
+		run('rebase', '--abort');
+		run('-c', planted('core.editor'), 'commit', '--allow-empty');
+		// A signed commit runs the signing program of its format.
+		run('-c', planted('gpg.program', 'exec'), ...signed);
+		run('-c', 'gpg.format=openpgp', '-c', planted('gpg.openpgp.program', 'exec'), ...signed);
+		run('-c', 'gpg.format=x509', '-c', planted('gpg.x509.program', 'exec'), ...signed);
+		run(
+			'-c',
+			'gpg.format=ssh',
+			'-c',
+			'user.signingKey=key::ssh-ed25519 AAAAewplanted',
+			'-c',
+			planted('gpg.ssh.program', 'exec'),
+			...signed
+		);
+		run('-c', 'gpg.format=ssh', '-c', planted('gpg.ssh.defaultKeyCommand', 'exec'), ...signed);
+		// An alias of a command that does not exist runs.
+		run('-c', planted('alias.ewcontrol', 'bang'), 'ewcontrol');
+
+		expect([...new Set(at.ranBy().split(/\r?\n/).filter(Boolean))].sort()).toEqual(
+			[
+				'filter.ewplanted.clean',
+				'filter.ewplanted.process',
+				'diff.external',
+				'diff.ewplanted.command',
+				'diff.ewplanted.textconv',
+				'difftool.ewplanted.cmd',
+				'filter.ewplanted.smudge',
+				'merge.ewplanted.driver',
+				'mergetool.ewplanted.cmd',
+				'sequence.editor',
+				'core.editor',
+				'gpg.program',
+				'gpg.openpgp.program',
+				'gpg.x509.program',
+				'gpg.ssh.program',
+				'gpg.ssh.defaultKeyCommand',
+				'alias.ewcontrol'
+			].sort()
+		);
+	});
+
+	describe('each one, planted alone in the pool', () => {
+		let pool: string;
+		let baseDir: string;
+
+		beforeAll(async () => {
+			const at = scene();
+			baseDir = at.baseDir;
+			pool = await seedPool(baseDir, originUrl);
+			// Selects the planted drivers for every path of every worktree of
+			// the pool: `info/attributes` is read from the common directory.
+			mkdirSync(join(pool, 'info'), { recursive: true });
+			writeFileSync(join(pool, 'info', 'attributes'), '* diff=ewplanted merge=ewplanted filter=ewplanted\n');
+		});
+
+		/** Plant, run the credentialed fetch and push, and take it all out again. */
+		async function provePlanted(planted: ReadonlyArray<readonly [string, string]>, at: Scene): Promise<void> {
+			for (const [name, value] of planted) git(pool, 'config', name, value);
+			try {
+				await fetchAndPush(baseDir, `program-${caseCounter}`);
+			} finally {
+				for (const [name] of planted) git(pool, 'config', '--unset-all', name);
+			}
+			// `ranBy` names any planted program that ran, in any command of the
+			// provision or the publish.
+			expect(at.ranBy()).toBe('');
+			expect(at.leaked()).toBe('');
+		}
+
+		it.each(programKeys)(
+			'$key: the fetch keeps its credential, the push publishes, and it never runs',
+			async (entry) => {
+				const at = scene();
+				await provePlanted(plantings([entry], at), at);
+			}
+		);
+
+		it('alias.* (of every command the fetch and the push start): the same', async () => {
+			const at = scene();
+			await provePlanted(
+				aliasedCommands.map(
+					(command) => [`alias.${command}`, valueFor('bang', at.program(`alias.${command}`))] as const
+				),
+				at
+			);
+		});
+	});
+
+	it('all of them at once, with the keys that name nothing: the same', async () => {
+		const at = scene();
+		const pool = await seedPool(at.baseDir, originUrl);
+		mkdirSync(join(pool, 'info'), { recursive: true });
+		writeFileSync(join(pool, 'info', 'attributes'), '* diff=ewplanted merge=ewplanted filter=ewplanted\n');
+		for (const [name, value] of plantings(programKeys, at)) git(pool, 'config', name, value);
+		for (const command of aliasedCommands) {
+			git(pool, 'config', `alias.${command}`, valueFor('bang', at.program(`alias.${command}`)));
+		}
+		// What would make a push reach for a fetch by URL, were it not pinned;
+		// and the ones that name nothing at all.
+		git(pool, 'config', 'push.negotiate', 'true');
+		git(pool, 'config', 'color.pager', 'true');
+		git(pool, 'config', 'i18n.commitEncoding', 'UTF-8');
+
+		await fetchAndPush(at.baseDir, 'programs');
+
+		expect(at.ranBy()).toBe('');
+		expect(at.leaked()).toBe('');
+	});
+});
+
+describe('a refusal says how to get out of it — and the commands work', () => {
+	// The pool is shared by every Task of a repository on a machine and
+	// nothing cleans its config, so a refusal lasts until someone removes the
+	// key. The message is what that someone has: these cases run exactly what
+	// it prints, and the credential works again.
+
+	const UNSET = /git -C "([^"]+)" config --unset-all ([a-z0-9.-]+)/;
+	const LISTING = /git -C "([^"]+)" config --show-origin --name-only --get-regexp "([^"]+)"/;
+
+	/** Run the commands a refusal printed, as printed. */
+	function followTheHint(message: string): void {
+		const unset = UNSET.exec(message);
+		if (unset) git(unset[1], 'config', '--unset-all', unset[2]);
+		const listing = LISTING.exec(message);
+		if (listing) {
+			const names = git(listing[1], 'config', '--show-origin', '--name-only', '--get-regexp', listing[2])
+				.split(/\r?\n/)
+				.filter(Boolean)
+				.map((line) => line.slice(line.indexOf('\t') + 1));
+			for (const name of names) git(listing[1], 'config', '--unset-all', name);
+		}
+	}
+
+	it('fetch: the withheld reason clears a key with no subsection AND one whose subsection it never printed', async () => {
+		const at = scene();
+		const pool = await seedPool(at.baseDir, originUrl);
+		git(pool, 'config', 'core.sshCommand', `${at.harvest} false`);
+		// Off the list, have a subsection, and do nothing to a plain fetch of
+		// a repository on disk — so that fetch still succeeds. `url` is also
+		// a key the pool's own `origin` carries: what the hint lists must not
+		// include it, or following it would unset `remote.origin.url` too.
+		git(pool, 'config', `remote.${originUrl}.proxy`, 'http://127.0.0.1:1');
+		git(pool, 'config', `remote.${originUrl}.url`, slash(originDir));
+		const origin = git(pool, 'config', 'remote.origin.url');
+		const reasons: string[] = [];
+		const withhold = (reason: string): number => reasons.push(reason);
+
+		await new LocalWorkspacePlugin().provision(
+			provisionSpec(at.baseDir, originUrl, 'stuck', {
+				fetchCredential: { username: 'x-access-token', token: TOKEN, remoteUrl: originUrl },
+				onFetchCredentialWithheld: withhold
+			})
+		);
+		expect(reasons).toHaveLength(1);
+		expect(reasons[0]).toContain('(core.sshcommand, remote.<…>.proxy, remote.<…>.url)');
+		expect(reasons[0]).toMatch(UNSET);
+		expect(reasons[0]).toMatch(LISTING);
+		// The subsection (a URL) is not in the message; the command finds it.
+		expect(reasons[0]).not.toContain(originUrl);
+
+		followTheHint(reasons[0]);
+
+		// Everything the hint named is gone, and nothing else: the pool's own
+		// remote is untouched.
+		expect(git(pool, 'config', 'remote.origin.url')).toBe(origin);
+		expect(git(pool, 'config', '--name-only', '--get-regexp', '^remote\\.').split(/\r?\n/).sort()).toEqual([
+			'remote.origin.fetch',
+			'remote.origin.url'
+		]);
+		const invocations: Invocation[] = [];
+		await new LocalWorkspacePlugin({ execFile: recordingGit(invocations) }).provision(
+			provisionSpec(at.baseDir, originUrl, 'recovered', {
+				fetchCredential: { username: 'x-access-token', token: TOKEN, remoteUrl: originUrl },
+				onFetchCredentialWithheld: withhold
+			})
+		);
+		expect(reasons).toHaveLength(1);
+		expect(invocations.filter((entry) => entry.args[0] === 'fetch').every(carriesHeader)).toBe(true);
+	});
+
+	it('push: the refusal names the SHARED repository, not the worktree, and the publish then goes through', async () => {
+		const at = scene();
+		const plugin = new LocalWorkspacePlugin();
+		const handle = await plugin.provision(provisionSpec(at.baseDir, originUrl, 'stuck-push'));
+		writeFileSync(join(handle.path, 'work.txt'), 'one\n');
+		// Set the way a run sets it: plain `git config`, inside its checkout.
+		git(handle.path, 'config', 'core.sshCommand', `${at.harvest} false`);
+		const credential = { username: 'x-access-token', token: TOKEN, remoteUrl: originUrl };
+
+		const refused = await plugin
+			.finalize(handle, { commitMessage: 'feat: one', push: true, pushCredential: credential })
+			.then(
+				() => null,
+				(error: Error) => error
+			);
+		expect(refused?.message).toMatch(/^refusing to publish: this repository's Git config carries settings/);
+		const unset = UNSET.exec(refused?.message ?? '');
+		expect(unset?.[2]).toBe('core.sshcommand');
+		// The pool: the worktree may be gone by the time anyone reads this,
+		// and its config is the pool's.
+		expect(unset?.[1]).toBe(git(handle.path, 'rev-parse', '--path-format=absolute', '--git-common-dir'));
+		expect(unset?.[1]).not.toBe(slash(handle.path));
+		expect(branchOn(originDir, handle.branch)).toBe('');
+
+		followTheHint(refused?.message ?? '');
+
+		writeFileSync(join(handle.path, 'work.txt'), 'two\n');
+		const result = await plugin.finalize(handle, {
+			commitMessage: 'feat: two',
+			push: true,
+			pushCredential: credential
+		});
+		expect(result.pushed).toBe(true);
+		expect(branchOn(originDir, handle.branch)).not.toBe('');
+		expect(at.didRun()).toBe(false);
+	});
+});
+
+describe('a URL rewrite in the OPERATOR’s own config', () => {
+	// `url.<ssh>.insteadOf https://github.com/` in a machine's global config
+	// is an ordinary setup. The gate trusts that scope — and used to arm the
+	// credential over it, after which the command died: the rewritten URL is
+	// off the one transport the child may speak. A job that cloned over the
+	// machine's own key stopped cloning. Here the local origin stands in for
+	// the endpoint the rewrite points at.
+
+	const rewriteOf = (variable: 'insteadOf' | 'pushInsteadOf'): string =>
+		`[url "${originUrl}"]\n\t${variable} = ${HTTPS_REMOTE}\n`;
+
+	it('fetch: WITHHELD — and the fetch goes over the rewrite, exactly as it did before', async () => {
+		const at = scene();
+		const invocations: Invocation[] = [];
+		const reasons: string[] = [];
+		const plugin = new LocalWorkspacePlugin({ execFile: recordingGit(invocations) });
+
+		const handle = await withGlobalConfig(at, rewriteOf('insteadOf'), () =>
+			plugin.provision(
+				provisionSpec(at.baseDir, HTTPS_REMOTE, 'rewritten', {
+					fetchCredential: { username: 'x-access-token', token: TOKEN, remoteUrl: HTTPS_REMOTE },
+					onFetchCredentialWithheld: (reason) => reasons.push(reason)
+				})
+			)
+		);
+
+		expect(reasons).toEqual([
+			"this machine's Git config rewrites this remote's URL (url.<…>.insteadof, global scope), and a scoped credential is used only for the URL it was issued for"
+		]);
+		// The scope and the key — not where it points.
+		expect(reasons[0]).not.toContain(slash(originDir));
+		expect(invocations.some(carriesHeader)).toBe(false);
+		// The plain fetch: by URL, no transport pin, and it WORKS.
+		const [base] = invocations.filter((entry) => entry.args[0] === 'fetch');
+		expect(base.args).toContain(HTTPS_REMOTE);
+		expect(base.env.GIT_ALLOW_PROTOCOL).toBeUndefined();
+		expect(handle.baseSha).toBe(originHead);
+	});
+
+	it('push, with a pushInsteadOf only: REFUSED in one sentence that names the rewrite’s scope', async () => {
+		const at = scene();
+		// A checkout of the https remote has to come from somewhere: fetched
+		// over an insteadOf, which is then taken away again.
+		const handle = await withGlobalConfig(at, rewriteOf('insteadOf'), () =>
+			new LocalWorkspacePlugin().provision(provisionSpec(at.baseDir, HTTPS_REMOTE, 'push-rewritten'))
+		);
+		writeFileSync(join(handle.path, 'work.txt'), 'rewritten\n');
+		const invocations: Invocation[] = [];
+		const plugin = new LocalWorkspacePlugin({ execFile: recordingGit(invocations) });
+
+		const error = await withGlobalConfig(at, rewriteOf('pushInsteadOf'), () =>
+			plugin
+				.finalize(handle, {
+					commitMessage: 'feat: work',
+					push: true,
+					pushCredential: { username: 'x-access-token', token: TOKEN, remoteUrl: HTTPS_REMOTE }
+				})
+				.then(
+					() => null,
+					(caught: Error) => caught
+				)
+		);
+
+		// `git remote get-url origin` does not show a pushInsteadOf, so every
+		// check before the gate passes. The gate is what says no — fail
+		// closed, as a publish without its scoped credential always is.
+		expect(error?.message).toBe(
+			"refusing to publish: this machine's Git config rewrites this remote's push URL (url.<…>.pushinsteadof, global scope), and a scoped credential is used only for the URL it was issued for"
+		);
+		expect(invocations.some((entry) => entry.args[0] === 'push')).toBe(false);
+		expect(invocations.some(carriesHeader)).toBe(false);
+		expect(branchOn(originDir, handle.branch)).toBe('');
+	});
+
+	it('push, with an insteadOf: REFUSED in the same sentence — not as "origin is not the one it was issued for"', async () => {
+		// `git remote get-url origin` applies insteadOf, so the comparison of
+		// origin with the credential's URL fails before the gate is reached.
+		// The configured URL IS the credential's: what differs is the
+		// rewrite, and the refusal says whose.
+		const at = scene();
+		const handle = await withGlobalConfig(at, rewriteOf('insteadOf'), () =>
+			new LocalWorkspacePlugin().provision(provisionSpec(at.baseDir, HTTPS_REMOTE, 'push-insteadof'))
+		);
+		writeFileSync(join(handle.path, 'work.txt'), 'rewritten\n');
+		const invocations: Invocation[] = [];
+		const plugin = new LocalWorkspacePlugin({ execFile: recordingGit(invocations) });
+
+		const error = await withGlobalConfig(at, rewriteOf('insteadOf'), () =>
+			plugin
+				.finalize(handle, {
+					commitMessage: 'feat: work',
+					push: true,
+					pushCredential: { username: 'x-access-token', token: TOKEN, remoteUrl: HTTPS_REMOTE }
+				})
+				.then(
+					() => null,
+					(caught: Error) => caught
+				)
+		);
+
+		expect(error?.message).toBe(
+			"refusing to publish: this machine's Git config rewrites this remote's push URL (url.<…>.insteadof, global scope), and a scoped credential is used only for the URL it was issued for"
+		);
+		expect(error?.message).not.toContain(slash(originDir));
+		expect(invocations.some((entry) => entry.args[0] === 'push')).toBe(false);
+		expect(invocations.some(carriesHeader)).toBe(false);
+		expect(branchOn(originDir, handle.branch)).toBe('');
+	});
+
+	it('push: an origin that is simply another repository keeps its own refusal', async () => {
+		const at = scene();
+		const handle = await new LocalWorkspacePlugin().provision(provisionSpec(at.baseDir, originUrl, 'push-other'));
+		writeFileSync(join(handle.path, 'work.txt'), 'other\n');
+
+		await expect(
+			new LocalWorkspacePlugin().finalize(handle, {
+				commitMessage: 'feat: work',
+				push: true,
+				pushCredential: { username: 'x-access-token', token: TOKEN, remoteUrl: HTTPS_REMOTE }
+			})
+		).rejects.toThrow(
+			'scoped push credential does not cover this checkout: the origin remote is not the one it was issued for'
+		);
+	});
+
+	it.each([
+		['nothing rewrites it', '', []],
+		['insteadOf', `[url "ssh://git@host.invalid/"]\n\tinsteadOf = https://host.invalid/\n`, []],
+		['pushInsteadOf only', `[url "ssh://git@host.invalid/"]\n\tpushInsteadOf = https://host.invalid/\n`, []],
+		[
+			'both, the push one on a longer prefix',
+			`[url "ssh://git@host.invalid/"]\n\tinsteadOf = https://host.invalid/\n[url "ssh://other.invalid/"]\n\tpushInsteadOf = https://host.invalid/owner/\n`,
+			[]
+		],
+		[
+			'the longest prefix wins, across the global and the repository scope',
+			`[url "ssh://short.invalid/"]\n\tinsteadOf = https://host.invalid/\n`,
+			[['url.ssh://long.invalid/.insteadOf', 'https://host.invalid/owner/']]
+		],
+		[
+			'a tie between two bases',
+			`[url "ssh://first.invalid/"]\n\tinsteadOf = https://example.invalid/\n[url "ssh://second.invalid/"]\n\tinsteadOf = https://host.invalid/\n[url "ssh://first.invalid/"]\n\tinsteadOf = https://host.invalid/\n`,
+			[]
+		],
+		['a prefix in another case', `[url "ssh://git@host.invalid/"]\n\tinsteadOf = https://HOST.invalid/\n`, []],
+		['an empty prefix', `[url "ssh://git@host.invalid/"]\n\tinsteadOf =\n`, []]
+	] as Array<[string, string, string[][]]>)(
+		'the URL it works out is the one git itself uses: %s',
+		(_label, globalConfig, repositoryConfig) => {
+			// `effectiveRemoteUrls` is a second reading of Git's rewrite rule.
+			// It is held to Git's own answer: `git remote -v`, for a remote
+			// defined the way a credentialed command defines its own.
+			const at = scene();
+			const repository = join(at.dir, 'agree.git');
+			mkdirSync(repository, { recursive: true });
+			git(repository, 'init', '--bare');
+			for (const [key, value] of repositoryConfig) git(repository, 'config', key, value);
+			const globalFile = join(at.dir, 'agree.gitconfig');
+			writeFileSync(globalFile, globalConfig);
+			const url = 'https://host.invalid/owner/repo.git';
+			const env = {
+				...process.env,
+				GIT_CONFIG_GLOBAL: slash(globalFile),
+				GIT_CONFIG_NOSYSTEM: '1',
+				GIT_CONFIG_COUNT: '1',
+				GIT_CONFIG_KEY_0: 'remote.ew-agree.url',
+				GIT_CONFIG_VALUE_0: url
+			};
+			const run = (...args: string[]): string =>
+				execFileSync('git', args, { cwd: repository, env, encoding: 'utf8', windowsHide: true });
+
+			const remotes = run('remote', '-v').split(/\r?\n/);
+			const gitsUrl = (kind: 'fetch' | 'push'): string | undefined =>
+				remotes
+					.find((line) => line.startsWith('ew-agree\t') && line.endsWith(` (${kind})`))
+					?.slice('ew-agree\t'.length, -` (${kind})`.length);
+			const entries = parseScopedConfigList(run('config', '--show-scope', '--list', '-z'));
+			const ours = effectiveRemoteUrls(entries ?? [], url);
+
+			expect(gitsUrl('fetch')).toBeDefined();
+			expect(ours.fetch).toBe(gitsUrl('fetch'));
+			expect(ours.push).toBe(gitsUrl('push'));
+		}
+	);
+});
+
+describe('a traced daemon — git’s tracing variables do not reach a credentialed child', () => {
+	// `GIT_TRACE_CURL=<file>` writes the request headers there (with
+	// `GIT_TRACE_REDACT=0`, unredacted); `GIT_TRACE2_EVENT=<file>` with a
+	// config pattern writes the command-scope config there. Either way the
+	// `Authorization` header ends up on disk, where no scrub of this
+	// process's output ever sees it. A daemon started with one of them set
+	// would do that to every credentialed command.
+
+	const TRACING = /^(GIT_TRACE|GIT_CURL_VERBOSE$)/i;
+	/** What a credentialed child carries instead: trace2 off, whatever the operator's config says. */
+	const TRACE2_OFF = { GIT_TRACE2: '0', GIT_TRACE2_EVENT: '0', GIT_TRACE2_PERF: '0' };
+	const read = (file: string): string => (existsSync(file) ? readFileSync(file, 'utf8') : '');
+	/** Plain `git ls-remote <url>`, with the header keyed to it the way a credentialed child keys it. */
+	const lsRemoteWithHeader = (url: string, cwd: string, env: Record<string, string>): Promise<unknown> =>
+		execFileAsync('git', ['ls-remote', url], {
+			cwd,
+			windowsHide: true,
+			env: {
+				...process.env,
+				GIT_TERMINAL_PROMPT: '0',
+				GIT_CONFIG_COUNT: '1',
+				GIT_CONFIG_KEY_0: `http.${url}.extraheader`,
+				GIT_CONFIG_VALUE_0: HEADER,
+				...env
+			}
+		}).catch(() => undefined);
+
+	it('CONTROL: GIT_TRACE_CURL with GIT_TRACE_REDACT=0 writes the Authorization header of a request that is sent', async () => {
+		// Over plain http to a local server — the one way to have a request
+		// actually SENT in this suite.
+		const at = scene();
+		const received: string[] = [];
+		const server = createServer((request, response) => {
+			received.push(String(request.headers.authorization ?? ''));
+			response.statusCode = 404;
+			response.end();
+		});
+		await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+		const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/ever-works/traced.git`;
+		const curlTrace = slash(join(at.dir, 'curl-control.txt'));
+		try {
+			await lsRemoteWithHeader(url, at.dir, { GIT_TRACE_CURL: curlTrace, GIT_TRACE_REDACT: '0' });
+		} finally {
+			server.closeAllConnections();
+			await new Promise<void>((resolve) => server.close(() => resolve()));
+		}
+
+		expect(received).toContain(`Basic ${BASIC}`);
+		expect(read(curlTrace)).toContain(`Authorization: Basic ${BASIC}`);
+	});
+
+	it('CONTROL: a traced https attempt writes its trace file even when nothing answers', async () => {
+		// So the ABSENCE of that file, below, means the variable never reached
+		// the child — not that there was nothing to write.
+		const at = scene();
+		const curlTrace = slash(join(at.dir, 'curl-unanswered.txt'));
+
+		await lsRemoteWithHeader(HTTPS_REMOTE, at.dir, { GIT_TRACE_CURL: curlTrace, GIT_TRACE_REDACT: '0' });
+
+		expect(read(curlTrace).length).toBeGreaterThan(0);
+	});
+
+	it('CONTROL: with GIT_TRACE2_EVENT and a config pattern, git writes the header into the trace file', () => {
+		const at = scene();
+		const pool = scratchPool(at.dir, originUrl);
+		const trace = slash(join(at.dir, 'trace2.json'));
+
+		execFileSync('git', ['fetch', '--depth', '1', originUrl, '+refs/heads/main:refs/remotes/origin/control'], {
+			cwd: pool,
+			windowsHide: true,
+			stdio: ['ignore', 'pipe', 'pipe'],
+			env: {
+				...process.env,
+				GIT_TRACE2_EVENT: trace,
+				GIT_TRACE2_CONFIG_PARAMS: 'http.*',
+				GIT_CONFIG_COUNT: '1',
+				GIT_CONFIG_KEY_0: `http.${originUrl}.extraheader`,
+				GIT_CONFIG_VALUE_0: HEADER
+			}
+		});
+
+		expect(read(trace)).toContain(BASIC);
+	});
+
+	it('a credentialed fetch and push put the header in no trace file, and the other children stay traced', async () => {
+		const at = scene();
+		const trace2 = slash(join(at.dir, 'trace2.json'));
+		const trace = slash(join(at.dir, 'trace.txt'));
+		const invocations: Invocation[] = [];
+		const plugin = new LocalWorkspacePlugin({ execFile: recordingGit(invocations) });
+
+		await withEnvironment(
+			{
+				GIT_TRACE2_EVENT: trace2,
+				GIT_TRACE2_CONFIG_PARAMS: 'http.*',
+				GIT_TRACE: trace,
+				GIT_TRACE_REDACT: '0',
+				GIT_CURL_VERBOSE: '1'
+			},
+			async () => {
+				const handle = await plugin.provision(
+					provisionSpec(at.baseDir, originUrl, 'traced', {
+						fetchCredential: { username: 'x-access-token', token: TOKEN, remoteUrl: originUrl }
+					})
+				);
+				writeFileSync(join(handle.path, 'work.txt'), 'traced\n');
+				const result = await plugin.finalize(handle, {
+					commitMessage: 'feat: work',
+					push: true,
+					pushCredential: { username: 'x-access-token', token: TOKEN, remoteUrl: originUrl }
+				});
+				expect(result.pushed).toBe(true);
+			}
+		);
+
+		// The two fetches and the push carried the credential, and not one
+		// tracing variable of the daemon's — only the three trace2 targets,
+		// switched off.
+		const credentialed = invocations.filter(carriesHeader);
+		expect(credentialed.map((entry) => entry.args[0])).toEqual(['fetch', 'fetch', 'push']);
+		for (const entry of credentialed) {
+			expect(Object.fromEntries(Object.entries(entry.env).filter(([name]) => TRACING.test(name)))).toEqual(
+				TRACE2_OFF
+			);
+		}
+		// Every other child kept the operator's tracing — it is theirs, and
+		// none of those commands holds a token.
+		const others = invocations.filter((entry) => !carriesHeader(entry));
+		expect(others.length).toBeGreaterThan(5);
+		expect(others.every((entry) => entry.env.GIT_TRACE2_EVENT === trace2)).toBe(true);
+		// So the files exist, were written to, and hold nothing of the header.
+		for (const file of [trace2, trace]) {
+			expect(read(file).length).toBeGreaterThan(0);
+			expect(read(file)).not.toContain(BASIC);
+			expect(read(file)).not.toContain(TOKEN);
+			expect(read(file)).not.toContain('Authorization');
+		}
+	});
+
+	it('GIT_TRACE_CURL=<file> with GIT_TRACE_REDACT=0: a credentialed https fetch writes nothing there', async () => {
+		const at = scene();
+		const httpsBase = join(at.dir, 'https-workspaces');
+		// First contact creates the pool and then fails to reach the remote
+		// (nothing listens there), untraced.
+		await new LocalWorkspacePlugin()
+			.provision(provisionSpec(httpsBase, HTTPS_REMOTE, 'seed'))
+			.catch(() => undefined);
+		const curlTrace = slash(join(at.dir, 'curl-trace.txt'));
+		const invocations: Invocation[] = [];
+		const plugin = new LocalWorkspacePlugin({ execFile: recordingGit(invocations) });
+
+		const error = await withEnvironment({ GIT_TRACE_CURL: curlTrace, GIT_TRACE_REDACT: '0' }, () =>
+			plugin
+				.provision(
+					provisionSpec(httpsBase, HTTPS_REMOTE, 'traced', {
+						fetchCredential: { username: 'x-access-token', token: TOKEN, remoteUrl: HTTPS_REMOTE }
+					})
+				)
+				.then(
+					() => null,
+					(caught: Error) => caught
+				)
+		);
+
+		// The credentialed fetch ran (and failed to connect, as it must)…
+		const fetch = invocations.find((entry) => entry.args[0] === 'fetch');
+		expect(fetch && carriesHeader(fetch)).toBe(true);
+		expect(error?.message).toMatch(/fetch of base ref 'main' failed/);
+		// …without the variable, so curl traced nothing: a traced https
+		// attempt writes its connection lines there even when nothing answers
+		// (measured: five lines for this very URL).
+		expect(fetch?.env.GIT_TRACE_CURL).toBeUndefined();
+		expect(fetch?.env.GIT_TRACE_REDACT).toBeUndefined();
+		expect(existsSync(curlTrace)).toBe(false);
+		expect(read(curlTrace)).not.toContain('Authorization');
+		expect(read(curlTrace)).not.toContain(BASIC);
+	});
+
+	it('the OPERATOR’s own trace2 config: a credentialed fetch and push write nothing of the header to its target', async () => {
+		// Not a variable this time: `trace2.eventTarget` and
+		// `trace2.configParams` in the machine's global config, which Git
+		// reads from the system and global files only — so no command-scope
+		// entry can switch them off, and removing variables does nothing.
+		const at = scene();
+		const target = slash(join(at.dir, 'operator-trace2.json'));
+		const operatorConfig = `[trace2]\n\teventTarget = ${target}\n\tconfigParams = http.*\n`;
+
+		// CONTROL: a plain git carrying the header writes it there.
+		const pool = scratchPool(at.dir, originUrl);
+		await withGlobalConfig(at, operatorConfig, async () => controlFetch(pool, originUrl));
+		expect(read(target)).toContain(BASIC);
+		rmSync(target);
+
+		const invocations: Invocation[] = [];
+		const plugin = new LocalWorkspacePlugin({ execFile: recordingGit(invocations) });
+		await withGlobalConfig(at, operatorConfig, async () => {
+			const handle = await plugin.provision(
+				provisionSpec(at.baseDir, originUrl, 'operator-traced', {
+					fetchCredential: { username: 'x-access-token', token: TOKEN, remoteUrl: originUrl }
+				})
+			);
+			writeFileSync(join(handle.path, 'work.txt'), 'operator-traced\n');
+			const result = await plugin.finalize(handle, {
+				commitMessage: 'feat: work',
+				push: true,
+				pushCredential: { username: 'x-access-token', token: TOKEN, remoteUrl: originUrl }
+			});
+			expect(result.pushed).toBe(true);
+		});
+
+		expect(invocations.filter(carriesHeader).map((entry) => entry.args[0])).toEqual(['fetch', 'fetch', 'push']);
+		// The operator's target still gets every other command…
+		expect(read(target).length).toBeGreaterThan(0);
+		// …and nothing of the credential.
+		expect(read(target)).not.toContain(BASIC);
+		expect(read(target)).not.toContain(TOKEN);
+	});
+});
+
+describe('remote.<private name>.proxy — the one remote key that outranks the pinned http.<url>.proxy', () => {
+	// A private remote's name is in its command's argv for as long as the
+	// command runs. A process that reads it there and writes `[remote "<that
+	// name>"] proxy` into the pool would route the request through a proxy of
+	// its choosing: Git takes a remote's own proxy over `http.<url>.proxy`.
+	// What stops it is the same value pinned on the private remote itself, in
+	// command scope. Planted here the moment the fetch's argv is known —
+	// earlier than any real reader could manage.
+
+	/** A local proxy that records every CONNECT it is asked for and refuses it. */
+	async function recordingProxy(): Promise<{ url: string; connects: string[]; close: () => Promise<void> }> {
+		const connects: string[] = [];
+		const server = createServer((_request, response) => {
+			response.statusCode = 502;
+			response.end();
+		});
+		server.on('connect', (request, socket) => {
+			connects.push(String(request.url));
+			socket.destroy();
+		});
+		await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+		return {
+			url: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
+			connects,
+			close: async () => {
+				server.closeAllConnections();
+				await new Promise<void>((resolve) => server.close(() => resolve()));
+			}
+		};
+	}
+
+	/** Proxy settings the daemon may have inherited would decide the case instead. */
+	const withoutProxyEnvironment = (env: NodeJS.ProcessEnv): NodeJS.ProcessEnv => {
+		const copy = { ...env };
+		for (const name of Object.keys(copy)) {
+			if (/^(https?|all|no)_proxy$/i.test(name)) delete copy[name];
+		}
+		return copy;
+	};
+
+	it('CONTROL: a remote’s own proxy in the pool beats an http.<url>.proxy given in command scope', async () => {
+		const at = scene();
+		const pool = scratchPool(at.dir, HTTPS_REMOTE);
+		const proxy = await recordingProxy();
+		try {
+			git(pool, 'config', 'remote.ew-control.proxy', proxy.url);
+			await execFileAsync('git', ['fetch', 'ew-control', '+refs/heads/main:refs/remotes/origin/main'], {
+				cwd: pool,
+				windowsHide: true,
+				env: {
+					...withoutProxyEnvironment(process.env),
+					GIT_TERMINAL_PROMPT: '0',
+					GIT_CONFIG_COUNT: '3',
+					GIT_CONFIG_KEY_0: 'remote.ew-control.url',
+					GIT_CONFIG_VALUE_0: HTTPS_REMOTE,
+					GIT_CONFIG_KEY_1: `http.${HTTPS_REMOTE}.proxy`,
+					GIT_CONFIG_VALUE_1: '',
+					GIT_CONFIG_KEY_2: `http.${HTTPS_REMOTE}.extraheader`,
+					GIT_CONFIG_VALUE_2: HEADER
+				}
+			}).catch(() => undefined);
+		} finally {
+			await proxy.close();
+		}
+
+		expect(proxy.connects).toEqual(['127.0.0.1:1']);
+	});
+
+	it('the reserved prefix covers every spelling git matches a private name in — and only those', () => {
+		// The allowlist judges keys as `git config --list` prints them. A quoted
+		// `[remote "EW-…"]` header keeps its case and is a DIFFERENT remote to
+		// Git (subsections compare case-sensitively); the deprecated dotted
+		// `[remote.EW-…]` header is lower-cased by Git itself, so it is listed —
+		// and matched — as the lower-case name.
+		const at = scene();
+		const file = slash(join(at.dir, 'spellings.gitconfig'));
+		writeFileSync(
+			file,
+			'[remote "EW-CREDENTIALED-quoted"]\n\turl = a\n[remote.EW-CREDENTIALED-dotted]\n\turl = b\n'
+		);
+
+		const listed = git(at.dir, 'config', '--file', file, '--name-only', '--list').split(/\r?\n/);
+
+		expect(listed).toEqual(['remote.EW-CREDENTIALED-quoted.url', 'remote.ew-credentialed-dotted.url']);
+		expect(() => git(at.dir, 'config', '--file', file, '--get', 'remote.ew-credentialed-quoted.url')).toThrow();
+		expect(git(at.dir, 'config', '--file', file, '--get', 'remote.ew-credentialed-dotted.url')).toBe('b');
+		expect(listed.map((key) => isAllowedRepositoryConfigKey(key))).toEqual([true, false]);
+	});
+
+	it('planted on the private name as the credentialed fetch starts: the request does not go through it', async () => {
+		const at = scene();
+		const httpsBase = join(at.dir, 'https-workspaces');
+		await new LocalWorkspacePlugin()
+			.provision(provisionSpec(httpsBase, HTTPS_REMOTE, 'seed'))
+			.catch(() => undefined);
+		const pool = poolOf(httpsBase);
+		const proxy = await recordingProxy();
+		const invocations: Invocation[] = [];
+		const recording = recordingGit(invocations) as unknown as (...rest: unknown[]) => unknown;
+		const planting = ((command: string, args: string[], ...rest: unknown[]) => {
+			const name = args[0] === 'fetch' ? args.find((arg) => arg.startsWith('ew-credentialed-')) : undefined;
+			if (name) git(pool, 'config', `remote.${name}.proxy`, proxy.url);
+			return recording(command, args, ...rest);
+		}) as unknown as typeof execFile;
+		const previous = { ...process.env };
+		for (const name of Object.keys(process.env)) {
+			if (/^(https?|all|no)_proxy$/i.test(name)) delete process.env[name];
+		}
+
+		let error: Error | null = null;
+		try {
+			error = await new LocalWorkspacePlugin({ execFile: planting })
+				.provision(
+					provisionSpec(httpsBase, HTTPS_REMOTE, 'proxied', {
+						fetchCredential: { username: 'x-access-token', token: TOKEN, remoteUrl: HTTPS_REMOTE }
+					})
+				)
+				.then(
+					() => null,
+					(caught: Error) => caught
+				);
+		} finally {
+			Object.assign(process.env, previous);
+			await proxy.close();
+		}
+
+		// The credentialed fetch ran, with the plant in place for its own name…
+		const fetch = invocations.find((entry) => entry.args[0] === 'fetch');
+		expect(fetch && carriesHeader(fetch)).toBe(true);
+		expect(git(pool, 'config', '--get-regexp', '^remote\.ew-credentialed-.*\.proxy$')).toContain(proxy.url);
+		// …and went straight to the remote (where nothing listens), not
+		// through the planted proxy.
+		expect(error?.message).toMatch(/fetch of base ref 'main' failed/);
+		expect(proxy.connects).toEqual([]);
+	});
+});
+
+describe('the lazy fetch of a promisor remote — a grandchild that names a PLAIN remote', () => {
+	// With a partial clone configured, an object the command needs and does
+	// not have makes Git start `git fetch <promisor remote>` to get it. That
+	// grandchild names the promisor remote — a plain name any config file may
+	// describe — so nothing layer 1 pins on the PRIVATE remote applies there:
+	// its `uploadpack` runs (file transport, below), and its `proxy` outranks
+	// the `http.<url>.proxy` pin (https; reproduced by the closure review on
+	// Debian 13.7 / git 2.47.3). The allowlist refuses the partial-clone keys,
+	// but a concurrent job can write them after it looked: `GIT_NO_LAZY_FETCH=1`
+	// (Git 2.44+) in the credentialed child is what stops the grandchild then.
+
+	/** A promisor remote with a harvester for its `uploadpack`, and a missing object to send Git there. */
+	function plantPromisor(pool: string, at: Scene): void {
+		git(pool, 'config', 'extensions.partialclone', 'ew-planted');
+		git(pool, 'config', 'remote.ew-planted.promisor', 'true');
+		git(pool, 'config', 'remote.ew-planted.url', originUrl);
+		git(pool, 'config', 'remote.ew-planted.uploadpack', `${at.harvest} git-upload-pack`);
+		missingTrackingRefs(pool);
+	}
+
+	const credential = (): { username: string; token: string; remoteUrl: string } => ({
+		username: 'x-access-token',
+		token: TOKEN,
+		remoteUrl: originUrl
+	});
+
+	it('CONTROL: the credentialed fetch’s own command and environment minus GIT_NO_LAZY_FETCH — the grandchild runs, and reads the header', async () => {
+		const at = scene();
+		const pool = await seedPool(at.baseDir, originUrl);
+		const invocations: Invocation[] = [];
+		const plugin = new LocalWorkspacePlugin({ execFile: recordingGit(invocations) });
+		const handle = await plugin.provision(
+			provisionSpec(at.baseDir, originUrl, 'lazy-control', { fetchCredential: credential() })
+		);
+		writeFileSync(join(handle.path, 'work.txt'), 'lazy\n');
+		await plugin.finalize(handle, { commitMessage: 'feat: work', push: true, pushCredential: credential() });
+		// Every credentialed child — the two fetches and the push — carries it.
+		const credentialed = invocations.filter(carriesHeader);
+		expect(credentialed.map((entry) => entry.args[0])).toEqual(['fetch', 'fetch', 'push']);
+		expect(credentialed.every((entry) => entry.env.GIT_NO_LAZY_FETCH === '1')).toBe(true);
+
+		// The base fetch again, exactly as the provider ran it, in the planted
+		// pool — without that one variable.
+		const [fetch] = credentialed;
+		plantPromisor(pool, at);
+		const env = { ...fetch.env };
+		delete env.GIT_NO_LAZY_FETCH;
+		try {
+			execFileSync('git', fetch.args, { cwd: pool, env, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+		} catch {
+			// The receipt is the verdict.
+		}
+
+		expect(at.didRun()).toBe(true);
+		expect(at.leaked()).toContain(BASIC);
+	});
+
+	it('planted BEFORE the run: the partial-clone keys withhold the credential', async () => {
+		const at = scene();
+		const pool = await seedPool(at.baseDir, originUrl);
+		plantPromisor(pool, at);
+		const invocations: Invocation[] = [];
+		const reasons: string[] = [];
+		const plugin = new LocalWorkspacePlugin({ execFile: recordingGit(invocations) });
+
+		await plugin
+			.provision(
+				provisionSpec(at.baseDir, originUrl, 'lazy-withheld', {
+					fetchCredential: credential(),
+					onFetchCredentialWithheld: (reason) => reasons.push(reason)
+				})
+			)
+			.catch(() => undefined);
+
+		expect(reasons).toHaveLength(1);
+		for (const name of ['extensions.partialclone', 'remote.<…>.promisor', 'remote.<…>.uploadpack']) {
+			expect(reasons[0]).toContain(name);
+		}
+		expect(invocations.some(carriesHeader)).toBe(false);
+		// The uncredentialed fetch is the one this provider always ran (its lazy
+		// fetch may well run the planted program); it holds no credential.
+		expect(at.leaked()).toBe('');
+	});
+
+	it('planted BETWEEN the check and the fetch: no lazy fetch runs, the program never fires, and the fetch succeeds', async () => {
+		const at = scene();
+		const pool = await seedPool(at.baseDir, originUrl);
+		const invocations: Invocation[] = [];
+		const reasons: string[] = [];
+		const plugin = new LocalWorkspacePlugin({
+			execFile: recordingGit(invocations, () => plantPromisor(pool, at))
+		});
+
+		const handle = await plugin.provision(
+			provisionSpec(at.baseDir, originUrl, 'lazy-raced', {
+				fetchCredential: credential(),
+				onFetchCredentialWithheld: (reason) => reasons.push(reason)
+			})
+		);
+
+		// The allowlist saw a clean pool, so the credential was used…
+		expect(reasons).toEqual([]);
+		const fetches = invocations.filter((entry) => entry.args[0] === 'fetch');
+		expect(fetches).toHaveLength(2);
+		expect(fetches.every(carriesHeader)).toBe(true);
+		// …the plant was in place for both fetches, and no grandchild ran it.
+		expect(git(pool, 'config', 'remote.ew-planted.promisor')).toBe('true');
+		expect(at.didRun()).toBe(false);
+		expect(at.leaked()).toBe('');
+		// And the fetch did not fail for it: the base came from the real remote.
+		expect(handle.baseSha).toBe(originHead);
+	});
+});

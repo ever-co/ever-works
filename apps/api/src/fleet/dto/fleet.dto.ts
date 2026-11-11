@@ -14,9 +14,12 @@ import {
     Min,
     MinLength,
     ValidateIf,
+    registerDecorator,
+    type ValidationOptions,
 } from 'class-validator';
 import {
     FLEET_ACTION_FAMILIES,
+    FLEET_AGENT_READINESS_MAX_REPORT_CHARS,
     FLEET_AUDIENCES,
     FLEET_CREDENTIAL_MAX_LENGTH,
     FLEET_CREDENTIAL_MIN_LENGTH,
@@ -81,6 +84,41 @@ const ENROLLABLE_KINDS: readonly FleetEnrollableNodeKind[] = FLEET_ENROLLABLE_NO
  * unbounded storage.
  */
 const FLEET_MAX_INSTANT_LENGTH = 64;
+
+/**
+ * Refuse a JSON value whose serialised form is longer than `max` characters.
+ *
+ * For the free-form objects of the heartbeat, which are deliberately not
+ * nested DTOs (a newer node's unknown key must not fail the beat): the
+ * service normalises what it keeps, and this makes sure an absurd payload is
+ * turned away at the edge before any of it is read. One `JSON.stringify` of a
+ * body the parser has already bounded (`BODY_LIMIT`, 1 MB by default) — a
+ * few milliseconds at worst, and nothing a real node ever comes near.
+ */
+function MaxSerializedLength(max: number, validationOptions?: ValidationOptions) {
+    return function (object: object, propertyName: string): void {
+        registerDecorator({
+            name: 'maxSerializedLength',
+            target: object.constructor,
+            propertyName,
+            constraints: [max],
+            options: validationOptions,
+            validator: {
+                validate(value: unknown): boolean {
+                    if (value === undefined || value === null) return true;
+                    try {
+                        return JSON.stringify(value).length <= max;
+                    } catch {
+                        return false;
+                    }
+                },
+                defaultMessage(): string {
+                    return `$property must serialise to at most ${max} characters`;
+                },
+            },
+        });
+    };
+}
 
 /**
  * Request body for `POST /api/fleet/nodes/enrollment-token` — issue a
@@ -864,6 +902,52 @@ export class FleetNodeSelfDescriptionDto {
     @IsArray()
     @ArrayMaxSize(64)
     helperEvents?: Record<string, unknown>[];
+
+    /**
+     * Fleet agent readiness — every agent CLI on the machine with whether it
+     * can take work: `{ checkedAt, agents: [{ provider, installed, version,
+     * signedIn, authMethod, account, status, reasonCode, checkedAt, usage?, … }] }`.
+     * The reason is a CODE; a `reason` sentence in the body is ignored and
+     * rebuilt from the code, so no line of a run's output can be stored.
+     *
+     * Only `@IsObject()`, for the reason `health` is: under `whitelist +
+     * forbidNonWhitelisted` a nested class would 400 the WHOLE beat the day a
+     * newer node reports a status or a field this build has not heard of, and
+     * a failed beat is a node swept offline. `FleetService` runs
+     * `normalizeFleetAgentReadinessReport`, which keeps the known fields
+     * within their bounds, reads an unknown status as `unknown` and an
+     * unknown reason code as none, masks the account label and DROPS the
+     * rest. Sent on the heartbeat only, in the node's newest optional tier.
+     */
+    @ApiProperty({
+        required: false,
+        type: Object,
+        example: {
+            checkedAt: '2026-11-10T12:00:00.000Z',
+            agents: [
+                {
+                    provider: 'claude-code',
+                    installed: true,
+                    version: '2.1.319',
+                    signedIn: true,
+                    authMethod: 'subscription',
+                    account: 'owner@example.com (Acme, max)',
+                    status: 'access_denied',
+                    reasonCode: 'org_access_disabled',
+                    checkedAt: '2026-11-10T12:00:00.000Z',
+                    lastFailureAt: '2026-11-10T11:59:00.000Z',
+                    lastFailureKind: 'access_denied',
+                    lastFailureCode: 'org_access_disabled',
+                },
+            ],
+        },
+        description:
+            'Agent readiness: per agent CLI whether it is installed (true, false, or null when the node could not tell), signed in (and how), and can take work (ready, not_signed_in, access_denied, limit_reached, not_installed, unsupported, unknown), with a reason code, usage windows and the last successful and last refused run when known. Unknown or malformed values are dropped, never rejected. Never carries a credential or text out of a run.',
+    })
+    @IsOptional()
+    @IsObject()
+    @MaxSerializedLength(FLEET_AGENT_READINESS_MAX_REPORT_CHARS)
+    agents?: Record<string, unknown>;
 }
 
 /**

@@ -442,6 +442,97 @@ describe('describeSelf', () => {
 			}
 		});
 	});
+
+	describe('agent readiness', () => {
+		const report = {
+			checkedAt: '2026-11-10T12:00:00.000Z',
+			agents: [
+				{
+					provider: 'claude-code',
+					installed: true,
+					version: '2.1.319',
+					signedIn: true,
+					authMethod: 'subscription' as const,
+					account: 'owner@example.com (Acme, max)',
+					status: 'ready' as const,
+					reasonCode: null,
+					reason: null,
+					checkedAt: '2026-11-10T12:00:00.000Z'
+				}
+			]
+		};
+
+		it('carries the report the probe returns', async () => {
+			const description = await describeSelf(runnerWith([]), environment(), '0.1.0', null, {
+				agents: () => report
+			});
+			expect(description.agents).toEqual(report);
+		});
+
+		it('re-normalises at the wire boundary: unknown keys dropped, no sentence of the probe`s own kept', async () => {
+			// Credential-SHAPED fixtures, assembled at runtime from plainly fake
+			// parts so no line here can be taken for a real key. Not credentials.
+			const fakeApiKey = ['sk', 'ant', 'api03', 'FAKE'.repeat(8)].join('-');
+			const fakeToken = ['sk', 'ant', 'oat01', 'FAKE'.repeat(4)].join('-');
+			const description = await describeSelf(runnerWith([]), environment(), '0.1.0', null, {
+				agents: () =>
+					({
+						checkedAt: '2026-11-10T12:00:00.000Z',
+						agents: [
+							{
+								...report.agents[0],
+								account: `owner@example.com ${fakeToken}`,
+								status: 'not_signed_in',
+								reasonCode: 'invalid_api_key',
+								// Whatever a probe puts here is discarded: the sentence is
+								// rebuilt from the code, so no line of output can ride on it.
+								reason: `Invalid API key ${fakeApiKey} · Fix external API key`,
+								credentials: { accessToken: fakeToken }
+							},
+							{
+								...report.agents[0],
+								provider: 'codex',
+								status: 'unknown',
+								reasonCode: 'a code this build has never heard of',
+								reason: 'postgres://app:hunter2@db.internal/prod'
+							}
+						]
+					}) as never
+			});
+			const [claude, codex] = description.agents?.agents ?? [];
+			expect(claude).not.toHaveProperty('credentials');
+			expect(claude?.reasonCode).toBe('invalid_api_key');
+			expect(claude?.reason).toBe('The API key was rejected. Replace it on this computer.');
+			expect(claude?.account).toBe('owner@example.com [redacted]');
+			expect(codex).toMatchObject({ reasonCode: null, reason: null });
+			const wire = JSON.stringify(description);
+			for (const leaked of ['FAKE', 'hunter2', 'db.internal', 'Fix external']) expect(wire).not.toContain(leaked);
+		});
+
+		it('keeps an empty list (no agent CLI here) and omits the field when the probe has no answer', async () => {
+			const empty = await describeSelf(runnerWith([]), environment(), '0.1.0', null, {
+				agents: () => ({ checkedAt: '2026-11-10T12:00:00.000Z', agents: [] })
+			});
+			expect(empty.agents).toEqual({ checkedAt: '2026-11-10T12:00:00.000Z', agents: [] });
+
+			for (const agents of [
+				() => null,
+				() => {
+					throw new Error('probe bug');
+				},
+				() => Promise.reject(new Error('probe bug'))
+			]) {
+				const description = await describeSelf(runnerWith(['git']), environment(), '0.1.0', null, { agents });
+				expect('agents' in description).toBe(false);
+				expect(description.capabilities).toContain('git');
+			}
+		});
+
+		it('is absent from a description built without the probe (enrolment, an older embedder)', async () => {
+			const description = await describeSelf(runnerWith([]), environment(), '0.1.0');
+			expect('agents' in description).toBe(false);
+		});
+	});
 });
 
 /**

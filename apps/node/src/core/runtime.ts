@@ -1,5 +1,5 @@
 import type { FleetJobKind } from '@ever-works/contracts';
-import { fleetHelperTarget } from '@ever-works/contracts';
+import { FLEET_AGENT_CREDENTIAL_ENV_NAMES, fleetHelperTarget } from '@ever-works/contracts';
 import { BAKED_HELPER_MANIFEST } from './screen/helper/helper-manifest';
 import { nodeHelperSignatureChecker } from './screen/helper/helper-signature';
 import { describeApiBase, resolveApiBase } from './api-base';
@@ -12,7 +12,20 @@ import {
 } from './capabilities';
 import { cacheProbe, detectAgentCliVersion, detectModelIdentity, type DiskProbeIo } from './telemetry-probe';
 import {
+	AGENT_AUTH_CACHE_TTL_MS,
+	AgentProbeEnvironments,
+	AgentRunHistory,
+	buildAgentReadinessReport,
+	detectUnsupportedAgentClis,
+	probeAgentAuth,
+	readNewestCodexRateLimits,
+	type AgentAuthProbe,
+	type AgentRunHistoryRecord,
+	type AgentThrottle
+} from './agent-readiness';
+import {
 	describeCliVersions,
+	MODEL_CLI_PROVIDERS,
 	ModelCliCompatibilityProbe,
 	primaryPinnedCliVersion,
 	type ModelCliFileStamp
@@ -49,7 +62,7 @@ import { defaultRunnerExec, type RunnerHostDeps } from './link/modules/runners/h
 import { listRunnerLogSources, newestRunnerDiagLog } from './link/modules/runners/logs';
 import { RunnerState } from './link/modules/runners/state';
 import type { WorkerSafetyGate } from './worker-safety-store';
-import { runAcceptanceChecksJob } from './executors/acceptance-checks';
+import { buildNodeCheckEnv, runAcceptanceChecksJob } from './executors/acceptance-checks';
 import { defaultSessionConfigFs, runAgentTaskJob } from './executors/agent-task';
 import { runAgentSessionJob } from './executors/agent-session';
 import { defaultRepositoryLayerFs } from './executors/codex-repository-layers';
@@ -62,6 +75,7 @@ import {
 	FleetTaskWorkspaceProvisioner
 } from './workspaces/fleet-task-workspace';
 import { measureWorkspaceFreeBytes } from './workspaces/disk-headroom';
+import { FetchCredentialSession } from './workspaces/fetch-credential';
 import { PushCredentialSession } from './workspaces/push-credential';
 import type { Logger } from './logger';
 import { PtyLocalPlugin } from '@ever-works/pty-local-plugin';
@@ -122,6 +136,7 @@ import { SessionHookOverlay } from './sessions/hook-overlay';
 import { SessionStatusPipeline } from './sessions/session-status';
 import { spawn as spawnProcess } from 'node:child_process';
 import { homedir as osHomedir, userInfo as osUserInfo } from 'node:os';
+import { posix as posixPath, win32 as win32Path } from 'node:path';
 import { existsSync } from 'node:fs';
 import {
 	clampResourceLimits,
@@ -610,6 +625,16 @@ export interface CreateNodeRuntimeOptions {
 	 * `status` and `doctor` can show it. Best-effort; a failure is logged.
 	 */
 	persistLifecycle?: (record: NodeLifecycleRecord) => Promise<void> | void;
+	/**
+	 * Fleet agent readiness — what an earlier process recorded about its
+	 * agents' runs (the last success, the last classified refusal), read from
+	 * beside the config. Without it a restart forgets that the last run was
+	 * refused, and a seat whose status command still says "signed in" reads
+	 * `ready` until its next run fails. Absent (tests, embedders): starts empty.
+	 */
+	agentRunHistory?: AgentRunHistoryRecord | null;
+	/** Fleet agent readiness — record the history beside the config. Best-effort; a failure is logged. */
+	persistAgentRunHistory?: (record: AgentRunHistoryRecord) => Promise<void> | void;
 	/** Durable write-ahead crash guard; acquired before the first job lease. */
 	workerSafetyGate?: WorkerSafetyGate;
 
@@ -888,6 +913,34 @@ export function createNodeRuntime(config: NodeConfig, io: NodeIo, options: Creat
 	// and the tools it spawns — stops running too (`loopRef` is set once the
 	// loop below exists).
 	let loopRef: HeartbeatLoop | null = null;
+	// Fleet agent readiness: what this node's real runs proved about each agent
+	// CLI (the last success, the last classified refusal, the usage windows a
+	// run's own stream carried). Built here so the `agent-task` executor and
+	// the heartbeat share ONE history; restored from the record an earlier
+	// process left, so a restart does not forget a refusal.
+	const agentHistory = new AgentRunHistory({
+		...(io.now ? { now: io.now } : {}),
+		timeZone: () => Intl.DateTimeFormat().resolvedOptions().timeZone ?? undefined,
+		...(options.agentRunHistory ? { initial: options.agentRunHistory } : {}),
+		...(options.persistAgentRunHistory ? { persist: options.persistAgentRunHistory } : {}),
+		logger: io.logger
+	});
+	// The worker's active model throttles, once the work lane exists (below).
+	let agentThrottles: (() => readonly AgentThrottle[]) | undefined;
+	// The status command of each CLI runs in the environment a RUN gets, not
+	// the daemon's: the same allow-list and the same exclusive credential
+	// choice (`buildNodeCheckEnv`), for the credential NAMES the last real run
+	// of that CLI was granted (restored from the history file), else the
+	// names the platform says it grants a run (its heartbeat answer), else —
+	// until one of those is known — an assumed default, under which "not
+	// signed in" is reported as unknown. See `AgentProbeEnvironments`.
+	const agentProbeEnvironments = new AgentProbeEnvironments({
+		build: (names) => buildNodeCheckEnv(names, (options.env ?? process.env) as NodeJS.ProcessEnv),
+		defaultNames: FLEET_AGENT_CREDENTIAL_ENV_NAMES
+	});
+	for (const [provider, entry] of Object.entries(options.agentRunHistory?.agents ?? {})) {
+		agentProbeEnvironments.noteRun(provider, entry.envPassthrough);
+	}
 	let probeHealth: (() => Promise<FleetNodeHealthSnapshot | null>) | undefined;
 	if (io.health) {
 		const probe = createHealthProbe(io.health, {
@@ -1505,6 +1558,99 @@ export function createNodeRuntime(config: NodeConfig, io: NodeIo, options: Creat
 		return usageScanAvailable() ? { ...base, usageScan: true } : base;
 	};
 	telemetry.consents = () => consents;
+	// Fleet agent readiness: the per-CLI report on every BEAT — wired here and
+	// not in `buildSelfDescriptionTelemetry`, for the reason `health` is:
+	// enrolment has no strip-and-retry fallback for a field an older platform
+	// does not know. Once the platform has proven it predates `agents` the
+	// beat strips it for the life of the process, and the status commands stop
+	// being spawned too.
+	//
+	// Free sources only, each cached for five minutes: the CLIs' own status
+	// commands, what this node's real runs proved (`agentHistory`, fed by the
+	// `agent-task` executor below), and — only under `--usage-scan`, the
+	// consent that already decides whether session records may be read here —
+	// the rate-limit snapshot in Codex's newest session record. Nothing in it
+	// starts a model call.
+	const readinessClock = io.now ?? Date.now;
+	const agentAuthProbes = new Map<string, () => Promise<AgentAuthProbe | null>>();
+	const agentAuth = async (provider: string, executable: string): Promise<AgentAuthProbe> => {
+		// The environment a RUN of this CLI gets (see `AgentProbeEnvironments`).
+		const environment = agentProbeEnvironments.resolve(provider);
+		const key = `${provider}|${executable}|${environment.key}`;
+		let probe = agentAuthProbes.get(key);
+		if (!probe) {
+			probe = cacheProbe(
+				async () => {
+					const answer = await probeAgentAuth(io.runner, provider, executable, {
+						platform: io.environment.platform,
+						env: environment.env
+					});
+					// Stamped when the command ANSWERED, and cached with the reading:
+					// a reading served from the cache keeps the instant it was taken.
+					return answer.state === 'answered'
+						? { ...answer, checkedAt: new Date(readinessClock()).toISOString() }
+						: answer;
+				},
+				AGENT_AUTH_CACHE_TTL_MS,
+				readinessClock
+			);
+			agentAuthProbes.set(key, probe);
+		}
+		const answer = (await probe()) ?? { state: 'unanswered' };
+		// Where the environment came from is a fact about NOW, not about the
+		// cached reading: the same names can stop being an assumption once
+		// the platform confirms them.
+		return answer.state === 'answered' ? { ...answer, environment: environment.source } : answer;
+	};
+	const unsupportedAgentClis = cacheProbe(
+		() => detectUnsupportedAgentClis(io.runner),
+		AGENT_AUTH_CACHE_TTL_MS,
+		readinessClock
+	);
+	const joinPath = (io.environment.platform === 'win32' ? win32Path : posixPath).join;
+	const codexRecordedUsage = cacheProbe(
+		async () => {
+			for (const root of resolveUsageRoots(usageRootsInput())) {
+				if (root.provider !== 'codex') continue;
+				const reading = await readNewestCodexRateLimits(usageFs, root.dir, joinPath);
+				if (reading) return reading;
+			}
+			return null;
+		},
+		AGENT_AUTH_CACHE_TTL_MS,
+		readinessClock
+	);
+	telemetry.agents = async () => {
+		if (loopRef && !loopRef.acceptsField('agents')) return null;
+		if (consents.usageScan && typeof pinnedModelCli.codex === 'string' && pinnedModelCli.codex) {
+			const recorded = await codexRecordedUsage().catch(() => null);
+			if (recorded) agentHistory.noteUsage('codex', recorded.windows, recorded.at);
+		}
+		return buildAgentReadinessReport({
+			drivable: async () => {
+				const compat = await cliCompat.probeAll(pinnedModelCli);
+				const timedOut = io.environment.modelCliTimedOut ?? [];
+				return MODEL_CLI_PROVIDERS.map((provider) => {
+					const executable = pinnedModelCli[provider];
+					const probed = compat.find((result) => result.provider === provider);
+					return {
+						provider,
+						executable: typeof executable === 'string' && executable ? executable : null,
+						version: probed?.version ?? null,
+						missingRequiredFlags: probed?.missingRequiredFlags ?? [],
+						probeTimedOut: timedOut.includes(provider)
+					};
+				});
+			},
+			auth: agentAuth,
+			unsupported: async () => (await unsupportedAgentClis()) ?? [],
+			history: agentHistory,
+			// Present only on a node with a worker: "no throttle" then means the
+			// platform lifted it, not that nobody is counting.
+			...(agentThrottles ? { throttles: agentThrottles } : {}),
+			now: readinessClock
+		});
+	};
 	if (options.selfUpdateReport) telemetry.selfUpdate = options.selfUpdateReport;
 	// Schedules on computers (FL-13): the zone this machine's schedules fire in.
 	telemetry.timeZone = () => Intl.DateTimeFormat().resolvedOptions().timeZone ?? null;
@@ -1616,10 +1762,13 @@ export function createNodeRuntime(config: NodeConfig, io: NodeIo, options: Creat
 			limitCeiling?: NodeLimitCeiling;
 			node?: { modelThrottles?: unknown };
 			recommendedNodeVersion?: string;
+			agentEnvPassthrough?: string[];
 		}) => {
 			attendedWake?.(response.pendingComputerSessions);
 			lifecycle.applyHeartbeat(response);
 			throttleTarget?.(response.node?.modelThrottles);
+			// Fleet agent readiness: the credential names a run is granted here.
+			agentProbeEnvironments.notePlatform(response.agentEnvPassthrough);
 			// Fleet node link (FL-02): the first accepted beat opens it (FR-1).
 			startLink?.();
 			// Fleet node link (FL-02 T-25): the self-update decides on the verdict.
@@ -1810,6 +1959,15 @@ export function createNodeRuntime(config: NodeConfig, io: NodeIo, options: Creat
 		throttleTarget = (throttles) => {
 			if (Array.isArray(throttles)) worker.syncModelThrottles(throttles);
 		};
+		// Fleet agent readiness: a CLI the work lane is holding back is not
+		// ready, and one it stopped holding back (an owner's "Clear limit now")
+		// is ready again — read from the lane itself, so the two cannot disagree.
+		agentThrottles = () =>
+			(worker.getState().modelThrottles ?? []).map((throttle) => ({
+				provider: throttle.provider,
+				until: throttle.until,
+				window: throttle.window
+			}));
 		// Fleet health signals (EW-776). Wired onto the SAME telemetry
 		// object `describe` already closed over above, so the heartbeat
 		// starts reporting worker state without the loop having to be
@@ -1894,8 +2052,46 @@ export function createNodeRuntime(config: NodeConfig, io: NodeIo, options: Creat
 				return await runAgentTaskJob(
 					job,
 					{
-						provisionWorkspace: (taskId, spec, provisionSignal) =>
-							workspaceProvisioner.provision(taskId, spec, provisionSignal),
+						provisionWorkspace: async (taskId, spec, provisionSignal) => {
+							// Scoped fetch credentials — the read twin of the
+							// push session above, and it hangs off the LEASE for
+							// the same reason: the platform proves this node
+							// still holds an active claim before it hands over
+							// a credential for the owner's repositories.
+							//
+							// Two things differ from push, both on purpose:
+							//
+							//  - its LIFETIME is this one call. The clone comes
+							//    first, so the credential cannot be minted late
+							//    the way the push's is; instead it is created
+							//    for the provision and disposed (revoked, and
+							//    dropped from this process) before this function
+							//    returns — i.e. before the model's first byte.
+							//  - with NO session the provision still runs. A
+							//    lease handle that cannot make the call (an
+							//    older client, an embedder) leaves the fetch on
+							//    this machine's own Git configuration, exactly
+							//    as it was; a push in the same position is
+							//    refused. See `fetch-credential.ts`.
+							const mintFetchCredential = lease?.mintFetchCredential;
+							const fetchCredentials = mintFetchCredential
+								? new FetchCredentialSession({
+										jobId: job.id,
+										client: { mintFetchCredential: () => mintFetchCredential() },
+										...(io.logger ? { logger: io.logger } : {})
+									})
+								: null;
+							if (!fetchCredentials) return workspaceProvisioner.provision(taskId, spec, provisionSignal);
+							try {
+								return await workspaceProvisioner.provision(taskId, spec, provisionSignal, {
+									fetchCredentials
+								});
+							} finally {
+								// Success, a failed fetch, a refused claim and a
+								// cancel all pass through here. Never throws.
+								await fetchCredentials.dispose();
+							}
+						},
 						...(workspaceProvisioner.finalize
 							? {
 									finalizeWorkspace: (taskId, descriptor, opts, finalizeSignal) =>
@@ -1998,6 +2194,13 @@ export function createNodeRuntime(config: NodeConfig, io: NodeIo, options: Creat
 						// record then says the isolation was declined rather than
 						// silently claiming one that was never proved.
 						sessionConfigFs: defaultSessionConfigFs,
+						// Fleet agent readiness: every finished model-CLI invocation
+						// tells the node whether that agent just worked, or why it
+						// was refused — learned from the run that happened anyway.
+						onModelRun: (run) => {
+							agentProbeEnvironments.noteRun(run.provider, run.envPassthrough);
+							agentHistory.note(run);
+						},
 						// The same read-only reader, for Claude Code's machine-wide
 						// `managed-mcp.json`: a machine that deploys one refuses
 						// every fleet Claude Code run with a reason instead of the

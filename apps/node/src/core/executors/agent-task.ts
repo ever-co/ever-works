@@ -85,6 +85,7 @@ import {
 	ModelCliCommandError,
 	modelCliMcpIsolationEnv,
 	parseModelCliResult,
+	readModelCliError,
 	readCodexUserSettings,
 	type CodexUserSettings,
 	redactCommandResult,
@@ -107,6 +108,7 @@ import {
 	withCodexDisclosures,
 	type RepositoryLayerFs
 } from './codex-repository-layers';
+import { readClaudeRateLimitWindows, type AgentRunObservation } from '../agent-readiness';
 import type { Logger } from '../logger';
 import type { FleetTaskWorkspaceErrorCode } from '../workspaces/fleet-task-workspace';
 import { extractRunEnvSecretValues } from '../workspaces/run-env-files';
@@ -252,6 +254,16 @@ export interface AgentTaskIo extends AcceptanceChecksIo {
 	 * defaults to the process's own; injected so a spec can pin both.
 	 */
 	usageLimitClock?: { now: () => number; timeZone?: string };
+	/**
+	 * Fleet agent readiness — told about EVERY finished model-CLI invocation:
+	 * the parsed verdict, plus the usage windows the CLI's own stream carried
+	 * about its seat, and what the CLI ITSELF reported when it failed (never
+	 * the model's words). How the node learns, from real runs and at no cost,
+	 * that an agent just worked or why it was refused (`AgentRunHistory`).
+	 * A report about the run, never a verdict on it: a throwing observer is
+	 * swallowed and can never fail or alter the run.
+	 */
+	onModelRun?: (run: AgentRunObservation) => void;
 	/**
 	 * The node's disk floor, applied to a workspace the PROVISIONER never
 	 * sees: a payload carrying `workspacePath`, or carrying neither field
@@ -2701,6 +2713,31 @@ async function invokeModelCliStep(input: {
 		io.parentEnv,
 		input.runSecretValues
 	);
+	// Fleet agent readiness: what this invocation proved about the CLI's seat.
+	// ONLY what the CLI itself reported (`readModelCliError`) — never the
+	// summary or the output tail, which carry the model's words — plus the
+	// seat's own usage events out of the raw stream, and the names (never the
+	// values) of the credentials this run was granted.
+	if (io.onModelRun) {
+		try {
+			const usage = execution.provider === 'claude-code' ? readClaudeRateLimitWindows(rawOutput) : [];
+			io.onModelRun({
+				provider: execution.provider,
+				status: parsed.status,
+				cliError:
+					parsed.status === 'succeeded'
+						? null
+						: readModelCliError(execution.provider, rawOutput, result, {
+								outputTokens: parsed.outputTokens ?? null
+							}),
+				outputTokens: parsed.outputTokens ?? null,
+				...(usage.length > 0 ? { usage } : {}),
+				envPassthrough: [...(execution.envPassthrough ?? [])]
+			});
+		} catch {
+			// Readiness is a report about the run, never a reason to fail it.
+		}
+	}
 	// Slice AP: the evidence comes from the LIVE view when it saw the whole
 	// stream (it carries the timings), and is otherwise rebuilt from the file
 	// now, untimed — never from a partial live view.

@@ -1,8 +1,11 @@
 import 'reflect-metadata';
-import { BadRequestException, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, Logger, UnauthorizedException } from '@nestjs/common';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
-import { FLEET_DEFAULT_MAX_CAPABILITY_TAGS } from '@ever-works/contracts';
+import {
+    FLEET_AGENT_CREDENTIAL_ENV_NAMES,
+    FLEET_DEFAULT_MAX_CAPABILITY_TAGS,
+} from '@ever-works/contracts';
 import type { AuthenticatedUser } from '../auth/types/auth.types';
 import { IS_PUBLIC_KEY } from '../auth/decorators/public.decorator';
 import { FleetController } from './fleet.controller';
@@ -62,10 +65,11 @@ describe('FleetController', () => {
     };
     let jobs: {
         loadByNodeForUser: jest.Mock;
+        agentTaskOutcomesForNode: jest.Mock;
         promoteWaitingForNode: jest.Mock;
         historyForNode: jest.Mock;
     };
-    let runs: { findByIds: jest.Mock };
+    let runs: { findByIds: jest.Mock; findStatusesByIds: jest.Mock };
     let controller: FleetController;
 
     // Appended constructor deps (runner status + execution preferences).
@@ -96,7 +100,14 @@ describe('FleetController', () => {
         recent: jest.fn(async () => []),
     };
 
+    let warnSpy: jest.SpyInstance;
+    afterEach(() => {
+        // Only this spy: the stubs above are shared across the suite.
+        warnSpy.mockRestore();
+    });
+
     beforeEach(() => {
+        warnSpy = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
         service = {
             listForUser: jest.fn(async () => [nodeView]),
             createEnrollmentToken: jest.fn(async () => ({
@@ -149,10 +160,20 @@ describe('FleetController', () => {
         };
         jobs = {
             loadByNodeForUser: jest.fn(async () => ({})),
+            // Unstubbed by default, so every test that is not about run stats
+            // sees the node exactly as the registry served it (no `runStats`).
+            // The controller logs that as a warning; it is not this suite's
+            // subject, so the line is kept off the test output.
+            agentTaskOutcomesForNode: jest.fn(async () => {
+                throw new Error('run stats are not stubbed in this test');
+            }),
             promoteWaitingForNode: jest.fn(async () => 0),
             historyForNode: jest.fn(async () => []),
         };
-        runs = { findByIds: jest.fn(async () => []) };
+        runs = {
+            findByIds: jest.fn(async () => []),
+            findStatusesByIds: jest.fn(async () => new Map<string, string>()),
+        };
         ceilingStub.describeForUser.mockClear();
         ceilingStub.setFleetCeilingForUser.mockClear();
         auditStub.recentForOwnerNode.mockClear();
@@ -457,6 +478,159 @@ describe('FleetController', () => {
         );
     });
 
+    describe('run stats — what the platform’s own run records say (fleet agent readiness)', () => {
+        const RUN_A = 'aaaaaaaa-aaaa-4aaa-8aaa-000000000001';
+        const RUN_B = 'aaaaaaaa-aaaa-4aaa-8aaa-000000000002';
+        const TASK = 'bbbbbbbb-bbbb-4bbb-8bbb-000000000001';
+        const outcome = (over: Record<string, unknown> = {}) => ({
+            jobId: 'job-1',
+            status: 'done',
+            costCents: 0,
+            recent: true,
+            runId: RUN_A,
+            taskId: TASK,
+            ...over,
+        });
+
+        it('a job the node reports `done` whose run FAILED counts as failed (the incident this is for)', async () => {
+            // Every run on the node was refused by the CLI: the node completed
+            // each job, and the reconciler failed each run.
+            jobs.agentTaskOutcomesForNode.mockResolvedValue({
+                outcomes: [
+                    outcome({ jobId: 'job-1', runId: RUN_A }),
+                    outcome({ jobId: 'job-2', runId: RUN_B, recent: false, costCents: 12 }),
+                ],
+                capped: false,
+            });
+            runs.findStatusesByIds.mockResolvedValue(
+                new Map([
+                    [RUN_A, 'failed'],
+                    [RUN_B, 'failed'],
+                ]),
+            );
+
+            const result = await controller.detail(auth, nodeView.id);
+
+            expect(jobs.agentTaskOutcomesForNode).toHaveBeenCalledWith(
+                'user-1',
+                nodeView.id,
+                expect.any(Date),
+            );
+            // Owner-scoped: the run ids travelled in job payloads.
+            expect(runs.findStatusesByIds).toHaveBeenCalledWith([RUN_A, RUN_B], 'user-1');
+            expect(result.node.runStats).toEqual({
+                last24h: { runs: 1, failed: 1, costCents: 0 },
+                last7d: { runs: 2, failed: 2, costCents: 12 },
+            });
+        });
+
+        it('agrees with the `failures` list beside it: one rule for both', async () => {
+            const job = {
+                id: 'job-1',
+                kind: 'agent-task',
+                status: 'done',
+                nodeId: nodeView.id,
+                targetNodeId: null,
+                requiredCapabilities: [],
+                payload: { runId: RUN_A, taskId: TASK },
+                leaseExpiresAt: null,
+                attempts: 1,
+                maxAttempts: 3,
+                createdAt: null,
+                startedAt: null,
+                completedAt: '2026-11-10T11:00:00.000Z',
+                error: null,
+            };
+            jobs.historyForNode.mockResolvedValue([job]);
+            runs.findByIds.mockResolvedValue([
+                { id: RUN_A, status: 'failed', errorMessage: 'refused' },
+            ]);
+            jobs.agentTaskOutcomesForNode.mockResolvedValue({
+                outcomes: [outcome()],
+                capped: false,
+            });
+            runs.findStatusesByIds.mockResolvedValue(new Map([[RUN_A, 'failed']]));
+
+            const result = await controller.detail(auth, nodeView.id);
+
+            expect(result.failures).toHaveLength(1);
+            expect(result.node.runStats?.last24h).toEqual({ runs: 1, failed: 1, costCents: 0 });
+        });
+
+        it('shows no numbers rather than wrong ones when the runs cannot be read', async () => {
+            jobs.agentTaskOutcomesForNode.mockResolvedValue({
+                outcomes: [outcome()],
+                capped: false,
+            });
+            runs.findStatusesByIds.mockRejectedValue(new Error('agent_runs unavailable'));
+
+            const result = await controller.detail(auth, nodeView.id);
+
+            expect(result.node.id).toBe(nodeView.id);
+            expect(result.node.runStats).toBeUndefined();
+        });
+
+        it('detail still answers when the ledger cannot be read, and says so in the log', async () => {
+            jobs.agentTaskOutcomesForNode.mockRejectedValue(new Error('fleet_jobs unavailable'));
+
+            const result = await controller.detail(auth, nodeView.id);
+
+            expect(result.node.id).toBe(nodeView.id);
+            expect(result.node.runStats).toBeUndefined();
+            expect(warnSpy).toHaveBeenCalledWith(
+                `Node run stats skipped for node ${nodeView.id}: fleet_jobs unavailable`,
+            );
+        });
+
+        it('a node that ran nothing reads zeros, and never asks for runs', async () => {
+            jobs.agentTaskOutcomesForNode.mockResolvedValue({ outcomes: [], capped: false });
+
+            const result = await controller.detail(auth, nodeView.id);
+
+            expect(result.node.runStats).toEqual({
+                last24h: { runs: 0, failed: 0, costCents: 0 },
+                last7d: { runs: 0, failed: 0, costCents: 0 },
+            });
+            expect(runs.findStatusesByIds).not.toHaveBeenCalled();
+        });
+
+        it('says when the figures are a floor', async () => {
+            jobs.agentTaskOutcomesForNode.mockResolvedValue({
+                outcomes: [outcome({ runId: null, taskId: null })],
+                capped: true,
+            });
+
+            const result = await controller.detail(auth, nodeView.id);
+
+            expect(result.node.runStats).toMatchObject({ capped: true });
+        });
+
+        it('is the owner`s ledger: someone the computer is shared with gets none, and no read is made', async () => {
+            service.getVisibleForUser.mockResolvedValue({
+                view: { ...nodeView, viewerRole: 'org-member' },
+                role: 'org-member',
+            });
+
+            const result = await controller.detail(auth, nodeView.id);
+
+            expect(jobs.agentTaskOutcomesForNode).not.toHaveBeenCalled();
+            expect(result.node.runStats).toBeUndefined();
+        });
+
+        it('the list carries none: counting failures is a per-node read, and the list is polled', async () => {
+            jobs.agentTaskOutcomesForNode.mockResolvedValue({
+                outcomes: [outcome()],
+                capped: false,
+            });
+
+            const result = await controller.list(auth);
+
+            expect(jobs.agentTaskOutcomesForNode).not.toHaveBeenCalled();
+            expect(runs.findStatusesByIds).not.toHaveBeenCalled();
+            expect(result).toEqual([{ ...nodeView, load: null }]);
+        });
+    });
+
     describe('detail — the node drawer payload (EW-776)', () => {
         const RUN_ID = '99999999-9999-4999-8999-999999999999';
         const TASK_ID = '88888888-8888-4888-8888-888888888888';
@@ -650,6 +824,8 @@ describe('FleetController', () => {
                     'lanId',
                     'macAddress',
                     'timeZone',
+                    // Fleet agent readiness: the per-CLI report.
+                    'agents',
                 ].sort(),
             );
             expect(result.secret).toBe('node-secret');
@@ -859,6 +1035,43 @@ describe('FleetController', () => {
                 secret: 'x'.repeat(43),
             } as FleetHeartbeatDto);
             expect(result).toEqual({ ok: true, node: nodeView });
+        });
+
+        describe('names the credentials a run is granted (fleet agent readiness, review N4)', () => {
+            // A node asks its agent CLIs how they are signed in with the
+            // credentials a RUN is given. Those names are this platform's
+            // configuration; the service reads it and the beat's answer
+            // carries it (`fleet.service.agent-readiness.spec.ts` pins which
+            // list that is).
+            const beat = async (agentEnvPassthrough?: unknown) => {
+                service.heartbeat.mockResolvedValue({
+                    node: nodeView,
+                    ...(agentEnvPassthrough !== undefined ? { agentEnvPassthrough } : {}),
+                });
+                return controller.heartbeat({
+                    nodeId: nodeView.id,
+                    secret: 'x'.repeat(43),
+                } as FleetHeartbeatDto);
+            };
+
+            it('carries the names the service gives, on the accepted beat', async () => {
+                expect(
+                    (await beat([...FLEET_AGENT_CREDENTIAL_ENV_NAMES])).agentEnvPassthrough,
+                ).toEqual([...FLEET_AGENT_CREDENTIAL_ENV_NAMES]);
+                expect(
+                    (await beat(['ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL']))
+                        .agentEnvPassthrough,
+                ).toEqual(['ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL']);
+            });
+
+            it('carries an EMPTY list too: "grant nothing" is an answer, not an absence', async () => {
+                const answer = await beat([]);
+                expect(answer).toHaveProperty('agentEnvPassthrough', []);
+            });
+
+            it('leaves the answer exactly as it was when the service gives none', async () => {
+                expect(await beat()).toEqual({ ok: true, node: nodeView });
+            });
         });
 
         it('promotes waiting jobs after a beat that leaves the node online, and never otherwise (slice S)', async () => {

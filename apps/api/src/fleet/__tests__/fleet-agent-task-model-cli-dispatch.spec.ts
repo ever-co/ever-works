@@ -2,6 +2,10 @@ import type {
     AgentTaskExecuteDispatcher,
     AgentTaskExecuteDispatchPayload,
 } from '@ever-works/agent/tasks-domain';
+import {
+    FLEET_JOB_PAYLOAD_HEAD_CHARS,
+    readLeadingJsonStringMembers,
+} from '@ever-works/agent/fleet';
 import { NodeDispatcherFactory, NodeJobRuntimePlugin } from '@ever-works/job-runtime-node-plugin';
 import {
     createFleetAwareAgentTaskExecuteDispatcher,
@@ -110,6 +114,45 @@ describe('fleet agent-task dispatch — model-cli plan wiring', () => {
 
     afterAll(() => {
         process.env = originalEnv;
+    });
+
+    it('writes the run and task ids at the HEAD of the stored document, whatever the plan weighs', async () => {
+        // A node's run statistics read only the first characters of each
+        // job's payload (`fleet-job-payload-head.ts`), so that their cost does
+        // not grow with the instructions. That works because of the order
+        // this router writes; if the ids ever move behind the plan, this
+        // fails here instead of the drawer silently counting by job status.
+        const heavy: FleetAgentTaskPlan = {
+            ...plan,
+            execution: {
+                ...plan.execution,
+                instructions: '# TASK {"runId":"decoy","taskId":"decoy"} '.repeat(4_000),
+            },
+        };
+        const planner = { plan: jest.fn().mockResolvedValue(heavy) };
+        await buildDispatcher(planner).enqueue(
+            payload({
+                taskId: '11111111-1111-4111-8111-111111111111',
+                agentId: '22222222-2222-4222-8222-222222222222',
+                userId: '33333333-3333-4333-8333-333333333333',
+                runId: '44444444-4444-4444-8444-444444444444',
+            }),
+        );
+
+        // What `simple-json` stores for the row.
+        const stored = JSON.stringify(store.enqueue.mock.calls[0][0].payload);
+        expect(stored.length).toBeGreaterThan(100_000);
+        expect(
+            readLeadingJsonStringMembers(stored.slice(0, FLEET_JOB_PAYLOAD_HEAD_CHARS), [
+                'runId',
+                'taskId',
+            ]),
+        ).toEqual({
+            runId: '44444444-4444-4444-8444-444444444444',
+            taskId: '11111111-1111-4111-8111-111111111111',
+        });
+        // With room to spare: the ids end well inside the head.
+        expect(stored.indexOf('"execution"')).toBeLessThan(FLEET_JOB_PAYLOAD_HEAD_CHARS / 2);
     });
 
     it('writes the plan into the job payload, drops the legacy steps and requires the provider tag', async () => {
