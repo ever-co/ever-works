@@ -287,9 +287,27 @@ There are two different paths that start a run, and they resolve the Agent diffe
 1. the Agent you pick explicitly in the picker,
 2. an Agent **assignee** on the Task,
 3. the Task's own **Agent** field,
-4. an Agent scoped to the Task's Work.
+4. the Work's **default Agent**, when the Work names one ([below](#the-works-default-agent)),
+5. an Agent scoped to the Task's Work.
 
 If exactly one candidate resolves, the run starts. If several do, or none, the picker opens and tells you which it is — each option is tagged **Assigned**, **Task agent** or **Work default**. With no candidate at all you get: _"No Agent is assigned to this Task and its Work has no default Agent."_
+
+The Work's default Agent only applies to a Task that has no Agent of its own (steps 2 and 3). A Task that has one resolves exactly as it did before the default existed, so naming a default never makes such a Task ambiguous. The picker still lists the default, tagged **Work default**, first among the Work's Agents.
+
+### The Work's default Agent
+
+A Work can name the Agent that runs its new Tasks when nobody picks one. Set it under **Work → Settings → Default Agent**, or with `PATCH /api/works/:id` and `{ "defaultAgentId": "<agent id>" }`; `null` clears it. Use it for an Agent that serves several Works: an Agent pinned to no single Work is never "an Agent scoped to the Task's Work", so before this setting such an Agent was only used when someone picked it.
+
+Every path that starts a Task without a named Agent tries the default before its older rule:
+
+- **Run** (step 4 above), including a [Mission](./missions.md#output) starting the Tasks it files;
+- the [Mission](./missions.md#output) check that decides whether a Repository Work can take Tasks at all;
+- a [Goal](./goals.md#who-runs-a-brand-new-goal)'s first iteration, when the Goal is scoped to the Work;
+- a change requested on an [App Work](./app-works-evolve.md), before the Agent of its most recent Task (it must still be allowed to commit).
+
+The setting only accepts an Agent you own, that is not archived, in the same tenant and organization as the Work. Any other id answers `404 Agent not found`, the same for an Agent of another organization as for one that does not exist. The default is checked again every time it is used: an Agent you archive, delete or move out of the Work's scope later is skipped, and the Work falls back to its only Agent until you pick another default. Automated credentials (a fleet-run token, an integration key) cannot change it.
+
+Moving a Task to **In progress** and recurring Tasks do not use it: both start only the Task's own assignees or Agent.
 
 ### Moving to In progress
 
@@ -298,7 +316,7 @@ Entering **In progress** — by drag, by the Move menu, or by the status buttons
 The right rail's **Agent** picker on Task detail writes that Task-level Agent, so assigning there is enough to make the move start a run.
 
 :::caution The Work's default Agent is not part of this fan-out
-**Run** will fall back to a Work-scoped Agent; moving the Task to In progress will not. That is why the board opens the agent picker whenever you move a card into In Progress — by drag or from the card's **Move →** menu, both go through the same handler — unless the Task has an assignee row or its own Agent. A Work default alone would move the card and start nothing.
+**Run** will fall back to the Work's default Agent or a Work-scoped Agent; moving the Task to In progress will not. That is why the board opens the agent picker whenever you move a card into In Progress — by drag or from the card's **Move →** menu, both go through the same handler — unless the Task has an assignee row or its own Agent. A Work default alone would move the card and start nothing.
 :::
 
 :::note This path was silently broken until EW-054

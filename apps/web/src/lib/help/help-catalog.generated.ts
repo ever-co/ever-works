@@ -450,6 +450,7 @@ export const HELP_ARTICLES = [
                 level: 2,
             },
             { id: 'run', text: 'Run', level: 3 },
+            { id: 'the-works-default-agent', text: 'The Work\'s default Agent', level: 3 },
             { id: 'moving-to-in-progress', text: 'Moving to In progress', level: 3 },
             {
                 id: 'acceptance-checks-quality-gates',
