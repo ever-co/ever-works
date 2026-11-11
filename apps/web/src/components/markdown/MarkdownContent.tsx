@@ -17,7 +17,22 @@ import remarkGfm from 'remark-gfm';
 import rehypeSanitize from 'rehype-sanitize';
 import { cn } from '@/lib/utils/cn';
 import { resolveMarkdownHref, resolveMarkdownImageSrc } from '@/lib/markdown/markdown-links';
-import { assessInlineMarkdown, assessMarkdown } from '@/lib/markdown/markdown-limits';
+import {
+    assessInlineMarkdownText,
+    assessMarkdownText,
+    type MarkdownTextLimitReason,
+} from '@/lib/markdown/markdown-limits';
+import {
+    BLOCK_TREE_BUDGETS,
+    INLINE_TREE_BUDGETS,
+    MarkdownBudgetError,
+    MarkdownMeasured,
+    remarkMeasureOnly,
+    remarkRenderBudget,
+    treeBudgetReason,
+    type MarkdownTreeCounts,
+    type MarkdownTreeLimitReason,
+} from '@/lib/markdown/markdown-tree-budget';
 
 /**
  * The one renderer for Markdown that users and agents write into record
@@ -43,12 +58,16 @@ import { assessInlineMarkdown, assessMarkdown } from '@/lib/markdown/markdown-li
  *    same-origin and load lazily without a referrer.
  *  - Headings are demoted two levels (`#` renders an `<h3>`) so a description
  *    never competes with the page's own `<h1>` / section `<h2>` outline.
- *  - It never throws (PR #3137 review): `lib/markdown/markdown-limits` refuses
- *    text too long or too deeply nested to parse safely (2,000 nested list
- *    levels overflow the parser's stack), the parse runs inside a try/catch on
- *    the server and the client, and an error boundary catches the rest. All
- *    three show the text as escaped plain text with a one-line note, so a bad
- *    description can never take its detail page — and its Edit button — down.
+ *  - It never throws or stalls (PR #3137 review and closure checks):
+ *    `lib/markdown/markdown-limits` refuses text too long, too deeply nested
+ *    or too costly to PARSE (2,000 nested list levels overflow the parser's
+ *    stack); `lib/markdown/markdown-tree-budget` then counts exactly what the
+ *    parsed tree will build — padded table cells, blocks, links, depth — and
+ *    stops before the HTML step when it is over budget; the parse runs inside
+ *    a try/catch on the server and the client, and an error boundary catches
+ *    the rest. All of them show the text as escaped plain text with a
+ *    one-line note, so a bad description can never take its detail page —
+ *    and its Edit button — down.
  */
 
 export type MarkdownContentSize = 'sm' | 'xs';
@@ -244,7 +263,14 @@ function rehypeDropFootnotes() {
     };
 }
 
-const REMARK_PLUGINS = [remarkGfm];
+/**
+ * The budget plugin runs LAST among the remark plugins: on the parsed tree,
+ * before remark-rehype turns it into HTML (where table rows are padded).
+ */
+const REMARK_PLUGINS: Options['remarkPlugins'] = [
+    remarkGfm,
+    [remarkRenderBudget, BLOCK_TREE_BUDGETS],
+];
 
 /**
  * Every block construct the tokenizer knows, by its micromark name. The
@@ -278,7 +304,11 @@ function remarkInlineOnly(this: { data(): unknown }) {
     ];
 }
 
-const INLINE_REMARK_PLUGINS = [remarkGfm, remarkInlineOnly];
+const INLINE_REMARK_PLUGINS: Options['remarkPlugins'] = [
+    remarkGfm,
+    remarkInlineOnly,
+    [remarkRenderBudget, INLINE_TREE_BUDGETS],
+];
 /**
  * Footnote ids are namespaced by `rehype-sanitize` alone (`user-content-…`,
  * against DOM clobbering); remark-rehype's own prefix is turned off so they
@@ -302,8 +332,45 @@ function parseMarkdown(options: Options): ReactElement | null {
     try {
         return Markdown(options);
     } catch {
+        // A MarkdownBudgetError (the parsed tree is over a budget) or an
+        // unforeseen parser failure: either way, plain text.
         return null;
     }
+}
+
+export type MarkdownRenderAssessment =
+    | { render: true; counts: MarkdownTreeCounts }
+    | { render: false; reason: MarkdownTextLimitReason | MarkdownTreeLimitReason | 'parseError' };
+
+/**
+ * Would this text render as Markdown? The same text pre-check, parse and tree
+ * walk as the component, stopping before HTML: cheap enough to call many
+ * times (tests search for each budget's limit with it).
+ */
+export function assessMarkdownRender(
+    content: string,
+    variant: 'block' | 'inline' = 'block',
+): MarkdownRenderAssessment {
+    const text =
+        variant === 'block' ? assessMarkdownText(content) : assessInlineMarkdownText(content);
+    if (!text.render) return { render: false, reason: text.reason };
+    const plugins: Options['remarkPlugins'] =
+        variant === 'block'
+            ? [remarkGfm, remarkMeasureOnly]
+            : [remarkGfm, remarkInlineOnly, remarkMeasureOnly];
+    try {
+        Markdown({ children: content, remarkPlugins: plugins });
+    } catch (error) {
+        if (error instanceof MarkdownMeasured) {
+            const reason = treeBudgetReason(
+                error.counts,
+                variant === 'block' ? BLOCK_TREE_BUDGETS : INLINE_TREE_BUDGETS,
+            );
+            return reason ? { render: false, reason } : { render: true, counts: error.counts };
+        }
+        if (error instanceof MarkdownBudgetError) return { render: false, reason: error.reason };
+    }
+    return { render: false, reason: 'parseError' };
 }
 
 interface BoundaryProps {
@@ -373,7 +440,7 @@ export const MarkdownContent = memo(function MarkdownContent({
     id,
     'data-testid': testId,
 }: MarkdownContentProps) {
-    const parsed = assessMarkdown(content).render
+    const parsed = assessMarkdownText(content).render
         ? parseMarkdown({
               children: content,
               remarkPlugins: REMARK_PLUGINS,
@@ -410,7 +477,7 @@ export const MarkdownInline = memo(function MarkdownInline({
     className,
     'data-testid': testId,
 }: Omit<MarkdownContentProps, 'size' | 'id'>) {
-    const parsed = assessInlineMarkdown(content).render
+    const parsed = assessInlineMarkdownText(content).render
         ? parseMarkdown({
               children: content,
               remarkPlugins: INLINE_REMARK_PLUGINS,

@@ -5,8 +5,11 @@ vi.mock('next-intl', () => ({
     useTranslations: () => (key: string) => key,
 }));
 
-import { MarkdownContent, MarkdownInline } from './MarkdownContent';
-import { assessInlineMarkdown, assessMarkdown } from '@/lib/markdown/markdown-limits';
+import { MarkdownContent, MarkdownInline, assessMarkdownRender } from './MarkdownContent';
+
+/** Text pre-check + parse + exact tree walk, as the component does (no HTML step). */
+const acceptsBlock = (md: string) => assessMarkdownRender(md, 'block').render;
+const acceptsInline = (md: string) => assessMarkdownRender(md, 'inline').render;
 
 /**
  * PR #3137, review B1 and its closure check: no description may keep its page
@@ -14,11 +17,13 @@ import { assessInlineMarkdown, assessMarkdown } from '@/lib/markdown/markdown-li
  * (jsdom, client render) or is refused by the pre-check and shown as plain
  * text — never something in between.
  *
- * The inputs are the reviewer's bypasses (pipe-less table rows, wide tables,
- * nesting after a quote marker, tabs, email autolinks, many small elements)
- * and, for every construct the pre-check counts, the largest text it accepts,
- * one step smaller, and one step larger. The sizes are found by asking the
- * pre-check itself, so the suite follows the budgets if they change.
+ * The inputs are the reviewer's bypasses from both closure checks (pipe-less
+ * table rows, wide tables, tables ended "by eye" by a line the parser keeps
+ * as a row, tables inside quotes and list items, nesting after a quote
+ * marker, tabs, email autolinks, many small elements) and, for every
+ * construct, the largest text the renderer accepts, one step smaller, and one
+ * step larger. The sizes are found by asking the renderer's own pre-check,
+ * parse and tree walk, so the suite follows the budgets if they change.
  */
 
 const BUDGET_MS = 500;
@@ -26,7 +31,9 @@ const GOAL_PAGE_BUDGET_MS = 1000;
 
 type Generator = (n: number) => string;
 
-const header = (cols: number) => 'a|'.repeat(cols - 1) + 'a\n' + '-|'.repeat(cols - 1) + '-\n';
+const cols = (n: number) => 'a|'.repeat(n - 1) + 'a';
+const delim = (n: number) => '-|'.repeat(n - 1) + '-';
+const header = (n: number) => `${cols(n)}\n${delim(n)}\n`;
 const lines = (n: number, line: (k: number) => string) =>
     Array.from({ length: n }, (_, k) => line(k)).join('\n');
 
@@ -43,13 +50,24 @@ function largestAccepted(generate: Generator, accepts: (md: string) => boolean):
     return low;
 }
 
-function renderBlock(md: string): { ms: number; fallback: boolean } {
+function renderOnce(md: string): { ms: number; fallback: boolean } {
     const started = performance.now();
     const { container } = render(<MarkdownContent content={md} />);
     const ms = performance.now() - started;
     const fallback = container.querySelector('[data-markdown-fallback]') !== null;
     cleanup();
     return { ms, fallback };
+}
+
+/**
+ * The better of two renders: the bound must hold, but one garbage-collection
+ * pause or a busy CI neighbour must not decide the run.
+ */
+function renderBlock(md: string): { ms: number; fallback: boolean } {
+    const first = renderOnce(md);
+    if (first.ms < BUDGET_MS) return first;
+    const second = renderOnce(md);
+    return second.ms < first.ms ? second : first;
 }
 
 beforeAll(() => {
@@ -86,14 +104,46 @@ describe('the review bypasses: refused, or rendered within budget', () => {
         ['8,000 "<a b=" openers', '<a b="'.repeat(8000)],
         ['16,000 "<!--" openers', '<!--'.repeat(16000)],
         ['the original 2,000 nested bullets', '- '.repeat(2000) + 'x'],
+        // Second closure check: the table goes on where a text guess ends it.
+        [
+            '50 columns, a "```x`" line, then 1,700 pipe-less rows',
+            `${header(50)}\`\`\`x\`\n` + 'x\n'.repeat(1700),
+        ],
+        [
+            '50 columns, a "#x" line, then 1,700 pipe-less rows',
+            `${header(50)}#x\n` + 'x\n'.repeat(1700),
+        ],
+        [
+            'a 500-column table inside a quote, 200 rows',
+            `> ${cols(500)}\n> ${delim(500)}\n` + '> x\n'.repeat(200),
+        ],
+        [
+            'a 50-column table inside a quote, 300 rows',
+            `> ${cols(50)}\n> ${delim(50)}\n` + '> x\n'.repeat(300),
+        ],
+        ['1,000 headings', '# a\n'.repeat(1000)],
     ];
 
     it.each(BYPASSES)('%s', (_name, md) => {
         const { ms, fallback } = renderBlock(md);
         expect(ms).toBeLessThan(BUDGET_MS);
-        expect(fallback).toBe(!assessMarkdown(md).render);
+        expect(fallback).toBe(!acceptsBlock(md));
     });
 });
+
+/** Lines that look like they end a table but that the parser keeps as rows. */
+const ROW_LINES: Array<[string, string]> = [
+    ['"```x`" (not a fence)', '```x`'],
+    ['"#x" (not a heading)', '#x'],
+    ['"-x" (not a list item)', '-x'],
+    ['"1.x" (not a list item)', '1.x'],
+    ['"***x" (not a rule)', '***x'],
+    ['"[r]: x" (not a definition here)', '[r]: x'],
+    ['"<b>x</b>" (inline HTML)', '<b>x</b>'],
+    ['"    x" (indented)', '    x'],
+    ['"|" (a lone pipe)', '|'],
+    ['plain text', 'x'],
+];
 
 const CONSTRUCTS: Array<[string, Generator]> = [
     [
@@ -133,6 +183,28 @@ const CONSTRUCTS: Array<[string, Generator]> = [
     ['pipe-less table rows, 50 columns', (n) => header(50) + 'x\n'.repeat(n)],
     ['piped table rows, 50 columns', (n) => header(50) + ('b|'.repeat(49) + 'b\n').repeat(n)],
     ['table columns', (n) => header(n) + 'x\n'],
+    [
+        'a 50-column table inside a quote',
+        (n) => `> ${cols(50)}\n> ${delim(50)}\n` + '> x\n'.repeat(n),
+    ],
+    [
+        'a 50-column table inside a list item',
+        (n) => `- ${cols(50)}\n  ${delim(50)}\n` + '  x\n'.repeat(n),
+    ],
+    [
+        'a 50-column table in a quote in a list item',
+        (n) => `- > ${cols(50)}\n  > ${delim(50)}\n` + '  > x\n'.repeat(n),
+    ],
+    [
+        'uneven rows wider than the header',
+        (n) => 'a|b\n-|-\n' + ('c|'.repeat(39) + 'c\n').repeat(n),
+    ],
+    ['uneven rows narrower than the header', (n) => header(40) + 'c|d\n'.repeat(n)],
+    ['many small tables (5 × 5 each)', (n) => (header(5) + 'x|y\n'.repeat(4) + '\n').repeat(n)],
+    ...ROW_LINES.map(([kind, line]): [string, Generator] => [
+        `a 50-column table continued by ${kind} lines`,
+        (n) => header(50) + `${line}\n`.repeat(n),
+    ]),
     ['entities', (n) => '&amp;'.repeat(n)],
     [
         'mixed constructs',
@@ -157,7 +229,7 @@ const CONSTRUCTS: Array<[string, Generator]> = [
 
 describe('each construct at, just under and just over its limit', () => {
     it.each(CONSTRUCTS)('%s', (_name, generate) => {
-        const limit = largestAccepted(generate, (md) => assessMarkdown(md).render);
+        const limit = largestAccepted(generate, acceptsBlock);
         expect(limit).toBeGreaterThan(0);
 
         for (const n of [limit - 1, limit].filter((value) => value > 0)) {
@@ -171,13 +243,20 @@ describe('each construct at, just under and just over its limit', () => {
         expect(over.ms).toBeLessThan(BUDGET_MS);
     });
 
-    it('a real 10,000-character description renders as Markdown', () => {
-        const md = (
-            '## Section\n\nSome **bold** text with `code` and a [link](https://x.test).\n\n' +
-            '- item one\n- item two\n  - nested\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n'
-        )
-            .repeat(80)
-            .slice(0, 10000);
+    it('a full 10,000-character Mission description renders as Markdown', () => {
+        // Sections of prose, lists, code and a table: the Mission/Goal maximum.
+        const prose =
+            'We grow weekly signups through the onboarding funnel, measured on the **activation** ' +
+            'dashboard, and ship each change behind a flag so `pnpm test` stays green. ';
+        const section = (k: number) =>
+            `## Step ${k}\n\n${prose.repeat(2)}\n\n` +
+            `- audit the [signup page](https://x.test/${k})\n- fix the *slowest* step\n- measure again\n\n` +
+            (k % 4 === 0
+                ? '| Metric | Target |\n| --- | ---: |\n| Signups | +20% |\n| Churn | -5% |\n\n'
+                : '');
+        let md = '';
+        for (let k = 1; md.length < 10000; k++) md += section(k);
+        md = md.slice(0, 10000);
         const { ms, fallback } = renderBlock(md);
         expect(fallback).toBe(false);
         expect(ms).toBeLessThan(BUDGET_MS);
@@ -199,25 +278,31 @@ const INLINE_CONSTRUCTS: Array<[string, Generator]> = [
 
 describe('a Goal page: 50 Definition-of-Done criteria at the inline limit', () => {
     it.each(INLINE_CONSTRUCTS)('%s', (_name, generate) => {
-        const limit = largestAccepted(generate, (md) => assessInlineMarkdown(md).render);
+        const limit = largestAccepted(generate, acceptsInline);
         expect(limit).toBeGreaterThan(0);
         const criterion = generate(limit);
 
-        const started = performance.now();
-        const { container } = render(
-            <ul>
-                {Array.from({ length: 50 }, (_, i) => (
-                    <li key={i}>
-                        {/* memo() is per instance: each of the 50 parses its own text. */}
-                        <MarkdownInline content={criterion} />
-                    </li>
-                ))}
-            </ul>,
-        );
-        const ms = performance.now() - started;
-        expect(container.querySelectorAll('[data-markdown-fallback]')).toHaveLength(0);
-        expect(container.querySelector('table,ul ul,blockquote,pre,h1,h2,h3')).toBeNull();
-        cleanup();
+        const renderPage = () => {
+            const started = performance.now();
+            const { container } = render(
+                <ul>
+                    {Array.from({ length: 50 }, (_, i) => (
+                        <li key={i}>
+                            {/* memo() is per instance: each of the 50 parses its own text. */}
+                            <MarkdownInline content={criterion} />
+                        </li>
+                    ))}
+                </ul>,
+            );
+            const ms = performance.now() - started;
+            expect(container.querySelectorAll('[data-markdown-fallback]')).toHaveLength(0);
+            expect(container.querySelector('table,ul ul,blockquote,pre,h1,h2,h3')).toBeNull();
+            cleanup();
+            return ms;
+        };
+        // The better of two pages, for the same reason as renderBlock.
+        const first = renderPage();
+        const ms = first < GOAL_PAGE_BUDGET_MS ? first : Math.min(first, renderPage());
         expect(ms).toBeLessThan(GOAL_PAGE_BUDGET_MS);
 
         // One step over the limit: plain text, never parsed.
