@@ -28,6 +28,7 @@ case "$image" in
 esac
 
 commit="$(git rev-parse --verify HEAD)"
+top="$(git rev-parse --show-toplevel)"
 folder="$(git rev-parse --show-prefix)"
 folder="${folder%/}"
 if [ -n "$(git status --porcelain -- .)" ]; then
@@ -45,8 +46,9 @@ echo "ever-works-screen linux-x64 release build of $commit ($folder) in $image"
 # RUSTUP_TOOLCHAIN: use the image's toolchain as it is (rust-toolchain.toml would
 # also ask rustup for clippy and rustfmt, which a release build does not need).
 # The build runs in /build/ever-works-screen, the path build-release.sh remaps,
-# and the outputs are handed back to the caller's user.
-git -c core.autocrlf=false -c core.eol=lf archive --format=tar "$commit:$folder" |
+# and the outputs are handed back to the caller's user. (git archive runs from
+# the top: from a subdirectory it would archive only that part of the tree.)
+git -C "$top" -c core.autocrlf=false -c core.eol=lf archive --format=tar "$commit:$folder" |
   MSYS_NO_PATHCONV=1 docker run --rm -i --platform linux/amd64 \
     --volume "$out_abs:/out" \
     --env "SOURCE_DATE_EPOCH=$epoch" \
