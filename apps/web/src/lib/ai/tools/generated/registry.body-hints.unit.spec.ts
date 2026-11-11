@@ -191,6 +191,9 @@ describe('template tools need the user’s confirmation on every call', () => {
         'set_default_template',
         'fork_template',
         'update_custom_template',
+        'customize_template',
+        'customize_template_from_base',
+        'switch_website_template',
     ])('%s is always gated as privileged', (tool) => {
         const op = ALL_OPERATIONS.find((o) => o.toolName === tool);
         expect(op, tool).toBeDefined();

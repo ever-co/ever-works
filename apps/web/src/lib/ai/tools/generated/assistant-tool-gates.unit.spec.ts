@@ -248,6 +248,9 @@ describe('privileged / run-starting generated tools are gated on every call', ()
         'set_default_template',
         'fork_template',
         'update_custom_template',
+        'customize_template',
+        'customize_template_from_base',
+        'switch_website_template',
     ])('%s', async (name) => {
         const op = byName(name);
         expect(op, name).toBeDefined();
