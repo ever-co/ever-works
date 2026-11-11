@@ -238,13 +238,18 @@ export interface CreateTaskInput {
     /**
      * The record this Task is derived from — a Mission's planned Task, a Goal's loop
      * iteration — whose title, brief or description it carries. Its visibility is read
-     * fresh at create and the Task is never wider than it:
+     * fresh at create and the Task takes it instead of the insert-time default, which it
+     * only ever narrows:
      *
      *  - `private` → the Task is private (as {@link derivedFromPrivate}).
      *  - `team` → the Task sits on the record's Teams (the first as `teamId`, the rest as
      *    `team_resources`, as `RecordVisibilityService.setTeams` stores them) with `team`
      *    visibility and the record's `visibilityExplicit`, instead of the insert-time
-     *    `organization` default. Only Teams of the Task's own Organization are used; a
+     *    `organization` default. Readers: the parent's Teams, plus the members of the Task's
+     *    Work as for any `team` Task. For a Mission those can read the Mission too (its
+     *    `mission_works`); a Goal has no Work rule, so a member of a Team Goal's Work who is
+     *    on none of its Teams reads the iteration but not the Goal (review of #3165, kept:
+     *    still far narrower than `organization`). Only Teams of the Task's own Organization are used; a
      *    `team` record with none (a value picked by hand) files a `team` Task on no Team,
      *    explicit, so it never widens on its own. A `teamId` the caller passes wins over
      *    the record's Teams, as it does without a source, and a sub-task keeps its
@@ -1027,7 +1032,7 @@ export class TasksService {
         }
 
         // Record visibility: a Task derived from a Team-shared record sits on that record's
-        // Teams, never wider than it (see `CreateTaskInput.derivedFrom`).
+        // Teams instead of the whole Organization (see `CreateTaskInput.derivedFrom`).
         const stamp = options.ownershipStamp ?? ownershipScope;
         const derived = await this.derivedVisibility(userId, input, stamp?.organizationId ?? null);
         if (derived?.private) privateSource = true;
@@ -2927,7 +2932,8 @@ export class TasksService {
 
     /**
      * {@link CreateTaskInput.derivedFrom}: what the new Task takes from the record it is
-     * derived from, read fresh. It only ever narrows: `private`, or `team` on the record's
+     * derived from, read fresh. It only ever narrows the insert-time default: `private`, or
+     * `team` (the parent's Teams, plus the Work's members as for any `team` Task) on the record's
      * Teams that belong to the Task's own Organization (`organizationId`, the scope the Task
      * is stamped with). A `teamId` the caller chose wins over the record's Teams, exactly as
      * without a source, so a source never adds a Team the caller did not ask for, and a
@@ -2982,6 +2988,23 @@ export class TasksService {
             private: false,
             teams: { teamIds, explicit: state.visibilityExplicit || teamIds.length === 0 },
         };
+    }
+
+    /**
+     * The Organization of the caller's own parent Task when the new sub-task names the
+     * parent's own Team (`teamId` equal to the parent's), else `null`. The parent is looked up
+     * exactly as `create` looks it up for the scope check (`findByIdAndUser` in the request
+     * scope). A personal parent answers `null`: its Team stays the caller's own.
+     */
+    private async parentTeamOrganization(
+        userId: string,
+        input: CreateTaskInput,
+        ownershipScope?: OwnershipScope,
+    ): Promise<string | null> {
+        if (!input.parentTaskId || !input.teamId) return null;
+        const parent = await this.tasks.findByIdAndUser(input.parentTaskId, userId, ownershipScope);
+        if (!parent || !parent.organizationId || parent.teamId !== input.teamId) return null;
+        return parent.organizationId;
     }
 
     private assertTitle(title: string): void {
@@ -3040,8 +3063,21 @@ export class TasksService {
             if (!this.teams) {
                 throw new BadRequestException('Team repository not wired in this context.');
             }
+            // A sub-task must carry its parent's `teamId` (`assertParentScopeMatches`), and a
+            // Task filed by a Team Mission or Goal sits on that record's Team, which a colleague
+            // may own. The caller's own parent Task (loaded in this scope, as the parent check
+            // below loads it) already holds that Team, so it only has to be a Team of the
+            // parent's Organization: the caller-owns-the-Team rule would refuse every sub-task
+            // of such a Task. Any other Team is still the caller's own.
+            const parentOrganizationId = await this.parentTeamOrganization(
+                userId,
+                input,
+                ownershipScope,
+            );
             const team = await this.teams.findOne({
-                where: ownershipWhereWith<Team>(userId, ownershipScope, { id: input.teamId }),
+                where: parentOrganizationId
+                    ? { id: input.teamId, organizationId: parentOrganizationId }
+                    : ownershipWhereWith<Team>(userId, ownershipScope, { id: input.teamId }),
                 select: ['id'],
             });
             if (!team) {

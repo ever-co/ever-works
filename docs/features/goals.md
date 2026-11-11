@@ -121,13 +121,15 @@ with no agent still leaves the loop **stuck** with `no-candidate-agent` until yo
 
 ### Who can see a Goal's iterations
 
-Each iteration is a Task that carries the Goal's title and brief, so it is never shared more widely than the Goal:
+Each iteration is a Task that carries the Goal's title and brief. It is filed with the Goal's own sharing: on the Goal's Teams when the Goal is shared with a Team, plus the members of the iteration's Work, as for any Team Task:
 
-| The Goal is                      | Its iteration Tasks are                                                                                                                                                           |
-| -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Private**                      | Private: you and the Task's participants.                                                                                                                                         |
-| Shared with a **Team**           | Filed on the Goal's Teams (the first is the Task's Team) with **Team** visibility: the members of those Teams and of the Goal's Work (if it has one), not the whole Organization. |
-| Shared with the **Organization** | Shared with the Organization, like any new Task there.                                                                                                                            |
+| The Goal is                      | Its iteration Tasks are                                                                                                                                                                                                                                           |
+| -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Private**                      | Private: you and the Task's participants.                                                                                                                                                                                                                         |
+| Shared with a **Team**           | Filed on the Goal's Teams (the first is the Task's Team) with **Team** visibility. The members of those Teams can read them, plus the members of the iteration's Work (the Goal's Work, if it has one) as for any Team Task. The rest of the Organization cannot. |
+| Shared with the **Organization** | Shared with the Organization, like any new Task there.                                                                                                                                                                                                            |
+
+A Goal itself has no Work rule: a member of the Goal's Work who is on none of its Teams can read its iterations, but not the Goal.
 
 The Goal's visibility is read again as each iteration is filed, so a change applies from the next iteration. Iterations already filed keep their visibility; change one on its own Task page. If you set a Goal to **Team** by hand, its iterations are set to **Team** by hand too, so a later Team change never widens them on its own.
 

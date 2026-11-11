@@ -15,10 +15,11 @@ import { TasksService } from '../../tasks-domain/tasks.service';
 import { GoalOrchestratorService } from '../goal-orchestrator.service';
 
 /**
- * A Goal's loop iteration is a Task carrying the Goal's title and brief, so it is never wider
- * than the Goal. A private Goal files private iterations (review 2026-10-17 F1). A Goal shared
- * with a Team used to file `organization` iterations, readable by every member of the
- * Organization; it now files them on the Goal's Teams with `team` visibility. Real
+ * A Goal's loop iteration is a Task carrying the Goal's title and brief, so it takes the Goal's
+ * sharing. A private Goal files private iterations (review 2026-10-17 F1). A Goal shared with a
+ * Team used to file `organization` iterations, readable by every member of the Organization; it
+ * now files them on the Goal's Teams with `team` visibility (the Goal's Teams, plus the members
+ * of the iteration's Work as for any `team` Task). Real
  * `TasksService`, `TaskRepository` and `RecordVisibilityService` on an in-memory SQLite database
  * with `RecordVisibilitySubscriber` registered; only the run dispatch is a double.
  */
@@ -162,7 +163,7 @@ describe('Goal loop iterations take the Goal visibility (real SQLite)', () => {
 
     const ORG_SCOPE = { tenantId: TENANT, organizationId: ORG };
 
-    it('a Team Goal files its iteration on its Team, visible to that Team only', async () => {
+    it('a Team Goal files its iteration on its Team instead of the whole Organization', async () => {
         const design = await team('Design');
         const { goal, transitions } = await advance(ORG_SCOPE, { visibility: 'team' }, [design]);
         expect(goal).toMatchObject({ visibility: 'team', visibilityExplicit: false });

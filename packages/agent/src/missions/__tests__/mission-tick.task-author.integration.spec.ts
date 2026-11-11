@@ -264,7 +264,7 @@ describe('Mission Task output files a Task the database accepts (real SQLite)', 
             });
         });
 
-        it('a Team Mission files a Task on its Team, visible to that Team only', async () => {
+        it('a Team Mission files a Task on its Team instead of the whole Organization', async () => {
             const design = await team('Design');
             const { mission, outcome } = await tick(
                 ORG_SCOPE,
@@ -461,6 +461,92 @@ describe('Mission Task output files a Task the database accepts (real SQLite)', 
             );
             const row = await taskRows.findOneByOrFail({ id: task.id });
             expect(row).toMatchObject({ teamId: null, visibility: 'organization' });
+        });
+
+        describe("a sub-task of a Task filed on a colleague's Team (review of #3165)", () => {
+            /** What the web form's "Add sub-task" sends: the parent's six owners. */
+            function subTask(parent: Task, teamId: string | null) {
+                return {
+                    title: 'Write the waitlist email',
+                    parentTaskId: parent.id,
+                    workId: parent.workId ?? null,
+                    missionId: parent.missionId ?? null,
+                    ideaId: parent.ideaId ?? null,
+                    teamId,
+                    agentId: parent.agentId ?? null,
+                    goalId: parent.goalId ?? null,
+                    createdByType: 'user' as const,
+                    createdById: OWNER,
+                };
+            }
+
+            it("is created on the parent's Team, which the Mission owner does not own", async () => {
+                const design = await team('Design');
+                const { tasksService } = await tick(
+                    ORG_SCOPE,
+                    { visibility: 'team' },
+                    {
+                        teams: [design],
+                    },
+                );
+                const [parent] = await taskRows.find();
+                expect(parent.teamId).toBe(design.id);
+
+                // Was `Team <id> not found.`: the Team-ownership check wants the caller's own Team.
+                const child = await tasksService.create(
+                    OWNER,
+                    subTask(parent, parent.teamId ?? null),
+                    ORG_SCOPE,
+                );
+                expect(await taskRows.findOneByOrFail({ id: child.id })).toMatchObject({
+                    parentTaskId: parent.id,
+                    teamId: design.id,
+                    organizationId: ORG,
+                    visibility: 'team',
+                });
+            });
+
+            it("still refuses a sub-task naming another colleague's Team", async () => {
+                const design = await team('Design');
+                const growth = await team('Growth');
+                const { tasksService } = await tick(
+                    ORG_SCOPE,
+                    { visibility: 'team' },
+                    {
+                        teams: [design],
+                    },
+                );
+                const [parent] = await taskRows.find();
+
+                await expect(
+                    tasksService.create(OWNER, subTask(parent, growth.id), ORG_SCOPE),
+                ).rejects.toThrow(`Team ${growth.id} not found.`);
+                expect(await taskRows.count()).toBe(1);
+            });
+
+            it("still refuses a Task (not a sub-task) naming a colleague's Team", async () => {
+                const design = await team('Design');
+                const { tasksService } = await tick(
+                    ORG_SCOPE,
+                    { visibility: 'team' },
+                    {
+                        teams: [design],
+                    },
+                );
+
+                await expect(
+                    tasksService.create(
+                        OWNER,
+                        {
+                            title: 'On their Team',
+                            teamId: design.id,
+                            createdByType: 'user',
+                            createdById: OWNER,
+                        },
+                        ORG_SCOPE,
+                    ),
+                ).rejects.toThrow(`Team ${design.id} not found.`);
+            });
         });
 
         it('a personal Mission (private by default) files a private Task', async () => {

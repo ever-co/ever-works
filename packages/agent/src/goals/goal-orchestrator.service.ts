@@ -1133,7 +1133,9 @@ export class GoalOrchestratorService {
                     // Review 2026-10-17 F1: the Task carries the Goal's title
                     // and brief, so a private Goal's iteration stays private, and
                     // a Team Goal's sits on the Goal's Teams with `team`
-                    // visibility (`derivedFrom`, read fresh at create).
+                    // visibility (`derivedFrom`, read fresh at create): the
+                    // Goal's Teams, plus the iteration Work's members as for
+                    // any `team` Task.
                     derivedFromPrivate: goal.visibility === 'private',
                     derivedFrom: { aggregate: 'goal', id: goal.id },
                 };
