@@ -324,15 +324,24 @@ export class WorkKnowledgeDocumentRepository {
             qb.andWhere('doc.language = :language', { language: opts.language });
         }
 
-        // `tag` was declared (and passed by the KB list / search / palette) but
-        // never applied, so the Tag chip filtered nothing. `tags` is a
-        // `simple-json` array, stored as JSON text on every driver: a document
-        // carries the tag when that text holds the tag's exact JSON string
-        // (`"gdpr"`, quotes included, so `gdpr` never matches `gdpr-eu`).
+        // `tag` was declared (and passed by the KB list API, MCP `kb_list`
+        // and direct API callers) but never applied, so every document came
+        // back whatever tag was asked for. `tags` is a `simple-json` array,
+        // stored as JSON text (`["gdpr","legal"]`) on every driver. A document
+        // carries the tag when that text holds the tag's exact JSON string at
+        // the START of an element — right after `[` or `,` — so a quote inside
+        // another tag (`x"b`, `say "hi"`) never makes a false match. Matched
+        // case-exactly with a plain substring position (`instr` on SQLite,
+        // whose LIKE folds ASCII case; `strpos` on PostgreSQL), like the
+        // in-memory re-filter in `KnowledgeBaseService.listDocuments`.
         if (opts.tag) {
-            qb.andWhere(`doc.tags LIKE :tagPattern ESCAPE '\\'`, {
-                tagPattern: `%${sanitizeLikePattern(JSON.stringify(opts.tag))}%`,
-            });
+            const tagJson = JSON.stringify(opts.tag);
+            const position =
+                this.repository.manager.connection.options.type === 'postgres' ? 'strpos' : 'instr';
+            qb.andWhere(
+                `(${position}(doc.tags, :tagFirst) > 0 OR ${position}(doc.tags, :tagNext) > 0)`,
+                { tagFirst: `[${tagJson}`, tagNext: `,${tagJson}` },
+            );
         }
 
         if (opts.source) {
