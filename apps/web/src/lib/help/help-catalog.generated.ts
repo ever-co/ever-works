@@ -173,6 +173,11 @@ export const HELP_ARTICLES = [
         docsUrl: 'https://docs.ever.works/features/dashboard',
         headings: [
             { id: 'the-home-page-at-', text: 'The home page at /', level: 2 },
+            {
+                id: 'which-today-the-page-uses',
+                text: 'Which "today" the page uses',
+                level: 3,
+            },
             { id: 'the-nine-stat-tiles', text: 'The nine stat tiles', level: 3 },
             { id: 'needs-attention', text: 'Needs attention', level: 3 },
             { id: 'coming-up', text: 'Coming up', level: 3 },
@@ -266,6 +271,11 @@ export const HELP_ARTICLES = [
                 level: 3,
             },
             { id: 'the-rest-surface', text: 'The REST surface', level: 3 },
+            {
+                id: 'team-and-agents--who-works-on-a-mission',
+                text: 'Team and agents — who works on a Mission',
+                level: 2,
+            },
             { id: 'attachments', text: 'Attachments', level: 2 },
             { id: 'cloning-a-mission', text: 'Cloning a Mission', level: 2 },
             { id: 'deleting-a-mission', text: 'Deleting a Mission', level: 2 },
@@ -652,6 +662,11 @@ export const HELP_ARTICLES = [
                 id: 'heartbeats--what-an-agent-does-on-an-idle-tick',
                 text: 'Heartbeats — what an Agent does on an idle tick',
                 level: 2,
+            },
+            {
+                id: 'agents-without-a-heartbeat-and-the-last-run',
+                text: 'Agents without a heartbeat, and the last run',
+                level: 3,
             },
             { id: 'memory', text: 'Memory', level: 2 },
             { id: 'tasks-skills-and-email', text: 'Tasks, skills, and email', level: 2 },
