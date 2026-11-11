@@ -365,6 +365,17 @@ describe('TaskReviewRejectionService.claimFeedbackForRun — who gets nothing', 
         expect(rows[0].consumedByRunId).toBeNull();
     });
 
+    it('a row retired on deploy (consumed by no run) is given to no run', async () => {
+        // `RetireUnscopedReviewFindingsBeforeFixRuns`: consumedAt set, no run.
+        const rows = [
+            row({ id: 'retired', createdAt: at(1), consumedAt: at(2) }),
+            row({ id: 'new', createdAt: at(20) }),
+        ];
+        const { svc } = build(rows, [run({ id: 'r2', status: 'queued', createdAt: at(30) })]);
+        expect(ids(await claim(svc, 'r2'))).toEqual(['new']);
+        expect(rows[0]).toMatchObject({ consumedByRunId: null, consumedAt: at(2) });
+    });
+
     it('the common case — nothing open — costs one read', async () => {
         const { svc, rejections, tasks } = build(
             [row({ id: 'done', createdAt: at(1), consumedByRunId: 'r0', consumedAt: at(2) })],

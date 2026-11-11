@@ -145,6 +145,16 @@ describe('TaskReviewRejectionRepository — carried review feedback', () => {
         expect(repository.update.mock.calls.length).toBe(calls);
     });
 
+    it('the resume path’s pending read skips a row retired on deploy (consumed by no run)', async () => {
+        const { repository, rejections } = build();
+        await rejections.findPendingForTask('task-1', 3);
+        expect(repository.find).toHaveBeenCalledWith({
+            where: { taskId: 'task-1', consumedByRunId: IsNull(), consumedAt: IsNull() },
+            order: { createdAt: 'ASC' },
+            take: 3,
+        });
+    });
+
     it('knows whether anything is open', async () => {
         const { repository, rejections } = build();
         await expect(rejections.hasOpenForTask('task-1')).resolves.toBe(false);

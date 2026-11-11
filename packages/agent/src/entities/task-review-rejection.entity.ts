@@ -166,7 +166,12 @@ export class TaskReviewRejection {
     @Column({ type: 'uuid', nullable: true })
     consumedByRunId?: string | null;
 
-    /** When the run in `consumedByRunId` consumed it; NULL while pending or carried. */
+    /**
+     * When the run in `consumedByRunId` consumed it; NULL while pending or
+     * carried. Set with `consumedByRunId` NULL = retired by no run: the
+     * one-time step on deploy of fresh-run feedback (migration
+     * `1797915000000-RetireUnscopedReviewFindingsBeforeFixRuns`).
+     */
     @PortableDateColumn({ nullable: true })
     consumedAt?: Date | null;
 

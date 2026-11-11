@@ -229,6 +229,30 @@ describe('a parked fix run → the owner answers → the resumed run gets the fi
         expect(rows[1]).toMatchObject({ consumedByRunId: null, consumedAt: null });
     });
 
+    it('a row retired on deploy (consumed by no run) is not replayed by the resume either', async () => {
+        const rows = [
+            finding('retired', { consumedAt: at(2) }),
+            finding('pending', { createdAt: at(3) }),
+        ];
+        const runs: FakeRun[] = [
+            {
+                id: 'r2',
+                taskId: TASK,
+                userId: USER,
+                triggerKind: 'task',
+                status: 'completed',
+                awaitingInput: true,
+                createdAt: at(10),
+            },
+        ];
+        const { steering, seeded } = harness(rows, runs);
+        const outcome = await steering.resume('r2', USER, 'Go ahead.');
+        expect(outcome.rejectionsReplayed).toBe(1);
+        expect(seeded.get(outcome.runId)![0]).toContain('Reviewer finding pending');
+        expect(seeded.get(outcome.runId)![0]).not.toContain('Reviewer finding retired');
+        expect(rows[0]).toMatchObject({ consumedByRunId: null });
+    });
+
     it('a run that completed normally (the CI fix loop resumes those) keeps what it consumed', async () => {
         const rows = [finding('a', { consumedByRunId: 'r2' })];
         const runs: FakeRun[] = [

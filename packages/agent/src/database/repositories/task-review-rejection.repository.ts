@@ -110,7 +110,11 @@ export class TaskReviewRejectionRepository {
      */
     async findPendingForTask(taskId: string, limit = 3): Promise<TaskReviewRejection[]> {
         return this.repository.find({
-            where: { taskId, consumedByRunId: IsNull() },
+            // `consumedAt` too: a row consumed by NO run (`consumedByRunId`
+            // NULL, `consumedAt` set) was retired on deploy of #3150
+            // (`RetireUnscopedReviewFindingsBeforeFixRuns`) and is replayed by
+            // no path. Every other pending row has `consumedAt` NULL anyway.
+            where: { taskId, consumedByRunId: IsNull(), consumedAt: IsNull() },
             order: { createdAt: 'ASC' },
             take: Math.max(1, Math.min(20, limit)),
         });
@@ -146,6 +150,8 @@ export class TaskReviewRejectionRepository {
     //   consumedByRunId = R, consumedAt NULL  carried by run R, outcome unknown
     //   consumedByRunId = R, consumedAt set   consumed (unchanged; `markConsumed`
     //                                         writes both at once for a resume)
+    //   consumedByRunId NULL, consumedAt set  retired on deploy, consumed by no run
+    //                                         (`RetireUnscopedReviewFindingsBeforeFixRuns`)
     //
     // No new column: the carried state is the one combination the resume
     // path never writes. `findPendingForTask` reads a carried row as not

@@ -100,7 +100,12 @@ export function makeRejectionStore(rows: FakeRejectionRow[]) {
         // The RESUME path's two methods (orchestration M9), unchanged by this feature.
         findPendingForTask: jest.fn(async (taskId: string, limit = 3) =>
             rows
-                .filter((row) => row.taskId === taskId && row.consumedByRunId === null)
+                .filter(
+                    (row) =>
+                        row.taskId === taskId &&
+                        row.consumedByRunId === null &&
+                        row.consumedAt === null,
+                )
                 .sort(oldestFirst)
                 .slice(0, Math.max(1, Math.min(20, limit))),
         ),

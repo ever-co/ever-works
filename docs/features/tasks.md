@@ -341,7 +341,7 @@ The findings are data, not instructions: they sit between fence markers carrying
 
 **Each finding is fixed once.** A run carries the findings it was given. When it completes they are used up, and a later run is not told about them again. When it fails, is cancelled, or stops to ask you a question, they go back: the next run gets them, and so does the run your answer starts (as its first message, like any resumed run).
 
-- A finding stays waiting until a run that was given it completes. Nothing else retires it — not its age, and not another run finishing in the meantime.
+- A finding stays waiting until a run that was given it completes. Nothing else retires it — not its age, and not another run finishing in the meantime. (The one exception was a single step on the deploy that introduced fix runs: findings recorded on the Task itself before it were retired then, so they did not all come due at once; findings on a still-open pull request were kept.)
 - A finding recorded on a pull request follows that pull request: once it is merged or closed, or the Task moves on to a new one, its findings are no longer given to runs. Findings recorded on the Task itself (`POST /api/tasks/:id/reject`) always are.
 - One run carries at most **10** findings, each cut at 4 KiB and 24 KiB in all. The rest wait for the next run, and the run is told how many are waiting. On one of your computers, a Task whose description leaves too little room carries fewer, and the ones left out wait too.
 
