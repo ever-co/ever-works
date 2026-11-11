@@ -990,6 +990,16 @@ export interface IGitOperations {
  * Git provider plugin for provider-specific API operations.
  * Also includes local git operations (clone, push, commit) via IGitOperations.
  */
+/**
+ * Per-call options for a provider read. `signal` cancels the request itself
+ * (the caller gave up — a timeout or a deadline): a provider passes it to its
+ * HTTP client so the call does not linger in retry or rate-limit queues.
+ * Optional everywhere; a provider that ignores it still works.
+ */
+export interface GitProviderRequestOptions {
+	readonly signal?: AbortSignal;
+}
+
 export interface IGitProviderPlugin extends IPlugin, IGitOperations {
 	readonly providerName: string;
 
@@ -1006,7 +1016,12 @@ export interface IGitProviderPlugin extends IPlugin, IGitOperations {
 		options?: ListRepositoriesOptions
 	): Promise<GitRepositoryWithPermissions[]>;
 	createRepository(options: CreateRepoOptions, token: string): Promise<GitRepository>;
-	getRepository(owner: string, repo: string, token: string): Promise<GitRepositoryWithPermissions | null>;
+	getRepository(
+		owner: string,
+		repo: string,
+		token: string,
+		requestOptions?: GitProviderRequestOptions
+	): Promise<GitRepositoryWithPermissions | null>;
 	hasRepositoryAccess?(owner: string, repo: string, token: string): Promise<boolean>;
 	/**
 	 * The provider's id and CURRENT full name of `owner/repo`, or `null` when
@@ -1037,7 +1052,7 @@ export interface IGitProviderPlugin extends IPlugin, IGitOperations {
 	updateRepository?(owner: string, repo: string, data: UpdateRepoOptions, token: string): Promise<GitRepository>;
 
 	// User & organization
-	getUser(token: string): Promise<GitUser>;
+	getUser(token: string, requestOptions?: GitProviderRequestOptions): Promise<GitUser>;
 	getOrganizations(token: string): Promise<GitOrganization[]>;
 
 	// Branch operations
@@ -1199,7 +1214,12 @@ export interface IGitProviderPlugin extends IPlugin, IGitOperations {
 	): Promise<GitPullRequest>;
 
 	// Utility
-	repositoryExists?(owner: string, repo: string, token: string): Promise<boolean>;
+	repositoryExists?(
+		owner: string,
+		repo: string,
+		token: string,
+		requestOptions?: GitProviderRequestOptions
+	): Promise<boolean>;
 	getLatestCommit?(owner: string, repo: string, branch: string, token: string): Promise<GitCommit | null>;
 
 	// Content access (for analyzing repositories)

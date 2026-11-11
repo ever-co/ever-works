@@ -1,6 +1,7 @@
 import * as fs from 'node:fs';
 import { Octokit, RequestError } from 'octokit';
 import type {
+	GitProviderRequestOptions,
 	GitRepository,
 	GitUser,
 	GitOrganization,
@@ -82,6 +83,15 @@ import { toGitProviderError } from './github-errors.js';
 // `github.plugin.ts`, which imports this service — importing the plugin here
 // would close a cycle.
 import { resolveGitHubE2eFakeOrigin } from './e2e-fakes.js';
+
+/**
+ * Octokit request parameters with the caller's `AbortSignal` (`request.signal`),
+ * so a caller that gives up cancels the HTTP request instead of leaving it in
+ * the client's retry / rate-limit queue.
+ */
+function withSignal<T extends object>(params: T, requestOptions?: GitProviderRequestOptions): T {
+	return requestOptions?.signal ? { ...params, request: { signal: requestOptions.signal } } : params;
+}
 
 /**
  * PR insights (kanban run cockpit M5/M6) — GitHub's check vocabulary
@@ -853,9 +863,9 @@ export class GitHubApiService {
 		return author;
 	}
 
-	async getUser(token: string, baseUrl?: string): Promise<GitUser> {
+	async getUser(token: string, baseUrl?: string, requestOptions?: GitProviderRequestOptions): Promise<GitUser> {
 		const octokit = this.createOctokit(token, baseUrl);
-		const { data } = await octokit.rest.users.getAuthenticated();
+		const { data } = await octokit.rest.users.getAuthenticated(withSignal({}, requestOptions));
 
 		return {
 			id: String(data.id),
@@ -882,12 +892,13 @@ export class GitHubApiService {
 		owner: string,
 		repo: string,
 		token: string,
-		baseUrl?: string
+		baseUrl?: string,
+		requestOptions?: GitProviderRequestOptions
 	): Promise<GitRepositoryWithPermissions | null> {
 		const octokit = this.createOctokit(token, baseUrl);
 
 		try {
-			const { data } = await octokit.rest.repos.get({ owner, repo });
+			const { data } = await octokit.rest.repos.get(withSignal({ owner, repo }, requestOptions));
 
 			// ── Repository facts (APW-02 T16, plan §4.3) ────────────────────────
 			// Every member below is OPTIONAL on `GitRepository`, and a payload that
@@ -902,11 +913,16 @@ export class GitHubApiService {
 			// size is left unreported rather than guessed at.
 			const emptyDefaultBranch = async (): Promise<boolean | undefined> => {
 				try {
-					await octokit.rest.repos.getBranch({
-						owner: data.owner.login,
-						repo: data.name,
-						branch: data.default_branch
-					});
+					await octokit.rest.repos.getBranch(
+						withSignal(
+							{
+								owner: data.owner.login,
+								repo: data.name,
+								branch: data.default_branch
+							},
+							requestOptions
+						)
+					);
 					// The default branch answers, so there is at least one commit.
 					return false;
 				} catch (err) {
@@ -2837,8 +2853,14 @@ export class GitHubApiService {
 		};
 	}
 
-	async repositoryExists(owner: string, repo: string, token: string, baseUrl?: string): Promise<boolean> {
-		const repository = await this.getRepository(owner, repo, token, baseUrl);
+	async repositoryExists(
+		owner: string,
+		repo: string,
+		token: string,
+		baseUrl?: string,
+		requestOptions?: GitProviderRequestOptions
+	): Promise<boolean> {
+		const repository = await this.getRepository(owner, repo, token, baseUrl, requestOptions);
 		return repository !== null;
 	}
 

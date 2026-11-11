@@ -718,6 +718,47 @@ describe('WorkLifecycleService', () => {
                 expect(workRepository.update).not.toHaveBeenCalled();
             });
 
+            it('cancels the provider call it gave up on (its AbortSignal is aborted)', async () => {
+                (service as any).ownershipCheckTimeoutMs = 20;
+                arm(makeWork({ generateStatus: { status: GenerateStatusType.ERROR } }));
+                gitFacade.hasValidCredentials.mockResolvedValue(true);
+                let seen: AbortSignal | undefined;
+                gitFacade.repositoryExists.mockImplementation(
+                    (_owner: string, _repo: string, options: { signal?: AbortSignal }) => {
+                        seen = options.signal;
+                        return new Promise(() => undefined);
+                    },
+                );
+                await expect(
+                    service.updateWork(
+                        'dir-1',
+                        { owner: 'acme', organization: true } as any,
+                        member,
+                    ),
+                ).rejects.toThrow(retry);
+                expect(seen?.aborted).toBe(true);
+            });
+
+            it('one deadline bounds the whole check, not only each call', async () => {
+                // Each call answers within the per-call limit, but together
+                // they run past the overall deadline.
+                (service as any).ownershipCheckTimeoutMs = 1_000;
+                (service as any).ownershipCheckDeadlineMs = 60;
+                arm(makeWork({ generateStatus: { status: GenerateStatusType.ERROR } }));
+                const slow = <T>(value: T) =>
+                    new Promise<T>((resolve) => setTimeout(() => resolve(value), 40));
+                gitFacade.hasValidCredentials.mockImplementation(() => slow(true));
+                gitFacade.repositoryExists.mockImplementation(() => slow(false));
+                await expect(
+                    service.updateWork(
+                        'dir-1',
+                        { owner: 'acme', organization: true } as any,
+                        member,
+                    ),
+                ).rejects.toThrow(retry);
+                expect(workRepository.update).not.toHaveBeenCalled();
+            });
+
             it('a "not found" answer still lets the owner change', async () => {
                 arm(
                     makeWork({
@@ -731,6 +772,26 @@ describe('WorkLifecycleService', () => {
                 await service.updateWork('dir-1', { owner: 'member-login' } as any, member);
                 expect(written()).toMatchObject({ owner: 'member-login' });
             });
+        });
+
+        it('re-reads the generate state AFTER the other provider calls of the update', async () => {
+            // An owner change together with a website template change: the
+            // template path asks whether the website repository exists, and
+            // the generate state must be re-read after that, just before the write.
+            const work = makeWork({ generateStatus: { status: GenerateStatusType.ERROR } });
+            arm(work);
+            workRepository.findById.mockResolvedValue(work);
+            await service.updateWork(
+                'dir-1',
+                { owner: 'acme', organization: true, websiteTemplateId: 'minimal' } as any,
+                member,
+            );
+            expect(websiteRepositoryState.isInitialized).toHaveBeenCalled();
+            expect(workRepository.findById).toHaveBeenCalled();
+            expect(
+                Math.max(...websiteRepositoryState.isInitialized.mock.invocationCallOrder),
+            ).toBeLessThan(Math.min(...workRepository.findById.mock.invocationCallOrder));
+            expect(written()).toMatchObject({ owner: 'acme', organization: true });
         });
 
         it('refuses when a generation started while the checks ran (re-read before the write)', async () => {
@@ -757,10 +818,9 @@ describe('WorkLifecycleService', () => {
                 manager,
             );
 
-            expect(gitFacade.getUser).toHaveBeenCalledWith({
-                userId: 'member-1',
-                providerId: 'github',
-            });
+            expect(gitFacade.getUser).toHaveBeenCalledWith(
+                expect.objectContaining({ userId: 'member-1', providerId: 'github' }),
+            );
             expect(written()).toMatchObject({ owner: 'member-login', organization: false });
         });
 

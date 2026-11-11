@@ -230,6 +230,11 @@ export class NoGitCredentialsError extends GitFacadeError {
 interface GitFacadeBaseOptions {
     readonly providerId: string;
     readonly workId?: string;
+    /**
+     * Cancels the provider request when the caller gives up (honoured by
+     * `getUser`, `getRepository` and `repositoryExists`).
+     */
+    readonly signal?: AbortSignal;
 }
 
 /** Token-based auth — used when caller already has a token (e.g., public repo analysis) */
@@ -246,6 +251,11 @@ export interface GitFacadeUserAuth extends GitFacadeBaseOptions {
 
 /** Git facade options: must provide at least token OR userId */
 export type GitFacadeOptions = GitFacadeTokenAuth | GitFacadeUserAuth;
+
+/** The per-call options a plugin read takes (only when there is something to pass). */
+function requestOptionsOf(options: GitFacadeOptions): { signal: AbortSignal } | undefined {
+    return options.signal ? { signal: options.signal } : undefined;
+}
 
 /**
  * Merge-policy matrix (Wave 3, founder decision D4) — the "who is asking"
@@ -804,7 +814,8 @@ export class GitFacadeService implements IGitFacade {
 
     async getUser(options: GitFacadeOptions): Promise<GitUser> {
         const { plugin, token } = await this.resolvePluginAndToken(options);
-        return plugin.getUser(token);
+        const requestOptions = requestOptionsOf(options);
+        return requestOptions ? plugin.getUser(token, requestOptions) : plugin.getUser(token);
     }
 
     async getOrganizations(options: GitFacadeOptions): Promise<GitOrganization[]> {
@@ -818,7 +829,10 @@ export class GitFacadeService implements IGitFacade {
         options: GitFacadeOptions,
     ): Promise<GitRepositoryWithPermissions | null> {
         const { plugin, token } = await this.resolvePluginAndToken(options);
-        return plugin.getRepository(owner, repo, token);
+        const requestOptions = requestOptionsOf(options);
+        return requestOptions
+            ? plugin.getRepository(owner, repo, token, requestOptions)
+            : plugin.getRepository(owner, repo, token);
     }
 
     async listRepositories(
@@ -966,10 +980,16 @@ export class GitFacadeService implements IGitFacade {
         options: GitFacadeOptions,
     ): Promise<boolean> {
         const { plugin, token } = await this.resolvePluginAndToken(options);
+        // Without a signal the plugin is called exactly as before.
+        const requestOptions = requestOptionsOf(options);
         if (plugin.repositoryExists) {
-            return plugin.repositoryExists(owner, repo, token);
+            return requestOptions
+                ? plugin.repositoryExists(owner, repo, token, requestOptions)
+                : plugin.repositoryExists(owner, repo, token);
         }
-        const repository = await plugin.getRepository(owner, repo, token);
+        const repository = requestOptions
+            ? await plugin.getRepository(owner, repo, token, requestOptions)
+            : await plugin.getRepository(owner, repo, token);
         return repository !== null;
     }
 
