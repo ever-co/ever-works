@@ -244,6 +244,26 @@ describe('redirectsWebhook', () => {
     it('does not ask for a pause or a description change', () => {
         expect(redirectsWebhook({ id: 'w1', body: { status: 'paused' } })).toBe(false);
         expect(redirectsWebhook({ id: 'w1', body: { description: 'ops' } })).toBe(false);
+        expect(redirectsWebhook({ id: 'w1', body: { description: 'ops', status: 'paused' } })).toBe(
+            false,
+        );
+    });
+
+    it('asks when the call widens which events it ships out (organizationIds / excludeOriginTags)', () => {
+        expect(
+            redirectsWebhook({
+                id: 'w1',
+                body: { organizationIds: ['00000000-0000-4000-8000-000000000001'] },
+            }),
+        ).toBe(true);
+        expect(redirectsWebhook({ id: 'w1', body: { excludeOriginTags: [] } })).toBe(true);
+    });
+
+    it('asks for any field it does not know (allowlist, fails closed)', () => {
+        expect(redirectsWebhook({ id: 'w1', body: { headers: { 'x-a': '1' } } })).toBe(true);
+        expect(redirectsWebhook({ id: 'w1', body: { description: 'ops', workId: 'w-2' } })).toBe(
+            true,
+        );
     });
 });
 
