@@ -170,6 +170,17 @@ All four routes are owner-scoped under `/api/me/missions`:
 When the Mission↔Work relation table shipped, a one-time backfill walked the historical Mission → Idea → Work chain and wrote a `created` relation for every Work a Mission had already built. New Works built from a Mission's Ideas keep appearing in the derived **Related Works** panel automatically, but they are **not** auto-stamped into **Attached Works** — attach a `created` relation yourself if you want the explicit edge.
 :::
 
+## Team and agents — who works on a Mission
+
+The **Team and agents** panel in the right-hand rail of `/missions/:id` (under _Visibility_) answers "who works on this?" in one read:
+
+- the **Teams** that hold this Mission as a team resource (attached on the Team's page), each linking to `/teams/:id`, with the **Agents** on that Team;
+- then the **other Agents** working on it that no listed Team already shows: Agents scoped to this Mission, and Agents scoped to one of its [attached Works](#attached-works-and-relations), each with the Work it works on.
+
+Every Agent row shows its status and **Last run `<time ago>` · `<status>`** (or _Never ran_) — the same last run the [Agent card](./agents.md#agents-without-a-heartbeat-and-the-last-run) shows. Archived Agents are left out.
+
+`GET /api/me/missions/:id/team` serves it: `{ teams: [{ id, name, slug, agents }], agents: [{ …, via: 'mission' | 'work', workId, workName }] }`. It is owner-gated in the active workspace exactly like `GET /api/me/missions/:id/works` (a foreign or out-of-scope Mission is a `404`), Teams are read only in the Mission's own Organization, and every Agent goes through the same visibility rule as the Agents list's _Organization_ tab — so another member's **private** Agent on a shared Team is never listed.
+
 ## Attachments
 
 A Mission can carry uploaded files — a brief, a spreadsheet of competitors, a brand PDF, a CSV of seed data. They live in the **Attachments** section at the bottom of the Mission detail page, rendered as the same tile grid used by Ideas, Agents and Tasks.

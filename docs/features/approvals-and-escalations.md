@@ -170,6 +170,19 @@ A **null** confidence means "never scored" (rows written before the column exist
 
 `?status=open` or `?status=resolved` narrows the list; omit it and you get both, because "what did I already decide?" is half of what makes a queue trustworthy. `limit` is 1–100 (default 50). Resolve is an owner-scoped compare-and-set on `open`, so a double-click resolves exactly once and a foreign id is indistinguishable from a missing one (`404`).
 
+Resolving an escalation by hand — through `POST /api/escalations/:id/resolve`, the Task page, or an Inbox reply — always needs a **signed-in person**; an API key or an Agent cannot do it (an Agent can only _propose_ a resolution for you to approve).
+
+#### `queued-too-long` closes itself when its run ends
+
+A `queued-too-long` card asks whether to raise the concurrency limit, cancel the run, or let it keep waiting. Once that run has **ended** — completed, failed or cancelled, by any path (a cloud Task run, a fleet run, a heartbeat, your cancel, the stuck-run sweeper) — the question is moot, so the platform closes the card itself:
+
+- the escalation is resolved with **no user** recorded (`resolvedByUserId` stays empty) and a fixed note such as _"Closed automatically: the run ended (failed) at 2026-11-10T21:04:00.000Z."_;
+- its Inbox item (the **Needs you** row on the dashboard) closes with it; nothing is resumed or steered, and it does not count as you having looked at the item.
+
+It happens the moment the run ends, and the stuck-run sweeper's queued pass (every 2 hours) closes any card that was still open — including cards filed before this behaviour existed, and cards whose run has since been deleted by retention. A card a person already resolved keeps the person's resolution.
+
+**Every other reason stays manual**, because a run ending does not answer it: `awaiting-input` and `run-parked` are filed on a run that has _already_ ended (closing them would drop the question or the resume); `gate-exhausted`, `gate-precheck-red`, `judge-escalated` and `loop-detected` are filed _because_ the run gave up, and the red checks, unmet criteria or loop are still there to judge; `guardrail-refusal` and `budget-stop` need a person to grant the action or raise the cap; `merge-refused` waits on a human merge decision; `delivery-failed` has its own Open / Close anyway / Try once more flow.
+
 Escalations are **idempotent per run**: every writer derives a stable dedup key (`reasonCode:runId`), so a retried background task or a redelivered webhook produces one card, not five. Recording is best-effort by contract — an escalation describes a failure and must never cause one — and can be switched off entirely with `AGENT_ESCALATION_LOGGING_ENABLED=false`.
 
 ### Delivery
@@ -192,13 +205,13 @@ Approval items in the Inbox work the same way: replying with the `approve` or `r
 
 Approvals and escalations are the human-facing layer. Underneath, several mechanisms stop an Agent from burning your budget while nobody is watching:
 
-| Net                        | What it does                                                                                                                                                                                  |
-| -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Auto-pause on failures** | Each failed run increments the Agent's `errorCount`; when it reaches `pauseAfterFailures` the Agent moves to `error` and its heartbeat is cleared. A successful run resets the count to zero. |
-| **Doom-loop detector**     | Ends a run that is cycling without progress and files a `loop-detected` escalation with the evidence.                                                                                         |
-| **Budgets**                | A per-Agent or per-Work ceiling short-circuits the next AI call and can raise a `budget-stop` escalation.                                                                                     |
-| **Tool grants**            | An allow/deny matrix over the tools an Agent may call. `deny` is additive and permanent — no descendant scope can un-deny a tool.                                                             |
-| **Merge policy**           | Decides whether an Agent may land its own pull request at all; a refusal becomes a `merge-refused` escalation.                                                                                |
+| Net                        | What it does                                                                                                                                                                                                                                  |
+| -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Auto-pause on failures** | Each failed **heartbeat** run increments the Agent's `errorCount`; when it reaches `pauseAfterFailures` the Agent moves to `error` and its heartbeat is cleared. A successful heartbeat run resets the count to zero. Task runs do not count. |
+| **Doom-loop detector**     | Ends a run that is cycling without progress and files a `loop-detected` escalation with the evidence.                                                                                                                                         |
+| **Budgets**                | A per-Agent or per-Work ceiling short-circuits the next AI call and can raise a `budget-stop` escalation.                                                                                                                                     |
+| **Tool grants**            | An allow/deny matrix over the tools an Agent may call. `deny` is additive and permanent — no descendant scope can un-deny a tool.                                                                                                             |
+| **Merge policy**           | Decides whether an Agent may land its own pull request at all; a refusal becomes a `merge-refused` escalation.                                                                                                                                |
 
 ### Auto-pause after N failures
 
