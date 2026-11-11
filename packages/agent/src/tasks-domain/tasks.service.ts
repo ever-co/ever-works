@@ -1508,6 +1508,15 @@ export class TasksService {
         if (current?.recurrenceSkippedAt) {
             patch.recurrenceSkippedAt = null;
         }
+        // A template cannot hold a one-time schedule (`setRecurring` clears
+        // it), but rows made recurring before that rule still carry one, and
+        // the one-time scheduler skips them only while they are recurring.
+        // Stopping the recurrence must not hand that stale, overdue time back
+        // to the scheduler, which would start a paid run on the next tick.
+        if (current?.isRecurring && (current.scheduledAt || current.scheduleClaimedAt)) {
+            patch.scheduledAt = null;
+            patch.scheduleClaimedAt = null;
+        }
         await this.updateTaskRow(id, patch);
         return this.getOne(userId, id, ownershipScope);
     }
