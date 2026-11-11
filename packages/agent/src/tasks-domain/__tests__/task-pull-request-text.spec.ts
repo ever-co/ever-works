@@ -163,6 +163,24 @@ describe('composeTaskPullRequestText', () => {
             expect(text.body).toContain('GITHUB_TOKEN=[redacted secret]');
         });
 
+        it.each([
+            ['an HTML comment', '<!-- -->'],
+            ['a tag pair', '<b></b>'],
+            ['an empty image', '![](x)'],
+            ['a backtick', '`'],
+            ['invisible times', '⁢'],
+        ])('posts no credential split by %s (closure check of #3145)', (_what, by) => {
+            const GH = `ghp_${'A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8'}`;
+            const written = `${GH.slice(0, 12)}${by}${GH.slice(12)}`;
+            const text = composeTaskPullRequestText({
+                task: { slug: 'T-1', title: 'x' },
+                summary: `I tested with ${written}.\n\nPR-TITLE: fix: deploy uses ${written}`,
+            });
+            expect(text.title).not.toContain(GH);
+            expect(text.body).not.toContain(GH);
+            expect(text.title).toBe('fix: deploy uses [redacted secret] [T-1]');
+        });
+
         it('breaks backslash-escaped references in the body and the title', () => {
             const text = composeTaskPullRequestText({
                 task: { slug: 'T-1', title: 'x' },

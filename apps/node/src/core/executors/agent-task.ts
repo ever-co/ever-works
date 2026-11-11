@@ -2328,7 +2328,14 @@ export function agentTaskCommitMessage(
 		typeof runSummary === 'string' && runSummary
 			? redactRunSummarySecrets(boundRunPullRequestSummary(runSummary))
 			: null;
-	return applyRunPullRequestTitleToCommitMessage(planned, summary);
+	const message = applyRunPullRequestTitleToCommitMessage(planned, summary);
+	if (message === planned) return message;
+	// And once more on the subject the cleaning produced, the line `git` gets:
+	// removing Markdown, comments or tags can rejoin a token the first pass saw
+	// split (review of #3145). The planned body and trailers stay byte-for-byte.
+	const newline = message.indexOf('\n');
+	const subject = newline === -1 ? message : message.slice(0, newline);
+	return `${redactRunSummarySecrets(subject)}${newline === -1 ? '' : message.slice(newline)}`;
 }
 
 async function finalizeWorkspace(

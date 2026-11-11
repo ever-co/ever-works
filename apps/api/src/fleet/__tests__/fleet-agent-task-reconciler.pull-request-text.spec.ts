@@ -215,6 +215,20 @@ describe('FleetAgentTaskReconcilerService → TaskWorkspaceService — the pull 
         expect(JSON.stringify(taskChat.post.mock.calls)).not.toContain(GH_TOKEN);
     });
 
+    it('B1 — posts no credential split by what the sanitizer deletes (closure check of #3145)', async () => {
+        const splitByComment = `${GH_TOKEN.slice(0, 12)}<!-- -->${GH_TOKEN.slice(12)}`;
+        const splitByTag = `${ANTHROPIC.slice(0, 4)}<i></i>${ANTHROPIC.slice(4)}`;
+        await complete(
+            `Fixed the deploy script with ${splitByComment} and ${splitByTag}.\n\nPR-TITLE: fix: deploy script uses ${splitByComment}`,
+        );
+        const { title, body } = opened();
+        for (const secret of [GH_TOKEN, ANTHROPIC]) {
+            expect(title).not.toContain(secret);
+            expect(body).not.toContain(secret);
+        }
+        expect(title).toBe('fix: deploy script uses [redacted secret] [T-1]');
+    });
+
     it('S3 — leaves out the sentence that quotes the Mission description, and posts the rest', async () => {
         await complete(
             [

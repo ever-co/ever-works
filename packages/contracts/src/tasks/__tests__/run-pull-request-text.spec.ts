@@ -1049,6 +1049,66 @@ describe('credentials never leave in a run summary', () => {
 	});
 });
 
+/**
+ * Closure check of #3145 — a credential split by something a later pass
+ * DELETES is whole again after that pass, so redaction runs once more at the
+ * end of every output: the body, the title, the commit subject and the
+ * one-line reader that feeds the next run's prompt.
+ */
+describe('a credential split by what the sanitizer deletes is still redacted', () => {
+	const GH = `ghp_${'A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8'}`;
+	const ANTHROPIC = `sk-ant-api03-${'x'.repeat(90)}`;
+	const split = (token: string, at: number, by: string) => `${token.slice(0, at)}${by}${token.slice(at)}`;
+	const FORMS: Array<[string, string, string]> = [
+		['an HTML comment', GH, split(GH, 12, '<!-- -->')],
+		['an empty HTML comment', GH, split(GH, 12, '<!---->')],
+		['an HTML tag pair', GH, split(GH, 12, '<b></b>')],
+		['an empty image', GH, split(GH, 12, '![](x)')],
+		['U+2062 invisible times', GH, split(GH, 12, '⁢')],
+		['U+180E Mongolian vowel separator', GH, split(GH, 12, '᠎')],
+		['a tag character U+E0041', GH, split(GH, 12, '\u{E0041}')],
+		['a backtick', GH, split(GH, 12, '`')],
+		['a code span', GH, `${GH.slice(0, 8)}\`${GH.slice(8, 16)}\`${GH.slice(16)}`],
+		['strong emphasis', GH, `${GH.slice(0, 8)}**${GH.slice(8, 16)}**${GH.slice(16)}`],
+		['an empty comment early in an Anthropic key', ANTHROPIC, split(ANTHROPIC, 4, '<!---->')],
+		['a tag early in an Anthropic key', ANTHROPIC, split(ANTHROPIC, 4, '<i></i>')]
+	];
+
+	it.each(FORMS)('redacts a token split by %s in all four outputs', (_what, token, written) => {
+		const summary = `I tested with ${written} and it worked.\n\nPR-TITLE: fix: deploy uses ${written}`;
+		const outputs = {
+			body: sanitizeRunPullRequestBody(parseRunPullRequestTitle(summary).summary || summary),
+			title: composeRunPullRequestTitle({ summary, slug: 'T-1' }) ?? '',
+			commit: applyRunPullRequestTitleToCommitMessage('feat: planned\n\nTask: T-1', summary),
+			oneLine: summarizeRunChangeInOneLine(`Tested with ${written} and it worked.`) ?? ''
+		};
+		for (const [where, text] of Object.entries(outputs)) {
+			// The exact token, and the token once a renderer has dropped what splits it.
+			expect(text, `${where}: ${text}`).not.toContain(token);
+			expect(text.replace(/<!--.*?-->|<\/?[a-z]+>|!\[\]\([^)]*\)|[*`\p{Cf}]/gu, ''), where).not.toContain(token);
+		}
+		expect(outputs.commit.endsWith('\n\nTask: T-1')).toBe(true);
+	});
+
+	it('keeps the zero-width spaces that break mentions and references while it redacts again', () => {
+		const output = sanitizeRunPullRequestBody(
+			`cc @octocat, fixes #12. Used ${split(GH, 12, '<!-- -->')}.\n\n\`\`\`\nsee @octocat\n\`\`\``
+		);
+		expect(output).not.toContain(GH);
+		expect(output).toContain(`@${ZWSP}octocat, fixes #${ZWSP}12.`);
+		expectInert(output);
+	});
+
+	it('stops a credential value at the punctuation that ends a statement', () => {
+		expect(redactRunSummarySecrets('const c = { api_key: process.env.API_KEY, x };')).toBe(
+			'const c = { api_key: process.env.API_KEY, x };'
+		);
+		expect(redactRunSummarySecrets('set(password=hunter2hunter2);')).toBe('set(password=[redacted secret]);');
+		// Punctuation INSIDE a value is part of it.
+		expect(redactRunSummarySecrets('DB_PASSWORD=abc,def123')).toBe('DB_PASSWORD=[redacted secret]');
+	});
+});
+
 describe('boundRunPullRequestSummary', () => {
 	it('keeps a summary that fits, and the head and last line of one that does not', () => {
 		expect(boundRunPullRequestSummary('short')).toBe('short');

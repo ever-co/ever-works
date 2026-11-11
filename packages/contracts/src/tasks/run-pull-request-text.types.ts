@@ -188,7 +188,9 @@ function runTitleSubject(summary: string | null | undefined): string | null {
 	if (!title) return null;
 	const subject = composeFleetTaskCommitMessage({ title, slug: null });
 	if (!subject || subject.includes('\n')) return null;
-	return subject.replace(BREAKING_CHANGE_BANG, '$1:');
+	// Once more on what is left: composing can still change case or join text
+	// (review of #3145), and this is what the provider and `git` receive.
+	return redactRunSummarySecrets(subject.replace(BREAKING_CHANGE_BANG, '$1:'));
 }
 
 /** `feat!:` / `fix(api)!:` — the conventional-commit breaking-change marker. */
@@ -254,25 +256,61 @@ const SECRET_NAME = /(?:token|secret|passw(?:or)?d|pwd|api[_-]?key|access[_-]?ke
  */
 export function redactRunSummarySecrets(text: string | null | undefined): string {
 	if (typeof text !== 'string' || !text) return '';
+	// No pattern below matches fewer characters; tiny pieces (a word between
+	// two code spans) cost nothing.
+	if (text.length < 8) return text;
 	let out = redactSecrets(text).cleaned;
-	// A secret split by Markdown escapes is the secret once rendered. Only when
-	// the decoded copy reveals one is it used: the escapes are lost then, which
-	// is acceptable for text that was hiding a credential behind them.
+	// A secret split by Markdown is the secret once RENDERED: by escapes
+	// (`ghp\_…`), or by emphasis or a code span in the middle (`ghp_A1**b2**C3`
+	// reads `ghp_A1b2C3`). Each view is tried in turn, and only when it reveals
+	// one is it used: that Markdown is lost then, which is acceptable for text
+	// that was hiding a credential behind it.
 	const decoded = out.replace(MARKDOWN_ESCAPE, '$1');
-	if (decoded !== out) {
-		const again = redactSecrets(decoded);
-		if (again.redactions > 0) out = again.cleaned;
+	for (const view of [decoded, decoded.replace(RENDERED_AWAY, '')]) {
+		if (view === out) continue;
+		const again = redactSecrets(view);
+		if (again.redactions > 0) {
+			out = again.cleaned;
+			break;
+		}
 	}
 	out = out.replace(URL_USERINFO, (match, scheme: string, userinfo: string) =>
 		userinfo.includes(':') || userinfo.length >= 16 ? `${scheme}[redacted secret]@` : match
 	);
 	out = out.replace(AUTHORIZATION_VALUE, '$1[redacted secret]');
-	out = out.replace(NAMED_VALUE, (match, name: string, separator: string, value: string) =>
-		SECRET_NAME.test(name) && !value.startsWith('[redacted') && (/\d/.test(value) || value.length >= 20)
-			? `${name}${separator}[redacted secret]`
-			: match
-	);
+	out = out.replace(NAMED_VALUE, (match, name: string, separator: string, value: string) => {
+		// Punctuation that ends a statement is not part of the value
+		// (`api_key: process.env.API_KEY,`); punctuation inside it is.
+		const trimmed = value.replace(/[,;)]+$/, '');
+		return SECRET_NAME.test(name) &&
+			!trimmed.startsWith('[redacted') &&
+			trimmed.length >= 8 &&
+			(/\d/.test(trimmed) || trimmed.length >= 20)
+			? `${name}${separator}[redacted secret]${value.slice(trimmed.length)}`
+			: match;
+	});
 	return out;
+}
+
+/** Markdown a renderer shows as nothing between two halves of a word: emphasis and code-span marks. */
+const RENDERED_AWAY = /[*~`]/g;
+
+/** A private-use stand-in for the zero-width spaces this module inserts (see below). */
+const ZWSP_STAND_IN = '';
+
+/**
+ * {@link redactRunSummarySecrets} for text this module has ALREADY neutralised.
+ * The shared scanner's evasion fallback answers the whole text normalised, with
+ * every zero-width space removed — which would put back each `@mention` and
+ * `#12` the rules broke. So the zero-width spaces are swapped for a private-use
+ * character (which neither NFKC nor the format-character strip touches) for
+ * the scan, and swapped back. A token can only have been split by one of them
+ * inside code, where the first, full pass over the raw text already saw it.
+ */
+function redactNeutralizedText(text: string): string {
+	if (text.length < 8) return text;
+	if (!text.includes(ZWSP)) return redactRunSummarySecrets(text);
+	return redactRunSummarySecrets(text.split(ZWSP).join(ZWSP_STAND_IN)).split(ZWSP_STAND_IN).join(ZWSP);
 }
 
 /** Fewest consecutive words of private planning text that count as a quote. */
@@ -408,7 +446,10 @@ export function summarizeRunChangeInOneLine(summary: string | null | undefined, 
 	if (typeof summary !== 'string' || !summary.trim()) return null;
 	const limit = clampInt(maxLength, 16, 1000, 160);
 	const parsed = parseRunPullRequestTitle(summary);
-	if (parsed.title) return cutAtWord(parsed.title, limit);
+	// Redacted on what is returned (the cleaned text), before the cut, so the
+	// line read back into the next run's prompt never carries a credential that
+	// a deletion pass rejoined (review of #3145).
+	if (parsed.title) return cutAtWord(redactRunSummarySecrets(parsed.title), limit);
 	// Bounded before any pattern runs: a first sentence is never past this.
 	const lines = sliceCodePoints(summary, 4000).replace(OTHER_LINE_BREAKS, '\n').split('\n');
 	let fallback: string | null = null;
@@ -424,10 +465,10 @@ export function summarizeRunChangeInOneLine(summary: string | null | undefined, 
 		const cleaned = cleanTitleText(sentence ? sentence[1]! : text);
 		if (!isUsableTitle(cleaned)) continue;
 		// A bare label (`Summary:`, `Done.`) is kept only if nothing better follows.
-		if (cleaned.split(' ').length >= 3) return cutAtWord(cleaned, limit);
+		if (cleaned.split(' ').length >= 3) return cutAtWord(redactRunSummarySecrets(cleaned), limit);
 		fallback ??= cleaned;
 	}
-	return fallback ? cutAtWord(fallback, limit) : null;
+	return fallback ? cutAtWord(redactRunSummarySecrets(fallback), limit) : null;
 }
 
 export interface SanitizeRunPullRequestBodyOptions {
@@ -482,13 +523,20 @@ export function sanitizeRunPullRequestBody(
 			for (const line of lines) produced += line.length + 1;
 			continue;
 		}
-		const text = neutralizeForCommitMessage(sanitizeProse(block.text, allowed, budget - produced));
+		// Redacted AGAIN after the passes that delete characters (format
+		// characters, comments, tags, images): `ghp_A1<!-- -->B2…` is the token
+		// once the comment is gone (review of #3145). Before the cap, so a
+		// redaction cannot push the result past it.
+		const text = redactNeutralizedText(
+			neutralizeForCommitMessage(sanitizeProse(block.text, allowed, budget - produced))
+		);
 		blocks.push({ kind: 'prose', text });
 		produced += text.length + 2;
 	}
 	// CI-skip directives last, over everything: that rule never lengthens the
 	// text, so it cannot push the result past the cap `fitBlocks` applied.
-	return neutralizeCiSkipDirectives(fitBlocks(blocks, maxLength)).trim();
+	// And once more on the FINAL text, everything included, as the last step.
+	return redactNeutralizedText(neutralizeCiSkipDirectives(fitBlocks(blocks, maxLength))).trim();
 }
 
 /**
@@ -608,11 +656,15 @@ function cleanTitleText(value: string): string {
 	text = text.replace(/\/(issues|pulls?|discussions)\/(?=\d)/gi, '/$1 ');
 	text = neutralizeCiSkipDirectives(text);
 	// Wrapper characters left over from a marker written as `**PR-TITLE: …**`.
-	return text
+	text = text
 		.replace(/\s+/g, ' ')
 		.trim()
 		.replace(/^[*_~ ]+/, '')
 		.replace(/[*_~ ]+$/, '');
+	// Once more, LAST: every pass above deletes characters (comments, tags,
+	// images, backticks, emphasis, `@`, `#`, schemes), and a token split by any
+	// of them is whole again here (`ghp_A1<!-- -->b2…`, `ghp_A1`b2…`).
+	return redactRunSummarySecrets(text);
 }
 
 function isUsableTitle(text: string): boolean {

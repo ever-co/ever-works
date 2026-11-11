@@ -170,7 +170,9 @@ composer redacts again on its own. Then (`sanitizeRunPullRequestBody`, `@ever-wo
   GitLab, Slack, npm, Hugging Face, Google, Stripe, AWS access-key ids, `sk-…` keys, `Bearer …`, JWTs, PEM private
   keys), the same shapes split by Markdown escapes, credentials in a URL (`https://user:pass@…`, `https://<token>@…`),
   an `Authorization` value of any scheme, and the value of anything named like a credential (`AWS_SECRET_ACCESS_KEY=…`,
-  `DATABASE_PASSWORD=…`) when it looks like one;
+  `DATABASE_PASSWORD=…`) when it looks like one — and again at the end of every output (body, title, commit subject,
+  the one-line reader), after the passes that delete characters, so a token split by a comment, a tag, an image,
+  emphasis or an invisible character is caught once it is whole;
 - `@mentions` (and full-width `＠`, `&#64;`, escaped or zero-width-split ones) get a zero-width space: nobody is
   notified;
 - `#12`, `owner/repo#12`, `GH-12` and issue, pull request and discussion links are broken, so no closing keyword
