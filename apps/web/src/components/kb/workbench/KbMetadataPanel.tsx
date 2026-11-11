@@ -20,6 +20,12 @@ import {
 } from '@ever-works/contracts';
 import { classifyServerError } from '@/lib/kb/use-autosave-status';
 
+/** `UpdateKbDocumentDto` limits (`packages/agent/src/dto/kb.dto.ts`). */
+const KB_TAGS_MAX = 32;
+const KB_TAG_MAX_LENGTH = 64;
+const KB_DESCRIPTION_MAX_LENGTH = 2000;
+const KB_LANGUAGE_MAX_LENGTH = 8;
+
 /**
  * EW-641 slice B — right-column "Metadata" side panel for the KB
  * workbench. Each field is a self-saving sub-component:
@@ -413,10 +419,13 @@ function TagsField({
 
     const addTag = useCallback(
         (raw: string) => {
-            const value = raw.trim();
+            // The API's limits (`UpdateKbDocumentDto`: at most 32 tags of 64
+            // characters). Beyond them the whole tag batch was refused, yet the
+            // chip stayed on screen and vanished on reload.
+            const value = raw.trim().slice(0, KB_TAG_MAX_LENGTH);
             if (value.length === 0) return;
             setTags((prev) => {
-                if (prev.includes(value)) return prev;
+                if (prev.includes(value) || prev.length >= KB_TAGS_MAX) return prev;
                 const next = [...prev, value];
                 scheduleFlush(next);
                 return next;
@@ -474,6 +483,7 @@ function TagsField({
             <input
                 type="text"
                 data-testid="kb-workbench-metadata-tag-input"
+                maxLength={KB_TAG_MAX_LENGTH}
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={(e) => {
@@ -592,6 +602,7 @@ function DescriptionField({
             <textarea
                 ref={textareaRef}
                 data-testid="kb-workbench-metadata-description-input"
+                maxLength={KB_DESCRIPTION_MAX_LENGTH}
                 value={value}
                 rows={2}
                 placeholder={labels.placeholder}
@@ -877,6 +888,7 @@ function LanguageField({
             <input
                 type="text"
                 data-testid="kb-workbench-metadata-language-input"
+                maxLength={KB_LANGUAGE_MAX_LENGTH}
                 value={value}
                 onChange={(e) => {
                     setValue(e.target.value);

@@ -100,16 +100,29 @@ describe('KbDocumentContextMenu', () => {
 
     it('does not render the menu until right-click fires', () => {
         render(
-            <KbDocumentContextMenu workId="work-1" document={doc()}>
+            <KbDocumentContextMenu renameEnabled workId="work-1" document={doc()}>
                 <a data-testid="row">row</a>
             </KbDocumentContextMenu>,
         );
         expect(screen.queryByTestId('kb-workbench-context-menu-doc-1')).toBeNull();
     });
 
-    it('opens the menu on right-click and renders every action item', () => {
+    it('hides Rename unless renameEnabled — the API cannot move a document yet', () => {
+        // Renaming PATCHes `{ path }`, which `UpdateKbDocumentDto` does not
+        // accept: every rename answered 400. The tree panel does not opt in.
         render(
             <KbDocumentContextMenu workId="work-1" document={doc()}>
+                <a data-testid="row">row</a>
+            </KbDocumentContextMenu>,
+        );
+        openMenu();
+        expect(screen.queryByTestId('kb-workbench-context-rename')).toBeNull();
+        expect(screen.getByTestId('kb-workbench-context-duplicate')).toBeTruthy();
+    });
+
+    it('opens the menu on right-click and renders every action item', () => {
+        render(
+            <KbDocumentContextMenu renameEnabled workId="work-1" document={doc()}>
                 <a data-testid="row">row</a>
             </KbDocumentContextMenu>,
         );
@@ -131,7 +144,7 @@ describe('KbDocumentContextMenu', () => {
         });
 
         render(
-            <KbDocumentContextMenu workId="work-1" document={doc()}>
+            <KbDocumentContextMenu renameEnabled workId="work-1" document={doc()}>
                 <a data-testid="row">row</a>
             </KbDocumentContextMenu>,
         );
@@ -152,6 +165,7 @@ describe('KbDocumentContextMenu', () => {
     it('shows Unlock instead of Lock when document is locked', () => {
         render(
             <KbDocumentContextMenu
+                renameEnabled
                 workId="work-1"
                 document={doc({ locked: true, lockMode: 'full' })}
             >
@@ -170,6 +184,7 @@ describe('KbDocumentContextMenu', () => {
         });
         render(
             <KbDocumentContextMenu
+                renameEnabled
                 workId="work-1"
                 document={doc({ locked: true, lockMode: 'full' })}
             >
@@ -193,7 +208,7 @@ describe('KbDocumentContextMenu', () => {
             data: doc({ status: 'archived' }),
         });
         render(
-            <KbDocumentContextMenu workId="work-1" document={doc()}>
+            <KbDocumentContextMenu renameEnabled workId="work-1" document={doc()}>
                 <a data-testid="row">row</a>
             </KbDocumentContextMenu>,
         );
@@ -212,6 +227,7 @@ describe('KbDocumentContextMenu', () => {
         const writes: string[] = [];
         render(
             <KbDocumentContextMenu
+                renameEnabled
                 workId="work-1"
                 document={doc()}
                 clipboardWrite={(text) => {
@@ -232,6 +248,7 @@ describe('KbDocumentContextMenu', () => {
         const writes: string[] = [];
         render(
             <KbDocumentContextMenu
+                renameEnabled
                 workId="work-1"
                 document={doc()}
                 clipboardWrite={(text) => {
@@ -251,6 +268,7 @@ describe('KbDocumentContextMenu', () => {
     it('disables rename / duplicate / delete when the document is fully locked', () => {
         render(
             <KbDocumentContextMenu
+                renameEnabled
                 workId="work-1"
                 document={doc({ locked: true, lockMode: 'full' })}
             >
@@ -273,6 +291,7 @@ describe('KbDocumentContextMenu', () => {
         // additions-only does not — verify the partial-lock branch.
         render(
             <KbDocumentContextMenu
+                renameEnabled
                 workId="work-1"
                 document={doc({ locked: true, lockMode: 'additions-only' })}
             >
@@ -293,7 +312,7 @@ describe('KbDocumentContextMenu', () => {
         });
 
         render(
-            <KbDocumentContextMenu workId="work-1" document={doc()}>
+            <KbDocumentContextMenu renameEnabled workId="work-1" document={doc()}>
                 <a data-testid="row">row</a>
             </KbDocumentContextMenu>,
         );
@@ -318,7 +337,7 @@ describe('KbDocumentContextMenu', () => {
     it('delete confirmation requires the doc name before the confirm button enables', async () => {
         deleteActionMock.mockResolvedValueOnce({ success: true, data: { id: 'doc-1' } });
         render(
-            <KbDocumentContextMenu workId="work-1" document={doc()}>
+            <KbDocumentContextMenu renameEnabled workId="work-1" document={doc()}>
                 <a data-testid="row">row</a>
             </KbDocumentContextMenu>,
         );
@@ -364,7 +383,7 @@ describe('KbDocumentContextMenu', () => {
         );
 
         render(
-            <KbDocumentContextMenu workId="work-1" document={doc()}>
+            <KbDocumentContextMenu renameEnabled workId="work-1" document={doc()}>
                 <a data-testid="row">row</a>
             </KbDocumentContextMenu>,
         );
@@ -390,7 +409,7 @@ describe('KbDocumentContextMenu', () => {
     it('reports an archive whose server action rejects, and leaves the menu usable', async () => {
         updateActionMock.mockRejectedValueOnce(new Error('connection lost'));
         render(
-            <KbDocumentContextMenu workId="work-1" document={doc()}>
+            <KbDocumentContextMenu renameEnabled workId="work-1" document={doc()}>
                 <a data-testid="row">row</a>
             </KbDocumentContextMenu>,
         );
@@ -410,7 +429,7 @@ describe('KbDocumentContextMenu', () => {
     it('reports a lock whose server action rejects, and leaves the menu usable', async () => {
         lockActionMock.mockRejectedValueOnce(new Error('connection lost'));
         render(
-            <KbDocumentContextMenu workId="work-1" document={doc()}>
+            <KbDocumentContextMenu renameEnabled workId="work-1" document={doc()}>
                 <a data-testid="row">row</a>
             </KbDocumentContextMenu>,
         );
@@ -433,6 +452,7 @@ describe('KbDocumentContextMenu', () => {
         unlockActionMock.mockRejectedValueOnce(new Error('connection lost'));
         render(
             <KbDocumentContextMenu
+                renameEnabled
                 workId="work-1"
                 document={doc({ locked: true, lockMode: 'full' })}
             >
@@ -455,7 +475,7 @@ describe('KbDocumentContextMenu', () => {
     it('reports a delete whose server action rejects, and leaves the dialog usable', async () => {
         deleteActionMock.mockRejectedValueOnce(new Error('connection lost'));
         render(
-            <KbDocumentContextMenu workId="work-1" document={doc()}>
+            <KbDocumentContextMenu renameEnabled workId="work-1" document={doc()}>
                 <a data-testid="row">row</a>
             </KbDocumentContextMenu>,
         );
@@ -480,7 +500,7 @@ describe('KbDocumentContextMenu', () => {
 
     it('Escape closes the menu', () => {
         render(
-            <KbDocumentContextMenu workId="work-1" document={doc()}>
+            <KbDocumentContextMenu renameEnabled workId="work-1" document={doc()}>
                 <a data-testid="row">row</a>
             </KbDocumentContextMenu>,
         );

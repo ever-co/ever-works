@@ -204,6 +204,8 @@ export const DOMAIN_EVENT_ROUTE_COVERAGE: Readonly<Record<string, RouteCoverage>
     'POST /api/works/:id/kb/documents': { events: ['kb.document.created'] },
     'PATCH /api/works/:id/kb/documents/:docId': { events: ['kb.document.updated'] },
     'DELETE /api/works/:id/kb/documents/:docId': { events: ['kb.document.deleted'] },
+    // The KB tree's Duplicate: the copy is created through the same create path.
+    'POST /api/works/:id/kb/documents/:docId/duplicate': { events: ['kb.document.created'] },
     'POST /api/works/:id/kb/documents/:docId/lock': { events: ['kb.document.updated'] },
     'POST /api/works/:id/kb/documents/:docId/unlock': { events: ['kb.document.updated'] },
     'POST /api/works/:id/kb/documents/:docId/restore': { events: ['kb.document.updated'] },

@@ -328,3 +328,73 @@ describe('KbController — non-session KB writes land proposed', () => {
         expect(kb.updateDocument.mock.calls[0][3].reviewState).toBeUndefined();
     });
 });
+
+describe('KbController — duplicate (the KB tree menu called a route that did not exist)', () => {
+    const auth = { userId: 'u-1', authMethod: 'session' } as AuthenticatedUser;
+    const source = {
+        id: DOC_ID,
+        path: 'brand/voice.md',
+        title: 'Voice',
+        class: 'brand',
+        body: '# Voice\n\nWe write plainly.',
+        description: 'How we write',
+        tags: ['tone'],
+        categories: ['style'],
+        language: 'en',
+        locked: true,
+    };
+    let kb: Record<string, jest.Mock>;
+    let controller: KbController;
+
+    beforeEach(() => {
+        kb = {
+            getDocument: jest.fn().mockResolvedValue(source),
+            createDocument: jest
+                .fn()
+                .mockResolvedValue({ id: 'copy-1', path: 'brand/voice-copy.md' }),
+        };
+        controller = new KbController(kb as unknown as KnowledgeBaseService);
+    });
+
+    it('is a POST on works/:id/kb/documents/:docId/duplicate answering 201', () => {
+        const handler = KbController.prototype.duplicateDocument;
+        expect(Reflect.getMetadata(PATH_METADATA, handler)).toBe(
+            'works/:id/kb/documents/:docId/duplicate',
+        );
+        expect(Reflect.getMetadata(METHOD_METADATA, handler)).toBe(RequestMethod.POST);
+        expect(Reflect.getMetadata(HTTP_CODE_METADATA, handler)).toBe(HttpStatus.CREATED);
+    });
+
+    it('creates a copy through the create path with the source content', async () => {
+        const result = await controller.duplicateDocument(auth, WORK_ID, DOC_ID, {
+            path: 'brand/voice-copy.md',
+        });
+
+        expect(kb.getDocument).toHaveBeenCalledWith(WORK_ID, DOC_ID, 'u-1');
+        expect(kb.createDocument).toHaveBeenCalledWith(
+            expect.objectContaining({
+                workId: WORK_ID,
+                userId: 'u-1',
+                path: 'brand/voice-copy.md',
+                title: 'Voice (copy)',
+                class: 'brand',
+                body: source.body,
+                description: 'How we write',
+                tags: ['tone'],
+                categories: ['style'],
+                language: 'en',
+            }),
+        );
+        // A copy is a new document: the source's lock is not carried over.
+        expect(kb.createDocument.mock.calls[0][0]).not.toHaveProperty('locked');
+        expect(result).toEqual({ id: 'copy-1', path: 'brand/voice-copy.md' });
+    });
+
+    it('defaults the path to the source (the create path picks a free name) and keeps a given title', async () => {
+        await controller.duplicateDocument(auth, WORK_ID, DOC_ID, { title: 'Voice v2' });
+        expect(kb.createDocument.mock.calls[0][0]).toMatchObject({
+            path: 'brand/voice.md',
+            title: 'Voice v2',
+        });
+    });
+});
