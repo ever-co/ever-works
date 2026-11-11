@@ -6,6 +6,7 @@ import {
 	RUN_PULL_REQUEST_TITLE_MAX_LENGTH,
 	RUN_PULL_REQUEST_TITLE_MAX_LINE_LENGTH,
 	applyRunPullRequestTitleToCommitMessage,
+	composeRunPullRequestTitle,
 	parseRunPullRequestTitle,
 	sanitizeRunPullRequestBody,
 	sanitizeRunPullRequestTitle,
@@ -745,5 +746,136 @@ describe('applyRunPullRequestTitleToCommitMessage', () => {
 		);
 		expect(Array.from(message.split('\n')[0]!).length).toBeLessThanOrEqual(72);
 		expect(message.endsWith('\n\nTask: T-2286')).toBe(true);
+	});
+});
+
+describe('composeRunPullRequestTitle', () => {
+	it('is a conventional commit followed by the Task slug in brackets', () => {
+		expect(
+			composeRunPullRequestTitle({
+				summary: 'Explained.\n\nPR-TITLE: Fix salary range filter dropping zero-minimum jobs',
+				slug: 'T-2286'
+			})
+		).toBe('fix: salary range filter dropping zero-minimum jobs [T-2286]');
+		expect(composeRunPullRequestTitle({ summary: 'x\nPR-TITLE: Add a saved-search digest', slug: 'T-9' })).toBe(
+			'feat: add a saved-search digest [T-9]'
+		);
+	});
+
+	it('keeps the type and scope the run wrote', () => {
+		for (const [line, expected] of [
+			['PR-TITLE: docs(api): describe leases', 'docs(api): describe leases [T-1]'],
+			['PR-TITLE: refactor: split the planner', 'refactor: split the planner [T-1]'],
+			['PR-TITLE: test: cover the zero case', 'test: cover the zero case [T-1]'],
+			['PR-TITLE: chore: bump vitest', 'chore: bump vitest [T-1]'],
+			['**PR-TITLE: fix: handle an empty list**', 'fix: handle an empty list [T-1]']
+		] as const) {
+			expect(composeRunPullRequestTitle({ summary: `Done.\n${line}`, slug: 'T-1' }), line).toBe(expected);
+		}
+	});
+
+	it('answers null when the run named no title, so the caller keeps its own', () => {
+		for (const summary of [null, undefined, '', 'Fixed it.', 'PR-TITLE: early\nthen more text']) {
+			expect(composeRunPullRequestTitle({ summary, slug: 'T-1' })).toBeNull();
+		}
+	});
+
+	it('leaves out a slug that is not a plain token, and never lets the title act', () => {
+		expect(composeRunPullRequestTitle({ summary: 'x\nPR-TITLE: Fix it', slug: 'T-1] @octocat [x' })).toBe(
+			'fix: it'
+		);
+		expect(composeRunPullRequestTitle({ summary: 'x\nPR-TITLE: Fix it', slug: null })).toBe('fix: it');
+		const hostile = composeRunPullRequestTitle({
+			summary: 'x\nPR-TITLE: Fixes #12 for @octocat <img src=x> [skip ci] https://github.com/a/b/issues/3',
+			slug: 'T-7'
+		})!;
+		expect(hostile).not.toMatch(/@\w|#\d|<img|\[skip ci\]|https?:\/\//i);
+		expect(containsCiSkipDirective(hostile)).toBe(false);
+		expect(hostile.endsWith(' [T-7]')).toBe(true);
+		expect(hostile).not.toMatch(/[\r\n]/);
+	});
+
+	it('keeps the summary part within the subject length', () => {
+		const title = composeRunPullRequestTitle({
+			summary: `x\nPR-TITLE: ${'Rework the salary range filter and its saved search digest '.repeat(3)}`,
+			slug: 'T-2286'
+		})!;
+		expect(Array.from(title.replace(/ \[T-2286\]$/, '')).length).toBeLessThanOrEqual(72);
+	});
+});
+
+describe('bounded on adversarial input', () => {
+	const MB = 1024 * 1024;
+	const fill = (unit: string): string => unit.repeat(Math.ceil(MB / unit.length)).slice(0, MB);
+	const ladder = (): string => {
+		// Backtick runs of every length 1, 2, 3 … — each one an opener with no
+		// closer of its own length: the worst case of the inline-code scan.
+		let out = '';
+		for (let run = 1; out.length < MB; run += 1) out += `${'`'.repeat(run)}a`;
+		return out.slice(0, MB);
+	};
+	const HOSTILE: Array<[string, () => string]> = [
+		['one 1 MB line', () => fill('a')],
+		['image tags', () => fill('<img src=x ')],
+		['unclosed image links', () => fill('![a](')],
+		['one backtick run', () => fill('`')],
+		['a ladder of backtick runs', ladder],
+		['unclosed comments', () => fill('<!--')],
+		['mentions and references', () => fill('@octocat #1 ')],
+		['script links', () => fill('[x](javascript:')],
+		['backslashes before a span', () => `${fill('\\').slice(0, MB - 10)}\`@octocat\``],
+		['table cells and backticks', () => fill('| ` ')],
+		['character references', () => fill('&#64;')],
+		['emphasis openers', () => fill('**a')],
+		['zero-width characters inside mentions', () => fill('@​‍octo')],
+		['fence lines', () => fill('```\n')],
+		['short lines', () => fill('x\n')],
+		['closing keywords and issue URLs', () => fill('fixes https://github.com/a/b/issues/1 ')],
+		['marker lines', () => fill('PR-TITLE: Fix it\n')],
+		['whitespace before a title', () => `${fill(' ')}\nPR-TITLE: Fix the redirect`],
+		['a long body before a title', () => `${fill('word ')}\nPR-TITLE: Fix the redirect`],
+		['nested backticks and tildes', () => fill('~~~`` `~~~\n')]
+	];
+
+	/** Best of three, so a garbage-collection pause on a shared machine is not read as a quadratic pattern. */
+	function fastest(run: () => unknown): number {
+		let best = Number.POSITIVE_INFINITY;
+		for (let attempt = 0; attempt < 3; attempt += 1) {
+			const started = performance.now();
+			run();
+			best = Math.min(best, performance.now() - started);
+		}
+		return best;
+	}
+
+	it.each(HOSTILE)('sanitizes 1 MB of %s in under 50 ms, inert and capped', (_what, build) => {
+		const input = build();
+		expect(input.length).toBeGreaterThanOrEqual(MB);
+		let output = '';
+		const elapsed = fastest(() => {
+			output = sanitizeRunPullRequestBody(input);
+		});
+		expect(elapsed).toBeLessThan(50);
+		expect(Array.from(output).length).toBeLessThanOrEqual(RUN_PULL_REQUEST_BODY_MAX_LENGTH);
+		expectInert(output);
+	});
+
+	it.each(HOSTILE)('reads the title and the one-line summary of 1 MB of %s in under 50 ms', (_what, build) => {
+		const input = build();
+		const elapsed = fastest(() => {
+			parseRunPullRequestTitle(input);
+			composeRunPullRequestTitle({ summary: input, slug: 'T-1' });
+			summarizeRunChangeInOneLine(input);
+			sanitizeRunPullRequestTitle(input);
+			applyRunPullRequestTitleToCommitMessage('feat: x\n\nTask: T-1', input);
+		});
+		expect(elapsed).toBeLessThan(50);
+	});
+
+	it('still finds a title at the end of a 1 MB summary', () => {
+		expect(parseRunPullRequestTitle(`${fill('word ')}\nPR-TITLE: Fix the redirect`).title).toBe('Fix the redirect');
+		expect(composeRunPullRequestTitle({ summary: `${fill(' ')}\nPR-TITLE: Fix the redirect`, slug: 'T-1' })).toBe(
+			'fix: the redirect [T-1]'
+		);
 	});
 });

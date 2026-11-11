@@ -97,6 +97,16 @@ const OTHER_LINE_BREAKS = /\r\n?|[\u0085\u2028\u2029\v\f]/g;
  */
 const TITLE_LINE = /^ {0,3}[*_`]{0,3}PR-TITLE:[*_`]{0,3}[ \t]+(\S.*)$/;
 
+/**
+ * How much of the END of a summary {@link parseRunPullRequestTitle} reads: a
+ * marker line longer than {@link RUN_PULL_REQUEST_TITLE_MAX_LINE_LENGTH} is
+ * refused anyway, so a window a few times that size always holds a usable one.
+ */
+const TITLE_SCAN_WINDOW = RUN_PULL_REQUEST_TITLE_MAX_LINE_LENGTH * 4;
+
+/** A Task slug fit to print in a title (`T-2286`): a plain token, nothing a provider acts on. */
+const RUN_PULL_REQUEST_SLUG = /^[A-Za-z0-9][A-Za-z0-9._-]{0,39}$/;
+
 export interface ParsedRunPullRequestTitle {
 	/** The cleaned title, or `null` when the summary does not end with a usable marker line. */
 	title: string | null;
@@ -115,17 +125,48 @@ export interface ParsedRunPullRequestTitle {
  */
 export function parseRunPullRequestTitle(summary: string | null | undefined): ParsedRunPullRequestTitle {
 	if (typeof summary !== 'string' || !summary) return { title: null, summary: '' };
-	const lines = summary.replace(OTHER_LINE_BREAKS, '\n').split('\n');
-	let last = lines.length - 1;
-	while (last >= 0 && lines[last]!.trim() === '') last -= 1;
-	if (last < 0) return { title: null, summary };
-	const line = lines[last]!;
+	// Bounded before any pattern runs: only the last line can be the marker,
+	// so only a window at the END of the text is read. A summary of any size
+	// costs one native `trimEnd` and a fixed-size scan.
+	const trimmed = summary.trimEnd();
+	if (!trimmed) return { title: null, summary };
+	const windowStart = Math.max(0, trimmed.length - TITLE_SCAN_WINDOW);
+	const window = trimmed.slice(windowStart).replace(OTHER_LINE_BREAKS, '\n');
+	const lineBreak = window.lastIndexOf('\n');
+	// No line break inside the window: the last line is longer than any title line.
+	if (lineBreak === -1 && windowStart > 0) return { title: null, summary };
+	const line = window.slice(lineBreak + 1);
 	if (line.length > RUN_PULL_REQUEST_TITLE_MAX_LINE_LENGTH) return { title: null, summary };
 	const match = TITLE_LINE.exec(line);
 	if (!match) return { title: null, summary };
 	const title = sanitizeRunPullRequestTitle(match[1]);
 	if (!title) return { title: null, summary };
-	return { title, summary: lines.slice(0, last).join('\n').trimEnd() };
+	const head = `${trimmed.slice(0, windowStart)}${lineBreak === -1 ? '' : window.slice(0, lineBreak)}`;
+	return { title, summary: head.trimEnd() };
+}
+
+/**
+ * The pull request TITLE an agent run's summary names, as a conventional
+ * commit: `fix: salary filter drops zero-minimum jobs [T-2286]`, or `null`
+ * when the summary names none (the caller then keeps the title it had).
+ *
+ * The type is the one the run wrote (`PR-TITLE: docs(api): …`) when it is a
+ * conventional-commit type, else read from the title's first words exactly
+ * as a fleet commit subject is ({@link composeFleetTaskCommitMessage}), so the
+ * pull request and the commit it carries say the same thing. The Task slug
+ * follows in brackets, so a pull request list maps every entry to its Task
+ * without opening it; a slug that is not a plain token is left out.
+ */
+export function composeRunPullRequestTitle(input: {
+	summary: string | null | undefined;
+	slug?: string | null;
+}): string | null {
+	const { title } = parseRunPullRequestTitle(input.summary);
+	if (!title) return null;
+	const subject = composeFleetTaskCommitMessage({ title, slug: null });
+	if (!subject || subject.includes('\n')) return null;
+	const slug = typeof input.slug === 'string' ? input.slug.trim() : '';
+	return RUN_PULL_REQUEST_SLUG.test(slug) ? `${subject} [${slug}]` : subject;
 }
 
 /**
@@ -221,9 +262,24 @@ export function sanitizeRunPullRequestBody(
 		.replace(CONTROL_CHARACTERS, '')
 		.replace(BIDI_CONTROLS, '')
 		.replace(LONE_SURROGATES, '');
-	const blocks = splitFencedBlocks(bounded).map((block): ProseBlock | CodeBlock =>
-		block.kind === 'code' ? block : { kind: 'prose', text: sanitizeProse(block.text, allowed) }
-	);
+	// Sanitized only until the result is certainly past the cap: what follows
+	// would be cut by `fitBlocks` anyway. Counted in UTF-16 units, so the stop
+	// is past `2 * maxLength` units, which is past `maxLength` characters, and
+	// the cut (and its note) still happens exactly as if everything were read.
+	const budget = maxLength * 2 + 2;
+	const blocks: Array<ProseBlock | CodeBlock> = [];
+	let produced = 0;
+	for (const block of splitFencedBlocks(bounded)) {
+		if (produced > budget) break;
+		if (block.kind === 'code') {
+			blocks.push(block);
+			for (const line of block.lines) produced += line.length + 1;
+			continue;
+		}
+		const text = sanitizeProse(block.text, allowed, budget - produced);
+		blocks.push({ kind: 'prose', text });
+		produced += text.length + 2;
+	}
 	return neutralizeCiSkipDirectives(fitBlocks(blocks, maxLength)).trim();
 }
 
@@ -397,11 +453,17 @@ const SCRIPT_SCHEME = /\b(javascript|vbscript|data|file|blob)([ \t]*):/gi;
 const PROVIDER_REFERENCE_PATH =
 	/((https?:\/\/)?(?:www\.)?(github\.com\/[A-Za-z0-9][A-Za-z0-9._-]{0,99}\/[A-Za-z0-9._-]{1,100}))?\/(issues|pull|pulls|discussions)\/([0-9]{1,10})/gi;
 
-function sanitizeProse(text: string, allowed: ReadonlySet<string>): string {
-	return text
-		.split('\n')
-		.map((line) => sanitizeProseLine(line, allowed))
-		.join('\n');
+/** Line by line, stopping once more than `budget` UTF-16 units have been written. */
+function sanitizeProse(text: string, allowed: ReadonlySet<string>, budget: number): string {
+	const out: string[] = [];
+	let written = 0;
+	for (const line of text.split('\n')) {
+		if (written > budget) break;
+		const sanitized = sanitizeProseLine(line, allowed);
+		out.push(sanitized);
+		written += sanitized.length + 1;
+	}
+	return out.join('\n');
 }
 
 /**
@@ -452,6 +514,8 @@ function splitOnUnescapedPipes(line: string): string[] {
  */
 function splitInlineCode(piece: string): Array<{ code: boolean; text: string }> {
 	const segments: Array<{ code: boolean; text: string }> = [];
+	if (!piece.includes('`')) return piece ? [{ code: false, text: piece }] : segments;
+	const closers = indexBacktickRuns(piece);
 	let text = '';
 	let index = 0;
 	while (index < piece.length) {
@@ -469,21 +533,12 @@ function splitInlineCode(piece: string): Array<{ code: boolean; text: string }> 
 		let end = index;
 		while (end < piece.length && piece[end] === '`') end += 1;
 		const length = end - index;
-		let close = -1;
-		let scan = end;
-		while (scan < piece.length) {
-			if (piece[scan] !== '`') {
-				scan += 1;
-				continue;
-			}
-			let runEnd = scan;
-			while (runEnd < piece.length && piece[runEnd] === '`') runEnd += 1;
-			if (runEnd - scan === length) {
-				close = scan;
-				break;
-			}
-			scan = runEnd;
-		}
+		// The next maximal run of exactly `length` backticks starting at or
+		// after `end` closes the span. `end` only grows, so each length's
+		// cursor only moves forward: one pass over the piece in total, where
+		// scanning ahead from every unclosed opener was O(n^1.5) on a ladder
+		// of runs of every length (` `` ``` …).
+		const close = closers.next(length, end);
 		if (close === -1) {
 			text += '\\`'.repeat(length);
 			index = end;
@@ -498,8 +553,50 @@ function splitInlineCode(piece: string): Array<{ code: boolean; text: string }> 
 	return segments;
 }
 
+/**
+ * Every maximal backtick run of a piece, by length, with a forward-only
+ * cursor per length: `next(length, from)` answers the start of the first run
+ * of exactly `length` that starts at or after `from`, or `-1`.
+ */
+function indexBacktickRuns(piece: string): { next(length: number, from: number): number } {
+	const starts = new Map<number, number[]>();
+	for (let index = 0; index < piece.length; ) {
+		if (piece[index] !== '`') {
+			index += 1;
+			continue;
+		}
+		let end = index;
+		while (end < piece.length && piece[end] === '`') end += 1;
+		const length = end - index;
+		const list = starts.get(length);
+		if (list) list.push(index);
+		else starts.set(length, [index]);
+		index = end;
+	}
+	const cursors = new Map<number, number>();
+	return {
+		next(length: number, from: number): number {
+			const list = starts.get(length);
+			if (!list) return -1;
+			let cursor = cursors.get(length) ?? 0;
+			while (cursor < list.length && list[cursor]! < from) cursor += 1;
+			cursors.set(length, cursor);
+			return cursor < list.length ? list[cursor]! : -1;
+		}
+	};
+}
+
+/**
+ * The characters any rule of {@link sanitizeProseText} starts from. Text
+ * without one of them has nothing to neutralise, so it skips the fourteen
+ * passes: on a wall of short segments (`| \` | \` …`, a line per character)
+ * those passes, not the text, were the cost.
+ */
+const PROSE_TRIGGER = /[&<!:/@#\-＠﹫＃﹟\p{Cf}]/u;
+
 /** Text outside every code span: neutralised without looking at what surrounds it. */
 function sanitizeProseText(value: string, allowed: ReadonlySet<string>): string {
+	if (!PROSE_TRIGGER.test(value)) return value;
 	let text = value.replace(FORMAT_CHARACTERS, '');
 	// Shown as written: a reference is decoded AFTER the Markdown is parsed, so
 	// `&#64;name` would otherwise become a live mention this pass never saw.
