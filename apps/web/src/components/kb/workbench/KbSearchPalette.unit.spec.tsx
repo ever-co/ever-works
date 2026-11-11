@@ -31,7 +31,8 @@ vi.mock('@/i18n/navigation', () => ({
 }));
 
 import { KbSearchPalette } from './KbSearchPalette';
-import type { KbSearchHit, KbSearchResult } from '@ever-works/contracts';
+import type { KbDocumentDto, KbSearchHit, KbSearchResult } from '@ever-works/contracts';
+import { parseKbSearchRequest, toKbSearchResult } from '@/lib/kb/kb-search-proxy.shared';
 
 function hit(overrides: Partial<KbSearchHit> = {}): KbSearchHit {
     return {
@@ -173,6 +174,41 @@ describe('workbench KbSearchPalette', () => {
 
         expect(captured.length).toBeGreaterThanOrEqual(2);
         expect(captured[captured.length - 1]).toContain('class=brand');
+    });
+
+    it('renders the results the REAL search route returns (not a hand-made { hits })', async () => {
+        // The body `/api/works/:id/kb/search` sends, built by the same mapper
+        // the route uses from an upstream `GET .../kb/documents` page.
+        const upstreamDoc = {
+            id: 'd-real',
+            path: 'brand/voice.md',
+            title: 'Real voice',
+            class: 'brand',
+            status: 'active',
+            tags: ['tone'],
+            description: 'How we sound.',
+        } as unknown as KbDocumentDto;
+        const routeBody = toKbSearchResult(parseKbSearchRequest(new URLSearchParams('q=voice')), {
+            items: [upstreamDoc],
+            total: 1,
+        });
+        mockSearchFetchOnce(routeBody);
+
+        render(<KbSearchPalette workId="work-1" defaultOpen debounceMs={10} />);
+        fireEvent.change(screen.getByTestId('kb-workbench-search-palette-input'), {
+            target: { value: 'voice' },
+        });
+
+        await waitFor(
+            () => {
+                expect(screen.getByTestId('kb-workbench-search-palette-result')).toBeTruthy();
+            },
+            { timeout: 3000 },
+        );
+        expect(screen.getByTestId('kb-workbench-search-palette-result').textContent).toContain(
+            'Real voice',
+        );
+        expect(screen.queryByTestId('kb-workbench-search-palette-noresults')).toBeNull();
     });
 
     it('clicking a result row pushes the workbench route via next-intl router', async () => {
