@@ -25,6 +25,7 @@ import { WorkRepoDeclaredCommandsDto } from './repo-declared-commands.dto';
 import { TaskExtraRepoDto } from './task-extra-repo.dto';
 import { UpdateSourceValidationDto } from './update-source-validation.dto';
 import { UpdateWorkDto } from './update-work.dto';
+import { KbDocumentQueryDto } from './kb.dto';
 import { UpdateWorkAdvancedPromptsDto } from './work-advanced-prompts.dto';
 import { UpdateWorkScheduleDto } from './work-schedule.dto';
 import {
@@ -366,6 +367,35 @@ describe('agent/dto submodule', () => {
             });
             const errs = await expectValidationErrors(dto);
             expect(errs).toContain('isBoolean');
+        });
+    });
+
+    describe('KbDocumentQueryDto.locked (query string)', () => {
+        const locked = (value: unknown) =>
+            (plainToInstance(KbDocumentQueryDto, { locked: value }) as KbDocumentQueryDto).locked;
+
+        it("reads ?locked=false as false (Boolean('false') made it true)", async () => {
+            expect(locked('false')).toBe(false);
+            expect(locked('0')).toBe(false);
+            await expectValid(plainToInstance(KbDocumentQueryDto, { locked: 'false' }));
+        });
+
+        it('reads ?locked=true as true', () => {
+            expect(locked('true')).toBe(true);
+            expect(locked('1')).toBe(true);
+            expect(locked(true)).toBe(true);
+        });
+
+        it('refuses any other value instead of guessing', async () => {
+            const errs = await expectValidationErrors(
+                plainToInstance(KbDocumentQueryDto, { locked: 'yes' }),
+            );
+            expect(errs).toContain('isBoolean');
+        });
+
+        it('leaves it unset when absent', async () => {
+            expect(locked(undefined)).toBeUndefined();
+            await expectValid(plainToInstance(KbDocumentQueryDto, {}));
         });
     });
 

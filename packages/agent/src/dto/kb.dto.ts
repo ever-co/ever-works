@@ -222,7 +222,16 @@ export class KbDocumentQueryDto {
 
     @IsOptional()
     @IsBoolean()
-    @Type(() => Boolean)
+    // A query string is text: `@Type(() => Boolean)` made `Boolean('false')`,
+    // so `?locked=false` filtered for LOCKED documents. Map the two spellings
+    // explicitly; anything else stays a string and `@IsBoolean` refuses it.
+    @Transform(({ value }) =>
+        value === true || value === 'true' || value === '1'
+            ? true
+            : value === false || value === 'false' || value === '0'
+              ? false
+              : value,
+    )
     locked?: boolean;
 
     @IsOptional()
