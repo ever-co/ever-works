@@ -20,6 +20,8 @@ import {
     type AgentTarget,
 } from '../../entities/agent.entity';
 import { AgentMembership } from '../../entities/agent-membership.entity';
+import { Task } from '../../entities/task.entity';
+import { TaskAssignee } from '../../entities/task-assignee.entity';
 import { buildCaseInsensitiveLikeClause, prepareCaseInsensitiveContainsPattern } from '../utils';
 import { ownershipSqlPredicate, ownershipWhere, type OwnershipScope } from '../ownership-scope';
 import type { RecordListView } from '@ever-works/contracts';
@@ -396,6 +398,103 @@ export class AgentRepository {
             .skip(filter.offset ?? 0);
         const rows = await qb.getMany();
         return { rows, total };
+    }
+
+    /**
+     * Which of `agentIds` are driven by an ACTIVE recurring Task of `userId`,
+     * and when the soonest of those Tasks fires next — the Agents card's
+     * "Runs on schedule · next …" line, for a whole list page in two queries
+     * (never one per card).
+     *
+     * A recurring Task is one of its Agent's drivers when the Agent is one of
+     * its agent assignees, or — only for a Task with no agent assignee — its
+     * own `agentId`. That is the order the recurrence dispatcher and the
+     * Schedules page resolve the Agent in. "Active" is the Schedules page's
+     * `active`: the template (`isRecurring`, no parent), not paused, not past
+     * `recurrenceEndsAt`, not out of occurrences, with a next fire time.
+     *
+     * Bounded to the caller's OWN Tasks in the request scope, so a shared or
+     * organization Agent never reveals another person's schedule.
+     *
+     * Agents with no such Task are absent from the map.
+     */
+    async findRecurringTaskDrivers(
+        userId: string,
+        agentIds: readonly string[],
+        ownershipScope?: OwnershipScope,
+        now: Date = new Date(),
+    ): Promise<Map<string, { activeCount: number; nextRunAt: Date | null }>> {
+        const out = new Map<string, { activeCount: number; nextRunAt: Date | null }>();
+        const ids = [...new Set(agentIds)].filter((id) => typeof id === 'string' && id.length > 0);
+        if (ids.length === 0) return out;
+
+        const manager = this.repository.manager;
+        const tasksQb = manager.createQueryBuilder(Task, 'task');
+        // EXISTS (an agent assignee among `agentIds`) — built off the outer
+        // builder so its parameters are the outer query's.
+        const assignedSql = tasksQb
+            .subQuery()
+            .select('1')
+            .from(TaskAssignee, 'driver')
+            .where('driver.taskId = task.id')
+            .andWhere('driver.assigneeType = :driverType')
+            .andWhere('driver.assigneeId IN (:...driverAgentIds)')
+            .getQuery();
+        tasksQb
+            .select(['task.id', 'task.agentId', 'task.nextOccurrenceAt'])
+            .where('task.userId = :userId', { userId })
+            .andWhere('task.isRecurring = :recurring', { recurring: true })
+            .andWhere('task.parentRecurringTaskId IS NULL')
+            .andWhere('task.recurrencePausedAt IS NULL')
+            .andWhere('task.nextOccurrenceAt IS NOT NULL')
+            .andWhere('(task.recurrenceEndsAt IS NULL OR task.recurrenceEndsAt > :now)', { now })
+            .andWhere(
+                '(task.recurrenceMaxOccurrences IS NULL OR task.recurrenceOccurredCount < task.recurrenceMaxOccurrences)',
+            )
+            .andWhere(
+                new Brackets((driven) => {
+                    driven
+                        .where('task.agentId IN (:...driverAgentIds)')
+                        .orWhere(`EXISTS ${assignedSql}`);
+                }),
+            )
+            .setParameters({ driverType: 'agent', driverAgentIds: ids });
+        const ownership = ownershipSqlPredicate('task', ownershipScope, 'driverOwnership');
+        if (ownership) {
+            tasksQb.andWhere(ownership.clause, ownership.parameters);
+        }
+        // Bounded: a page of Agents never needs more than this many templates.
+        const tasks = await tasksQb.orderBy('task.nextOccurrenceAt', 'ASC').take(1000).getMany();
+        if (tasks.length === 0) return out;
+
+        const assignees = await manager.find(TaskAssignee, {
+            where: { taskId: In(tasks.map((task) => task.id)), assigneeType: 'agent' },
+            select: ['taskId', 'assigneeId'],
+        });
+        const assignedByTask = new Map<string, string[]>();
+        for (const row of assignees) {
+            assignedByTask.set(row.taskId, [
+                ...(assignedByTask.get(row.taskId) ?? []),
+                row.assigneeId,
+            ]);
+        }
+
+        const wanted = new Set(ids);
+        for (const task of tasks) {
+            const assigned = assignedByTask.get(task.id) ?? [];
+            const drivers = assigned.length > 0 ? assigned : task.agentId ? [task.agentId] : [];
+            for (const agentId of new Set(drivers)) {
+                if (!wanted.has(agentId)) continue;
+                const entry = out.get(agentId) ?? { activeCount: 0, nextRunAt: null };
+                entry.activeCount += 1;
+                const next = task.nextOccurrenceAt ?? null;
+                if (next && (!entry.nextRunAt || next.getTime() < entry.nextRunAt.getTime())) {
+                    entry.nextRunAt = next;
+                }
+                out.set(agentId, entry);
+            }
+        }
+        return out;
     }
 
     async save(agent: Agent): Promise<Agent> {

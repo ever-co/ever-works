@@ -59,8 +59,20 @@ export interface AgentDto {
     nextHeartbeatAt: Date | null;
     /** Schedules — non-null when the heartbeat is paused (the Agent itself may be ACTIVE). */
     heartbeatPausedAt: Date | null;
+    /**
+     * When the Agent's most recent run BEGAN, and the status it ended in.
+     * Written by every terminal run (cloud Task run, fleet run, heartbeat),
+     * monotonically — see `AgentRunRepository.recordTerminalEffects`.
+     */
     lastRunAt: Date | null;
     lastRunStatus: string | null;
+    /**
+     * The caller's ACTIVE recurring Tasks that drive this Agent: how many,
+     * and the soonest next fire. Present on the Agents LIST only (one batched
+     * read per page); absent elsewhere, which means "not computed", never
+     * "none". `{ activeCount: 0, nextRunAt: null }` means none.
+     */
+    recurringTasks?: AgentRecurringTasksSummary;
     errorCount: number;
     pauseAfterFailures: number;
     // ── Halt reason (AW-23) — why this agent is not working ──
@@ -100,6 +112,12 @@ export interface AgentDto {
     contentHash: string | null;
     createdAt: Date;
     updatedAt: Date;
+}
+
+/** {@link AgentDto.recurringTasks}. */
+export interface AgentRecurringTasksSummary {
+    activeCount: number;
+    nextRunAt: Date | null;
 }
 
 export function toAgentDto(agent: Agent): AgentDto {

@@ -339,14 +339,59 @@ export class AgentsService {
                 filter,
                 ownershipScope,
             );
-            return { rows: visible.rows.map(toAgentDto), total: visible.total };
+            return {
+                rows: await this.withRecurringTasks(
+                    userId,
+                    visible.rows.map(toAgentDto),
+                    ownershipScope,
+                ),
+                total: visible.total,
+            };
         }
         const { rows, total } = await this.agents.findByUserIdScoped(
             userId,
             filter,
             ownershipScope,
         );
-        return { rows: rows.map(toAgentDto), total };
+        return {
+            rows: await this.withRecurringTasks(userId, rows.map(toAgentDto), ownershipScope),
+            total,
+        };
+    }
+
+    /**
+     * Attach {@link AgentDto.recurringTasks} to a list page — one batched read
+     * for the whole page (the Agents card says "Runs on schedule · next …"
+     * for an Agent with no heartbeat that recurring Tasks drive). Only the
+     * caller's own Tasks count. Best-effort: a failed read leaves the field
+     * absent ("not computed"), never fails the list.
+     */
+    private async withRecurringTasks(
+        userId: string,
+        rows: AgentDto[],
+        ownershipScope?: OwnershipScope,
+    ): Promise<AgentDto[]> {
+        if (rows.length === 0 || typeof this.agents.findRecurringTaskDrivers !== 'function') {
+            return rows;
+        }
+        try {
+            const drivers = await this.agents.findRecurringTaskDrivers(
+                userId,
+                rows.map((row) => row.id),
+                ownershipScope,
+            );
+            return rows.map((row) => ({
+                ...row,
+                recurringTasks: drivers.get(row.id) ?? { activeCount: 0, nextRunAt: null },
+            }));
+        } catch (error) {
+            this.logger.warn(
+                `Agents list: recurring-Task read failed (cards fall back): ${
+                    error instanceof Error ? error.message : String(error)
+                }`,
+            );
+            return rows;
+        }
     }
 
     async getOne(userId: string, id: string, ownershipScope?: OwnershipScope): Promise<AgentDto> {

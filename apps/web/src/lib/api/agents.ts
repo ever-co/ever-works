@@ -128,8 +128,15 @@ export interface Agent {
     heartbeatCadence: string | null;
     idleBehavior: AgentIdleBehavior;
     nextHeartbeatAt: string | null;
+    /** When the most recent run (any kind: Task, fleet, heartbeat) began. */
     lastRunAt: string | null;
+    /** The status that run ended in (`completed`, `failed`, `cancelled`, …). */
     lastRunStatus: string | null;
+    /**
+     * The caller's ACTIVE recurring Tasks that drive this Agent — present on
+     * the Agents LIST only; absent means "not computed", never "none".
+     */
+    recurringTasks?: { activeCount: number; nextRunAt: string | null };
     errorCount: number;
     pauseAfterFailures: number;
     avatarMode: AgentAvatarMode;
