@@ -151,15 +151,17 @@ export class SchedulesController {
     @ApiOperation({
         summary: 'Run a schedule now, out of band',
         description:
-            'Dispatches one fire immediately without moving the next scheduled fire. A recurring task or heartbeat returns the run ids; a mission tick raises ideas and returns the mission link instead. 409 codes: SCHEDULE_ALREADY_RUNNING, SCHEDULE_NO_AGENT, SCHEDULE_OWNER_ARCHIVED, SCHEDULE_CONTROL_UNAVAILABLE. 404 for a schedule that is not yours.',
+            'Dispatches one fire immediately without moving the next scheduled fire. A recurring task or heartbeat returns the run ids; a mission tick raises ideas and returns the mission link instead. 409 codes: SCHEDULE_ALREADY_RUNNING, SCHEDULE_NO_AGENT, SCHEDULE_OWNER_ARCHIVED, SCHEDULE_CONTROL_UNAVAILABLE, SCHEDULE_TOO_MANY_OPEN (a recurring task at its open-instance limit; `force: true` runs it anyway). 404 for a schedule that is not yours.',
     })
     async runNow(
         @CurrentUser() auth: AuthenticatedUser,
         @Param('id', ParseScheduleIdPipe) id: string,
         @Body() body: RunScheduleNowDto,
     ): Promise<ScheduleRunNowResult> {
+        // `force` is only passed when set, so every other run-now is the call it always was.
         return this.requireControls().runNow(this.context(auth), id, {
             confirm: body?.confirm === true,
+            ...(body?.force === true ? { force: true } : {}),
         });
     }
 

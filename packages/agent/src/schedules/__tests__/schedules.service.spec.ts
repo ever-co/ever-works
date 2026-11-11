@@ -335,6 +335,45 @@ describe('SchedulesService', () => {
         expect(views[0].cadenceRaw).toBe('FREQ=WEEKLY');
         expect(views[0].cadenceHuman.toLowerCase()).toContain('week');
     });
+
+    // Recurring Tasks overlap limit — a recurring Task records no fires, except the latest
+    // scheduled slot its open-instance limit SKIPPED, which reads as a `skipped` last run.
+    it('shows a skipped slot as the last run, and nothing when none was skipped', async () => {
+        const base = {
+            title: 'Quality loop',
+            recurrenceRule: null,
+            recurrenceCron: '0 9 * * *',
+            nextOccurrenceAt: new Date('2026-07-21T09:00:00.000Z'),
+            recurrenceEndsAt: null,
+            recurrenceMaxOccurrences: null,
+            recurrenceOccurredCount: 3,
+            recurrenceMaxOpenInstances: 3,
+        };
+        const taskRepo = makeRepo([
+            {
+                ...base,
+                id: 'task-skipped',
+                recurrenceSkippedAt: new Date('2026-07-20T09:00:12.000Z'),
+            },
+            { ...base, id: 'task-fired', recurrenceSkippedAt: null },
+        ]);
+        const service = new SchedulesService(
+            taskRepo as never,
+            makeRepo([]) as never,
+            makeWorkScheduleRepo([]) as never,
+            makeRepo([]) as never,
+            { find: jest.fn().mockResolvedValue([]) } as never,
+            makeRepo([]) as never,
+        );
+
+        const views = await service.getSchedules(SCOPE, { sourceType: 'recurring_task' });
+        const skipped = views.find((view) => view.ownerId === 'task-skipped')!;
+        expect(skipped.lastRunAt).toBe('2026-07-20T09:00:12.000Z');
+        expect(skipped.lastRunStatus).toBe('skipped');
+        const fired = views.find((view) => view.ownerId === 'task-fired')!;
+        expect(fired.lastRunAt).toBeNull();
+        expect(fired.lastRunStatus).toBeNull();
+    });
 });
 
 // ── Schedules workspace — paging, attribution, health, controls ──────────

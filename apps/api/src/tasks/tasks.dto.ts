@@ -20,6 +20,7 @@ import {
 } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
 import {
+    RECURRENCE_MAX_OPEN_INSTANCES_LIMIT,
     RUN_BATCH_MAX_TASKS,
     TaskPriority,
     TaskStatus,
@@ -496,6 +497,45 @@ export class SetTaskRecurringDto {
     @Min(1)
     @Max(9999)
     recurrenceMaxOccurrences?: number;
+
+    /**
+     * Recurring Tasks overlap limit — at most this many instances of the template may be open
+     * at once (a run in flight, an open pull request, or spawned in the last 7 days with no
+     * pull-request outcome). A whole number sets it, `null` clears it (no limit), omitted keeps
+     * the template's current limit. Sent ALONE (no cadence) it updates only the limit of a Task
+     * that is already recurring.
+     */
+    @ApiProperty({
+        required: false,
+        nullable: true,
+        type: Number,
+        minimum: 1,
+        maximum: RECURRENCE_MAX_OPEN_INSTANCES_LIMIT,
+        description:
+            'At most this many instances of the template may be open at once; a scheduled fire at the limit is skipped and run-now answers 409 SCHEDULE_TOO_MANY_OPEN unless forced. null = no limit (the default); omitted = keep the current limit. Sent without a cadence, updates only the limit of a Task that is already recurring.',
+    })
+    @IsOptional()
+    @IsInt()
+    @Min(1)
+    @Max(RECURRENCE_MAX_OPEN_INSTANCES_LIMIT)
+    recurrenceMaxOpenInstances?: number | null;
+}
+
+/** Body of `POST /api/tasks/:id/recurring/run-now` (optional). */
+export class RunRecurringNowDto {
+    /**
+     * Run it even when the template is at its open-instance limit (an owner action). Bypasses
+     * that limit only: a fire whose previous run is still queued or running is still refused.
+     */
+    @ApiProperty({
+        required: false,
+        type: Boolean,
+        description:
+            'Run even when the template is at its open-instance limit (recurrenceMaxOpenInstances). Does not bypass SCHEDULE_ALREADY_RUNNING.',
+    })
+    @IsOptional()
+    @IsBoolean()
+    force?: boolean;
 }
 
 export class TransitionTaskDto {
