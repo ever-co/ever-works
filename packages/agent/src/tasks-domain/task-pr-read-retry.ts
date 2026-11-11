@@ -1,4 +1,4 @@
-import { TASK_PR_NOT_FOUND_RECHECK_MS } from './task-open-work';
+import { TASK_PR_NOT_FOUND_RECHECK_MS, TASK_PR_NOT_FOUND_STATE } from './task-open-work';
 
 /**
  * When the PR-status sweep reads a pull request again after a read that did not succeed: the
@@ -47,6 +47,86 @@ export function prReadRetryDelayMs(now: Date, lastSeen: Date | string | null | u
     return Math.min(TASK_PR_READ_RETRY_CAP_MS, Math.max(TASK_PR_READ_RETRY_BASE_MS, unseenMs));
 }
 
+/**
+ * A stored retry instant as the sweep obeys it: `null` when there is none, it is not a date, or it
+ * lies more than {@link TASK_PR_READ_RETRY_CAP_MS} ahead of `now`. Every writer clamps to that cap,
+ * so a later value can only come from a clock that was ahead when it was written (or a hand
+ * edit), and obeying it would stop the pull request from being read until then: such a row is
+ * read on the usual cadence instead, and the next write replaces the value.
+ * `TaskRepository.findDuePrStatusSync` applies the same ceiling in SQL.
+ */
+export function prReadEffectiveRetryAt(
+    retryAt: Date | string | null | undefined,
+    now: Date,
+): Date | null {
+    const ms = retryAt ? new Date(retryAt).getTime() : Number.NaN;
+    if (!Number.isFinite(ms) || ms > now.getTime() + TASK_PR_READ_RETRY_CAP_MS) return null;
+    return new Date(ms);
+}
+
+/**
+ * When the sweep would next read a pull request if nothing new deferred it, in epoch ms: its retry
+ * instant ({@link prReadEffectiveRetryAt}) when it has one; for a pull request recorded
+ * "not found", its 6-hourly re-check (`ciCheckedAt` + `TASK_PR_NOT_FOUND_RECHECK_MS`); otherwise
+ * now (an open pull request is due on the next tick or two). A rate-limit deferral only ever moves
+ * this LATER, never earlier: a pull request already due after the provider's reset is left alone.
+ */
+export function prReadNextDueMs(
+    row: {
+        prState?: string | null;
+        ciCheckedAt?: Date | string | null;
+        prReadRetryAt?: Date | string | null;
+    },
+    now: Date,
+): number {
+    const retryAt = prReadEffectiveRetryAt(row.prReadRetryAt, now);
+    if (retryAt) return retryAt.getTime();
+    if (row.prState === TASK_PR_NOT_FOUND_STATE) {
+        const readMs = row.ciCheckedAt ? new Date(row.ciCheckedAt).getTime() : Number.NaN;
+        return Number.isFinite(readMs) ? readMs + TASK_PR_NOT_FOUND_RECHECK_MS : now.getTime();
+    }
+    return now.getTime();
+}
+
+/**
+ * Which credential the git facade reads a Work's pull requests with, as a stable key that names no
+ * secret. It mirrors `GitFacadeService.resolvePluginAndToken`, which picks the credential PER WORK,
+ * in this order:
+ *
+ *  1. `platform` — the platform-held token, for every Work stored on the platform's own git
+ *     storage (`storageProvider = 'ever-works-git'`) while that storage is configured;
+ *  2. `installation:<id>` — the app installation the Work's repository was connected through
+ *     (`sourceRepository.auth`), one token per installation;
+ *  3. `owner:<userId>:<provider>` — the owner's own connected account (or token) on the Work's
+ *     provider.
+ *
+ * A rate limit is a fact about one of these, so it defers exactly the pull requests read with the
+ * same key. A prediction that turns out wrong (an installation since removed, which makes the
+ * facade fall back to the owner's account) can only defer LESS than the shared credential would
+ * allow, never a pull request read with another credential.
+ */
+export function prReadCredentialKey(
+    work: {
+        storageProvider?: string | null;
+        gitProvider?: string | null;
+        sourceRepository?: { auth?: { mode?: string; installationId?: string } | null } | null;
+    },
+    userId: string,
+    opts: { platformTokenActive: boolean },
+): string {
+    if (opts.platformTokenActive && work.storageProvider === 'ever-works-git') return 'platform';
+    const auth = work.sourceRepository?.auth;
+    if (
+        work.gitProvider === 'github' &&
+        auth?.mode === 'github_app_installation' &&
+        typeof auth.installationId === 'string' &&
+        auth.installationId !== ''
+    ) {
+        return `installation:${auth.installationId}`;
+    }
+    return `owner:${userId}:${work.gitProvider ?? ''}`;
+}
+
 /** The provider's typed rate-limit reasons (`GitProviderRequestError.reason`). */
 const RATE_LIMIT_REASONS: ReadonlySet<string> = new Set(['rate_limited', 'secondary_rate_limited']);
 
@@ -54,9 +134,10 @@ const RATE_LIMIT_REASONS: ReadonlySet<string> = new Set(['rate_limited', 'second
  * Whether a failed provider read was a RATE LIMIT, and if so until when the connection should be
  * left alone; `null` for any other failure.
  *
- * A rate limit is a fact about the connection, not about one pull request, so the caller defers
- * every pull-request read made with it (`TaskRepository.deferPrReadsForOwner`) instead of letting
- * each of the owner's rows spend a call to learn the same thing.
+ * A rate limit is a fact about the credential, not about one pull request, so the caller defers
+ * every pull-request read of the owner made with the same credential ({@link prReadCredentialKey},
+ * `TaskPrStatusService.deferRateLimitedCredential`) instead of letting each row spend a call to
+ * learn the same thing.
  *
  * Recognised, without importing any provider SDK:
  *  - a typed provider error (`reason` `rate_limited` / `secondary_rate_limited`, with its own

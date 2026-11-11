@@ -2,10 +2,13 @@ import {
     TASK_PR_READ_RATE_LIMIT_FALLBACK_MS,
     TASK_PR_READ_RETRY_BASE_MS,
     TASK_PR_READ_RETRY_CAP_MS,
+    prReadCredentialKey,
+    prReadEffectiveRetryAt,
+    prReadNextDueMs,
     prReadRateLimitedUntil,
     prReadRetryDelayMs,
 } from '../task-pr-read-retry';
-import { TASK_PR_NOT_FOUND_RECHECK_MS } from '../task-open-work';
+import { TASK_PR_NOT_FOUND_RECHECK_MS, TASK_PR_NOT_FOUND_STATE } from '../task-open-work';
 
 /**
  * The PR-status sweep's retry rules for a read that did not succeed, as pure functions: the
@@ -137,6 +140,102 @@ describe('task-pr-read-retry', () => {
             ]) {
                 expect(prReadRateLimitedUntil(error, NOW)).toBeNull();
             }
+        });
+    });
+
+    describe('prReadEffectiveRetryAt', () => {
+        it('obeys an instant up to 6 hours ahead, and nothing further (a clock that was ahead)', () => {
+            expect(prReadEffectiveRetryAt(new Date(NOW.getTime() + MINUTE), NOW)).toEqual(
+                new Date(NOW.getTime() + MINUTE),
+            );
+            expect(prReadEffectiveRetryAt(ago(MINUTE), NOW)).toEqual(ago(MINUTE));
+            const cap = new Date(NOW.getTime() + TASK_PR_READ_RETRY_CAP_MS);
+            expect(prReadEffectiveRetryAt(cap, NOW)).toEqual(cap);
+            expect(prReadEffectiveRetryAt(new Date(cap.getTime() + 1), NOW)).toBeNull();
+            expect(
+                prReadEffectiveRetryAt(new Date(NOW.getTime() + 365 * 24 * 60 * MINUTE), NOW),
+            ).toBeNull();
+            expect(prReadEffectiveRetryAt(null, NOW)).toBeNull();
+            expect(prReadEffectiveRetryAt('not a date', NOW)).toBeNull();
+        });
+    });
+
+    describe('prReadNextDueMs', () => {
+        it('a retry instant when there is one, the 6-hourly re-check for "not found", else now', () => {
+            const retryAt = new Date(NOW.getTime() + 20 * MINUTE);
+            expect(prReadNextDueMs({ prState: 'open', prReadRetryAt: retryAt }, NOW)).toBe(
+                retryAt.getTime(),
+            );
+            expect(
+                prReadNextDueMs(
+                    { prState: TASK_PR_NOT_FOUND_STATE, ciCheckedAt: ago(60 * MINUTE) },
+                    NOW,
+                ),
+            ).toBe(NOW.getTime() - 60 * MINUTE + TASK_PR_NOT_FOUND_RECHECK_MS);
+            expect(prReadNextDueMs({ prState: 'open', ciCheckedAt: ago(MINUTE) }, NOW)).toBe(
+                NOW.getTime(),
+            );
+            // A retry instant beyond the ceiling is not one: due on the usual cadence.
+            expect(
+                prReadNextDueMs(
+                    {
+                        prState: 'open',
+                        prReadRetryAt: new Date(NOW.getTime() + 365 * 24 * 60 * MINUTE),
+                    },
+                    NOW,
+                ),
+            ).toBe(NOW.getTime());
+            // A "not found" never read: due now.
+            expect(prReadNextDueMs({ prState: TASK_PR_NOT_FOUND_STATE }, NOW)).toBe(NOW.getTime());
+        });
+    });
+
+    describe('prReadCredentialKey', () => {
+        const OWNER = 'user-1';
+        const installed = (installationId: string) => ({
+            gitProvider: 'github',
+            storageProvider: 'user-github',
+            sourceRepository: {
+                auth: { mode: 'github_app_installation', installationId },
+            },
+        });
+
+        it('keys a Work by the credential the git facade reads it with', () => {
+            const off = { platformTokenActive: false };
+            // An app installation: one key per installation, whoever owns the Task.
+            expect(prReadCredentialKey(installed('X'), OWNER, off)).toBe('installation:X');
+            expect(prReadCredentialKey(installed('Y'), OWNER, off)).toBe('installation:Y');
+            // The owner's own account, per provider.
+            expect(prReadCredentialKey({ gitProvider: 'github' }, OWNER, off)).toBe(
+                'owner:user-1:github',
+            );
+            expect(prReadCredentialKey({ gitProvider: 'gitlab' }, OWNER, off)).toBe(
+                'owner:user-1:gitlab',
+            );
+            expect(
+                prReadCredentialKey(
+                    { gitProvider: 'github', sourceRepository: { auth: { mode: 'none' } } },
+                    OWNER,
+                    off,
+                ),
+            ).toBe('owner:user-1:github');
+            // An installation is a git-provider-specific credential: another provider ignores it.
+            expect(
+                prReadCredentialKey({ ...installed('X'), gitProvider: 'gitlab' }, OWNER, off),
+            ).toBe('owner:user-1:gitlab');
+        });
+
+        it('the platform storage is read with the platform token only while that is configured', () => {
+            const platformWork = { ...installed('X'), storageProvider: 'ever-works-git' };
+            expect(prReadCredentialKey(platformWork, OWNER, { platformTokenActive: true })).toBe(
+                'platform',
+            );
+            expect(prReadCredentialKey(platformWork, OWNER, { platformTokenActive: false })).toBe(
+                'installation:X',
+            );
+            expect(prReadCredentialKey(installed('X'), OWNER, { platformTokenActive: true })).toBe(
+                'installation:X',
+            );
         });
     });
 });

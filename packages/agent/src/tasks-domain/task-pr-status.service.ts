@@ -27,7 +27,13 @@ import {
     TASK_PR_NOT_FOUND_RECHECK_MS,
     TASK_PR_NOT_FOUND_STATE,
 } from './task-open-work';
-import { prReadRateLimitedUntil, prReadRetryDelayMs } from './task-pr-read-retry';
+import {
+    prReadCredentialKey,
+    prReadEffectiveRetryAt,
+    prReadNextDueMs,
+    prReadRateLimitedUntil,
+    prReadRetryDelayMs,
+} from './task-pr-read-retry';
 
 /**
  * PR insights (kanban run cockpit, plan 04 M5 + M6 + the merged half of
@@ -149,6 +155,8 @@ interface TaskPrRepoTarget {
     gitOptions: { userId: string; providerId: string; workId: string };
     /** APW-08 FR-43 — the Work's kind, so the thread post needs no second Work read. */
     workKind: string | null;
+    /** Which credential the facade reads with (`prReadCredentialKey`), for a rate limit. */
+    credentialKey: string;
 }
 
 /** What {@link TaskPrStatusService.refreshTask} answers: the Task, and the provider read behind it. */
@@ -255,8 +263,9 @@ export class TaskPrStatusService {
         }
         // A read that did not succeed is backing off (rule 1): a failed read stamps no
         // `ciCheckedAt`, so the floor alone would let every request reach the provider again.
-        // An explicit refresh still asks.
-        if (!opts.refresh && this.isLater(task.prReadRetryAt, new Date(nowMs))) {
+        // An explicit refresh still asks, and a stored instant more than 6 h ahead is not obeyed.
+        const retryAt = prReadEffectiveRetryAt(task.prReadRetryAt, new Date(nowMs));
+        if (!opts.refresh && retryAt && retryAt.getTime() > nowMs) {
             return this.toView(task, true);
         }
         // A terminal PR never changes again — serve the cache forever. A `not_found` one is
@@ -372,12 +381,13 @@ export class TaskPrStatusService {
      * fails backs its own row off (rule 4), so it does not come back at the
      * head of the next batch.
      *
-     * A RATE LIMIT is about the owner's connection, not one pull request:
-     * the read that hits it defers every pull request of that owner on that
-     * provider (`recordReadFailure`), the rest of the owner's rows in this
-     * batch are skipped without a call, and the batch is refilled ONCE from
-     * the rows still due, so one rate-limited owner costs the other owners
-     * neither this tick nor the next.
+     * A RATE LIMIT is about the credential the read used, not one pull
+     * request: the read that hits it defers the owner's pull requests read
+     * with the same credential (`deferRateLimitedCredential`), the rest of
+     * them in this batch are skipped without a call, and the batch is
+     * refilled ONCE from the rows still due, so one spent credential costs
+     * the other owners (and the owner's other credentials) neither this tick
+     * nor the next.
      */
     async syncDuePrStatuses(
         opts: { limit?: number; staleSeconds?: number } = {},
@@ -397,7 +407,9 @@ export class TaskPrStatusService {
         const tickAt = this.clock();
         const staleBefore = new Date(tickAt.getTime() - staleSeconds * 1000);
         const notFoundBefore = new Date(tickAt.getTime() - TASK_PR_NOT_FOUND_RECHECK_MS);
-        const rateLimitedOwners = new Set<string>();
+        // Spent credentials this tick, by owner (`prReadCredentialKey`), and each Work's key.
+        const spent = new Map<string, Set<string>>();
+        const keyOfWork = new Map<string, string | null>();
         const seen = new Set<string>();
         let budget = opts.limit ?? PR_STATUS_SYNC_BATCH;
 
@@ -409,10 +421,14 @@ export class TaskPrStatusService {
             let skipped = 0;
             for (const task of due) {
                 seen.add(task.id);
-                if (rateLimitedOwners.has(task.userId)) {
-                    skipped += 1;
-                    summary.deferred += 1;
-                    continue;
+                const ownerSpent = spent.get(task.userId);
+                if (ownerSpent) {
+                    const key = await this.credentialKeyOf(task, keyOfWork);
+                    if (key && ownerSpent.has(key)) {
+                        skipped += 1;
+                        summary.deferred += 1;
+                        continue;
+                    }
                 }
                 try {
                     const before = task.prState;
@@ -437,7 +453,12 @@ export class TaskPrStatusService {
                 } catch (error) {
                     summary.failed += 1;
                     if (prReadRateLimitedUntil(error, this.clock())) {
-                        rateLimitedOwners.add(task.userId);
+                        const key = await this.credentialKeyOf(task, keyOfWork);
+                        if (key) {
+                            const ownerSpent = spent.get(task.userId) ?? new Set<string>();
+                            ownerSpent.add(key);
+                            spent.set(task.userId, ownerSpent);
+                        }
                     }
                     this.logger.warn(
                         `PR status sync failed for task ${task.id}: ${
@@ -633,12 +654,12 @@ export class TaskPrStatusService {
             const gitFacade = this.gitFacade;
             const prNumber = task.prNumber;
             if (!gitFacade || !prNumber || !task.workId) return { task, status: null };
-            let providerId: string | null = null;
+            let resolved: TaskPrRepoTarget | null = null;
             let target: TaskPrRepoTarget;
             let status: GitPullRequestStatus | null;
             try {
                 target = await this.resolveRepo(task, userId);
-                providerId = target.gitOptions.providerId;
+                resolved = target;
                 status = await gitFacade.getPullRequestStatus(
                     target.owner,
                     target.repo,
@@ -647,7 +668,7 @@ export class TaskPrStatusService {
                 );
             } catch (error) {
                 // Rule 4: a failed read is not an answer. Back off, then fail as before.
-                await this.recordReadFailure(task, error, providerId);
+                await this.recordReadFailure(task, error, resolved);
                 throw error;
             }
             const checkedAt = this.clock();
@@ -867,10 +888,15 @@ export class TaskPrStatusService {
             await this.tasks.updatePrStatusCache(task.id, stamp);
             return { task: Object.assign(task, stamp), status: null };
         }
+        // Never later than this answer: a first answer stamped under a clock that was ahead
+        // would otherwise postpone the confirmation until then.
         const firstMs = task.prNotFoundSince
             ? new Date(task.prNotFoundSince).getTime()
             : Number.NaN;
-        const firstAnswer = Number.isFinite(firstMs) ? new Date(firstMs) : checkedAt;
+        const firstAnswer =
+            Number.isFinite(firstMs) && firstMs <= checkedAt.getTime()
+                ? new Date(firstMs)
+                : checkedAt;
         const confirmAtMs = firstAnswer.getTime() + TASK_PR_NOT_FOUND_CONFIRM_MS;
         if (checkedAt.getTime() < confirmAtMs) {
             const retryAt = new Date(
@@ -907,40 +933,40 @@ export class TaskPrStatusService {
      * (readers take it as "the pull request was last seen"), not `prNotFoundSince`. Only when to
      * try again:
      *
-     *  - a **rate limit** defers every pull request of the owner on that provider until the
-     *    provider's reset (`TaskRepository.deferPrReadsForOwner`): the connection is spent, not
+     *  - a **rate limit** defers the owner's pull requests read with the same credential until
+     *    the provider's reset ({@link deferRateLimitedCredential}): the credential is spent, not
      *    this pull request;
      *  - **anything else** backs this row off by {@link prReadRetryDelayMs}: as long as the pull
      *    request has gone unseen, from one tick doubling to 6 hours, never sooner than a wait
-     *    already set.
+     *    already set (one more than 6 hours ahead is not a wait: `prReadEffectiveRetryAt`).
      *
      * Best-effort: a failed write is logged and the read's own error still propagates.
      */
     private async recordReadFailure(
         task: Task,
         error: unknown,
-        providerId: string | null,
+        target: TaskPrRepoTarget | null,
     ): Promise<void> {
         const now = this.clock();
         try {
             const limitedUntil = prReadRateLimitedUntil(error, now);
-            if (limitedUntil && providerId) {
-                const deferred = await this.tasks.deferPrReadsForOwner(
-                    task.userId,
-                    providerId,
+            if (limitedUntil && target) {
+                const deferred = await this.deferRateLimitedCredential(
+                    task,
+                    target.credentialKey,
                     limitedUntil,
+                    now,
                 );
                 this.logger.warn(
-                    `Task ${task.id}: its owner's ${providerId} connection is rate limited; ` +
-                        `${deferred} pull-request read(s) deferred to ${limitedUntil.toISOString()}.`,
+                    `Task ${task.id}: the ${target.gitOptions.providerId} credential its read used ` +
+                        `is rate limited; ${deferred} pull-request read(s) of its owner deferred to ` +
+                        `${limitedUntil.toISOString()}.`,
                 );
-                if (!this.isLater(task.prReadRetryAt, limitedUntil)) {
-                    Object.assign(task, { prReadRetryAt: limitedUntil });
-                }
                 return;
             }
             const backoff = new Date(now.getTime() + prReadRetryDelayMs(now, this.lastSeen(task)));
-            if (this.isLater(task.prReadRetryAt, backoff)) return;
+            const waiting = prReadEffectiveRetryAt(task.prReadRetryAt, now);
+            if (waiting && waiting.getTime() > backoff.getTime()) return;
             await this.tasks.updatePrStatusCache(task.id, { prReadRetryAt: backoff });
             Object.assign(task, { prReadRetryAt: backoff });
         } catch (writeError) {
@@ -953,17 +979,82 @@ export class TaskPrStatusService {
     }
 
     /**
+     * A rate limit on `credentialKey` (`prReadCredentialKey`): none of the owner's pull requests
+     * read with that credential is read again before `until`, the provider's reset. One read
+     * learnt it; every other read with the same credential would only spend a call to learn it
+     * again, and keep taking the sweep's batch from everyone else meanwhile.
+     *
+     *  - **Same credential only.** The git facade picks the credential per Work (the platform's
+     *    own token, an app installation, or the owner's account), so each of the owner's Works is
+     *    keyed the same way and only those with the spent key are deferred. Another installation
+     *    of the same owner, or the owner's own account, keeps being read.
+     *  - **Same owner only.** A credential shared across owners (the platform token, an
+     *    organisation's installation) defers each owner's rows when that owner's read hits the
+     *    limit: one call per owner per reset, and a misread error can never defer another
+     *    tenant.
+     *  - **Never earlier.** A row already due after `until` (one backing off further, or a
+     *    "not found" whose 6-hourly re-check comes later, `prReadNextDueMs`) is left alone.
+     *
+     * Returns the rows deferred (the failing row included).
+     */
+    private async deferRateLimitedCredential(
+        task: Task,
+        credentialKey: string,
+        until: Date,
+        now: Date,
+    ): Promise<number> {
+        const rows = await this.tasks.findOpenPrReadsOfOwner(task.userId);
+        const keyOfWork = new Map<string, string | null>();
+        if (task.workId) keyOfWork.set(task.workId, credentialKey);
+        const ids: string[] = [];
+        for (const row of rows) {
+            if (!row.workId) continue;
+            const key = await this.credentialKeyOf(
+                { userId: task.userId, workId: row.workId },
+                keyOfWork,
+            );
+            if (key !== credentialKey) continue;
+            if (prReadNextDueMs(row, now) >= until.getTime()) continue;
+            ids.push(row.id);
+        }
+        const deferred = await this.tasks.deferPrReads(ids, until);
+        if (ids.includes(task.id)) Object.assign(task, { prReadRetryAt: until });
+        return deferred;
+    }
+
+    /**
+     * The credential key (`prReadCredentialKey`) a Task's pull request is read with, from its
+     * Work; `null` when the Work cannot be read. `cache` holds one answer per Work for a tick.
+     */
+    private async credentialKeyOf(
+        task: { userId: string; workId?: string | null },
+        cache: Map<string, string | null>,
+    ): Promise<string | null> {
+        if (!task.workId) return null;
+        if (cache.has(task.workId)) return cache.get(task.workId) ?? null;
+        const work = await this.works.findById(task.workId).catch(() => null);
+        const key = work ? this.credentialKeyOfWork(work, task.userId) : null;
+        cache.set(task.workId, key);
+        return key;
+    }
+
+    private credentialKeyOfWork(
+        work: Parameters<typeof prReadCredentialKey>[0],
+        userId: string,
+    ): string {
+        return prReadCredentialKey(work, userId, {
+            // The facade reads with the platform's token only while that storage is configured.
+            platformTokenActive:
+                config.everWorks.git.isEnabled() && config.everWorks.git.getPat() !== '',
+        });
+    }
+
+    /**
      * When the pull request was last seen: its last successful read, or, never read, the last
      * change to the Task (the write that recorded the pull request moved `updatedAt`).
      */
     private lastSeen(task: Task): Date | null {
         return task.ciCheckedAt ?? task.updatedAt ?? task.createdAt ?? null;
-    }
-
-    /** Whether `current` is a real instant strictly later than `than`. */
-    private isLater(current: Date | null | undefined, than: Date): boolean {
-        const ms = current ? new Date(current).getTime() : Number.NaN;
-        return Number.isFinite(ms) && ms > than.getTime();
     }
 
     /**
@@ -1083,6 +1174,7 @@ export class TaskPrStatusService {
                 (work.taskIsolationBaseBranch && work.taskIsolationBaseBranch.trim()) || 'main',
             gitOptions: { userId, providerId: work.gitProvider, workId: work.id },
             workKind: work.kind ?? null,
+            credentialKey: this.credentialKeyOfWork(work, userId),
         };
     }
 

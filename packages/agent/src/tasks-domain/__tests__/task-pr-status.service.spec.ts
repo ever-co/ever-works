@@ -37,7 +37,8 @@ describe('TaskPrStatusService', () => {
         updatePrStatusCache: jest.Mock;
         updateById: jest.Mock;
         recordCiHead: jest.Mock;
-        deferPrReadsForOwner: jest.Mock;
+        findOpenPrReadsOfOwner: jest.Mock;
+        deferPrReads: jest.Mock;
     };
     let autoResume: { onCheckResult: jest.Mock };
     let works: { findById: jest.Mock };
@@ -90,8 +91,9 @@ describe('TaskPrStatusService', () => {
             // poll is the second writer of the head pair, through the same
             // monotonic compare-and-set the webhook uses.
             recordCiHead: jest.fn().mockResolvedValue(true),
-            // A rate limit defers every read of the owner's connection (rule 4).
-            deferPrReadsForOwner: jest.fn().mockResolvedValue(0),
+            // A rate limit defers the owner's reads made with the same credential (rule 4).
+            findOpenPrReadsOfOwner: jest.fn().mockResolvedValue([]),
+            deferPrReads: jest.fn(async (ids: string[]) => ids.length),
         };
         works = {
             findById: jest.fn().mockResolvedValue({
@@ -619,7 +621,7 @@ describe('TaskPrStatusService', () => {
 
         expect(summary).toMatchObject({ scanned: 2, refreshed: 1, failed: 1, deferred: 0 });
         // "rate limited" in a message with no status is an ordinary failure: one row backs off.
-        expect(tasks.deferPrReadsForOwner).not.toHaveBeenCalled();
+        expect(tasks.deferPrReads).not.toHaveBeenCalled();
         expect(tasks.updatePrStatusCache).toHaveBeenCalledWith('task-a', {
             prReadRetryAt: expect.any(Date),
         });
@@ -652,7 +654,7 @@ describe('TaskPrStatusService', () => {
             expect(tasks.updatePrStatusCache).toHaveBeenCalledWith('task-1', {
                 prReadRetryAt: new Date(NOW.getTime() + 10 * MINUTE),
             });
-            expect(tasks.deferPrReadsForOwner).not.toHaveBeenCalled();
+            expect(tasks.deferPrReads).not.toHaveBeenCalled();
             expect(mergeGate.onPullRequestStatusRefreshed).not.toHaveBeenCalled();
         });
 
@@ -687,8 +689,35 @@ describe('TaskPrStatusService', () => {
             expect(tasks.updatePrStatusCache).not.toHaveBeenCalled();
         });
 
-        it('a rate limit defers the owner’s reads on that provider, skips their other rows without a call, and refills the batch once', async () => {
+        it('a rate limit defers the owner’s reads made with the same credential, skips them without a call, and refills the batch once', async () => {
             const resetAt = new Date(NOW.getTime() + 30 * MINUTE);
+            // The owner's open pull requests: task-a and task-b on the failing Work, task-e on
+            // another installation, task-f already backing off past the reset.
+            const installation = (installationId: string) => ({
+                id: `work-${installationId}`,
+                gitProvider: 'github',
+                taskIsolationBaseBranch: 'develop',
+                sourceRepository: {
+                    auth: { mode: 'github_app_installation', providerId: 'github', installationId },
+                },
+                getRepoOwner: () => 'acme',
+                getDataRepo: () => 'widgets',
+            });
+            works.findById.mockImplementation(async (id: string) =>
+                id === 'work-other' ? installation('other') : installation('spent'),
+            );
+            tasks.findOpenPrReadsOfOwner.mockResolvedValue([
+                { id: 'task-a', workId: WORK, prState: 'open', ciCheckedAt: null },
+                { id: 'task-b', workId: WORK, prState: 'open', ciCheckedAt: null },
+                { id: 'task-e', workId: 'work-other', prState: 'open', ciCheckedAt: null },
+                {
+                    id: 'task-f',
+                    workId: WORK,
+                    prState: 'open',
+                    ciCheckedAt: null,
+                    prReadRetryAt: new Date(resetAt.getTime() + MINUTE),
+                },
+            ]);
             tasks.findDuePrStatusSync
                 .mockResolvedValueOnce([
                     makeTask({ id: 'task-a' }),
@@ -712,7 +741,8 @@ describe('TaskPrStatusService', () => {
 
             const summary = await service.syncDuePrStatuses({ limit: 3 });
 
-            expect(tasks.deferPrReadsForOwner).toHaveBeenCalledWith(USER, 'github', resetAt);
+            expect(tasks.findOpenPrReadsOfOwner).toHaveBeenCalledWith(USER);
+            expect(tasks.deferPrReads).toHaveBeenCalledWith(['task-a', 'task-b'], resetAt);
             // task-a hit the limit; task-b (same owner) is not asked; task-c and the refill's
             // task-d are.
             expect(git.getPullRequestStatus).toHaveBeenCalledTimes(3);
@@ -724,7 +754,7 @@ describe('TaskPrStatusService', () => {
                 failed: 1,
                 deferred: 1,
             });
-            // A rate limit is about the connection: this row gets no backoff of its own.
+            // A rate limit is about the credential: this row gets no backoff of its own.
             expect(tasks.updatePrStatusCache).not.toHaveBeenCalledWith('task-a', expect.anything());
         });
 

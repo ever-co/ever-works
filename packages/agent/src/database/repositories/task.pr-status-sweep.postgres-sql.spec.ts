@@ -76,7 +76,7 @@ describe('TaskRepository — Postgres SQL of the PR-status sweep', () => {
         expect(regular).toBe(
             'SELECT <all columns> FROM "tasks" "task"' +
                 ' WHERE "task"."prNumber" IS NOT NULL AND "task"."workId" IS NOT NULL' +
-                ' AND "task"."prReadRetryAt" IS NULL' +
+                ' AND ("task"."prReadRetryAt" IS NULL OR "task"."prReadRetryAt" > :retryCeiling)' +
                 ` AND (("task"."prState" IS NULL OR "task"."prState" IN ('open', 'draft'))` +
                 ' AND ("task"."ciCheckedAt" IS NULL OR "task"."ciCheckedAt" < :staleBefore)' +
                 ' OR "task"."prState" = :prNotFound' +
@@ -92,18 +92,28 @@ describe('TaskRepository — Postgres SQL of the PR-status sweep', () => {
         );
     });
 
-    it('deferPrReadsForOwner: the owner’s non-terminal pull requests on that provider, keeping updatedAt', async () => {
-        const [sql, ...rest] = await captureUpdates(() =>
-            tasks.deferPrReadsForOwner(OWNER, 'github', NOW),
+    it('findOpenPrReadsOfOwner: the owner’s pull requests the sweep still reads, with what a deferral decides on', async () => {
+        const [sql, ...rest] = await captureSelects(() => tasks.findOpenPrReadsOfOwner(OWNER));
+        expect(rest).toEqual([]);
+        expect(sql).toBe(
+            'SELECT "task"."id" AS "task_id", "task"."workId" AS "task_workId",' +
+                ' "task"."prState" AS "task_prState", "task"."ciCheckedAt" AS "task_ciCheckedAt",' +
+                ' "task"."prReadRetryAt" AS "task_prReadRetryAt" FROM "tasks" "task"' +
+                ' WHERE "task"."userId" = :userId AND "task"."prNumber" IS NOT NULL' +
+                ' AND "task"."workId" IS NOT NULL' +
+                ` AND ("task"."prState" IS NULL OR "task"."prState" IN ('open', 'draft', :prNotFound))`,
         );
+    });
+
+    it('deferPrReads: exactly the rows the caller chose, keeping updatedAt', async () => {
+        const [sql, ...rest] = await captureUpdates(() => tasks.deferPrReads(['t-1', 't-2'], NOW));
         expect(rest).toEqual([]);
         expect(sql).toBe(
             'UPDATE "tasks" SET "prReadRetryAt" = :orm_param_0, "updatedAt" = "updatedAt"' +
-                ' WHERE "userId" = :userId AND "prNumber" IS NOT NULL' +
-                ` AND ("prState" IS NULL OR "prState" IN ('open', 'draft', :prNotFound))` +
-                ' AND ("prReadRetryAt" IS NULL OR "prReadRetryAt" < :until)' +
-                ' AND "workId" IN (SELECT "id" FROM "works" WHERE "gitProvider" = :gitProvider)',
+                ' WHERE "id" IN (:...taskIds)',
         );
+        // Nothing chosen, nothing written.
+        expect(await captureUpdates(() => tasks.deferPrReads([], NOW))).toEqual([]);
     });
 
     it('updatePrStatusCache: the backoff columns, keeping updatedAt', async () => {

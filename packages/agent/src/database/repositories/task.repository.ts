@@ -33,6 +33,7 @@ import {
     TASK_PR_NOT_FOUND_RECHECK_MS,
     TASK_PR_NOT_FOUND_STATE,
 } from '../../tasks-domain/task-open-work';
+import { TASK_PR_READ_RETRY_CAP_MS } from '../../tasks-domain/task-pr-read-retry';
 import { visibleToPredicate } from '../../record-visibility/visible-to';
 
 export interface ListTasksFilter {
@@ -711,6 +712,12 @@ export class TaskRepository {
      * before its retry instant, and none of them waits forever. Before this
      * split a failed read stamped nothing, kept its stale `ciCheckedAt` and
      * sorted first on every tick: a batch of them read nothing else.
+     *
+     * A retry instant more than `TASK_PR_READ_RETRY_CAP_MS` (6 h) past
+     * `retryBefore` is not obeyed (`prReadEffectiveRetryAt`): every writer
+     * clamps to that, so only a clock that was ahead (or a hand edit) can
+     * leave one, and obeying it would stop the pull request from being read
+     * until then. Such a row is on the usual cadence instead.
      */
     async findDuePrStatusSync(
         staleBefore: Date,
@@ -719,11 +726,14 @@ export class TaskRepository {
         retryBefore: Date = new Date(),
     ): Promise<Task[]> {
         const take = Math.max(1, Math.min(limit, 200));
+        const retryCeiling = new Date(retryBefore.getTime() + TASK_PR_READ_RETRY_CAP_MS);
         const regular = await this.repository
             .createQueryBuilder('task')
             .where('task.prNumber IS NOT NULL')
             .andWhere('task.workId IS NOT NULL')
-            .andWhere('task.prReadRetryAt IS NULL')
+            .andWhere('(task.prReadRetryAt IS NULL OR task.prReadRetryAt > :retryCeiling)', {
+                retryCeiling,
+            })
             .andWhere(
                 new Brackets((due) =>
                     due
@@ -757,37 +767,49 @@ export class TaskRepository {
     }
 
     /**
-     * A rate limit on the owner's connection to `gitProvider`: no pull request
-     * of theirs on that provider is read again before `until` (the
-     * provider's reset). One read learnt it, so every other read with the
-     * same connection would only spend a call to learn it again, and would
-     * keep taking the sweep's batch from every other owner meanwhile.
-     *
-     * The scope is the owner's Works on that provider: the platform cannot
-     * see from here whether the call used the owner's own token or a narrower
-     * installation, so it may defer a little more than needed, never longer
-     * than the provider's reset. Rows already deferred further are left
-     * alone, and terminal pull requests are not touched. Keeps `updatedAt`
-     * (a sweep write, as `updatePrStatusCache`). Returns the rows deferred.
+     * The owner's pull requests the PR-status sweep still reads (open, draft
+     * or recorded `not_found`, on a Work), with only what a rate-limit
+     * deferral decides on: the Work (whose credential the read uses) and when
+     * the row is next due. `TaskPrStatusService.deferRateLimitedCredential`
+     * picks the ones read with the spent credential. Owner-scoped
+     * (`idx_tasks_user_status`).
      */
-    async deferPrReadsForOwner(userId: string, gitProvider: string, until: Date): Promise<number> {
-        const escape = (name: string) => this.repository.manager.connection.driver.escape(name);
-        const keepUpdatedAt = escape('updatedAt');
+    async findOpenPrReadsOfOwner(
+        userId: string,
+    ): Promise<Array<Pick<Task, 'id' | 'workId' | 'prState' | 'ciCheckedAt' | 'prReadRetryAt'>>> {
+        return this.repository
+            .createQueryBuilder('task')
+            .select([
+                'task.id',
+                'task.workId',
+                'task.prState',
+                'task.ciCheckedAt',
+                'task.prReadRetryAt',
+            ])
+            .where('task.userId = :userId', { userId })
+            .andWhere('task.prNumber IS NOT NULL')
+            .andWhere('task.workId IS NOT NULL')
+            .andWhere("(task.prState IS NULL OR task.prState IN ('open', 'draft', :prNotFound))", {
+                prNotFound: TASK_PR_NOT_FOUND_STATE,
+            })
+            .getMany();
+    }
+
+    /**
+     * A rate limit: the sweep reads none of `taskIds` before `until` (the
+     * provider's reset). The caller has already chosen the rows (same owner,
+     * same credential, due before `until`), so a deferral never makes a row
+     * due EARLIER than it already was. Keeps `updatedAt` (a sweep write, as
+     * `updatePrStatusCache`). Returns the rows written.
+     */
+    async deferPrReads(taskIds: string[], until: Date): Promise<number> {
+        if (taskIds.length === 0) return 0;
+        const keepUpdatedAt = this.repository.manager.connection.driver.escape('updatedAt');
         const result = await this.repository
             .createQueryBuilder()
             .update(Task)
             .set({ prReadRetryAt: until, updatedAt: () => keepUpdatedAt })
-            .where('userId = :userId', { userId })
-            .andWhere('prNumber IS NOT NULL')
-            .andWhere("(prState IS NULL OR prState IN ('open', 'draft', :prNotFound))", {
-                prNotFound: TASK_PR_NOT_FOUND_STATE,
-            })
-            .andWhere('(prReadRetryAt IS NULL OR prReadRetryAt < :until)', { until })
-            .andWhere(
-                `${escape('workId')} IN (SELECT ${escape('id')} FROM ${escape('works')}` +
-                    ` WHERE ${escape('gitProvider')} = :gitProvider)`,
-                { gitProvider },
-            )
+            .where('id IN (:...taskIds)', { taskIds })
             .execute();
         return result.affected ?? 0;
     }

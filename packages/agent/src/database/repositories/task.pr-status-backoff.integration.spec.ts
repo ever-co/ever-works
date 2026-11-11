@@ -1,8 +1,8 @@
+import { randomUUID } from 'node:crypto';
 import { DataSource, type Repository } from 'typeorm';
 import type { GitPullRequestStatus } from '@ever-works/plugin';
 import { ENTITIES } from '../_entities-inventory';
 import { Task, TaskPriority, TaskStatus } from '../../entities/task.entity';
-import { Work } from '../../entities/work.entity';
 import type { GitFacadeService } from '../../facades/git.facade';
 import {
     TASK_PR_NOT_FOUND_CONFIRM_MS,
@@ -27,7 +27,8 @@ import { TaskRepository } from './task.repository';
  *     stamped nothing, so its row kept its stale `ciCheckedAt` and sorted first on every tick: 25
  *     of them (the batch size, one owner's worth) and nobody else's pull request was read again.
  *     A failed read now backs off (`prReadRetryAt`), and a retry waits its turn by its retry
- *     instant. A rate limit defers every read of the owner's connection to the provider's reset.
+ *     instant. A rate limit defers the owner's reads made with the same credential (the
+ *     facade picks one per Work) to the provider's reset, never making a row due earlier.
  *  2. **"Not found" counted from the last successful read.** After a gap in reads, one answer
  *     confirmed at once. It is now confirmed 30 minutes after the FIRST "not found" answer.
  *
@@ -37,7 +38,6 @@ import { TaskRepository } from './task.repository';
 describe('PR-status sweep: failed reads back off (real SQLite)', () => {
     let dataSource: DataSource;
     let taskRows: Repository<Task>;
-    let workRows: Repository<Work>;
     let repository: TaskRepository;
     let slugSeq = 0;
 
@@ -51,10 +51,18 @@ describe('PR-status sweep: failed reads back off (real SQLite)', () => {
     const T0 = Math.floor(Date.now() / MINUTE) * MINUTE;
     const LONG_AGO = new Date(T0 - 30 * DAY);
 
-    /** Provider id per Work id: the service reads it from the Work double, the deferral from SQL. */
-    const providerOf = new Map<string, string>();
-    let ghWorkOf: Record<string, string>;
-    let glWork: string;
+    /**
+     * The Works the Work double resolves, with what the git facade picks the credential by: the
+     * provider and, for a repository connected through an app installation, its id.
+     */
+    const workFixtures = new Map<string, { gitProvider: string; installationId?: string }>();
+    /** Each owner's default Work: read with the owner's own account. */
+    let workOf: Record<string, string>;
+    const addWork = (gitProvider: string, installationId?: string) => {
+        const id = randomUUID();
+        workFixtures.set(id, { gitProvider, installationId });
+        return id;
+    };
 
     beforeAll(async () => {
         dataSource = new DataSource({
@@ -66,7 +74,6 @@ describe('PR-status sweep: failed reads back off (real SQLite)', () => {
         await dataSource.initialize();
         await dataSource.query('PRAGMA foreign_keys = OFF');
         taskRows = dataSource.getRepository(Task);
-        workRows = dataSource.getRepository(Work);
         repository = new TaskRepository(taskRows);
     });
 
@@ -77,27 +84,8 @@ describe('PR-status sweep: failed reads back off (real SQLite)', () => {
     beforeEach(async () => {
         at(T0);
         await taskRows.clear();
-        await workRows.clear();
-        providerOf.clear();
-        const work = async (userId: string, gitProvider: string) => {
-            slugSeq += 1;
-            const row = await workRows.save(
-                workRows.create({
-                    userId,
-                    name: `work-${slugSeq}`,
-                    slug: `work-${slugSeq}`,
-                    description: 'Sweep fixture',
-                    gitProvider,
-                } as Partial<Work>),
-            );
-            providerOf.set(row.id, gitProvider);
-            return row.id;
-        };
-        ghWorkOf = {
-            [BROKEN]: await work(BROKEN, 'github'),
-            [HEALTHY]: await work(HEALTHY, 'github'),
-        };
-        glWork = await work(BROKEN, 'gitlab');
+        workFixtures.clear();
+        workOf = { [BROKEN]: addWork('github'), [HEALTHY]: addWork('github') };
     });
 
     /**
@@ -125,7 +113,7 @@ describe('PR-status sweep: failed reads back off (real SQLite)', () => {
                 priority: TaskPriority.P3,
                 createdByType: 'user',
                 createdById: userId,
-                workId: ghWorkOf[userId],
+                workId: workOf[userId],
                 branchRef: `task/t-${slugSeq}`,
                 branchState: 'pr-open',
                 prNumber: slugSeq,
@@ -187,13 +175,26 @@ describe('PR-status sweep: failed reads back off (real SQLite)', () => {
             ),
         };
         const works = {
-            findById: async (id: string) => ({
-                id,
-                gitProvider: providerOf.get(id) ?? 'github',
-                taskIsolationBaseBranch: null,
-                getRepoOwner: () => 'acme',
-                getDataRepo: () => 'widgets',
-            }),
+            findById: async (id: string) => {
+                const fixture = workFixtures.get(id) ?? { gitProvider: 'github' };
+                return {
+                    id,
+                    gitProvider: fixture.gitProvider,
+                    storageProvider: 'user-github',
+                    sourceRepository: fixture.installationId
+                        ? {
+                              auth: {
+                                  mode: 'github_app_installation',
+                                  providerId: 'github',
+                                  installationId: fixture.installationId,
+                              },
+                          }
+                        : undefined,
+                    taskIsolationBaseBranch: null,
+                    getRepoOwner: () => 'acme',
+                    getDataRepo: () => 'widgets',
+                };
+            },
         };
         const service = new TaskPrStatusService(
             repository,
@@ -330,40 +331,52 @@ describe('PR-status sweep: failed reads back off (real SQLite)', () => {
     });
 
     describe('a rate limit', () => {
-        /**
-         * One read learns the connection is spent; on `develop` every other row of the owner in the
-         * batch made the same call (25 per tick), and the other owner was not read at all.
-         */
-        it('defers every read of the owner’s connection to the reset, skips the rest of the batch without a call, and reads another owner in the same tick', async () => {
-            const resetAt = T0 + 40 * MINUTE;
-            const limited: Task[] = [];
-            for (let i = 0; i < PR_STATUS_SYNC_BATCH + 5; i += 1) {
-                limited.push(await openPr(BROKEN, new Date(T0 - 10 * MINUTE)));
-            }
-            // The same owner on another provider: a different connection, not deferred.
-            const otherProvider = await openPr(BROKEN, new Date(T0 - 9 * MINUTE), {
-                workId: glWork,
+        const resetAt = T0 + 40 * MINUTE;
+        const limited = () =>
+            httpError(403, 'API rate limit exceeded', {
+                'x-ratelimit-remaining': '0',
+                'x-ratelimit-reset': String(resetAt / 1000),
             });
+
+        /**
+         * The review of #3169: the facade picks the credential PER WORK (the platform token, an
+         * app installation, or the owner's account), so a limit on one installation says nothing
+         * about the owner's other installation or own account. On `develop` every other row of the
+         * owner in the batch made the same call (25 per tick) and no other owner was read.
+         */
+        it('defers only the pull requests read with the spent credential, skips them in the tick without a call, and reads everything else in the same tick', async () => {
+            const workA = addWork('github', 'X');
+            const workC = addWork('github', 'X');
+            const workB = addWork('github', 'Y');
+            const ownAccount = workOf[BROKEN];
+            const onA: Task[] = [];
+            for (let i = 0; i < PR_STATUS_SYNC_BATCH + 5; i += 1) {
+                onA.push(await openPr(BROKEN, new Date(T0 - 10 * MINUTE), { workId: workA }));
+            }
+            const onC = await openPr(BROKEN, new Date(T0 - 9 * MINUTE), { workId: workC });
+            const onB = await openPr(BROKEN, new Date(T0 - 9 * MINUTE), { workId: workB });
+            const onOwnAccount = await openPr(BROKEN, new Date(T0 - 9 * MINUTE));
             const otherOwner = await openPr(HEALTHY, new Date(T0 - 3 * MINUTE));
             let spent = true;
+            const onX = (call: { workId: string }) =>
+                call.workId === workA || call.workId === workC;
             const { tick, calls } = sweeper((call) =>
-                call.userId === BROKEN && call.workId !== glWork && spent
-                    ? httpError(403, 'API rate limit exceeded', {
-                          'x-ratelimit-remaining': '0',
-                          'x-ratelimit-reset': String(resetAt / 1000),
-                      })
-                    : providerSays(call.prNumber),
+                onX(call) && spent ? limited() : providerSays(call.prNumber),
             );
 
             at(T0);
             const summary = await tick();
 
-            const limitedCalls = () =>
-                calls.filter((call) => call.userId === BROKEN && call.workId !== glWork).length;
-            expect(limitedCalls()).toBe(1);
+            const xCalls = () => calls.filter(onX).length;
+            const callsOn = (workId: string) => calls.filter((call) => call.workId === workId);
+            // One call learnt that installation X is spent; nothing else read with it.
+            expect(xCalls()).toBe(1);
+            // Installation Y, the owner's own account and the other owner: all read this tick.
+            expect(callsOn(workB)).toHaveLength(1);
+            expect(callsOn(ownAccount)).toHaveLength(1);
             expect(calls.filter((call) => call.userId === HEALTHY)).toHaveLength(1);
-            expect(summary).toMatchObject({ failed: 1, refreshed: 1, deferred: 25 });
-            for (const row of limited) {
+            expect(summary).toMatchObject({ failed: 1, refreshed: 3, deferred: 24 });
+            for (const row of [...onA, onC]) {
                 const after = await readRow(row.id);
                 expect(after.prReadRetryAt!.getTime()).toBe(resetAt);
                 expect(after).toMatchObject({
@@ -371,29 +384,132 @@ describe('PR-status sweep: failed reads back off (real SQLite)', () => {
                     ciState: 'passing',
                     prNotFoundSince: null,
                 });
-                expect(after.ciCheckedAt!.getTime()).toBe(T0 - 10 * MINUTE);
+                expect(after.ciCheckedAt!.getTime()).toBeLessThan(T0);
                 expect(after.updatedAt.getTime()).toBe(LONG_AGO.getTime());
             }
-            expect((await readRow(otherProvider.id)).prReadRetryAt).toBeNull();
-            expect((await readRow(otherOwner.id)).ciCheckedAt!.getTime()).toBe(T0);
+            for (const row of [onB, onOwnAccount, otherOwner]) {
+                const after = await readRow(row.id);
+                expect(after.prReadRetryAt).toBeNull();
+                expect(after.ciCheckedAt!.getTime()).toBe(T0);
+            }
 
-            // Next tick: the owner's other connection is read; the spent one is still left alone.
+            // Next tick: installation X is still left alone.
             at(T0 + 2 * MINUTE);
             await tick();
-            expect(calls.filter((call) => call.workId === glWork)).toHaveLength(1);
-            expect(limitedCalls()).toBe(1);
+            expect(xCalls()).toBe(1);
 
-            // From the reset the deferred rows are read again, a batch at a time (sharing it with
-            // the rows last read before the reset), and each successful read ends its deferral.
+            // From the reset its pull requests are read again, a batch at a time.
             spent = false;
             at(resetAt);
             await tick();
             at(resetAt + 2 * MINUTE);
             await tick();
-            expect(limitedCalls()).toBe(1 + limited.length);
-            for (const row of limited) {
+            expect(xCalls()).toBe(1 + onA.length + 1);
+            for (const row of [...onA, onC]) {
                 expect((await readRow(row.id)).prReadRetryAt).toBeNull();
             }
+        });
+
+        /**
+         * The review of #3169: the deferral used to set the reset on every row of the owner, which
+         * pulled a "not found" row FORWARD from its 6-hourly re-check to the reset, an extra call
+         * landing just as the budget refilled.
+         */
+        it('never makes a row due earlier than it already was', async () => {
+            const workA = addWork('github', 'X');
+            // Recorded "not found" and re-checked an hour ago: next due 5 h from now.
+            const goneLater = await openPr(BROKEN, new Date(T0 - HOUR), {
+                workId: workA,
+                prState: TASK_PR_NOT_FOUND_STATE,
+                ciState: null,
+            });
+            // Re-checked 5 h 50 min ago: due 10 minutes from now, before the reset.
+            const goneSooner = await openPr(BROKEN, new Date(T0 - 5 * HOUR - 50 * MINUTE), {
+                workId: workA,
+                prState: TASK_PR_NOT_FOUND_STATE,
+                ciState: null,
+            });
+            const failing = await openPr(BROKEN, new Date(T0 - 2 * HOUR), { workId: workA });
+            const backingOffLonger = new Date(resetAt + HOUR);
+            await repository.updatePrStatusCache(failing.id, { prReadRetryAt: backingOffLonger });
+            const trigger = await openPr(BROKEN, new Date(T0 - 10 * MINUTE), { workId: workA });
+            let spent = true;
+            const { tick, calls } = sweeper((call) =>
+                call.prNumber === trigger.prNumber && spent ? limited() : null,
+            );
+
+            at(T0);
+            await tick();
+
+            expect(calls.map((call) => call.prNumber)).toEqual([trigger.prNumber]);
+            expect((await readRow(trigger.id)).prReadRetryAt!.getTime()).toBe(resetAt);
+            // Due after the reset anyway: left exactly as they were.
+            expect((await readRow(goneLater.id)).prReadRetryAt).toBeNull();
+            expect((await readRow(failing.id)).prReadRetryAt!.getTime()).toBe(
+                backingOffLonger.getTime(),
+            );
+            // Due before the reset: waits for it.
+            expect((await readRow(goneSooner.id)).prReadRetryAt!.getTime()).toBe(resetAt);
+
+            // At the reset the "not found" re-check that was due 5 h out is still not read.
+            spent = false;
+            at(resetAt);
+            await tick();
+            expect(calls.some((call) => call.prNumber === goneLater.prNumber)).toBe(false);
+            expect(calls.some((call) => call.prNumber === goneSooner.prNumber)).toBe(true);
+            // Its own 6-hourly re-check, as before the rate limit.
+            at(T0 + 5 * HOUR + MINUTE);
+            await tick();
+            expect(calls.some((call) => call.prNumber === goneLater.prNumber)).toBe(true);
+        });
+    });
+
+    /**
+     * The review of #3169: every writer clamps a retry instant to 6 hours, but one written under a
+     * clock that was ahead (or by hand) was obeyed until then, and a failed `refresh=true` could
+     * not clear it. The same for a first "not found" stamped in the future.
+     */
+    describe('a stored instant beyond the 6-hour ceiling', () => {
+        it('a retry instant a year ahead is not obeyed: the row is read on the usual cadence, and a failed read replaces it', async () => {
+            const row = await openPr(BROKEN, new Date(T0 - 10 * MINUTE));
+            const yearAhead = new Date(T0 + 365 * DAY);
+            await repository.updatePrStatusCache(row.id, { prReadRetryAt: yearAhead });
+            const { tick, calls, service } = sweeper(() => httpError(502, 'Bad gateway'));
+
+            at(T0);
+            await tick();
+            expect(calls).toHaveLength(1);
+            // The failed read wrote a real backoff (10 min: as long as it has gone unseen).
+            const after = await readRow(row.id);
+            expect(after.prReadRetryAt!.getTime()).toBe(T0 + 10 * MINUTE);
+
+            // The on-demand read does not serve a year-ahead instant from the cache either.
+            await repository.updatePrStatusCache(row.id, { prReadRetryAt: yearAhead });
+            const view = await service.getForTask(BROKEN, row.id);
+            expect(view.cached).toBe(true);
+            expect(calls).toHaveLength(2);
+            expect((await readRow(row.id)).prReadRetryAt!.getTime()).toBeLessThanOrEqual(
+                T0 + TASK_PR_READ_RETRY_CAP_MS,
+            );
+        });
+
+        it('a first "not found" stamped a year ahead counts as this answer: confirmed 30 minutes later', async () => {
+            const row = await openPr(BROKEN, new Date(T0 - 3 * HOUR));
+            await repository.updatePrStatusCache(row.id, {
+                prNotFoundSince: new Date(T0 + 365 * DAY),
+            });
+            const { tick, calls } = sweeper(() => null);
+
+            at(T0);
+            await tick();
+            const pending = await readRow(row.id);
+            expect(pending.prState).toBe('open');
+            expect(pending.prNotFoundSince!.getTime()).toBe(T0);
+
+            at(T0 + TASK_PR_NOT_FOUND_CONFIRM_MS);
+            await tick();
+            expect(calls).toHaveLength(2);
+            expect((await readRow(row.id)).prState).toBe(TASK_PR_NOT_FOUND_STATE);
         });
     });
 
