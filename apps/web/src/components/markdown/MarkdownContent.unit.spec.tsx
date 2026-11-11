@@ -1,5 +1,11 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { render } from '@testing-library/react';
+import { renderToString } from 'react-dom/server';
+
+vi.mock('next-intl', () => ({
+    useTranslations: () => (key: string) => key,
+}));
+
 import { MarkdownContent, MarkdownInline } from './MarkdownContent';
 
 function renderMd(content: string) {
@@ -135,5 +141,82 @@ describe('MarkdownInline', () => {
         );
         expect(container.querySelector('img')).toBeNull();
         expect(container.textContent).toContain('a');
+    });
+});
+
+describe('MarkdownContent — never throws, never stalls (PR #3137 review B1)', () => {
+    const CRASHERS: Array<[string, string]> = [
+        ['2,000 nested bullets', '- '.repeat(2000) + 'x'],
+        ['2,000 nested numbered items', '1. '.repeat(2000) + 'x'],
+        ['4,000 nested quotes', '>'.repeat(4000) + ' x'],
+    ];
+
+    it.each(CRASHERS)(
+        '%s: shows the text as plain text with a note, quickly, on the client',
+        (_name, md) => {
+            const started = performance.now();
+            const root = renderMd(md);
+            expect(performance.now() - started).toBeLessThan(200);
+            const fallback = root.querySelector('[data-markdown-fallback]');
+            expect(fallback).not.toBeNull();
+            expect(fallback?.textContent).toContain('plainTextFallback');
+            expect(root.querySelector('pre')?.textContent).toBe(md);
+            expect(root.querySelector('ul,ol,blockquote')).toBeNull();
+        },
+    );
+
+    it.each(CRASHERS)('%s: renders on the server without throwing', (_name, md) => {
+        const started = performance.now();
+        const html = renderToString(<MarkdownContent content={md} />);
+        expect(performance.now() - started).toBeLessThan(200);
+        expect(html).toContain('data-markdown-fallback');
+    });
+
+    it('MarkdownInline falls back to the plain text too', () => {
+        const md = '>'.repeat(4000) + ' x';
+        const { container } = render(<MarkdownInline content={md} />);
+        expect(container.querySelector('[data-markdown-fallback]')?.textContent).toBe(md);
+    });
+
+    it('still renders a normal document as Markdown', () => {
+        const root = renderMd('## Plan\n\n- **one**\n- two\n\n> quoted');
+        expect(root.querySelector('[data-markdown-fallback]')).toBeNull();
+        expect(root.querySelector('h4')?.textContent).toBe('Plan');
+        expect(root.querySelectorAll('li')).toHaveLength(2);
+        expect(root.querySelector('blockquote')).not.toBeNull();
+    });
+});
+
+describe('MarkdownContent — footnotes', () => {
+    const MD = 'Claim[^1] and another[^note].\n\n[^1]: The source.\n[^note]: More.';
+
+    // rehype-sanitize is the ONLY step that namespaces ids (remark-rehype's own
+    // prefix is off): without it the ids would be `fn-1` and this test fails.
+    it('namespaces footnote ids once, and the links point at them', () => {
+        const root = renderMd(MD);
+        const refs = Array.from(root.querySelectorAll<HTMLAnchorElement>('sup a'));
+        expect(refs).toHaveLength(2);
+        for (const ref of refs) {
+            const target = ref.getAttribute('href') ?? '';
+            expect(target).toMatch(/^#user-content-fn-/);
+            expect(target).not.toContain('user-content-user-content');
+            expect(root.querySelector(`[id="${target.slice(1)}"]`)).not.toBeNull();
+        }
+        const back = root.querySelector<HTMLAnchorElement>('a[data-footnote-backref]');
+        const backTarget = back?.getAttribute('href') ?? '';
+        expect(backTarget).toMatch(/^#user-content-fnref-/);
+        expect(root.querySelector(`[id="${backTarget.slice(1)}"]`)).not.toBeNull();
+        for (const element of Array.from(root.querySelectorAll('[id]'))) {
+            expect(element.id.startsWith('user-content-')).toBe(true);
+            expect(element.id.startsWith('user-content-user-content-')).toBe(false);
+        }
+    });
+
+    it('drops footnotes from an inline field instead of leaking "Footnotes" and "↩"', () => {
+        const { container } = render(<MarkdownInline content={MD} />);
+        expect(container.textContent).not.toContain('Footnotes');
+        expect(container.textContent).not.toContain('↩');
+        expect(container.querySelector('sup,section')).toBeNull();
+        expect(container.textContent).toContain('Claim and another');
     });
 });

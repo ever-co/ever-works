@@ -11072,7 +11072,8 @@
             "tabsLabel": "{field}: write or preview",
             "emptyPreview": "Nothing to preview yet.",
             "hint": "Markdown: **bold**, _italic_, lists, `code`, tables and links.",
-            "counter": "{count} / {max}"
+            "counter": "{count} / {max}",
+            "plainTextFallback": "Shown as plain text: this text is too long or too complex to format safely."
         },
         "recordEdit": {
             "titleLabel": "Title",
@@ -11085,7 +11086,8 @@
             "titleTooLong": "Keep the title to {max} characters or fewer.",
             "descriptionRequired": "Enter a description.",
             "descriptionTooLong": "Keep the description to {max} characters or fewer.",
-            "saveError": "The changes could not be saved. Try again."
+            "saveError": "The changes could not be saved. Try again.",
+            "discardConfirm": "Discard your unsaved changes?"
         }
     },
     "organizations": {

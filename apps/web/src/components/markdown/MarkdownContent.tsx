@@ -1,9 +1,23 @@
-import type { ComponentPropsWithoutRef, ElementType } from 'react';
-import Markdown, { type Components, type ExtraProps, type UrlTransform } from 'react-markdown';
+import {
+    Component,
+    memo,
+    type ComponentPropsWithoutRef,
+    type ElementType,
+    type ReactElement,
+    type ReactNode,
+} from 'react';
+import { useTranslations } from 'next-intl';
+import Markdown, {
+    type Components,
+    type ExtraProps,
+    type Options,
+    type UrlTransform,
+} from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeSanitize from 'rehype-sanitize';
 import { cn } from '@/lib/utils/cn';
 import { resolveMarkdownHref, resolveMarkdownImageSrc } from '@/lib/markdown/markdown-links';
+import { assessMarkdown } from '@/lib/markdown/markdown-limits';
 
 /**
  * The one renderer for Markdown that users and agents write into record
@@ -29,12 +43,18 @@ import { resolveMarkdownHref, resolveMarkdownImageSrc } from '@/lib/markdown/mar
  *    same-origin and load lazily without a referrer.
  *  - Headings are demoted two levels (`#` renders an `<h3>`) so a description
  *    never competes with the page's own `<h1>` / section `<h2>` outline.
- *
- * No `'use client'`: the component has no state, so it renders in server
- * components (the Agent detail page) as well as inside client ones.
+ *  - It never throws (PR #3137 review): `lib/markdown/markdown-limits` refuses
+ *    text too long or too deeply nested to parse safely (2,000 nested list
+ *    levels overflow the parser's stack), the parse runs inside a try/catch on
+ *    the server and the client, and an error boundary catches the rest. All
+ *    three show the text as escaped plain text with a one-line note, so a bad
+ *    description can never take its detail page — and its Edit button — down.
  */
 
 export type MarkdownContentSize = 'sm' | 'xs';
+
+/** `rehype-sanitize`'s default `clobberPrefix` for ids and aria references. */
+const ID_PREFIX = 'user-content-';
 
 const BLOCK_CLASS = cn(
     'prose dark:prose-invert max-w-none break-words',
@@ -116,10 +136,15 @@ function MarkdownLink({
         // A refused URL keeps its label as text, never a clickable link.
         return <span data-markdown-refused-link="">{children}</span>;
     }
+    // In-page targets (footnotes) carry rehype-sanitize's `user-content-` id prefix.
+    const target =
+        resolved.href.startsWith('#') && !resolved.href.startsWith(`#${ID_PREFIX}`)
+            ? `#${ID_PREFIX}${resolved.href.slice(1)}`
+            : resolved.href;
     return (
         <a
             {...props}
-            href={resolved.href}
+            href={target}
             {...(resolved.external ? { target: '_blank', rel: 'noopener noreferrer' } : {})}
         >
             {children}
@@ -180,11 +205,120 @@ export const markdownUrlTransform: UrlTransform = (url, key) => {
     return '';
 };
 
+interface HastNode {
+    type: string;
+    tagName?: string;
+    properties?: Record<string, unknown>;
+    children?: HastNode[];
+}
+interface HastParent extends HastNode {
+    children: HastNode[];
+}
+
+function isFootnoteNode(node: HastNode): boolean {
+    if (node.type !== 'element') return false;
+    if (node.tagName === 'section' && node.properties?.dataFootnotes !== undefined) return true;
+    // <sup><a data-footnote-ref …>1</a></sup>
+    return (
+        node.tagName === 'sup' &&
+        (node.children ?? []).some((child) => child.properties?.dataFootnoteRef !== undefined)
+    );
+}
+
+/**
+ * Inline fields have no room for a footnotes section: drop footnote
+ * references and the generated "Footnotes" list before anything is unwrapped,
+ * so neither "Footnotes" nor "↩" leaks into a one-line criterion. Iterative,
+ * so a deep tree cannot overflow the stack here either.
+ */
+function rehypeDropFootnotes() {
+    return (tree: HastParent) => {
+        const stack: HastParent[] = [tree];
+        while (stack.length > 0) {
+            const parent = stack.pop() as HastParent;
+            parent.children = parent.children.filter((child) => !isFootnoteNode(child));
+            for (const child of parent.children) {
+                if (child.type === 'element' && child.children) stack.push(child as HastParent);
+            }
+        }
+    };
+}
+
 const REMARK_PLUGINS = [remarkGfm];
+/**
+ * Footnote ids are namespaced by `rehype-sanitize` alone (`user-content-…`,
+ * against DOM clobbering); remark-rehype's own prefix is turned off so they
+ * are not prefixed twice, and `MarkdownLink` points `#fn-1` at the result.
+ */
+const REMARK_REHYPE_OPTIONS = { clobberPrefix: '' };
 const REHYPE_PLUGINS = [rehypeSanitize];
+const INLINE_REHYPE_PLUGINS = [rehypeDropFootnotes, rehypeSanitize];
 
 /** Inline formatting only — what a one-line field (a DoD criterion) may use. */
 const INLINE_ELEMENTS = ['strong', 'em', 'del', 'code', 'a', 'br'];
+
+/**
+ * Parse with the try/catch INSIDE this component's render, on the server and
+ * the client alike: an error boundary cannot catch a server render, and the
+ * parser is where an unforeseen input would throw. `Markdown` is a plain
+ * synchronous function without hooks, so calling it here is the same work
+ * React would do one level down.
+ */
+function parseMarkdown(options: Options): ReactElement | null {
+    try {
+        return Markdown(options);
+    } catch {
+        return null;
+    }
+}
+
+interface BoundaryProps {
+    resetKey: string;
+    fallback: ReactNode;
+    children: ReactNode;
+}
+interface BoundaryState {
+    failed: boolean;
+    resetKey: string;
+}
+
+/** Client-side safety net for anything that throws while React renders the tree. */
+class MarkdownErrorBoundary extends Component<BoundaryProps, BoundaryState> {
+    state: BoundaryState = { failed: false, resetKey: this.props.resetKey };
+
+    static getDerivedStateFromError(): Partial<BoundaryState> {
+        return { failed: true };
+    }
+
+    static getDerivedStateFromProps(
+        props: BoundaryProps,
+        state: BoundaryState,
+    ): Partial<BoundaryState> | null {
+        // New content (an edited preview) gets a fresh attempt.
+        return props.resetKey === state.resetKey
+            ? null
+            : { failed: false, resetKey: props.resetKey };
+    }
+
+    render() {
+        return this.state.failed ? this.props.fallback : this.props.children;
+    }
+}
+
+/** The text as it was written, escaped by React, with a one-line explanation. */
+function PlainTextFallback({ content }: { content: string }) {
+    const t = useTranslations('common.markdown');
+    return (
+        <div className="not-prose space-y-1.5" data-markdown-fallback="">
+            <p className="text-[11px] text-text-muted dark:text-text-muted-dark">
+                {t('plainTextFallback')}
+            </p>
+            <pre className="m-0 whitespace-pre-wrap break-words font-sans text-sm leading-relaxed text-text-secondary dark:text-text-secondary-dark">
+                {content}
+            </pre>
+        </div>
+    );
+}
 
 export interface MarkdownContentProps {
     content: string;
@@ -194,38 +328,69 @@ export interface MarkdownContentProps {
     'data-testid'?: string;
 }
 
-export function MarkdownContent({
+/**
+ * Memoized: a parent re-render (a "Show more" toggle, a keystroke elsewhere in
+ * a form) does not parse the same text again.
+ */
+export const MarkdownContent = memo(function MarkdownContent({
     content,
     size = 'sm',
     className,
     id,
     'data-testid': testId,
 }: MarkdownContentProps) {
+    const parsed = assessMarkdown(content).render
+        ? parseMarkdown({
+              children: content,
+              remarkPlugins: REMARK_PLUGINS,
+              remarkRehypeOptions: REMARK_REHYPE_OPTIONS,
+              rehypePlugins: REHYPE_PLUGINS,
+              components: BLOCK_COMPONENTS,
+              urlTransform: markdownUrlTransform,
+              skipHtml: true,
+          })
+        : null;
+    const fallback = <PlainTextFallback content={content} />;
+
     return (
         <div id={id} data-testid={testId} className={cn(BLOCK_CLASS, SIZE_CLASS[size], className)}>
-            <Markdown
-                remarkPlugins={REMARK_PLUGINS}
-                rehypePlugins={REHYPE_PLUGINS}
-                components={BLOCK_COMPONENTS}
-                urlTransform={markdownUrlTransform}
-                skipHtml
-            >
-                {content}
-            </Markdown>
+            {parsed ? (
+                <MarkdownErrorBoundary resetKey={content} fallback={fallback}>
+                    {parsed}
+                </MarkdownErrorBoundary>
+            ) : (
+                fallback
+            )}
         </div>
     );
-}
+});
 
 /**
  * One line of Markdown: bold, italic, strikethrough, inline code and links.
  * Block syntax (headings, lists, quotes) is unwrapped to its text, so a
- * criterion that starts with `#` or `-` still reads as a sentence.
+ * criterion that starts with `#` or `-` still reads as a sentence; footnotes
+ * are dropped. Text the renderer will not parse shows as plain text.
  */
-export function MarkdownInline({
+export const MarkdownInline = memo(function MarkdownInline({
     content,
     className,
     'data-testid': testId,
 }: Omit<MarkdownContentProps, 'size' | 'id'>) {
+    const parsed = assessMarkdown(content).render
+        ? parseMarkdown({
+              children: content,
+              remarkPlugins: REMARK_PLUGINS,
+              remarkRehypeOptions: REMARK_REHYPE_OPTIONS,
+              rehypePlugins: INLINE_REHYPE_PLUGINS,
+              components: INLINE_COMPONENTS,
+              urlTransform: markdownUrlTransform,
+              allowedElements: INLINE_ELEMENTS,
+              unwrapDisallowed: true,
+              skipHtml: true,
+          })
+        : null;
+    const fallback = <span data-markdown-fallback="">{content}</span>;
+
     return (
         <span
             data-testid={testId}
@@ -236,17 +401,13 @@ export function MarkdownInline({
                 className,
             )}
         >
-            <Markdown
-                remarkPlugins={REMARK_PLUGINS}
-                rehypePlugins={REHYPE_PLUGINS}
-                components={INLINE_COMPONENTS}
-                urlTransform={markdownUrlTransform}
-                allowedElements={INLINE_ELEMENTS}
-                unwrapDisallowed
-                skipHtml
-            >
-                {content}
-            </Markdown>
+            {parsed ? (
+                <MarkdownErrorBoundary resetKey={content} fallback={fallback}>
+                    {parsed}
+                </MarkdownErrorBoundary>
+            ) : (
+                fallback
+            )}
         </span>
     );
-}
+});
