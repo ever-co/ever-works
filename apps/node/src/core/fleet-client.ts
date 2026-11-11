@@ -1,4 +1,5 @@
 import { normalizeFleetNodeVersionFloor, type FleetNodeLimitCeiling } from '@ever-works/contracts';
+import { normalizeAgentEnvNames } from './agent-readiness';
 import type { Logger } from './logger';
 import {
 	MAX_CREDENTIAL_LENGTH,
@@ -289,6 +290,12 @@ export class FleetClient {
 		if (recommended) {
 			response.recommendedNodeVersion = recommended;
 		}
+		// Fleet agent readiness: the credential names a run is granted here.
+		// Only a well-formed list of names; an empty one is kept (it is an answer).
+		const passthrough = readAgentEnvPassthrough(payload);
+		if (passthrough) {
+			response.agentEnvPassthrough = passthrough;
+		}
 		return response;
 	}
 
@@ -510,6 +517,11 @@ function selfDescription(source: NodeSelfDescription): NodeSelfDescription {
 	if (Array.isArray(source.helperEvents)) {
 		out.helperEvents = source.helperEvents;
 	}
+	// Fleet agent readiness: the per-CLI report, already normalised by
+	// `describeSelf`; copied as is. Heartbeat-only in practice.
+	if (source.agents !== undefined) {
+		out.agents = source.agents;
+	}
 	return out;
 }
 
@@ -582,6 +594,22 @@ export function readLimitCeiling(payload: unknown): FleetNodeLimitCeiling | null
 /** Most pending live-view ids a heartbeat answer is read for (a wake-up hint, not a work list). */
 const MAX_PENDING_COMPUTER_SESSIONS = 16;
 const SESSION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * `agentEnvPassthrough` from a heartbeat body: the NAMES of the environment
+ * variables the platform grants an agent run. Null when the platform sent
+ * none (an older platform) or something that is not a list — so "not told"
+ * stays distinct from an EMPTY list, which is an answer ("grant nothing").
+ * Only well-formed variable names are kept, capped.
+ */
+export function readAgentEnvPassthrough(payload: unknown): string[] | null {
+	const raw =
+		payload && typeof payload === 'object'
+			? (payload as { agentEnvPassthrough?: unknown }).agentEnvPassthrough
+			: null;
+	if (!Array.isArray(raw)) return null;
+	return normalizeAgentEnvNames(raw);
+}
 
 /** `pendingComputerSessions` from a heartbeat body: session ids only, capped; anything else is ignored. */
 export function readPendingComputerSessions(payload: unknown): string[] {

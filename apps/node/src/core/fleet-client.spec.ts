@@ -275,6 +275,61 @@ describe('heartbeat', () => {
 		expect(JSON.parse(calls[1].init.body)).not.toHaveProperty('modelIdentity');
 	});
 
+	it('carries the agent readiness report onto the wire, and omits it when there is none', async () => {
+		// `selfDescription` is an explicit whitelist: a field it does not name
+		// is computed and never sent.
+		const { fetchFn, calls } = fakeFetch(() => ({ status: 200, body: { ok: true, node: nodeView } }));
+		const agents = {
+			checkedAt: '2026-11-10T12:00:00.000Z',
+			agents: [
+				{
+					provider: 'codex',
+					installed: true,
+					version: '0.50.0',
+					signedIn: false,
+					authMethod: 'none' as const,
+					account: null,
+					status: 'not_signed_in' as const,
+					reasonCode: 'status_signed_out',
+					reason: 'The CLI is not signed in on this computer.',
+					checkedAt: '2026-11-10T12:00:00.000Z'
+				}
+			]
+		};
+
+		await client(fetchFn).heartbeat({ nodeId: NODE_ID, secret: SECRET, agents });
+		expect(JSON.parse(calls[0].init.body).agents).toEqual(agents);
+
+		await client(fetchFn).heartbeat({ nodeId: NODE_ID, secret: SECRET });
+		expect(JSON.parse(calls[1].init.body)).not.toHaveProperty('agents');
+	});
+
+	it('reads the credential names the platform grants a run off the heartbeat answer (review N4)', async () => {
+		const answer = (extra: Record<string, unknown>) =>
+			fakeFetch(() => ({ status: 200, body: { ok: true, node: nodeView, ...extra } }));
+		const beat = (fetchFn: FetchLike) => client(fetchFn).heartbeat({ nodeId: NODE_ID, secret: SECRET });
+
+		const told = await beat(
+			answer({
+				agentEnvPassthrough: [
+					'ANTHROPIC_AUTH_TOKEN',
+					'ANTHROPIC_BASE_URL',
+					'not a name',
+					7,
+					'anthropic_auth_token'
+				]
+			}).fetchFn
+		);
+		expect(told.agentEnvPassthrough).toEqual(['ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL']);
+
+		// "Grant nothing" is an answer; it is not the same as not being told.
+		expect((await beat(answer({ agentEnvPassthrough: [] }).fetchFn)).agentEnvPassthrough).toEqual([]);
+		// An older platform, or junk: the field is simply not there.
+		for (const extra of [{}, { agentEnvPassthrough: 'ANTHROPIC_API_KEY' }, { agentEnvPassthrough: null }]) {
+			expect(await beat(answer(extra).fetchFn)).not.toHaveProperty('agentEnvPassthrough');
+		}
+	});
+
 	it('carries the worker state and reason, and omits both when absent', async () => {
 		// Fleet health signals (EW-776), same whitelist trap as above: a
 		// worker state the loop computes and the client never sends is a

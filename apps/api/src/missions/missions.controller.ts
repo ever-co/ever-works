@@ -334,7 +334,7 @@ export class MissionsController {
         missionId: string;
         ideasCreated?: number;
         ideasQueued?: number;
-        /** APW-08 T35 — Tasks filed on the Mission's App Works. */
+        /** APW-08 T35 — Tasks filed on the Mission's App or Repository Works. */
         tasksFiled?: number;
         message?: string;
     }> {

@@ -96,6 +96,11 @@ jest.mock('@ever-works/agent/tasks-domain', () => ({
     ...jest.requireActual<Record<string, unknown>>(
         '../../../../packages/agent/src/tasks-domain/app-work-cloud-push',
     ),
+    // The REAL isolation rule (a leaf: contracts only), for the Repository Work base-branch
+    // refusal below — a stub could answer "isolated" where the run would not be.
+    ...jest.requireActual<Record<string, unknown>>(
+        '../../../../packages/agent/src/tasks-domain/task-isolation',
+    ),
 }));
 jest.mock('@ever-works/agent/ingest', () => ({
     EventIngestModule: class EventIngestModule {},
@@ -1278,6 +1283,8 @@ describe('api-side AgentsModule — AGENT_GIT_FACADE Work repository resolution 
         sourceRepository?: { owner: string; repo: string } | null;
         /** Where Task branches fork from; NULL means the repository's own default. */
         taskIsolationBaseBranch?: string | null;
+        /** `'off' | 'worktree'` — whether the Work's Tasks run on their own branch. */
+        taskIsolation?: string;
     }
 
     interface Harness {
@@ -1309,6 +1316,7 @@ describe('api-side AgentsModule — AGENT_GIT_FACADE Work repository resolution 
                     ? { owner: 'import-source', repo: 'imported-thing' }
                     : overrides.sourceRepository,
             taskIsolationBaseBranch: overrides.taskIsolationBaseBranch ?? null,
+            taskIsolation: overrides.taskIsolation ?? 'off',
         };
     };
 
@@ -1911,6 +1919,129 @@ describe('api-side AgentsModule — AGENT_GIT_FACADE Work repository resolution 
                     expect(gate.evaluate).not.toHaveBeenCalled();
                 },
             );
+        });
+    });
+
+    /**
+     * A Repository Work's base branch is never a `commitToRepo` target for the run of an
+     * ISOLATED Task: that Task's change reaches the base branch only as its own pull request.
+     * The App Work rule's base-branch half, for `repo` — whatever the merge policy protects
+     * (`production` here is not one of the platform's protected branches). A non-isolated Task
+     * commits to the Work's branch by design, and stays untouched.
+     */
+    describe('a Repository Work — an isolated Task run never commits to the base branch', () => {
+        const fs = jest.requireActual<typeof import('node:fs')>('node:fs');
+        const os = jest.requireActual<typeof import('node:os')>('node:os');
+        const nodePath = jest.requireActual<typeof import('node:path')>('node:path');
+        let dir: string;
+
+        beforeEach(() => {
+            dir = fs.mkdtempSync(nodePath.join(os.tmpdir(), 'repo-work-base-'));
+        });
+        afterEach(() => {
+            fs.rmSync(dir, { recursive: true, force: true });
+        });
+
+        const repoWork = (taskIsolation = 'worktree') =>
+            makeWork({
+                kind: 'repo',
+                taskIsolation,
+                taskIsolationBaseBranch: 'production',
+            } as WorkOverrides);
+        const gitIn = () => {
+            const git = makeGit();
+            git.cloneOrPull.mockResolvedValue(dir);
+            return git;
+        };
+        const files = [{ path: 'src/pricing.ts', body: 'export const price = 1;\n' }];
+        const rowsFor = (task: unknown) => ({ findById: jest.fn().mockResolvedValue(task) });
+        const isolatedTask = { id: 'task-r', workId: WORK_ID, isolationMode: null };
+
+        it.each([['production'], ['refs/heads/production'], [undefined]])(
+            'refuses the base branch for an isolated Task (branch %p), before any git work',
+            async (branch) => {
+                const git = gitIn();
+                const taskRows = rowsFor(isolatedTask);
+                const { facade } = build({ git, work: repoWork(), taskRows });
+
+                await expect(
+                    facade.commitToRepo(
+                        commitInput({ ...(branch ? { branch } : {}), files, taskId: 'task-r' }),
+                    ),
+                ).rejects.toThrow(/changes only through that Task's pull request/);
+                expect(taskRows.findById).toHaveBeenCalledWith('task-r');
+                expectNoGitWork(git);
+            },
+        );
+
+        it('a Task that opted in to isolation on a Work where it is off is refused too', async () => {
+            const git = gitIn();
+            const { facade } = build({
+                git,
+                work: repoWork('off'),
+                taskRows: rowsFor({ ...isolatedTask, isolationMode: 'on' }),
+            });
+            await expect(
+                facade.commitToRepo(commitInput({ files, taskId: 'task-r' })),
+            ).rejects.toThrow(/changes only through that Task's pull request/);
+            expectNoGitWork(git);
+        });
+
+        it('a feature branch is committed as before', async () => {
+            const git = gitIn();
+            const { facade } = build({ git, work: repoWork(), taskRows: rowsFor(isolatedTask) });
+            const commit = await facade.commitToRepo(
+                commitInput({ branch: 'feature/pricing', files, taskId: 'task-r' }),
+            );
+            expect(commit).toMatchObject({ sha: 'sha-1', branch: 'feature/pricing' });
+            expect(git.push).toHaveBeenCalledTimes(1);
+        });
+
+        it('a non-isolated Task, another Work’s Task, or no Task commits to the base branch as before', async () => {
+            for (const [work, task, taskId] of [
+                [repoWork('off'), isolatedTask, 'task-r'],
+                [repoWork(), { ...isolatedTask, isolationMode: 'off' }, 'task-r'],
+                [repoWork(), { ...isolatedTask, workId: 'another-work' }, 'task-r'],
+                [repoWork(), isolatedTask, undefined],
+            ] as const) {
+                const git = gitIn();
+                const { facade } = build({ git, work, taskRows: rowsFor(task) });
+                const commit = await facade.commitToRepo(
+                    commitInput({ branch: 'production', files, ...(taskId ? { taskId } : {}) }),
+                );
+                expect(commit).toMatchObject({ branch: 'production' });
+                expect(git.push).toHaveBeenCalledTimes(1);
+            }
+        });
+
+        it('refuses BEFORE writing when the run’s Task cannot be read', async () => {
+            const git = gitIn();
+            const { facade } = build({
+                git,
+                work: repoWork(),
+                taskRows: { findById: jest.fn().mockRejectedValue(new Error('db down')) },
+            });
+            await expect(
+                facade.commitToRepo(commitInput({ files, taskId: 'task-r' })),
+            ).rejects.toThrow(/whether it runs on its own branch is unknown/);
+            expectNoGitWork(git);
+        });
+
+        it('another kind with an isolated Task is untouched (only `repo` and `app` refuse)', async () => {
+            const git = gitIn();
+            const { facade } = build({
+                git,
+                work: makeWork({
+                    kind: 'website',
+                    taskIsolation: 'worktree',
+                    taskIsolationBaseBranch: 'production',
+                } as WorkOverrides),
+                taskRows: rowsFor(isolatedTask),
+            });
+            const commit = await facade.commitToRepo(
+                commitInput({ branch: 'production', files, taskId: 'task-r' }),
+            );
+            expect(commit).toMatchObject({ branch: 'production' });
         });
     });
 

@@ -190,6 +190,12 @@ by `packages/agent/src/app-works/app-work-switches.ts` at each decision. Changes
 planner start no run on a Task on an App Work (a review run still runs). Auto-deploy off: a deployable Build
 no longer deploys itself (APW-06 T35's listener); a person's Deploy and the owner's domain-change rebuild stay.
 
+**Repository Works are not covered (2026-11-11).** Since a Mission's Task output also files on Repository Works
+(`repo`), `EVER_WORKS_APP_CHANGES_ENABLED=false` stops a Mission's Tasks on its **App** Works only: it keeps
+filing and starting Tasks on its Repository Works, exactly as every other reader of the switch only asks "is this
+an App Work?". To stop those, pause the Mission, or set the Fleet's global stop flag (`fleet_kill_switch`), which
+parks every new agent run. See [Missions → Output](../../../features/missions.md#output).
+
 ### 3B. Quotas and caps (R-31)
 
 Resolution **R-31** gives every unbounded App Works action a documented per-member and per-organization cap,

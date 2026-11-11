@@ -8,6 +8,7 @@ import {
     Optional,
 } from '@nestjs/common';
 import type { TaskIsolationMode } from './task-isolation';
+import type { MissionRepoRunRefusal } from './mission-repo-run';
 import { InjectRepository } from '@nestjs/typeorm';
 import type { EntityManager, Repository } from 'typeorm';
 import {
@@ -1951,6 +1952,54 @@ export class TasksService {
             }
         }
         return { results };
+    }
+
+    /**
+     * The Agent {@link runTask} will start a NEW Task with, before the Task exists: the one a
+     * caller passes (owned by `userId` in `ownershipScope`, as `resolveRunAgentId` checks it),
+     * else — a new Task has no assignee rows, and its own `agentId` is that same explicit one —
+     * the Work's only Agent (`listRunCandidates`' Work lookup: the same query, the same page).
+     * `null` exactly where `runTask` would refuse with a 400: no such Agent, none, or several.
+     */
+    async resolveRunAgentForNewTask(
+        userId: string,
+        input: { workId: string; agentId?: string | null },
+        ownershipScope?: OwnershipScope,
+    ): Promise<Agent | null> {
+        if (!this.agents) return null;
+        if (input.agentId) {
+            const agent = await this.agents.findByIdAndUser(input.agentId, userId, ownershipScope);
+            return agent && ownershipScopeMatches(agent, ownershipScope) ? agent : null;
+        }
+        const { rows } = await this.agents.findByUserIdScoped(
+            userId,
+            { workId: input.workId, limit: 25 },
+            ownershipScope,
+        );
+        const distinct = new Map(rows.map((agent) => [agent.id, agent]));
+        return distinct.size === 1 ? [...distinct.values()][0] : null;
+    }
+
+    /**
+     * May a Mission file (and start) a Task on this Work right now? Asked by the Mission tick
+     * BEFORE it plans, with the Agent dispatch will resolve ({@link resolveRunAgentForNewTask}),
+     * through the same rule dispatch applies (`TaskTransitionService.missionRepoRunRefusal`).
+     * `null` for every Work that is not a Repository Work. Never reads a title.
+     */
+    async missionRepoRunRefusalForNewTask(
+        userId: string,
+        input: { workId: string; missionId: string; agentId?: string | null },
+        ownershipScope?: OwnershipScope,
+    ): Promise<MissionRepoRunRefusal | 'unreadable' | null> {
+        const agent = await this.resolveRunAgentForNewTask(userId, input, ownershipScope);
+        return this.transitions.missionRepoRunRefusal(
+            {
+                id: `new-mission-task:${input.missionId}`,
+                workId: input.workId,
+                missionId: input.missionId,
+            },
+            agent,
+        );
     }
 
     /** Explicit → assignee → Work default, with the picker-shaped 400s. */

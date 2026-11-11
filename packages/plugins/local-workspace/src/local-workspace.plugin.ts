@@ -10,6 +10,7 @@ import type {
 	WorkspaceBranchChanges,
 	WorkspaceFinalizeOptions,
 	WorkspaceFinalizeResult,
+	WorkspaceFetchCredential,
 	WorkspaceMergeSimulation,
 	WorkspacePublishFence,
 	WorkspacePushCredential
@@ -22,6 +23,18 @@ import { promises as fs } from 'node:fs';
 import { isAbsolute, join, relative, resolve as resolvePath } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFileWithVerifiedCancellation } from './verified-exec.js';
+import {
+	credentialedCommandEntries,
+	credentialedProtocol,
+	displayConfigKey,
+	effectiveRemoteUrls,
+	foreignRepositoryConfig,
+	parseScopedConfigList,
+	privateRemoteName,
+	recoveryHint,
+	SCOPED_CONFIG_LIST_ARGS,
+	type CredentialedProtocol
+} from './credentialed-command.js';
 import {
 	checkoutHardeningEnv,
 	emptyHooksDir,
@@ -142,6 +155,41 @@ interface CheckoutHardeningScope {
 	env: Record<string, string>;
 }
 
+/**
+ * A scoped credential as ONE `git` child receives it — the push credential
+ * of a finalize, or the fetch credential of a provision — ARMED: everything
+ * `credentialed-command.ts` decides about that child is on it, so
+ * {@link LocalWorkspacePlugin.git} can only ever start a credentialed
+ * command with all of it in place. There is no way to hand `git()` a bare
+ * token.
+ *
+ *  - `protocol` — the one transport the child may speak
+ *    (`GIT_ALLOW_PROTOCOL`).
+ *  - `remoteName` — the private remote the command names INSTEAD of the URL.
+ *  - `safety` — the command-scope config that pins or neutralises every key
+ *    that could run a program or move the connection.
+ *  - `hooksPath` — what `core.hooksPath` is reset to. Absent is the push's
+ *    value, `''`, exactly as before this type existed. A FETCH sets it to an
+ *    empty directory: a provision is hardened with `core.hooksPath` → an
+ *    empty directory already, and the credential entries are appended AFTER
+ *    that overlay, so `''` here would REPLACE the hardening's value for the
+ *    one child that now carries a token — `git-hardening` chose a directory
+ *    over `''` deliberately.
+ *
+ * It matters because a fetch runs hooks: `reference-transaction` whenever
+ * it moves a ref (and `pre-auto-gc` when it triggers a gc), and a hook
+ * inherits the child's whole environment. Measured with git 2.52 in this
+ * plugin's layout, with the entry disabled: a `reference-transaction` hook
+ * in the bare pool fired on the fetch and read
+ * `GIT_CONFIG_VALUE_<n>=Authorization: Basic …` (the spec keeps that case).
+ */
+type ChildCredential = WorkspacePushCredential & {
+	readonly protocol: CredentialedProtocol;
+	readonly remoteName: string;
+	readonly safety: ReadonlyArray<readonly [string, string]>;
+	readonly hooksPath?: string;
+};
+
 export interface LocalWorkspacePluginOptions {
 	/** Narrow process seam for deterministic cancellation tests. */
 	readonly execFile?: typeof execFile;
@@ -155,7 +203,29 @@ export interface LocalWorkspacePluginOptions {
 	 * uses `Date.now`.
 	 */
 	readonly now?: () => number;
+	/**
+	 * How long the pool maintenance that follows a credentialed fetch may
+	 * hold a provision, in milliseconds. Injected so the bound is exercised
+	 * without waiting for it; production uses
+	 * {@link POOL_MAINTENANCE_TIMEOUT_MS}.
+	 */
+	readonly poolMaintenanceTimeoutMs?: number;
 }
+
+/**
+ * The longest a provision waits for the pool maintenance it starts after a
+ * credentialed fetch. Where Git can detach it (`maintenance run --detach`,
+ * Git 2.47+ on a platform with `fork`) the command returns at once and
+ * this never matters; where it cannot — Windows, where an automatic gc has
+ * always run in the foreground of the fetch that triggered it — this is
+ * the cap. Generous enough for an ordinary `gc --auto` to finish; when it
+ * is not, the provision stops waiting and the gc finishes in the background,
+ * as a detached one would. It is never killed: a killed maintenance leaves
+ * its lock behind and silently disables every later one (see
+ * `maintainPool`). A maintenance that could not finish is never a
+ * provision's failure.
+ */
+export const POOL_MAINTENANCE_TIMEOUT_MS = 120_000;
 
 /**
  * Local Workspace — the `workspace` provider for persistent local
@@ -237,6 +307,7 @@ export class LocalWorkspacePlugin implements IPlugin, IWorkspacePlugin {
 	private readonly replaceFile: (source: string, destination: string) => Promise<void>;
 	private readonly terminateProcessTree: ((child: ChildProcess) => Promise<void>) | undefined;
 	private readonly now: () => number;
+	private readonly poolMaintenanceTimeoutMs: number;
 
 	/** Per-repo promise-chain mutex — see class doc. */
 	private readonly repoLocks = new Map<string, Promise<void>>();
@@ -250,6 +321,10 @@ export class LocalWorkspacePlugin implements IPlugin, IWorkspacePlugin {
 		this.replaceFile = options.replaceFile ?? ((source, destination) => fs.rename(source, destination));
 		this.terminateProcessTree = options.terminateProcessTree;
 		this.now = options.now ?? (() => Date.now());
+		this.poolMaintenanceTimeoutMs =
+			options.poolMaintenanceTimeoutMs !== undefined && options.poolMaintenanceTimeoutMs > 0
+				? options.poolMaintenanceTimeoutMs
+				: POOL_MAINTENANCE_TIMEOUT_MS;
 	}
 
 	async onLoad(_context: PluginContext): Promise<void> {
@@ -403,31 +478,79 @@ export class LocalWorkspacePlugin implements IPlugin, IWorkspacePlugin {
 
 		const authedUrl = this.authedUrl(spec.repoUrl, spec.auth);
 
+		// Scoped fetch credential (the read twin of the scoped push). Decided
+		// ONCE, here — after the pool is proven ours and before the first
+		// network command — and used for the two fetches below and for nothing
+		// else: `init`, `remote add`, the ownership probes and `worktree add`
+		// never see it. Null means "fetch exactly as before".
+		const fetchCredential = await this.resolveFetchCredential(spec, poolDir);
+
+		// A CREDENTIALED fetch differs from the plain one in two arguments, and
+		// both are part of what keeps the token in that child (the rest is its
+		// environment — see `credentialed-command.ts`):
+		//
+		//  - it names the private remote, never the URL. `git fetch <url>`
+		//    reads `remote.<url>.*` from the pool's config — `uploadpack`,
+		//    `url`, `vcs`, `proxy` — and a private name is one no config
+		//    file can have a section for;
+		//  - `--no-recurse-submodules`, because a per-submodule
+		//    `fetchRecurseSubmodules` in the pool's config outranks the
+		//    `fetch.recurseSubmodules=false` the environment carries, and a
+		//    recursing fetch is a second `git fetch`, with this environment,
+		//    inside a repository the run wrote.
+		//
+		// A plain fetch keeps its exact arguments.
+		const fetchTarget = fetchCredential ? fetchCredential.remoteName : authedUrl;
+		const fetchFlags = fetchCredential ? ['--no-recurse-submodules'] : [];
+
 		// Fetch-first, ALWAYS: the base is branched from origin/<baseRef>
 		// as of NOW, never a cached ref.
 		await this.gitOrThrow(
 			[
 				'fetch',
+				...fetchFlags,
 				'--depth',
 				String(depth),
-				authedUrl,
+				fetchTarget,
 				`+refs/heads/${spec.baseRef}:refs/remotes/origin/${spec.baseRef}`
 			],
 			poolDir,
 			spec.auth,
 			`fetch of base ref '${spec.baseRef}' failed`,
-			spec.signal
+			spec.signal,
+			fetchCredential
 		);
 
 		// A previously pushed task branch is the durable identity — reuse
 		// it when it exists (re-run / conflict-fix loop).
+		//
+		// The second credentialed command gets a private remote of its OWN:
+		// the first one's name was in that child's argv for as long as it
+		// ran, which is long enough for another process on this machine to
+		// have read it.
+		const branchCredential = fetchCredential ? this.withFreshRemote(fetchCredential) : null;
 		const branchFetch = await this.git(
-			['fetch', authedUrl, `+refs/heads/${spec.branch}:refs/remotes/origin/${spec.branch}`],
+			[
+				'fetch',
+				...fetchFlags,
+				branchCredential ? branchCredential.remoteName : authedUrl,
+				`+refs/heads/${spec.branch}:refs/remotes/origin/${spec.branch}`
+			],
 			poolDir,
 			spec.auth,
-			spec.signal
+			spec.signal,
+			branchCredential
 		);
 		const remoteBranchExists = branchFetch.code === 0;
+
+		if (fetchCredential) {
+			// A credentialed fetch runs no gc of its own: `git gc` can be made
+			// to start a program the pool's config names (`gc.recentObjectsHook`),
+			// and it would inherit the token. So the pool is maintained HERE,
+			// by the same command a plain fetch runs at its end, in a child
+			// that carries nothing. Its verdict is not this provision's.
+			await this.maintainPool(poolDir, spec);
+		}
 
 		const baseSha = (
 			await this.gitOrThrow(
@@ -643,14 +766,33 @@ export class LocalWorkspacePlugin implements IPlugin, IWorkspacePlugin {
 		const repoUrl = (
 			await this.gitOrThrow(['remote', 'get-url', 'origin'], dir, opts.auth, 'origin remote missing', signal)
 		).stdout.trim();
-		const credential = this.resolvePushCredential(opts.pushCredential, repoUrl);
-		if (credential) {
+		let scoped: WorkspacePushCredential | null;
+		try {
+			scoped = this.resolvePushCredential(opts.pushCredential, repoUrl);
+		} catch (mismatch) {
+			throw (await this.rewriteRefusal(opts.pushCredential, dir, signal)) ?? mismatch;
+		}
+		let credential: ChildCredential | null = null;
+		if (scoped) {
 			// Fail closed BEFORE the write, twice: once because a
 			// credential already sitting in this repository's config
 			// could answer the push instead of ours, and once after,
 			// because the whole promise of an environment-carried
 			// credential is that nothing of it survives the command.
 			await this.assertNoPersistedCredential(dir, signal);
+			// And a third time, wider. The probe above knows three families
+			// of key; a `remote.<url>.receivepack` beside a local `url` is in
+			// none of them, and it ran a planted program with this push's
+			// `contents: write` token in its environment (measured — see
+			// `credentialed-command.ts`). So the credential is ARMED before
+			// it is used: an allowlist over the repository's whole config,
+			// and the transport, remote name and overrides that hold even if
+			// that config changes after this line. A push is REFUSED where a
+			// fetch would fall back — unchanged: there is no version of a
+			// publish that goes ahead without its credential.
+			const armed = await this.armCredential(scoped, dir, 'push', signal);
+			if (armed.credential === null) throw new Error(`refusing to publish: ${armed.refusal}`);
+			credential = armed.credential;
 		}
 		let pushFailure: unknown = null;
 		try {
@@ -682,7 +824,14 @@ export class LocalWorkspacePlugin implements IPlugin, IWorkspacePlugin {
 					// reset in `credentialEnv` as well, so neutralising the
 					// hooks does not depend on this one flag being right.
 					...(credential ? ['--no-verify'] : []),
-					this.authedUrl(repoUrl, opts.auth),
+					// A credentialed push names its PRIVATE remote, never the
+					// URL: `git push <url>` reads `remote.<url>.*` from the
+					// repository's config — `receivepack`, `pushurl`, `url`,
+					// `mirror`, `proxy`, `vcs` — and a name minted for this one
+					// command is a section no config file can hold. The remote's
+					// only definition is the token-free URL, in this child's
+					// environment.
+					credential ? credential.remoteName : this.authedUrl(repoUrl, opts.auth),
 					`${source}:refs/heads/${branch}`
 				],
 				dir,
@@ -1233,6 +1382,295 @@ export class LocalWorkspacePlugin implements IPlugin, IWorkspacePlugin {
 	}
 
 	/**
+	 * Why a push credential that did not match `origin` really did not —
+	 * when the reason is a URL REWRITE.
+	 *
+	 * `git remote get-url origin` applies `url.<base>.insteadOf`, so on a
+	 * machine whose global config rewrites `https://github.com/` to ssh the
+	 * URL {@link resolvePushCredential} compares is the rewritten one, and
+	 * the refusal used to say only that origin "is not the one it was issued
+	 * for". When the CONFIGURED `remote.origin.url` is byte-identical to the
+	 * credential's, the difference is the rewrite, and the gate says so in
+	 * its own sentence: the rewrite's key and scope, never its value (or, if
+	 * the rewrite is the repository's own, the allowlist's refusal). Null
+	 * when the mismatch is anything else — the caller's refusal stands.
+	 */
+	private async rewriteRefusal(
+		credential: WorkspacePushCredential | undefined,
+		dir: string,
+		signal?: AbortSignal
+	): Promise<Error | null> {
+		if (!credential?.token || !credential.remoteUrl) return null;
+		const configured = await this.git(['config', '--get', 'remote.origin.url'], dir, undefined, signal);
+		if (configured.code !== 0 || configured.stdout.trim() !== credential.remoteUrl) return null;
+		const armed = await this.armCredential(credential, dir, 'push', signal);
+		return armed.credential === null ? new Error(`refusing to publish: ${armed.refusal}`) : null;
+	}
+
+	/**
+	 * The scoped READ credential this provision's fetches may use, or null.
+	 *
+	 * WITHHOLDS — where {@link resolvePushCredential} refuses — and that is
+	 * the one deliberate difference between the two. A push without its
+	 * scoped credential must not happen, because the only other thing that
+	 * could authenticate it is the ambient helper the credential replaces.
+	 * A fetch without one is simply the fetch every provision ran before
+	 * this field existed, so when the credential cannot be offered SAFELY it
+	 * is not offered at all and the fetch proceeds exactly as it would have:
+	 * a public repository still clones, a machine whose operator configured
+	 * a helper still works, and in every one of those cases the token never
+	 * left this process.
+	 *
+	 * Withheld when:
+	 *
+	 *  - the caller also passed URL-userinfo `auth` (the cloud path): two
+	 *    credentials for one request is a caller error, and the older
+	 *    mechanism keeps its behaviour;
+	 *  - `remoteUrl` is not byte-identical to the URL about to be fetched —
+	 *    the same test the push applies to `origin`. The header is keyed to
+	 *    `remoteUrl`, and a credential issued for a named repository has no
+	 *    business near any other;
+	 *  - {@link armCredential} says no: the remote is not one a header can
+	 *    authenticate, the pool's config cannot be read, it carries a key
+	 *    that is not on the allowlist, or this machine's own Git config
+	 *    rewrites the remote's URL (a global `url.<ssh>.insteadOf`: the
+	 *    fetch then goes over that rewrite, as it did before this field
+	 *    existed). That gate — and the exec-time half that does not depend
+	 *    on it — is shared with the push.
+	 */
+	private async resolveFetchCredential(
+		spec: WorkspaceProvisionSpec,
+		poolDir: string
+	): Promise<ChildCredential | null> {
+		const credential: WorkspaceFetchCredential | undefined = spec.fetchCredential;
+		if (!credential?.token) return null;
+		const withhold = (reason: string): null => {
+			try {
+				spec.onFetchCredentialWithheld?.(reason);
+			} catch {
+				// A reporting callback never decides how a repository is fetched.
+			}
+			return null;
+		};
+		if (spec.auth?.token) {
+			return withhold('this provision already carries per-operation auth');
+		}
+		if (!credential.remoteUrl || credential.remoteUrl !== spec.repoUrl) {
+			return withhold('it was issued for a different remote than the one being fetched');
+		}
+		const armed = await this.armCredential(
+			credential,
+			poolDir,
+			'fetch',
+			spec.signal,
+			// The SAME empty directory, in the same spelling, a hardened
+			// provision already points `core.hooksPath` at (`git-hardening`),
+			// so the credential entries appended after that overlay repeat
+			// its value instead of replacing it.
+			(this.checkoutHardening.getStore()?.hooksDir ?? (await emptyHooksDir())).replace(/\\/g, '/')
+		);
+		return armed.credential ?? withhold(armed.refusal);
+	}
+
+	/**
+	 * Turn a scoped credential into one a `git` child may carry — or say why
+	 * not. The single gate both credentialed commands pass through.
+	 *
+	 * In order, and each a reason not to use the credential at all:
+	 *
+	 *  1. its remote must be one a header can authenticate
+	 *     ({@link credentialedProtocol});
+	 *  2. the repository's config must be readable — an unreadable config is
+	 *     never treated as an empty one;
+	 *  3. every key the REPOSITORY itself carries (`local` and `worktree`
+	 *     scope, `include.path` followed) must be on the allowlist
+	 *     ({@link foreignRepositoryConfig}) — and when one is not, the
+	 *     refusal says how to remove it ({@link recoveryHint});
+	 *  4. the URL Git will really use for this remote, once the OPERATOR's
+	 *     `url.*.insteadOf` / `pushInsteadOf` are applied, must still be the
+	 *     one the credential was issued for ({@link effectiveRemoteUrls}) —
+	 *     the fetch URL for a fetch, the push URL for a push.
+	 *
+	 * What comes back armed also carries the exec-time half, which does not
+	 * depend on (3) having seen everything: another job on this node can
+	 * write the shared config between this read and the command, so the
+	 * transport, the remote name and the overrides are fixed on the child
+	 * itself. The same single listing serves both halves — the allowlist
+	 * reads the repository's scopes from it, the overrides read the
+	 * operator's.
+	 *
+	 * The refusal names config keys as `section.variable` at most: never a
+	 * subsection, never a value.
+	 */
+	private async armCredential(
+		credential: WorkspacePushCredential,
+		dir: string,
+		purpose: 'fetch' | 'push',
+		signal?: AbortSignal,
+		hooksPath?: string
+	): Promise<{ credential: ChildCredential; refusal: null } | { credential: null; refusal: string }> {
+		const refuse = (refusal: string): { credential: null; refusal: string } => ({ credential: null, refusal });
+		const protocol = credentialedProtocol(credential.remoteUrl);
+		if (!protocol) {
+			return refuse('a scoped credential is an HTTP header, and its remote is not an https URL');
+		}
+		const listing = await this.git([...SCOPED_CONFIG_LIST_ARGS], dir, undefined, signal);
+		const config = listing.code === 0 ? parseScopedConfigList(listing.stdout) : null;
+		if (!config) {
+			return refuse("this repository's Git config could not be read");
+		}
+		const foreign = foreignRepositoryConfig(config);
+		if (foreign.length > 0) {
+			// Named, and with the way out: this answer is the same for every
+			// later run on this repository until the key is gone, and nothing
+			// but an operator removes it (why not this code: see "When the
+			// allowlist says no" in `credentialed-command.ts`).
+			const shared = await this.sharedRepositoryDir(dir, signal);
+			return refuse(
+				`this repository's Git config carries settings a credentialed command is not run with (${foreign.join(', ')}). ${recoveryHint(foreign, shared)}`
+			);
+		}
+		// The repository's own rewrites are gone by here (the allowlist names
+		// `url.*`), so what is left to find is the OPERATOR's: a global
+		// `url.<ssh>.insteadOf https://github.com/` is how many machines
+		// clone. Arming the credential over one only gets the command killed
+		// — the rewritten URL is off the one transport this child may speak
+		// — so it is not armed: the fetch then runs exactly as it always
+		// did, over the rewrite; the push is refused, as a push without its
+		// scoped credential always is.
+		const urls = effectiveRemoteUrls(config, credential.remoteUrl);
+		const rewritten = purpose === 'push' ? urls.push : urls.fetch;
+		if (rewritten !== credential.remoteUrl) {
+			const rule = purpose === 'push' ? urls.pushRule : urls.fetchRule;
+			return refuse(
+				`this machine's Git config rewrites this remote's ${purpose === 'push' ? 'push ' : ''}URL (${rule?.key ?? 'url.<…>.insteadof'}, ${rule?.scope ?? 'unknown'} scope), and a scoped credential is used only for the URL it was issued for`
+			);
+		}
+		const remoteName = privateRemoteName();
+		return {
+			credential: {
+				username: credential.username,
+				token: credential.token,
+				remoteUrl: credential.remoteUrl,
+				protocol,
+				remoteName,
+				safety: credentialedCommandEntries({
+					remoteName,
+					remoteUrl: credential.remoteUrl,
+					protocol,
+					config,
+					env: process.env
+				}),
+				...(hooksPath === undefined ? {} : { hooksPath })
+			},
+			refusal: null
+		};
+	}
+
+	/**
+	 * The repository whose config a refusal is about, as a path an operator
+	 * can hand to `git -C`: the SHARED one. From a linked worktree that is
+	 * the pool — the worktree itself may be gone by the time anyone reads
+	 * the message, and its config IS the pool's. Falls back to the
+	 * directory the command ran in.
+	 */
+	private async sharedRepositoryDir(dir: string, signal?: AbortSignal): Promise<string> {
+		try {
+			const common = await this.git(
+				['rev-parse', '--path-format=absolute', '--git-common-dir'],
+				dir,
+				undefined,
+				signal
+			);
+			const path = common.stdout.trim();
+			if (common.code === 0 && isAbsolute(path)) return path;
+		} catch (error) {
+			if (signal?.aborted) throw error;
+		}
+		return dir;
+	}
+
+	/**
+	 * Maintain the pool after a credentialed fetch, WITHOUT a credential and
+	 * without holding the provision up for it.
+	 *
+	 * A plain `git fetch` ends by starting `git maintenance run --auto` and,
+	 * on a platform that can fork, does not wait for it. The credentialed
+	 * fetch does not start one at all (see the caller), so this is that
+	 * step, kept as it was:
+	 *
+	 *  - `--detach` (Git 2.47+): the maintenance goes to the background
+	 *    where Git can put it there, and the command returns at once. An
+	 *    older Git does not know the option and says so (usage error, 129);
+	 *    there `gc --auto` detaches ITSELF, so the same command is run
+	 *    without it.
+	 *  - a bound on the WAIT either way, because Git cannot detach on Windows
+	 *    (it says nothing and runs in the foreground) and an explicit
+	 *    `maintenance run` there is a whole gc, with the repository lock
+	 *    held: {@link POOL_MAINTENANCE_TIMEOUT_MS}.
+	 *
+	 * Nothing this does is the provision's verdict: a failed, refused or
+	 * unfinished maintenance is tried again by the next fetch.
+	 *
+	 * The bound stops the WAITING, never the maintenance. A `git maintenance`
+	 * killed while it runs leaves `objects/maintenance.lock` behind (measured,
+	 * Git for Windows 2.52, killed the way this provider kills a child:
+	 * `taskkill /T /F`; a `SIGKILL` runs no cleanup either), and from then on
+	 * every maintenance of that repository — this one, and the one a plain
+	 * `git fetch` starts — finds the lock, exits 0 and does nothing (measured:
+	 * the loose objects stay loose), with nobody told. So the maintenance is
+	 * started with no signal at all and left to finish in the background,
+	 * exactly as a detached one would; the caller's cancellation, like the
+	 * bound, only stops this provision from waiting for it.
+	 */
+	private async maintainPool(poolDir: string, spec: WorkspaceProvisionSpec): Promise<void> {
+		const { signal } = spec;
+		const waitFor = async (args: string[]): Promise<GitResult | null> => {
+			throwIfAborted(signal);
+			// No signal: nothing in this provider may kill it (see above).
+			const running = this.git(args, poolDir, spec.auth).catch(() => null);
+			let timer: ReturnType<typeof setTimeout> | undefined;
+			let stopWaiting: (() => void) | undefined;
+			const released = new Promise<null>((resolve) => {
+				stopWaiting = () => resolve(null);
+				timer = setTimeout(stopWaiting, this.poolMaintenanceTimeoutMs);
+				signal?.addEventListener('abort', stopWaiting, { once: true });
+			});
+			try {
+				const result = await Promise.race([running, released]);
+				throwIfAborted(signal);
+				return result;
+			} finally {
+				clearTimeout(timer);
+				if (stopWaiting) signal?.removeEventListener('abort', stopWaiting);
+			}
+		};
+		const detached = await waitFor(['maintenance', 'run', '--auto', '--quiet', '--detach']);
+		if (detached?.code === 129) await waitFor(['maintenance', 'run', '--auto', '--quiet']);
+	}
+
+	/**
+	 * The same armed credential for a SECOND command, under a private remote
+	 * name of its own. A name is in its command's argv while that command
+	 * runs, so it is used once.
+	 */
+	private withFreshRemote(credential: ChildCredential): ChildCredential {
+		const remoteName = privateRemoteName();
+		const previous = `remote.${credential.remoteName}.`;
+		return {
+			...credential,
+			remoteName,
+			// Every entry about the previous name — its URL, and the proxy
+			// keys pinned on it — moves to the new one.
+			safety: credential.safety.map(([key, value]) =>
+				key.startsWith(previous)
+					? ([`remote.${remoteName}.${key.slice(previous.length)}`, value] as const)
+					: ([key, value] as const)
+			)
+		};
+	}
+
+	/**
 	 * Install a scoped credential for ONE `git` invocation, through the
 	 * child ENVIRONMENT.
 	 *
@@ -1287,7 +1725,7 @@ export class LocalWorkspacePlugin implements IPlugin, IWorkspacePlugin {
 	 *    has to be cleaned up on a crash, a cancel or a lapsed lease,
 	 *    because nothing was ever written down.
 	 */
-	private credentialEnv(credential: WorkspacePushCredential, inherited: NodeJS.ProcessEnv): Record<string, string> {
+	private credentialEnv(credential: ChildCredential, inherited: NodeJS.ProcessEnv): Record<string, string> {
 		const basic = Buffer.from(`${credential.username}:${credential.token}`, 'utf8').toString('base64');
 		// APPEND, never overwrite. `GIT_CONFIG_COUNT` may already be set by
 		// whoever started this process — an operator pinning a setting, a
@@ -1298,17 +1736,30 @@ export class LocalWorkspacePlugin implements IPlugin, IWorkspacePlugin {
 		// everything the system and global files set.
 		const parsed = Number.parseInt(String(inherited.GIT_CONFIG_COUNT ?? ''), 10);
 		const base = Number.isSafeInteger(parsed) && parsed > 0 ? parsed : 0;
-		return {
-			GIT_CONFIG_COUNT: String(base + 4),
+		const env: Record<string, string> = {
 			[`GIT_CONFIG_KEY_${base}`]: 'credential.helper',
 			[`GIT_CONFIG_VALUE_${base}`]: '',
 			[`GIT_CONFIG_KEY_${base + 1}`]: 'core.askpass',
 			[`GIT_CONFIG_VALUE_${base + 1}`]: '',
 			[`GIT_CONFIG_KEY_${base + 2}`]: 'core.hooksPath',
-			[`GIT_CONFIG_VALUE_${base + 2}`]: '',
+			// `''` for a push, exactly as before. A FETCH names an empty
+			// directory instead — see {@link ChildCredential}.
+			[`GIT_CONFIG_VALUE_${base + 2}`]: credential.hooksPath ?? '',
 			[`GIT_CONFIG_KEY_${base + 3}`]: `http.${credential.remoteUrl}.extraheader`,
 			[`GIT_CONFIG_VALUE_${base + 3}`]: `Authorization: Basic ${basic}`
 		};
+		// The exec-time half of `credentialed-command.ts`, AFTER the four
+		// entries above so their positions are what they always were: the
+		// private remote's definition, and every key that could run a program
+		// or move the connection, pinned or emptied. Command scope is read
+		// last, so each is the final word over whatever the repository's own
+		// config says — including what it says a moment after it was checked.
+		credential.safety.forEach(([key, value], index) => {
+			env[`GIT_CONFIG_KEY_${base + 4 + index}`] = key;
+			env[`GIT_CONFIG_VALUE_${base + 4 + index}`] = value;
+		});
+		env.GIT_CONFIG_COUNT = String(base + 4 + credential.safety.length);
+		return env;
 	}
 
 	/**
@@ -1328,11 +1779,64 @@ export class LocalWorkspacePlugin implements IPlugin, IWorkspacePlugin {
 	 *    `git config --get-all credential.helper` ends with `X` — the
 	 *    reset is overridden and an inherited helper answers the push.
 	 *
-	 * Applied only to a credentialed command: every other Git call this
-	 * plugin makes (fetch, status, config probes) keeps whatever the
-	 * operator configured, because none of them carries a write token.
+	 * Applied only to a credentialed command — the push of a finalize, and
+	 * the fetches of a provision that was lent a scoped fetch credential:
+	 * every other Git call this plugin makes (an uncredentialed fetch,
+	 * status, config probes) keeps whatever the operator configured, because
+	 * none of them carries a token.
 	 */
 	private static readonly credentialEnvRemovals = ['GIT_ASKPASS', 'SSH_ASKPASS', 'GIT_CONFIG_PARAMETERS'] as const;
+
+	/**
+	 * Is this inherited variable one a credentialed child must not get?
+	 *
+	 * The names in {@link credentialEnvRemovals}, and Git's TRACING
+	 * variables — `GIT_TRACE`, `GIT_TRACE_CURL`, `GIT_TRACE_PACKET`,
+	 * `GIT_TRACE_REDACT`, `GIT_TRACE2`, `GIT_TRACE2_EVENT`, … (every
+	 * `GIT_TRACE*`) and `GIT_CURL_VERBOSE`. A daemon started with one of
+	 * them set would have Git write what the credentialed command does to
+	 * the file it names: with `GIT_TRACE_CURL` (and `GIT_TRACE_REDACT=0`)
+	 * the request headers, with `GIT_TRACE2_EVENT` and a config pattern the
+	 * command-scope config — either way the `Authorization` header, on
+	 * disk, where no scrub of this process's output ever sees it (measured
+	 * with `GIT_TRACE2_EVENT`: the header was in the file). So the one
+	 * child that carries a credential is not traced. Every other Git call
+	 * keeps the operator's tracing.
+	 *
+	 * Compared in upper case: Windows environment names are
+	 * case-insensitive, and a copy of `process.env` keeps whatever spelling
+	 * the variable was set with.
+	 */
+	private static isWithheldFromCredentialedChild(name: string): boolean {
+		const upper = name.toUpperCase();
+		return (
+			(LocalWorkspacePlugin.credentialEnvRemovals as readonly string[]).includes(upper) ||
+			upper.startsWith('GIT_TRACE') ||
+			upper === 'GIT_CURL_VERBOSE'
+		);
+	}
+
+	/**
+	 * The three trace2 targets, switched OFF for a credentialed child.
+	 *
+	 * Removing the variables ({@link isWithheldFromCredentialedChild}) is not
+	 * enough for trace2: its targets can also come from the system or global
+	 * config (`trace2.eventTarget`, `trace2.normalTarget`,
+	 * `trace2.perfTarget`), and with `trace2.configParams` matching `http.*`
+	 * the event stream records the command-scope config — the
+	 * `Authorization` header with it (measured, git 2.52: one line holding
+	 * the header, from a global `trace2.eventTarget`). Those keys are read
+	 * only from the system and global files, never from command scope, so
+	 * no `GIT_CONFIG_*` entry can turn them off; the variable can: a set,
+	 * non-empty `GIT_TRACE2_EVENT` replaces the configured target, and `0`
+	 * means off (measured: no file was written). Every other Git call keeps
+	 * the operator's tracing.
+	 */
+	private static readonly credentialedChildTraceOff: Readonly<Record<string, string>> = {
+		GIT_TRACE2: '0',
+		GIT_TRACE2_EVENT: '0',
+		GIT_TRACE2_PERF: '0'
+	};
 
 	/**
 	 * Prove that nothing in this repository's own Git configuration can
@@ -1388,7 +1892,18 @@ export class LocalWorkspacePlugin implements IPlugin, IWorkspacePlugin {
 			signal
 		);
 		if (probe.code === 0 && probe.stdout.trim().length > 0) {
-			const found = probe.stdout.trim().split(/\r?\n/).join(', ');
+			// Shown as `section.variable` / `section.<…>.variable`, like the
+			// gate after this one: a subsection here is a URL somebody typed,
+			// and `url.https://user:token@host/.insteadOf` is a real way to
+			// keep a credential. It used to be printed whole, into a job result.
+			const found = [
+				...new Set(
+					probe.stdout
+						.trim()
+						.split(/\r?\n/)
+						.map((key) => displayConfigKey(key))
+				)
+			].join(', ');
 			throw new Error(
 				afterSuccessfulPush
 					? `the push completed, but this repository's Git config now carries persisted credential or remote-rewrite settings (${found}); the branch IS on the remote`
@@ -1425,8 +1940,9 @@ export class LocalWorkspacePlugin implements IPlugin, IWorkspacePlugin {
 		auth: WorkspaceProvisionSpec['auth'],
 		signal?: AbortSignal,
 		// Appended LAST and optional: every existing call site keeps its
-		// arity, and only the publish ever passes one.
-		credential?: WorkspacePushCredential | null,
+		// arity, and only the publish — and a provision's two fetches, when
+		// it was lent a scoped fetch credential — ever passes one.
+		credential?: ChildCredential | null,
 		// Likewise: only {@link gitLiteral} passes one, and never together
 		// with a credential.
 		extraEnv?: Readonly<Record<string, string>>
@@ -1438,7 +1954,9 @@ export class LocalWorkspacePlugin implements IPlugin, IWorkspacePlugin {
 			// set variable and Git would try to run "" as a program. See
 			// `credentialEnvRemovals` for what each of these would
 			// otherwise do to a credentialed push.
-			for (const name of LocalWorkspacePlugin.credentialEnvRemovals) delete inherited[name];
+			for (const name of Object.keys(inherited)) {
+				if (LocalWorkspacePlugin.isWithheldFromCredentialedChild(name)) delete inherited[name];
+			}
 		}
 		// An explicit overlay wins; otherwise a hardened provision's scope
 		// supplies one (works-security finding 3).
@@ -1452,7 +1970,31 @@ export class LocalWorkspacePlugin implements IPlugin, IWorkspacePlugin {
 				...layered,
 				// Appended AFTER the overlay's `GIT_CONFIG_*` entries, never on
 				// top of them: both use the same indexed variables.
-				...(credential ? this.credentialEnv(credential, layered) : {})
+				...(credential ? this.credentialEnv(credential, layered) : {}),
+				// The ONE transport this child may speak, whatever
+				// `protocol.*.allow` any config file carries. An environment
+				// variable on purpose: it replaces Git's whole transport policy,
+				// where a command-scope `protocol.allow=never` loses to a more
+				// specific `protocol.file.allow=always` in the repository's own
+				// config (measured). With it, a redirect onto the file or ssh
+				// transport — and the `uploadpack` / `receivepack` /
+				// `core.sshCommand` program that transport would run with this
+				// environment — dies as `transport '…' not allowed`.
+				...(credential ? { GIT_ALLOW_PROTOCOL: credential.protocol } : {}),
+				// And no lazy fetch (Git 2.44+). With a partial clone configured,
+				// a missing object makes Git start `git fetch <promisor remote>`:
+				// a grandchild that names a PLAIN remote, so the private name and
+				// everything pinned on it cover nothing there — its `uploadpack`
+				// ran with this environment (measured), and its `proxy` would
+				// outrank the `http.<url>.proxy` pin. The allowlist refuses the
+				// partial-clone keys; this holds when they are written after it
+				// looked. The fetch itself still succeeds (measured). An older Git
+				// ignores the variable.
+				...(credential ? { GIT_NO_LAZY_FETCH: '1' } : {}),
+				// And no trace2 output from the one child that carries a token,
+				// even where the operator's own config asks for it — see
+				// {@link LocalWorkspacePlugin.credentialedChildTraceOff}.
+				...(credential ? LocalWorkspacePlugin.credentialedChildTraceOff : {})
 			},
 			maxBuffer: 16 * 1024 * 1024,
 			windowsHide: true,
@@ -1484,7 +2026,7 @@ export class LocalWorkspacePlugin implements IPlugin, IWorkspacePlugin {
 		auth: WorkspaceProvisionSpec['auth'],
 		what: string,
 		signal?: AbortSignal,
-		credential?: WorkspacePushCredential | null,
+		credential?: ChildCredential | null,
 		// Appended LAST and optional: every existing call site keeps its arity,
 		// and only the finalize add/status/commit pass one (the hook / fsmonitor
 		// neutralisation). Never together with a credential — those are separate

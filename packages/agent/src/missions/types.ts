@@ -46,8 +46,10 @@ export interface MissionDto {
     /** APW-08 T34 (FR-54) — when the "nothing to file" notice was last recorded. */
     taskOutputNoticeAt: Date | null;
     /**
-     * APW-08 T34 — set on a write's answer only: `noAppWorkRelation` when the Mission files Tasks
-     * but has no App Work attached as Improves or Operates (accepted all the same, S27).
+     * APW-08 T34 — set on a write's answer only, for a Mission that files Tasks (accepted all
+     * the same, S27): `noAppWorkRelation` when no App or Repository Work is attached as Improves
+     * or Operates; `repoWorkTaskIsolationOff` when a Repository Work is, with its Task isolation
+     * off (nothing is filed on it until the setting is on).
      */
     warnings?: string[];
     createdAt: Date;

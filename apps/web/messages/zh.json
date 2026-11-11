@@ -2350,9 +2350,9 @@
                     "no-ideas": "Tick ran but generated no Ideas",
                     "failed": "Run now failed",
                     "cron-no-match": "Tick ran (cron skipped)",
-                    "tasks-filed": "已在该任务的 App Works 上录入任务。",
-                    "no-tasks": "该任务的 App Works 上没有可录入的新内容。",
-                    "spawned-and-tasks-filed": "已生成新的创意，并在该任务的 App Works 上录入任务。"
+                    "tasks-filed": "已在该任务的 App Works 或 Repository Works 上录入任务。",
+                    "no-tasks": "该任务的 App Works 或 Repository Works 上没有可录入的新内容。",
+                    "spawned-and-tasks-filed": "已生成新的创意，并在该任务的 App Works 或 Repository Works 上录入任务。"
                 }
             },
             "goals": {
@@ -2388,14 +2388,17 @@
             "output": {
                 "title": "输出",
                 "ideas": "想法",
-                "tasks": "附加的 App Works 上的任务",
+                "tasks": "附加的 App Works 或 Repository Works 上的任务",
                 "both": "两者",
                 "tasksPerTick": "每轮任务数",
                 "openCap": "每个 Work 的未完成任务上限",
                 "appliesTo": "适用于以“改进”或“运营”关系附加的 Works。",
-                "noAppWork": "以“改进”或“运营”关系附加一个 App Work，才能在其上录入任务。",
+                "noAppWork": "以“改进”或“运营”关系附加一个 App Work 或 Repository Work，才能在其上录入任务。",
+                "repoIsolationOff": "某个附加的 Repository Work 已关闭“Task isolation”，因此不会在其上录入任务。请在该 Work 的设置中开启“Task isolation”。",
+                "repoAgentCannotOpenPullRequests": "将在某个附加的 Repository Work 上运行任务的智能体没有提交和创建拉取请求的权限，因此不会在其上录入任务。请为此 Mission 的任务输出选择同时具备这两项权限的智能体，或为该 Work 的智能体授予这些权限。",
+                "repoAllowsAgentMerge": "某个附加的 Repository Work 的合并策略允许智能体合并自己的拉取请求，因此此 Mission 不会在其上录入任务。请在该 Work 上关闭由智能体合并，以便此 Mission 在其上录入任务。",
                 "tasksOnWorks": "附加的 Works 上的任务",
-                "nothingToFile": "没有可录入任务的附加 App Work。",
+                "nothingToFile": "没有可录入任务的附加 App Work 或 Repository Work。",
                 "tasksOnWorksEmpty": "尚未录入任何任务。",
                 "save": "保存",
                 "saved": "已保存输出",
@@ -2774,7 +2777,7 @@
         },
         "feed": {
             "narration": {
-                "missionNothingToFile": "<b>{actor}</b> 今天在某个任务的 App Works 上没有发现可录入的新内容"
+                "missionNothingToFile": "<b>{actor}</b> 今天在某个任务的 App Works 或 Repository Works 上没有发现可录入的新内容"
             }
         },
         "works": {

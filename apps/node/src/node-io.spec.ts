@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { isProbeTimedOut, ProbeTimedOutError } from './core/boot-retry';
 import type { CommandRunner } from './core/capabilities';
@@ -259,4 +262,58 @@ describe('searchPathWithRetry (boot-probe retry)', () => {
 		);
 		expect(calls).toHaveLength(4);
 	});
+});
+
+/**
+ * Fleet agent readiness: a CLI's status command is started in the environment
+ * a run gets and with nothing to read. Real processes, so the two options are
+ * pinned on what the child actually saw.
+ */
+describe('createCommandRunner — a caller`s environment and a closed stdin', () => {
+	// Reports its environment once stdin ends; with stdin left open it would never answer.
+	const SCRIPT = [
+		'process.stdin.resume();',
+		"process.stdin.on('end', () => {",
+		'	const pick = (name) => (name in process.env ? process.env[name] : null);',
+		'	process.stdout.write(JSON.stringify({',
+		"		granted: pick('EVER_NODE_IO_GRANTED'),",
+		"		daemonOnly: pick('EVER_NODE_IO_DAEMON_ONLY'),",
+		"		noCwdSearch: pick('NoDefaultCurrentDirectoryInExePath')",
+		'	}));',
+		'});'
+	].join('\n');
+
+	it('replaces the daemon`s environment, keeps the Windows search-path hardening, and ends stdin', async () => {
+		const dir = mkdtempSync(join(tmpdir(), 'ever-node-io-'));
+		const script = join(dir, 'report-env.cjs');
+		writeFileSync(script, SCRIPT);
+		process.env.EVER_NODE_IO_DAEMON_ONLY = 'only-the-daemon-has-this';
+		try {
+			// What a child needs to start at all, plus the one name the caller grants.
+			const env: Record<string, string> = { EVER_NODE_IO_GRANTED: 'yes' };
+			for (const [name, value] of Object.entries(process.env)) {
+				if (/^(path|pathext|systemroot|comspec|windir|home|userprofile|tmp|temp)$/i.test(name) && value) {
+					env[name] = value;
+				}
+			}
+			const startedAt = Date.now();
+			// Windows goes through cmd.exe, which splits an unquoted path at a space.
+			const quoted = (path: string) => (process.platform === 'win32' && /\s/.test(path) ? `"${path}"` : path);
+			const result = await createCommandRunner().run(quoted(process.execPath), [quoted(script)], {
+				timeoutMs: 15_000,
+				closeStdin: true,
+				env
+			});
+			expect(result.timedOut).toBe(false);
+			expect(JSON.parse(result.stdout)).toEqual({
+				granted: 'yes',
+				daemonOnly: null,
+				noCwdSearch: process.platform === 'win32' ? '1' : null
+			});
+			expect(Date.now() - startedAt).toBeLessThan(10_000);
+		} finally {
+			delete process.env.EVER_NODE_IO_DAEMON_ONLY;
+			rmSync(dir, { recursive: true, force: true });
+		}
+	}, 30_000);
 });

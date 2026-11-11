@@ -480,6 +480,91 @@ describe('HeartbeatLoop', () => {
 			expect(entries.some((entry) => entry.message.includes('the daemon line stays off'))).toBe(true);
 		});
 
+		it('drops ONLY the agent readiness report against a platform that predates it (new node, old API)', async () => {
+			const scheduler = fakeScheduler();
+			const scripted = scriptedClient([rejected(), ok, ok]);
+			const entries: LogEntry[] = [];
+			const agents = {
+				checkedAt: '2026-11-10T12:00:00.000Z',
+				agents: [
+					{
+						provider: 'claude-code',
+						installed: true,
+						version: '2.1.319',
+						signedIn: true,
+						authMethod: 'subscription' as const,
+						account: null,
+						status: 'access_denied' as const,
+						reasonCode: 'org_access_disabled',
+						reason: 'The organization has disabled subscription access for this CLI. Use an API key, or ask an admin to enable access.',
+						checkedAt: '2026-11-10T12:00:00.000Z'
+					}
+				]
+			};
+			const loop = new HeartbeatLoop({
+				client: scripted.client,
+				nodeId: NODE_ID,
+				secret: SECRET,
+				describe: async () => ({
+					platform: 'linux/x64',
+					capabilities: ['claude-code'],
+					workerState: 'idle',
+					consents: { work: true, attend: false, manage: false, usageScan: false },
+					timeZone: 'Europe/Paris',
+					helperTrust: 'none',
+					agents
+				}),
+				intervalMs: INTERVAL,
+				scheduler: scheduler.scheduler,
+				logger: createLogger({ sink: (entry) => entries.push(entry) })
+			});
+
+			await loop.start();
+
+			// One 400, one retry: the whole cost of talking to an older platform.
+			expect(scripted.sent()).toBe(2);
+			expect(scripted.requests[0]).toHaveProperty('agents', agents);
+			expect(scripted.requests[1]).not.toHaveProperty('agents');
+			// Every older field — the desktop tier right below it included — still goes.
+			expect(scripted.requests[1]).toMatchObject({
+				helperTrust: 'none',
+				timeZone: 'Europe/Paris',
+				consents: { work: true },
+				workerState: 'idle'
+			});
+			expect(loop.getState().state).toBe('connected');
+			expect(loop.acceptsField('agents')).toBe(false);
+			expect(loop.acceptsField('helperTrust')).toBe(true);
+			expect(loop.acceptsField('consents')).toBe(true);
+			expect(entries.some((entry) => entry.message.includes('agent readiness report'))).toBe(true);
+
+			// Latched: the next beat does not try the field again.
+			await loop.tick();
+			expect(scripted.sent()).toBe(3);
+			expect(scripted.requests[2]).not.toHaveProperty('agents');
+		});
+
+		it('sends the agent readiness report to a platform that accepts it, on every beat', async () => {
+			const scheduler = fakeScheduler();
+			const scripted = scriptedClient([ok, ok]);
+			const agents = { checkedAt: '2026-11-10T12:00:00.000Z', agents: [] };
+			const loop = new HeartbeatLoop({
+				client: scripted.client,
+				nodeId: NODE_ID,
+				secret: SECRET,
+				describe: async () => ({ platform: 'linux/x64', capabilities: [], agents }),
+				intervalMs: INTERVAL,
+				scheduler: scheduler.scheduler
+			});
+
+			await loop.start();
+			await loop.tick();
+
+			expect(scripted.sent()).toBe(2);
+			for (const request of scripted.requests) expect(request).toHaveProperty('agents', agents);
+			expect(loop.acceptsField('agents')).toBe(true);
+		});
+
 		it('falls back to the legacy 16 tags first when a platform refuses a longer list, keeping every field', async () => {
 			const scheduler = fakeScheduler();
 			const tags = Array.from({ length: 18 }, (_, index) => `tag-${index}`);

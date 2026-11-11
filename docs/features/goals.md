@@ -68,7 +68,11 @@ New Goals are created in **draft**. Nothing is evaluated until you activate them
 
 ### The Goal's Work
 
-**Work (optional)** scopes the Goal to one of your Works: its loop's iterations become Tasks on that Work. On an [App Work](./app-works.md) each iteration's change then goes through the delivery chain, and an iteration whose pull request is still open counts as work in flight: the loop says _Waiting for iteration {n}'s pull request to be merged or closed._ instead of starting more iterations than its concurrency allows.
+**Work (optional)** scopes the Goal to one of your Works: its loop's iterations become Tasks on that Work. On an [App Work](./app-works.md) each iteration's change then goes through the delivery chain.
+
+On an App Work **or a Repository Work** — the two kinds whose Tasks are delivered as pull requests — an iteration whose pull request is still open counts as work in flight: the loop says _Waiting for iteration {n}'s pull request to be merged or closed._ instead of starting more iterations than its concurrency allows. Without the wait, the next iteration would branch from a base that does not have the previous one's change yet, and repeat it or conflict with it. The slot is freed when the pull request is merged or closed, when the Task is done or cancelled, or when its branch is discarded.
+
+On a Repository Work this needs [Task isolation](./task-isolation.md) on and an Agent that may open pull requests: an iteration that opens no pull request (isolation is off, or the Agent only pushed its branch) holds no slot, and the next iteration starts as soon as its run ends. Works of every other kind are never gated.
 
 - The Work must be one of yours in the Goal's workspace; another account's Work is answered as not found.
 - It cannot change while the loop runs — pause the loop first. **No Work** clears it.

@@ -273,5 +273,10 @@ function toRunnerView(node: FleetNodeView, load: FleetNodeLoadView | null): Flee
         // itself, next to what the platform infers about it.
         workerState: node.workerState ?? null,
         workerStateReason: node.workerStateReason ?? null,
+        // Fleet agent readiness: "online" plus an installed CLI did not say
+        // whether any agent could actually work. Straight off the node view
+        // (null = the node never reported: unknown, never "none can").
+        agentReadiness: node.agentReadiness ?? null,
+        anyAgentReady: node.anyAgentReady ?? null,
     };
 }

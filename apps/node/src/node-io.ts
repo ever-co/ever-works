@@ -162,10 +162,29 @@ export function createCommandRunner(): CommandRunner {
 					options.timeoutMs > 0
 						? options.timeoutMs
 						: 10_000;
-				execFile(
+				const child = execFile(
 					plan.file,
 					args,
-					{ shell: plan.shell, cwd: plan.cwd, env: plan.env, windowsHide: true, timeout },
+					{
+						shell: plan.shell,
+						cwd: plan.cwd,
+						// A caller's environment replaces the daemon's whole (fleet
+						// agent readiness: the allow-listed one a run gets). The
+						// plan's own hardening of the Windows search path is kept.
+						env: options?.env
+							? {
+									...options.env,
+									...(plan.env.NoDefaultCurrentDirectoryInExePath
+										? {
+												NoDefaultCurrentDirectoryInExePath:
+													plan.env.NoDefaultCurrentDirectoryInExePath
+											}
+										: {})
+								}
+							: plan.env,
+						windowsHide: true,
+						timeout
+					},
 					(error, stdout, stderr) => {
 						const code = error
 							? ((error as NodeJS.ErrnoException & { code?: number | string }).code ?? 1)
@@ -184,6 +203,15 @@ export function createCommandRunner(): CommandRunner {
 						});
 					}
 				);
+				// End-of-file on stdin at once: a command that would read a prompt
+				// or a confirmation gets nothing and cannot wait for it.
+				if (options?.closeStdin) {
+					try {
+						child.stdin?.end();
+					} catch {
+						// The child may already be gone; there is nothing to close.
+					}
+				}
 			})
 	};
 }

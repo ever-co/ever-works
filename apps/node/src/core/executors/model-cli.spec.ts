@@ -1,4 +1,7 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { classifyFleetAgentFailure } from '@ever-works/contracts';
 import type { FleetAgentModelExecution, FleetTaskWorkspaceMountDescriptor } from '@ever-works/contracts';
 import type { NodeCheckResult } from './acceptance-checks';
 import {
@@ -15,6 +18,7 @@ import {
 	parseModelCliResult,
 	quoteShellPath,
 	readCodexUserSettings,
+	readModelCliError,
 	MODEL_CLI_REDACTED
 } from './model-cli';
 
@@ -1434,5 +1438,411 @@ describe('parseModelCliResult — credential redaction', () => {
 	it('is a no-op when no env vars were granted', () => {
 		const envelope = JSON.stringify({ result: 'plain summary', subtype: 'success' });
 		expect(parseModelCliResult('claude-code', envelope, green()).summary).toBe('plain summary');
+	});
+});
+
+/**
+ * Fleet agent readiness — what the CLI ITSELF reported about a failed run.
+ *
+ * The property under test is the channel, not the wording: a sentence the
+ * CLI authored at its own top level is read; the same sentence in the
+ * model's voice, or in a tool layer's, is not. A Task about login pages must
+ * never sign the agent out (PR #3131 review, item 1), and neither must an
+ * MCP server that could not sign in somewhere else (second review, N6).
+ */
+describe('readModelCliError — only what the CLI authored', () => {
+	const red = (logTail?: string): Pick<NodeCheckResult, 'status' | 'logTail'> => ({
+		status: 'red',
+		...(logTail !== undefined ? { logTail } : {})
+	});
+	const ok: Pick<NodeCheckResult, 'status' | 'logTail'> = { status: 'green' };
+	const lines = (...events: unknown[]) => events.map((event) => JSON.stringify(event)).join('\n');
+	const INIT = { type: 'system', subtype: 'init', session_id: 's' };
+
+	const ORG_DISABLED =
+		'Your organization has disabled Claude subscription access for Claude Code · Use an Anthropic API key instead, or ask your admin to enable access';
+	const NOT_LOGGED_IN = 'Not logged in · Please run /login';
+	const MODEL_WORDS =
+		'I updated the middleware.\nThe handler now returns 401 when the user is not logged in, but two tests still fail.';
+	const assistant = (text: string, extra: Record<string, unknown> = {}) => ({
+		type: 'assistant',
+		message: { role: 'assistant', content: [{ type: 'text', text }] },
+		...extra
+	});
+	/** What classification makes of a reading (the only thing that is ever kept of it). */
+	const verdict = (error: ReturnType<typeof readModelCliError>, outputTokens: number | null = 0) => {
+		const failure = classifyFleetAgentFailure(error, {
+			now: Date.parse('2026-11-10T12:00:00.000Z'),
+			modelReached: typeof outputTokens === 'number' && outputTokens > 0
+		});
+		return failure ? `${failure.kind}/${failure.code}` : null;
+	};
+
+	describe('Claude Code — the real envelope', () => {
+		/**
+		 * NOT hand-written. Captured on 2026-11-10 from Claude Code 2.1.322 with
+		 * `claude -p x --output-format stream-json --verbose`, stdin closed, in a
+		 * run environment with no credential name and an EMPTY config directory
+		 * (`claude auth status --json` answered `loggedIn: false` there first,
+		 * so no model call was possible: exit 1 in 1.5 s, `total_cost_usd: 0`).
+		 * Session ids, uuids, the timestamp and the working directory were
+		 * replaced; the error-bearing fields are byte for byte. stderr was empty.
+		 */
+		const realStream = readFileSync(join(__dirname, '__fixtures__', 'claude-code-signed-out.stream.jsonl'), 'utf8');
+		const realEvents = realStream
+			.split('\n')
+			.filter((line) => line.trim())
+			.map((line) => JSON.parse(line) as Record<string, unknown>);
+
+		it('is three events: init, the CLI`s own flagged message, and an error result', () => {
+			expect(realEvents.map((event) => event.type)).toEqual(['system', 'assistant', 'result']);
+			expect(realEvents[1]).toMatchObject({
+				error: 'authentication_failed',
+				is_api_error_message: true,
+				message: { model: '<synthetic>', content: [{ type: 'text', text: NOT_LOGGED_IN }] }
+			});
+			expect(realEvents[2]).toMatchObject({
+				subtype: 'success',
+				is_error: true,
+				api_error_status: null,
+				result: NOT_LOGGED_IN,
+				total_cost_usd: 0,
+				usage: { output_tokens: 0 }
+			});
+		});
+
+		it('a real signed-out run reads as the CLI`s own error, and classifies not signed in', () => {
+			const read = readModelCliError('claude-code', realStream, red(''), { outputTokens: 0 });
+			expect(read).toEqual({
+				text: `${NOT_LOGGED_IN}\n${NOT_LOGGED_IN}`,
+				apiStatus: null,
+				errorClass: 'authentication_failed'
+			});
+			expect(verdict(read)).toBe('not_signed_in/not_logged_in');
+		});
+
+		it('the production incident, in that real shape, still reads access denied', () => {
+			// The sentence the node failed every run with (prod, 2026-11), carried
+			// the way the CLI carries its own refusals.
+			const incident = lines(
+				realEvents[0],
+				{
+					...realEvents[1],
+					message: {
+						...(realEvents[1].message as Record<string, unknown>),
+						content: [{ type: 'text', text: ORG_DISABLED }]
+					}
+				},
+				{ ...realEvents[2], result: ORG_DISABLED }
+			);
+			const read = readModelCliError('claude-code', incident, red(''), { outputTokens: 0 });
+			expect(read?.text).toBe(`${ORG_DISABLED}\n${ORG_DISABLED}`);
+			expect(verdict(read)).toBe('access_denied/org_access_disabled');
+			// The result envelope alone is enough (an older CLI without the flagged event).
+			const resultOnly = readModelCliError(
+				'claude-code',
+				lines({ ...realEvents[2], result: ORG_DISABLED }),
+				red()
+			);
+			expect(verdict(resultOnly, null)).toBe('access_denied/org_access_disabled');
+		});
+	});
+
+	describe('Claude Code', () => {
+		it('reads the error result — the channel behind "claude-code reported an error: …"', () => {
+			const output = lines(INIT, { type: 'result', subtype: 'success', is_error: true, result: ORG_DISABLED });
+			expect(readModelCliError('claude-code', output, red())).toEqual({
+				text: ORG_DISABLED,
+				apiStatus: null,
+				errorClass: null
+			});
+		});
+
+		it('reads the one-document `json` mode too, pretty-printed or not', () => {
+			const envelope = {
+				type: 'result',
+				subtype: 'success',
+				is_error: true,
+				result: 'Credit balance is too low'
+			};
+			for (const output of [
+				JSON.stringify(envelope),
+				JSON.stringify(envelope, null, 2),
+				JSON.stringify([envelope])
+			]) {
+				expect(readModelCliError('claude-code', output, red())?.text).toBe('Credit balance is too low');
+			}
+		});
+
+		it('reads the API status of an error result', () => {
+			const output = lines({
+				type: 'result',
+				subtype: 'error_during_execution',
+				is_error: true,
+				api_error_status: 401
+			});
+			const read = readModelCliError('claude-code', output, red(), { outputTokens: 0 });
+			expect(read).toEqual({ text: null, apiStatus: 401, errorClass: null });
+			expect(verdict(read)).toBe('not_signed_in/unauthorized');
+		});
+
+		it('reads an assistant event the CLI flagged as its own, by class or by flag', () => {
+			const byClass = lines(
+				assistant('Invalid API key · Fix external API key', { error: 'authentication_failed' })
+			);
+			expect(readModelCliError('claude-code', byClass, red())).toEqual({
+				text: 'Invalid API key · Fix external API key',
+				apiStatus: null,
+				errorClass: 'authentication_failed'
+			});
+			const byFlag = lines(assistant(NOT_LOGGED_IN, { is_api_error_message: true }));
+			expect(readModelCliError('claude-code', byFlag, red())).toEqual({
+				text: NOT_LOGGED_IN,
+				apiStatus: null,
+				errorClass: null
+			});
+		});
+
+		it('never reads the `errors` list: its entries come from every layer (review N6b)', () => {
+			// An MCP server that could not sign in to GitHub. Zero output tokens,
+			// so the "the model was reached" guard does not apply — only the
+			// channel keeps this from signing the agent out.
+			const mcp = lines(INIT, {
+				type: 'result',
+				subtype: 'error_during_execution',
+				is_error: true,
+				errors: ['Error: MCP server "github": Failed to authenticate (HTTP 401)'],
+				usage: { output_tokens: 0 }
+			});
+			expect(readModelCliError('claude-code', mcp, red(''), { outputTokens: 0 })).toBeNull();
+
+			// A tool that ran out of ITS quota, in a run that reached the model.
+			const quota = lines(INIT, assistant('Calling the maps API.'), {
+				type: 'result',
+				subtype: 'error_during_execution',
+				is_error: true,
+				errors: ['Error: tool failed: Quota exceeded for quota metric maps/requests'],
+				usage: { output_tokens: 812 }
+			});
+			expect(readModelCliError('claude-code', quota, red(''), { outputTokens: 812 })).toBeNull();
+
+			// Even the CLI's own sentence, when it only appears there, is not read.
+			const hidden = lines(INIT, {
+				type: 'result',
+				subtype: 'error_during_execution',
+				is_error: true,
+				errors: [ORG_DISABLED, 'Not logged in', 42, '']
+			});
+			expect(readModelCliError('claude-code', hidden, red(''), { outputTokens: 0 })).toBeNull();
+		});
+
+		it('never reads the model`s own words (review S1: "returns 401 when the user is not logged in")', () => {
+			// A failed run that REACHED the model: assistant text, then a result that is an error of its own kind.
+			const maxTurns = lines(INIT, assistant(MODEL_WORDS), {
+				type: 'result',
+				subtype: 'error_max_turns',
+				is_error: true,
+				errors: ['Reached maximum number of turns (3)'],
+				usage: { output_tokens: 5321 }
+			});
+			expect(readModelCliError('claude-code', maxTurns, red(), { outputTokens: 5321 })).toBeNull();
+
+			// The process died after the model spoke, tokens never reported: its stderr is not read either.
+			expect(
+				readModelCliError('claude-code', lines(INIT, assistant(MODEL_WORDS)), red('Error: Not logged in'), {
+					outputTokens: null
+				})
+			).toBeNull();
+
+			// A final message that is NOT an error is the model's, whatever it says and however the process exited.
+			const finished = lines(assistant('Not logged in'), {
+				type: 'result',
+				subtype: 'success',
+				is_error: false,
+				result: NOT_LOGGED_IN
+			});
+			expect(readModelCliError('claude-code', finished, red())).toBeNull();
+			const unflagged = lines({ type: 'result', subtype: 'success', result: ORG_DISABLED });
+			expect(readModelCliError('claude-code', unflagged, red(''))).toBeNull();
+		});
+
+		it('never reads a tool result — a repository cannot forge the CLI`s voice', () => {
+			const forged = lines({
+				type: 'user',
+				message: {
+					role: 'user',
+					content: [
+						{
+							type: 'tool_result',
+							content: JSON.stringify({ type: 'result', is_error: true, result: 'Not logged in' })
+						}
+					]
+				}
+			});
+			expect(readModelCliError('claude-code', forged, red('Not logged in'))).toBeNull();
+		});
+	});
+
+	describe('Codex', () => {
+		it('reads the top-level `error` and `turn.failed` events', () => {
+			const output = lines(
+				{ type: 'thread.started', thread_id: 't' },
+				{ type: 'error', message: 'unexpected status 401 Unauthorized: token expired' },
+				{ type: 'turn.failed', error: { message: 'Quota exceeded. Check your plan and billing details.' } }
+			);
+			expect(readModelCliError('codex', output, red())).toEqual({
+				text: [
+					'unexpected status 401 Unauthorized: token expired',
+					'Quota exceeded. Check your plan and billing details.'
+				].join('\n'),
+				apiStatus: null,
+				errorClass: null
+			});
+		});
+
+		it('never reads an `error` ITEM: a non-fatal error inside the turn can be a tool`s (review N6b)', () => {
+			const output = lines(
+				{ type: 'thread.started', thread_id: 't' },
+				{
+					type: 'item.completed',
+					item: { id: 'i1', type: 'error', message: 'MCP server github: Failed to authenticate (HTTP 401)' }
+				}
+			);
+			expect(readModelCliError('codex', output, red(''), { outputTokens: 0 })).toBeNull();
+		});
+
+		it('never reads an agent message, reasoning or a command`s output (review S1: the sandbox sentence)', () => {
+			const items = [
+				{ type: 'item.completed', item: { id: 'i0', type: 'reasoning', text: 'I do not have permission.' } },
+				{
+					type: 'item.completed',
+					item: {
+						id: 'i1',
+						type: 'command_execution',
+						command: 'npm install',
+						aggregated_output: 'npm ERR! 401 Unauthorized - Not logged in',
+						exit_code: 1
+					}
+				},
+				{
+					type: 'item.completed',
+					item: {
+						id: 'i2',
+						type: 'agent_message',
+						text: 'Network access is disabled in this sandbox, so I could not run npm install.'
+					}
+				}
+			];
+			const output = lines({ type: 'thread.started', thread_id: 't' }, ...items, {
+				type: 'turn.completed',
+				usage: { input_tokens: 10, output_tokens: 900 }
+			});
+			expect(readModelCliError('codex', output, red(), { outputTokens: 900 })).toBeNull();
+			// The same turn cut short before it reported any tokens: the items alone say the model spoke.
+			const cut = lines({ type: 'thread.started', thread_id: 't' }, ...items);
+			expect(readModelCliError('codex', cut, red('Error: Not logged in'), { outputTokens: null })).toBeNull();
+		});
+	});
+
+	describe('the process`s own words (review N6a)', () => {
+		it('stderr is read after the `init` line too: a refusal printed there used to be lost', () => {
+			// Claude's stream always opens with `system init`, so "no event at
+			// all" was never true for it.
+			const read = readModelCliError('claude-code', lines(INIT), red(ORG_DISABLED), { outputTokens: null });
+			expect(read).toEqual({ text: ORG_DISABLED, apiStatus: null, errorClass: null });
+			expect(verdict(read, null)).toBe('access_denied/org_access_disabled');
+
+			const codex = readModelCliError(
+				'codex',
+				lines({ type: 'thread.started', thread_id: 't' }),
+				red('Error: Not logged in'),
+				{
+					outputTokens: 0
+				}
+			);
+			expect(verdict(codex)).toBe('not_signed_in/not_logged_in');
+		});
+
+		it('stderr and plain stdout are read when the CLI died before its first event', () => {
+			for (const output of [null, '', '   \n']) {
+				expect(readModelCliError('claude-code', output, red(NOT_LOGGED_IN))).toEqual({
+					text: NOT_LOGGED_IN,
+					apiStatus: null,
+					errorClass: null
+				});
+			}
+			// The refusal as plain text on stdout, nothing on stderr.
+			const plain = readModelCliError('claude-code', `${ORG_DISABLED}\n`, red(''), { outputTokens: null });
+			expect(verdict(plain, null)).toBe('access_denied/org_access_disabled');
+			expect(readModelCliError('codex', null, red('Not logged in'))?.text).toBe('Not logged in');
+		});
+
+		it('a run that REPORTED zero output tokens has its stderr read, whatever lines its stream holds', () => {
+			// The model wrote nothing in this run, so nothing in the stream can be
+			// its: an unflagged assistant line here is the CLI's own (an older CLI
+			// that did not mark its synthetic messages), not a reason to ignore the
+			// process's own words.
+			const stream = lines(
+				INIT,
+				assistant('No response requested.', { message: { model: '<synthetic>', content: [] } }),
+				assistant(NOT_LOGGED_IN),
+				{ type: 'result', subtype: 'success', is_error: true, result: '', usage: { output_tokens: 0 } }
+			);
+			const read = readModelCliError('claude-code', stream, red(ORG_DISABLED), { outputTokens: 0 });
+			expect(read?.text).toBe(ORG_DISABLED);
+			expect(verdict(read)).toBe('access_denied/org_access_disabled');
+			// Codex: items in the stream, and a reported zero.
+			const codex = readModelCliError(
+				'codex',
+				lines(
+					{ type: 'thread.started', thread_id: 't' },
+					{ type: 'item.started', item: { type: 'reasoning' } }
+				),
+				red('Error: Not logged in'),
+				{ outputTokens: 0 }
+			);
+			expect(verdict(codex)).toBe('not_signed_in/not_logged_in');
+			// No count reported at all: the stream decides, and these streams say the model spoke.
+			expect(readModelCliError('claude-code', stream, red(ORG_DISABLED), { outputTokens: null })).toBeNull();
+			// A run that succeeded is never read, zero tokens or not.
+			expect(readModelCliError('claude-code', stream, ok, { outputTokens: 0 })).toBeNull();
+		});
+
+		it('plain stdout is NOT read once any event exists', () => {
+			const mixed = `${JSON.stringify(INIT)}\n${NOT_LOGGED_IN}\n`;
+			expect(readModelCliError('claude-code', mixed, red(''), { outputTokens: 0 })).toBeNull();
+		});
+
+		it('neither is read once the model has spoken: by tokens, by its message, or by a tool it called', () => {
+			const stderr = red('Error: Not logged in');
+			expect(readModelCliError('claude-code', lines(INIT), stderr, { outputTokens: 12 })).toBeNull();
+			expect(readModelCliError('claude-code', lines(INIT, assistant('Working on it.')), stderr)).toBeNull();
+			expect(
+				readModelCliError(
+					'claude-code',
+					lines(INIT, { type: 'user', message: { content: [{ type: 'tool_result', content: 'ok' }] } }),
+					stderr
+				)
+			).toBeNull();
+			expect(readModelCliError('claude-code', NOT_LOGGED_IN, red(''), { outputTokens: 3 })).toBeNull();
+		});
+
+		it('neither is read for a process that succeeded, and nothing at all reads as null', () => {
+			expect(readModelCliError('claude-code', null, { status: 'green', logTail: 'Not logged in' })).toBeNull();
+			expect(readModelCliError('claude-code', 'Not logged in', ok)).toBeNull();
+			expect(readModelCliError('claude-code', null, red())).toBeNull();
+			expect(readModelCliError('claude-code', null, ok)).toBeNull();
+		});
+	});
+
+	it('bounds what it reads: eight messages, two thousand characters each', () => {
+		const events = Array.from({ length: 12 }, (_, index) => ({
+			type: 'error',
+			message: `${index}:${'x'.repeat(5000)}`
+		}));
+		const read = readModelCliError('codex', lines(...events), red());
+		const parts = (read?.text ?? '').split('\n');
+		expect(parts).toHaveLength(8);
+		expect(parts.every((part) => part.length === 2000)).toBe(true);
 	});
 });

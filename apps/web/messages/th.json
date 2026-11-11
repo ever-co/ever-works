@@ -2350,9 +2350,9 @@
                     "no-ideas": "Tick ran but generated no Ideas",
                     "failed": "Run now failed",
                     "cron-no-match": "Tick ran (cron skipped)",
-                    "tasks-filed": "บันทึกงานลงใน App Works ของภารกิจแล้ว",
-                    "no-tasks": "ไม่มีอะไรใหม่ให้บันทึกใน App Works ของภารกิจ",
-                    "spawned-and-tasks-filed": "สร้างไอเดียใหม่และบันทึกงานลงใน App Works ของภารกิจแล้ว"
+                    "tasks-filed": "บันทึกงานลงใน App Works หรือ Repository Works ของภารกิจแล้ว",
+                    "no-tasks": "ไม่มีอะไรใหม่ให้บันทึกใน App Works หรือ Repository Works ของภารกิจ",
+                    "spawned-and-tasks-filed": "สร้างไอเดียใหม่และบันทึกงานลงใน App Works หรือ Repository Works ของภารกิจแล้ว"
                 }
             },
             "goals": {
@@ -2388,14 +2388,17 @@
             "output": {
                 "title": "ผลลัพธ์",
                 "ideas": "ไอเดีย",
-                "tasks": "งานใน App Works ที่แนบไว้",
+                "tasks": "งานใน App Works หรือ Repository Works ที่แนบไว้",
                 "both": "ทั้งสองอย่าง",
                 "tasksPerTick": "งานต่อรอบ",
                 "openCap": "จำนวนงานที่เปิดอยู่สูงสุดต่อ Work",
                 "appliesTo": "ใช้กับ Works ที่แนบในฐานะ “ปรับปรุง” หรือ “ดูแล”",
-                "noAppWork": "แนบ App Work ในฐานะ “ปรับปรุง” หรือ “ดูแล” เพื่อบันทึกงานลงไป",
+                "noAppWork": "แนบ App Work หรือ Repository Work ในฐานะ “ปรับปรุง” หรือ “ดูแล” เพื่อบันทึกงานลงไป",
+                "repoIsolationOff": "“Task isolation” ปิดอยู่ใน Repository Work ที่แนบไว้ จึงไม่มีการบันทึกงานลงในนั้น เปิด “Task isolation” ในการตั้งค่าของ Work นั้น",
+                "repoAgentCannotOpenPullRequests": "เอเจนต์ที่จะรันงานใน Repository Work ที่แนบไว้ไม่มีสิทธิ์ commit และเปิด pull request จึงไม่มีการบันทึกงานลงในนั้น เลือกเอเจนต์ที่มีทั้งสองสิทธิ์สำหรับผลลัพธ์งานของภารกิจนี้ หรือให้สิทธิ์เหล่านั้นแก่เอเจนต์ของ Work นั้น",
+                "repoAllowsAgentMerge": "นโยบายการ merge ของ Repository Work ที่แนบไว้อนุญาตให้เอเจนต์ merge pull request ของตัวเองได้ ภารกิจนี้จึงไม่บันทึกงานลงในนั้น ปิดการ merge โดยเอเจนต์สำหรับ Work นั้นเพื่อให้ภารกิจบันทึกงานลงไปได้",
                 "tasksOnWorks": "งานใน Works ที่แนบไว้",
-                "nothingToFile": "ไม่มี App Work ที่แนบไว้สำหรับบันทึกงาน",
+                "nothingToFile": "ไม่มี App Work หรือ Repository Work ที่แนบไว้สำหรับบันทึกงาน",
                 "tasksOnWorksEmpty": "ยังไม่มีงานที่บันทึก",
                 "save": "บันทึก",
                 "saved": "บันทึกผลลัพธ์แล้ว",
@@ -2774,7 +2777,7 @@
         },
         "feed": {
             "narration": {
-                "missionNothingToFile": "<b>{actor}</b> ไม่พบสิ่งใหม่ที่จะบันทึกลงใน App Works ของภารกิจในวันนี้"
+                "missionNothingToFile": "<b>{actor}</b> ไม่พบสิ่งใหม่ที่จะบันทึกลงใน App Works หรือ Repository Works ของภารกิจในวันนี้"
             }
         },
         "works": {
