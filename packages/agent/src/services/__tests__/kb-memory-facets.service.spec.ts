@@ -212,6 +212,58 @@ describe('KnowledgeBaseService — memory facets + retrieval log', () => {
         );
     });
 
+    it('re-applies the status / tag / locked / language chips to documents the semantic leg adds', async () => {
+        const docs = [
+            buildDocument({ id: 'match', tags: ['gdpr'], locked: true, language: 'de' }),
+            buildDocument({
+                id: 'draft',
+                status: KbDocumentStatus.DRAFT,
+                tags: ['gdpr'],
+                locked: true,
+                language: 'de',
+            }),
+            buildDocument({ id: 'untagged', tags: null, locked: true, language: 'de' }),
+            buildDocument({ id: 'unlocked', tags: ['gdpr'], locked: false, language: 'de' }),
+            buildDocument({ id: 'english', tags: ['gdpr'], locked: true, language: 'en' }),
+        ];
+        const byId = new Map(docs.map((d) => [d.id, d]));
+        // The lexical leg (filtered in SQL) found nothing; every hit comes
+        // from the embeddings, which carry no metadata predicate.
+        docRepo.list.mockResolvedValue({ items: [], total: 0 });
+        docRepo.findById.mockImplementation(async (_workId, id) => byId.get(id) ?? null);
+        jest.spyOn(service, 'semanticSearch').mockResolvedValue(
+            docs.map((d) => ({ documentId: d.id })) as never,
+        );
+
+        const result = await service.listDocuments(WORK_ID, USER_ID, {
+            q: 'retention',
+            status: KbDocumentStatus.ACTIVE,
+            tag: 'gdpr',
+            locked: true,
+            language: 'de',
+        });
+
+        expect(result.items.map((d) => d.id)).toEqual(['match']);
+        expect(result.total).toBe(1);
+    });
+
+    it('leaves semantic hits alone when no such chip is set', async () => {
+        const docs = [
+            buildDocument({ id: 'a', status: KbDocumentStatus.DRAFT }),
+            buildDocument({ id: 'b', tags: null, locked: true, language: 'fr' }),
+        ];
+        const byId = new Map(docs.map((d) => [d.id, d]));
+        docRepo.list.mockResolvedValue({ items: [], total: 0 });
+        docRepo.findById.mockImplementation(async (_workId, id) => byId.get(id) ?? null);
+        jest.spyOn(service, 'semanticSearch').mockResolvedValue(
+            docs.map((d) => ({ documentId: d.id })) as never,
+        );
+
+        const result = await service.listDocuments(WORK_ID, USER_ID, { q: 'anything' });
+
+        expect(result.items.map((d) => d.id).sort()).toEqual(['a', 'b']);
+    });
+
     // ─── Retrieval log (M10) ───────────────────────────────────────────
 
     it('records what a context resolution injected, and for which question', async () => {
