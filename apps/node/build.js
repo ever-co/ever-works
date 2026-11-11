@@ -22,7 +22,18 @@
  *   - `@napi-rs/keyring` — the secret store; without it the credential
  *     stays in the owner-locked config file instead of the keychain;
  *   - the PTY prebuild — the `pty-local` terminal host; without it a live
- *     view's terminal channel runs on that plugin's pipe floor.
+ *     view's terminal channel runs on that plugin's pipe floor, and the
+ *     session daemon withdraws `sessions`.
+ *
+ * Optional, not regular, on purpose: the PTY addon's install falls back to
+ * `node-gyp rebuild` on a platform it has no prebuild for, and as a regular
+ * dependency that failure would abort `npm install -g ever-works-node` on
+ * that machine instead of degrading it. The price is that npm skips an
+ * optional dependency without a word (0.2.10 pinned `^0.13.1`, whose
+ * engines stop below Node 25, so every Node 26 machine lost its terminal
+ * silently). The node names the skipped package, its range and the install
+ * command itself instead: the session daemon's reason, the heartbeat the
+ * app shows, and `ever-works-node doctor` (see `pty-host.ts`).
  *
  * Run `pnpm --filter ever-works-node build` first (type-check + the
  * workspace dependencies must be built); `build:bundle` then calls this.

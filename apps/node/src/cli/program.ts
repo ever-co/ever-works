@@ -105,6 +105,7 @@ import { NODE_SOURCE_UPGRADE_HINT } from '../core/worker-loop';
 import { DaemonControlClient } from '../core/sessions/daemon-client';
 import { resolveSessionDaemonPaths } from '../core/sessions/daemon/daemon-paths';
 import { installDaemonProcessHandlers, runSessionDaemon } from '../core/sessions/daemon/daemon-main';
+import { describeTerminalAddon, type TerminalAddonReport } from '../core/sessions/daemon/pty-host';
 import {
 	SELF_UPDATE_EXIT_CODE,
 	SelfUpdateController,
@@ -201,6 +202,12 @@ export interface CliDeps {
 	enrollTokenFileIo?: EnrollTokenFileIo;
 	/** The session daemon's own entry (the hidden subcommand); a seam for the CLI spec. */
 	runSessionDaemon?: typeof runSessionDaemon;
+	/**
+	 * Sessions on computers (FL-04) — `doctor`'s in-process check of the
+	 * terminal addon (the same load the session daemon does), so a missing
+	 * addon is named even when no daemon runs. A seam for the CLI spec.
+	 */
+	terminalAddon?: () => TerminalAddonReport;
 	/**
 	 * Fleet node link (FL-02 T-25) — the running binary's real path, so the
 	 * opt-in self-update can tell an `npm install -g` install (which it
@@ -2048,12 +2055,15 @@ export async function runDoctor(deps: CliDeps, options: DoctorCommandOptions): P
 	const now = (deps.now ?? (() => Date.now()))();
 	// Sessions on computers (FL-04): the session daemon, asked read-only.
 	const sessions = await describeSessionDaemon(deps);
+	// The terminal addon, checked here: npm skips it without a word when it
+	// cannot install it, and the daemon is not always there to say so.
+	const terminal = (deps.terminalAddon ?? describeTerminalAddon)();
 	// Virtual computers (FL-16 P3, T-36): what each system is pinned to here.
 	const virtual = await describeVirtualCatalogue(deps);
 	if (options.json === true) {
 		deps.out(
 			JSON.stringify(
-				{ ...housekeepingJson(report), ...lifecycleJson(deps, lifecycle), sessions, virtual },
+				{ ...housekeepingJson(report), ...lifecycleJson(deps, lifecycle), sessions, terminal, virtual },
 				null,
 				2
 			)
@@ -2073,6 +2083,13 @@ export async function runDoctor(deps: CliDeps, options: DoctorCommandOptions): P
 			sessions.daemon === 'running'
 				? `daemon running, ${sessions.sessions ?? 0} session(s), terminal ${sessions.pty === 'available' ? 'available' : `missing — ${sessions.reason ?? 'unknown'}`}`
 				: `daemon not running — ${sessions.reason ?? 'unknown'}`
+		}`
+	);
+	deps.out(
+		`terminal     ${
+			terminal.available
+				? `${terminal.addon} ${terminal.version ?? '(version unknown)'} loads on Node ${terminal.node}`
+				: (terminal.reason ?? 'missing')
 		}`
 	);
 	if (virtual) {

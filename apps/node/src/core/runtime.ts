@@ -130,6 +130,7 @@ import type { ConnectFn } from './sessions/daemon-client';
 import { SessionDaemonSupervisor } from './sessions/daemon-supervisor';
 import { ensureDaemonToken } from './sessions/daemon-token';
 import type { SessionDaemonPaths } from './sessions/daemon/daemon-paths';
+import { loadNodePty } from './sessions/daemon/pty-host';
 import { NO_HOOK_OVERLAY, type HookOverlayPort } from './sessions/hook-overlay.port';
 import { resolveHookPaths } from './sessions/hook-client';
 import { SessionHookOverlay } from './sessions/hook-overlay';
@@ -1039,6 +1040,10 @@ export function createNodeRuntime(config: NodeConfig, io: NodeIo, options: Creat
 					child.unref();
 				}),
 			...(options.sessionDaemonConnect ? { connect: options.sessionDaemonConnect } : {}),
+			// A daemon started before the terminal addon was installed is retired
+			// once this process can load it (only for the daemon this node spawns
+			// itself; an injected spawn is a test's).
+			...(options.sessionDaemonSpawn ? {} : { terminalAvailableHere: () => loadNodePty().module !== null }),
 			logger: io.logger,
 			...(io.scheduler ? { scheduler: io.scheduler } : {})
 		});

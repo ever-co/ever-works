@@ -125,13 +125,13 @@ describe('collectPluginDependencies', () => {
                 everworks: { plugin: { id: 'pty-local' } },
                 peerDependencies: { '@ever-works/plugin': 'workspace:*' },
                 optionalDependencies: {
-                    '@homebridge/node-pty-prebuilt-multiarch': '^0.13.1',
+                    '@homebridge/node-pty-prebuilt-multiarch': '^0.15.0',
                 },
             }),
         );
 
         const result = collectPluginDependencies();
-        expect(result).toEqual(['@homebridge/node-pty-prebuilt-multiarch@^0.13.1']);
+        expect(result).toEqual(['@homebridge/node-pty-prebuilt-multiarch@^0.15.0']);
     });
 
     it('applies the workspace: / @ever-works filters to optionalDependencies too', () => {

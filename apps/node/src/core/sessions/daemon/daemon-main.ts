@@ -75,6 +75,9 @@ export async function runSessionDaemon(options: RunSessionDaemonOptions): Promis
 	}
 	let ptyFactory = options.ptyFactory;
 	let ptyReason = options.ptyReason;
+	// The real addon is retried while it is missing (an install after the
+	// daemon started); an injected factory is the test's to control.
+	const realPty = ptyFactory === undefined;
 	if (ptyFactory === undefined) {
 		const loaded = createNodePtyFactory();
 		ptyFactory = loaded.factory;
@@ -87,6 +90,17 @@ export async function runSessionDaemon(options: RunSessionDaemonOptions): Promis
 		version: options.version,
 		ptyFactory,
 		...(ptyReason ? { ptyReason } : {}),
+		...(realPty
+			? {
+					reloadPty: () => {
+						const loaded = createNodePtyFactory();
+						return {
+							factory: loaded.factory,
+							...(loaded.availability.reason ? { reason: loaded.availability.reason } : {})
+						};
+					}
+				}
+			: {}),
 		store: new SessionStore(options.stateDir),
 		...(options.idleExitMs !== undefined ? { idleExitMs: options.idleExitMs } : {}),
 		log,
