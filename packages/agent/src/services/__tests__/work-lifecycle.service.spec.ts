@@ -531,6 +531,73 @@ describe('WorkLifecycleService', () => {
         });
     });
 
+    describe('updateWork — owner / organization after generation', () => {
+        const generatedWork = (overrides: Record<string, unknown> = {}) =>
+            ({
+                id: 'dir-1',
+                name: 'Test Work',
+                description: 'Test description',
+                owner: 'member-login',
+                organization: false,
+                readmeConfig: {},
+                gitProvider: 'github',
+                userId: user.id,
+                website: 'https://example.com',
+                websiteTemplateId: 'classic',
+                generateStatus: { status: 'generated' },
+                getRepoOwner: jest.fn().mockReturnValue('member-login'),
+                getWebsiteRepo: jest.fn().mockReturnValue('test-work-website'),
+                ...overrides,
+            }) as any;
+
+        it.each([
+            ['another owner', { owner: 'manager-login' }],
+            ['organization on', { organization: true, owner: 'acme' }],
+        ])('refuses %s on a generated Work', async (_label, dto) => {
+            const work = generatedWork();
+            ownershipService.ensureCanEdit.mockResolvedValue({ work });
+
+            await expect(service.updateWork(work.id, dto as any, user)).rejects.toThrow(
+                'cannot be changed after it has generated',
+            );
+            expect(workRepository.update).not.toHaveBeenCalled();
+        });
+
+        it('accepts the stored owner sent back with a rename', async () => {
+            const work = generatedWork();
+            ownershipService.ensureCanEdit.mockResolvedValue({ work });
+            workRepository.update.mockResolvedValueOnce({ ...work, name: 'Renamed' });
+
+            await service.updateWork(
+                work.id,
+                { name: 'Renamed', owner: 'member-login', organization: false } as any,
+                user,
+            );
+
+            expect(workRepository.update).toHaveBeenCalledWith(
+                work.id,
+                expect.objectContaining({
+                    name: 'Renamed',
+                    owner: 'member-login',
+                    organization: false,
+                }),
+            );
+        });
+
+        it('still lets a Work that has not generated choose its owner', async () => {
+            const work = generatedWork({ generateStatus: null });
+            ownershipService.ensureCanEdit.mockResolvedValue({ work });
+            workRepository.update.mockResolvedValueOnce({ ...work, owner: 'acme' });
+
+            await service.updateWork(work.id, { owner: 'acme', organization: true } as any, user);
+
+            expect(workRepository.update).toHaveBeenCalledWith(
+                work.id,
+                expect.objectContaining({ owner: 'acme', organization: true }),
+            );
+        });
+    });
+
     it('rejects website template changes after website repository initialization', async () => {
         const work = {
             id: 'dir-1',

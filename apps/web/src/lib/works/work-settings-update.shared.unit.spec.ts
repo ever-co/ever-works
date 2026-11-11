@@ -118,6 +118,38 @@ describe('ownershipForSettingsSave', () => {
         ).toEqual({ organization: false, owner: 'manager-login' });
     });
 
+    it('leaves the owner out when another user saves the form unchanged before generation', () => {
+        // The General form always sends both fields. Before: `organization:
+        // false` re-derived the owner as the SAVER's login (manager-login).
+        expect(
+            ownershipForSettingsSave(
+                {
+                    kind: 'directory',
+                    generateStatus: null,
+                    owner: 'member-login',
+                    organization: false,
+                },
+                manager,
+                { owner: 'member-login', organization: false },
+            ),
+        ).toBeNull();
+    });
+
+    it('re-derives before generation when the user changed the ownership fields', () => {
+        expect(
+            ownershipForSettingsSave(
+                {
+                    kind: 'directory',
+                    generateStatus: null,
+                    owner: 'member-login',
+                    organization: false,
+                },
+                manager,
+                { owner: 'acme', organization: true },
+            ),
+        ).toEqual({ organization: true, owner: 'acme' });
+    });
+
     it("leaves a Repository Work's owner out — the API refuses any change to it", () => {
         expect(
             ownershipForSettingsSave({ kind: 'repo', generateStatus: null }, manager, {

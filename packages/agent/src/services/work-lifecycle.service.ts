@@ -1616,6 +1616,29 @@ export class WorkLifecycleService {
             });
         }
 
+        // Once a Work has generated, its repositories exist under `owner` (an
+        // organization when `organization` is set): every later read, push and
+        // sync resolves them there. Changing either field then points the Work
+        // at repositories that do not exist; the settings form already locks
+        // both fields after generation, so only a direct API call reached this.
+        // Sending the stored values back is still accepted.
+        if (work.generateStatus !== null && work.generateStatus !== undefined) {
+            const ownerChanged =
+                updateDto.owner !== undefined &&
+                (updateDto.owner ?? '').trim() !== (work.owner ?? '').trim();
+            const organizationChanged =
+                updateDto.organization !== undefined &&
+                Boolean(updateDto.organization) !== Boolean(work.organization);
+            if (ownerChanged || organizationChanged) {
+                throw new BadRequestException({
+                    status: 'error',
+                    message:
+                        'The owner of a Work’s repositories cannot be changed after it has generated: ' +
+                        'its repositories already exist under the current owner.',
+                });
+            }
+        }
+
         try {
             // Build update data object
             const updateData: Record<string, any> = {
