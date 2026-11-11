@@ -147,6 +147,46 @@ describe('composeTaskPullRequestText', () => {
             ).toBe(true);
         });
 
+        // Review of #3145, round 3 — the composer is the last step before the
+        // provider, so it redacts on its own (defence in depth: the fleet
+        // reconciler already did) and decodes escapes before matching.
+        it('posts no credential the summary carries, in the title or the body', () => {
+            const GH = `ghp_${'A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8'}`;
+            const ANTHROPIC = `sk-ant-api03-${'x'.repeat(90)}`;
+            const summary = `Fixed the deploy script.\n\nI tested with GITHUB_TOKEN=${GH} and ANTHROPIC_API_KEY=${ANTHROPIC}.\n\nPR-TITLE: fix: deploy script uses ${GH}`;
+            const text = composeTaskPullRequestText({ task: { slug: 'T-1', title: 'x' }, summary });
+            for (const secret of [GH, ANTHROPIC]) {
+                expect(text.title).not.toContain(secret);
+                expect(text.body).not.toContain(secret);
+            }
+            expect(text.title).toBe('fix: deploy script uses [redacted secret] [T-1]');
+            expect(text.body).toContain('GITHUB_TOKEN=[redacted secret]');
+        });
+
+        it('breaks backslash-escaped references in the body and the title', () => {
+            const text = composeTaskPullRequestText({
+                task: { slug: 'T-1', title: 'x' },
+                summary:
+                    'Fixes GH\\-12 and [the bug](https://github.com/other-org/repo/issues\\/7).\n\nPR-TITLE: fix: GH\\-12',
+            });
+            expect(text.body).toContain('GH\\-​12');
+            expect(text.body).toContain('issues\\/​7');
+            expect(text.body).toContain('https:​//github.com/other-org');
+            expect(text.title).toBe('fix: GH 12 [T-1]');
+        });
+
+        it('keeps only the primary pull request link live in a mounted repository', () => {
+            const primary = 'https://github.com/o/r/pull/5';
+            const text = composeTaskPullRequestText({
+                task: { slug: 'T-1', title: 'Do x' },
+                summary: `See ${primary} and https://github.com/o/r/pull/6`,
+                mount: { repositoryId: 'o/r2', primaryPrUrl: primary },
+            });
+            expect(text.body).toContain(`See ${primary} and`);
+            expect(text.body).not.toContain('https://github.com/o/r/pull/6');
+            expect(text.body).toContain('https:​//github.com/o/r/pull/​6');
+        });
+
         it('caps the summary and keeps the footer whole', () => {
             const text = composeTaskPullRequestText({
                 task,

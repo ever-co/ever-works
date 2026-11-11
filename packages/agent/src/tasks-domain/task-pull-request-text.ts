@@ -1,6 +1,8 @@
 import {
+    boundRunPullRequestSummary,
     composeRunPullRequestTitle,
     parseRunPullRequestTitle,
+    redactRunSummarySecrets,
     sanitizeRunPullRequestBody,
 } from '@ever-works/contracts';
 import type { Task } from '../entities/task.entity';
@@ -13,9 +15,10 @@ import type { Task } from '../entities/task.entity';
  * change there is — what was wrong, what changed, how it was verified, what
  * could not be run — so it becomes the body, and its `PR-TITLE:` line the
  * title. It is MODEL-AUTHORED text posted under the owner's identity, so it
- * goes through the contracts' sanitizer (`sanitizeRunPullRequestBody`:
+ * goes through the contracts' rules: credentials redacted
+ * (`redactRunSummarySecrets`), then the sanitizer (`sanitizeRunPullRequestBody`:
  * mentions, closing keywords, cross-references, HTML, images and script
- * links neutralised; code kept; capped) and only ever arrives as the run's
+ * links neutralised; code kept; capped). It only ever arrives as the run's
  * `summary` — never the node's log tail, never its environment.
  *
  * Without a summary (a cloud run, an older node, a run that wrote none) the
@@ -49,7 +52,15 @@ export const TASK_PULL_REQUEST_MERGE_POLICY_SENTENCE =
 
 export function composeTaskPullRequestText(input: TaskPullRequestTextInput): TaskPullRequestText {
     const { task, mount } = input;
-    const summary = typeof input.summary === 'string' ? input.summary : '';
+    // Defence in depth (review of #3145, B1): the fleet reconciler already
+    // bounds and redacts the summary before it gets here, but any other caller
+    // (the cloud finalize, a future one) gets the same guarantee. Bounded
+    // first, so the redaction never runs over more than the head and the
+    // `PR-TITLE:` line; credentials out before the title or body is built.
+    const summary =
+        typeof input.summary === 'string' && input.summary
+            ? redactRunSummarySecrets(boundRunPullRequestSummary(input.summary))
+            : '';
     const runTitle = summary ? composeRunPullRequestTitle({ summary, slug: task.slug }) : null;
     // The PR-TITLE line is the title, not part of the description; the rest
     // of the summary is. Allowed links: the primary pull request, which the

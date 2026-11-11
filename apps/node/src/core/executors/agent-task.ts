@@ -34,6 +34,8 @@ import {
 	FLEET_RUN_SECRETS_UNAVAILABLE_REASON,
 	FLEET_RUN_SECRETS_UNRESOLVED_REASON,
 	applyRunPullRequestTitleToCommitMessage,
+	boundRunPullRequestSummary,
+	redactRunSummarySecrets,
 	detectFleetModelUsageLimit,
 	FLEET_JOB_FAILURE_KIND_MODEL_USAGE_LIMIT,
 	FleetAgentExecutionError,
@@ -2317,7 +2319,16 @@ export function agentTaskCommitMessage(
 		typeof payload.git?.commitMessage === 'string' && payload.git.commitMessage.trim()
 			? payload.git.commitMessage.trim()
 			: defaultAgentTaskCommitMessage(taskId);
-	return applyRunPullRequestTitleToCommitMessage(planned, runSummary);
+	// The platform's own redaction (the shared `redactSecrets` plus credentials
+	// in URLs, `Authorization` values and credential-named values), applied
+	// here before the `PR-TITLE:` line becomes a commit subject: the run-secret
+	// scrub only knows the values this node declared, and a model can print a
+	// token it read anywhere (review of #3145). Bounded first.
+	const summary =
+		typeof runSummary === 'string' && runSummary
+			? redactRunSummarySecrets(boundRunPullRequestSummary(runSummary))
+			: null;
+	return applyRunPullRequestTitleToCommitMessage(planned, summary);
 }
 
 async function finalizeWorkspace(

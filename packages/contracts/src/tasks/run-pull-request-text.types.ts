@@ -21,6 +21,9 @@
  *
  * What the body sanitizer does, in order:
  *
+ *  0. The input is BOUNDED, then CREDENTIALS are redacted
+ *     ({@link redactRunSummarySecrets}: the platform's shared secret patterns,
+ *     credentials in URLs, `Authorization` values, credential-named values).
  *  1. FENCED CODE BLOCKS are found with CommonMark's own rules and written back
  *     in a canonical form: a fence at column 0, longer than any backtick run
  *     inside it, always closed, with blank lines around it. Their content is
@@ -36,22 +39,29 @@
  *  3. Everything else is PROSE and is neutralised without looking at context:
  *     invisible format characters removed, character references shown as
  *     written, HTML comments and tags removed and any other tag opener escaped,
- *     images reduced to their alternative text, every `@` and every `#<digit>`
+ *     images reduced to their alternative text, a line that is only an
+ *     attachment URL the provider would embed shown as code. Then, MATCHED ON
+ *     THE TEXT WITH MARKDOWN ESCAPES DECODED (what a renderer reads) and
+ *     applied to the text: every `@`, every `#<digit>` and `GH-<digit>`
  *     followed by a zero-width space, issue / pull request / discussion links
  *     to the provider broken unless they are the Task's own pull request,
  *     script-like link schemes broken.
  *  4. The whole result is capped, with code blocks cut at a line and closed,
- *     and CI-skip directives are neutralised everywhere (a squash merge can
- *     copy a description into a commit message, where they are read as text).
+ *     and, everywhere (a squash merge can copy a description into a commit
+ *     message, where code is plain text): CI-skip directives neutralised,
+ *     `BREAKING CHANGE` notes broken, and the reference after a closing
+ *     keyword (`fixes #12`) broken.
  *
  * Known limits, stated rather than hidden: the provider rules target GitHub
  * (`#12`, `GH-12`, `github.com/…/issues|pull|discussions/…`); a mention or a
- * closing keyword INSIDE code is left as written, because a renderer does not
- * act on code — a repository that squash-merges with the description as the
- * commit message reads that code as plain text.
+ * bare reference INSIDE code is left as written, because a renderer does not
+ * act on code (a closing keyword's reference is broken there too, see 4).
+ * Shell metacharacters in a title are kept: a title is text, and a tool that
+ * pastes it into a shell unquoted is broken for any title.
  */
 
 import { composeFleetTaskCommitMessage, neutralizeCiSkipDirectives } from '../fleet/fleet-commit-message.types.js';
+import { redactSecrets } from '../secret/secret-patterns.js';
 
 /** The marker a run's final message ends with to name its pull request. */
 export const RUN_PULL_REQUEST_TITLE_MARKER = 'PR-TITLE:';
@@ -161,12 +171,201 @@ export function composeRunPullRequestTitle(input: {
 	summary: string | null | undefined;
 	slug?: string | null;
 }): string | null {
-	const { title } = parseRunPullRequestTitle(input.summary);
+	const subject = runTitleSubject(input.summary);
+	if (!subject) return null;
+	const slug = typeof input.slug === 'string' ? input.slug.trim() : '';
+	return RUN_PULL_REQUEST_SLUG.test(slug) ? `${subject} [${slug}]` : subject;
+}
+
+/**
+ * The conventional subject a run's `PR-TITLE:` line names, or `null`. An agent
+ * never declares a breaking change on its own: a `!` it wrote after the type
+ * (`feat!:`, `fix(api)!:`) is dropped, because release tooling reads it as a
+ * major version bump.
+ */
+function runTitleSubject(summary: string | null | undefined): string | null {
+	const { title } = parseRunPullRequestTitle(summary);
 	if (!title) return null;
 	const subject = composeFleetTaskCommitMessage({ title, slug: null });
 	if (!subject || subject.includes('\n')) return null;
-	const slug = typeof input.slug === 'string' ? input.slug.trim() : '';
-	return RUN_PULL_REQUEST_SLUG.test(slug) ? `${subject} [${slug}]` : subject;
+	return subject.replace(BREAKING_CHANGE_BANG, '$1:');
+}
+
+/** `feat!:` / `fix(api)!:` — the conventional-commit breaking-change marker. */
+const BREAKING_CHANGE_BANG = /^([a-z]+(?:\([^)\n]{1,40}\))?)!:/;
+
+/**
+ * The longest run summary any pull-request rule reads. Past it, only the head
+ * (what a body can show) and the LAST line (where `PR-TITLE:` is) are kept,
+ * so secret redaction and the private-text guard never run over the 256 KiB a
+ * node may report.
+ */
+export const RUN_PULL_REQUEST_SUMMARY_MAX_INPUT_LENGTH = 32_000;
+
+/**
+ * A run summary bounded for the pull-request rules: unchanged up to
+ * {@link RUN_PULL_REQUEST_SUMMARY_MAX_INPUT_LENGTH}; longer, its head (as much
+ * as the body sanitizer ever reads) and its last line. Linear: one slice at
+ * each end, no pattern over the whole text.
+ */
+export function boundRunPullRequestSummary(summary: string | null | undefined): string {
+	if (typeof summary !== 'string') return '';
+	if (summary.length <= RUN_PULL_REQUEST_SUMMARY_MAX_INPUT_LENGTH) return summary;
+	const trimmed = summary.trimEnd();
+	const windowStart = Math.max(0, trimmed.length - TITLE_SCAN_WINDOW);
+	const window = trimmed.slice(windowStart).replace(OTHER_LINE_BREAKS, '\n');
+	const lineBreak = window.lastIndexOf('\n');
+	const lastLine = lineBreak === -1 ? '' : window.slice(lineBreak + 1);
+	const head = sliceCodePoints(summary, RUN_PULL_REQUEST_BODY_MAX_LENGTH * 4);
+	return lastLine ? `${head}\n\n${lastLine}` : head;
+}
+
+/** `\X` where X is ASCII punctuation: what CommonMark reads as the literal X. */
+const MARKDOWN_ESCAPE = /\\([!-/:-@[-`{-~])/g;
+/** `scheme://userinfo@` — credentials written into a URL. Bounded on both sides. */
+const URL_USERINFO = /\b([a-z][a-z0-9+.-]{1,15}:\/\/)([^\s/?#@]{1,256})@/gi;
+/** An `Authorization` header or setting with its value. */
+const AUTHORIZATION_VALUE =
+	/\b(authorization[ \t]*[:=][ \t]*["']?(?:(?:basic|bearer|token|digest)[ \t]+)?)[A-Za-z0-9._~+/=-]{8,}/gi;
+/** `NAME=value` / `name: value`, the name bounded so a long word costs nothing. */
+const NAMED_VALUE = /\b([A-Za-z][A-Za-z0-9_.-]{0,63})([ \t]*[:=][ \t]*["']?)([^\s"'`]{8,})/g;
+/** Names whose value is a credential: `GITHUB_TOKEN`, `aws_secret_access_key`, `db.password` … */
+const SECRET_NAME = /(?:token|secret|passw(?:or)?d|pwd|api[_-]?key|access[_-]?key|private[_-]?key|credentials?)$/i;
+
+/**
+ * Credentials taken out of a run summary before any of it is posted to the
+ * provider (pull request title, body, commit subject) or read back into a
+ * prompt. A summary is model-authored, and a model that ran with a token in
+ * its environment can print it ("tested with `GITHUB_TOKEN=ghp_…`").
+ *
+ *  - every shape the platform's shared scanner knows (`redactSecrets`: GitHub,
+ *    GitLab, Slack, npm, Hugging Face, Google, Stripe, AWS access-key ids,
+ *    `sk-…` (OpenAI, Anthropic), `Bearer …`, JWTs, PEM private keys);
+ *  - the same shapes split by Markdown escapes (`ghp\_…` renders as `ghp_…`);
+ *  - credentials in a URL (`https://user:pass@host`, `https://<token>@host`);
+ *  - an `Authorization` value of any scheme (`Basic …` included);
+ *  - the value of anything NAMED like a credential (`AWS_SECRET_ACCESS_KEY=…`,
+ *    `password: …`) when it looks like one: at least 8 characters, with a
+ *    digit or at least 20 long, so `token: string` and `api_key: process.env.X`
+ *    stay readable.
+ *
+ * Callers bound the input first ({@link boundRunPullRequestSummary}); every
+ * pattern here is linear on it.
+ */
+export function redactRunSummarySecrets(text: string | null | undefined): string {
+	if (typeof text !== 'string' || !text) return '';
+	let out = redactSecrets(text).cleaned;
+	// A secret split by Markdown escapes is the secret once rendered. Only when
+	// the decoded copy reveals one is it used: the escapes are lost then, which
+	// is acceptable for text that was hiding a credential behind them.
+	const decoded = out.replace(MARKDOWN_ESCAPE, '$1');
+	if (decoded !== out) {
+		const again = redactSecrets(decoded);
+		if (again.redactions > 0) out = again.cleaned;
+	}
+	out = out.replace(URL_USERINFO, (match, scheme: string, userinfo: string) =>
+		userinfo.includes(':') || userinfo.length >= 16 ? `${scheme}[redacted secret]@` : match
+	);
+	out = out.replace(AUTHORIZATION_VALUE, '$1[redacted secret]');
+	out = out.replace(NAMED_VALUE, (match, name: string, separator: string, value: string) =>
+		SECRET_NAME.test(name) && !value.startsWith('[redacted') && (/\d/.test(value) || value.length >= 20)
+			? `${name}${separator}[redacted secret]`
+			: match
+	);
+	return out;
+}
+
+/** Fewest consecutive words of private planning text that count as a quote. */
+export const RUN_SUMMARY_PRIVATE_QUOTE_MIN_WORDS = 8;
+const QUOTE_WORD = /[\p{L}\p{N}]+/gu;
+/** How much of one private source is read, and how many word runs are kept. */
+const PRIVATE_SOURCE_MAX_CHARS = 20_000;
+const PRIVATE_RUNS_MAX = 100_000;
+
+/**
+ * A run summary without the sentences that quote private planning text.
+ *
+ * A fleet run is told WHY its Task exists (`# RUN CONTEXT`: the Mission and
+ * Goal descriptions and the Goal's Definition of Done, written by the members
+ * of an organisation), and its summary becomes a pull request description,
+ * which is often public. The prompt asks the model not to quote that context;
+ * this is the mechanical half: any sentence (or, for a quote that crosses a
+ * sentence or a line, every sentence it touches) containing a run of
+ * {@link RUN_SUMMARY_PRIVATE_QUOTE_MIN_WORDS} or more consecutive words of any
+ * source, compared case-insensitively on letters and digits only, is dropped.
+ * A line left empty is dropped with its line break. Bounded: each source is
+ * read up to 20,000 characters; callers bound the summary.
+ */
+export function dropQuotedPrivateText(
+	summary: string | null | undefined,
+	privateTexts: ReadonlyArray<string | null | undefined> | null | undefined,
+	options: { minWords?: number } = {}
+): { text: string; dropped: number } {
+	if (typeof summary !== 'string' || !summary) return { text: '', dropped: 0 };
+	const size = clampInt(options.minWords, 4, 64, RUN_SUMMARY_PRIVATE_QUOTE_MIN_WORDS);
+	const runs = new Set<string>();
+	for (const source of privateTexts ?? []) {
+		if (typeof source !== 'string' || !source) continue;
+		const words = sliceCodePoints(source, PRIVATE_SOURCE_MAX_CHARS).toLowerCase().match(QUOTE_WORD) ?? [];
+		for (let index = 0; index + size <= words.length && runs.size < PRIVATE_RUNS_MAX; index += 1) {
+			runs.add(words.slice(index, index + size).join(' '));
+		}
+	}
+	if (runs.size === 0) return { text: summary, dropped: 0 };
+
+	const text = summary.replace(OTHER_LINE_BREAKS, '\n');
+	const words: Array<{ word: string; start: number; end: number }> = [];
+	for (const match of text.matchAll(QUOTE_WORD)) {
+		words.push({ word: match[0].toLowerCase(), start: match.index!, end: match.index! + match[0].length });
+	}
+	const quoted: Array<[number, number]> = [];
+	for (let index = 0; index + size <= words.length; index += 1) {
+		const key = words
+			.slice(index, index + size)
+			.map((entry) => entry.word)
+			.join(' ');
+		if (runs.has(key)) quoted.push([words[index]!.start, words[index + size - 1]!.end]);
+	}
+	if (quoted.length === 0) return { text: summary, dropped: 0 };
+
+	// Sentences and lines, in order; a segment keeps its trailing separator.
+	const segments: Array<{ start: number; end: number; drop: boolean }> = [];
+	let segmentStart = 0;
+	for (let index = 0; index < text.length; index += 1) {
+		const char = text[index]!;
+		if (char === '\n') {
+			segments.push({ start: segmentStart, end: index + 1, drop: false });
+			segmentStart = index + 1;
+		} else if ((char === '.' || char === '!' || char === '?') && /[ \t]/.test(text[index + 1] ?? '')) {
+			let end = index + 1;
+			while (end < text.length && (text[end] === ' ' || text[end] === '\t')) end += 1;
+			segments.push({ start: segmentStart, end, drop: false });
+			segmentStart = end;
+			index = end - 1;
+		}
+	}
+	if (segmentStart < text.length) segments.push({ start: segmentStart, end: text.length, drop: false });
+
+	// Both lists are ordered (quotes span the same number of words), so one forward pass marks them.
+	let first = 0;
+	for (const [start, end] of quoted) {
+		while (first < segments.length && segments[first]!.end <= start) first += 1;
+		for (let index = first; index < segments.length && segments[index]!.start < end; index += 1) {
+			segments[index]!.drop = true;
+		}
+	}
+	let out = '';
+	let dropped = 0;
+	for (const segment of segments) {
+		if (!segment.drop) {
+			out += text.slice(segment.start, segment.end);
+			continue;
+		}
+		dropped += 1;
+		// Keep the line break of a line that still has something on it.
+		if (text[segment.end - 1] === '\n' && out !== '' && !out.endsWith('\n')) out = `${out.trimEnd()}\n`;
+	}
+	return { text: out, dropped };
 }
 
 /**
@@ -215,8 +414,11 @@ export function summarizeRunChangeInOneLine(summary: string | null | undefined, 
 	let fallback: string | null = null;
 	for (const raw of lines) {
 		const line = raw.trim();
+		// Too short to ever be a usable line (cleaning never adds text but a
+		// redaction placeholder, and a credential is longer than this).
+		if (line.length < 3) continue;
 		// A rule, a fence or a heading names a section; it does not say what changed.
-		if (!line || /^(?:[-=*_~`]{3,}|#{1,6}(?:\s|$))/.test(line)) continue;
+		if (/^(?:[-=*_~`]{3,}|#{1,6}(?:\s|$))/.test(line)) continue;
 		const text = sliceCodePoints(line.replace(/^(?:[-*+]|\d{1,3}[.)])[ \t]+/, ''), 400);
 		const sentence = /^(.{1,400}?[.!?])(?:\s|$)/.exec(text);
 		const cleaned = cleanTitleText(sentence ? sentence[1]! : text);
@@ -257,11 +459,14 @@ export function sanitizeRunPullRequestBody(
 	}
 	// Bounded before any pattern runs: nothing past this can survive the cap,
 	// and one very long line must not become the cost of the whole pass.
-	const bounded = sliceCodePoints(summary, maxLength * 4)
-		.replace(OTHER_LINE_BREAKS, '\n')
-		.replace(CONTROL_CHARACTERS, '')
-		.replace(BIDI_CONTROLS, '')
-		.replace(LONE_SURROGATES, '');
+	// Credentials go first, before anything else could split or hide one.
+	const bounded = redactRunSummarySecrets(
+		sliceCodePoints(summary, maxLength * 4)
+			.replace(OTHER_LINE_BREAKS, '\n')
+			.replace(CONTROL_CHARACTERS, '')
+			.replace(BIDI_CONTROLS, '')
+			.replace(LONE_SURROGATES, '')
+	);
 	// Sanitized only until the result is certainly past the cap: what follows
 	// would be cut by `fitBlocks` anyway. Counted in UTF-16 units, so the stop
 	// is past `2 * maxLength` units, which is past `maxLength` characters, and
@@ -272,15 +477,56 @@ export function sanitizeRunPullRequestBody(
 	for (const block of splitFencedBlocks(bounded)) {
 		if (produced > budget) break;
 		if (block.kind === 'code') {
-			blocks.push(block);
-			for (const line of block.lines) produced += line.length + 1;
+			const lines = block.lines.map(neutralizeForCommitMessage);
+			blocks.push({ ...block, lines });
+			for (const line of lines) produced += line.length + 1;
 			continue;
 		}
-		const text = sanitizeProse(block.text, allowed, budget - produced);
+		const text = neutralizeForCommitMessage(sanitizeProse(block.text, allowed, budget - produced));
 		blocks.push({ kind: 'prose', text });
 		produced += text.length + 2;
 	}
+	// CI-skip directives last, over everything: that rule never lengthens the
+	// text, so it cannot push the result past the cap `fitBlocks` applied.
 	return neutralizeCiSkipDirectives(fitBlocks(blocks, maxLength)).trim();
+}
+
+/**
+ * The rules that hold in CODE too, applied per block BEFORE the cap (they add
+ * zero-width spaces): a squash merge can copy the description into the commit
+ * message, where code is plain text that the provider's closing keywords and
+ * release tooling read. Both rules are line-local.
+ */
+function neutralizeForCommitMessage(text: string): string {
+	return neutralizeClosingKeywordReferences(neutralizeBreakingChangeNotes(text));
+}
+
+/** `BREAKING CHANGE:` / `BREAKING-CHANGE:` — the footer that makes release tooling cut a major version. */
+const BREAKING_CHANGE_NOTE = /\bBREAKING(?=[ \t_-]{1,4}CHANGES?\b)/gi;
+
+/**
+ * An agent never declares a breaking change on its own: the word `BREAKING`
+ * before `CHANGE` gets a zero-width space, so no conventional-commit parser
+ * reads a `BREAKING CHANGE` note from text a squash merge copied. A reader
+ * sees the same words.
+ */
+function neutralizeBreakingChangeNotes(text: string): string {
+	return text.replace(BREAKING_CHANGE_NOTE, (word) => `${word}${ZWSP}`);
+}
+
+/**
+ * A closing keyword and the reference right after it (`fixes #12`,
+ * `Closes: owner/repo#3`, `resolves GH-4`, `fixed https://github.com/o/r/issues/5`):
+ * the provider closes that issue when a commit carrying the text lands. In
+ * prose every reference is already broken; this reaches the ones in CODE,
+ * which a squash merge turns into plain commit-message text. Every quantifier
+ * is bounded, so the scan is linear.
+ */
+const CLOSING_KEYWORD_REFERENCE =
+	/\b(close[sd]?|fix(?:e[sd])?|resolve[sd]?)([ \t]{0,8}:?[ \t]{0,8})((?:[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100})?[#＃]|GH-|(?:https?:\/\/)?(?:www\.)?github\.com\/[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}\/(?:issues|pulls?)\/)(?=[0-9])/gi;
+
+function neutralizeClosingKeywordReferences(text: string): string {
+	return text.replace(CLOSING_KEYWORD_REFERENCE, `$1$2$3${ZWSP}`);
 }
 
 /**
@@ -291,10 +537,10 @@ export function sanitizeRunPullRequestBody(
  */
 export function applyRunPullRequestTitleToCommitMessage(message: string, summary: string | null | undefined): string {
 	if (typeof message !== 'string' || !message) return message;
-	const { title } = parseRunPullRequestTitle(summary);
-	if (!title) return message;
-	const subject = composeFleetTaskCommitMessage({ title, slug: null });
-	if (!subject || subject.includes('\n')) return message;
+	// The same title the pull request gets: credentials redacted, breaking-change
+	// marker dropped, nothing a provider or CI acts on.
+	const subject = runTitleSubject(boundRunPullRequestSummary(summary));
+	if (!subject) return message;
 	const newline = message.indexOf('\n');
 	return newline === -1 ? subject : `${subject}${message.slice(newline)}`;
 }
@@ -326,9 +572,31 @@ function stripHtmlTags(text: string): string {
 const MARKDOWN_IMAGE = /!\[([^\]\n]{0,300})\]\([^()\n]{0,2000}(?:\([^()\n]{0,500}\)[^()\n]{0,500})?\)/g;
 const MARKDOWN_LINK = /\[([^\]\n]{0,300})\]\([^()\n]{0,2000}(?:\([^()\n]{0,500}\)[^()\n]{0,500})?\)/g;
 
+/**
+ * Chat-template control markers some models treat as turn delimiters
+ * (`<|im_start|>`, `[INST]`, `<<SYS>>`). A one-line summary is read back into
+ * the NEXT run's prompt (`# WORK IN FLIGHT`), so it carries none.
+ */
+const CHAT_TEMPLATE_MARKER = /\[\/?INST\]|<<\/?SYS>>|<\|[^|<>\n]{0,40}\|>/gi;
+
+function stripChatTemplateMarkers(text: string): string {
+	let current = text;
+	for (let pass = 0; pass < 8; pass += 1) {
+		const next = current.replace(CHAT_TEMPLATE_MARKER, '');
+		if (next === current) break;
+		current = next;
+	}
+	// Still nested after eight passes: no opener or closer is left whole.
+	return current.replace(/<\||\|>/g, '').replace(/\[\/?INST\]/gi, '');
+}
+
 /** Plain single-line text, with everything a title or a commit subject would act on removed. */
 function cleanTitleText(value: string): string {
 	let text = value.replace(ALL_CONTROL_CHARACTERS, ' ').replace(FORMAT_CHARACTERS, '').replace(LONE_SURROGATES, '');
+	// A title is plain text: `GH\-12` and `issues\/12` mean `GH-12` and
+	// `issues/12`, so the rules below see what a reader sees.
+	text = text.replace(MARKDOWN_ESCAPE, '$1');
+	text = redactRunSummarySecrets(stripChatTemplateMarkers(text));
 	text = stripHtmlTags(stripHtmlComments(text));
 	text = text.replace(MARKDOWN_IMAGE, '$1').replace(MARKDOWN_LINK, '$1');
 	text = stripEmphasis(text.replace(/`+/g, ''));
@@ -453,13 +721,22 @@ const SCRIPT_SCHEME = /\b(javascript|vbscript|data|file|blob)([ \t]*):/gi;
 const PROVIDER_REFERENCE_PATH =
 	/((https?:\/\/)?(?:www\.)?(github\.com\/[A-Za-z0-9][A-Za-z0-9._-]{0,99}\/[A-Za-z0-9._-]{1,100}))?\/(issues|pull|pulls|discussions)\/([0-9]{1,10})/gi;
 
+/**
+ * A line that is only a provider attachment URL (`github.com/user-attachments/…`,
+ * `user-images.githubusercontent.com/…`), optionally as a list item or a quote:
+ * the provider EMBEDS it (an image or a video player), so it is shown as code.
+ */
+const ATTACHMENT_LINE =
+	/^([ \t]{0,3}(?:[-*+>][ \t]{1,4})?)<?((?:https?:\/\/)?(?:github\.com\/user-attachments\/|(?:private-)?user-images\.githubusercontent\.com\/)[^\s<>`]{1,2000})>?[ \t]*$/i;
+
 /** Line by line, stopping once more than `budget` UTF-16 units have been written. */
 function sanitizeProse(text: string, allowed: ReadonlySet<string>, budget: number): string {
 	const out: string[] = [];
 	let written = 0;
 	for (const line of text.split('\n')) {
 		if (written > budget) break;
-		const sanitized = sanitizeProseLine(line, allowed);
+		const attachment = ATTACHMENT_LINE.exec(line);
+		const sanitized = attachment ? `${attachment[1]}\`${attachment[2]}\`` : sanitizeProseLine(line, allowed);
 		out.push(sanitized);
 		written += sanitized.length + 1;
 	}
@@ -609,30 +886,82 @@ function sanitizeProseText(value: string, allowed: ReadonlySet<string>): string 
 	// opener is escaped, so it is shown as text and can be neither.
 	text = text.replace(/<(?=[A-Za-z/!?])/g, '&lt;');
 	text = text.replace(MARKDOWN_IMAGE, '$1').replace(/!\[/g, '[');
-	text = text.replace(SCRIPT_SCHEME, `$1$2${ZWSP}:`);
-	text = text.replace(
-		PROVIDER_REFERENCE_PATH,
-		(
-			match,
-			prefix: string | undefined,
-			scheme: string | undefined,
-			repository: string | undefined,
-			kind: string,
-			number: string
-		) => {
-			if (repository && allowed.has(`${repository}/${kind}/${number}`.toLowerCase())) return match;
-			// The scheme is broken too, so what is left is plain text and not a
-			// link to an address that no longer exists.
-			const head = prefix && scheme ? `${scheme.replace('://', `:${ZWSP}//`)}${prefix.slice(scheme.length)}` : '';
-			return `${head || prefix || ''}/${kind}/${ZWSP}${number}`;
+	return neutralizeOnDecodedView(text, allowed);
+}
+
+/**
+ * The text as a CommonMark renderer reads it: a backslash before ASCII
+ * punctuation is dropped (`GH\-12` is `GH-12`, `issues\/12` is `issues/12`,
+ * `javascript\:` is `javascript:` in a link destination). `start[i]` is where
+ * decoded character `i` begins in `text` — its backslash when it was escaped —
+ * and `start[decoded.length]` is `text.length`. One pass, linear.
+ */
+function decodeMarkdownEscapes(text: string): { decoded: string; start: number[] } {
+	const start: number[] = [];
+	let decoded = '';
+	for (let index = 0; index < text.length; ) {
+		start.push(index);
+		if (text[index] === '\\' && index + 1 < text.length && ASCII_PUNCTUATION.test(text[index + 1]!)) {
+			decoded += text[index + 1];
+			index += 2;
+		} else {
+			decoded += text[index];
+			index += 1;
 		}
-	);
-	// Every `@`, whatever follows it: Markdown removed later (an escape, an
-	// empty emphasis) must not be able to put a name back next to it.
-	text = text.replace(/[@\uff20\ufe6b]/g, (at) => `${at}${ZWSP}`);
-	text = text.replace(/[#\uff03\ufe5f](?=\\?[0-9])/g, (hash) => `${hash}${ZWSP}`);
-	text = text.replace(/\bGH-(?=[0-9])/gi, (match) => `${match}${ZWSP}`);
-	return text;
+	}
+	start.push(text.length);
+	return { decoded, start };
+}
+
+/**
+ * The reference, scheme and mention rules, MATCHED on the decoded view and
+ * APPLIED to the text: every match marks where a zero-width space goes, and
+ * that point is mapped back through `start` (before the backslash of an
+ * escaped character, so an escape can neither hide a match nor survive as a
+ * stray backslash). Matching the escaped text directly let `GH\-12`,
+ * `issues\/12` and `javascript\:` through, since each pattern would need its
+ * own `\\?` at every punctuation mark.
+ *
+ *  - a script-like scheme (`javascript:`, `vbscript:`, `data:`, `file:`,
+ *    `blob:`): broken before its colon;
+ *  - an issue / pull request / discussion path, bare or in a full URL (the
+ *    provider links the PATH on its own): broken before its number, and a
+ *    full URL's scheme broken too, so no dead link is left — unless it is one
+ *    of the Task's own pull requests (`allowed`);
+ *  - every `@` (full-width forms included), whatever follows it;
+ *  - `#` before a digit, and `GH-` before a digit.
+ */
+function neutralizeOnDecodedView(text: string, allowed: ReadonlySet<string>): string {
+	const { decoded, start } = decodeMarkdownEscapes(text);
+	const cuts = new Set<number>();
+	const before = (decodedIndex: number): void => {
+		cuts.add(start[decodedIndex]!);
+	};
+	for (const match of decoded.matchAll(SCRIPT_SCHEME)) before(match.index! + match[0].length - 1);
+	for (const match of decoded.matchAll(PROVIDER_REFERENCE_PATH)) {
+		const [whole, prefix, scheme, repository, kind, number] = match as unknown as [
+			string,
+			string | undefined,
+			string | undefined,
+			string | undefined,
+			string,
+			string
+		];
+		if (repository && allowed.has(`${repository}/${kind}/${number}`.toLowerCase())) continue;
+		before(match.index! + whole.length - number.length);
+		if (prefix && scheme) before(match.index! + scheme.indexOf(':') + 1);
+	}
+	for (const match of decoded.matchAll(/[@\uff20\ufe6b]/g)) before(match.index! + 1);
+	for (const match of decoded.matchAll(/[#\uff03\ufe5f](?=\\?[0-9])/g)) before(match.index! + 1);
+	for (const match of decoded.matchAll(/\bGH-(?=[0-9])/gi)) before(match.index! + 3);
+	if (cuts.size === 0) return text;
+	let out = '';
+	let from = 0;
+	for (const cut of [...cuts].sort((left, right) => left - right)) {
+		out += `${text.slice(from, cut)}${ZWSP}`;
+		from = cut;
+	}
+	return out + text.slice(from);
 }
 
 /** `github.com/owner/repo/pull/12`, lower-cased, for the allow-list comparison. */
