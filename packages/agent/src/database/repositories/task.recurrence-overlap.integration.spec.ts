@@ -136,6 +136,16 @@ describe('Recurring Tasks overlap limit (real SQLite)', () => {
             .execute();
     }
 
+    /**
+     * The PR-status sweep's write, exactly as production makes it (`updatePrStatusCache`). It does
+     * not name `updatedAt`, so TypeORM's update builder bumps it: a sweep read is also a write of
+     * the instance. Never fake a fresh `ciCheckedAt` with a stale `updatedAt`; no code path does.
+     */
+    const sweepRead = (
+        taskId: string,
+        patch: Parameters<TaskRepository['updatePrStatusCache']>[1] = {},
+    ) => repository.updatePrStatusCache(taskId, { ciCheckedAt: new Date(), ...patch });
+
     async function run(
         taskId: string,
         status: AgentRun['status'],
@@ -203,64 +213,88 @@ describe('Recurring Tasks overlap limit (real SQLite)', () => {
                 { status: TaskStatus.IN_REVIEW, prNumber: 7, prState: 'open', workId: WORK },
                 { createdAt: old, updatedAt: old },
             );
-            await setTimes(open.id, { ciCheckedAt: ago(HOUR) });
+            await sweepRead(open.id);
             const draft = await instance(
                 parent,
                 { status: TaskStatus.BLOCKED, prNumber: 8, prState: 'draft', workId: WORK },
                 { createdAt: old, updatedAt: old },
             );
-            await setTimes(draft.id, { ciCheckedAt: ago(10 * 60_000) });
-            const cancelled = await instance(parent, {
-                status: TaskStatus.CANCELLED,
-                prNumber: 9,
-                prState: 'open',
-                workId: WORK,
-            });
-            await setTimes(cancelled.id, { ciCheckedAt: ago(HOUR) });
+            await sweepRead(draft.id);
+            const cancelled = await instance(
+                parent,
+                { status: TaskStatus.CANCELLED, prNumber: 9, prState: 'open', workId: WORK },
+                { createdAt: old, updatedAt: old },
+            );
+            await sweepRead(cancelled.id);
             expect(await openIds(parent)).toEqual([open.id, draft.id].sort());
+            // The sweep's read is also a write: `updatedAt` moved with `ciCheckedAt`.
+            const read = await taskRows.findOneByOrFail({ id: open.id });
+            expect(read.updatedAt.getTime()).toBeGreaterThan(ago(HOUR).getTime());
         });
 
-        it('an open pull request NOT confirmed on the template’s Work counts only 7 days after it last changed', async () => {
+        it('an open pull request the sweep no longer reads ages out 7 days after the last write', async () => {
             const parent = await template({ workId: WORK });
             const old = ago(60 * DAY);
-            // Moved out of the Work (the sweep never polls `workId IS NULL`): bounded by updatedAt.
+            // Taken out of the Work: the sweep never polls `workId IS NULL`, so nothing writes it.
             const movedOutStale = await instance(
                 parent,
                 { status: TaskStatus.IN_REVIEW, prNumber: 30, prState: 'open', workId: null },
                 { createdAt: old, updatedAt: ago(8 * DAY) },
             );
-            await setTimes(movedOutStale.id, { ciCheckedAt: ago(HOUR) });
             const movedOutRecent = await instance(
                 parent,
                 { status: TaskStatus.IN_REVIEW, prNumber: 31, prState: 'open', workId: null },
                 { createdAt: old, updatedAt: ago(6 * DAY) },
             );
-            // Moved to another Work, read fresh there: still bounded by updatedAt.
+            // On the Work, but its reads have failed for 8 days (a failed read writes nothing):
+            // the last write is the last successful read, 8 days ago.
+            const readsFailing = await instance(
+                parent,
+                { status: TaskStatus.IN_REVIEW, prNumber: 33, prState: 'open', workId: WORK },
+                { createdAt: old, updatedAt: ago(8 * DAY) },
+            );
+            await setTimes(readsFailing.id, { ciCheckedAt: ago(8 * DAY), updatedAt: ago(8 * DAY) });
+            expect(await openIds(parent)).toEqual([movedOutRecent.id]);
+            expect(movedOutStale.id && readsFailing.id).toBeTruthy();
+        });
+
+        /**
+         * The documented limit (#3146 closure review): an open pull request the sweep keeps
+         * writing but can never see merged or closed holds its slot until someone cancels the
+         * instance or forces run-now. Pinned so the behaviour cannot change silently.
+         */
+        it('an open pull request the sweep keeps writing keeps its slot: another Work, or "not found"', async () => {
+            const parent = await template({ workId: WORK });
+            const old = ago(60 * DAY);
+            // Moved to another Work: the sweep keeps reading it there, and every read writes it.
             const otherWork = await instance(
                 parent,
                 { status: TaskStatus.IN_REVIEW, prNumber: 32, prState: 'open', workId: OTHER_WORK },
                 { createdAt: old, updatedAt: ago(8 * DAY) },
             );
-            await setTimes(otherWork.id, { ciCheckedAt: ago(HOUR) });
-            // On the Work, but the sweep has not read it for 8 days.
-            const sweepStopped = await instance(
+            await sweepRead(otherWork.id);
+            // The provider answers "not found" (deleted repository, lost access): the sweep stamps
+            // the read and leaves `prState` as it was.
+            const notFound = await instance(
                 parent,
-                { status: TaskStatus.IN_REVIEW, prNumber: 33, prState: 'open', workId: WORK },
-                { createdAt: old, updatedAt: old },
+                { status: TaskStatus.IN_REVIEW, prNumber: 34, prState: 'open', workId: WORK },
+                { createdAt: old, updatedAt: ago(30 * DAY) },
             );
-            await setTimes(sweepStopped.id, { ciCheckedAt: ago(8 * DAY) });
-            expect(await openIds(parent)).toEqual([movedOutRecent.id]);
-            expect(movedOutStale.id && otherWork.id && sweepStopped.id).toBeTruthy();
+            await sweepRead(notFound.id);
+            expect(await openIds(parent)).toEqual([otherWork.id, notFound.id].sort());
+            // Cancelling the instance is what frees it.
+            await taskRows.update(otherWork.id, { status: TaskStatus.CANCELLED });
+            expect(await openIds(parent)).toEqual([notFound.id]);
         });
 
-        it('a template with no Work bounds every open pull request by its last change', async () => {
+        it('a template with no Work bounds every open pull request by its last write', async () => {
+            // Its instances inherit no Work, so the sweep never reads (or writes) them.
             const parent = await template({ workId: null });
-            const confirmedButOld = await instance(
+            await instance(
                 parent,
-                { status: TaskStatus.IN_REVIEW, prNumber: 40, prState: 'open', workId: WORK },
+                { status: TaskStatus.IN_REVIEW, prNumber: 40, prState: 'open' },
                 { createdAt: ago(60 * DAY), updatedAt: ago(8 * DAY) },
             );
-            await setTimes(confirmedButOld.id, { ciCheckedAt: ago(HOUR) });
             const recent = await instance(
                 parent,
                 { status: TaskStatus.IN_REVIEW, prNumber: 41, prState: 'open' },
@@ -346,7 +380,7 @@ describe('Recurring Tasks overlap limit (real SQLite)', () => {
             expect(await count(parent)).toBe(2);
         });
 
-        it('holds a pull request closed unmerged for 24 h after it last changed, by either timestamp', async () => {
+        it('holds a pull request closed unmerged for 24 h after it last changed', async () => {
             const parent = await template();
             const longAgo = new Date(NOW.getTime() - 3 * DAY);
             const closedByUpdate = await instance(
@@ -354,12 +388,14 @@ describe('Recurring Tasks overlap limit (real SQLite)', () => {
                 { status: TaskStatus.IN_REVIEW, prNumber: 5, prState: 'closed' },
                 { createdAt: longAgo, updatedAt: new Date(NOW.getTime() - 2 * HOUR) },
             );
+            // Closed as the sweep sees it happen: its read writes `prState`, `ciCheckedAt` and
+            // (through the update builder) `updatedAt`.
             const closedBySweep = await instance(
                 parent,
-                { status: TaskStatus.IN_REVIEW, prNumber: 6, prState: 'closed' },
+                { status: TaskStatus.IN_REVIEW, prNumber: 6, prState: 'open' },
                 { createdAt: longAgo, updatedAt: longAgo },
             );
-            await setTimes(closedBySweep.id, { ciCheckedAt: new Date(NOW.getTime() - HOUR) });
+            await sweepRead(closedBySweep.id, { prState: 'closed' });
             await instance(
                 parent,
                 { status: TaskStatus.IN_REVIEW, prNumber: 7, prState: 'closed' },
@@ -685,8 +721,8 @@ describe('Recurring Tasks overlap limit (real SQLite)', () => {
                 prState: 'open',
             });
             const { service } = dispatcher({ fireLock: lock });
-            await taskRows.update(open.id, { prState: 'closed' });
-            await setTimes(open.id, { updatedAt: NOW, ciCheckedAt: NOW });
+            // The sweep sees it close (its read writes `prState`, `ciCheckedAt` and `updatedAt`).
+            await sweepRead(open.id, { prState: 'closed' });
             expect((await service.dispatchDue(50, NOW)).spawned).toBe(0);
 
             const nextDay = new Date(NOW.getTime() + 25 * HOUR);

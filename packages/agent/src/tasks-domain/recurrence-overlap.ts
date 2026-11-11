@@ -32,12 +32,12 @@ import {
 export const RECURRENCE_MAX_OPEN_INSTANCES_LIMIT = 100;
 
 /**
- * The bound on every open-instance branch that nothing else ends: 7 days. A run in flight counts
- * for 7 days after it started (or was queued); an open pull request the PR-status sweep no
- * longer reads on the template's Work counts for 7 days after the instance last changed; an
- * instance with no pull-request outcome counts for 7 days after it was spawned. So a question
- * nobody answers, a run parked behind a paused Agent, a failed run left in To do or a pull
- * request moved out of its Work stops holding a slot a week later even if nobody touches it.
+ * 7 days: how long a run in flight counts after it started (or was queued), an instance with no
+ * pull-request outcome after it was spawned, and an open pull request the PR-status sweep no
+ * longer writes after the instance's last write. So a question nobody answers, a run parked
+ * behind a paused Agent, a failed run left in To do, or an open pull request on an instance taken
+ * out of its Work stops holding a slot a week later even if nobody touches it. It does NOT bound
+ * an open pull request the sweep keeps writing (see `recurrenceOpenInstancesWhere`).
  */
 export const RECURRENCE_OPEN_INSTANCE_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -100,11 +100,14 @@ export type RecurrenceTemplateRef = Pick<Task, 'id'> & { workId?: string | null 
  *  2. **it is not Done or Cancelled, its pull request is open or a draft, it is still on the
  *     template's Work, and the PR-status sweep read it in the last 7 days** (`ciCheckedAt`, which
  *     the sweep stamps on every read). An unreviewed pull request is the backlog the limit is
- *     for, so while the sweep keeps confirming it there is no age bound: the reviewer frees the
- *     slot by merging or closing it, the owner by cancelling the instance;
- *  3. **it is not Done or Cancelled, its pull request is open or a draft, and it changed in the
- *     last 7 days** (`updatedAt`): the same pull request when 2 does not confirm it (moved out
- *     of the Work, a template with no Work, a sweep that stopped reading it);
+ *     for, so while the sweep keeps reading it there is no age bound: the reviewer frees the slot
+ *     by merging or closing it, the owner by cancelling the instance;
+ *  3. **it is not Done or Cancelled, its pull request is open or a draft, and the instance was
+ *     written in the last 7 days** (`updatedAt`). Every PR-status sweep write
+ *     (`TaskRepository.updatePrStatusCache`) bumps `updatedAt` too (TypeORM's update builder
+ *     appends `updatedAt = CURRENT_TIMESTAMP` unless the SET names it), so this branch only ages
+ *     out for an instance the sweep no longer writes: one with no Work (taken out of it, or a
+ *     template with no Work, whose instances have none) or one whose reads keep failing;
  *  4. **it is not Done or Cancelled, has no pull-request outcome yet (`prState` NULL: no pull
  *     request, or one the status sweep has not read) and was spawned in the last 7 days**;
  *  5. **it is not Done or Cancelled, its pull request was closed without merging, and it changed
@@ -113,11 +116,21 @@ export type RecurrenceTemplateRef = Pick<Task, 'id'> & { workId?: string | null 
  *     because SQL has no GREATEST on every driver.
  *
  * A merged pull request frees the slot at once (the review happened), and so does Done or
- * Cancelled. Every branch ends by itself: 1, 3 and 4 a week after their timestamp, 5 a day
- * after, and 2 when the pull request is merged or closed or the sweep stops reading it on the
- * template's Work. Branch 2 is left out when the template has no Work (an `undefined` key would
- * drop the predicate rather than match nothing). `prState` is nullable and SQL's `<>` drops
- * NULLs, hence OR-ed branches.
+ * Cancelled.
+ *
+ * What ends by itself: 1 a week after the run started, 4 a week after the spawn, 5 a day after the
+ * read that saw the pull request close, and 2 / 3 once the sweep sees the pull request merged or
+ * closed, or (for an instance it stops writing) a week after the instance's last write.
+ *
+ * What does NOT end by itself: an open pull request the sweep keeps writing without ever seeing it
+ * merged or closed. That is an instance moved to ANOTHER Work (read against that Work's
+ * repository), or a pull request the provider answers "not found" for (deleted repository, lost
+ * access, removed app: the sweep stamps the read and keeps `prState`). Such an instance holds its
+ * slot until someone cancels it or forces run-now; the daily `schedule_skipped` row names it.
+ *
+ * Branch 2 is left out when the template has no Work (an `undefined` key would drop the
+ * predicate rather than match nothing). `prState` is nullable and SQL's `<>` drops NULLs, hence
+ * OR-ed branches.
  */
 export function recurrenceOpenInstancesWhere(
     template: RecurrenceTemplateRef,
