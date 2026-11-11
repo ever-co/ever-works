@@ -18,6 +18,10 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 out_dir="${1:-dist}"
+# Emptied first, so it must be a folder of its own inside this one.
+case "$out_dir" in
+  "" | . | ./ | /* | *..*) echo "out_dir must be a relative folder inside this one: $out_dir" >&2; exit 2 ;;
+esac
 
 # rust:1.88.0-slim-bookworm (the channel rust-toolchain.toml pins). Change both together.
 image="${SCREEN_HELPER_LINUX_IMAGE:-docker.io/library/rust:1.88.0-slim-bookworm@sha256:38bc5a86d998772d4aec2348656ed21438d20fcdce2795b56ca434cf21430d89}"
@@ -37,28 +41,27 @@ if [ -n "$(git status --porcelain -- .)" ]; then
 fi
 epoch="${SOURCE_DATE_EPOCH:-$(git log -1 --format=%ct "$commit")}"
 
+rm -rf "$out_dir"
 mkdir -p "$out_dir"
-out_abs="$(cd "$out_dir" && pwd)"
-# Git Bash on Windows: Docker wants the Windows form of the path, untouched by MSYS.
-if command -v cygpath >/dev/null 2>&1; then out_abs="$(cygpath -w "$out_abs")"; fi
 
-echo "ever-works-screen linux-x64 release build of $commit ($folder) in $image"
-# RUSTUP_TOOLCHAIN: use the image's toolchain as it is (rust-toolchain.toml would
-# also ask rustup for clippy and rustfmt, which a release build does not need).
-# The build runs in /build/ever-works-screen, the path build-release.sh remaps,
-# and the outputs are handed back to the caller's user. (git archive runs from
-# the top: from a subdirectory it would archive only that part of the tree.)
+echo "ever-works-screen linux-x64 release build of $commit ($folder) in $image" >&2
+# The sources go in on stdin and the outputs come back on stdout, both as tar:
+# no bind mount, so any Docker daemon works (local, remote, Docker-in-Docker).
+# The build log goes to stderr. RUSTUP_TOOLCHAIN: use the image's toolchain as
+# it is (rust-toolchain.toml would also ask rustup for clippy and rustfmt,
+# which a release build does not need). The build runs in
+# /build/ever-works-screen, the path build-release.sh remaps. (git archive runs
+# from the top: from a subdirectory it would archive only that part of the tree.)
 git -C "$top" -c core.autocrlf=false -c core.eol=lf archive --format=tar "$commit:$folder" |
   MSYS_NO_PATHCONV=1 docker run --rm -i --platform linux/amd64 \
-    --volume "$out_abs:/out" \
     --env "SOURCE_DATE_EPOCH=$epoch" \
     --env "RUSTUP_TOOLCHAIN=$toolchain" \
-    --env "HOST_UID=$(id -u)" \
-    --env "HOST_GID=$(id -g)" \
     "$image" \
     bash -c 'set -euo pipefail
-      mkdir -p /build/ever-works-screen
+      mkdir -p /build/ever-works-screen /out
       tar -C /build/ever-works-screen -xf -
       cd /build/ever-works-screen
-      bash build-release.sh /out
-      chown -R "$HOST_UID:$HOST_GID" /out'
+      bash build-release.sh /out >&2
+      tar -C /out -cf - .' |
+  tar -C "$out_dir" -xf -
+cat "$out_dir/unsigned-release-metadata.json"
