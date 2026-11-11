@@ -1112,7 +1112,17 @@
                 "statusArchived": "ถูกเก็บไว้",
                 "noTitle": "(ไม่มีชื่อ)",
                 "noCadence": "ไม่มีเสียงเต้นหัวใจ",
-                "cadencePrefix": "เสียงเต้นหัวใจ:"
+                "cadencePrefix": "เสียงเต้นหัวใจ:",
+                "runsOnSchedule": "Runs on schedule",
+                "runsOnScheduleNext": "Runs on schedule · next {time}",
+                "runsWhenAssigned": "Runs when assigned",
+                "lastRun": "Last run {time} · {status}",
+                "lastRunCompleted": "completed",
+                "lastRunFailed": "failed",
+                "lastRunCancelled": "cancelled",
+                "lastRunDispatchFailed": "could not start",
+                "lastRunRecoveredStuck": "recovered after getting stuck",
+                "lastRunUnknown": "unknown"
             },
             "tabs": {
                 "dashboard": "แดชบอร์ด",
@@ -2404,6 +2414,19 @@
                 "unavailable": "โหลดงานไม่สำเร็จ",
                 "previous": "ก่อนหน้า",
                 "next": "ถัดไป"
+            },
+            "team": {
+                "title": "Team and agents",
+                "loading": "Loading…",
+                "unavailable": "Could not load who works on this Mission.",
+                "empty": "No Team holds this Mission yet, and no Agent is scoped to it or to its attached Works.",
+                "teamNoAgents": "No agents on this Team that you can see.",
+                "otherAgents": "Other agents",
+                "agents": "Agents",
+                "viaMission": "Scoped to this Mission",
+                "viaWork": "Works on {name}",
+                "viaWorkUnnamed": "Works on an attached Work",
+                "neverRan": "Never ran"
             }
         },
         "ideasPage": {
