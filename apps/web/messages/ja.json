@@ -1540,6 +1540,7 @@
                 "priority": "優先度",
                 "labels": "ラベル",
                 "labelsPlaceholder": "コンマ区切り",
+                "labelsTooLong": "{max} 文字を超えるラベルは先頭の {max} 文字に短縮されます。",
                 "labelsHint": "複数のラベルはコンマで区切ってください。",
                 "labelsAutoHint": "編集するまではタイトルから自動生成されます。複数のラベルはコンマで区切ってください。",
                 "organize": "整理",
@@ -3503,7 +3504,8 @@
                     "notManageable": "Seats are adjusted on a paid plan once card payments are enabled.",
                     "save": "Save",
                     "saved": "Seats updated",
-                    "saveError": "Failed to update seats"
+                    "saveError": "Failed to update seats",
+                    "tooMany": "設定できるシート数は最大 {max} です。"
                 },
                 "payg": {
                     "title": "Pay-as-you-go",
@@ -9212,6 +9214,7 @@
                 "targetInvalid": "Target value must be a number.",
                 "unitRequired": "Unit is required.",
                 "dodRequired": "A delivery Goal needs at least one Definition-of-Done criterion.",
+                "dodTooLong": "条件は最大 50 件、各 500 文字までです。",
                 "deadlineInvalid": "Deadline is not a valid date.",
                 "createFailed": "Couldn't create the Goal. Please try again."
             },
@@ -9420,7 +9423,9 @@
                     "workerModelHelp": "Free text; passed through to iteration runs.",
                     "assignedAgent": "Pinned agent",
                     "assignedAgentNone": "No pin (round-robin)",
-                    "assignedAgentHelp": "Routing always picks this agent. Without a pin the router round-robins over the agents that have already worked this Goal — and, for a brand-new Goal, over the eligible agents in its scope — so the loop can start without one."
+                    "assignedAgentHelp": "Routing always picks this agent. Without a pin the router round-robins over the agents that have already worked this Goal — and, for a brand-new Goal, over the eligible agents in its scope — so the loop can start without one.",
+                    "assignedAgentDeleted": "削除されたエージェント",
+                    "assignedAgentDeletedHelp": "固定されたエージェントは削除されたか利用できなくなったため、この作業を担当するエージェントがいません。別のエージェントを選ぶか、固定を解除してください。"
                 },
                 "executionTargets": {
                     "cloud": "Cloud",

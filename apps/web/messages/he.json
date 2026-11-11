@@ -1571,6 +1571,7 @@
                 "priority": "עדיפות",
                 "labels": "תוויות",
                 "labelsPlaceholder": "מופרדות בפסיקים",
+                "labelsTooLong": "תוויות ארוכות מ-{max} תווים מקוצרות ל-{max} התווים הראשונים שלהן.",
                 "labelsHint": "הפרד בין תוויות מרובות בפסיקים.",
                 "labelsAutoHint": "נגזרות מהכותרת עד שתערוך אותן. הפרד בין תוויות מרובות בפסיקים.",
                 "organize": "ארגון",
@@ -3577,7 +3578,8 @@
                     "notManageable": "Seats are adjusted on a paid plan once card payments are enabled.",
                     "save": "Save",
                     "saved": "Seats updated",
-                    "saveError": "Failed to update seats"
+                    "saveError": "Failed to update seats",
+                    "tooMany": "ניתן להגדיר לכל היותר {max} מושבים."
                 },
                 "payg": {
                     "title": "Pay-as-you-go",
@@ -9285,6 +9287,7 @@
                 "targetInvalid": "Target value must be a number.",
                 "unitRequired": "Unit is required.",
                 "dodRequired": "A delivery Goal needs at least one Definition-of-Done criterion.",
+                "dodTooLong": "לכל היותר 50 קריטריונים, עד 500 תווים כל אחד.",
                 "deadlineInvalid": "Deadline is not a valid date.",
                 "createFailed": "Couldn't create the Goal. Please try again."
             },
@@ -9493,7 +9496,9 @@
                     "workerModelHelp": "Free text; passed through to iteration runs.",
                     "assignedAgent": "Pinned agent",
                     "assignedAgentNone": "No pin (round-robin)",
-                    "assignedAgentHelp": "Routing always picks this agent. Without a pin the router round-robins over the agents that have already worked this Goal — and, for a brand-new Goal, over the eligible agents in its scope — so the loop can start without one."
+                    "assignedAgentHelp": "Routing always picks this agent. Without a pin the router round-robins over the agents that have already worked this Goal — and, for a brand-new Goal, over the eligible agents in its scope — so the loop can start without one.",
+                    "assignedAgentDeleted": "סוכן שנמחק",
+                    "assignedAgentDeletedHelp": "הסוכן המוצמד נמחק או שאינו זמין עוד, ולכן אף סוכן לא לוקח את העבודה הזו. בחרו סוכן אחר או בטלו את ההצמדה."
                 },
                 "executionTargets": {
                     "cloud": "Cloud",

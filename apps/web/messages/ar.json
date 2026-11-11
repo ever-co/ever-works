@@ -1571,6 +1571,7 @@
                 "priority": "الأولوية",
                 "labels": "العلامات",
                 "labelsPlaceholder": "مفصولة بفواصل",
+                "labelsTooLong": "تُختصر العلامات التي تزيد على {max} حرفًا إلى أول {max} حرفًا منها.",
                 "labelsHint": "افصل بين العلامات المتعددة بفواصل.",
                 "labelsAutoHint": "مشتقة من العنوان إلى أن تقوم بتعديلها. افصل بين العلامات المتعددة بفواصل.",
                 "organize": "التنظيم",
@@ -3577,7 +3578,8 @@
                     "notManageable": "Seats are adjusted on a paid plan once card payments are enabled.",
                     "save": "Save",
                     "saved": "Seats updated",
-                    "saveError": "Failed to update seats"
+                    "saveError": "Failed to update seats",
+                    "tooMany": "يمكنك تعيين {max} مقعد كحد أقصى."
                 },
                 "payg": {
                     "title": "Pay-as-you-go",
@@ -9285,6 +9287,7 @@
                 "targetInvalid": "Target value must be a number.",
                 "unitRequired": "Unit is required.",
                 "dodRequired": "A delivery Goal needs at least one Definition-of-Done criterion.",
+                "dodTooLong": "بحد أقصى 50 معيارًا، ولا يتجاوز كل منها 500 حرف.",
                 "deadlineInvalid": "Deadline is not a valid date.",
                 "createFailed": "Couldn't create the Goal. Please try again."
             },
@@ -9493,7 +9496,9 @@
                     "workerModelHelp": "Free text; passed through to iteration runs.",
                     "assignedAgent": "Pinned agent",
                     "assignedAgentNone": "No pin (round-robin)",
-                    "assignedAgentHelp": "Routing always picks this agent. Without a pin the router round-robins over the agents that have already worked this Goal — and, for a brand-new Goal, over the eligible agents in its scope — so the loop can start without one."
+                    "assignedAgentHelp": "Routing always picks this agent. Without a pin the router round-robins over the agents that have already worked this Goal — and, for a brand-new Goal, over the eligible agents in its scope — so the loop can start without one.",
+                    "assignedAgentDeleted": "وكيل محذوف",
+                    "assignedAgentDeletedHelp": "الوكيل المثبَّت حُذف أو لم يعد متاحًا، لذا لا يتولى أي وكيل هذا العمل. اختر وكيلًا آخر أو أزل التثبيت."
                 },
                 "executionTargets": {
                     "cloud": "Cloud",

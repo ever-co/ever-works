@@ -1540,6 +1540,7 @@
                 "priority": "优先级",
                 "labels": "标签",
                 "labelsPlaceholder": "用逗号分隔",
+                "labelsTooLong": "超过 {max} 个字符的标签将截短为前 {max} 个字符。",
                 "labelsHint": "多个标签请用逗号分隔。",
                 "labelsAutoHint": "在你手动编辑前将根据标题自动生成。多个标签请用逗号分隔。",
                 "organize": "整理",
@@ -3503,7 +3504,8 @@
                     "notManageable": "Seats are adjusted on a paid plan once card payments are enabled.",
                     "save": "Save",
                     "saved": "Seats updated",
-                    "saveError": "Failed to update seats"
+                    "saveError": "Failed to update seats",
+                    "tooMany": "最多可设置 {max} 个席位。"
                 },
                 "payg": {
                     "title": "Pay-as-you-go",
@@ -9212,6 +9214,7 @@
                 "targetInvalid": "Target value must be a number.",
                 "unitRequired": "Unit is required.",
                 "dodRequired": "A delivery Goal needs at least one Definition-of-Done criterion.",
+                "dodTooLong": "最多 50 条标准，每条不超过 500 个字符。",
                 "deadlineInvalid": "Deadline is not a valid date.",
                 "createFailed": "Couldn't create the Goal. Please try again."
             },
@@ -9420,7 +9423,9 @@
                     "workerModelHelp": "Free text; passed through to iteration runs.",
                     "assignedAgent": "Pinned agent",
                     "assignedAgentNone": "No pin (round-robin)",
-                    "assignedAgentHelp": "Routing always picks this agent. Without a pin the router round-robins over the agents that have already worked this Goal — and, for a brand-new Goal, over the eligible agents in its scope — so the loop can start without one."
+                    "assignedAgentHelp": "Routing always picks this agent. Without a pin the router round-robins over the agents that have already worked this Goal — and, for a brand-new Goal, over the eligible agents in its scope — so the loop can start without one.",
+                    "assignedAgentDeleted": "已删除的代理",
+                    "assignedAgentDeletedHelp": "固定的代理已被删除或不再可用，因此没有代理承接这项工作。请选择其他代理，或取消固定。"
                 },
                 "executionTargets": {
                     "cloud": "Cloud",

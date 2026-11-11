@@ -63,6 +63,22 @@ export default async function GoalDetailPage({ params }: { params: Params }) {
         recordVisibilityAPI.get('goal', id).catch(() => null),
     ]);
 
+    // Review of #3172 — a pin to an Agent the list does not hold is looked up
+    // on its own. Found (past the list's first page), it joins the options. A
+    // 404 means it was deleted (or is no longer the viewer's): the Goal then
+    // routes to no Agent, so the page says so and the owner can clear the pin.
+    // A failed read stays unknown — it is not reported as a deletion.
+    let missingAgentId: string | null = null;
+    const pinnedId = goal.assignedAgentId ?? null;
+    if (pinnedId && !agents.some((agent) => agent.id === pinnedId)) {
+        const pinned = await agentsAPI.lookup(pinnedId);
+        if (pinned.status === 'found') {
+            agents.push({ id: pinned.agent.id, name: pinned.agent.name });
+        } else if (pinned.status === 'missing') {
+            missingAgentId = pinnedId;
+        }
+    }
+
     return (
         <GoalDetailClient
             goal={goal}
@@ -70,6 +86,7 @@ export default async function GoalDetailPage({ params }: { params: Params }) {
             events={events}
             sessions={sessions}
             agents={agents}
+            missingAgentId={missingAgentId}
             canEdit={visibility ? visibility.canEdit : true}
         />
     );

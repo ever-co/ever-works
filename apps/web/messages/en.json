@@ -2550,6 +2550,7 @@
                 "priority": "Priority",
                 "labels": "Labels",
                 "labelsPlaceholder": "comma-separated",
+                "labelsTooLong": "Labels longer than {max} characters are shortened to their first {max}.",
                 "dueDate": "Due date",
                 "startDate": "Start date",
                 "estimateMinutes": "Estimate (minutes)",
@@ -5994,7 +5995,8 @@
                     "notManageable": "Seats are adjusted on a paid plan once card payments are enabled.",
                     "save": "Save",
                     "saved": "Seats updated",
-                    "saveError": "Failed to update seats"
+                    "saveError": "Failed to update seats",
+                    "tooMany": "You can set at most {max} seats."
                 },
                 "payg": {
                     "title": "Pay-as-you-go",
@@ -11531,6 +11533,7 @@
                 "targetInvalid": "Target value must be a number.",
                 "unitRequired": "Unit is required.",
                 "dodRequired": "A delivery Goal needs at least one Definition-of-Done criterion.",
+                "dodTooLong": "At most 50 criteria, each up to 500 characters.",
                 "deadlineInvalid": "Deadline is not a valid date.",
                 "createFailed": "Couldn't create the Goal. Please try again."
             },
@@ -11739,7 +11742,9 @@
                     "workerModelHelp": "Free text; passed through to iteration runs.",
                     "assignedAgent": "Pinned agent",
                     "assignedAgentNone": "No pin (round-robin)",
-                    "assignedAgentHelp": "Routing always picks this agent. Without a pin the router round-robins over the agents that have already worked this Goal — and, for a brand-new Goal, over the eligible agents in its scope — so the loop can start without one."
+                    "assignedAgentHelp": "Routing always picks this agent. Without a pin the router round-robins over the agents that have already worked this Goal — and, for a brand-new Goal, over the eligible agents in its scope — so the loop can start without one.",
+                    "assignedAgentDeleted": "Deleted Agent",
+                    "assignedAgentDeletedHelp": "The pinned Agent was deleted or is no longer available, so no Agent picks up this work. Pick another Agent or clear the pin."
                 },
                 "executionTargets": {
                     "cloud": "Cloud",

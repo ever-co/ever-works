@@ -1571,6 +1571,7 @@
                 "priority": "Prioridad",
                 "labels": "Etiquetas",
                 "labelsPlaceholder": "separadas por comas",
+                "labelsTooLong": "Las etiquetas de más de {max} caracteres se acortan a sus primeros {max}.",
                 "labelsHint": "Separa varias etiquetas con comas.",
                 "labelsAutoHint": "Se derivan del título hasta que las edites. Separa varias etiquetas con comas.",
                 "organize": "Organizar",
@@ -3577,7 +3578,8 @@
                     "notManageable": "Seats are adjusted on a paid plan once card payments are enabled.",
                     "save": "Save",
                     "saved": "Seats updated",
-                    "saveError": "Failed to update seats"
+                    "saveError": "Failed to update seats",
+                    "tooMany": "Puedes establecer como máximo {max} asientos."
                 },
                 "payg": {
                     "title": "Pay-as-you-go",
@@ -9285,6 +9287,7 @@
                 "targetInvalid": "Target value must be a number.",
                 "unitRequired": "Unit is required.",
                 "dodRequired": "A delivery Goal needs at least one Definition-of-Done criterion.",
+                "dodTooLong": "Como máximo 50 criterios, de hasta 500 caracteres cada uno.",
                 "deadlineInvalid": "Deadline is not a valid date.",
                 "createFailed": "Couldn't create the Goal. Please try again."
             },
@@ -9493,7 +9496,9 @@
                     "workerModelHelp": "Free text; passed through to iteration runs.",
                     "assignedAgent": "Pinned agent",
                     "assignedAgentNone": "No pin (round-robin)",
-                    "assignedAgentHelp": "Routing always picks this agent. Without a pin the router round-robins over the agents that have already worked this Goal — and, for a brand-new Goal, over the eligible agents in its scope — so the loop can start without one."
+                    "assignedAgentHelp": "Routing always picks this agent. Without a pin the router round-robins over the agents that have already worked this Goal — and, for a brand-new Goal, over the eligible agents in its scope — so the loop can start without one.",
+                    "assignedAgentDeleted": "Agente eliminado",
+                    "assignedAgentDeletedHelp": "El agente fijado se eliminó o ya no está disponible, así que ningún agente asume este trabajo. Elige otro agente o quita la fijación."
                 },
                 "executionTargets": {
                     "cloud": "Cloud",

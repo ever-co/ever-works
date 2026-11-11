@@ -1540,6 +1540,7 @@
                 "priority": "우선순위",
                 "labels": "레이블",
                 "labelsPlaceholder": "쉼표로 구분",
+                "labelsTooLong": "{max}자를 넘는 레이블은 앞의 {max}자로 줄어듭니다.",
                 "labelsHint": "여러 레이블은 쉼표로 구분하세요.",
                 "labelsAutoHint": "직접 수정하기 전까지는 제목에서 자동으로 만들어집니다. 여러 레이블은 쉼표로 구분하세요.",
                 "organize": "정리",
@@ -3503,7 +3504,8 @@
                     "notManageable": "Seats are adjusted on a paid plan once card payments are enabled.",
                     "save": "Save",
                     "saved": "Seats updated",
-                    "saveError": "Failed to update seats"
+                    "saveError": "Failed to update seats",
+                    "tooMany": "좌석은 최대 {max}개까지 설정할 수 있습니다."
                 },
                 "payg": {
                     "title": "Pay-as-you-go",
@@ -9212,6 +9214,7 @@
                 "targetInvalid": "Target value must be a number.",
                 "unitRequired": "Unit is required.",
                 "dodRequired": "A delivery Goal needs at least one Definition-of-Done criterion.",
+                "dodTooLong": "기준은 최대 50개, 각각 500자까지입니다.",
                 "deadlineInvalid": "Deadline is not a valid date.",
                 "createFailed": "Couldn't create the Goal. Please try again."
             },
@@ -9420,7 +9423,9 @@
                     "workerModelHelp": "Free text; passed through to iteration runs.",
                     "assignedAgent": "Pinned agent",
                     "assignedAgentNone": "No pin (round-robin)",
-                    "assignedAgentHelp": "Routing always picks this agent. Without a pin the router round-robins over the agents that have already worked this Goal — and, for a brand-new Goal, over the eligible agents in its scope — so the loop can start without one."
+                    "assignedAgentHelp": "Routing always picks this agent. Without a pin the router round-robins over the agents that have already worked this Goal — and, for a brand-new Goal, over the eligible agents in its scope — so the loop can start without one.",
+                    "assignedAgentDeleted": "삭제된 에이전트",
+                    "assignedAgentDeletedHelp": "고정된 에이전트가 삭제되었거나 더 이상 사용할 수 없어 이 작업을 맡는 에이전트가 없습니다. 다른 에이전트를 선택하거나 고정을 해제하세요."
                 },
                 "executionTargets": {
                     "cloud": "Cloud",

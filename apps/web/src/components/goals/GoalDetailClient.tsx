@@ -80,6 +80,11 @@ export interface GoalDetailClientProps {
      */
     agents?: GoalAgentOption[];
     /**
+     * The pinned Agent id when the API answered 404 for it (deleted, or no
+     * longer the viewer's): shown as a deleted Agent, which the owner can unpin.
+     */
+    missingAgentId?: string | null;
+    /**
      * Whether the viewer may change this Goal (the owner — the API's
      * record-visibility answer). Gates the Edit action; defaults to `true`
      * so the API stays the one that refuses when the answer is unknown.
@@ -148,6 +153,7 @@ export function GoalDetailClient({
     events,
     sessions,
     agents = [],
+    missingAgentId = null,
     canEdit = true,
 }: GoalDetailClientProps) {
     const t = useTranslations('dashboard.goalDetail');
@@ -759,7 +765,10 @@ export function GoalDetailClient({
                                 <DetailRow label={t('limits.fields.assignedAgent')}>
                                     {goal.assignedAgentId
                                         ? (agents.find((agent) => agent.id === goal.assignedAgentId)
-                                              ?.name ?? goal.assignedAgentId)
+                                              ?.name ??
+                                          (goal.assignedAgentId === missingAgentId
+                                              ? t('limits.fields.assignedAgentDeleted')
+                                              : goal.assignedAgentId))
                                         : t('limits.fields.assignedAgentNone')}
                                 </DetailRow>
                             </div>
@@ -822,6 +831,7 @@ export function GoalDetailClient({
                 onOpenChange={setLimitsOpen}
                 onGoalChange={setGoal}
                 agents={agents}
+                missingAgentId={missingAgentId}
             />
         </div>
     );

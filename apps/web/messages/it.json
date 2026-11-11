@@ -1540,6 +1540,7 @@
                 "priority": "Priorità",
                 "labels": "Etichette",
                 "labelsPlaceholder": "separate da virgola",
+                "labelsTooLong": "Le etichette più lunghe di {max} caratteri vengono accorciate ai primi {max}.",
                 "labelsHint": "Separa più etichette con delle virgole.",
                 "labelsAutoHint": "Derivate dal titolo finché non le modifichi. Separa più etichette con delle virgole.",
                 "organize": "Organizza",
@@ -3503,7 +3504,8 @@
                     "notManageable": "Seats are adjusted on a paid plan once card payments are enabled.",
                     "save": "Save",
                     "saved": "Seats updated",
-                    "saveError": "Failed to update seats"
+                    "saveError": "Failed to update seats",
+                    "tooMany": "Puoi impostare al massimo {max} posti."
                 },
                 "payg": {
                     "title": "Pay-as-you-go",
@@ -9212,6 +9214,7 @@
                 "targetInvalid": "Target value must be a number.",
                 "unitRequired": "Unit is required.",
                 "dodRequired": "A delivery Goal needs at least one Definition-of-Done criterion.",
+                "dodTooLong": "Al massimo 50 criteri, ciascuno fino a 500 caratteri.",
                 "deadlineInvalid": "Deadline is not a valid date.",
                 "createFailed": "Couldn't create the Goal. Please try again."
             },
@@ -9420,7 +9423,9 @@
                     "workerModelHelp": "Free text; passed through to iteration runs.",
                     "assignedAgent": "Pinned agent",
                     "assignedAgentNone": "No pin (round-robin)",
-                    "assignedAgentHelp": "Routing always picks this agent. Without a pin the router round-robins over the agents that have already worked this Goal — and, for a brand-new Goal, over the eligible agents in its scope — so the loop can start without one."
+                    "assignedAgentHelp": "Routing always picks this agent. Without a pin the router round-robins over the agents that have already worked this Goal — and, for a brand-new Goal, over the eligible agents in its scope — so the loop can start without one.",
+                    "assignedAgentDeleted": "Agente eliminato",
+                    "assignedAgentDeletedHelp": "L’agente fissato è stato eliminato o non è più disponibile, quindi nessun agente si occupa di questo lavoro. Scegli un altro agente o rimuovi il fissaggio."
                 },
                 "executionTargets": {
                     "cloud": "Cloud",

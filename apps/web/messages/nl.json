@@ -1540,6 +1540,7 @@
                 "priority": "Prioriteit",
                 "labels": "Labels",
                 "labelsPlaceholder": "komma-gescheiden",
+                "labelsTooLong": "Labels langer dan {max} tekens worden ingekort tot de eerste {max}.",
                 "labelsHint": "Scheid meerdere labels met komma’s.",
                 "labelsAutoHint": "Afgeleid van de titel totdat je ze bewerkt. Scheid meerdere labels met komma’s.",
                 "organize": "Ordenen",
@@ -3503,7 +3504,8 @@
                     "notManageable": "Seats are adjusted on a paid plan once card payments are enabled.",
                     "save": "Save",
                     "saved": "Seats updated",
-                    "saveError": "Failed to update seats"
+                    "saveError": "Failed to update seats",
+                    "tooMany": "Je kunt maximaal {max} plaatsen instellen."
                 },
                 "payg": {
                     "title": "Pay-as-you-go",
@@ -9212,6 +9214,7 @@
                 "targetInvalid": "Target value must be a number.",
                 "unitRequired": "Unit is required.",
                 "dodRequired": "A delivery Goal needs at least one Definition-of-Done criterion.",
+                "dodTooLong": "Maximaal 50 criteria van elk maximaal 500 tekens.",
                 "deadlineInvalid": "Deadline is not a valid date.",
                 "createFailed": "Couldn't create the Goal. Please try again."
             },
@@ -9420,7 +9423,9 @@
                     "workerModelHelp": "Free text; passed through to iteration runs.",
                     "assignedAgent": "Pinned agent",
                     "assignedAgentNone": "No pin (round-robin)",
-                    "assignedAgentHelp": "Routing always picks this agent. Without a pin the router round-robins over the agents that have already worked this Goal — and, for a brand-new Goal, over the eligible agents in its scope — so the loop can start without one."
+                    "assignedAgentHelp": "Routing always picks this agent. Without a pin the router round-robins over the agents that have already worked this Goal — and, for a brand-new Goal, over the eligible agents in its scope — so the loop can start without one.",
+                    "assignedAgentDeleted": "Verwijderde agent",
+                    "assignedAgentDeletedHelp": "De vastgezette agent is verwijderd of niet meer beschikbaar, dus geen enkele agent pakt dit werk op. Kies een andere agent of hef de vastzetting op."
                 },
                 "executionTargets": {
                     "cloud": "Cloud",

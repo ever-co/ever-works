@@ -300,6 +300,8 @@ export const DOMAIN_EVENT_ROUTE_COVERAGE: Readonly<Record<string, RouteCoverage>
         exempt: 'Execution-loop limits (spend cap, wall clock, concurrency, model hints): EW-only settings, not in the goal integration DTO.',
     },
     'PUT /api/me/goals/:id/dod': { events: ['goal.updated'] },
+    'POST /api/me/goals/:id/dod/criteria': { events: ['goal.updated'] },
+    'DELETE /api/me/goals/:id/dod/:criterionId': { events: ['goal.updated'] },
     'POST /api/me/goals/:id/dod/propose': { events: ['goal.updated'] },
     'POST /api/me/goals/:id/dod/approve': { events: ['goal.updated'] },
     'PATCH /api/me/goals/:id/dod/:criterionId': { events: ['goal.updated'] },

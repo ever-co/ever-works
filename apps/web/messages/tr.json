@@ -1540,6 +1540,7 @@
                 "priority": "Öncelik",
                 "labels": "Etiketler",
                 "labelsPlaceholder": "virgülle ayrılmış",
+                "labelsTooLong": "{max} karakterden uzun etiketler ilk {max} karaktere kısaltılır.",
                 "labelsHint": "Birden fazla etiketi virgülle ayırın.",
                 "labelsAutoHint": "Siz düzenleyene kadar başlıktan türetilir. Birden fazla etiketi virgülle ayırın.",
                 "organize": "Düzenle",
@@ -3503,7 +3504,8 @@
                     "notManageable": "Seats are adjusted on a paid plan once card payments are enabled.",
                     "save": "Save",
                     "saved": "Seats updated",
-                    "saveError": "Failed to update seats"
+                    "saveError": "Failed to update seats",
+                    "tooMany": "En fazla {max} koltuk ayarlayabilirsiniz."
                 },
                 "payg": {
                     "title": "Pay-as-you-go",
@@ -9212,6 +9214,7 @@
                 "targetInvalid": "Target value must be a number.",
                 "unitRequired": "Unit is required.",
                 "dodRequired": "A delivery Goal needs at least one Definition-of-Done criterion.",
+                "dodTooLong": "En fazla 50 kriter, her biri en fazla 500 karakter.",
                 "deadlineInvalid": "Deadline is not a valid date.",
                 "createFailed": "Couldn't create the Goal. Please try again."
             },
@@ -9420,7 +9423,9 @@
                     "workerModelHelp": "Free text; passed through to iteration runs.",
                     "assignedAgent": "Pinned agent",
                     "assignedAgentNone": "No pin (round-robin)",
-                    "assignedAgentHelp": "Routing always picks this agent. Without a pin the router round-robins over the agents that have already worked this Goal — and, for a brand-new Goal, over the eligible agents in its scope — so the loop can start without one."
+                    "assignedAgentHelp": "Routing always picks this agent. Without a pin the router round-robins over the agents that have already worked this Goal — and, for a brand-new Goal, over the eligible agents in its scope — so the loop can start without one.",
+                    "assignedAgentDeleted": "Silinmiş ajan",
+                    "assignedAgentDeletedHelp": "Sabitlenen ajan silinmiş ya da artık kullanılamıyor, bu yüzden bu işi hiçbir ajan üstlenmiyor. Başka bir ajan seçin ya da sabitlemeyi kaldırın."
                 },
                 "executionTargets": {
                     "cloud": "Cloud",

@@ -1540,6 +1540,7 @@
                 "priority": "Пріоритет",
                 "labels": "Мітки",
                 "labelsPlaceholder": "розділені комами",
+                "labelsTooLong": "Мітки, довші за {max} символів, скорочуються до перших {max}.",
                 "labelsHint": "Розділяйте кілька міток комами.",
                 "labelsAutoHint": "Формуються із заголовка, доки ви їх не зміните. Розділяйте кілька міток комами.",
                 "organize": "Організація",
@@ -3503,7 +3504,8 @@
                     "notManageable": "Seats are adjusted on a paid plan once card payments are enabled.",
                     "save": "Save",
                     "saved": "Seats updated",
-                    "saveError": "Failed to update seats"
+                    "saveError": "Failed to update seats",
+                    "tooMany": "Можна встановити не більше {max} місць."
                 },
                 "payg": {
                     "title": "Pay-as-you-go",
@@ -9212,6 +9214,7 @@
                 "targetInvalid": "Target value must be a number.",
                 "unitRequired": "Unit is required.",
                 "dodRequired": "A delivery Goal needs at least one Definition-of-Done criterion.",
+                "dodTooLong": "Не більше 50 критеріїв, кожен — до 500 символів.",
                 "deadlineInvalid": "Deadline is not a valid date.",
                 "createFailed": "Couldn't create the Goal. Please try again."
             },
@@ -9420,7 +9423,9 @@
                     "workerModelHelp": "Free text; passed through to iteration runs.",
                     "assignedAgent": "Pinned agent",
                     "assignedAgentNone": "No pin (round-robin)",
-                    "assignedAgentHelp": "Routing always picks this agent. Without a pin the router round-robins over the agents that have already worked this Goal — and, for a brand-new Goal, over the eligible agents in its scope — so the loop can start without one."
+                    "assignedAgentHelp": "Routing always picks this agent. Without a pin the router round-robins over the agents that have already worked this Goal — and, for a brand-new Goal, over the eligible agents in its scope — so the loop can start without one.",
+                    "assignedAgentDeleted": "Видалений агент",
+                    "assignedAgentDeletedHelp": "Закріпленого агента видалено або він більше недоступний, тож цю роботу не бере жоден агент. Виберіть іншого агента або зніміть закріплення."
                 },
                 "executionTargets": {
                     "cloud": "Cloud",

@@ -173,7 +173,10 @@ export function NewCloudComputerDialog({
                 software: form.software,
                 acknowledgedPriceCents: size.priceMonthlyCents,
                 confirm: true,
-                ...(form.software.includes('overlay-vpn') && vpnAuthKey.trim()
+                ...(form.software.includes('overlay-vpn') &&
+                options?.software.find((entry) => entry.id === 'overlay-vpn')?.acceptsAuthKey !==
+                    false &&
+                vpnAuthKey.trim()
                     ? { vpnAuthKey: vpnAuthKey.trim() }
                     : {}),
             });
@@ -392,7 +395,11 @@ export function NewCloudComputerDialog({
                             </div>
                         </fieldset>
 
-                        {form.software.includes('overlay-vpn') ? (
+                        {form.software.includes('overlay-vpn') &&
+                        // Hidden where the deployment has no join command: create
+                        // refuses a key there. An older API sends no flag → shown.
+                        options?.software.find((entry) => entry.id === 'overlay-vpn')
+                            ?.acceptsAuthKey !== false ? (
                             <label className="flex flex-col gap-1">
                                 <span className="font-medium">{t('create.vpnKey')}</span>
                                 <input
