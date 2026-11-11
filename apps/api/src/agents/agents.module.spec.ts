@@ -96,6 +96,11 @@ jest.mock('@ever-works/agent/tasks-domain', () => ({
     ...jest.requireActual<Record<string, unknown>>(
         '../../../../packages/agent/src/tasks-domain/app-work-cloud-push',
     ),
+    // The REAL isolation rule (a leaf: contracts only), for the Repository Work base-branch
+    // refusal below — a stub could answer "isolated" where the run would not be.
+    ...jest.requireActual<Record<string, unknown>>(
+        '../../../../packages/agent/src/tasks-domain/task-isolation',
+    ),
 }));
 jest.mock('@ever-works/agent/ingest', () => ({
     EventIngestModule: class EventIngestModule {},
