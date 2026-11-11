@@ -165,8 +165,19 @@ export function redirectsWebhook(args: Record<string, unknown>): boolean {
     );
 }
 
-/** `update_notification_channel`: confirm when the call changes the channel's destination config. */
+/**
+ * `update_notification_channel`: confirm when the call changes where the
+ * channel delivers. The API field is `targetConfig` (`UpdateChannelDto`); this
+ * checked only `config`, the name the tool's old hint used, so once the hint
+ * named the real field the redirect would have gone through unconfirmed.
+ * `config` is still caught in case a model sends it.
+ */
 export function redirectsNotificationChannel(args: Record<string, unknown>): boolean {
     const body = bodyOf(args);
-    return Boolean(body && body.config !== undefined);
+    return Boolean(
+        body &&
+        (body.targetConfig !== undefined ||
+            body.config !== undefined ||
+            body.pluginId !== undefined),
+    );
 }

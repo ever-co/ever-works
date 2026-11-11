@@ -15,6 +15,7 @@ import { validate } from 'class-validator';
 import {
     NotificationPreferencesController,
     QuietHoursBody,
+    SetEventSubscriptionBody,
 } from './notification-preferences.controller';
 import type { AuthenticatedUser } from '../auth/types/auth.types';
 
@@ -92,5 +93,29 @@ describe('NotificationPreferencesController — quiet hours', () => {
             expect(await errorsFor({ quietHoursStart: '25:00' })).not.toHaveLength(0);
             expect(await errorsFor({ timezone: 'Mars/Phobos' })).not.toHaveLength(0);
         });
+    });
+});
+
+describe('SetEventSubscriptionBody (PUT preferences/event/:eventKey)', () => {
+    const errorsFor = async (body: Record<string, unknown>) =>
+        validate(plainToInstance(SetEventSubscriptionBody, body), {
+            whitelist: true,
+            forbidNonWhitelisted: true,
+        });
+
+    it('accepts a channel selection, including [] (mute) and built-in channel ids', async () => {
+        expect(await errorsFor({ channelIds: [] })).toHaveLength(0);
+        expect(await errorsFor({ channelIds: ['in-app', 'email'] })).toHaveLength(0);
+    });
+
+    it('refuses a body without channelIds — it used to save an empty selection and mute the event', async () => {
+        // The chat tool's old hint sent `{ enabled, channels }`; the inline type
+        // validated nothing and `channelIds` reached the service as undefined.
+        expect(await errorsFor({ enabled: true, channels: ['in-app'] })).not.toHaveLength(0);
+        expect(await errorsFor({})).not.toHaveLength(0);
+    });
+
+    it('refuses non-string channel ids', async () => {
+        expect(await errorsFor({ channelIds: [1, 2] })).not.toHaveLength(0);
     });
 });

@@ -2302,7 +2302,8 @@ export const WAVE2_OPERATIONS: OperationSpec[] = [
             },
         ],
         body: true,
-        bodyHint: 'file (required, multipart), targetClass, title, description, tags',
+        bodyHint:
+            'NOT usable from chat: the route takes a multipart file upload, which a chat tool cannot send. Ask the user to upload the file in the Work’s Knowledge Base instead.',
     },
     {
         toolName: 'list_work_uploads',
