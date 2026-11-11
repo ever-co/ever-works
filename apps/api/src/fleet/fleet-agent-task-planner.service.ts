@@ -46,6 +46,7 @@ import {
     type TaskPullRequestRow,
 } from '@ever-works/agent/tasks-domain';
 import {
+    REVIEW_FEEDBACK_ITEM_MAX_BYTES,
     REVIEW_FEEDBACK_SECTION_HEADING,
     capReviewFeedbackText,
     describeReviewFeedbackRules,
@@ -998,21 +999,31 @@ export class FleetAgentTaskPlannerService implements FleetAgentTaskPlanner {
             this.resolveRunContext(task, work),
             this.resolveWorkInFlight(task),
         ]);
-        const { instructions, continuation } = await this.composeInstructions({
-            agent,
-            task,
-            workspace,
-            appBrief,
-            acceptanceChecks,
-            setup,
-            ownerMessages,
-            answerTrail,
-            reviewFeedback,
-            settings,
-            mcp,
-            runContext,
-            workInFlight,
-        });
+        const { instructions, continuation, unshownReviewFeedbackIds } =
+            await this.composeInstructions({
+                agent,
+                task,
+                workspace,
+                appBrief,
+                acceptanceChecks,
+                setup,
+                ownerMessages,
+                answerTrail,
+                reviewFeedback,
+                settings,
+                mcp,
+                runContext,
+                workInFlight,
+            });
+        // Review feedback reaches the next run — findings this run carries but
+        // the instructions budget could not show go back to pending NOW, for
+        // the next run: a run must never consume a finding it was not given.
+        if (unshownReviewFeedbackIds.length > 0 && payload.runId) {
+            await this.reviewFeedback?.releaseFeedbackForRun(
+                payload.runId,
+                unshownReviewFeedbackIds,
+            );
+        }
 
         // Run secrets (self-build slice Y): the union of the env var NAMES
         // every repository of this run granted. NAMES only — the values are
@@ -1567,6 +1578,12 @@ export class FleetAgentTaskPlannerService implements FleetAgentTaskPlanner {
          * owner answer (there is nothing to continue with).
          */
         continuation: string | null;
+        /**
+         * Review feedback reaches the next run — the findings the run carries
+         * that did not fit the instructions budget and were left out; the
+         * caller hands them back to pending.
+         */
+        unshownReviewFeedbackIds: string[];
     }> {
         const { agent, task, workspace, acceptanceChecks, setup, ownerMessages, settings } = input;
         const answerTrail = input.answerTrail ?? [];
@@ -1660,26 +1677,38 @@ export class FleetAgentTaskPlannerService implements FleetAgentTaskPlanner {
 
         // Review feedback reaches the next run — a FIX run's findings sit after the brief (and
         // the owner's words) and right before the workspace facts: what this run has to do,
-        // then where and how. Never left out to fit the payload: it is the run's actual work.
-        // Fenced with the plan's one code, like every other section.
-        const reviewSection = input.reviewFeedback?.items.length
-            ? composeReviewFeedbackSection(input.reviewFeedback, task, workspace, fenceNonce)
-            : null;
-
-        const fleetSections = [
-            reviewSection,
-            '# WORKSPACE (fleet node)',
-            describeWorkspaceSection(workspace, {
-                canAskOwner,
-                ...(input.mcp ? { mcp: input.mcp } : {}),
-            }),
-            '# ACCEPTANCE CHECKS',
-            checksSection,
-            '# OUTPUT CONTRACT',
-            outputContract,
-        ]
-            .filter(Boolean)
-            .join('\n\n');
+        // then where and how. Fenced with the plan's one code, like every other section. Kept
+        // over every optional part of the tail; when even that does not fit, the NEWEST
+        // findings are left out one by one (below) and handed back to pending — never a plan
+        // that fails on every run because a Task's brief plus its findings are too big.
+        const reviewItems = input.reviewFeedback?.items ?? [];
+        let reviewShown = reviewItems.length;
+        const fleetSectionsShowing = (shown: number): string =>
+            [
+                shown > 0 && input.reviewFeedback
+                    ? composeReviewFeedbackSection(
+                          {
+                              items: reviewItems.slice(0, shown),
+                              omitted: input.reviewFeedback.omitted + (reviewItems.length - shown),
+                          },
+                          task,
+                          workspace,
+                          fenceNonce,
+                      )
+                    : null,
+                '# WORKSPACE (fleet node)',
+                describeWorkspaceSection(workspace, {
+                    canAskOwner,
+                    ...(input.mcp ? { mcp: input.mcp } : {}),
+                }),
+                '# ACCEPTANCE CHECKS',
+                checksSection,
+                '# OUTPUT CONTRACT',
+                outputContract,
+            ]
+                .filter(Boolean)
+                .join('\n\n');
+        let fleetSections = fleetSectionsShowing(reviewShown);
 
         // The owner's answer sits between the Task brief and the fleet
         // facts: the model reads what it was asked to do, then what the
@@ -1757,6 +1786,18 @@ export class FleetAgentTaskPlannerService implements FleetAgentTaskPlanner {
             optional[key] = null;
             tail = tailOf();
         }
+        // Then the review findings, newest first: the ones left out go back to
+        // pending for the next run, and the section says how many are waiting.
+        while (reviewShown > 0 && byteLength(tail) > FLEET_AGENT_EXECUTION_MAX_INSTRUCTIONS_BYTES) {
+            reviewShown -= 1;
+            fleetSections = fleetSectionsShowing(reviewShown);
+            tail = tailOf();
+        }
+        if (reviewShown < reviewItems.length) {
+            this.logger.warn(
+                `Fleet instructions for task ${task.id}: ${reviewItems.length - reviewShown} of ${reviewItems.length} review finding(s) left out to fit the job payload — handed back for the next run`,
+            );
+        }
         // The Task brief, the owner's answer and the workspace facts are
         // never truncated; when they alone do not fit, the run cannot be
         // planned honestly — fail HERE (recorded on the run row) rather
@@ -1779,6 +1820,7 @@ export class FleetAgentTaskPlannerService implements FleetAgentTaskPlanner {
             continuation: ownerSection
                 ? composeContinuation(ownerSection, outputContract, fenceNonce)
                 : null,
+            unshownReviewFeedbackIds: reviewItems.slice(reviewShown).map((item) => item.id),
         };
     }
 
@@ -2025,13 +2067,6 @@ function composeAnswerTrailSection(trail: AnsweredQuestion[], nonce: string): st
 
 const REVIEW_FEEDBACK_BEGIN = (nonce: string) => `--- BEGIN REVIEW FEEDBACK [${nonce}] ---`;
 const REVIEW_FEEDBACK_END = (nonce: string) => `--- END REVIEW FEEDBACK [${nonce}] ---`;
-/**
- * One finding's ceiling AFTER neutralising. It is already cut to
- * `REVIEW_FEEDBACK_ITEM_MAX_CHARS` (4000 characters) and the run carries at
- * most `REVIEW_FEEDBACK_MAX_CHARS` in all, so the whole section stays far
- * below the 160 KiB instructions budget it is never dropped from.
- */
-const REVIEW_FEEDBACK_ITEM_MAX_BYTES = 12 * 1024;
 
 /**
  * Review feedback reaches the next run — the `# REVIEW FEEDBACK TO ADDRESS`

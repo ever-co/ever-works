@@ -337,15 +337,16 @@ Changes requested on the pull request itself — by a repository collaborator or
 
 The findings are data, not instructions: they sit between fence markers carrying a code their authors cannot know, and nothing inside them can change the run's rules, grant it permissions or send its push anywhere else.
 
-**Same branch, same pull request.** A fix run checks out the Task's branch at its pushed head (on another computer too), pushes to that branch, and the open pull request picks the commits up. No second pull request is opened. When the Task's pull request was merged or closed, the next run opens a new one, as before.
+**Same branch, same pull request.** A fix run checks out the Task's branch at its pushed head (on another computer too, and on the same one when someone pushed to the branch since), pushes to that branch, and the open pull request picks the commits up. No second pull request is opened, and the Task moves back to **In review**. Whether the pull request is still open is checked when the run finishes: one merged or closed while the run worked gets a new pull request for the new commits, as before.
 
-**Each finding is fixed once.** A run carries the findings it was given. When it completes they are used up, and a later run is not told about them again. When it fails or is cancelled they go back, and the next run gets them. A run that stops to ask you a question keeps them, and the run your answer starts carries them on.
+**Each finding is fixed once.** A run carries the findings it was given. When it completes they are used up, and a later run is not told about them again. When it fails, is cancelled, or stops to ask you a question, they go back: the next run gets them, and so does the run your answer starts (as its first message, like any resumed run).
 
-- One run carries at most **10** findings, each cut at 4,000 characters and 24,000 in all. The rest wait for the next run, and the run is told how many are waiting.
-- A finding recorded before the Task's last completed run that carried no findings is treated as handled (that run started after it). If it still applies, record it again.
+- A finding stays waiting until a run that was given it completes. Nothing else retires it — not its age, and not another run finishing in the meantime.
+- A finding recorded on a pull request follows that pull request: once it is merged or closed, or the Task moves on to a new one, its findings are no longer given to runs. Findings recorded on the Task itself (`POST /api/tasks/:id/reject`) always are.
+- One run carries at most **10** findings, each cut at 4 KiB and 24 KiB in all. The rest wait for the next run, and the run is told how many are waiting. On one of your computers, a Task whose description leaves too little room carries fewer, and the ones left out wait too.
 
 :::note A resumed run
-Resuming a parked run — its Inbox answer, or **Resume** — still replays pending findings as the first message of the resumed run, as before.
+Resuming a parked run — its Inbox answer, or **Resume** — replays the pending findings as the first message of the resumed run.
 :::
 
 :::warning No screen assigns a person
