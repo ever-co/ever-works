@@ -131,6 +131,75 @@ describe('the review bypasses: refused, or rendered within budget', () => {
     });
 });
 
+/**
+ * Third closure check: a fence the parser opens INSIDE a container (here after
+ * `- a`) used to make the text pre-check stop counting until a closing fence
+ * it never saw. The pre-check now counts every line; these are the reviewer's
+ * seven payloads behind every kind of fence prefix.
+ */
+const FENCE_PREFIXES: Array<[string, string]> = [
+    ['a list item, fence indented 3 spaces (the review)', '- a\n   ```\n'],
+    ['a list item, fence indented 2 spaces', '- a\n  ```\n'],
+    ['a list item, fence indented 1 space', '- a\n ```\n'],
+    ['a list item, a ~~~ fence', '- a\n   ~~~\n'],
+    ['a nested list item', '- a\n  - b\n     ```\n'],
+    ['a quote', '> a\n> ```\n'],
+    ['an unclosed top-level fence', '```\n'],
+    ['a fence opened with more backticks than it is closed with', '````\n```\n'],
+];
+
+const tabbedQuoteList = (n: number) => {
+    let s = '';
+    for (let k = 0; k < n; k++)
+        s += '>' + '\t'.repeat(Math.floor(k / 2)) + (k % 2 ? '  ' : '') + '- x\n';
+    return s;
+};
+
+const FENCE_PAYLOADS: Array<[string, string]> = [
+    ['8,000 piped table rows (16.7 s in the review)', 'a|b\n-|-\n' + 'x|y\n'.repeat(8000)],
+    ['32 KB of "*a" (6.3 s)', '*a'.repeat(16000)],
+    ['4,000 nested list levels (12.7 s)', '- '.repeat(4000) + 'x'],
+    ['2,000 nested list levels (3.2 s)', '- '.repeat(2000) + 'x'],
+    ['2,000 nested images (rendered in 9.8 s)', '!['.repeat(2000) + 'a' + '](b)'.repeat(2000)],
+    ['1,000 nested images (2.1 s)', '!['.repeat(1000) + 'a' + '](b)'.repeat(1000)],
+    ['a tab-nested list in a quote, 300 levels (2.8 s)', tabbedQuoteList(300)],
+];
+
+const FENCE_CASES: Array<[string, string]> = FENCE_PREFIXES.flatMap(([where, prefix]) =>
+    FENCE_PAYLOADS.map(([what, payload]): [string, string] => [
+        `${what} behind ${where}`,
+        (prefix + payload).slice(0, 32 * 1024),
+    ]),
+);
+
+describe('a fence opened inside a container hides nothing from the pre-check', () => {
+    it.each(FENCE_CASES)('%s', (_name, md) => {
+        const { ms, fallback } = renderBlock(md);
+        expect(ms).toBeLessThan(BUDGET_MS);
+        expect(fallback).toBe(!acceptsBlock(md));
+        // None of these may render as Markdown.
+        expect(fallback).toBe(true);
+    });
+
+    it('a description with large real code blocks still renders as Markdown', () => {
+        const python = Array.from(
+            { length: 150 },
+            (_, k) =>
+                `${'    '.repeat(k % 4)}result_${k} = compute(item_${k}, factor=2 * k)  # step [${k}]`,
+        ).join('\n');
+        const tsx = Array.from(
+            { length: 120 },
+            (_, k) =>
+                `${'  '.repeat(k % 6)}<Item key={${k}} value={items[${k}]} onClick={() => select(${k})} />`,
+        ).join('\n');
+        const prose = 'We migrate the export job to the new queue and keep the old one running. ';
+        const md = `## Plan\n\n${prose.repeat(5)}\n\n\`\`\`python\n${python}\n\`\`\`\n\n${prose.repeat(3)}\n\n\`\`\`tsx\n${tsx}\n\`\`\`\n`;
+        const { ms, fallback } = renderBlock(md);
+        expect(fallback).toBe(false);
+        expect(ms).toBeLessThan(BUDGET_MS);
+    });
+});
+
 /** Lines that look like they end a table but that the parser keeps as rows. */
 const ROW_LINES: Array<[string, string]> = [
     ['"```x`" (not a fence)', '```x`'],

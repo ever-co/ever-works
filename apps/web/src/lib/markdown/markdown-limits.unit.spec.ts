@@ -80,12 +80,48 @@ describe('assessMarkdownText', () => {
         expect(reason(md)).toBe(expected);
     });
 
-    it('does not count what is inside a top-level code fence', () => {
-        const code =
-            '```py\n' +
-            ('    '.repeat(20) + 'x = a_b * c_d ** 2  # [1] | y\n').repeat(200) +
-            '```\n';
-        expect(reason(code + '\nAfter the code.')).toBe('render');
+    it('never skips a code block: its lines are counted like any other (third closure check)', () => {
+        // Inside a fence, deep indentation still counts as nesting.
+        const code = '```py\n' + ('    '.repeat(20) + 'x = 1\n').repeat(10) + '```\n';
+        expect(reason(code)).toBe('nesting');
+        // A "fence" opened inside a list item hides nothing either.
+        const hidden = (prefix: string) =>
+            prefix + 'a|b\n-|-\n' + 'x|y\n'.repeat(BLOCK_TEXT_CAPS.tableRows);
+        for (const prefix of [
+            '- a\n   ```\n',
+            '- a\n  ```\n',
+            '- a\n ```\n',
+            '- a\n   ~~~\n',
+            '- a\n  - b\n     ```\n',
+            '> a\n> ```\n',
+            '```\n',
+            '````\n```\n',
+        ]) {
+            expect(reason(hidden(prefix))).toBe('tableRows');
+            expect(reason(prefix + '- '.repeat(MAX_MARKDOWN_NESTING + 1) + 'x')).toBe('nesting');
+            expect(reason(prefix + '*a'.repeat(BLOCK_TEXT_CAPS.emphasis + 1))).toBe('emphasis');
+        }
+    });
+
+    it('passes descriptions with large real code blocks', () => {
+        const python = Array.from(
+            { length: 150 },
+            (_, k) =>
+                `${'    '.repeat(k % 4)}result_${k} = compute(item_${k}, factor=2 * k)  # step [${k}]`,
+        ).join('\n');
+        const tsx = Array.from(
+            { length: 120 },
+            (_, k) =>
+                `${'  '.repeat(k % 6)}<Item key={${k}} value={items[${k}]} onClick={() => select(${k})} />`,
+        ).join('\n');
+        const json = Array.from(
+            { length: 400 },
+            (_, k) => `${'  '.repeat(1 + (k % 8))}"key_${k}": [${k}, "<value_${k}>"],`,
+        ).join('\n');
+        expect(
+            reason('## Plan\n\n```python\n' + python + '\n```\n\n```tsx\n' + tsx + '\n```\n'),
+        ).toBe('render');
+        expect(reason('```json\n' + json + '\n```\n')).toBe('render');
     });
 
     it('never skips lines the parser does not treat as code', () => {

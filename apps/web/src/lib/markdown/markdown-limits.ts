@@ -18,8 +18,13 @@
  *    super-linearly in the tokenizer;
  *  - and the size.
  *
- * One linear pass, no regular expressions. Top-level code fences are skipped,
- * read strictly so a line the parser does NOT treat as code is never skipped.
+ * One linear pass, no regular expressions, and NOTHING is skipped: every line
+ * is counted, code blocks included. Skipping what looked like a top-level
+ * code fence let a list item `- a` followed by a fence line indented three
+ * spaces hide everything after it — the parser opens that fence inside the
+ * list item and closes it on the next unindented line — so 8,000 table rows
+ * behind it took 16.7 s to parse (PR #3137, third closure check). A real code
+ * block is cheap to parse, so counting it too is safe.
  */
 
 /** Characters. Mission and Goal descriptions cap at 10,000; Task ones are unbounded. */
@@ -103,50 +108,6 @@ function isDigit(char: string | undefined): boolean {
     return char !== undefined && char >= '0' && char <= '9';
 }
 
-interface Fence {
-    char: string;
-    length: number;
-}
-
-/** A run of 3+ fence characters after at most `maxIndent` spaces, or null. */
-function fenceRun(
-    text: string,
-    start: number,
-    end: number,
-    maxIndent: number,
-): (Fence & { after: number }) | null {
-    let i = start;
-    while (i < end && text[i] === ' ' && i - start < maxIndent) i++;
-    const char = text[i];
-    if (char !== '`' && char !== '~') return null;
-    let j = i;
-    while (j < end && text[j] === char) j++;
-    return j - i >= 3 ? { char, length: j - i, after: j } : null;
-}
-
-/**
- * A top-level fence opener, read STRICTLY (at most 3 spaces of indentation, no
- * backtick in a backtick fence's info string): skipping lines the parser does
- * not treat as code would let them through unchecked, so when in doubt a line
- * is not an opener. A fence inside a list or quote is simply not skipped.
- */
-function fenceOpens(text: string, start: number, end: number): Fence | null {
-    const run = fenceRun(text, start, end, 3);
-    if (!run) return null;
-    if (run.char === '`' && text.slice(run.after, end).includes('`')) return null;
-    return { char: run.char, length: run.length };
-}
-
-/** A closer, read LENIENTLY (any indentation): ending a fence early only means checking more. */
-function fenceCloses(text: string, start: number, end: number, fence: Fence): boolean {
-    const run = fenceRun(text, start, end, Number.POSITIVE_INFINITY);
-    if (!run || run.char !== fence.char || run.length < fence.length) return false;
-    for (let i = run.after; i < end; i++) {
-        if (!isSpace(text[i]) && text[i] !== '\r') return false;
-    }
-    return true;
-}
-
 /**
  * The nesting of one line's container prefix. Every whitespace column counts —
  * before the first marker and after any — except the one space each marker
@@ -215,7 +176,7 @@ function isDelimiterLike(text: string, start: number, end: number): boolean {
 interface TextOptions {
     caps: MarkdownTextCounts;
     maxLength: number;
-    /** `false` for the inline parser, which builds no containers or fences. */
+    /** `false` for the inline parser, which builds no containers or tables. */
     blockConstructs: boolean;
 }
 
@@ -236,7 +197,12 @@ function assessText(
         tableRows: 0,
         tablePipes: 0,
     };
-    let fence: Fence | null = null;
+    // The only state: whether the line may be a table row. It only ever ADDS
+    // to the counts, and it ends where the parser ends a table — at a blank
+    // (whitespace-only) line; a bare ">" is not blank here, so inside a quote
+    // it over-counts. Nothing suspends counting: every line of the text is
+    // counted, code blocks included (PR #3137, third closure check: skipping
+    // a "fence" the parser opened inside a list item hid the rest of the text).
     let inTable = false;
     let previousBlank = true;
     let previousPipes = 0;
@@ -245,50 +211,46 @@ function assessText(
         let lineEnd = content.indexOf('\n', lineStart);
         if (lineEnd < 0) lineEnd = content.length;
 
-        if (fence) {
-            if (fenceCloses(content, lineStart, lineEnd, fence)) fence = null;
-        } else if (!blockConstructs || !(fence = fenceOpens(content, lineStart, lineEnd))) {
-            let blank = true;
-            let pipes = 0;
-            for (let i = lineStart; i < lineEnd; i++) {
-                const char = content[i];
-                if (blank && !isSpace(char) && char !== '\r') blank = false;
-                if (char === '|') pipes++;
-                if (char === '*' || char === '_' || char === '~') counts.emphasis++;
-                else if (char === '`') {
-                    if (content[i - 1] !== '`') counts.codeTicks++;
-                } else if (char === '[') {
-                    counts.brackets++;
-                    if (content[i - 1] === '!') counts.images++;
-                } else if (char === '<') counts.angles++;
-            }
-            if (blank) {
-                inTable = false;
-            } else {
-                counts.lines++;
-                if (blockConstructs) {
-                    const { depth, contentStart } = lineNesting(content, lineStart, lineEnd);
-                    if (depth > MAX_MARKDOWN_NESTING) return { render: false, reason: 'nesting' };
-                    counts.nestingWork += depth;
-                    if (inTable) {
-                        counts.tableRows++;
-                        counts.tablePipes += pipes;
-                    } else if (
-                        !previousBlank &&
-                        (pipes > 0 || previousPipes > 0) &&
-                        isDelimiterLike(content, contentStart, lineEnd)
-                    ) {
-                        inTable = true;
-                        counts.tableRows += 2; // the header and the delimiter row
-                        counts.tablePipes += pipes + previousPipes;
-                    }
+        let blank = true;
+        let pipes = 0;
+        for (let i = lineStart; i < lineEnd; i++) {
+            const char = content[i];
+            if (blank && !isSpace(char) && char !== '\r') blank = false;
+            if (char === '|') pipes++;
+            if (char === '*' || char === '_' || char === '~') counts.emphasis++;
+            else if (char === '`') {
+                if (content[i - 1] !== '`') counts.codeTicks++;
+            } else if (char === '[') {
+                counts.brackets++;
+                if (content[i - 1] === '!') counts.images++;
+            } else if (char === '<') counts.angles++;
+        }
+        if (blank) {
+            inTable = false;
+        } else {
+            counts.lines++;
+            if (blockConstructs) {
+                const { depth, contentStart } = lineNesting(content, lineStart, lineEnd);
+                if (depth > MAX_MARKDOWN_NESTING) return { render: false, reason: 'nesting' };
+                counts.nestingWork += depth;
+                if (inTable) {
+                    counts.tableRows++;
+                    counts.tablePipes += pipes;
+                } else if (
+                    !previousBlank &&
+                    (pipes > 0 || previousPipes > 0) &&
+                    isDelimiterLike(content, contentStart, lineEnd)
+                ) {
+                    inTable = true;
+                    counts.tableRows += 2; // the header and the delimiter row
+                    counts.tablePipes += pipes + previousPipes;
                 }
             }
-            previousBlank = blank;
-            previousPipes = pipes;
-            for (const key of Object.keys(caps) as Array<keyof MarkdownTextCounts>) {
-                if (counts[key] > caps[key]) return { render: false, reason: key };
-            }
+        }
+        previousBlank = blank;
+        previousPipes = pipes;
+        for (const key of Object.keys(caps) as Array<keyof MarkdownTextCounts>) {
+            if (counts[key] > caps[key]) return { render: false, reason: key };
         }
         lineStart = lineEnd + 1;
     }
@@ -306,7 +268,8 @@ export function assessMarkdownText(content: string): MarkdownTextAssessment {
 
 /**
  * The same pass for one inline field. Block constructs are switched off in the
- * inline parser, so nesting and fences are not counted.
+ * inline parser, so nesting and potential table rows are not counted; every
+ * line and character still is.
  */
 export function assessInlineMarkdownText(content: string): MarkdownTextAssessment {
     return assessText(content, {
