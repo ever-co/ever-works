@@ -13,6 +13,10 @@ import { ROUTES } from '@/lib/constants';
 import type { Task, TaskPriority } from '@/lib/api/tasks';
 import { TASK_PRIORITY_PRESENTATION } from '@/lib/task-priorities/catalog';
 import { ChecksEditor } from './ChecksEditor';
+import {
+    acceptanceChecksForSave,
+    acceptanceChecksSaveProblem,
+} from '@/lib/tasks/acceptance-checks-for-save.shared';
 import { WorkSelect } from './WorkSelect';
 import { TaskExtraReposPicker } from './TaskExtraReposPicker';
 // PASS-4 review fix (CRITICAL): templates dead end. Pre-fill from
@@ -144,6 +148,7 @@ export function planningPayload(
 
 export function NewTaskForm({ createTask }: { createTask: CreateTaskFn }) {
     const t = useTranslations('dashboard.tasksPage.newDialog');
+    const tChecks = useTranslations('dashboard.tasksPage.checksEditor');
     const router = useRouter();
     const searchParams = useSearchParams();
     // Tasks upgrades — workflow templates expand into a parent Task plus
@@ -347,6 +352,16 @@ export function NewTaskForm({ createTask }: { createTask: CreateTaskFn }) {
                         setError(t(planning.error));
                         return;
                     }
+                    // Quality gates — only declared rows with a command
+                    // count; empty declaration = inherit Work defaults. Too
+                    // many checks or a too-long command: say which, instead
+                    // of the API's generic 400.
+                    const checkRows = acceptanceChecksForSave(checks);
+                    const checksProblem = acceptanceChecksSaveProblem(checkRows);
+                    if (checksProblem) {
+                        setError(tChecks(checksProblem.reason, { ...checksProblem }));
+                        return;
+                    }
                     const task = await createTask({
                         title: title.trim(),
                         description: description.trim() || null,
@@ -359,12 +374,7 @@ export function NewTaskForm({ createTask }: { createTask: CreateTaskFn }) {
                         missionId: scopeCount === 1 ? missionId : null,
                         ideaId: scopeCount === 1 ? ideaId : null,
                         extraRepos: extraRepos.length > 0 ? extraRepos : undefined,
-                        // Quality gates — only declared rows with a command
-                        // count; empty declaration = inherit Work defaults.
-                        acceptanceChecks: (() => {
-                            const rows = checks.filter((c) => c.command.trim().length > 0);
-                            return rows.length > 0 ? rows : undefined;
-                        })(),
+                        acceptanceChecks: checkRows.length > 0 ? checkRows : undefined,
                         maxGateAttempts:
                             maxGateAttempts === 'inherit'
                                 ? undefined
@@ -547,6 +557,8 @@ export function NewTaskForm({ createTask }: { createTask: CreateTaskFn }) {
                         noneLabel={t('workNone')}
                         placeholder={t('workPlaceholder')}
                         testId="new-task-work"
+                        // The API files a Task / Goal only on a Work the caller owns.
+                        ownedOnly
                     />
                     <p className="mt-1 text-[11px] text-text-muted dark:text-text-muted-dark">
                         {t('workHint')}
