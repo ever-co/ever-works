@@ -99,7 +99,7 @@ function buildWork(overrides: Partial<Work> = {}): Work {
         tenantId: TENANT,
         organizationId: ORG,
         websiteTemplateId: null,
-        deployProvider: 'vercel',
+        deployProvider: 'ever-works',
         defaultAgentId: null,
         getRepoOwner: () => 'acme',
         ...overrides,

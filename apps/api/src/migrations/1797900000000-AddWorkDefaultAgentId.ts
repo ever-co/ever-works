@@ -27,8 +27,8 @@ const COLUMN = 'defaultAgentId';
  *
  * Slot `1797900000000`: the next after `1797800000000-AddRecurrenceMaxOpenInstances`, the newest
  * migration on `develop` when this was written. Forward-only with a guard so a partially applied
- * database converges; portable `TableColumn` DDL (better-sqlite3 in e2e/CI, Postgres in
- * production). `down()` drops exactly what `up()` added.
+ * database converges; portable `TableColumn` DDL (better-sqlite3 in e2e/CI, the production
+ * database). `down()` drops exactly what `up()` added.
  */
 export class AddWorkDefaultAgentId1797900000000 implements MigrationInterface {
     name = 'AddWorkDefaultAgentId1797900000000';
