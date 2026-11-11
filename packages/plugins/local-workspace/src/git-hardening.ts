@@ -173,6 +173,60 @@ export function gitConfigEnvOverlay(
 	return env;
 }
 
+/**
+ * Overlay for the reused-worktree CATCH-UP (review feedback reaches the next
+ * run): `rev-parse`, `merge-base --is-ancestor`, `status` and `reset --keep`
+ * in a checkout a previous run had a shell in, moving it to a commit somebody
+ * else pushed. Everything {@link checkoutHardeningEntries} pins, plus every
+ * other key that could make THESE commands start a program:
+ *
+ *  - no signature check, ever: the catch-up uses `reset --keep`, which never
+ *    asks `gpg.program` / `gpg.ssh.program` / `gpg.x509.program` (a
+ *    `merge --ff-only` under `merge.verifySignatures` did, for a signed tip —
+ *    reproduced in review); `merge.verifySignatures=false` holds should the
+ *    command ever change;
+ *  - no automatic maintenance: `gc.auto=0`, `maintenance.auto=false` (a
+ *    `gc --auto` runs `gc.recentObjectsHook`);
+ *  - no external diff, no credential prompt or helper: `diff.external`,
+ *    `core.askPass`, `credential.helper` emptied, `core.alternateRefsCommand`
+ *    emptied;
+ *  - `core.unsetEnvVars` back to Git for Windows' default, so a planted value
+ *    cannot strip {@link FAST_FORWARD_ENV} from the command's children.
+ *
+ * Transports (`core.sshCommand`, `core.gitProxy`, `uploadpack`, `protocol.*`)
+ * are refused as a whole by `GIT_ALLOW_PROTOCOL=''`, and a lazy fetch of a
+ * planted promisor remote by `GIT_NO_LAZY_FETCH=1` ({@link FAST_FORWARD_ENV}).
+ */
+export function fastForwardHardeningEntries(
+	hooksDir: string,
+	found: readonly FilterDriverConfigEntry[]
+): Array<[string, string]> {
+	return [
+		...checkoutHardeningEntries(hooksDir, found),
+		['merge.verifySignatures', 'false'],
+		['gc.auto', '0'],
+		['maintenance.auto', 'false'],
+		['diff.external', ''],
+		['core.askPass', ''],
+		['credential.helper', ''],
+		['core.alternateRefsCommand', ''],
+		['core.unsetEnvVars', 'PERL5LIB']
+	];
+}
+
+/**
+ * The variables beside {@link fastForwardHardeningEntries}: no transport at
+ * all (an empty `GIT_ALLOW_PROTOCOL` is a set one — `transport 'file' not
+ * allowed`), no lazy fetch (Git 2.44+), no pager, no prompt.
+ */
+export const FAST_FORWARD_ENV: Readonly<Record<string, string>> = {
+	GIT_ALLOW_PROTOCOL: '',
+	GIT_NO_LAZY_FETCH: '1',
+	GIT_PAGER: 'cat',
+	GIT_TERMINAL_PROMPT: '0',
+	GIT_LFS_SKIP_SMUDGE: '1'
+};
+
 /** The complete environment overlay for a hardened CHECKOUT-type command. */
 export function checkoutHardeningEnv(
 	hooksDir: string,

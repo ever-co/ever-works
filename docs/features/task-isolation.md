@@ -30,6 +30,8 @@ The same fields are writable over the API with `PATCH /api/works/:id`.
 
 A [Mission that files Tasks](./missions.md#output) relies on this setting for a Repository Work: it files Tasks on one only while `taskIsolation` is `worktree`, because only then does each Task become a branch and a pull request. It never turns the setting on by itself.
 
+The Agent that runs those Tasks also has to be allowed to commit and to open pull requests. When the Work is served by an Agent shared with other Works, name it as the Work's [default Agent](./tasks.md#the-works-default-agent) (`defaultAgentId`, same `PATCH /api/works/:id`) so Tasks nobody assigned, including a Mission's, run with it.
+
 ## Per-Task override
 
 A single Task can opt in or out regardless of the Work setting. On the Task detail page, the **Branch** panel shows an isolation selector while the Task has no branch yet:
@@ -66,7 +68,7 @@ If the base branch moves on and the Task branch can no longer merge, the branch 
 
 ## Cleanup
 
-With `taskBranchCleanup: on-merge`, a nightly sweep deletes the remote branches of Tasks that reached a terminal state (done or cancelled), plus any abandoned branch past a hard staleness cutoff — in every repository the Task spans, so a multi-repo Task does not leave one branch behind per extra repository. With `manual`, branches are never auto-deleted — use **Discard branch**.
+With `taskBranchCleanup: on-merge`, a nightly sweep deletes the remote branches of Tasks that reached a terminal state (done or cancelled), plus any abandoned branch past a hard staleness cutoff (14 days by default, `TASK_BRANCH_GC_STALE_DAYS`: no change to the Task, no pull-request status read and no CI result for its head in that time, so a pull request still open for review keeps its branch; a Task whose pull request the provider answers "not found" for is never cleaned up this way) — in every repository the Task spans, so a multi-repo Task does not leave one branch behind per extra repository. With `manual`, branches are never auto-deleted — use **Discard branch**.
 
 ## Related
 

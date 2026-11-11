@@ -40,6 +40,8 @@ import {
 import {
 	checkoutHardeningEnv,
 	emptyHooksDir,
+	FAST_FORWARD_ENV,
+	fastForwardHardeningEntries,
 	FILTER_DRIVER_PROBE_ARGS,
 	finalizeHardeningEntries,
 	gitConfigEnvOverlay,
@@ -398,6 +400,78 @@ export class LocalWorkspacePlugin implements IPlugin, IWorkspacePlugin {
 	}
 
 	/**
+	 * Review feedback reaches the next run (2026-11-11) — bring a REUSED
+	 * worktree up to its pushed Task branch.
+	 *
+	 * A reused checkout used to resume exactly where this machine left it,
+	 * even when the remote branch had moved on since: a person reverted an
+	 * unrelated commit on the pull request, or another machine pushed the
+	 * last fix. The next run (a fix run for review findings, typically) then
+	 * built on a stale branch, and its push was refused as a non-fast-forward
+	 * — after the model had done the work.
+	 *
+	 * Taken ONLY when it is a plain fast-forward of a clean checkout: the
+	 * local head is an ancestor of the fetched `origin/<branch>`, and no
+	 * tracked file is modified. Anything else — local commits the remote does
+	 * not have, a dirty tree, a move Git refuses — leaves the worktree exactly
+	 * as before. Never throws except to honour cancellation.
+	 *
+	 * No `merge`: the move is `reset --keep <the fetched commit>`, after the
+	 * ancestry check proved it a fast-forward. `merge --ff-only` asks
+	 * `gpg.program` under `merge.verifySignatures` for a signed tip (an
+	 * independent review ran a planted one), runs `post-merge`, and starts
+	 * automatic maintenance; `reset --keep` does none of that.
+	 *
+	 * Every command here — on BOTH runtimes, hardened provision or not, since
+	 * the catch-up is new on each — runs under {@link fastForwardEnv}: the
+	 * checkout overlay plus every other key that could make these commands
+	 * start a program, no transport and no lazy fetch. That overlay is built
+	 * from the filter drivers visible FROM THE WORKTREE, before the first
+	 * command: a driver defined only in its own `config.worktree` is invisible
+	 * from the pool, and the review saw one run during `status`.
+	 */
+	private async fastForwardReusedWorktree(worktreeDir: string, spec: WorkspaceProvisionSpec): Promise<void> {
+		const remoteRef = `refs/remotes/origin/${spec.branch}`;
+		try {
+			const env = await this.fastForwardEnv(worktreeDir, spec.signal);
+			const run = (args: string[]): Promise<GitResult> =>
+				this.git(args, worktreeDir, spec.auth, spec.signal, null, env);
+			const head = await run(['rev-parse', '--verify', 'HEAD^{commit}']);
+			const remote = await run(['rev-parse', '--verify', `${remoteRef}^{commit}`]);
+			if (head.code !== 0 || remote.code !== 0) return;
+			const headSha = head.stdout.trim();
+			const remoteSha = remote.stdout.trim();
+			if (!/^[0-9a-f]{40,64}$/.test(headSha) || !/^[0-9a-f]{40,64}$/.test(remoteSha)) return;
+			if (headSha === remoteSha) return;
+			if ((await run(['merge-base', '--is-ancestor', headSha, remoteSha])).code !== 0) return;
+			const status = await run(['status', '--porcelain', '--untracked-files=no', '--ignore-submodules=all']);
+			if (status.code !== 0 || status.stdout.trim().length > 0) return;
+			await run(['reset', '--quiet', '--keep', remoteSha]);
+		} catch (error) {
+			if (isAbortError(error)) throw error;
+		}
+	}
+
+	/**
+	 * The catch-up's environment ({@link fastForwardReusedWorktree}): the
+	 * filter drivers probed from the worktree itself, pinned with every other
+	 * program-running key (`fastForwardHardeningEntries`), appended after the
+	 * operator's own `GIT_CONFIG_*` entries; then {@link FAST_FORWARD_ENV}, and
+	 * `GIT_WORK_TREE` so a planted `core.worktree` cannot point the checkout
+	 * anywhere else. Passed as the command's whole overlay, so it replaces a
+	 * hardened provision's scope rather than adding to its indexes.
+	 */
+	private async fastForwardEnv(worktreeDir: string, signal?: AbortSignal): Promise<Record<string, string>> {
+		const hooksDir = (await emptyHooksDir()).replace(/\\/g, '/');
+		const found = await this.probeFilterDrivers(worktreeDir, signal);
+		return {
+			...gitConfigEnvOverlay(fastForwardHardeningEntries(hooksDir, found)),
+			...FAST_FORWARD_ENV,
+			GIT_WORK_TREE: worktreeDir
+		};
+	}
+
+	/**
 	 * Re-read the filter drivers visible from `dir` and rebuild the scope's
 	 * overlay. A no-op outside a hardened provision.
 	 */
@@ -578,7 +652,10 @@ export class LocalWorkspacePlugin implements IPlugin, IWorkspacePlugin {
 			if (existing.stamp.branch === spec.branch) {
 				await this.removeProvisionIntent(poolDir, worktreeDir, spec);
 				// The worktree persists across runs on purpose — resume in
-				// place, no re-clone, no branch re-cut.
+				// place, no re-clone, no branch re-cut. Resuming in place
+				// includes the commits pushed onto the branch since this
+				// checkout last ran, when taking them is a plain fast-forward.
+				if (remoteBranchExists) await this.fastForwardReusedWorktree(worktreeDir, spec);
 				return {
 					path: worktreeDir,
 					baseSha,

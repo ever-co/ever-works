@@ -2348,3 +2348,36 @@ function upstreamActionFailure(context: string, error: unknown): AppUpstreamActi
         message: error instanceof Error ? error.message : 'Unknown error',
     };
 }
+
+/**
+ * The Work's default Agent — the Agent that runs its new Tasks when none is named (Run, a
+ * Mission's Task output, a Goal's first iteration, an App Work change), tried before the Work's
+ * only Agent. Same `PATCH /works/:id` UpdateWorkDto path as the sibling settings cards; the
+ * schema mirrors `UpdateWorkDto.defaultAgentId` (`@IsUUID`, nullable), and the API decides
+ * whether the Agent may be used (owned, not archived, in the Work's scope; else 404).
+ */
+export async function updateWorkDefaultAgent(workId: string, defaultAgentId: string | null) {
+    const user = await getAuthFromCookie();
+    if (!user) {
+        redirect(ROUTES.AUTH_LOGIN);
+    }
+
+    const validation = z
+        .object({ defaultAgentId: z.string().uuid().nullable() })
+        .safeParse({ defaultAgentId }, ZOD3_ERROR_MESSAGES);
+    if (!validation.success) {
+        return { success: false, error: validation.error.issues[0].message };
+    }
+
+    try {
+        const response = await workAPI.update(workId, validation.data);
+        revalidatePath(`/works/${workId}/settings`);
+        return { success: response.status === 'success' };
+    } catch (error) {
+        console.error('Failed to update the default Agent:', error);
+        return {
+            success: false,
+            error: error instanceof Error ? error.message : 'Failed to update the default Agent',
+        };
+    }
+}

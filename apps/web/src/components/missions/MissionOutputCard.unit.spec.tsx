@@ -48,6 +48,9 @@ function mission(overrides: Partial<Mission> = {}): Mission {
 
 beforeEach(() => {
     vi.clearAllMocks();
+    // `clearAllMocks` keeps queued `mockResolvedValueOnce` answers: one a test left unused would
+    // answer the next test's save instead of that test's own. Drop them here.
+    updateMissionAction.mockReset();
     updateMissionAction.mockImplementation(async (_id: string, input: Partial<Mission>) =>
         mission({ ...input } as Partial<Mission>),
     );
@@ -193,6 +196,9 @@ describe('MissionOutputCard (APW-08 T36)', () => {
         expect(screen.queryByTestId('mission-output-repo-isolation-off')).toBeNull();
 
         updateMissionAction.mockResolvedValueOnce(mission({ outputMode: 'tasks', warnings: [] }));
+        // Save stays disabled until the first save's transition settles. On a loaded runner a click
+        // that lands before then is ignored, which leaves this queued answer unused.
+        await waitFor(() => expect(screen.getByTestId('mission-output-save')).not.toBeDisabled());
         fireEvent.click(screen.getByTestId('mission-output-save'));
         await waitFor(() =>
             expect(screen.queryByTestId('mission-output-repo-agent-cannot-open-prs')).toBeNull(),

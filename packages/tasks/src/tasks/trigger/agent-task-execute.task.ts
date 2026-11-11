@@ -17,6 +17,7 @@ import {
     AgentEscalationService,
     AgentRunService,
     RunDispatchGateService,
+    buildFencedReviewFeedback,
     buildFencedTaskBrief,
     detectDoomLoop,
     fingerprintFailures,
@@ -636,10 +637,42 @@ export const agentTaskExecuteTask = task<'agent-task-execute', AgentTaskExecuteP
                       labels: taskRow.labels,
                   })
                 : `Task ${payload.taskId}`;
+            // Review feedback reaches the next run — the findings reviewers
+            // recorded since the Task's last finished run, CLAIMED for this
+            // run over the RPC proxy (the same reader the fleet planner uses):
+            // consumed when this run completes, handed back when it fails.
+            // A REVIEW run never fixes anything and gets none. Best-effort: a
+            // failed claim starts the run exactly as before.
+            let reviewFeedbackBlock: string | null = null;
+            if (!reviewRun) {
+                try {
+                    const feedback = await appContext
+                        .get(TaskReviewRejectionService)
+                        .claimFeedbackForRun({
+                            taskId: payload.taskId,
+                            runId: claimedRunId,
+                            userId: payload.userId,
+                        });
+                    reviewFeedbackBlock = buildFencedReviewFeedback(feedback, {
+                        branch: provisioned?.branch ?? taskRow.branchRef ?? null,
+                        prUrl: taskRow.prUrl ?? null,
+                    });
+                } catch (error) {
+                    triggerLogger.warn(
+                        `Review feedback skipped for run ${claimedRunId}: ${
+                            error instanceof Error ? error.message : String(error)
+                        }`,
+                    );
+                }
+            }
+
             // G2 — the pre-check block goes AFTER the task brief: the
             // agent should know what it was asked to do before it reads
             // what is already broken. When the pass did not run (the
             // default), `immediateInput` is byte-identical to before.
+            // The review feedback goes between the two: what the run must
+            // fix, before what the checks already say is broken. No
+            // findings (the usual case) leaves the input byte-identical too.
             //
             // A REVIEW run is not asked to do the Task. Its brief — the pull
             // request diff and the CI verdict — is already seeded on the run
@@ -651,9 +684,7 @@ export const agentTaskExecuteTask = task<'agent-task-execute', AgentTaskExecuteP
                       'You were dispatched as a CODE REVIEWER for this Task, not as its implementer. Do not change anything.',
                       'Your review assignment — the pull request diff and the CI verdict — follows as the next message. Record your verdict with the one tool this run has.',
                   ].join('\n')
-                : preCheckBlock
-                  ? `${taskBrief}\n\n${preCheckBlock}`
-                  : taskBrief;
+                : [taskBrief, reviewFeedbackBlock, preCheckBlock].filter(Boolean).join('\n\n');
 
             const scopeContext = taskRow
                 ? `Task scope: mission=${taskRow.missionId ?? 'none'}, idea=${taskRow.ideaId ?? 'none'}, work=${taskRow.workId ?? 'none'}`

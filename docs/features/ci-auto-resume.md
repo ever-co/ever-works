@@ -109,6 +109,8 @@ A comment is only a doorbell — it carries no link to the row it is meant to an
 - a `gate` row (this loop's own record of a CI failure) is never cashed in by a comment — the CI half owns those;
 - the row has to be about **this** pull request, and less than a week old. A rejection nobody consumed for a week was handled by a human or abandoned.
 
+A rejection this loop does not resume for — the budget is spent, a run is in flight, the doorbell never rang — is not lost: the next run of the Task (**Run**, `POST /api/tasks/:id/reject` with `runNow`, a recurring re-run) carries it as review feedback to fix on the same branch and pull request. See [When a reviewer rejects the work](./tasks.md#when-a-reviewer-rejects-the-work).
+
 ## When the budget is spent
 
 Exactly **one** Inbox notice per Task — claimed with a compare-and-set marker on the Task itself, so the dozens of deliveries that all rediscover a spent budget cannot each file a row. It names the pull request, the last head commit seen, how many attempts were used, and whether the loop stopped because the budget ran out or because the same failure came back unchanged.
