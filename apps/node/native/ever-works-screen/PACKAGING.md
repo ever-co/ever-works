@@ -86,35 +86,42 @@ only with the same linker and system libraries, so for those targets a release t
 
 ### How a node release publishes the helper
 
-`.github/workflows/publish-node.yml`, on the owner's `node-v<version>` tag:
+`.github/workflows/publish-node.yml`, on the owner's `node-v<version>` tag. It runs in our cluster, not on GitHub
+Actions (owner, 2026-11-11): the ci-builds engine (Argo Workflows + act, `ever-co/k8s-gitops` `apps/ci-builds`) runs the
+file for every `node-v*` tag.
 
-1. `screen-helper` builds every target: linux-x64 in the pinned container, darwin-arm64 and darwin-x64 on Apple
-   silicon (hosted, fresh), win32-x64 on a fresh hosted Windows image or the machines named by the variable
-   `RUNNER_WINDOWS_X64_RELEASE` (JSON label list) — never on `RUNNER_WINDOWS_X64`, whose desktops also run pull
-   requests' cargo builds as SYSTEM with a persistent toolchain. The repository variable
-   `SCREEN_HELPER_RELEASE_TARGETS` (a JSON list) narrows the targets;
-2. `build` stages the node bundle with those builds (`apps/node/build.js`, `SCREEN_HELPER_RELEASE_DIR`):
-   `apps/node/screen-helper-release.js` checks every binary against its metadata and bakes, per target, its SHA-256
-   and the URL
-   `https://github.com/ever-co/ever-works/releases/download/node-v<version>/ever-works-screen-<helper version>-<target>`
-   (`.exe` on Windows) into `cli.js`, which also ships the manifest as `helper-manifest.json`. A target that was asked
-   for and not built fails the release;
-3. `release-screen-helper` checks the assets against the bundle npm will publish (the same `helper-manifest.json`,
-   every SHA-256 in `cli.js`), uploads the binaries, `SHA256SUMS` and `helper-manifest.json` to a draft GitHub release
-   of that tag and publishes the release once every asset is there (the job's own token, `contents: write`; not marked
-   Latest). A re-run compares an asset already there with the build and never replaces it. Re-run **failed jobs**
-   only: re-running all jobs rebuilds the macOS and Windows helpers, whose bytes may differ on another machine, and
-   the job then stops on the difference (nothing wrong is published; delete the draft's assets to start over);
-4. only then `publish` publishes the npm package that points at them.
+1. `build` builds the linux-x64 helper with `build-release-linux.sh` (pinned container, two builds compared, from the
+   committed tree), then stages the node bundle with it (`apps/node/build.js`, `SCREEN_HELPER_RELEASE_DIR`,
+   `SCREEN_HELPER_REQUIRED_TARGETS=linux-x64`). `apps/node/screen-helper-release.js` checks the binary against its
+   metadata and bakes its SHA-256 and the URL
+   `https://github.com/ever-co/ever-works/releases/download/node-v<version>/ever-works-screen-<helper version>-linux-x64`
+   into `cli.js`, which also ships the manifest as `helper-manifest.json`. A required target that was not built fails
+   the release;
+2. `release-screen-helper` checks the assets against the bundle npm will publish (the same `helper-manifest.json`,
+   every SHA-256 in `cli.js`), uploads the binary, `SHA256SUMS` and `helper-manifest.json` to a draft GitHub release of
+   that tag and publishes the release once every asset is there (release assets of this public repository, uploaded
+   with the build's token; not marked Latest). A re-run compares an asset already there with the build and never
+   replaces it;
+3. only then `publish` publishes the npm package that points at them (with npm provenance only where GitHub's OIDC
+   token exists, so not in the cluster).
 
 On a machine, `ever-works-node helper install` downloads its target's build and keeps it only when it hashes to the
 baked fingerprint; `helper admit` shows both fingerprints and records a **published** hash-pinned admission (no
-`--allow-unpublished`). A manual dispatch of the workflow is a dry run: it builds and bakes, uploads nothing and runs
-`npm publish --dry-run`. The `Screen Helper` workflow runs the same release builds and the manifest step
-(`release-manifest`) on every pull request that touches the crate.
+`--allow-unpublished`). A dispatch of the workflow is a dry run: it builds and bakes, uploads nothing and runs
+`npm publish --dry-run`. In the cluster, by hand from the homelab repo:
+`python scripts/ci-builds-run.py ever-co/ever-works <branch> publish-node.yml 4 --event workflow_dispatch --no-push`.
 
-The published builds are unsigned on every OS (hash-pinned, "Reduced trust"). Once the owner holds the signing
-identities, a release adds the signed builds below and the manifest's `signedSha256` and `signer`.
+**Windows and macOS are not published yet.** Their helpers need a Windows and a macOS build machine, and the in-cluster
+engine runs Linux only. Until one builds them, those machines build and admit the helper themselves (below and
+[`README.md`](README.md)). `screen-helper-release.js` already takes any number of targets: a release that drops a
+Windows or macOS build (binary + `unsigned-release-metadata.json`, from `build-release.ps1` / `build-release.sh`,
+`SCREEN_HELPER_TARGET=darwin-x64` for the Intel build on Apple silicon) into `SCREEN_HELPER_RELEASE_DIR` and lists the
+target in `SCREEN_HELPER_REQUIRED_TARGETS` publishes it too. Build Windows releases on a machine that runs no
+pull-request jobs: the `RUNNER_WINDOWS_X64` desktops run pull requests' cargo builds as SYSTEM with a persistent
+toolchain, and whatever a release builds is baked in as the published helper.
+
+The published builds are unsigned (hash-pinned, "Reduced trust"). Once the owner holds the signing identities, a
+release adds the signed builds below and the manifest's `signedSha256` and `signer`.
 
 ## Release signing
 

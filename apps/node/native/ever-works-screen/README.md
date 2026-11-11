@@ -29,15 +29,16 @@ version; with no argument it waits for the node's messages on stdin and exits wh
 
 A **release build** (twice in clean target directories, the two SHA-256 compared, `dist/` with the binary and
 `unsigned-release-metadata.json`): `./build-release.ps1 -OutDir dist` on Windows, `bash build-release.sh dist` on Linux
-and macOS, and `bash build-release-linux.sh dist` for the linux-x64 build a node release publishes (in a pinned
-container, needs Docker: the same bytes on any machine). The `Screen Helper` workflow
-(`.github/workflows/screen-helper.yml`) runs all of the above on Windows, Linux and macOS for pull requests that touch
-this folder, and on demand.
+and macOS. The `Screen Helper` workflow (`.github/workflows/screen-helper.yml`) runs all of the above on Windows, Linux
+and macOS for pull requests that touch this folder, and on demand. The linux-x64 build a node release publishes is
+`bash build-release-linux.sh dist`: the same in a pinned container (needs Docker), from the committed tree, so it gives
+the same bytes on any machine.
 
 ## Install the published helper
 
-A node release publishes the helper for linux-x64, win32-x64, darwin-arm64 and darwin-x64
-([`PACKAGING.md`](PACKAGING.md#how-a-node-release-publishes-the-helper)), so on a machine you only fetch and approve it:
+A node release publishes the linux-x64 helper
+([`PACKAGING.md`](PACKAGING.md#how-a-node-release-publishes-the-helper)), so on a Linux machine you only fetch and
+approve it:
 
 ```sh
 ever-works-node helper install   # downloads it and checks it against the fingerprint the node version bakes in
@@ -45,8 +46,8 @@ ever-works-node helper admit     # compare the fingerprints it prints, then type
 ever-works-node helper status    # "trust  hash-pinned (Reduced trust)", no "(unpublished build)"
 ```
 
-A node version from before helper releases (0.2.11 and older) publishes none: `helper install` says so, and you build
-and admit the helper yourself as below.
+On Windows and macOS, and with a node version from before helper releases (0.2.11 and older), `helper install` says
+that this version publishes none: build and admit the helper yourself as below.
 
 ## Admit a build of your own
 

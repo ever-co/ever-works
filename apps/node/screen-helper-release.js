@@ -18,7 +18,7 @@
  * versions or a missing required target all fail.
  *
  * Used by `build.js` (SCREEN_HELPER_RELEASE_DIR, see there) and, as a check
- * without a monorepo install, by the Screen Helper workflow:
+ * without a monorepo install, from the command line (e.g. to check builds by hand):
  *   node screen-helper-release.js --dir <builds> --url-base <https://…> [--require a,b] [--out <dir>]
  * Node built-ins only, on purpose.
  */

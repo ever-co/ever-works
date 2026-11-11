@@ -6,9 +6,18 @@ name: Publish Node
 # monorepo checkout. See `apps/node/build.js` for what the bundle contains.
 #
 # Triggers:
-#   - a `node-v*` tag (e.g. `node-v0.2.0`) publishes that version, with an
-#     npm provenance attestation, and is the ONLY path that publishes;
+#   - a `node-v*` tag (e.g. `node-v0.2.0`) publishes that version, and is the
+#     ONLY path that publishes;
 #   - manual dispatch is a dry run: build, smoke-test, `npm publish --dry-run`.
+#
+# Where it runs: in our cluster, not on GitHub Actions (owner, 2026-11-11: the
+# org's Actions billing block is permanent). The ci-builds engine (Argo
+# Workflows + act, `ever-co/k8s-gitops` apps/ci-builds) runs this file unchanged
+# for every `node-v*` tag (catalog `tags`), all jobs in one pod, artifacts on
+# act's own server. A dry run by hand:
+#   python scripts/ci-builds-run.py ever-co/ever-works <branch> publish-node.yml 4 --event workflow_dispatch --no-push
+# (homelab repo). npm provenance needs GitHub's OIDC token, which only a
+# GitHub-hosted runner has, so an in-cluster release publishes without it.
 #
 # Release flow: bump `apps/node/package.json` AND `apps/node/src/version.ts`
 # together in a PR (`src/version.spec.ts` pins them to each other), merge it,
@@ -16,16 +25,17 @@ name: Publish Node
 # package version, so every published version maps to exactly one commit.
 #
 # The screen helper (FL-07, `apps/node/native/ever-works-screen`) ships with
-# every release: `screen-helper` builds it reproducibly for each target, `build`
-# bakes each build's SHA-256 and download URL into the bundle (the manifest
-# `ever-works-node helper install` checks a download against), and
-# `release-screen-helper` hosts the binaries as assets of this tag's GitHub
-# release (`https://github.com/<repo>/releases/download/node-v<version>/...`)
-# BEFORE npm publishes the package that points at them. Only the job token is
-# needed (`contents: write` there). The targets are the four below unless the
-# repository variable SCREEN_HELPER_RELEASE_TARGETS (a JSON list, e.g.
-# '["linux-x64","win32-x64"]' on an engine with no macOS runner) narrows them;
-# `build` then requires exactly those, so a target is never dropped silently.
+# every release, for linux-x64: `build` builds it reproducibly in a pinned
+# container (Docker; the same bytes on any machine) and bakes its SHA-256 and
+# download URL into the bundle (the manifest `ever-works-node helper install`
+# checks a download against), and `release-screen-helper` hosts it as an asset
+# of this tag's GitHub release
+# (`https://github.com/<repo>/releases/download/node-v<version>/...`) BEFORE npm
+# publishes the package that points at them. Release assets of this public
+# repository: no Actions storage, uploaded with the build's own token. The
+# macOS and Windows helpers need macOS and Windows build machines, which the
+# in-cluster engine does not have: until one builds them, those platforms keep
+# building and admitting the helper themselves (PACKAGING.md).
 
 on:
   push:
@@ -41,87 +51,9 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  screen-helper:
-    name: screen helper (${{ matrix.target }})
-    strategy:
-      fail-fast: true
-      matrix:
-        # Keep in step with SCREEN_HELPER_REQUIRED_TARGETS in the build job.
-        target: ${{ fromJSON(vars.SCREEN_HELPER_RELEASE_TARGETS || '["linux-x64","win32-x64","darwin-arm64","darwin-x64"]') }}
-    # linux-x64 builds in a pinned container (Docker), so any Linux runner gives the
-    # same bytes; both macOS targets on Apple silicon (darwin-x64 cross-built).
-    # win32-x64 is built on a FRESH machine: the hosted image, or the label list in
-    # RUNNER_WINDOWS_X64_RELEASE (JSON) for Windows machines kept for releases. Not
-    # on RUNNER_WINDOWS_X64: those desktops also run pull requests' cargo builds as
-    # SYSTEM with a persistent toolchain, and whatever a release builds there is
-    # baked in as the published Windows helper.
-    runs-on: ${{ matrix.target == 'linux-x64' && (vars.RUNNER_LINUX_X64_4 || 'ubuntu-latest') || matrix.target == 'win32-x64' && (vars.RUNNER_WINDOWS_X64_RELEASE && fromJSON(vars.RUNNER_WINDOWS_X64_RELEASE) || 'windows-latest') || 'macos-latest' }}
-    timeout-minutes: 40
-    defaults:
-      run:
-        shell: bash
-        working-directory: apps/node/native/ever-works-screen
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-
-      # Git Bash, PowerShell 7 and rustup on our own Windows runners; a no-op
-      # on GitHub-hosted ones.
-      - name: Self-hosted Windows setup
-        if: runner.os == 'Windows'
-        uses: ./.github/actions/self-hosted-windows-setup
-        with:
-          pwsh: 'true'
-          rust: 'true'
-
-      - name: Install the pinned toolchain (rust-toolchain.toml)
-        if: matrix.target != 'linux-x64'
-        run: |
-          rustup toolchain install
-          rustup show
-
-      - name: Reproducible release build (linux-x64, pinned container)
-        if: matrix.target == 'linux-x64'
-        run: bash ./build-release-linux.sh dist
-
-      - name: Reproducible release build (macOS)
-        if: startsWith(matrix.target, 'darwin-')
-        env:
-          SCREEN_HELPER_TARGET: ${{ matrix.target }}
-        run: bash ./build-release.sh dist
-
-      - name: Reproducible release build (Windows)
-        if: matrix.target == 'win32-x64'
-        shell: pwsh
-        run: ./build-release.ps1 -OutDir dist
-
-      - name: Check the build is the ${{ matrix.target }} helper
-        env:
-          TARGET: ${{ matrix.target }}
-        run: |
-          cat dist/unsigned-release-metadata.json
-          grep -Eq "\"target\": *\"$TARGET\"" dist/unsigned-release-metadata.json || {
-            echo "::error::this runner built another target than $TARGET"
-            exit 1
-          }
-
-      - name: Keep the build for the bundle and the release
-        uses: actions/upload-artifact@v7
-        with:
-          name: screen-helper-${{ matrix.target }}
-          path: |
-            apps/node/native/ever-works-screen/dist/ever-works-screen
-            apps/node/native/ever-works-screen/dist/ever-works-screen.exe
-            apps/node/native/ever-works-screen/dist/unsigned-release-metadata.json
-          if-no-files-found: error
-          retention-days: 30
-
   build:
-    needs: screen-helper
     runs-on: ${{ vars.RUNNER_LINUX_X64_4 || 'ubuntu-latest' }}
-    timeout-minutes: 30
+    timeout-minutes: 45
 
     steps:
       - name: Checkout repository
@@ -176,20 +108,20 @@ jobs:
         working-directory: apps/node
         run: npx vitest run src/version.spec.ts src/cli/program.spec.ts src/cli/program.workspace-root.spec.ts
 
-      - name: Download the screen helper builds
-        uses: actions/download-artifact@v8
-        with:
-          pattern: screen-helper-*
-          path: ${{ runner.temp }}/screen-helper
+      # Two clean builds, compared, in rust:1.88.0-slim-bookworm pinned by
+      # digest, from the committed tree: prints the SHA-256 anyone can check
+      # by running the same script at this commit.
+      - name: Reproducible release build of the screen helper (linux-x64, pinned container)
+        working-directory: apps/node/native/ever-works-screen
+        run: bash ./build-release-linux.sh dist
 
-      # Bakes each helper build's SHA-256 and URL into cli.js and stages the
-      # binaries under their release names in apps/node/dist-screen-helper/.
+      # Bakes the helper build's SHA-256 and URL into cli.js and stages the
+      # binary under its release name in apps/node/dist-screen-helper/.
       - name: Stage the publishable bundle
         working-directory: apps/node
         env:
-          SCREEN_HELPER_RELEASE_DIR: ${{ runner.temp }}/screen-helper
-          # Keep in step with the screen-helper matrix.
-          SCREEN_HELPER_REQUIRED_TARGETS: ${{ join(fromJSON(vars.SCREEN_HELPER_RELEASE_TARGETS || '["linux-x64","win32-x64","darwin-arm64","darwin-x64"]'), ',') }}
+          SCREEN_HELPER_RELEASE_DIR: native/ever-works-screen/dist
+          SCREEN_HELPER_REQUIRED_TARGETS: linux-x64
         run: |
           version="$(node -p "require('./package.json').version")"
           export SCREEN_HELPER_URL_BASE="https://github.com/${GITHUB_REPOSITORY}/releases/download/node-v${version}"
@@ -332,11 +264,10 @@ jobs:
 
   publish:
     needs: [build, release-screen-helper]
-    # GitHub-HOSTED on purpose. npm verifies the provenance bundle and refuses one minted on a
-    # self-hosted runner: the first real release (node-v0.2.0, run 37966885221) failed with
-    # `E422 ... Unsupported GitHub Actions runner environment: "self-hosted". Only "github-hosted"
-    # runners are supported when publishing with provenance.` The heavy build stays on our ARC
-    # runners; this job only downloads the staged bundle and runs `npm publish`, so it is cheap.
+    # On GitHub this had to be GitHub-HOSTED: npm verifies the provenance bundle and refuses one
+    # minted on a self-hosted runner (node-v0.2.0, run 37966885221: `E422 ... Unsupported GitHub
+    # Actions runner environment: "self-hosted"`). In the cluster there is no OIDC token at all,
+    # so the publish step below leaves provenance out there.
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -368,9 +299,19 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
-      - name: Publish to npm (public, with provenance)
+      # With a provenance attestation where GitHub's OIDC token exists (a
+      # GitHub-hosted runner); without one in the cluster, where `--provenance`
+      # fails (node-v0.2.11, 2026-11-10: `Provenance generation in GitHub
+      # Actions requires "write" access to the "id-token" permission`).
+      - name: Publish to npm (public)
         if: startsWith(github.ref, 'refs/tags/node-v')
         working-directory: dist-bundle
-        run: npm publish --access public --provenance
+        run: |
+          if [ -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
+            npm publish --access public --provenance
+          else
+            echo "::notice::no GitHub OIDC token here (in-cluster build): publishing without a provenance attestation"
+            npm publish --access public
+          fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

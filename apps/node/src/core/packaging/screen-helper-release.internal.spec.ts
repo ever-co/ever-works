@@ -202,7 +202,7 @@ describe('screen helper release manifest', () => {
 		expect(readFileSync(join(out, 'important.txt'), 'utf8')).toBe('keep me');
 	});
 
-	it('runs as the command the Screen Helper workflow calls, and fails with a usage line on bad arguments', () => {
+	it('runs as a command (manifest on stdout, assets with --out) and fails on bad arguments', () => {
 		const root = tempDir();
 		const linux = writeBuild(join(root, 'linux'), 'linux-x64');
 		const out = join(tempDir(), 'assets');
