@@ -17,32 +17,16 @@ import {
     IsArray,
     IsBoolean,
     IsEnum,
-    IsIn,
     IsOptional,
     IsString,
     Matches,
     MaxLength,
 } from 'class-validator';
+import { IsIanaTimeZone } from '../common/is-iana-time-zone';
 import { CurrentUser, AuthSessionGuard } from '../auth';
 import { AuthenticatedUser } from '@src/auth/types/auth.types';
 import { NotificationPreferencesService } from './notification-preferences.service';
 import { NotificationCategory } from '@ever-works/agent/entities';
-
-// Security: DTO class (not interface) so class-validator decorators are enforced
-// by the global ValidationPipe. Valid IANA time zones computed once at startup.
-// `Intl.supportedValuesOf` is available on the Node 22 runtime but not in the
-// project's TS lib typings; cast to access it without widening the lib target.
-// `Intl.supportedValuesOf('timeZone')` returns the canonical IANA zone list
-// but OMITS the universally-valid `UTC` / `GMT` aliases (V8 quirk), so add
-// them explicitly — rejecting `UTC` is a correctness bug, not hardening. Both
-// construct cleanly in `Intl.DateTimeFormat`, so there is no RangeError risk.
-const VALID_TIMEZONES = new Set<string>([
-    ...(Intl as typeof Intl & { supportedValuesOf(key: string): string[] }).supportedValuesOf(
-        'timeZone',
-    ),
-    'UTC',
-    'GMT',
-]);
 
 // Security: HH:mm (optionally with :ss) — rejects arbitrary strings stored as
 // quiet-hours times. Seconds are optional because callers commonly send the
@@ -66,7 +50,7 @@ export class QuietHoursBody {
     // Security: must be a valid IANA timezone to prevent RangeError in Intl.DateTimeFormat downstream
     @IsOptional()
     @IsString()
-    @IsIn([...VALID_TIMEZONES], { message: 'timezone must be a valid IANA timezone identifier' })
+    @IsIanaTimeZone()
     timezone?: string | null;
 
     // AW-13: the person's opt-in to let every urgent event through quiet

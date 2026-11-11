@@ -40,7 +40,7 @@ import { seedKbMarkdownDoc } from './helpers/kb-fixtures';
  *    doc titled `alpha …`.
  *  - Empty / whitespace `?q=` → the service short-circuits to a pure list
  *    (no filtering): returns ALL docs (`total` == doc count).
- *  - No-results `?q=<nonexistent>` → `{ items: [], total: 0 }`.
+ *  - No-results `?q=<nonexistent>` → `{ items: [], hits: [], total: 0 }`.
  *  - `limit` clips `items` but `total` reflects the FULL lexical match count
  *    (5 matches, `limit=2` → 2 items, total 5). `offset` paginates the
  *    blended/lexical order.
@@ -548,7 +548,8 @@ test.describe('Flow — KB search: keyword + semantic/RRF + scoping', () => {
             headers: { Accept: 'application/json' },
         });
         expect(proxyEmpty.status(), 'web proxy empty-q returns 200').toBe(200);
-        expect(await proxyEmpty.json()).toEqual({ items: [], total: 0 });
+        // `hits` (workbench palette) sits next to `items` (wikilink / mention pickers).
+        expect(await proxyEmpty.json()).toEqual({ items: [], hits: [], total: 0 });
 
         // Non-empty q proxies upstream and returns the matching docs.
         const proxyHit = await page.request.get(
@@ -610,30 +611,17 @@ test.describe('Flow — KB search: keyword + semantic/RRF + scoping', () => {
         const list = page.getByTestId('kb-workbench-search-palette-list');
         await expect(list).toBeVisible({ timeout: 20_000 });
 
-        // The palette settles on the no-results branch for this query. This is
-        // intentional, not a flaky miss: the workbench palette consumes the RRF
-        // `{ hits: KbSearchHit[] }` shape (`@ever-works/contracts`
-        // `KbSearchResult`), but the `/api/works/:id/kb/search` proxy still
-        // passes the upstream `{ items, total }` documents payload verbatim
-        // (the Phase 2 / row-30 RRF rewrite that emits `hits` is not yet wired
-        // to this route). With no `hits` field the palette renders its
-        // no-results branch even on a lexical match. The lexical-MATCH coverage
-        // that a populated result list would stand for is fully preserved by
-        // the web-proxy assertions ABOVE (proxyHit → seedA/seedB) and by the
-        // upstream-documents tests earlier in this file, so we assert the
-        // palette's real, observable end state here rather than skipping the UI
-        // flow. Tighten this to per-row `kb-workbench-search-palette-result`
-        // (keyed by data-doc-id) once the proxy emits the `hits` contract.
-        // Assert the observable invariant — NO result rows render for this
-        // query — rather than the cmdk `Command.Empty` (`-noresults`) element,
-        // whose render is gated by cmdk's internal filter bookkeeping and is
-        // unreliable for a server-side-search palette. The lexical-MATCH
-        // coverage is already proven by the proxyHit assertions above; tighten
-        // to per-row `-result` (data-doc-id) once the proxy emits the `hits`
-        // contract.
-        await expect(page.getByTestId('kb-workbench-search-palette-result')).toHaveCount(0, {
-            timeout: 20_000,
-        });
+        // The palette lists the seeded documents for the token. It used to settle
+        // on no results for every query: the proxy passed the documents
+        // endpoint's `{ items, total }` through verbatim while the palette reads
+        // `{ hits }` (`KbSearchResult`); the proxy now answers both.
+        const results = page.getByTestId('kb-workbench-search-palette-result');
+        await expect(results.first()).toBeVisible({ timeout: 20_000 });
+        await expect(
+            page.locator(
+                `[data-testid="kb-workbench-search-palette-result"][data-doc-id="${seedA.documentId}"]`,
+            ),
+        ).toHaveCount(1, { timeout: 20_000 });
 
         // The close control dismisses the dialog. Under prebuilt-web/prod
         // `next start` (run 27374977059) the palette re-renders rapidly while
