@@ -33,6 +33,7 @@ import {
     TASK_PR_NOT_FOUND_RECHECK_MS,
     TASK_PR_NOT_FOUND_STATE,
 } from '../../tasks-domain/task-open-work';
+import { TASK_PR_READ_RETRY_CAP_MS } from '../../tasks-domain/task-pr-read-retry';
 import { visibleToPredicate } from '../../record-visibility/visible-to';
 
 export interface ListTasksFilter {
@@ -699,16 +700,40 @@ export class TaskRepository {
      * Never-checked rows (`ciCheckedAt IS NULL`) sort first, then the
      * stalest — so a newly opened PR gets its dot quickly and a long
      * backlog drains in age order. Hits `idx_tasks_pr_status_sync`.
+     *
+     * A row whose last read did not succeed (`prReadRetryAt` set: the read
+     * threw, the owner's connection was rate limited, or a "not found" is
+     * not confirmed yet) is NOT in that order. It is due once
+     * `prReadRetryAt` has passed (`retryBefore`, default now), whatever its
+     * lane, and waits its turn by that instant. Two reads, each walking its
+     * own index (`idx_tasks_pr_status_sync`, `idx_tasks_pr_read_retry`),
+     * merged first-due-first: a row read at `ciCheckedAt` against a row due
+     * again at `prReadRetryAt`, so a retry waits behind every row last read
+     * before its retry instant, and none of them waits forever. Before this
+     * split a failed read stamped nothing, kept its stale `ciCheckedAt` and
+     * sorted first on every tick: a batch of them read nothing else.
+     *
+     * A retry instant more than `TASK_PR_READ_RETRY_CAP_MS` (6 h) past
+     * `retryBefore` is not obeyed (`prReadEffectiveRetryAt`): every writer
+     * clamps to that, so only a clock that was ahead (or a hand edit) can
+     * leave one, and obeying it would stop the pull request from being read
+     * until then. Such a row is on the usual cadence instead.
      */
     async findDuePrStatusSync(
         staleBefore: Date,
         limit = 50,
         notFoundBefore: Date = new Date(Date.now() - TASK_PR_NOT_FOUND_RECHECK_MS),
+        retryBefore: Date = new Date(),
     ): Promise<Task[]> {
-        return this.repository
+        const take = Math.max(1, Math.min(limit, 200));
+        const retryCeiling = new Date(retryBefore.getTime() + TASK_PR_READ_RETRY_CAP_MS);
+        const regular = await this.repository
             .createQueryBuilder('task')
             .where('task.prNumber IS NOT NULL')
             .andWhere('task.workId IS NOT NULL')
+            .andWhere('(task.prReadRetryAt IS NULL OR task.prReadRetryAt > :retryCeiling)', {
+                retryCeiling,
+            })
             .andWhere(
                 new Brackets((due) =>
                     due
@@ -725,8 +750,68 @@ export class TaskRepository {
                 ),
             )
             .orderBy('task.ciCheckedAt', 'ASC', 'NULLS FIRST')
-            .take(Math.max(1, Math.min(limit, 200)))
+            .take(take)
             .getMany();
+        const retrying = await this.repository
+            .createQueryBuilder('task')
+            .where('task.prReadRetryAt <= :retryBefore', { retryBefore })
+            .andWhere('task.prNumber IS NOT NULL')
+            .andWhere('task.workId IS NOT NULL')
+            .andWhere("(task.prState IS NULL OR task.prState IN ('open', 'draft', :prNotFound))", {
+                prNotFound: TASK_PR_NOT_FOUND_STATE,
+            })
+            .orderBy('task.prReadRetryAt', 'ASC')
+            .take(take)
+            .getMany();
+        return mergeFirstDue(regular, retrying, take);
+    }
+
+    /**
+     * The owner's pull requests the PR-status sweep still reads (open, draft
+     * or recorded `not_found`, on a Work), with only what a rate-limit
+     * deferral decides on: the Work (whose credential the read uses) and when
+     * the row is next due. `TaskPrStatusService.deferRateLimitedCredential`
+     * picks the ones read with the spent credential. Owner-scoped
+     * (`idx_tasks_user_status`).
+     */
+    async findOpenPrReadsOfOwner(
+        userId: string,
+    ): Promise<Array<Pick<Task, 'id' | 'workId' | 'prState' | 'ciCheckedAt' | 'prReadRetryAt'>>> {
+        return this.repository
+            .createQueryBuilder('task')
+            .select([
+                'task.id',
+                'task.workId',
+                'task.prState',
+                'task.ciCheckedAt',
+                'task.prReadRetryAt',
+            ])
+            .where('task.userId = :userId', { userId })
+            .andWhere('task.prNumber IS NOT NULL')
+            .andWhere('task.workId IS NOT NULL')
+            .andWhere("(task.prState IS NULL OR task.prState IN ('open', 'draft', :prNotFound))", {
+                prNotFound: TASK_PR_NOT_FOUND_STATE,
+            })
+            .getMany();
+    }
+
+    /**
+     * A rate limit: the sweep reads none of `taskIds` before `until` (the
+     * provider's reset). The caller has already chosen the rows (same owner,
+     * same credential, due before `until`), so a deferral never makes a row
+     * due EARLIER than it already was. Keeps `updatedAt` (a sweep write, as
+     * `updatePrStatusCache`). Returns the rows written.
+     */
+    async deferPrReads(taskIds: string[], until: Date): Promise<number> {
+        if (taskIds.length === 0) return 0;
+        const keepUpdatedAt = this.repository.manager.connection.driver.escape('updatedAt');
+        const result = await this.repository
+            .createQueryBuilder()
+            .update(Task)
+            .set({ prReadRetryAt: until, updatedAt: () => keepUpdatedAt })
+            .where('id IN (:...taskIds)', { taskIds })
+            .execute();
+        return result.affected ?? 0;
     }
 
     /**
@@ -738,12 +823,23 @@ export class TaskRepository {
      * would read a sweep that merely re-read an open pull request as a
      * change. TypeORM's update builder sets an `@UpdateDateColumn` to
      * CURRENT_TIMESTAMP unless the SET names it, so `updatedAt` is set to
-     * its own value. `ciCheckedAt` is the sweep's own stamp.
+     * its own value. `ciCheckedAt` is the sweep's own stamp, and
+     * `prReadRetryAt` / `prNotFoundSince` its memory of reads that did not
+     * succeed.
      */
     async updatePrStatusCache(
         taskId: string,
         patch: Partial<
-            Pick<Task, 'prState' | 'ciState' | 'ciCheckedAt' | 'prChecks' | 'prHeadSha'>
+            Pick<
+                Task,
+                | 'prState'
+                | 'ciState'
+                | 'ciCheckedAt'
+                | 'prChecks'
+                | 'prHeadSha'
+                | 'prReadRetryAt'
+                | 'prNotFoundSince'
+            >
         >,
     ): Promise<void> {
         const keepUpdatedAt = this.repository.manager.connection.driver.escape('updatedAt');
@@ -1588,4 +1684,29 @@ export class TaskRepository {
             .execute();
         return (result.affected ?? 0) > 0;
     }
+}
+
+/**
+ * The PR-status sweep's two due lists as ONE batch of at most `take` rows, first-due-first. Each
+ * list arrives in its own order: `regular` by `ciCheckedAt` (never read first), `retrying` by
+ * `prReadRetryAt`. A regular row is ranked by its last read and a retrying row by the instant its
+ * retry became due; on a tie the regular row goes first.
+ */
+function mergeFirstDue(regular: Task[], retrying: Task[], take: number): Task[] {
+    const rank = (at: Date | null | undefined): number => {
+        const ms = at ? new Date(at).getTime() : Number.NaN;
+        return Number.isFinite(ms) ? ms : Number.NEGATIVE_INFINITY;
+    };
+    const batch: Task[] = [];
+    let r = 0;
+    let s = 0;
+    while (batch.length < take && (r < regular.length || s < retrying.length)) {
+        const next =
+            s >= retrying.length ||
+            (r < regular.length && rank(regular[r].ciCheckedAt) <= rank(retrying[s].prReadRetryAt))
+                ? regular[r++]
+                : retrying[s++];
+        batch.push(next);
+    }
+    return batch;
 }

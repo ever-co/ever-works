@@ -121,6 +121,24 @@ describe('TaskWorkspaceService — a new pull request resets the PR-status cache
             ciCheckedAt: null,
             prChecks: null,
             prHeadSha: null,
+            prReadRetryAt: null,
+            prNotFoundSince: null,
+        });
+    });
+
+    it('a new pull request does not inherit the backoff or the first "not found" of the old one', async () => {
+        // The old pull request's reads were failing: only the sweep's retry memory is left.
+        await openFor(
+            makeTask({
+                prNumber: 11,
+                prReadRetryAt: new Date('2026-11-11T16:00:00.000Z'),
+                prNotFoundSince: new Date('2026-11-11T09:00:00.000Z'),
+            } as Partial<Task>),
+        );
+        expect(prPatch()).toMatchObject({
+            prNumber: 12,
+            prReadRetryAt: null,
+            prNotFoundSince: null,
         });
     });
 

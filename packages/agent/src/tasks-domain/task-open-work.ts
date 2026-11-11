@@ -29,12 +29,13 @@ export const TASK_CLOSED_UNMERGED_PR_STATE = 'closed';
 export const TASK_PR_NOT_FOUND_STATE = 'not_found';
 
 /**
- * How long "not found" must persist before it is recorded: the provider answered "not found" and
- * the pull request has not been read successfully for this long (`ciCheckedAt`, which a "not
- * found" answer leaves alone until then). The sweep re-reads an open pull request every few
- * minutes, so 30 minutes is several consecutive answers, while a brief loss of access (a GitHub App
- * repository selection being edited, an owner reconnecting) heals on the next read without
- * touching the Task.
+ * How long "not found" must persist before it is recorded, counted from the FIRST "not found"
+ * answer since the last successful read (`tasks.prNotFoundSince`): the provider still answers "not
+ * found" this long after it first did. Counted from that answer, not from the last successful read,
+ * so one answer after a long gap in reads (the sweep paused, or more open pull requests than it
+ * reads in 30 minutes) is never recorded at once. The sweep asks again a few times in between
+ * (`TaskPrStatusService.recordNotFound`), so a brief loss of access (an app's repository selection
+ * being edited, an owner reconnecting) heals on a later read without touching the Task.
  */
 export const TASK_PR_NOT_FOUND_CONFIRM_MS = 30 * 60 * 1000;
 

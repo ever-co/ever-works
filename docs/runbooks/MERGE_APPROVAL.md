@@ -310,6 +310,10 @@ is now — clearing only ever removes the signal.)
    gate still will not raise an approval.
 4. Is the pull request a draft? Drafts are excluded.
 5. Is the `task-pr-status-sync` cron running? It is the only trigger.
+   A pull request whose last read failed is not read again before
+   `tasks.prReadRetryAt` (backing off up to 6 hours; after a rate limit,
+   until the provider's reset). `?refresh=true` on the status read asks
+   at once, and a successful read clears it.
 
 **"The Task chat says the merge was refused, over and over."** It should
 not: a refusal is reported once per (head commit, refusal code) and the
