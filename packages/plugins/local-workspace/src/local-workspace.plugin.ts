@@ -259,6 +259,14 @@ export const POOL_MAINTENANCE_TIMEOUT_MS = 120_000;
  * cancelled provision's fetch is (whole process tree), the lock goes to the
  * next waiter, and the caller gets an error that names the fetch. Generous
  * enough to deepen an ordinary repository's whole history.
+ *
+ * The cost, measured (Git for Windows 2.52, `taskkill /T /F` as the
+ * provider kills): an `--unshallow` stopped mid-transfer leaves the pool's
+ * `shallow.lock` behind, and every later fetch into that pool then fails
+ * with "Unable to create '…/shallow.lock': File exists" until the file is
+ * removed — as a cancelled provision's own `--depth` fetch can. The target
+ * fetch does not deepen and held no `shallow.lock` during its transfer. A
+ * loud, named failure, where there was a lock held with no end.
  */
 export const POOL_FETCH_TIMEOUT_MS = 10 * 60_000;
 
