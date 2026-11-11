@@ -169,6 +169,13 @@ function build(
     let created = 0;
     const tasksService = {
         create: jest.fn(async (_userId: string, input: Row) => {
+            // `tasks.createdByType` / `tasks.createdById` are NOT NULL: refused here as the
+            // database refuses them, so a create input without its author never passes a mock.
+            if (!input.createdByType || !input.createdById) {
+                throw new Error(
+                    'null value in column "createdByType" of relation "tasks" violates not-null constraint',
+                );
+            }
             const task = { id: `t-${++created}`, ...input };
             taskRows.push({ ...task, status: input.status });
             return task;
@@ -291,6 +298,46 @@ describe('MissionTickService — Task output (APW-08 T35)', () => {
             expect.objectContaining({ missionId: 'm1', worksConsidered: 1, tasksFiled: 1 }),
         );
     });
+
+    // Prod, round 20: every Task-output tick failed on `tasks.createdByType` NOT NULL, because the
+    // create input carried no author. A Mission files on behalf of its owner, as a Goal does.
+    it.each([
+        ['a personal Mission', {}, undefined],
+        [
+            'an Organization Mission',
+            { tenantId: 'ten-1', organizationId: 'org-1' },
+            { tenantId: 'ten-1', organizationId: 'org-1' },
+        ],
+    ])(
+        '%s files every Task as its owner (createdByType user, createdById the owner)',
+        async (_label, scope, relationScope) => {
+            const t = build({ userId: 'owner-1', ...scope } as Partial<Mission>);
+            const result = await t.service.runOnce('m1', 'owner-1');
+            expect(result).toMatchObject({ outcome: 'tasks-filed', tasksFiled: 1 });
+            expect(t.tasksService.create).toHaveBeenCalledTimes(1);
+            const call = t.tasksService.create.mock.calls[0] as unknown[];
+            expect(call[0]).toBe('owner-1');
+            expect(call[1]).toMatchObject({ createdByType: 'user', createdById: 'owner-1' });
+            expect(call[2]).toEqual(relationScope);
+        },
+    );
+
+    // As a private Goal's iterations (review 2026-10-17 F1): the Task carries text planned from
+    // the Mission's description, so only a private Mission asks for a private Task.
+    it.each([
+        ['private', true],
+        ['team', false],
+        ['organization', false],
+    ])(
+        'a Mission with visibility %s files with derivedFromPrivate %s',
+        async (visibility, derived) => {
+            const t = build({ visibility } as Partial<Mission>);
+            await t.service.runOnce('m1', 'u1');
+            expect(t.tasksService.create.mock.calls[0][1]).toMatchObject({
+                derivedFromPrivate: derived,
+            });
+        },
+    );
 
     // Review of #3061 — the per-run cap is resolved by `dispatchAgentRun` from the Task's Mission
     // for EVERY run of it, so the tick passes none of its own (pinned in the transition spec).

@@ -31,7 +31,7 @@ import {
 } from '../domain-events/domain-event-publisher.service';
 import { isRepositoryWorkKind } from '@ever-works/contracts';
 import { Task, TaskStatus } from '../entities/task.entity';
-import { TasksService } from '../tasks-domain/tasks.service';
+import { TasksService, type CreateTaskInput } from '../tasks-domain/tasks.service';
 import { MISSION_TASK_LABEL, type MissionRepoRunRefusal } from '../tasks-domain/mission-repo-run';
 import {
     TASK_CLOSED_PR_SLOT_HOLD_MS,
@@ -1416,15 +1416,24 @@ export class MissionTickService {
                 duplicates += 1;
                 continue;
             }
-            const input = {
+            // Typed, never cast: a cast hid the missing author, and every Task insert failed
+            // on `tasks.createdByType` NOT NULL. A Mission files on behalf of its owner, as a
+            // Goal files its iterations (`GoalOrchestratorService`): the owner is the author.
+            const input: CreateTaskInput = {
                 title: proposal.title,
                 description: proposal.description || null,
                 missionId: mission.id,
                 workId: target.workId,
                 labels: [MISSION_TASK_LABEL],
                 status: requireApproval ? TaskStatus.BACKLOG : TaskStatus.TODO,
+                createdByType: 'user',
+                createdById: mission.userId,
+                // The Task carries text planned from the Mission's description, so a private
+                // Mission's Tasks are private too, as a private Goal's iterations are (review
+                // 2026-10-17 F1). Any other Mission's Tasks keep the insert-time default.
+                derivedFromPrivate: mission.visibility === 'private',
                 ...(output.agentId ? { agentId: output.agentId } : {}),
-            } as Parameters<TasksService['create']>[1];
+            };
             const task = scope
                 ? await tasksService.create(mission.userId, input, scope)
                 : await tasksService.create(mission.userId, input, undefined, {
