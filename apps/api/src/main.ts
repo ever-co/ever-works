@@ -19,6 +19,10 @@ import {
     INBOUND_EMAIL_WEBHOOK_PATH,
     resolveInboundEmailBodyLimit,
 } from './email/inbound-email-body-limit';
+import {
+    ACCOUNT_IMPORT_PATHS,
+    resolveAccountImportBodyLimit,
+} from './account/account-import-body-limit';
 import { assertProductionCorsConfig } from './cors-validation';
 import { config as appConfig } from './config/constants';
 import { config as agentConfig } from '@ever-works/agent/config';
@@ -194,6 +198,17 @@ async function bootstrap() {
     app.use(
         INBOUND_EMAIL_WEBHOOK_PATH,
         urlencoded({ limit: inboundEmailBodyLimit, extended: true, verify: captureRawBody }),
+    );
+    // Account import: an export larger than the global limit could be exported
+    // but never imported back. Its two signed-in routes get their own limit
+    // (25 MB default, `ACCOUNT_IMPORT_BODY_LIMIT`, capped), mounted before the
+    // global parser like the inbound-email one above.
+    app.use(
+        ACCOUNT_IMPORT_PATHS,
+        json({
+            limit: resolveAccountImportBodyLimit(process.env.ACCOUNT_IMPORT_BODY_LIMIT),
+            verify: captureRawBody,
+        }),
     );
     app.use(json({ limit: bodyLimit, verify: captureRawBody }));
     app.use(urlencoded({ limit: bodyLimit, extended: true, verify: captureRawBody }));

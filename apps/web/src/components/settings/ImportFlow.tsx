@@ -5,7 +5,10 @@ import { Button } from '@/components/ui/button';
 import { toast } from 'sonner';
 import { useTranslations } from 'next-intl';
 import { Upload, AlertTriangle, Check, X, FileJson } from 'lucide-react';
-import { previewImport, applyImport, applyPull } from '@/app/actions/account-transfer';
+import { applyPull } from '@/app/actions/account-transfer';
+// Route handlers, not server actions: Next caps a server action body at 1 MB,
+// so an export over 1 MB could not be imported back.
+import { applyAccountImport, previewAccountImport } from '@/lib/account/account-import.client';
 import type {
     AccountExportPayload,
     ImportPreview,
@@ -54,7 +57,7 @@ export function ImportFlow({ onClose, initialPreview, isPullMode }: ImportFlowPr
 
                     startTransition(async () => {
                         try {
-                            const result = await previewImport(data);
+                            const result = await previewAccountImport(data);
                             if (!result.success || !result.data) {
                                 toast.error(result.error || t('previewError'));
                                 return;
@@ -107,7 +110,7 @@ export function ImportFlow({ onClose, initialPreview, isPullMode }: ImportFlowPr
                         return;
                     }
                 } else if (payload) {
-                    const res = await applyImport(payload, resolutionsList);
+                    const res = await applyAccountImport(payload, resolutionsList);
                     importResult = res.success ? res.data : null;
                     if (!res.success) {
                         toast.error(res.error || t('importError'));
