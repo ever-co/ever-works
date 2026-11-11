@@ -105,10 +105,22 @@ export async function normalizeTaskExtraRepos(
             continue;
         }
         if (connection && !connection.enabled && stored) {
+            // Kept as stored, but it still takes part in the duplicate checks below: once
+            // the connection is re-enabled it mounts again, so a new entry may not share
+            // its directory or its repository (whichever of the two comes first in the list).
+            const storedIdentity =
+                typeof connection.url === 'string'
+                    ? repositoryIdFromCloneUrl(connection.url)
+                    : null;
+            if (storedIdentity) {
+                claimRepository(seenRepositories, storedIdentity, connection.name);
+            }
+            claimMountDir(
+                seenDirs,
+                stored.mountDir ?? resolveMountDir(connection.mountPath, connection.name),
+                connection.name,
+            );
             normalized.push(stored);
-            const storedDir =
-                stored.mountDir ?? resolveMountDir(connection.mountPath, connection.name);
-            seenDirs.set(storedDir.toLowerCase(), connection.name);
             continue;
         }
         if (!connection) {
@@ -132,13 +144,7 @@ export async function normalizeTaskExtraRepos(
                 `Repository connection ${connection.name} cannot be mounted on a fleet run: its URL is not an <owner>/<repository> clone URL.`,
             );
         }
-        const sameRepository = seenRepositories.get(identity.toLowerCase());
-        if (sameRepository) {
-            throw new BadRequestException(
-                `Repository connections ${sameRepository} and ${connection.name} both point at ${identity}; a Task mounts each repository once.`,
-            );
-        }
-        seenRepositories.set(identity.toLowerCase(), connection.name);
+        claimRepository(seenRepositories, identity, connection.name);
 
         const mountDirRaw =
             typeof entry.mountDir === 'string' ? entry.mountDir.trim() : (entry.mountDir ?? null);
@@ -164,13 +170,7 @@ export async function normalizeTaskExtraRepos(
                 `Repository connection ${connection.name} would be mounted at '${effectiveDir}', which is not a valid fleet mount directory (letters, digits, '.', '_' or '-'; no leading or trailing dot; up to 64 characters; not '.git', '.mounts', 'node_modules' or a Windows device name). Set an explicit mountDir for it.`,
             );
         }
-        const sameDir = seenDirs.get(effectiveDir.toLowerCase());
-        if (sameDir) {
-            throw new BadRequestException(
-                `extraRepos mount directory '${effectiveDir}' is used twice (${sameDir} and ${connection.name}); set a distinct mountDir.`,
-            );
-        }
-        seenDirs.set(effectiveDir.toLowerCase(), connection.name);
+        claimMountDir(seenDirs, effectiveDir, connection.name);
 
         if (entry.writable !== undefined && typeof entry.writable !== 'boolean') {
             throw new BadRequestException('extraRepos writable must be a boolean.');
@@ -182,4 +182,26 @@ export async function normalizeTaskExtraRepos(
         });
     }
     return normalized.length > 0 ? normalized : null;
+}
+
+/** Record that `name` mounts `identity`; a second connection to the same repository is refused. */
+function claimRepository(seen: Map<string, string>, identity: string, name: string): void {
+    const sameRepository = seen.get(identity.toLowerCase());
+    if (sameRepository) {
+        throw new BadRequestException(
+            `Repository connections ${sameRepository} and ${name} both point at ${identity}; a Task mounts each repository once.`,
+        );
+    }
+    seen.set(identity.toLowerCase(), name);
+}
+
+/** Record that `name` mounts at `dir` (case-insensitively: Windows and macOS collide); a second one is refused. */
+function claimMountDir(seen: Map<string, string>, dir: string, name: string): void {
+    const sameDir = seen.get(dir.toLowerCase());
+    if (sameDir) {
+        throw new BadRequestException(
+            `extraRepos mount directory '${dir}' is used twice (${sameDir} and ${name}); set a distinct mountDir.`,
+        );
+    }
+    seen.set(dir.toLowerCase(), name);
 }
