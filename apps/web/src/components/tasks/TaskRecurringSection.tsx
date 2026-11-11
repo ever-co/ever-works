@@ -300,10 +300,11 @@ function InactivePanel({ task }: { task: Task }) {
                     await setTaskRecurringAction(task.id, {
                         recurrenceRule: frequency === 'CRON' ? undefined : ruleString,
                         recurrenceCron: frequency === 'CRON' ? ruleString : undefined,
-                        // Cron expressions are evaluated in UTC by
-                        // `computeNextCronFire`; stamping the browser zone
-                        // would render a next-fire time in a zone the
-                        // dispatcher never used.
+                        // The dispatcher evaluates both dialects in
+                        // `recurrenceTimezone`. This form's cron field is
+                        // written in UTC (its hint says so), so a cron
+                        // cadence is filed with 'UTC' rather than the
+                        // browser zone; an RRULE's times are local.
                         recurrenceTimezone: frequency === 'CRON' ? 'UTC' : timezone || undefined,
                         // End of the chosen day in the template's zone (the last day runs).
                         recurrenceEndsAt: endsAt
