@@ -123,6 +123,96 @@ describe('TasksService — extraRepos (multi-repo Task workspaces, PR C2)', () =
         ).rejects.toThrow(/is disabled/);
     });
 
+    describe('an update with a connection that went stale since it was added', () => {
+        const taskWith = (extraRepos: unknown[]) => ({
+            id: 'task-1',
+            title: 'T',
+            userId: 'user-1',
+            extraRepos,
+        });
+
+        it('drops a deleted connection instead of refusing every later edit of the list', async () => {
+            // The editor sends the whole list; the picker no longer shows the
+            // deleted connection, so the user could not untick it and every
+            // save answered "not found".
+            const repoConnections = {
+                findByIdAndUser: jest.fn(async (id: string) =>
+                    id === 'gone' ? null : connection({ id }),
+                ),
+            };
+            const { service, patches } = makeService(
+                repoConnections,
+                taskWith([{ repoConnectionId: 'gone' }, { repoConnectionId: 'conn-1' }]),
+            );
+
+            await service.update('user-1', 'task-1', {
+                extraRepos: [
+                    { repoConnectionId: 'gone' },
+                    { repoConnectionId: 'conn-1' },
+                    { repoConnectionId: 'conn-2' },
+                ],
+            } as never);
+
+            expect(patches[0]?.extraRepos).toEqual([
+                { repoConnectionId: 'conn-1' },
+                { repoConnectionId: 'conn-2' },
+            ]);
+        });
+
+        it('keeps a disabled connection the Task already had, as stored', async () => {
+            const { service, patches } = makeService(
+                registry({ off: { enabled: false } }),
+                taskWith([{ repoConnectionId: 'off', mountDir: 'legacy' }]),
+            );
+
+            await service.update('user-1', 'task-1', {
+                extraRepos: [
+                    { repoConnectionId: 'off', mountDir: 'legacy' },
+                    { repoConnectionId: 'conn-1' },
+                ],
+            } as never);
+
+            expect(patches[0]?.extraRepos).toEqual([
+                { repoConnectionId: 'off', mountDir: 'legacy' },
+                { repoConnectionId: 'conn-1' },
+            ]);
+        });
+
+        it('still refuses to ADD a deleted or disabled connection', async () => {
+            const repoConnections = {
+                findByIdAndUser: jest.fn(async (id: string) =>
+                    id === 'gone' ? null : connection({ id, enabled: id !== 'off' }),
+                ),
+            };
+            const { service } = makeService(repoConnections, taskWith([]));
+
+            await expect(
+                service.update('user-1', 'task-1', {
+                    extraRepos: [{ repoConnectionId: 'gone' }],
+                } as never),
+            ).rejects.toThrow(/not found/);
+            await expect(
+                service.update('user-1', 'task-1', {
+                    extraRepos: [{ repoConnectionId: 'off' }],
+                } as never),
+            ).rejects.toThrow(/is disabled/);
+        });
+
+        it('stores null when the only entry left was a deleted connection', async () => {
+            const repoConnections = { findByIdAndUser: jest.fn().mockResolvedValue(null) };
+            const { service, patches } = makeService(
+                repoConnections,
+                taskWith([{ repoConnectionId: 'gone' }]),
+            );
+
+            await service.update('user-1', 'task-1', {
+                extraRepos: [{ repoConnectionId: 'gone' }],
+            } as never);
+
+            expect(patches[0]?.extraRepos).toBeNull();
+        });
+    });
+
     it.each([
         ['a path', 'tools/template'],
         ['a leading dot', '.hidden'],

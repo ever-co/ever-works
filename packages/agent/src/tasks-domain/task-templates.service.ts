@@ -26,7 +26,7 @@ import { WorkProposalRepository } from '../user-research/work-proposal.repositor
 import { normalizeTaskExtraRepos } from './task-extra-repos';
 import { ActivityLogService } from '../activity-log/activity-log.service';
 import { ActivityActionType, ActivityStatus } from '../entities/activity-log.types';
-import { protectedTaskBranchReason } from './task-isolation';
+import { invalidGitBranchNameReason, protectedTaskBranchReason } from './task-isolation';
 
 export interface TaskTemplateStepInput {
     title: string;
@@ -336,6 +336,12 @@ export class TaskTemplatesService {
             ideaId: input.ideaId ?? null,
         };
         const branchRef = input.branchName?.trim() ? input.branchName.trim().slice(0, 200) : null;
+        const invalidBranchReason = branchRef ? invalidGitBranchNameReason(branchRef) : null;
+        if (invalidBranchReason) {
+            throw new BadRequestException(
+                `branchName '${branchRef}' is not a valid git branch name: ${invalidBranchReason}.`,
+            );
+        }
         // Prompt-injection hardening: a Task branch is where an agent's pushes
         // land, so it may never pre-name a protected branch (main / master /
         // develop / stage) — nor the Work's configured base branch (`trunk`…;

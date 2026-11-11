@@ -11,6 +11,7 @@ import type { Task } from '@/lib/api/tasks';
 import { clearTaskRecurringAction, setTaskRecurringAction } from '@/app/actions/tasks';
 import { MaxOpenInstancesEditor, MaxOpenInstancesField } from './TaskRecurringOverlapControl';
 import { parseMaxOpenInstances } from './recurring-overlap';
+import { recurrenceEndsAtFor } from '@/lib/tasks/recurrence-ends-at.shared';
 
 /**
  * Agents/Skills/Tasks PR #1017 — Phase 17.8 UI.
@@ -304,7 +305,10 @@ function InactivePanel({ task }: { task: Task }) {
                         // would render a next-fire time in a zone the
                         // dispatcher never used.
                         recurrenceTimezone: frequency === 'CRON' ? 'UTC' : timezone || undefined,
-                        recurrenceEndsAt: endsAt ? new Date(endsAt).toISOString() : undefined,
+                        // End of the chosen day in the template's zone (the last day runs).
+                        recurrenceEndsAt: endsAt
+                            ? recurrenceEndsAtFor(endsAt, frequency === 'CRON' ? 'UTC' : timezone)
+                            : undefined,
                         recurrenceMaxOccurrences:
                             maxOccurrences.trim().length > 0
                                 ? Math.max(1, Math.min(9999, parseInt(maxOccurrences, 10) || 1))

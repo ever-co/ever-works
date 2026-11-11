@@ -57,6 +57,17 @@ export async function normalizeTaskExtraRepos(
     ownerId: string,
     raw: TaskExtraRepo[] | null | undefined,
     editorId: string = ownerId,
+    /**
+     * The Task's CURRENT extra repositories, on an update. An entry it already
+     * had is not re-validated against the registry: when its connection was
+     * deleted since, the entry is dropped (it can never mount again); when it
+     * was disabled, the stored entry is kept as is (it can be re-enabled).
+     * The Task editor always sends the whole list, so re-validating every
+     * entry made one stale connection block every later edit of the list with
+     * "not found" / "is disabled" — the picker no longer shows it, so the user
+     * could not even untick it. New entries are validated in full.
+     */
+    current: readonly TaskExtraRepo[] | null = null,
 ): Promise<TaskExtraRepo[] | null> {
     if (raw === undefined || raw === null) return null;
     if (!Array.isArray(raw)) throw new BadRequestException('extraRepos must be an array.');
@@ -75,6 +86,7 @@ export async function normalizeTaskExtraRepos(
     const seenDirs = new Map<string, string>();
     const seenRepositories = new Map<string, string>();
     const normalized: TaskExtraRepo[] = [];
+    const currentById = new Map((current ?? []).map((entry) => [entry.repoConnectionId, entry]));
     for (const entry of raw) {
         const repoConnectionId =
             typeof entry?.repoConnectionId === 'string' ? entry.repoConnectionId.trim() : '';
@@ -88,6 +100,17 @@ export async function normalizeTaskExtraRepos(
         }
         seenConnections.add(repoConnectionId);
         const connection = await deps.repoConnections.findByIdAndUser(repoConnectionId, ownerId);
+        const stored = currentById.get(repoConnectionId);
+        if (!connection && stored) {
+            continue;
+        }
+        if (connection && !connection.enabled && stored) {
+            normalized.push(stored);
+            const storedDir =
+                stored.mountDir ?? resolveMountDir(connection.mountPath, connection.name);
+            seenDirs.set(storedDir.toLowerCase(), connection.name);
+            continue;
+        }
         if (!connection) {
             throw new BadRequestException(
                 editorId === ownerId
@@ -158,5 +181,5 @@ export async function normalizeTaskExtraRepos(
             ...(entry.writable === undefined ? {} : { writable: entry.writable }),
         });
     }
-    return normalized;
+    return normalized.length > 0 ? normalized : null;
 }
