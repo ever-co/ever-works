@@ -6,6 +6,7 @@ import {
     missionsAPI,
     type CreateMissionInput,
     type MissionOutcome,
+    type MissionTeamView,
     type UpdateMissionInput,
 } from '@/lib/api/missions';
 import { tasksAPI, type Task } from '@/lib/api/tasks';
@@ -118,6 +119,18 @@ export async function detachMissionAttachmentAction(missionId: string, attachmen
     const result = await missionsAPI.removeAttachment(missionId, attachmentId);
     revalidatePath(`/[locale]/(dashboard)/missions/${missionId}`, 'page');
     return result;
+}
+
+/**
+ * The Mission page's "Team and agents" panel — who works on this Mission, in
+ * one API read (`GET /me/missions/:id/team`, owner-gated, every Agent one the
+ * caller may read). Rejects on any API failure; the panel says so.
+ */
+export async function getMissionTeamAction(missionId: string): Promise<MissionTeamView> {
+    // Security: verify session server-side before reading data
+    const user = await getAuthFromCookie();
+    if (!user) redirect(ROUTES.AUTH_LOGIN);
+    return missionsAPI.getTeam(missionId);
 }
 
 /**

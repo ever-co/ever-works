@@ -20,6 +20,8 @@ import {
     MissionCloneService,
     MissionStatus,
     MissionsService,
+    MissionTeamService,
+    type MissionTeamView,
     type CloneMissionResult,
     type MissionDto,
     type MissionGuardrailsOverride,
@@ -87,6 +89,10 @@ export class MissionsController {
         // Goal) with 404-no-leak semantics.
         private readonly goalsService: GoalsService,
         @Optional() private readonly scopeContext?: ScopeContextService,
+        // The Mission page's "Team and agents" panel. Appended LAST +
+        // @Optional() per the positional-spec rule; provided and exported by
+        // the agent-side MissionsModule this module imports.
+        @Optional() private readonly teamService?: MissionTeamService,
     ) {}
 
     @Get()
@@ -358,6 +364,31 @@ export class MissionsController {
         return {
             relations: await this.service.listWorks(auth.userId, id, this.scopeContext?.getScope()),
         };
+    }
+
+    /**
+     * Who works on this Mission: the Teams that hold it as a resource (with
+     * their Agent members) and the Agents scoped to it or to one of its
+     * attached Works that no listed Team shows. Same owner gate as
+     * `GET :id/works`; every Agent is filtered through `visibleTo(caller)`.
+     */
+    @Get(':id/team')
+    @ApiOperation({
+        summary:
+            'List the Teams that hold this Mission (with their Agents) and the other Agents working on it',
+    })
+    @HttpCode(HttpStatus.OK)
+    async team(
+        @CurrentUser() auth: AuthenticatedUser,
+        @Param('id', ParseUUIDPipe) id: string,
+    ): Promise<MissionTeamView> {
+        if (!this.teamService) {
+            // Unwired (a partial test module): still gate on the Mission, and
+            // answer an honest empty panel rather than a 500.
+            await this.service.getForUser(auth.userId, id, this.scopeContext?.getScope());
+            return { teams: [], agents: [] };
+        }
+        return this.teamService.getForUser(auth.userId, id, this.scopeContext?.getScope());
     }
 
     @Post(':id/works')

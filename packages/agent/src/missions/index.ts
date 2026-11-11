@@ -6,6 +6,8 @@ export * from './missions.module';
 export * from './types';
 export * from './mission-task-output';
 export * from './mission-task-planner.service';
+// The Mission page's "Team and agents" panel.
+export * from './mission-team.service';
 // Phase 3 PR J — Mission tick worker. Exported so the Trigger.dev
 // task at packages/tasks/src/tasks/trigger/mission-tick.task.ts
 // can resolve it from the application context.

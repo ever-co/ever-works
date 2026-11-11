@@ -345,6 +345,16 @@ export const missionsAPI = {
     // never ownership: Missions never own Works (invariant I-7) and
     // detaching / deleting a Mission never touches the Work (I-6).
 
+    /**
+     * `GET /me/missions/:id/team` → who works on this Mission: the Teams that
+     * hold it (with their Agents) and the other Agents scoped to it or to one
+     * of its attached Works. Owner-gated like `listWorks`; every Agent is one
+     * the caller may read.
+     */
+    async getTeam(id: string): Promise<MissionTeamView> {
+        return serverFetch<MissionTeamView>(`/me/missions/${id}/team`, { method: 'GET' });
+    },
+
     /** `GET /me/missions/:id/works` → the Works this Mission relates to. */
     async listWorks(id: string): Promise<MissionWorkRelationDto[]> {
         const res = await serverFetch<{ relations: MissionWorkRelationDto[] }>(
@@ -492,6 +502,35 @@ export interface MissionWorkRelationDto {
     readonly workSlug: string | null;
     /** APW-08 T34 — the Work's kind (`app` lets a Mission file Tasks on it). */
     readonly workKind?: string | null;
+}
+
+/** One Agent on the Mission page's "Team and agents" panel (agent-side `MissionTeamAgentView`). */
+export interface MissionTeamAgentDto {
+    readonly id: string;
+    readonly name: string;
+    readonly status: string;
+    /** When its most recent run began (ISO), or `null` when it never ran. */
+    readonly lastRunAt: string | null;
+    readonly lastRunStatus: string | null;
+}
+
+/** `GET /me/missions/:id/team` (agent-side `MissionTeamView`). */
+export interface MissionTeamView {
+    /** The Teams that hold this Mission as a resource, by name, with their Agents. */
+    readonly teams: ReadonlyArray<{
+        readonly id: string;
+        readonly name: string;
+        readonly slug: string;
+        readonly agents: ReadonlyArray<MissionTeamAgentDto>;
+    }>;
+    /** Agents on no listed Team: scoped to this Mission, or to one of its attached Works. */
+    readonly agents: ReadonlyArray<
+        MissionTeamAgentDto & {
+            readonly via: 'mission' | 'work';
+            readonly workId: string | null;
+            readonly workName: string | null;
+        }
+    >;
 }
 
 /**
