@@ -23,7 +23,10 @@ import { TaskExtraReposPicker } from './TaskExtraReposPicker';
 // ?from=<slug> when the user clicked "Use template" on /tasks/templates.
 import { listAstTemplates } from '@/lib/api/agent-templates';
 // Tasks upgrades — workflow Task Templates (parent + steps).
-import type { TaskTemplateRow } from '@/lib/api/task-templates.shared';
+import {
+    TASK_TEMPLATE_DESCRIPTION_MAX_LENGTH,
+    type TaskTemplateRow,
+} from '@/lib/api/task-templates.shared';
 import {
     instantiateTaskTemplateAction,
     listTaskTemplatesAction,
@@ -305,11 +308,19 @@ export function NewTaskForm({ createTask }: { createTask: CreateTaskFn }) {
         .split(',')
         .some((label) => label.trim().length > MAX_LABEL_LENGTH);
 
+    // Template mode posts to `/task-templates/:id/instantiate`, whose
+    // description is capped at 8000 characters (a blank Task's is not): say so
+    // here rather than show the API's 400.
+    const descriptionLength = description.trim().length;
+    const descriptionTooLong =
+        mode === 'template' && descriptionLength > TASK_TEMPLATE_DESCRIPTION_MAX_LENGTH;
+
     const handleSubmit = (e: React.FormEvent) => {
         e.preventDefault();
         if (!title.trim()) return;
         setError(null);
         if (mode === 'template') {
+            if (descriptionTooLong) return;
             if (!selectedTemplate) {
                 setError(t('templateRequired'));
                 return;
@@ -545,8 +556,24 @@ export function NewTaskForm({ createTask }: { createTask: CreateTaskFn }) {
                         onChange={(e) => setDescription(e.target.value)}
                         rows={5}
                         placeholder={t('descriptionPlaceholder')}
+                        aria-invalid={descriptionTooLong ? true : undefined}
+                        aria-describedby={
+                            descriptionTooLong ? 'new-task-description-too-long' : undefined
+                        }
                         className="w-full rounded-md border border-border/60 dark:border-border-dark/60 bg-card dark:bg-card-primary-dark p-3 text-sm text-text dark:text-text-dark"
                     />
+                    {descriptionTooLong ? (
+                        <p
+                            id="new-task-description-too-long"
+                            className="mt-1 text-[11px] text-danger"
+                            data-testid="new-task-description-too-long"
+                        >
+                            {t('descriptionTooLong', {
+                                max: TASK_TEMPLATE_DESCRIPTION_MAX_LENGTH,
+                                count: descriptionLength,
+                            })}
+                        </p>
+                    ) : null}
                 </div>
                 <div>
                     <label className="block text-xs text-text-secondary mb-1">{t('work')}</label>
@@ -767,7 +794,10 @@ export function NewTaskForm({ createTask }: { createTask: CreateTaskFn }) {
                         type="submit"
                         size="sm"
                         disabled={
-                            pending || !title.trim() || (mode === 'template' && !selectedTemplate)
+                            pending ||
+                            !title.trim() ||
+                            (mode === 'template' && !selectedTemplate) ||
+                            descriptionTooLong
                         }
                     >
                         {pending

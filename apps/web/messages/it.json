@@ -1541,6 +1541,7 @@
                 "labels": "Etichette",
                 "labelsPlaceholder": "separate da virgola",
                 "labelsTooLong": "Le etichette più lunghe di {max} caratteri vengono accorciate ai primi {max}.",
+                "descriptionTooLong": "Con un modello di workflow la descrizione può avere al massimo {max} caratteri (ora {count}). Accorciala.",
                 "labelsHint": "Separa più etichette con delle virgole.",
                 "labelsAutoHint": "Derivate dal titolo finché non le modifichi. Separa più etichette con delle virgole.",
                 "organize": "Organizza",

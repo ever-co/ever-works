@@ -1541,6 +1541,7 @@
                 "labels": "Etiquetas",
                 "labelsPlaceholder": "separadas por vírgula",
                 "labelsTooLong": "Etiquetas com mais de {max} caracteres são encurtadas para os primeiros {max}.",
+                "descriptionTooLong": "Com um modelo de fluxo de trabalho, a descrição pode ter no máximo {max} caracteres ({count} agora). Encurte-a.",
                 "labelsHint": "Separe várias etiquetas com vírgulas.",
                 "labelsAutoHint": "Derivadas do título até você editá-las. Separe várias etiquetas com vírgulas.",
                 "organize": "Organizar",

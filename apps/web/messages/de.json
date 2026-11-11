@@ -1572,6 +1572,7 @@
                 "labels": "Labels",
                 "labelsPlaceholder": "durch Komma getrennt",
                 "labelsTooLong": "Labels mit mehr als {max} Zeichen werden auf die ersten {max} gekürzt.",
+                "descriptionTooLong": "Mit einer Workflow-Vorlage darf die Beschreibung höchstens {max} Zeichen lang sein (derzeit {count}). Kürze sie.",
                 "labelsHint": "Trennen Sie mehrere Labels durch Kommas.",
                 "labelsAutoHint": "Wird aus dem Titel abgeleitet, bis Sie sie bearbeiten. Trennen Sie mehrere Labels durch Kommas.",
                 "organize": "Organisieren",

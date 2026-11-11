@@ -1541,6 +1541,7 @@
                 "labels": "Label",
                 "labelsPlaceholder": "dipisahkan koma",
                 "labelsTooLong": "Label yang lebih dari {max} karakter dipendekkan menjadi {max} karakter pertamanya.",
+                "descriptionTooLong": "Dengan templat alur kerja, deskripsi paling banyak {max} karakter (saat ini {count}). Persingkat deskripsinya.",
                 "labelsHint": "Pisahkan beberapa label dengan koma.",
                 "labelsAutoHint": "Diambil dari judul sampai Anda mengubahnya. Pisahkan beberapa label dengan koma.",
                 "organize": "Atur",

@@ -2555,6 +2555,7 @@
                 "labels": "Labels",
                 "labelsPlaceholder": "comma-separated",
                 "labelsTooLong": "Labels longer than {max} characters are shortened to their first {max}.",
+                "descriptionTooLong": "With a workflow template the description can be at most {max} characters ({count} now). Shorten it.",
                 "dueDate": "Due date",
                 "startDate": "Start date",
                 "estimateMinutes": "Estimate (minutes)",

@@ -1541,6 +1541,7 @@
                 "labels": "Etykiety",
                 "labelsPlaceholder": "oddzielone przecinkami",
                 "labelsTooLong": "Etykiety dłuższe niż {max} znaków są skracane do pierwszych {max}.",
+                "descriptionTooLong": "W przypadku szablonu przepływu pracy opis może mieć najwyżej {max} znaków (obecnie {count}). Skróć go.",
                 "labelsHint": "Oddziel wiele etykiet przecinkami.",
                 "labelsAutoHint": "Tworzone na podstawie tytułu, dopóki ich nie zmienisz. Oddziel wiele etykiet przecinkami.",
                 "organize": "Organizuj",

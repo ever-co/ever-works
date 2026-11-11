@@ -1541,6 +1541,7 @@
                 "labels": "标签",
                 "labelsPlaceholder": "用逗号分隔",
                 "labelsTooLong": "超过 {max} 个字符的标签将截短为前 {max} 个字符。",
+                "descriptionTooLong": "使用工作流模板时，描述最多 {max} 个字符（当前 {count} 个），请缩短。",
                 "labelsHint": "多个标签请用逗号分隔。",
                 "labelsAutoHint": "在你手动编辑前将根据标题自动生成。多个标签请用逗号分隔。",
                 "organize": "整理",

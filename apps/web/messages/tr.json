@@ -1541,6 +1541,7 @@
                 "labels": "Etiketler",
                 "labelsPlaceholder": "virgülle ayrılmış",
                 "labelsTooLong": "{max} karakterden uzun etiketler ilk {max} karaktere kısaltılır.",
+                "descriptionTooLong": "İş akışı şablonunda açıklama en fazla {max} karakter olabilir (şu an {count}). Kısaltın.",
                 "labelsHint": "Birden fazla etiketi virgülle ayırın.",
                 "labelsAutoHint": "Siz düzenleyene kadar başlıktan türetilir. Birden fazla etiketi virgülle ayırın.",
                 "organize": "Düzenle",

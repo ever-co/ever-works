@@ -1541,6 +1541,7 @@
                 "labels": "Labels",
                 "labelsPlaceholder": "komma-gescheiden",
                 "labelsTooLong": "Labels langer dan {max} tekens worden ingekort tot de eerste {max}.",
+                "descriptionTooLong": "Bij een workflowsjabloon mag de beschrijving maximaal {max} tekens lang zijn (nu {count}). Maak hem korter.",
                 "labelsHint": "Scheid meerdere labels met komma’s.",
                 "labelsAutoHint": "Afgeleid van de titel totdat je ze bewerkt. Scheid meerdere labels met komma’s.",
                 "organize": "Ordenen",

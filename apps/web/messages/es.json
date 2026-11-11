@@ -1572,6 +1572,7 @@
                 "labels": "Etiquetas",
                 "labelsPlaceholder": "separadas por comas",
                 "labelsTooLong": "Las etiquetas de más de {max} caracteres se acortan a sus primeros {max}.",
+                "descriptionTooLong": "Con una plantilla de flujo de trabajo, la descripción puede tener como máximo {max} caracteres ({count} ahora). Acórtala.",
                 "labelsHint": "Separa varias etiquetas con comas.",
                 "labelsAutoHint": "Se derivan del título hasta que las edites. Separa varias etiquetas con comas.",
                 "organize": "Organizar",
