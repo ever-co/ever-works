@@ -87,6 +87,65 @@ describe('findLatestEndedRunsByAgent', () => {
             expect(found.get(BUILDER)?.runId).toBe(ended.id);
         });
 
+        it('reads both halves through idx_agent_runs_agent_finished once the planner has statistics', async () => {
+            // A run history across many Agents, then ANALYZE: the planner statistics a
+            // long-lived Postgres keeps on its own. Without them SQLite's defaults guess
+            // that `status IN (…)` is selective and read `idx_agent_runs_status` instead.
+            const history: AgentRun[] = [];
+            for (let agent = 0; agent < 20; agent++) {
+                const agentId = `${String(agent).padStart(8, '0')}-0000-4000-8000-000000000000`;
+                for (let n = 0; n < 10; n++) {
+                    history.push(
+                        rows.create({
+                            agentId,
+                            userId: USER,
+                            triggerKind: 'task',
+                            status: n === 9 ? 'running' : n % 3 === 0 ? 'failed' : 'completed',
+                            finishedAt: n === 9 ? null : new Date(Date.UTC(2026, 10, 1, agent, n)),
+                        }),
+                    );
+                }
+            }
+            await rows.save(history, { chunk: 100 });
+            await dataSource.query('ANALYZE');
+
+            let query: [string, unknown[]] = ['', []];
+            const getMany = jest
+                .spyOn(SelectQueryBuilder.prototype, 'getMany')
+                .mockImplementation(function (this: SelectQueryBuilder<AgentRun>) {
+                    query = this.getQueryAndParameters();
+                    return Promise.resolve([]);
+                });
+            try {
+                await findLatestEndedRunsByAgent(dataSource.manager, [
+                    history[0].agentId,
+                    history[10].agentId,
+                ]);
+            } finally {
+                getMany.mockRestore();
+            }
+
+            const plan = (await dataSource.query(
+                `EXPLAIN QUERY PLAN ${query[0]}`,
+                query[1],
+            )) as Array<{
+                detail: string;
+            }>;
+            const details = plan.map((row) => row.detail);
+
+            // The join back is one seek per Agent; the grouped MAX reads only ended runs.
+            expect(details).toEqual(
+                expect.arrayContaining([
+                    expect.stringMatching(
+                        /\brun\b.* USING (COVERING )?INDEX idx_agent_runs_agent_finished \(agentId=\? AND finishedAt=\?\)/,
+                    ),
+                    expect.stringMatching(
+                        /\bended\b.* USING (COVERING )?INDEX idx_agent_runs_agent_finished \(agentId=\? AND finishedAt>\?\)/,
+                    ),
+                ]),
+            );
+        });
+
         it('answers an empty page without a query', async () => {
             const spy = jest.spyOn(dataSource.manager, 'createQueryBuilder');
             await expect(findLatestEndedRunsByAgent(dataSource.manager, [])).resolves.toEqual(
