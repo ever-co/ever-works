@@ -92,7 +92,12 @@ cross-compiled for `x86_64-pc-windows-gnu`:
   file). The image digest, the snapshot and the package versions sit together in the script and change together, and
   the script refuses a non-bookworm image for this target. When `snapshot.debian.org` cannot be reached, the same exact
   versions come from `deb.debian.org` while bookworm still carries them (Debian never reuses a version for other
-  bytes); otherwise the build fails and nothing is published.
+  bytes), and the run shows a `::warning::` saying so; otherwise the build fails and nothing is published.
+- Rust's standard library for the target (`rust-std-1.88.0-x86_64-pc-windows-gnu.tar.gz`, linked into every function
+  of the `.exe`; the image has only the linux one) is pinned by a **SHA-256 in the script**: the tarball's official
+  `.sha256`, which the rust-std entry of the GPG-signed `channel-rust-1.88.0.toml` confirms. The container downloads it,
+  refuses any other bytes (the build fails) and installs it into the image's toolchain with the tarball's
+  `install.sh`; `rustup target add` is not used and rustup can download nothing. Change it with the image.
 - The PE is deterministic: `--no-insert-timestamp` (the link time is otherwise stamped into the header; the MSVC build's
   `/Brepro`), and the header flags the MSVC linker sets (`--tsaware`, subsystem and OS version 6.0), so Windows treats
   both builds alike.
@@ -118,7 +123,9 @@ like the published one but has another fingerprint, so it is admitted as unpubli
 
 `.github/workflows/publish-node.yml`, on the owner's `node-v<version>` tag. It runs in our cluster, not on GitHub
 Actions (owner, 2026-11-11): the ci-builds engine (Argo Workflows + act, `ever-co/k8s-gitops` `apps/ci-builds`) runs the
-file for every `node-v*` tag.
+file for every `node-v*` tag, and in ever-co the jobs are gated off GitHub Actions (`vars.CI_IN_CLUSTER`, as in
+`screen-helper.yml`). Only a merged commit is released: `build` first checks that the tagged commit is on `main` or
+`develop` (both take changes only through a reviewed pull request) and fails otherwise, before anything is built.
 
 1. `build` builds the linux-x64 and win32-x64 helpers with `build-release-linux.sh` (pinned container, two builds
    compared, from the committed tree; `dist/linux-x64` and `dist/win32-x64`), then stages the node bundle with them
@@ -138,8 +145,9 @@ file for every `node-v*` tag.
 
 On a machine, `ever-works-node helper install` downloads its target's build and keeps it only when it hashes to the
 baked fingerprint; `helper admit` shows both fingerprints and records a **published** hash-pinned admission (no
-`--allow-unpublished`). A dispatch of the workflow is a dry run: it builds and bakes, uploads nothing and runs
-`npm publish --dry-run`. In the cluster, by hand from the homelab repo:
+`--allow-unpublished`). A dispatch of the workflow is a dry run, also on a `node-v*` tag ref (only a tag push
+publishes): it builds and bakes, uploads nothing and runs `npm publish --dry-run`. In the cluster, by hand from the
+homelab repo:
 `python scripts/ci-builds-run.py ever-co/ever-works <branch> publish-node.yml 4 --event workflow_dispatch --no-push`.
 
 **macOS is not published yet.** Its helpers need a macOS build machine (Apple's SDK and linker), and the in-cluster

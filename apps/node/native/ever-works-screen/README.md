@@ -34,7 +34,7 @@ and macOS for pull requests that touch this folder, and on demand. The builds a 
 `build-release-linux.sh`, the same in a pinned container (needs Docker), from the committed tree, so they give the same
 bytes on any machine: `bash build-release-linux.sh dist/linux-x64` for Linux, and
 `SCREEN_HELPER_TARGET=win32-x64 bash build-release-linux.sh dist/win32-x64` for Windows (cross-compiled with a pinned
-mingw-w64; Docker Desktop on Windows works).
+mingw-w64 and a hash-pinned Rust standard library; Docker Desktop on Windows works).
 
 ## Install the published helper
 

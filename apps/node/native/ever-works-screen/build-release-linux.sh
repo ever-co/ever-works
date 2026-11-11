@@ -12,7 +12,8 @@
 # image is Debian 12; the linux-x64 helper it builds needs glibc 2.34 or newer
 # (Debian 12, Ubuntu 22.04 and newer). For win32-x64 the container first
 # installs the mingw-w64 cross toolchain at exact versions from
-# snapshot.debian.org (the snapshot the image itself was made from, below), so
+# snapshot.debian.org (the snapshot the image itself was made from, below) and
+# Rust's standard library for that target from a tarball pinned by SHA-256, so
 # that toolchain is pinned as well; the .exe imports only DLLs Windows ships
 # (msvcrt, kernel32, user32, gdi32, ntdll, bcryptprimitives and two API sets).
 # publish-node.yml builds the released helpers with it (see PACKAGING.md,
@@ -70,7 +71,8 @@ esac
 # every package against the archive's signed Release file. When
 # snapshot.debian.org cannot be reached, the same exact versions come from
 # deb.debian.org while bookworm still carries them: Debian never reuses a
-# version for other bytes, so the build is the same; otherwise the build fails.
+# version for other bytes, so the build is the same, and the run shows a
+# warning saying so; otherwise the build fails.
 debian_snapshot="20250721T000000Z"
 if [ "$target" = win32-x64 ]; then
   case "$image" in
@@ -84,6 +86,21 @@ gcc-mingw-w64-x86-64-win32=12.2.0-14+deb12u1+25.2+b1 \
 gcc-mingw-w64-x86-64-win32-runtime=12.2.0-14+deb12u1+25.2+b1 \
 mingw-w64-common=10.0.0-3 \
 mingw-w64-x86-64-dev=10.0.0-3"
+# win32-x64: Rust's standard library for x86_64-pc-windows-gnu, linked into
+# every function of the .exe (the image carries only the linux one). Pinned
+# here by SHA-256 instead of `rustup target add`, so the pin is in this repo,
+# not in rustup's behaviour (today rustup checks the channel manifest cached in
+# the image, which names the same hash). The hash is the tarball's official
+# .sha256 and the rust-std entry of the GPG-signed channel-rust-1.88.0.toml
+# (they agree). The container downloads the tarball, refuses any other bytes
+# (the build fails, nothing is published) and installs it into the image's
+# toolchain; rustup downloads nothing. Change it with the image (same Rust).
+rust_std_url="https://static.rust-lang.org/dist/2025-06-26/rust-std-1.88.0-x86_64-pc-windows-gnu.tar.gz"
+rust_std_sha256="5dae719c6c2b11f9ce7858cc4b3f6302a1a83519adf7066bcf0c79e5c4cda568"
+case "$rust_std_url" in
+  */rust-std-"$toolchain"-x86_64-pc-windows-gnu.tar.gz) ;;
+  *) echo "the pinned Windows rust-std ($rust_std_url) is not Rust $toolchain, the channel rust-toolchain.toml pins" >&2; exit 2 ;;
+esac
 
 commit="$(git rev-parse --verify HEAD)"
 top="$(git rev-parse --show-toplevel)"
@@ -115,6 +132,8 @@ git -C "$top" -c core.autocrlf=false -c core.eol=lf archive --format=tar "$commi
     --env "SCREEN_HELPER_TARGET=$target" \
     --env "DEBIAN_SNAPSHOT=$debian_snapshot" \
     --env "MINGW_PACKAGES=$mingw_packages" \
+    --env "RUST_STD_URL=$rust_std_url" \
+    --env "RUST_STD_SHA256=$rust_std_sha256" \
     "$image" \
     bash -c 'set -euo pipefail
       if [ "$SCREEN_HELPER_TARGET" = win32-x64 ]; then
@@ -125,11 +144,29 @@ git -C "$top" -c core.autocrlf=false -c core.eol=lf archive --format=tar "$commi
           apt-get -o Acquire::Check-Valid-Until=false -o Acquire::Retries=5 update -qq >&2 &&
             DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=5 install -y -qq --no-install-recommends $MINGW_PACKAGES >&2
         }
-        if ! install_mingw "https://snapshot.debian.org/archive/debian/$DEBIAN_SNAPSHOT"; then
+        if install_mingw "https://snapshot.debian.org/archive/debian/$DEBIAN_SNAPSHOT"; then
+          echo "mingw-w64 toolchain from snapshot.debian.org/archive/debian/$DEBIAN_SNAPSHOT" >&2
+        else
           echo "snapshot.debian.org failed; the same exact versions from deb.debian.org" >&2
           install_mingw "https://deb.debian.org/debian"
+          # A workflow command, so the run summary shows it (stderr: stdout carries the outputs).
+          echo "::warning title=Screen helper toolchain from deb.debian.org::snapshot.debian.org failed, so the win32-x64 mingw-w64 toolchain came from deb.debian.org: the same exact versions, checked against its signed Release file, not snapshot $DEBIAN_SNAPSHOT" >&2
         fi
         x86_64-w64-mingw32-gcc --version | head -1 >&2
+        # Rust std for the target, pinned by RUST_STD_SHA256: apt-helper refuses
+        # other bytes (and downloads as _apt, which owns the folder), then
+        # sha256sum checks again before anything is unpacked.
+        std_dir=/tmp/rust-std
+        std_name="${RUST_STD_URL##*/}"
+        install -d -o _apt -m 0755 "$std_dir"
+        /usr/lib/apt/apt-helper -o Acquire::Retries=5 download-file "$RUST_STD_URL" "$std_dir/$std_name" "SHA256:$RUST_STD_SHA256" >&2
+        printf "%s  %s\n" "$RUST_STD_SHA256" "$std_dir/$std_name" | sha256sum --check --strict >&2
+        tar -C "$std_dir" -xzf "$std_dir/$std_name"
+        "$std_dir/${std_name%.tar.gz}/install.sh" --prefix="$(rustc --print sysroot)" --disable-ldconfig >&2
+        rm -rf "$std_dir"
+        # Nothing below may download a toolchain part: build-release.sh finds
+        # this std installed, and any rustup download now fails.
+        export RUSTUP_DIST_SERVER=https://rustup-downloads-are-off.invalid
       fi
       mkdir -p /build/ever-works-screen /out
       tar -C /build/ever-works-screen -xf -

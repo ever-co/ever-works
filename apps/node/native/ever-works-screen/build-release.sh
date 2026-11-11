@@ -11,7 +11,7 @@
 # the host can: darwin-x64 on an Apple silicon Mac, darwin-arm64 on an Intel one,
 # and win32-x64 on Linux x64 (x86_64-pc-windows-gnu, linked by the mingw-w64
 # cross compiler x86_64-w64-mingw32-gcc: build-release-linux.sh installs a
-# pinned one, see there).
+# pinned one and the target's standard library, see there).
 set -euo pipefail
 
 cd "$(dirname "$0")"
@@ -53,7 +53,14 @@ if [ "$target_name" != "$host_target" ]; then
       ;;
     *) echo "cannot build $target_name on a $host_target host" >&2; exit 2 ;;
   esac
-  rustup target add "$triple"
+  # The released win32-x64 build installs this target's standard library
+  # itself, from a tarball pinned by SHA-256 (build-release-linux.sh), and
+  # rustup must not download another: anywhere else rustup adds it.
+  if [ -d "$(rustc --print sysroot)/lib/rustlib/$triple/lib" ]; then
+    echo "the $triple standard library is already installed; rustup is not asked for it" >&2
+  else
+    rustup target add "$triple"
+  fi
   cargo_target=(--target "$triple")
   binary_dir="$triple/release"
 fi
