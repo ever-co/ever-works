@@ -107,5 +107,13 @@ describe('NotificationPreferencesController — quiet hours', () => {
             }
             expect(await errorsFor({ timezone: '+05:00' })).not.toHaveLength(0);
         });
+
+        it('refuses spellings Intl accepts but IANA does not (PST, IST, utc, europe/london, SystemV/EST5)', async () => {
+            // The e2e matrix pins PST / utc as a 400 on PUT quiet-hours.
+            for (const timezone of ['PST', 'IST', 'utc', 'europe/london', 'SystemV/EST5']) {
+                const errors = await errorsFor({ timezone });
+                expect(errors.map((e) => e.property)).toEqual(['timezone']);
+            }
+        });
     });
 });
