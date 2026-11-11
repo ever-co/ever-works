@@ -57,6 +57,7 @@ import {
     type EverWorksDeployQuotaCounter,
 } from '@src/ever-works-providers';
 import { WorkRepository } from '@src/database/repositories/work.repository';
+import { AgentRepository } from '@src/database/repositories/agent.repository';
 
 /**
  * Work module providing work-related services.
@@ -145,6 +146,12 @@ import { WorkRepository } from '@src/database/repositories/work.repository';
         // it and it participates in the DI graph.
         EverWorksK8sDeployProvider,
         EverWorksDnsService,
+        // `WorkLifecycleService.updateWork` validates a Work's default Agent (`defaultAgentId`)
+        // against it. `DatabaseModule` does not carry it and the API's `AgentsModule` does not
+        // export it, so it is provided locally (the `ActivityLogModule` / `SkillsModule` shape);
+        // without it the `@Optional()` injection is `undefined` and every default is refused.
+        // Internal only: not exported.
+        AgentRepository,
         {
             // The Ever Works Deploy quota service is repo-agnostic — it
             // takes a small `EverWorksDeployQuotaCounter` it can consult.
