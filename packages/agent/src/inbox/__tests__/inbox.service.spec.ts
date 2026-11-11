@@ -1754,6 +1754,41 @@ describe('InboxService — My Decisions', () => {
             expect(details).toMatchObject({ via: 'escalation-agent', restart: 'none' });
         });
 
+        it('a SYSTEM close (the run ended) closes the mirror, resumes nothing and is no human look', async () => {
+            // A `queued-too-long` card whose run already ended: the question is
+            // moot, so its Needs-you row closes — without any run being touched,
+            // and without stamping a "first viewed" nobody did.
+            const store = makeStore([
+                makeRow({ id: 'i1', kind: 'escalation', escalationId: 'e1', agentRunId: 'run-1' }),
+            ]);
+            const steering = makeSteering();
+            const activityLog = {
+                log: jest.fn(async (_entry: { details: Record<string, unknown> }) => undefined),
+            };
+            const { service } = build({ store, runs: parkedRun(), steering, activityLog });
+
+            await service.escalationResolved({
+                escalationId: 'e1',
+                resolvedByUserId: null,
+                note: 'Closed automatically: the run ended (failed) at 2026-11-10T21:04:00.000Z.',
+                resolvedBy: 'system',
+            });
+
+            const row = store.rows.get('i1')!;
+            expect(row.status).toBe('answered');
+            expect(row.answerText).toContain('Closed automatically');
+            expect(steering.resume).not.toHaveBeenCalled();
+            expect(steering.steer).not.toHaveBeenCalled();
+            expect(store.stampFirstViewed).not.toHaveBeenCalled();
+            await new Promise((resolve) => setImmediate(resolve));
+            const details = activityLog.log.mock.calls.at(-1)![0].details;
+            expect(details).toMatchObject({
+                via: 'escalation-system',
+                restart: 'none',
+                decidedByUserId: null,
+            });
+        });
+
         it('is a no-op when the Inbox reply already closed the item: one answer, one restart', async () => {
             const store = makeStore([
                 makeRow({ id: 'i1', kind: 'escalation', escalationId: 'e1', agentRunId: 'run-1' }),

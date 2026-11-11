@@ -839,24 +839,32 @@ export class InboxService implements InboxProducer {
             optionId: null,
         });
         if (!claimed) return;
+        // A system close (the run's end answered the card) is nobody looking
+        // at it, and hands nothing to any run.
+        const systemClosed = input.resolvedBy === 'system';
         // Deciding through another door is still a human looking at it:
         // same first-view rule as `reply`, so an answered mirror never
         // reads as "never seen" in the raised → seen → answered timings.
-        await this.stampFirstViewed(row.id, row.userId);
+        if (!systemClosed) await this.stampFirstViewed(row.id, row.userId);
 
         // Prompt-injection hardening: a resolution an AGENT wrote never
         // reaches the parked run. Only a person's answer is handed over as
         // the owner's answer; an agent-authored note is recorded on the item
         // and the run stays where it is for a person to pick up.
         const agentAuthored = input.resolvedBy === 'agent';
-        const handOff: AnswerHandOff = agentAuthored
-            ? { restart: 'none' }
-            : await this.tryResumeLinkedRun(row, row.userId, note);
+        const handOff: AnswerHandOff =
+            agentAuthored || systemClosed
+                ? { restart: 'none' }
+                : await this.tryResumeLinkedRun(row, row.userId, note);
         await this.recordAnswered(row.id, row.unread);
         const fresh = await this.items.findOwned(row.id, row.userId);
         if (fresh) {
             this.logAnswered(fresh, 'escalation-resolved', {
-                via: agentAuthored ? 'escalation-agent' : 'escalation',
+                via: systemClosed
+                    ? 'escalation-system'
+                    : agentAuthored
+                      ? 'escalation-agent'
+                      : 'escalation',
                 restart: handOff.restart,
                 decidedByUserId: input.resolvedByUserId,
             });
