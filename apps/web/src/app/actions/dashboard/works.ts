@@ -52,6 +52,12 @@ import {
     resolveManagedStorageStatus,
     type ManagedStorageStatus,
 } from '@/lib/works/managed-storage';
+import {
+    ownershipForSettingsSave,
+    resolveRepositoryOwnership,
+    workRegeneratesReadmeOnSave,
+} from '@/lib/works/work-settings-update.shared';
+import { acceptanceCheckSchema } from '@/lib/works/acceptance-checks.shared';
 import { getTranslations } from 'next-intl/server';
 import { revalidatePath } from 'next/cache';
 import { ROUTES } from '@/lib/constants';
@@ -212,40 +218,9 @@ async function markProposalAcceptedWithRetry(proposalId: string, workId: string)
     }
 }
 
-const checkOrganization = (
-    connectionInfo: GitProviderConnectionInfo | null,
-    data: { owner?: string; organization?: boolean },
-) => {
-    if (!connectionInfo?.connected) {
-        return {
-            organization: data.organization || false,
-            owner: data.owner || undefined,
-        };
-    }
-
-    const username = connectionInfo.username;
-
-    if (!data.organization) {
-        return {
-            organization: false,
-            owner: username || undefined,
-        };
-    }
-
-    const owner = data.owner?.trim();
-
-    if (owner && username && owner !== username) {
-        return {
-            organization: true,
-            owner: owner || undefined,
-        };
-    }
-
-    return {
-        organization: false,
-        owner: username || undefined,
-    };
-};
+// Where a NEW Work's repositories go; lives in `work-settings-update.shared.ts`
+// (unit tested there) because a `'use server'` file may only export actions.
+const checkOrganization = resolveRepositoryOwnership;
 
 /**
  * Outcome of the create-time git-provider gate. `ok: true` carries the
@@ -815,19 +790,29 @@ export async function updateWork(workId: string, data: UpdateWorkDto) {
         const { work } = await workAPI.get(workId);
         const providerId = work.gitProvider;
 
+        // `owner` / `organization` are re-derived only while the Work's
+        // repositories do not exist yet; afterwards they are left out and the
+        // API keeps the stored values (see `ownershipForSettingsSave`).
+        const payload = { ...validation.data };
+        delete payload.owner;
+        delete payload.organization;
         const connectionCheck = providerId ? await checkGitProviderConnection(providerId) : null;
-
-        const { organization, owner } = checkOrganization(
+        const ownership = ownershipForSettingsSave(
+            work,
             connectionCheck as GitProviderConnectionInfo | null,
             validation.data,
         );
+        if (ownership) {
+            payload.organization = ownership.organization;
+            payload.owner = ownership.owner;
+        }
 
-        validation.data.organization = organization;
-        validation.data.owner = owner;
+        await workAPI.update(workId, payload);
 
-        await workAPI.update(workId, validation.data);
-
-        const readmeUpdate = await workAPI.updateReadme(workId);
+        // The README is regenerated only for kinds the API generates it for.
+        const readmeUpdate = workRegeneratesReadmeOnSave(work)
+            ? await workAPI.updateReadme(workId)
+            : null;
 
         revalidatePath(ROUTES.DASHBOARD_WORK_SETTINGS(workId));
 
@@ -1610,9 +1595,11 @@ export async function updateWebsiteSettings(
     // Validate the scalar fields that have well-defined safe bounds.
     // Nested objects (header/homepage/footer/custom_menu) are passed through
     // to the backend which applies its own class-validator checks.
+    // The limits are the API's (`UpdateWebsiteSettingsDto`: name 100, site URL
+    // 200): a longer value used to pass here and come back as a 400.
     const websiteSettingsScalarSchema = z.object({
-        company_name: z.string().max(200).optional(),
-        company_website: z.string().max(2000).optional(),
+        company_name: z.string().max(100).optional(),
+        company_website: z.string().max(200).optional(),
         import_max_rows: z.number().int().min(1).max(2000).optional(),
         categories_enabled: z.boolean().optional(),
         companies_enabled: z.boolean().optional(),
@@ -1775,7 +1762,8 @@ export async function updateTaskIsolationSettings(
 
     const taskIsolationSchema = z.object({
         taskIsolation: z.enum(['off', 'worktree']).optional(),
-        taskIsolationBaseBranch: z.string().max(255).nullable().optional(),
+        // 128: `UpdateWorkDto.taskIsolationBaseBranch` (`@MaxLength(128)`).
+        taskIsolationBaseBranch: z.string().max(128).nullable().optional(),
         taskIsolationTargetRepo: z.enum(['work-output', 'linked']).optional(),
         taskBranchCleanup: z.enum(['on-merge', 'manual']).optional(),
     });
@@ -1824,22 +1812,10 @@ export async function updateQualityGatesSettings(
         redirect(ROUTES.AUTH_LOGIN);
     }
 
-    const checkSchema = z.object({
-        id: z
-            .string()
-            .min(1)
-            .max(64)
-            .regex(/^[a-z0-9][a-z0-9-]*$/),
-        name: z.string().min(1).max(120),
-        kind: z.enum(['build', 'test', 'lint', 'typecheck', 'custom']),
-        command: z.string().min(1).max(500),
-        cwd: z.string().max(200).optional(),
-        timeoutSec: z.number().int().min(1).max(1800).optional(),
-        required: z.boolean(),
-        disabled: z.boolean().optional(),
-    });
+    // The API's `AcceptanceCheckDto`, every field included: a field missing
+    // here is stripped, and the API replaces the whole list.
     const qualityGatesSchema = z.object({
-        checkDefaults: z.array(checkSchema).max(20).nullable().optional(),
+        checkDefaults: z.array(acceptanceCheckSchema).max(20).nullable().optional(),
         checksPolicy: z.enum(['off', 'warn', 'required']).optional(),
         maxGateAttempts: z.number().int().min(1).max(5).optional(),
     });

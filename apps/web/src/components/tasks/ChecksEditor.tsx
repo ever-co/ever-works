@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
+import { slugifyCheckId } from '@/lib/works/acceptance-checks.shared';
 
 /**
  * Quality gates (Wave 3 M6) — the acceptance-checks list editor.
@@ -20,15 +21,6 @@ import { Switch } from '@/components/ui/switch';
  */
 
 const CHECK_KINDS: TaskAcceptanceCheckKind[] = ['build', 'test', 'lint', 'typecheck', 'custom'];
-
-/** "Type check!" → "type-check" — mirrors the Task-label slugifier. */
-function slugifyCheckId(raw: string): string {
-    return raw
-        .toLowerCase()
-        .trim()
-        .replace(/[^a-z0-9]+/g, '-')
-        .replace(/^-+|-+$/g, '');
-}
 
 function nextCheckId(existing: TaskAcceptanceCheck[]): string {
     const taken = new Set(existing.map((c) => c.id));
