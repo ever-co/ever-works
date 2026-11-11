@@ -14,6 +14,9 @@ const schema: JsonSchema = {
         projectId: { type: 'string', pattern: '^[0-9]+$' },
         largerRunnerLabel: { type: 'string', pattern: '^[A-Za-z0-9._-]{1,64}$' },
         apiHost: { type: 'string', format: 'uri' },
+        retries: { type: 'number', minimum: 0 },
+        verbose: { type: 'boolean' },
+        region: { type: 'string', enum: ['eu', 'us'] },
     },
 } as JsonSchema;
 
@@ -43,11 +46,33 @@ describe('withoutBlankOptionalValues + the real settings validator', () => {
         expect(validate({ projectId: '' }).valid).toBe(false);
     });
 
-    it('keeps every other value for the check, including false and 0', () => {
+    it('still refuses a blank optional number, boolean or enum field', () => {
+        expect(validate({ projectId: '1', retries: '' }).valid).toBe(false);
+        expect(validate({ projectId: '1', verbose: '' }).valid).toBe(false);
+        expect(validate({ projectId: '1', region: '' }).valid).toBe(false);
+    });
+
+    it('drops only blank free-text fields, keeping every other value (false and 0 included)', () => {
         expect(
-            withoutBlankOptionalValues({ a: '', b: false, c: 0, d: 'x', projectId: '' }, schema),
+            withoutBlankOptionalValues(
+                {
+                    apiHost: '',
+                    largerRunnerLabel: '',
+                    undeclared: '',
+                    retries: '',
+                    region: '',
+                    verbose: false,
+                    c: 0,
+                    d: 'x',
+                    projectId: '',
+                },
+                schema,
+            ),
         ).toEqual({
-            b: false,
+            undeclared: '',
+            retries: '',
+            region: '',
+            verbose: false,
             c: 0,
             d: 'x',
             projectId: '',
