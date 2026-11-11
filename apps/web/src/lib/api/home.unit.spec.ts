@@ -39,6 +39,20 @@ describe('homeAPI', () => {
         );
     });
 
+    it("sends the browser's timezone as its own hint, beside (never instead of) an override", async () => {
+        const { homeAPI } = await importApi();
+        await homeAPI.summary({ browserTz: 'America/Los_Angeles' });
+        expect(serverFetchMock).toHaveBeenLastCalledWith(
+            '/home/summary?browserTz=America%2FLos_Angeles',
+            { method: 'GET' },
+        );
+        await homeAPI.summary({ tz: 'UTC', browserTz: 'America/Los_Angeles' });
+        expect(serverFetchMock).toHaveBeenLastCalledWith(
+            '/home/summary?tz=UTC&browserTz=America%2FLos_Angeles',
+            { method: 'GET' },
+        );
+    });
+
     it('never double-prefixes the endpoint with /api', async () => {
         const { homeAPI } = await importApi();
         await homeAPI.summary({ tz: 'UTC' });

@@ -31,7 +31,11 @@ import { AgentApprovalsService } from '../agent-approvals/agent-approvals.servic
 import { AgentEscalationService } from '../agents/agent-escalation.service';
 import { NotificationService } from '../notifications/notification.service';
 import { ActivityLogService } from '../activity-log/activity-log.service';
-import { ActivityActionType, ActivityStatus } from '../entities/activity-log.types';
+import {
+    ActivityActionType,
+    ActivityStatus,
+    type ActivityActorKind,
+} from '../entities/activity-log.types';
 import {
     DomainEventPublisher,
     recordAfterWrite,
@@ -839,27 +843,40 @@ export class InboxService implements InboxProducer {
             optionId: null,
         });
         if (!claimed) return;
+        // A system close (the run's end answered the card) is nobody looking
+        // at it, and hands nothing to any run.
+        const systemClosed = input.resolvedBy === 'system';
         // Deciding through another door is still a human looking at it:
         // same first-view rule as `reply`, so an answered mirror never
         // reads as "never seen" in the raised → seen → answered timings.
-        await this.stampFirstViewed(row.id, row.userId);
+        if (!systemClosed) await this.stampFirstViewed(row.id, row.userId);
 
         // Prompt-injection hardening: a resolution an AGENT wrote never
         // reaches the parked run. Only a person's answer is handed over as
         // the owner's answer; an agent-authored note is recorded on the item
         // and the run stays where it is for a person to pick up.
         const agentAuthored = input.resolvedBy === 'agent';
-        const handOff: AnswerHandOff = agentAuthored
-            ? { restart: 'none' }
-            : await this.tryResumeLinkedRun(row, row.userId, note);
+        const handOff: AnswerHandOff =
+            agentAuthored || systemClosed
+                ? { restart: 'none' }
+                : await this.tryResumeLinkedRun(row, row.userId, note);
         await this.recordAnswered(row.id, row.unread);
         const fresh = await this.items.findOwned(row.id, row.userId);
         if (fresh) {
-            this.logAnswered(fresh, 'escalation-resolved', {
-                via: agentAuthored ? 'escalation-agent' : 'escalation',
-                restart: handOff.restart,
-                decidedByUserId: input.resolvedByUserId,
-            });
+            this.logAnswered(
+                fresh,
+                'escalation-resolved',
+                {
+                    via: systemClosed
+                        ? 'escalation-system'
+                        : agentAuthored
+                          ? 'escalation-agent'
+                          : 'escalation',
+                    restart: handOff.restart,
+                    decidedByUserId: input.resolvedByUserId,
+                },
+                systemClosed ? 'system' : undefined,
+            );
         }
     }
 
@@ -1277,11 +1294,19 @@ export class InboxService implements InboxProducer {
         row: InboxItem,
         routed: InboxReplyRouted,
         extra: Record<string, unknown> = {},
+        // `system` for an item the platform closed itself (a `queued-too-long`
+        // escalation whose run ended): the feed then shows the platform as
+        // the actor, not "You answered a decision". Omitted = today's
+        // derivation (`INBOX_ITEM_ANSWERED` is a person's action).
+        actorKind?: ActivityActorKind,
     ): void {
-        void this.tryLogActivity(row.userId, ActivityActionType.INBOX_ITEM_ANSWERED, row, {
-            ...extra,
-            routed,
-        });
+        void this.tryLogActivity(
+            row.userId,
+            ActivityActionType.INBOX_ITEM_ANSWERED,
+            row,
+            { ...extra, routed },
+            actorKind,
+        );
     }
 
     private async tryLogActivity(
@@ -1289,6 +1314,7 @@ export class InboxService implements InboxProducer {
         actionType: ActivityActionType,
         row: InboxItem,
         details: Record<string, unknown>,
+        actorKind?: ActivityActorKind,
     ): Promise<void> {
         if (!this.activityLog) return;
         try {
@@ -1298,6 +1324,7 @@ export class InboxService implements InboxProducer {
                 actionType,
                 status: ActivityStatus.COMPLETED,
                 summary: `Inbox ${row.kind}: ${row.title}`.slice(0, 500),
+                ...(actorKind ? { actorKind } : {}),
                 details: {
                     ...details,
                     inboxItemId: row.id,

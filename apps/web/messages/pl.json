@@ -1112,7 +1112,17 @@
                 "statusArchived": "Zarchiwizowany",
                 "noTitle": "(brak tytułu)",
                 "noCadence": "Brak rytmu",
-                "cadencePrefix": "Rytm:"
+                "cadencePrefix": "Rytm:",
+                "runsOnSchedule": "Runs on schedule",
+                "runsOnScheduleNext": "Runs on schedule · next {time}",
+                "runsWhenAssigned": "Runs when assigned",
+                "lastRun": "Last run {time} · {status}",
+                "lastRunCompleted": "completed",
+                "lastRunFailed": "failed",
+                "lastRunCancelled": "cancelled",
+                "lastRunDispatchFailed": "could not start",
+                "lastRunRecoveredStuck": "recovered after getting stuck",
+                "lastRunUnknown": "unknown"
             },
             "tabs": {
                 "dashboard": "Pulpit",
@@ -2356,9 +2366,9 @@
                     "no-ideas": "Tick ran but generated no Ideas",
                     "failed": "Run now failed",
                     "cron-no-match": "Tick ran (cron skipped)",
-                    "tasks-filed": "Zadania zapisane w App Works misji.",
-                    "no-tasks": "Brak nowych zadań do zapisania w App Works misji.",
-                    "spawned-and-tasks-filed": "Utworzono nowe pomysły i zapisano zadania w App Works misji."
+                    "tasks-filed": "Zadania zapisane w App Works lub Repository Works misji.",
+                    "no-tasks": "Brak nowych zadań do zapisania w App Works lub Repository Works misji.",
+                    "spawned-and-tasks-filed": "Utworzono nowe pomysły i zapisano zadania w App Works lub Repository Works misji."
                 }
             },
             "goals": {
@@ -2394,14 +2404,17 @@
             "output": {
                 "title": "Wynik",
                 "ideas": "Pomysły",
-                "tasks": "Zadania w dołączonych App Works",
+                "tasks": "Zadania w dołączonych App Works lub Repository Works",
                 "both": "Oba",
                 "tasksPerTick": "Zadania na cykl",
                 "openCap": "Limit otwartych zadań na Work",
                 "appliesTo": "Dotyczy Works dołączonych jako „Ulepsza” lub „Obsługuje”.",
-                "noAppWork": "Dołącz App Work jako „Ulepsza” lub „Obsługuje”, aby zapisywać w nim zadania.",
+                "noAppWork": "Dołącz App Work lub Repository Work jako „Ulepsza” lub „Obsługuje”, aby zapisywać w nim zadania.",
+                "repoIsolationOff": "Opcja „Task isolation” jest wyłączona w dołączonym Repository Work, więc nie są w nim zapisywane żadne zadania. Włącz „Task isolation” w ustawieniach tego Work.",
+                "repoAgentCannotOpenPullRequests": "Agent, który wykonywałby zadania w dołączonym Repository Work, nie może commitować i otwierać pull requestów, więc nie są w nim zapisywane żadne zadania. Wybierz dla wyjścia zadań tej misji agenta z oboma uprawnieniami albo nadaj je agentowi tego Work.",
+                "repoAllowsAgentMerge": "Zasady scalania dołączonego Repository Work pozwalają agentom scalać własne pull requesty, więc ta misja nie zapisuje w nim zadań. Wyłącz scalanie przez agentów dla tego Work, aby misja mogła tam zapisywać zadania.",
                 "tasksOnWorks": "Zadania w dołączonych Works",
-                "nothingToFile": "Brak dołączonego App Work, w którym można zapisać zadania.",
+                "nothingToFile": "Brak dołączonego App Work lub Repository Work, w którym można zapisać zadania.",
                 "tasksOnWorksEmpty": "Nie zapisano jeszcze żadnych zadań.",
                 "save": "Zapisz",
                 "saved": "Wynik zapisany",
@@ -2410,6 +2423,21 @@
                 "unavailable": "Nie udało się wczytać zadań.",
                 "previous": "Poprzednia",
                 "next": "Następna"
+            },
+            "team": {
+                "title": "Team and agents",
+                "loading": "Loading…",
+                "unavailable": "Could not load who works on this Mission.",
+                "empty": "No Team holds this Mission yet, and no Agent is scoped to it or to its attached Works.",
+                "teamNoAgents": "No agents on this Team that you can see.",
+                "otherAgents": "Other agents",
+                "agents": "Agents",
+                "viaMission": "Scoped to this Mission",
+                "viaWork": "Works on {name}",
+                "viaWorkUnnamed": "Works on an attached Work",
+                "neverRan": "Never ran",
+                "viaStandingTasks": "Standing tasks on {name}",
+                "viaStandingTasksUnnamed": "Standing tasks on an attached Work"
             }
         },
         "ideasPage": {
@@ -2780,7 +2808,7 @@
         },
         "feed": {
             "narration": {
-                "missionNothingToFile": "<b>{actor}</b> nie znalazł dziś niczego nowego do zapisania w App Works misji"
+                "missionNothingToFile": "<b>{actor}</b> nie znalazł dziś niczego nowego do zapisania w App Works lub Repository Works misji"
             }
         },
         "works": {

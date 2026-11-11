@@ -1112,7 +1112,17 @@
                 "statusArchived": "Arquivado",
                 "noTitle": "(sem título)",
                 "noCadence": "Nenhuma batida de coração",
-                "cadencePrefix": "Batida de coração:"
+                "cadencePrefix": "Batida de coração:",
+                "runsOnSchedule": "Runs on schedule",
+                "runsOnScheduleNext": "Runs on schedule · next {time}",
+                "runsWhenAssigned": "Runs when assigned",
+                "lastRun": "Last run {time} · {status}",
+                "lastRunCompleted": "completed",
+                "lastRunFailed": "failed",
+                "lastRunCancelled": "cancelled",
+                "lastRunDispatchFailed": "could not start",
+                "lastRunRecoveredStuck": "recovered after getting stuck",
+                "lastRunUnknown": "unknown"
             },
             "tabs": {
                 "dashboard": "Dashboard",
@@ -2356,9 +2366,9 @@
                     "no-ideas": "Tick ran but generated no Ideas",
                     "failed": "Run now failed",
                     "cron-no-match": "Tick ran (cron skipped)",
-                    "tasks-filed": "Tarefas registradas nos App Works da Missão.",
-                    "no-tasks": "Nada novo para registrar nos App Works da Missão.",
-                    "spawned-and-tasks-filed": "Novas Ideias geradas e Tarefas registradas nos App Works da Missão."
+                    "tasks-filed": "Tarefas registradas nos App Works ou Repository Works da Missão.",
+                    "no-tasks": "Nada novo para registrar nos App Works ou Repository Works da Missão.",
+                    "spawned-and-tasks-filed": "Novas Ideias geradas e Tarefas registradas nos App Works ou Repository Works da Missão."
                 }
             },
             "goals": {
@@ -2394,14 +2404,17 @@
             "output": {
                 "title": "Saída",
                 "ideas": "Ideias",
-                "tasks": "Tarefas nos App Works anexados",
+                "tasks": "Tarefas nos App Works ou Repository Works anexados",
                 "both": "Ambos",
                 "tasksPerTick": "Tarefas por ciclo",
                 "openCap": "Limite de tarefas abertas por Work",
                 "appliesTo": "Aplica-se a Works anexados como “Melhora” ou “Opera”.",
-                "noAppWork": "Anexe um App Work como “Melhora” ou “Opera” para registrar tarefas nele.",
+                "noAppWork": "Anexe um App Work ou um Repository Work como “Melhora” ou “Opera” para registrar tarefas nele.",
+                "repoIsolationOff": "“Task isolation” está desativado em um Repository Work anexado, portanto nenhuma tarefa é registrada nele. Ative “Task isolation” nas configurações desse Work.",
+                "repoAgentCannotOpenPullRequests": "O agente que executaria as tarefas em um Repository Work anexado não pode fazer commits e abrir pull requests, portanto nenhuma tarefa é registrada nele. Escolha um agente com as duas permissões para a saída de tarefas desta Missão ou conceda-as ao agente do Work.",
+                "repoAllowsAgentMerge": "A política de merge de um Repository Work anexado permite que agentes façam merge dos próprios pull requests, portanto esta Missão não registra tarefas nele. Desative os merges por agentes nesse Work para que a Missão possa registrar tarefas lá.",
                 "tasksOnWorks": "Tarefas nos Works anexados",
-                "nothingToFile": "Nenhum App Work anexado para registrar tarefas.",
+                "nothingToFile": "Nenhum App Work ou Repository Work anexado para registrar tarefas.",
                 "tasksOnWorksEmpty": "Nenhuma tarefa registrada ainda.",
                 "save": "Salvar",
                 "saved": "Saída salva",
@@ -2410,6 +2423,21 @@
                 "unavailable": "Não foi possível carregar as tarefas.",
                 "previous": "Anterior",
                 "next": "Próxima"
+            },
+            "team": {
+                "title": "Team and agents",
+                "loading": "Loading…",
+                "unavailable": "Could not load who works on this Mission.",
+                "empty": "No Team holds this Mission yet, and no Agent is scoped to it or to its attached Works.",
+                "teamNoAgents": "No agents on this Team that you can see.",
+                "otherAgents": "Other agents",
+                "agents": "Agents",
+                "viaMission": "Scoped to this Mission",
+                "viaWork": "Works on {name}",
+                "viaWorkUnnamed": "Works on an attached Work",
+                "neverRan": "Never ran",
+                "viaStandingTasks": "Standing tasks on {name}",
+                "viaStandingTasksUnnamed": "Standing tasks on an attached Work"
             }
         },
         "ideasPage": {
@@ -2780,7 +2808,7 @@
         },
         "feed": {
             "narration": {
-                "missionNothingToFile": "<b>{actor}</b> não encontrou hoje nada de novo para registrar nos App Works de uma Missão"
+                "missionNothingToFile": "<b>{actor}</b> não encontrou hoje nada de novo para registrar nos App Works ou Repository Works de uma Missão"
             }
         },
         "works": {

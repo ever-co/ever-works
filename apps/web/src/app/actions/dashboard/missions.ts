@@ -7,6 +7,7 @@ import {
     type CreateMissionInput,
     type Mission,
     type MissionOutcome,
+    type MissionTeamView,
     type UpdateMissionInput,
 } from '@/lib/api/missions';
 import { tasksAPI, type Task } from '@/lib/api/tasks';
@@ -122,7 +123,19 @@ export async function detachMissionAttachmentAction(missionId: string, attachmen
 }
 
 /**
- * APW-08 T36 (FR-55) — one page of the Tasks a Mission filed on its App Works (the
+ * The Mission page's "Team and agents" panel — who works on this Mission, in
+ * one API read (`GET /me/missions/:id/team`, gated like the Mission read, every
+ * Agent one the caller may read). Rejects on any API failure; the panel says so.
+ */
+export async function getMissionTeamAction(missionId: string): Promise<MissionTeamView> {
+    // Security: verify session server-side before reading data
+    const user = await getAuthFromCookie();
+    if (!user) redirect(ROUTES.AUTH_LOGIN);
+    return missionsAPI.getTeam(missionId);
+}
+
+/**
+ * APW-08 T36 (FR-55) — one page of the Tasks a Mission filed on its attached Works (the
  * `mission-task` label), newest first, 20 per page.
  */
 export async function listMissionTasksOnWorksAction(

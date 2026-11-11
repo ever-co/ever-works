@@ -13,6 +13,7 @@ import {
 	isFleetAgentExecutionPermissionMode,
 	isFleetAgentModelSessionId
 } from '@ever-works/contracts';
+import type { FleetAgentCliError } from '@ever-works/contracts';
 import type { NodeCheckResult, NodeCommandEnvOverlay, WireCheck } from './acceptance-checks';
 
 /**
@@ -1432,6 +1433,159 @@ function claudeStreamTail(output: string, stderrTail: string | null | undefined)
 	}
 	if (streamEvents === 0) return null;
 	return tail([...said, stderrTail ?? ''].filter((part) => part.trim()).join('\n'));
+}
+
+/** Most of one CLI-authored error message that is read; a real one is a line or two. */
+const MODEL_CLI_ERROR_PART_MAX_CHARS = 2_000;
+/** Most CLI-authored error messages of one run that are read. */
+const MODEL_CLI_ERROR_MAX_PARTS = 8;
+
+/** What the caller knows about the run beside its output. */
+export interface ModelCliErrorFacts {
+	/** Output tokens the run reported; above zero, the model spoke. Null / absent = not reported. */
+	outputTokens?: number | null;
+}
+
+/**
+ * Fleet agent readiness — what the CLI ITSELF reported about a failed run,
+ * and nothing the model or a tool wrote.
+ *
+ * A model run's output mixes authors: the CLI (its error result, its error
+ * events, its stderr), the model (assistant text) and the tool layer (tool
+ * output, MCP server errors, hook failures). Only the first says anything
+ * about the seat. A Task about login pages produces "returns 401 when the
+ * user is not logged in" in the model's voice; an MCP server that could not
+ * sign in to GitHub produces "Failed to authenticate (HTTP 401)" in the
+ * tool layer's. Read as the CLI's own state, either marks a working agent
+ * signed out. So this reads ONLY what the CLI authors at the top level:
+ *
+ *  - Claude Code, as a real signed-out 2.1.322 prints it
+ *    (`__fixtures__/claude-code-signed-out.stream.jsonl`): an `assistant`
+ *    event the CLI flagged as its own (`error: 'authentication_failed'`,
+ *    `is_api_error_message: true`, model `<synthetic>`) — its class and its
+ *    text; and the `result` envelope whose `is_error` is true — its `result`
+ *    text (what `describeModelFailure` reports as "claude-code reported an
+ *    error: …") and its `api_error_status`. NOT the envelope's `errors` list:
+ *    its entries come from every layer (a hook, a tool, an MCP server), and
+ *    nothing on an entry says which. Never an assistant event the CLI did
+ *    not flag, and never a `result` that is not an error (that is the
+ *    model's final message);
+ *  - Codex: the `message` of a top-level `error` event and of `turn.failed`.
+ *    NOT an `error` item (a non-fatal error surfaced inside the turn, which
+ *    can be a tool's), an `agent_message`, `reasoning` or a command's output;
+ *  - either CLI's stderr, and stdout text that is not an event at all —
+ *    when the model did not speak in this run. The run failed and REPORTED
+ *    zero output tokens: then stderr is read whatever the stream holds (a
+ *    model that wrote nothing cannot have authored anything in it; a line
+ *    that looks like an assistant event is the CLI's own). When the run
+ *    reported no token count at all (it died before its result), the
+ *    stream decides: stderr is read only if it holds nothing the model
+ *    wrote. A CLI that refuses to start prints its reason there, after its
+ *    `init` line or before any line. Once the model has spoken, the authors
+ *    of stderr can no longer be told apart and it is not read.
+ *
+ * Null when those channels are empty: the caller then draws no verdict.
+ * The text is for classification inside this process only — it is never
+ * stored, sent or logged.
+ */
+export function readModelCliError(
+	provider: FleetAgentExecutionProvider,
+	rawOutput: string | null,
+	step: Pick<NodeCheckResult, 'status' | 'logTail'>,
+	facts: ModelCliErrorFacts = {}
+): FleetAgentCliError | null {
+	const parts: string[] = [];
+	const push = (value: unknown): void => {
+		if (typeof value !== 'string' || !value.trim() || parts.length >= MODEL_CLI_ERROR_MAX_PARTS) return;
+		parts.push(value.slice(0, MODEL_CLI_ERROR_PART_MAX_CHARS));
+	};
+	let apiStatus: number | null = null;
+	let errorClass: string | null = null;
+	let sawEvent = false;
+	// True once the stream holds anything the MODEL wrote or caused.
+	let modelSpoke = typeof facts.outputTokens === 'number' && facts.outputTokens > 0;
+	const plain: string[] = [];
+
+	const read = (event: Record<string, unknown>): void => {
+		sawEvent = true;
+		if (provider === 'claude-code') {
+			if (event.type === 'result') {
+				if (event.is_error !== true) return;
+				push(event.result);
+				if (typeof event.api_error_status === 'number' && Number.isFinite(event.api_error_status)) {
+					apiStatus = event.api_error_status;
+				}
+			} else if (event.type === 'assistant') {
+				const flagged =
+					(typeof event.error === 'string' && event.error.length > 0) || event.is_api_error_message === true;
+				if (!flagged) {
+					modelSpoke = true;
+					return;
+				}
+				if (typeof event.error === 'string' && event.error) errorClass = event.error.slice(0, 64);
+				const message = event.message as Record<string, unknown> | null | undefined;
+				const blocks = message && Array.isArray(message.content) ? message.content : [];
+				for (const block of blocks) {
+					const record = block as Record<string, unknown> | null;
+					if (record && record.type === 'text') push(record.text);
+				}
+			} else if (event.type === 'user') {
+				// A tool result: the model called a tool, so it spoke.
+				modelSpoke = true;
+			}
+			return;
+		}
+		if (event.type === 'error') {
+			push(event.message);
+		} else if (event.type === 'turn.failed') {
+			push((event.error as Record<string, unknown> | null | undefined)?.message);
+		} else if (typeof event.type === 'string' && event.type.startsWith('item.')) {
+			// Every item is the model's doing — a message, a command, a tool
+			// call — or a non-fatal error surfaced inside its turn.
+			const item = event.item as Record<string, unknown> | null | undefined;
+			if (!item || item.type !== 'error') modelSpoke = true;
+		}
+	};
+
+	const output = typeof rawOutput === 'string' ? rawOutput : '';
+	const asEvent = (value: unknown): Record<string, unknown> | null =>
+		value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+	for (const line of output.split(/\r?\n/)) {
+		if (!line.trim()) continue;
+		let event: Record<string, unknown> | null = null;
+		try {
+			event = asEvent(JSON.parse(line));
+		} catch {
+			// Not an event line.
+		}
+		if (event) read(event);
+		else if (plain.length < MODEL_CLI_ERROR_MAX_PARTS) plain.push(line);
+	}
+	// Claude Code's `json` mode prints ONE document, which may span lines.
+	if (!sawEvent && output.trim()) {
+		try {
+			const parsed = JSON.parse(output.trim()) as unknown;
+			for (const candidate of Array.isArray(parsed) ? parsed : [parsed]) {
+				const event = asEvent(candidate);
+				if (event) read(event);
+			}
+		} catch {
+			// Not a document either.
+		}
+	}
+	// The process's own words — only for a run in which the model said nothing:
+	// it reported zero output tokens (whatever the stream holds), or reported
+	// no count and the stream shows nothing the model wrote.
+	const reportedNoOutput = facts.outputTokens === 0;
+	if (step.status !== 'green' && (reportedNoOutput || !modelSpoke)) {
+		push(step.logTail);
+		// Text on stdout that is no event: only when there is no event at all,
+		// i.e. the CLI died before it wrote its first one.
+		if (!sawEvent) push(plain.join('\n'));
+	}
+
+	if (parts.length === 0 && apiStatus === null && errorClass === null) return null;
+	return { text: parts.length > 0 ? parts.join('\n') : null, apiStatus, errorClass };
 }
 
 /** Claude Code `--output-format json` prints ONE JSON document; be tolerant of leading noise. */

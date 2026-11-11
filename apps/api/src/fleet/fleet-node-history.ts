@@ -104,8 +104,27 @@ export function buildNodeJobHistory(
  * being absent from the failed subset that sits right beside it.
  */
 export function isFailedNodeHistoryEntry(entry: FleetNodeJobHistoryEntry): boolean {
-    if (entry.reconciled) return entry.reconciled.status === 'failed';
-    return entry.status === 'failed';
+    return isFailedJobOutcome(entry.status, entry.reconciled ? entry.reconciled.status : null);
+}
+
+/**
+ * The rule itself, on the two statuses it reads — for a caller that holds
+ * them without a history row (the node's run statistics,
+ * `fleet-node-run-stats.ts`).
+ *
+ * `reconciledRunStatus` is the status of the Agent run the job carried, or
+ * null / undefined when no run is known for it (no correlation, the run was
+ * not found). A known run decides outright; only without one does the job's
+ * own status speak.
+ */
+export function isFailedJobOutcome(
+    jobStatus: string,
+    reconciledRunStatus: string | null | undefined,
+): boolean {
+    if (typeof reconciledRunStatus === 'string' && reconciledRunStatus) {
+        return reconciledRunStatus === 'failed';
+    }
+    return jobStatus === 'failed';
 }
 
 function toReconciledOutcome(run: ReconcilableRun): FleetJobReconciledOutcome {

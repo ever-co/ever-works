@@ -55,7 +55,7 @@ export type GoalLoopReasonCode =
     | 'wall-clock-exceeded'
     | 'no-progress'
     | 'run-in-flight'
-    /** APW-08 T32 (FR-47) — an App Work Goal's open pull requests hold the ceiling. */
+    /** APW-08 T32 (FR-47) — an App or Repository Work Goal's open pull requests hold the ceiling. */
     | 'awaiting-merge'
     /** APW-08 T32 (FR-48) — the Goal's Work is gone or unreachable. */
     | 'work-unavailable'
@@ -117,10 +117,11 @@ export interface GoalLoopInput {
      */
     maxConcurrentIterations?: number | null;
     /**
-     * APW-08 T32 (FR-47, S10) — for a Goal scoped to an App Work: iteration Tasks whose pull
-     * request is still open (in review, not running). Each holds a concurrency slot until it
-     * merges or closes, so iteration N+1 never starts on top of iteration N's open change.
-     * Absent / 0 = nothing awaits a merge (every Goal without an App Work).
+     * APW-08 T32 (FR-47, S10) — for a Goal scoped to an App Work or a Repository Work:
+     * iteration Tasks whose pull request is still open (in review, not running). Each holds a
+     * concurrency slot until it merges or closes, so iteration N+1 never starts on top of
+     * iteration N's open change. Absent / 0 = nothing awaits a merge (every Goal with no Work,
+     * or a Work of another kind).
      */
     pullRequestsAwaitingMerge?: number | null;
     /** The iteration numbers of those pull requests, oldest first, for the log line. */

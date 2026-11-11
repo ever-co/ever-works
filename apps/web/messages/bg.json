@@ -1143,7 +1143,17 @@
                 "statusArchived": "Архивиран",
                 "noTitle": "(без заглавие)",
                 "noCadence": "Няма пулс",
-                "cadencePrefix": "Пулс:"
+                "cadencePrefix": "Пулс:",
+                "runsOnSchedule": "Runs on schedule",
+                "runsOnScheduleNext": "Runs on schedule · next {time}",
+                "runsWhenAssigned": "Runs when assigned",
+                "lastRun": "Last run {time} · {status}",
+                "lastRunCompleted": "completed",
+                "lastRunFailed": "failed",
+                "lastRunCancelled": "cancelled",
+                "lastRunDispatchFailed": "could not start",
+                "lastRunRecoveredStuck": "recovered after getting stuck",
+                "lastRunUnknown": "unknown"
             },
             "tabs": {
                 "dashboard": "Табло",
@@ -2387,9 +2397,9 @@
                     "no-ideas": "Tick ran but generated no Ideas",
                     "failed": "Run now failed",
                     "cron-no-match": "Tick ran (cron skipped)",
-                    "tasks-filed": "Задачите са заведени в App Works на мисията.",
-                    "no-tasks": "Няма нищо ново за завеждане в App Works на мисията.",
-                    "spawned-and-tasks-filed": "Създадени са нови идеи и задачите са заведени в App Works на мисията."
+                    "tasks-filed": "Задачите са заведени в App или Repository Works на мисията.",
+                    "no-tasks": "Няма нищо ново за завеждане в App или Repository Works на мисията.",
+                    "spawned-and-tasks-filed": "Създадени са нови идеи и задачите са заведени в App или Repository Works на мисията."
                 }
             },
             "goals": {
@@ -2425,14 +2435,17 @@
             "output": {
                 "title": "Резултат",
                 "ideas": "Идеи",
-                "tasks": "Задачи в прикачените App Works",
+                "tasks": "Задачи в прикачените App или Repository Works",
                 "both": "И двете",
                 "tasksPerTick": "Задачи на цикъл",
                 "openCap": "Лимит на отворени задачи за Работа",
                 "appliesTo": "Важи за Работи, прикачени като „Подобрява“ или „Поддържа“.",
-                "noAppWork": "Прикачете App Work като „Подобрява“ или „Поддържа“, за да заведете задачи в него.",
+                "noAppWork": "Прикачете App или Repository Work като „Подобрява“ или „Поддържа“, за да заведете задачи в него.",
+                "repoIsolationOff": "Настройката „Task isolation“ е изключена за прикачен Repository Work, затова в него не се завеждат задачи. Включете „Task isolation“ в настройките на този Work.",
+                "repoAgentCannotOpenPullRequests": "Агентът, който би изпълнявал задачите в прикачен Repository Work, няма право да прави commit и да отваря pull request-и, затова в него не се завеждат задачи. Изберете за изхода със задачи на тази мисия агент с двете права или ги дайте на агента на този Work.",
+                "repoAllowsAgentMerge": "Политиката за сливане на прикачен Repository Work позволява на агентите да сливат собствените си pull request-и, затова тази мисия не завежда задачи в него. Изключете сливането от агенти за този Work, за да може мисията да завежда задачи там.",
                 "tasksOnWorks": "Задачи в прикачените Работи",
-                "nothingToFile": "Няма прикачен App Work, в който да се заведат задачи.",
+                "nothingToFile": "Няма прикачен App или Repository Work, в който да се заведат задачи.",
                 "tasksOnWorksEmpty": "Все още няма заведени задачи.",
                 "save": "Запазване",
                 "saved": "Резултатът е запазен",
@@ -2441,6 +2454,21 @@
                 "unavailable": "Задачите не можаха да се заредят.",
                 "previous": "Назад",
                 "next": "Напред"
+            },
+            "team": {
+                "title": "Team and agents",
+                "loading": "Loading…",
+                "unavailable": "Could not load who works on this Mission.",
+                "empty": "No Team holds this Mission yet, and no Agent is scoped to it or to its attached Works.",
+                "teamNoAgents": "No agents on this Team that you can see.",
+                "otherAgents": "Other agents",
+                "agents": "Agents",
+                "viaMission": "Scoped to this Mission",
+                "viaWork": "Works on {name}",
+                "viaWorkUnnamed": "Works on an attached Work",
+                "neverRan": "Never ran",
+                "viaStandingTasks": "Standing tasks on {name}",
+                "viaStandingTasksUnnamed": "Standing tasks on an attached Work"
             }
         },
         "ideasPage": {
@@ -2849,7 +2877,7 @@
         },
         "feed": {
             "narration": {
-                "missionNothingToFile": "<b>{actor}</b> не намери днес нищо ново за завеждане в App Works на мисия"
+                "missionNothingToFile": "<b>{actor}</b> не намери днес нищо ново за завеждане в App или Repository Works на мисия"
             }
         },
         "works": {

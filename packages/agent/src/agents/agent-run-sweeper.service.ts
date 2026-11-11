@@ -59,6 +59,12 @@ export interface QueuedTooLongSweepSummary {
     flagged: number;
     /** Of those, how many produced an owner notification. */
     notified: number;
+    /**
+     * Open `queued-too-long` escalations this tick closed because their run
+     * has since ended (the backstop for the terminal-event listener, and the
+     * backfill for cards filed before it existed).
+     */
+    closed: number;
 }
 
 /**
@@ -387,14 +393,27 @@ export class AgentRunSweeperService {
      */
     async sweepQueuedTooLong(): Promise<QueuedTooLongSweepSummary> {
         const thresholdMinutes = config.agents.getRunQueuedTooLongMinutes();
+        const sweeperEnabled = config.agents.getRunSweeperEnabled();
+        // Close the cards whose run has ended FIRST, and even when surfacing
+        // is switched off (threshold 0): a card already on someone's
+        // dashboard must still close once its question is moot. Bounded and
+        // idempotent; the escalation service never throws. (A partial double
+        // without the method, in a unit spec, is skipped.)
+        const closed =
+            sweeperEnabled && typeof this.escalations?.closeEndedQueuedTooLong === 'function'
+                ? await this.escalations.closeEndedQueuedTooLong(
+                      config.agents.getRunQueuedAttentionBatch(),
+                  )
+                : 0;
         const base: QueuedTooLongSweepSummary = {
             enabled: true,
             thresholdMinutes,
             scanned: 0,
             flagged: 0,
             notified: 0,
+            closed,
         };
-        if (!config.agents.getRunSweeperEnabled() || thresholdMinutes <= 0) {
+        if (!sweeperEnabled || thresholdMinutes <= 0) {
             return { ...base, enabled: false };
         }
 

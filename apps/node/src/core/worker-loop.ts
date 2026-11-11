@@ -1,5 +1,6 @@
 import { performance } from 'node:perf_hooks';
 import type {
+	FleetJobFetchCredentialResponse,
 	FleetJobKind,
 	FleetJobPushCredentialResponse,
 	FleetJobView,
@@ -316,6 +317,14 @@ export interface JobLeaseCapableClient {
 	 * own credential helper instead.
 	 */
 	mintPushCredential?(jobId: string, leaseGeneration?: number): Promise<FleetJobPushCredentialResponse>;
+	/**
+	 * Scoped fetch credentials. Optional like its siblings, with one
+	 * difference in what absence means: a client that predates it is not a
+	 * gap to fail on, because a fetch keeps its fallback — the lease handle
+	 * then has no `mintFetchCredential` either, and the node fetches with
+	 * the machine's own Git configuration exactly as it did before.
+	 */
+	mintFetchCredential?(jobId: string, leaseGeneration?: number): Promise<FleetJobFetchCredentialResponse>;
 }
 
 /**
@@ -409,6 +418,21 @@ export interface JobLeaseHandle {
 	 * publishes without the credential.
 	 */
 	mintPushCredential(): Promise<FleetJobPushCredentialResponse>;
+	/**
+	 * Ask for the repository-scoped READ credentials this run's clone may
+	 * authenticate with (scoped fetch credentials).
+	 *
+	 * On the LEASE handle for the reason `mintPushCredential` is: the
+	 * platform proves the claim with the same four checks, against the
+	 * generation THIS run holds.
+	 *
+	 * OPTIONAL, unlike `mintPushCredential`, and the difference is the
+	 * feature's own: a publish has no version without its credential, while
+	 * a fetch without one is the fetch this node always ran. So a handle
+	 * built over a client that predates the call simply does not carry it,
+	 * and the caller clones as before instead of failing.
+	 */
+	mintFetchCredential?(): Promise<FleetJobFetchCredentialResponse>;
 }
 
 /** The keep-alive as the LOOP sees it: the executor's half, plus control. */
@@ -2039,7 +2063,16 @@ export class WorkerLoop {
 						);
 					}
 					return mintFn.call(this.options.client, jobId, generation);
-				}
+				},
+				// Scoped fetch credentials: same channel, same claim, same
+				// generation. Present only when the client can make the call —
+				// an absent method is how a caller learns to fetch as before.
+				...(this.options.client.mintFetchCredential
+					? {
+							mintFetchCredential: async () =>
+								this.options.client.mintFetchCredential!.call(this.options.client, jobId, generation)
+						}
+					: {})
 			}
 		};
 	}

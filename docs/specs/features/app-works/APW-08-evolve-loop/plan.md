@@ -1283,7 +1283,12 @@ Skill from [`skill-draft/SKILL.md`](./skill-draft/SKILL.md) published to `ever-w
 - Checks for cloud runs require a pull request to exist (spec §9); the CI fix loop, not "no PR on red", governs.
 - The isolated-run predicate depends on a pipeline that enforces Environment networking; today that is one
   pipeline plugin.
-- Mission Task output is limited to App Works.
+- ~~Mission Task output is limited to App Works.~~ **Lifted for Repository Works (2026-11-10):** the tick's kind
+  test (`MissionTickService.fileTaskOutput`), the write warning (`MissionsService.withTaskOutputWarnings`) and the
+  Goal gate (`GoalOrchestratorService.goalWorkState`) now ask `workKindDeliversTasksAsPullRequests` (`app`,
+  `repo`) instead of `isAppWorkKind`. A `repo` Work is filed on only while its Task isolation is on
+  (`missionTaskOutputEligibility`); `noAppWorkRelation` keeps its code and now means "no App or Repository Work",
+  and `repoWorkTaskIsolationOff` is the new warning. Other kinds are still not filed on.
 - `MissionTemplateManifestService.applyDefaults` gets its first caller here; the two starter templates' manifests
   start being honoured at the same time — called out in the P3 PR description.
 - Fleet setup steps and App checks run with the machine's **real** home and toolchain; the containment record covers

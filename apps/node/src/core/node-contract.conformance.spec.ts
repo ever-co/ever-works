@@ -154,7 +154,9 @@ describe('what the node actually puts on the wire', () => {
 		// 18 → 23 with FL-07 (desktop view & control): the helper's trust level,
 		// its status, the displays, the desktop reasons and the helper events,
 		// sent only by a node whose `describeSelf` has a screen helper backend.
-		expect(baseline.selfDescription.nodeEmitsOptional).toHaveLength(23);
+		// 23 → 24 with fleet agent readiness: the per-CLI report, sent on the
+		// heartbeat by a runtime that wires the probe, and never at enroll.
+		expect(baseline.selfDescription.nodeEmitsOptional).toHaveLength(24);
 	});
 
 	it('enroll sends exactly the pinned body, to the pinned path', async () => {
@@ -286,7 +288,25 @@ describe('what the node actually puts on the wire', () => {
 			desktopReasons: ['no-display-session'],
 			helperEvents: [
 				{ id: '0f8f6a2e-6a0c-4d3e-9a43-5b4d2f1e0c11', kind: 'admit', at: '2026-10-27T00:00:00.000Z' }
-			]
+			],
+			// Fleet agent readiness.
+			agents: {
+				checkedAt: '2026-11-10T12:00:00.000Z',
+				agents: [
+					{
+						provider: 'claude-code',
+						installed: true,
+						version: '2.1.319',
+						signedIn: true,
+						authMethod: 'subscription',
+						account: null,
+						status: 'ready',
+						reasonCode: null,
+						reason: null,
+						checkedAt: '2026-11-10T12:00:00.000Z'
+					}
+				]
+			}
 		});
 		const emitted = Object.keys(bodyOf(sent)).filter((key) => key !== 'nodeId' && key !== 'secret');
 		expect(emitted.sort()).toEqual(

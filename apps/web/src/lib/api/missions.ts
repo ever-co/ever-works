@@ -37,6 +37,8 @@ export interface MissionTaskOutput {
     tasksPerTick: number;
     openTasksCap: number;
     agentId?: string;
+    /** Set over the API only: Repository Work Tasks under a merge policy that lets agents merge. */
+    allowAgentMerge?: boolean;
 }
 
 export interface Mission {
@@ -67,7 +69,14 @@ export interface Mission {
     /** APW-08 T34 — the Task output's bounds (normalized by the API). */
     taskOutput?: MissionTaskOutput;
     taskOutputNoticeAt?: string | null;
-    /** APW-08 T34 — on a write's answer only: `noAppWorkRelation`. */
+    /**
+     * APW-08 T34 — on a write's answer only, for a Mission that files Tasks:
+     * `noAppWorkRelation` (no App or Repository Work attached as Improves or Operates),
+     * `repoWorkTaskIsolationOff` (a Repository Work is attached, with its Task isolation off),
+     * `repoWorkAgentCannotOpenPullRequests` (the Agent its Tasks would run with may not commit
+     * and open pull requests) or `repoWorkAllowsAgentMerge` (its merge policy lets agents merge
+     * and the Mission has not opted in).
+     */
     warnings?: string[];
 }
 
@@ -174,7 +183,7 @@ export interface MissionRunNowResponse {
     missionId: string;
     ideasCreated?: number;
     ideasQueued?: number;
-    /** APW-08 T35 — Tasks filed on the Mission's App Works. */
+    /** APW-08 T35 — Tasks filed on the Mission's App or Repository Works. */
     tasksFiled?: number;
     message?: string;
 }
@@ -345,6 +354,16 @@ export const missionsAPI = {
     // never ownership: Missions never own Works (invariant I-7) and
     // detaching / deleting a Mission never touches the Work (I-6).
 
+    /**
+     * `GET /me/missions/:id/team` → who works on this Mission: the Teams that
+     * hold it (with their Agents) and the other Agents tied to it or to one of
+     * its attached Works. Readable-gated like `get`; every Agent is one the
+     * caller may read.
+     */
+    async getTeam(id: string): Promise<MissionTeamView> {
+        return serverFetch<MissionTeamView>(`/me/missions/${id}/team`, { method: 'GET' });
+    },
+
     /** `GET /me/missions/:id/works` → the Works this Mission relates to. */
     async listWorks(id: string): Promise<MissionWorkRelationDto[]> {
         const res = await serverFetch<{ relations: MissionWorkRelationDto[] }>(
@@ -490,8 +509,48 @@ export interface MissionWorkRelationDto {
     readonly createdAt: string;
     readonly workName: string | null;
     readonly workSlug: string | null;
-    /** APW-08 T34 — the Work's kind (`app` lets a Mission file Tasks on it). */
+    /** APW-08 T34 — the Work's kind (`app` and `repo` let a Mission file Tasks on it). */
     readonly workKind?: string | null;
+    /**
+     * The Work's Task isolation setting (`worktree` = on). A Mission files Tasks on a
+     * Repository Work only while it is on.
+     */
+    readonly workTaskIsolation?: string | null;
+}
+
+/** One Agent on the Mission page's "Team and agents" panel (agent-side `MissionTeamAgentView`). */
+export interface MissionTeamAgentDto {
+    readonly id: string;
+    readonly name: string;
+    readonly status: string;
+    /** Its most recent ENDED run of any kind: when it finished (ISO) and how; `null` = never. */
+    readonly latestRun: { readonly status: string; readonly finishedAt: string } | null;
+}
+
+/**
+ * How an Agent on no listed Team is tied to the Mission: scoped or assigned to
+ * it (`mission`), to one of its attached Works (`work`), or the assigned Agent
+ * of an active recurring Task on one of those Works (`standing-tasks`).
+ */
+export type MissionTeamAgentVia = 'mission' | 'work' | 'standing-tasks';
+
+/** `GET /me/missions/:id/team` (agent-side `MissionTeamView`). */
+export interface MissionTeamView {
+    /** The Teams that hold this Mission as a resource, by name, with their Agents. */
+    readonly teams: ReadonlyArray<{
+        readonly id: string;
+        readonly name: string;
+        readonly slug: string;
+        readonly agents: ReadonlyArray<MissionTeamAgentDto>;
+    }>;
+    /** Agents on no listed Team, with what ties them to the Mission. */
+    readonly agents: ReadonlyArray<
+        MissionTeamAgentDto & {
+            readonly via: MissionTeamAgentVia;
+            readonly workId: string | null;
+            readonly workName: string | null;
+        }
+    >;
 }
 
 /**

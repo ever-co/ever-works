@@ -387,4 +387,42 @@ describe('AgentRunSweeperService — state-aware policy (M6)', () => {
             },
         );
     });
+
+    describe('queued-too-long cards whose run has ended close themselves', () => {
+        it('closes them first, every tick, and reports how many', async () => {
+            escalations.closeEndedQueuedTooLong = jest.fn().mockResolvedValue(30);
+            process.env.AGENT_RUN_QUEUED_ATTENTION_BATCH = '40';
+
+            const summary = await makeSvc().sweepQueuedTooLong();
+
+            expect(escalations.closeEndedQueuedTooLong).toHaveBeenCalledWith(40);
+            expect(summary.closed).toBe(30);
+        });
+
+        it('still closes them when surfacing is switched off (threshold 0)', async () => {
+            escalations.closeEndedQueuedTooLong = jest.fn().mockResolvedValue(2);
+            process.env.AGENT_RUN_QUEUED_TOO_LONG_MINUTES = '0';
+
+            const summary = await makeSvc().sweepQueuedTooLong();
+
+            expect(summary.enabled).toBe(false);
+            expect(summary.closed).toBe(2);
+            expect(runs.findQueuedTooLong).not.toHaveBeenCalled();
+        });
+
+        it('honours the sweeper kill switch', async () => {
+            escalations.closeEndedQueuedTooLong = jest.fn().mockResolvedValue(2);
+            process.env.AGENT_RUN_SWEEPER_ENABLED = 'false';
+
+            const summary = await makeSvc().sweepQueuedTooLong();
+
+            expect(escalations.closeEndedQueuedTooLong).not.toHaveBeenCalled();
+            expect(summary.closed).toBe(0);
+        });
+
+        it('skips a partial escalation double without the method', async () => {
+            const summary = await makeSvc().sweepQueuedTooLong();
+            expect(summary.closed).toBe(0);
+        });
+    });
 });

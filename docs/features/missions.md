@@ -96,21 +96,27 @@ Set the cap on the Mission detail page under **Settings**. The current count vs 
 
 A Mission's **Output** decides what its tick files. Set it in the **Output** card on the Mission page:
 
-| Output                          | What each tick does                                                                                           |
-| ------------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| **Ideas** (the default)         | Proposes Ideas, as every Mission did before.                                                                  |
-| **Tasks on attached App Works** | Plans small changes and files them as Tasks on the [App Works](./app-works.md) attached as Improves/Operates. |
-| **Both**                        | Ideas first, then Tasks.                                                                                      |
+| Output                                        | What each tick does                                                                                                                                   |
+| --------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Ideas** (the default)                       | Proposes Ideas, as every Mission did before.                                                                                                          |
+| **Tasks on attached App or Repository Works** | Plans small changes and files them as Tasks on the [App Works](./app-works.md) and [Repository Works](./work-kinds.md) attached as Improves/Operates. |
+| **Both**                                      | Ideas first, then Tasks.                                                                                                                              |
 
 When the Mission files Tasks:
 
-- It works on at most 5 App Works attached as **Improves** (product changes) or **Operates** (maintenance). A Mission with Task output and no such App Work is saved all the same, and says so: _Attach an App Work as Improves or Operates to file Tasks on it._
-- **Tasks per tick** (1–3) caps how many Tasks one tick files on each App Work, and **Open Tasks cap per Work** (1–10) stops filing while that many of the Mission's Tasks are still open there. A proposal whose title matches an open Task on that Work is dropped.
+- It works on at most 5 App or Repository Works attached as **Improves** (product changes) or **Operates** (maintenance). These are the two kinds whose Tasks are delivered as pull requests an agent run opens; Works of every other kind are never filed on. A Mission with Task output and no such Work is saved all the same, and says so: _Attach an App or Repository Work as Improves or Operates to file Tasks on it._
+- **A Repository Work needs Task isolation on.** A Task on a Repository Work only becomes a branch and a pull request while the Work's [Task isolation](./task-isolation.md) setting is on (an App Work always isolates its Tasks). The Mission never turns the setting on for you. While it is off the Mission files nothing on that Work, and tells you three ways: the **Output** card names the Work and links to its settings, saving the Mission answers the `repoWorkTaskIsolationOff` warning, and the day's "nothing to file" Activity entry names the Work.
+- **A Repository Work needs an Agent that can deliver a pull request.** Before it plans for a Repository Work, the Mission works out which Agent the Task would run with, the same way **Run** does: the Mission's own Task output Agent, else the Work's only Agent. That Agent must be allowed both to **commit** and to **open pull requests**: without the first its run gets no branch and changes nothing, and without the second it ends with a pushed branch and no pull request, so the Task never completes. If no single Agent resolves, or it lacks either permission, the Mission files nothing on that Work: saving answers `repoWorkAgentCannotOpenPullRequests`, the **Output** card says so, and the day's Activity entry names the Work.
+- **A Repository Work whose merge policy lets agents merge gets no unattended Tasks.** If the Work's effective merge policy (the Work's, or its organization's or tenant's) has `allowAgentMerge` on, a Mission's run could land a change in the base branch with nobody looking, so the Mission files nothing there unless you opt it in over the API (`taskOutput.allowAgentMerge: true`; there is no form for it, and a Mission template cannot set it). Saving answers `repoWorkAllowsAgentMerge` until then.
+- These checks run again when each Task is started: a Task the Mission filed on a Repository Work is not started if its Agent, the Work's Task isolation or the merge policy changed in the meantime (the run is refused before it costs anything).
+- On a Repository Work each Task is one small pull request into the Work's base branch, and the Task's title becomes the pull request's title. The planner is told to write titles that stand on their own and to keep the Mission's private context out of titles and descriptions, because the repository may be public. While such a Task runs on its own branch, the agent's commit tool refuses the Work's base branch, so its change reaches the base branch only through that pull request.
+- **Tasks per tick** (1–3) caps how many Tasks one tick files on each Work, and **Open Tasks cap per Work** (1–10) stops filing while that many of the Mission's Tasks are still open there. A Task that has a run queued or running always counts. A Task waiting (In review or Blocked) on a pull request that was closed without merging keeps counting for **24 hours** after it last changed, then stops, so a rejected pull request never stalls the Mission for good, and closing pull requests lets it file at most one cap's worth of new Tasks per Work per day. The Task itself stays where it is until you cancel it or run it again. A proposal whose title matches an open Task on that Work is dropped.
 - With **Require approval before creating** in the Mission's guardrails, new Tasks wait in **Backlog** until you move them to **To do**; otherwise they start right away with the Mission's Agent (or the Work's default one).
 - Each run is capped by the Mission's per-run budget (`maxBudgetCentsPerRun`).
 - A tick with nothing to file records one Activity entry per Mission per day.
+- When the operator pauses App changes (`EVER_WORKS_APP_CHANGES_ENABLED=false`), the Mission files nothing on its App Works. That switch is about App Works only: the Mission **keeps filing and starting Tasks on its Repository Works**. To stop those, pause the Mission (or, for every run at once, the Fleet's global stop flag).
 
-The Mission page lists them under **Tasks on attached Works**, newest first, 20 per page. Each Task then follows the App Work's delivery chain until it is live — see [Evolving an App Work](./app-works-evolve.md). The [Build on an open-source app](./mission-templates.md#templates-about-an-app-work) template sets all of this up in one step.
+The Mission page lists them under **Tasks on attached Works**, newest first, 20 per page. A Task on an App Work then follows the App Work's delivery chain until it is live — see [Evolving an App Work](./app-works-evolve.md); a Task on a Repository Work moves to Done when its pull request is merged (subject to the Task's approvers and gates, as for any Task). The [Build on an open-source app](./mission-templates.md#templates-about-an-app-work) template sets all of this up in one step for an App Work.
 
 ## Attached Works and relations
 
@@ -169,6 +175,20 @@ All four routes are owner-scoped under `/api/me/missions`:
 :::note `created` relations were seeded once, then it's manual
 When the Mission↔Work relation table shipped, a one-time backfill walked the historical Mission → Idea → Work chain and wrote a `created` relation for every Work a Mission had already built. New Works built from a Mission's Ideas keep appearing in the derived **Related Works** panel automatically, but they are **not** auto-stamped into **Attached Works** — attach a `created` relation yourself if you want the explicit edge.
 :::
+
+## Team and agents — who works on a Mission
+
+The **Team and agents** panel in the right-hand rail of `/missions/:id` (under _Visibility_) answers "who works on this?" in one read:
+
+- the **Teams** that hold this Mission as a team resource (attached on the Team's page), each linking to `/teams/:id`, with the **Agents** on that Team;
+- then the **other Agents** working on it that no listed Team already shows:
+    - Agents **scoped** to this Mission, or **assigned** to it;
+    - Agents scoped or assigned to one of its [attached Works](#attached-works-and-relations), with the Work they work on;
+    - Agents that drive an **active recurring Task** on one of those Works (_Standing tasks on `<Work>`_) — how shared workspace Agents, which have no Work scope or assignment, reach a Work.
+
+Every Agent row shows its status and **Last run `<time ago>` · `<status>`** (or _Never ran_) — the same last run the [Agent card](./agents.md#agents-without-a-heartbeat-and-the-last-run) shows: its most recent ended run of any kind. Archived Agents are left out.
+
+`GET /api/me/missions/:id/team` serves it: `{ teams: [{ id, name, slug, agents }], agents: [{ …, via: 'mission' | 'work' | 'standing-tasks', workId, workName }] }`, each Agent with `latestRun: { status, finishedAt } | null`. It is gated like `GET /api/me/missions/:id`: the owner, or anyone the Mission's visibility lets open it (anyone else gets a `404`). Teams are read only in the Mission's own Organization; the attached Works are the owner's, and a viewer who is not the owner only sees those they own or are a member of; and every Agent goes through the same visibility rule as the Agents list's _Organization_ tab — so another member's **private** Agent on a shared Team is never listed.
 
 ## Attachments
 

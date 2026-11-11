@@ -1112,7 +1112,17 @@
                 "statusArchived": "संग्रहीत",
                 "noTitle": "(कोई शीर्षक नहीं)",
                 "noCadence": "कोई हार्टबीट नहीं",
-                "cadencePrefix": "हार्टबीट:"
+                "cadencePrefix": "हार्टबीट:",
+                "runsOnSchedule": "Runs on schedule",
+                "runsOnScheduleNext": "Runs on schedule · next {time}",
+                "runsWhenAssigned": "Runs when assigned",
+                "lastRun": "Last run {time} · {status}",
+                "lastRunCompleted": "completed",
+                "lastRunFailed": "failed",
+                "lastRunCancelled": "cancelled",
+                "lastRunDispatchFailed": "could not start",
+                "lastRunRecoveredStuck": "recovered after getting stuck",
+                "lastRunUnknown": "unknown"
             },
             "tabs": {
                 "dashboard": "डैशबोर्ड",
@@ -2356,9 +2366,9 @@
                     "no-ideas": "Tick ran but generated no Ideas",
                     "failed": "Run now failed",
                     "cron-no-match": "Tick ran (cron skipped)",
-                    "tasks-filed": "Mission के App Works पर Tasks दर्ज किए गए।",
-                    "no-tasks": "Mission के App Works पर दर्ज करने के लिए कुछ नया नहीं है।",
-                    "spawned-and-tasks-filed": "नए Ideas बनाए गए और Mission के App Works पर Tasks दर्ज किए गए।"
+                    "tasks-filed": "Mission के App या Repository Works पर Tasks दर्ज किए गए।",
+                    "no-tasks": "Mission के App या Repository Works पर दर्ज करने के लिए कुछ नया नहीं है।",
+                    "spawned-and-tasks-filed": "नए Ideas बनाए गए और Mission के App या Repository Works पर Tasks दर्ज किए गए।"
                 }
             },
             "goals": {
@@ -2394,14 +2404,17 @@
             "output": {
                 "title": "आउटपुट",
                 "ideas": "Ideas",
-                "tasks": "जुड़े App Works पर Tasks",
+                "tasks": "जुड़े App या Repository Works पर Tasks",
                 "both": "दोनों",
                 "tasksPerTick": "प्रति tick Tasks",
                 "openCap": "प्रति Work खुले Tasks की सीमा",
                 "appliesTo": "“सुधारता है” या “चलाता है” के रूप में जुड़े Works पर लागू।",
-                "noAppWork": "Tasks दर्ज करने के लिए किसी App Work को “सुधारता है” या “चलाता है” के रूप में जोड़ें।",
+                "noAppWork": "Tasks दर्ज करने के लिए किसी App या Repository Work को “सुधारता है” या “चलाता है” के रूप में जोड़ें।",
+                "repoIsolationOff": "जुड़े हुए एक Repository Work पर “Task isolation” बंद है, इसलिए उस पर कोई Task दर्ज नहीं किया जाता। उस Work की सेटिंग्स में “Task isolation” चालू करें।",
+                "repoAgentCannotOpenPullRequests": "जुड़े हुए एक Repository Work पर Tasks चलाने वाले Agent को commit करने और pull request खोलने की अनुमति नहीं है, इसलिए उस पर कोई Task दर्ज नहीं किया जाता। इस Mission के Task आउटपुट के लिए दोनों अनुमतियों वाला Agent चुनें, या उस Work के Agent को ये अनुमतियाँ दें।",
+                "repoAllowsAgentMerge": "जुड़े हुए एक Repository Work की merge नीति Agents को अपने ही pull request merge करने देती है, इसलिए यह Mission उस पर कोई Task दर्ज नहीं करता। Mission को वहाँ Tasks दर्ज करने देने के लिए उस Work पर Agents द्वारा merge बंद करें।",
                 "tasksOnWorks": "जुड़े Works पर Tasks",
-                "nothingToFile": "Tasks दर्ज करने के लिए कोई App Work जुड़ा नहीं है।",
+                "nothingToFile": "Tasks दर्ज करने के लिए कोई App या Repository Work जुड़ा नहीं है।",
                 "tasksOnWorksEmpty": "अभी तक कोई Task दर्ज नहीं हुआ।",
                 "save": "सहेजें",
                 "saved": "आउटपुट सहेजा गया",
@@ -2410,6 +2423,21 @@
                 "unavailable": "Tasks लोड नहीं हो सके।",
                 "previous": "पिछला",
                 "next": "अगला"
+            },
+            "team": {
+                "title": "Team and agents",
+                "loading": "Loading…",
+                "unavailable": "Could not load who works on this Mission.",
+                "empty": "No Team holds this Mission yet, and no Agent is scoped to it or to its attached Works.",
+                "teamNoAgents": "No agents on this Team that you can see.",
+                "otherAgents": "Other agents",
+                "agents": "Agents",
+                "viaMission": "Scoped to this Mission",
+                "viaWork": "Works on {name}",
+                "viaWorkUnnamed": "Works on an attached Work",
+                "neverRan": "Never ran",
+                "viaStandingTasks": "Standing tasks on {name}",
+                "viaStandingTasksUnnamed": "Standing tasks on an attached Work"
             }
         },
         "ideasPage": {
@@ -2780,7 +2808,7 @@
         },
         "feed": {
             "narration": {
-                "missionNothingToFile": "<b>{actor}</b> को आज किसी Mission के App Works पर दर्ज करने के लिए कुछ नया नहीं मिला"
+                "missionNothingToFile": "<b>{actor}</b> को आज किसी Mission के App या Repository Works पर दर्ज करने के लिए कुछ नया नहीं मिला"
             }
         },
         "works": {

@@ -2302,13 +2302,147 @@ describe('GoalOrchestratorService — the Goal’s Work (APW-08 T32)', () => {
         expect(tasksService.create).not.toHaveBeenCalled();
     });
 
-    it('a non-App Work never counts an open pull request', async () => {
-        const { service, tasks } = build({
-            goal: running({ iteration: 3, lastProgressIteration: 3 }),
-            works: worksWith({ ...APP_WORK, kind: 'directory' }),
+    it('a Work of a kind whose Tasks are not delivered as pull requests never counts an open one', async () => {
+        for (const kind of ['directory', 'default', 'awesome-repo', 'website', 'project', null]) {
+            const { service, tasks } = build({
+                goal: running({ iteration: 3, lastProgressIteration: 3 }),
+                works: worksWith({ ...APP_WORK, kind }),
+            });
+            tasks._rows.push(openChange());
+            expect((await service.advance('u1', 'g1')).action).toBe('dispatch');
+        }
+    });
+
+    // A Repository Work: an agent's Task there is a branch and a pull request into the base
+    // branch, so iteration N+1 must not start while iteration N's pull request is open — it
+    // would branch from a base that lacks N's change and repeat it or conflict with it.
+    describe('a Repository Work', () => {
+        const REPO_WORK = { ...APP_WORK, kind: 'repo' };
+
+        it('waits while an earlier iteration’s pull request is open, and logs it ONCE', async () => {
+            const { service, tasksService, tasks, events } = build({
+                goal: running({ iteration: 3, lastProgressIteration: 3 }),
+                works: worksWith(REPO_WORK),
+            });
+            tasks._rows.push(openChange({ branchState: 'pr-open' }));
+            const result = await service.advance('u1', 'g1');
+            expect(result).toMatchObject({
+                action: 'wait',
+                reasonCode: 'awaiting-merge',
+                reasoning: "Waiting for iteration 3's pull request to be merged or closed.",
+            });
+            expect(tasksService.create).not.toHaveBeenCalled();
+            await service.advance('u1', 'g1');
+            const lines = events._rows.filter(
+                (row) =>
+                    row.message ===
+                    "Waiting for iteration 3's pull request to be merged or closed.",
+            );
+            expect(lines).toHaveLength(1);
         });
-        tasks._rows.push(openChange());
-        expect((await service.advance('u1', 'g1')).action).toBe('dispatch');
+
+        it('an open PR counts whatever the state field and the Task status say: unknown, draft, BLOCKED', async () => {
+            for (const over of [{ prState: null }, { prState: 'draft' }, { status: 'blocked' }]) {
+                const { service, tasks } = build({
+                    goal: running({ iteration: 3, lastProgressIteration: 3 }),
+                    works: worksWith(REPO_WORK),
+                });
+                tasks._rows.push(openChange(over));
+                expect((await service.advance('u1', 'g1')).reasonCode).toBe('awaiting-merge');
+            }
+        });
+
+        it('frees the slot once merged, closed, done or the branch is gone; another Work’s PR never counts', async () => {
+            for (const over of [
+                { prState: 'merged' },
+                { prState: 'closed' },
+                { status: 'done' },
+                { status: 'cancelled' },
+                { branchState: 'discarded' },
+                { branchState: 'cleaned' },
+                { workId: '99999999-9999-4999-8999-999999999999' },
+            ]) {
+                const { service, tasks, tasksService } = build({
+                    goal: running({ iteration: 3, lastProgressIteration: 3 }),
+                    works: worksWith(REPO_WORK),
+                });
+                tasks._rows.push(openChange(over));
+                expect((await service.advance('u1', 'g1')).action).toBe('dispatch');
+                expect(tasksService.create.mock.calls[0][1]).toMatchObject({
+                    goalId: 'g1',
+                    workId: WORK,
+                });
+            }
+        });
+
+        it('a branch pushed with no pull request never holds the slot, so the loop cannot stall on it', async () => {
+            // The Agent may commit but not open pull requests: the run ends `pushed-no-pr`, the
+            // Task sits in review with a pushed branch and no pull request recorded.
+            for (const over of [
+                { prNumber: null, prUrl: null, prState: null, branchState: 'pushed' },
+                { prNumber: null, prUrl: null, prState: null, branchState: null },
+                // A number with no URL is not a recorded pull request either.
+                { prUrl: null, branchState: 'pushed' },
+            ]) {
+                const { service, tasks } = build({
+                    goal: running({ iteration: 3, lastProgressIteration: 3 }),
+                    works: worksWith(REPO_WORK),
+                });
+                tasks._rows.push(openChange({ status: 'in_review', ...over }));
+                expect(await service.advance('u1', 'g1')).toMatchObject({ action: 'dispatch' });
+            }
+        });
+
+        it('a Task with a run in flight is counted as running, not as awaiting a merge', async () => {
+            // Two slots: iteration 3 runs (its PR is open too), iteration 2's PR waits for a merge.
+            // The gate fills the second slot with iteration 2 ONLY — iteration 3 is counted once,
+            // as running. Without the gate the second slot would be free (a dispatch); with
+            // iteration 3 double-counted the line would name both iterations.
+            const { service, tasks, runs, tasksService } = build({
+                goal: running({
+                    iteration: 3,
+                    lastProgressIteration: 3,
+                    maxConcurrentIterations: 2,
+                }),
+                works: worksWith(REPO_WORK),
+            });
+            tasks._rows.push(
+                openChange({
+                    id: 'task-it2',
+                    title: '[Goal] Customer self-service — iteration 2',
+                    prNumber: 6,
+                    prUrl: 'https://github.com/acme/bookings/pull/6',
+                    createdAt: new Date('2026-10-31T09:00:00.000Z'),
+                }),
+                openChange(),
+            );
+            runs._rows.push({
+                id: 'r-it3',
+                taskId: 'task-it3',
+                status: 'running',
+                costCents: 0,
+                startedAt: new Date('2026-10-31T10:05:00.000Z'),
+            });
+            expect(await service.advance('u1', 'g1')).toMatchObject({
+                action: 'wait',
+                reasonCode: 'awaiting-merge',
+                reasoning: "Waiting for iteration 2's pull request to be merged or closed.",
+            });
+            expect(tasksService.create).not.toHaveBeenCalled();
+        });
+
+        it('pauses when the Repository Work is no longer the owner’s, exactly as for an App Work (FR-48)', async () => {
+            const { service, goals, tasksService } = build({
+                goal: running(),
+                works: worksWith({ ...REPO_WORK, userId: 'someone-else' }),
+            });
+            expect(await service.advance('u1', 'g1')).toMatchObject({
+                action: 'pause',
+                reasonCode: 'work-unavailable',
+            });
+            expect(goals._rows[0].loopStatus).toBe('paused');
+            expect(tasksService.create).not.toHaveBeenCalled();
+        });
     });
 
     it('pauses with the S26 message when the Work is gone or no longer the owner’s (FR-48)', async () => {

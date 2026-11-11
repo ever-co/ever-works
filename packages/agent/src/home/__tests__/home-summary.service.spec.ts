@@ -172,6 +172,35 @@ describe('HomeSummaryService', () => {
         ).rejects.toBeInstanceOf(InvalidHomeTimezoneError);
     });
 
+    it('keeps the profile timezone over the browser hint', async () => {
+        const { service } = builders();
+
+        const summary = await service.build('user-1', {
+            scope: SCOPE,
+            browserTimezone: 'America/Los_Angeles',
+            now: NOW,
+        });
+
+        expect(summary.timezone).toBe('Europe/Kyiv');
+        expect(summary.timezoneFallback).toBe(false);
+    });
+
+    it("uses the browser hint when the profile has no timezone, instead of UTC's day", async () => {
+        const { service, preferences } = builders();
+        preferences.findByUser.mockResolvedValue({ timezone: null });
+
+        const summary = await service.build('user-1', {
+            scope: SCOPE,
+            browserTimezone: 'America/Los_Angeles',
+            // 03:00 UTC on 2026-09-15 is still the 14th in Los Angeles.
+            now: new Date('2026-09-15T03:00:00.000Z'),
+        });
+
+        expect(summary.timezone).toBe('America/Los_Angeles');
+        expect(summary.timezoneFallback).toBe(false);
+        expect(summary.day.date).toBe('2026-09-14');
+    });
+
     it('falls back to UTC when the profile timezone cannot be read', async () => {
         const { service, preferences } = builders();
         preferences.findByUser.mockRejectedValue(new Error('db down'));

@@ -128,8 +128,24 @@ export interface Agent {
     heartbeatCadence: string | null;
     idleBehavior: AgentIdleBehavior;
     nextHeartbeatAt: string | null;
+    /**
+     * The HEARTBEAT's last run (claim time) and how it ended — heartbeat-only;
+     * Task runs never write it. For the last run of any kind see `latestRun`.
+     */
     lastRunAt: string | null;
     lastRunStatus: string | null;
+    /**
+     * The most recent ENDED run of any kind (Task, fleet, heartbeat, chat):
+     * when it finished and how. Present on the Agents LIST only; `null` = it
+     * never ran to an end; absent = not computed.
+     */
+    latestRun?: { status: string; finishedAt: string } | null;
+    /**
+     * The caller's ACTIVE recurring Tasks that drive this Agent — present on
+     * the Agents LIST only. `activeCount: 0` ("none") is only sent for the
+     * caller's own Agents; absent = not computed, and the card says nothing.
+     */
+    recurringTasks?: { activeCount: number; nextRunAt: string | null };
     errorCount: number;
     pauseAfterFailures: number;
     avatarMode: AgentAvatarMode;

@@ -18,6 +18,7 @@ import { AgentsPreviewSection } from '@/components/dashboard/AgentsPreviewSectio
 import { ApprovalsQueue } from '@/components/approvals/ApprovalsQueue';
 import { buildDecisionsHref } from '@/lib/api/inbox.shared';
 import { HomeMorningStack } from '@/components/home/HomeMorningStack';
+import { BrowserTimezoneCookie } from '@/components/home/BrowserTimezoneCookie';
 import { WorkspaceSection } from '@/components/home/WorkspaceSection';
 import { WorkspaceStats } from '@/components/home/WorkspaceStats';
 import { glanceForSummary } from '@/components/home/home.shared';
@@ -148,6 +149,10 @@ export default function DashboardClient({
 
     return (
         <div className="w-full">
+            {/* The browser's timezone, for the server-rendered "today" when the
+                profile has none. Re-renders once when the summary fell back to
+                UTC only because the cookie was not there yet. */}
+            <BrowserTimezoneCookie refreshIfChanged={homeSummary?.timezoneFallback === true} />
             {/* Home (AW-19) — the morning read, in the order the owner set on
                 2026-09-18: the composer, `Your workspace` (Today + All), Needs
                 you, Working now, Today beside This week, Recent activity. The

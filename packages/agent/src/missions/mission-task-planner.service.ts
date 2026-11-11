@@ -4,14 +4,20 @@ import { AiFacadeService } from '../facades/ai.facade';
 import { fenceUntrusted } from '../utils/untrusted-content';
 
 /**
- * APW-08 T35 (FR-51) — proposes the Tasks a Mission files on one of its App Works.
+ * APW-08 T35 (FR-51) — proposes the Tasks a Mission files on one of its App or Repository Works.
  *
- * The inputs are the Mission's description (the owner's own words), the App Work's name and
+ * The inputs are the Mission's description (the owner's own words), the Work's name, kind and
  * description, the titles of its most recent Tasks and the relation: **Improves** asks for
  * product changes, **Operates** for maintenance (dependency updates, failed deliveries, upstream
  * conflicts). Everything that did not come from the Mission's owner — the Work's description and
  * the Task titles, which agents and imports write — is fenced as untrusted data, so a Task title
  * that reads like an instruction stays data.
+ *
+ * The wording follows the Work's kind ({@link MissionTaskPlanWorkKind}). For an App Work it is
+ * the prompt as it always was. For a Repository Work — an existing code repository, which may be
+ * public — it also says what a filed Task turns into: one small pull request into the base
+ * branch, titled with the Task's title, so the title has to stand on its own and neither it nor
+ * the description may carry the Mission's private context into the repository.
  *
  * The answer is schema-checked (`{ tasks: [{ title ≤ 120, description ≤ 4000 }] }`) and cut to
  * the count asked for. The caller drops a proposal whose normalised title equals an open Task's.
@@ -31,12 +37,21 @@ const PLANNED_TASK_SCHEMA = z.object({
         .max(10),
 });
 
+/** What the planner plans for: an App Work (`app`) or a Repository Work (`repo`). */
+export type MissionTaskPlanWorkKind = 'app' | 'repo';
+
 export interface MissionTaskPlanInput {
     userId: string;
     missionId: string;
     missionDescription: string;
     relation: 'improves' | 'operates';
-    work: { id: string; name: string; description?: string | null };
+    work: {
+        id: string;
+        name: string;
+        description?: string | null;
+        /** Absent = `app`, the only kind a Mission planned for before Repository Works. */
+        kind?: MissionTaskPlanWorkKind;
+    };
     recentTaskTitles: readonly string[];
     /** How many Tasks to propose (1..3, the Mission's `tasksPerTick` within its open cap). */
     count: number;
@@ -49,13 +64,53 @@ export interface PlannedMissionTask {
 
 /** The planner's prompt — pure, so the fencing is testable without a model. */
 export function buildMissionTaskPrompt(input: MissionTaskPlanInput): string {
+    const repository = input.work.kind === 'repo';
+    // A Repository Work has no delivery chain and no upstream fork to reconcile, so its
+    // maintenance examples are the ones a plain repository has.
+    const maintenance = repository
+        ? 'dependency updates, fixing failing checks, small repairs'
+        : 'dependency updates, fixing failed deliveries, resolving upstream conflicts';
     const ask =
         input.relation === 'operates'
-            ? 'maintenance work that keeps it healthy: dependency updates, fixing failed deliveries, resolving upstream conflicts'
+            ? `maintenance work that keeps it healthy: ${maintenance}`
             : 'product changes that move it toward the Mission';
     const count = Math.max(1, Math.min(3, Math.trunc(input.count)));
+    const tasks = `Propose at most ${count} Task${count === 1 ? '' : 's'}: ${ask}.`;
+    const recentTaskTitles = input.recentTaskTitles
+        .slice(0, MISSION_PLANNER_RECENT_TASKS)
+        .map((title) => `- ${title}`)
+        .join('\n');
+    if (repository) {
+        // A Repository Work: an existing code repository the platform did not generate. The
+        // same instructions and the same fences as an App Work, plus what a filed Task becomes
+        // there — a pull request whose title is the Task's title, in a repository other people
+        // read (and that may be public).
+        return [
+            `You plan work for one existing code repository. ${tasks}`,
+            "Each Task is one small, reviewable change a coding agent can make in a single pull request into the repository's base branch.",
+            'Give each a short imperative title (at most 120 characters) and a description of what done looks like.',
+            "The title becomes the pull request's title, so it must make sense on its own to a reviewer who has not read the Mission.",
+            'The repository may be public: do not quote or reveal private context from the Mission below (names of people or customers, internal plans, figures, credentials) in a title or a description.',
+            "Do not repeat a Task that is already in the repository's recent Tasks.",
+            'Answer as JSON: {"tasks":[{"title":"…","description":"…"}]}.',
+            '',
+            "The Mission (the owner's own words):",
+            input.missionDescription.trim().slice(0, 4000),
+            '',
+            `The repository: ${input.work.name.trim().slice(0, 200)}`,
+            fenceUntrusted('repository_description', input.work.description ?? '', {
+                source: "the repository's description",
+                maxChars: 2000,
+            }),
+            '',
+            fenceUntrusted('recent_task_titles', recentTaskTitles, {
+                source: "the repository's most recent Task titles",
+                maxChars: 6000,
+            }),
+        ].join('\n');
+    }
     return [
-        `You plan work for one app. Propose at most ${count} Task${count === 1 ? '' : 's'}: ${ask}.`,
+        `You plan work for one app. ${tasks}`,
         'Each Task is one change a coding agent can make in a single pull request.',
         'Give each a short imperative title (at most 120 characters) and a description of what done looks like.',
         "Do not repeat a Task that is already in the app's recent Tasks.",
@@ -70,14 +125,10 @@ export function buildMissionTaskPrompt(input: MissionTaskPlanInput): string {
             maxChars: 2000,
         }),
         '',
-        fenceUntrusted(
-            'recent_task_titles',
-            input.recentTaskTitles
-                .slice(0, MISSION_PLANNER_RECENT_TASKS)
-                .map((title) => `- ${title}`)
-                .join('\n'),
-            { source: "the app's most recent Task titles", maxChars: 6000 },
-        ),
+        fenceUntrusted('recent_task_titles', recentTaskTitles, {
+            source: "the app's most recent Task titles",
+            maxChars: 6000,
+        }),
     ].join('\n');
 }
 

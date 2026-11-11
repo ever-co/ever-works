@@ -11,6 +11,7 @@ import {
 	isRepositoryWorkKind,
 	isUserSelectableWorkKind,
 	normalizeWorkKind,
+	workKindDeliversTasksAsPullRequests,
 	WORK_KINDS,
 	USER_SELECTABLE_WORK_KINDS,
 	type WorkKind
@@ -368,6 +369,45 @@ describe('the app work kind', () => {
 		expect(isAppWorkKind(undefined)).toBe(false);
 		expect(isAppWorkKind(null)).toBe(false);
 		expect(isAppWorkKind('')).toBe(false);
+	});
+});
+
+/**
+ * "Tasks on this Work are delivered as pull requests an agent run opens" — the
+ * one question a Mission's Task output and a Goal's wait-for-merge gate ask
+ * before they plan on that fact. True for the two kinds that wrap code the
+ * platform did not generate, and for nothing else.
+ */
+describe('workKindDeliversTasksAsPullRequests', () => {
+	it('is true for app and repo, with the same loose input as normalizeWorkKind', () => {
+		expect(workKindDeliversTasksAsPullRequests('app')).toBe(true);
+		expect(workKindDeliversTasksAsPullRequests('repo')).toBe(true);
+		expect(workKindDeliversTasksAsPullRequests('  APP ')).toBe(true);
+		expect(workKindDeliversTasksAsPullRequests(' Repo')).toBe(true);
+	});
+
+	it.each(WORK_KINDS.filter((kind) => kind !== 'app' && kind !== 'repo'))('is false for the %s kind', (kind) => {
+		expect(workKindDeliversTasksAsPullRequests(kind)).toBe(false);
+	});
+
+	it('is false for an unknown, look-alike or missing kind', () => {
+		// The kind that merely contains the word must not match: its data
+		// repository is platform-generated.
+		expect(workKindDeliversTasksAsPullRequests('awesome-repo')).toBe(false);
+		expect(workKindDeliversTasksAsPullRequests('repository')).toBe(false);
+		expect(workKindDeliversTasksAsPullRequests('application')).toBe(false);
+		expect(workKindDeliversTasksAsPullRequests('no-such-kind')).toBe(false);
+		expect(workKindDeliversTasksAsPullRequests(undefined)).toBe(false);
+		expect(workKindDeliversTasksAsPullRequests(null)).toBe(false);
+		expect(workKindDeliversTasksAsPullRequests('')).toBe(false);
+	});
+
+	it('agrees with the two kind predicates it generalises', () => {
+		for (const kind of WORK_KINDS) {
+			expect(workKindDeliversTasksAsPullRequests(kind), `kind "${kind}"`).toBe(
+				isAppWorkKind(kind) || isRepositoryWorkKind(kind)
+			);
+		}
 	});
 });
 

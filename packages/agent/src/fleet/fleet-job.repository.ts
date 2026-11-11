@@ -7,6 +7,10 @@ import {
     FLEET_JOB_TERMINAL_STATUSES,
     QUEUED_REASON_WAITING_FOR_RUNNER,
 } from '@ever-works/contracts';
+import {
+    FLEET_JOB_PAYLOAD_HEAD_CHARS,
+    readLeadingJsonStringMembers,
+} from './fleet-job-payload-head';
 import { FleetJob } from '../entities/fleet-job.entity';
 
 export interface CreateFleetJobData {
@@ -654,6 +658,102 @@ export class FleetJobRepository {
             .andWhere('j.completedAt >= :since', { since })
             .getRawOne<{ total: string | number | null }>();
         return Number(row?.total ?? 0);
+    }
+
+    /**
+     * Fleet agent readiness — the `agent-task` jobs ONE node finished since
+     * `since`, newest first, as the little its run statistics need: the job's
+     * own status, the cost it reported, whether it finished at or after
+     * `recentSince`, and the run and task ids its payload carries.
+     *
+     * Why per job and not a grouped count by status: the job's status is the
+     * NODE's verdict on the job, not the outcome of the run. A failed agent
+     * run is reported by a node that did its work properly, so the job
+     * settles `done` — and a count by job status read "N finished, 0 failed"
+     * during exactly the outage it was meant to show. The caller pairs each
+     * row with its run (`payload.runId`) and judges it the way the node
+     * history does.
+     *
+     * The payload is NOT parsed here, and never read whole. Only its first
+     * `FLEET_JOB_PAYLOAD_HEAD_CHARS` characters leave the database, and the
+     * two ids are read out of that head in process
+     * (`readLeadingJsonStringMembers`, which says why the head is enough):
+     *
+     *  - the cost does not grow with the size of the payloads. Casting each
+     *    one to JSON in SQL did — four casts a row, 11 to 13 seconds a read
+     *    for a busy node with 128 KB payloads on Postgres;
+     *  - one stored value that is not a JSON document, or holds an escape
+     *    Postgres' JSON type refuses (`\u0000`, a lone surrogate), is that
+     *    one row's "no id", not a failed read for the whole node;
+     *  - the statement is the same on every driver (`SUBSTR`).
+     *
+     * Owner-scoped in the WHERE clause like every read keyed by a node id;
+     * bounded to the window in SQL (`completedAt >= since`, on
+     * `idx_fleet_jobs_node_completed`), so older rows are never read; and
+     * bounded by `limit`. A purged payload (`bodiesPurgedAt`) yields null ids,
+     * which the caller reads as "no run known" and judges by the job's own
+     * status.
+     */
+    async findAgentTaskOutcomesForNode(
+        userId: string,
+        nodeId: string,
+        since: Date,
+        recentSince: Date,
+        limit: number,
+    ): Promise<
+        Array<{
+            id: string;
+            status: string;
+            costCents: number;
+            recent: boolean;
+            runId: string | null;
+            taskId: string | null;
+        }>
+    > {
+        const rows = await this.repository
+            .createQueryBuilder('j')
+            .select('j.id', 'id')
+            .addSelect('j.status', 'status')
+            .addSelect('COALESCE(j.costCents, 0)', 'costCents')
+            .addSelect('CASE WHEN j.completedAt >= :recentSince THEN 1 ELSE 0 END', 'recent')
+            // A constant of this module, never a caller's value.
+            .addSelect(`SUBSTR(j.payload, 1, ${FLEET_JOB_PAYLOAD_HEAD_CHARS})`, 'payloadHead')
+            .where('j.userId = :userId', { userId })
+            .andWhere('j.nodeId = :nodeId', { nodeId })
+            .andWhere('j.kind = :kind', { kind: 'agent-task' })
+            .andWhere('j.status IN (:...statuses)', { statuses: [...FLEET_JOB_TERMINAL_STATUSES] })
+            .andWhere('j.completedAt >= :since', { since })
+            .setParameter('recentSince', recentSince)
+            .orderBy('j.completedAt', 'DESC')
+            .limit(Math.max(1, Math.floor(limit)))
+            .getRawMany<{
+                id: string;
+                status: string;
+                costCents: string | number | null;
+                recent: string | number | boolean | null;
+                payloadHead: unknown;
+            }>();
+        return rows.map((row) => {
+            let ids: { runId: string | null; taskId: string | null } = {
+                runId: null,
+                taskId: null,
+            };
+            try {
+                ids = readLeadingJsonStringMembers(row.payloadHead, ['runId', 'taskId']);
+            } catch {
+                // One unreadable row is that row's "no run known" — never the
+                // whole node's statistics.
+            }
+            return {
+                id: row.id,
+                status: row.status,
+                // `COALESCE` / `CASE` come back as strings on Postgres and numbers on sqlite.
+                costCents: Number(row.costCents ?? 0),
+                recent: Number(row.recent ?? 0) === 1 || row.recent === true,
+                runId: ids.runId,
+                taskId: ids.taskId,
+            };
+        });
     }
 
     /** Cents every job of one owner reported since `since` — the FLEET-WIDE daily ceiling's input. */

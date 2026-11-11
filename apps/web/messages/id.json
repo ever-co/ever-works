@@ -1112,7 +1112,17 @@
                 "statusArchived": "Diarsipkan",
                 "noTitle": "(tanpa judul)",
                 "noCadence": "Tidak ada detak jantung",
-                "cadencePrefix": "Detak jantung:"
+                "cadencePrefix": "Detak jantung:",
+                "runsOnSchedule": "Runs on schedule",
+                "runsOnScheduleNext": "Runs on schedule · next {time}",
+                "runsWhenAssigned": "Runs when assigned",
+                "lastRun": "Last run {time} · {status}",
+                "lastRunCompleted": "completed",
+                "lastRunFailed": "failed",
+                "lastRunCancelled": "cancelled",
+                "lastRunDispatchFailed": "could not start",
+                "lastRunRecoveredStuck": "recovered after getting stuck",
+                "lastRunUnknown": "unknown"
             },
             "tabs": {
                 "dashboard": "Dashboard",
@@ -2356,9 +2366,9 @@
                     "no-ideas": "Tick ran but generated no Ideas",
                     "failed": "Run now failed",
                     "cron-no-match": "Tick ran (cron skipped)",
-                    "tasks-filed": "Tugas dicatat di App Works Misi.",
-                    "no-tasks": "Tidak ada hal baru untuk dicatat di App Works Misi.",
-                    "spawned-and-tasks-filed": "Ide baru dibuat dan Tugas dicatat di App Works Misi."
+                    "tasks-filed": "Tugas dicatat di App Works atau Repository Works Misi.",
+                    "no-tasks": "Tidak ada hal baru untuk dicatat di App Works atau Repository Works Misi.",
+                    "spawned-and-tasks-filed": "Ide baru dibuat dan Tugas dicatat di App Works atau Repository Works Misi."
                 }
             },
             "goals": {
@@ -2394,14 +2404,17 @@
             "output": {
                 "title": "Keluaran",
                 "ideas": "Ide",
-                "tasks": "Tugas di App Works terlampir",
+                "tasks": "Tugas di App Works atau Repository Works terlampir",
                 "both": "Keduanya",
                 "tasksPerTick": "Tugas per siklus",
                 "openCap": "Batas tugas terbuka per Work",
                 "appliesTo": "Berlaku untuk Works yang dilampirkan sebagai Meningkatkan atau Mengoperasikan.",
-                "noAppWork": "Lampirkan App Work sebagai Meningkatkan atau Mengoperasikan untuk mencatat tugas di sana.",
+                "noAppWork": "Lampirkan App Work atau Repository Work sebagai Meningkatkan atau Mengoperasikan untuk mencatat tugas di sana.",
+                "repoIsolationOff": "“Task isolation” nonaktif pada Repository Work yang terlampir, sehingga tidak ada tugas yang dicatat di sana. Aktifkan “Task isolation” di pengaturan Work tersebut.",
+                "repoAgentCannotOpenPullRequests": "Agen yang akan menjalankan tugas di Repository Work yang terlampir tidak boleh melakukan commit dan membuka pull request, sehingga tidak ada tugas yang dicatat di sana. Pilih agen dengan kedua izin untuk keluaran tugas Misi ini, atau berikan izin tersebut kepada agen Work itu.",
+                "repoAllowsAgentMerge": "Kebijakan merge pada Repository Work yang terlampir mengizinkan agen me-merge pull request mereka sendiri, sehingga Misi ini tidak mencatat tugas di sana. Matikan merge oleh agen untuk Work tersebut agar Misi dapat mencatat tugas di sana.",
                 "tasksOnWorks": "Tugas di Works terlampir",
-                "nothingToFile": "Tidak ada App Work terlampir untuk mencatat tugas.",
+                "nothingToFile": "Tidak ada App Work atau Repository Work terlampir untuk mencatat tugas.",
                 "tasksOnWorksEmpty": "Belum ada tugas yang dicatat.",
                 "save": "Simpan",
                 "saved": "Keluaran disimpan",
@@ -2410,6 +2423,21 @@
                 "unavailable": "Tidak dapat memuat tugas.",
                 "previous": "Sebelumnya",
                 "next": "Berikutnya"
+            },
+            "team": {
+                "title": "Team and agents",
+                "loading": "Loading…",
+                "unavailable": "Could not load who works on this Mission.",
+                "empty": "No Team holds this Mission yet, and no Agent is scoped to it or to its attached Works.",
+                "teamNoAgents": "No agents on this Team that you can see.",
+                "otherAgents": "Other agents",
+                "agents": "Agents",
+                "viaMission": "Scoped to this Mission",
+                "viaWork": "Works on {name}",
+                "viaWorkUnnamed": "Works on an attached Work",
+                "neverRan": "Never ran",
+                "viaStandingTasks": "Standing tasks on {name}",
+                "viaStandingTasksUnnamed": "Standing tasks on an attached Work"
             }
         },
         "ideasPage": {
@@ -2780,7 +2808,7 @@
         },
         "feed": {
             "narration": {
-                "missionNothingToFile": "<b>{actor}</b> tidak menemukan hal baru untuk dicatat di App Works sebuah Misi hari ini"
+                "missionNothingToFile": "<b>{actor}</b> tidak menemukan hal baru untuk dicatat di App Works atau Repository Works sebuah Misi hari ini"
             }
         },
         "works": {

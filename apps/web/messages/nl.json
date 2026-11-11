@@ -1112,7 +1112,17 @@
                 "statusArchived": "Gearchiveerd",
                 "noTitle": "(geen titel)",
                 "noCadence": "Geen hartslag",
-                "cadencePrefix": "Hartslag:"
+                "cadencePrefix": "Hartslag:",
+                "runsOnSchedule": "Runs on schedule",
+                "runsOnScheduleNext": "Runs on schedule · next {time}",
+                "runsWhenAssigned": "Runs when assigned",
+                "lastRun": "Last run {time} · {status}",
+                "lastRunCompleted": "completed",
+                "lastRunFailed": "failed",
+                "lastRunCancelled": "cancelled",
+                "lastRunDispatchFailed": "could not start",
+                "lastRunRecoveredStuck": "recovered after getting stuck",
+                "lastRunUnknown": "unknown"
             },
             "tabs": {
                 "dashboard": "Dashboard",
@@ -2356,9 +2366,9 @@
                     "no-ideas": "Tick ran but generated no Ideas",
                     "failed": "Run now failed",
                     "cron-no-match": "Tick ran (cron skipped)",
-                    "tasks-filed": "Taken aangemaakt op de App Works van de Missie.",
-                    "no-tasks": "Niets nieuws om aan te maken op de App Works van de Missie.",
-                    "spawned-and-tasks-filed": "Nieuwe Ideeën gegenereerd en Taken aangemaakt op de App Works van de Missie."
+                    "tasks-filed": "Taken aangemaakt op de App Works of Repository Works van de Missie.",
+                    "no-tasks": "Niets nieuws om aan te maken op de App Works of Repository Works van de Missie.",
+                    "spawned-and-tasks-filed": "Nieuwe Ideeën gegenereerd en Taken aangemaakt op de App Works of Repository Works van de Missie."
                 }
             },
             "goals": {
@@ -2394,14 +2404,17 @@
             "output": {
                 "title": "Uitvoer",
                 "ideas": "Ideeën",
-                "tasks": "Taken op gekoppelde App Works",
+                "tasks": "Taken op gekoppelde App Works of Repository Works",
                 "both": "Beide",
                 "tasksPerTick": "Taken per ronde",
                 "openCap": "Max. open taken per Work",
                 "appliesTo": "Geldt voor Works die als ‘Verbetert’ of ‘Beheert’ zijn gekoppeld.",
-                "noAppWork": "Koppel een App Work als ‘Verbetert’ of ‘Beheert’ om er taken op aan te maken.",
+                "noAppWork": "Koppel een App Work of Repository Work als ‘Verbetert’ of ‘Beheert’ om er taken op aan te maken.",
+                "repoIsolationOff": "‘Task isolation’ staat uit voor een gekoppeld Repository Work, dus er worden geen taken op aangemaakt. Zet ‘Task isolation’ aan in de instellingen van dat Work.",
+                "repoAgentCannotOpenPullRequests": "De agent die taken op een gekoppeld Repository Work zou uitvoeren, mag niet committen en pull requests openen, dus er worden geen taken op aangemaakt. Kies voor de taakuitvoer van deze Missie een agent met beide rechten, of geef ze aan de agent van het Work.",
+                "repoAllowsAgentMerge": "Het mergebeleid van een gekoppeld Repository Work laat agents hun eigen pull requests mergen, dus deze Missie maakt er geen taken op aan. Zet merges door agents uit voor dat Work zodat de Missie er taken kan aanmaken.",
                 "tasksOnWorks": "Taken op gekoppelde Works",
-                "nothingToFile": "Geen gekoppeld App Work om taken op aan te maken.",
+                "nothingToFile": "Geen gekoppeld App Work of Repository Work om taken op aan te maken.",
                 "tasksOnWorksEmpty": "Nog geen taken aangemaakt.",
                 "save": "Opslaan",
                 "saved": "Uitvoer opgeslagen",
@@ -2410,6 +2423,21 @@
                 "unavailable": "De taken konden niet worden geladen.",
                 "previous": "Vorige",
                 "next": "Volgende"
+            },
+            "team": {
+                "title": "Team and agents",
+                "loading": "Loading…",
+                "unavailable": "Could not load who works on this Mission.",
+                "empty": "No Team holds this Mission yet, and no Agent is scoped to it or to its attached Works.",
+                "teamNoAgents": "No agents on this Team that you can see.",
+                "otherAgents": "Other agents",
+                "agents": "Agents",
+                "viaMission": "Scoped to this Mission",
+                "viaWork": "Works on {name}",
+                "viaWorkUnnamed": "Works on an attached Work",
+                "neverRan": "Never ran",
+                "viaStandingTasks": "Standing tasks on {name}",
+                "viaStandingTasksUnnamed": "Standing tasks on an attached Work"
             }
         },
         "ideasPage": {
@@ -2780,7 +2808,7 @@
         },
         "feed": {
             "narration": {
-                "missionNothingToFile": "<b>{actor}</b> vond vandaag niets nieuws om aan te maken op de App Works van een Missie"
+                "missionNothingToFile": "<b>{actor}</b> vond vandaag niets nieuws om aan te maken op de App Works of Repository Works van een Missie"
             }
         },
         "works": {

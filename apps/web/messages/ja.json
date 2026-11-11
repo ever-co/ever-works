@@ -1112,7 +1112,17 @@
                 "statusArchived": "アーカイブ済み",
                 "noTitle": "(タイトルなし)",
                 "noCadence": "ハートビートなし",
-                "cadencePrefix": "ハートビット:"
+                "cadencePrefix": "ハートビット:",
+                "runsOnSchedule": "Runs on schedule",
+                "runsOnScheduleNext": "Runs on schedule · next {time}",
+                "runsWhenAssigned": "Runs when assigned",
+                "lastRun": "Last run {time} · {status}",
+                "lastRunCompleted": "completed",
+                "lastRunFailed": "failed",
+                "lastRunCancelled": "cancelled",
+                "lastRunDispatchFailed": "could not start",
+                "lastRunRecoveredStuck": "recovered after getting stuck",
+                "lastRunUnknown": "unknown"
             },
             "tabs": {
                 "dashboard": "ダッシュボード",
@@ -2356,9 +2366,9 @@
                     "no-ideas": "Tick ran but generated no Ideas",
                     "failed": "Run now failed",
                     "cron-no-match": "Tick ran (cron skipped)",
-                    "tasks-filed": "ミッションの App Works にタスクを登録しました。",
-                    "no-tasks": "ミッションの App Works に登録する新しいものはありません。",
-                    "spawned-and-tasks-filed": "新しいアイデアを生成し、ミッションの App Works にタスクを登録しました。"
+                    "tasks-filed": "ミッションの App Works または Repository Works にタスクを登録しました。",
+                    "no-tasks": "ミッションの App Works または Repository Works に登録する新しいものはありません。",
+                    "spawned-and-tasks-filed": "新しいアイデアを生成し、ミッションの App Works または Repository Works にタスクを登録しました。"
                 }
             },
             "goals": {
@@ -2394,14 +2404,17 @@
             "output": {
                 "title": "出力",
                 "ideas": "アイデア",
-                "tasks": "添付された App Works のタスク",
+                "tasks": "添付された App Works または Repository Works のタスク",
                 "both": "両方",
                 "tasksPerTick": "1 回あたりのタスク数",
                 "openCap": "Work ごとの未完了タスク上限",
                 "appliesTo": "「改善」または「運用」として添付された Works に適用されます。",
-                "noAppWork": "タスクを登録するには、App Work を「改善」または「運用」として添付してください。",
+                "noAppWork": "タスクを登録するには、App Work または Repository Work を「改善」または「運用」として添付してください。",
+                "repoIsolationOff": "添付された Repository Work で「Task isolation」がオフになっているため、そこにはタスクが登録されません。その Work の設定で「Task isolation」をオンにしてください。",
+                "repoAgentCannotOpenPullRequests": "添付された Repository Work でタスクを実行するエージェントにコミットとプルリクエスト作成の権限がないため、そこにはタスクが登録されません。このミッションのタスク出力に両方の権限を持つエージェントを選ぶか、その Work のエージェントに権限を付与してください。",
+                "repoAllowsAgentMerge": "添付された Repository Work のマージポリシーでエージェントが自分のプルリクエストをマージできるため、このミッションはそこにタスクを登録しません。ミッションがタスクを登録できるよう、その Work でエージェントによるマージをオフにしてください。",
                 "tasksOnWorks": "添付された Works のタスク",
-                "nothingToFile": "タスクを登録できる App Work が添付されていません。",
+                "nothingToFile": "タスクを登録できる App Work または Repository Work が添付されていません。",
                 "tasksOnWorksEmpty": "まだタスクは登録されていません。",
                 "save": "保存",
                 "saved": "出力を保存しました",
@@ -2410,6 +2423,21 @@
                 "unavailable": "タスクを読み込めませんでした。",
                 "previous": "前へ",
                 "next": "次へ"
+            },
+            "team": {
+                "title": "Team and agents",
+                "loading": "Loading…",
+                "unavailable": "Could not load who works on this Mission.",
+                "empty": "No Team holds this Mission yet, and no Agent is scoped to it or to its attached Works.",
+                "teamNoAgents": "No agents on this Team that you can see.",
+                "otherAgents": "Other agents",
+                "agents": "Agents",
+                "viaMission": "Scoped to this Mission",
+                "viaWork": "Works on {name}",
+                "viaWorkUnnamed": "Works on an attached Work",
+                "neverRan": "Never ran",
+                "viaStandingTasks": "Standing tasks on {name}",
+                "viaStandingTasksUnnamed": "Standing tasks on an attached Work"
             }
         },
         "ideasPage": {
@@ -2780,7 +2808,7 @@
         },
         "feed": {
             "narration": {
-                "missionNothingToFile": "<b>{actor}</b> は今日、ミッションの App Works に登録する新しいものを見つけませんでした"
+                "missionNothingToFile": "<b>{actor}</b> は今日、ミッションの App Works または Repository Works に登録する新しいものを見つけませんでした"
             }
         },
         "works": {

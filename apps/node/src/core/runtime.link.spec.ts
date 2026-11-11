@@ -185,6 +185,8 @@ describe('createNodeRuntime — the node link', () => {
 		// here every beat that still carries consents is refused, so each step must drop exactly the next tier
 		// (of those this beat carries) and add nothing, and the first beat without consents is accepted.
 		const tiersNewestFirst = [
+			// Fleet agent readiness: the newest tier, so the first one peeled.
+			['agents'],
 			['timeZone'],
 			['macAddress', 'lanId'],
 			['selfUpdate'],

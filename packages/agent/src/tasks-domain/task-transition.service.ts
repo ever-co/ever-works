@@ -79,6 +79,20 @@ import { agentBlockLiftRefusal, agentMayLiftBlock } from './agent-block-lift';
 import { describeAppChangesPaused, readAppWorkSwitches } from '../app-works/app-work-switches';
 // APW-08 T11 (FR-9) — the refusal copy lives in the isolation leaf (contracts only).
 import { describeAppWorkNoCommitPermission } from './task-isolation';
+// A Mission's unattended Task on a Repository Work — the rule the tick asks before filing and
+// dispatch asks again before starting. A leaf (contracts and the isolation leaf only).
+import {
+    decideMissionRepoRun,
+    describeMissionRepoRunRefusal,
+    isMissionFiledTask,
+    MISSION_REPO_RUN_WORK_UNREADABLE,
+    missionTaskOutputAllowsAgentMerge,
+    type MissionRepoRunAgentView,
+    type MissionRepoRunRefusal,
+} from './mission-repo-run';
+// The effective merge policy (`allowAgentMerge`) for that rule. PolicyModule is imported by
+// TasksDomainModule, the one module that provides this service.
+import { MergePolicyService } from '../policy/merge-policy.service';
 // APW-08 T12 — the isolated-run admission port and its refusal copy. A leaf (contracts and the
 // T48 containment leaf only): the token is read in a parameter decorator below.
 import {
@@ -403,7 +417,72 @@ export class TaskTransitionService {
         @Optional()
         @InjectRepository(Mission)
         private readonly missionRows?: Repository<Mission>,
+        // A Mission's unattended Task on a Repository Work is not started under a merge policy
+        // that lets agents merge, unless the Mission opted in (`missionRepoRunRefusal`). Resolved
+        // from `PolicyModule`, which TasksDomainModule imports. Appended LAST + @Optional
+        // (positional-spec arity rule); absent, only the Work's own `mergePolicy` is read.
+        @Optional() private readonly mergePolicy?: MergePolicyService,
     ) {}
+
+    /**
+     * May a Mission-filed Task run unattended on its Work? `null` for every Work that is not a
+     * Repository Work, and for a Repository Work when the Agent may commit and open pull
+     * requests, the Task will run isolated (its own branch, so its change is a pull request), and
+     * the effective merge policy does not let agents merge (or the Mission opted in with
+     * `taskOutput.allowAgentMerge`). The rule is `decideMissionRepoRun`; this method only reads
+     * what it needs, lazily.
+     *
+     * Asked by `MissionTickService` BEFORE it plans for a Repository Work (through
+     * `TasksService.missionRepoRunRefusalForNewTask`, with the Agent `runTask` will resolve) and
+     * by {@link dispatchAgentRun} before a Mission-filed Task's run is created, so a setting or
+     * an Agent changed in between cannot slip a run through.
+     *
+     * A Work that cannot be read answers `'unreadable'`: for an unattended run that is a refusal
+     * (the caller decides). No Work, or no Work repository bound, is not a Repository Work.
+     */
+    async missionRepoRunRefusal(
+        task: Pick<Task, 'id' | 'workId' | 'missionId'> & { isolationMode?: string | null },
+        agent: (MissionRepoRunAgentView & { id?: string | null }) | null,
+        readWork: () => Promise<DispatchWorkRead> = this.dispatchWorkRead(task),
+    ): Promise<MissionRepoRunRefusal | 'unreadable' | null> {
+        const read = await readWork();
+        if (read.status === 'unreadable') return 'unreadable';
+        if (read.status !== 'ok' || !read.work) return null;
+        const work = read.work;
+        return decideMissionRepoRun({
+            task,
+            work,
+            agent,
+            agentMergeAllowed: async () => {
+                if (!this.mergePolicy) {
+                    return (
+                        (work as { mergePolicy?: { allowAgentMerge?: boolean } | null }).mergePolicy
+                            ?.allowAgentMerge === true
+                    );
+                }
+                const resolved = await this.mergePolicy.resolve({
+                    agentId: agent?.id ?? null,
+                    workId: work.id,
+                    organizationId: work.organizationId ?? null,
+                    tenantId: work.tenantId ?? null,
+                });
+                return resolved.policy.allowAgentMerge === true;
+            },
+            // A Mission that cannot be read has not opted in: the refusal stands.
+            missionAllowsAgentMerge: async () => {
+                if (!task.missionId || !this.missionRows) return false;
+                try {
+                    const mission = await this.missionRows.findOne({
+                        where: { id: task.missionId },
+                        select: ['id', 'taskOutput'],
+                    });
+                    return missionTaskOutputAllowsAgentMerge(mission?.taskOutput);
+                } catch {
+                    return false;
+                }
+            },
+        });
+    }
 
     /**
      * Assert + execute. Throws on disallowed move or unsatisfied gate.
@@ -1680,6 +1759,26 @@ export class TaskTransitionService {
             const error = describeAppWorkNoCommitPermission();
             this.logger.warn(`Task ${task.id}: no run dispatched for agent ${agentId} — ${error}`);
             return { runId: null, dispatched: false, parked: false, error };
+        }
+        // A Mission's unattended Task on a Repository Work — the FR-9 equivalent for that kind,
+        // and more: the Agent must be able to commit AND open pull requests, the Task must run
+        // isolated, and a merge policy that lets agents merge needs the Mission's opt-in. The
+        // tick checks the same rule before it files (`missionRepoRunRefusal`); this is where a
+        // setting or an Agent changed since cannot slip a run through. Before a run row exists,
+        // like FR-9. Fails CLOSED on an unreadable Work: nobody is watching this run. A review
+        // run is not a change, so it passes, as it does FR-9.
+        if (!opts.reviewId && isMissionFiledTask(task)) {
+            const refusal = await this.missionRepoRunRefusal(task, agent, readWork);
+            if (refusal) {
+                const error =
+                    refusal === 'unreadable'
+                        ? MISSION_REPO_RUN_WORK_UNREADABLE
+                        : describeMissionRepoRunRefusal(refusal);
+                this.logger.warn(
+                    `Task ${task.id}: no run dispatched for agent ${agentId} — ${error}`,
+                );
+                return { runId: null, dispatched: false, parked: false, error };
+            }
         }
         const generation = opts.generation ?? (task.recurrenceOccurredCount ?? 0) + 1;
         const dedupKey = opts.dedupKey ?? `${task.id}:${agentId}:${generation}`;
