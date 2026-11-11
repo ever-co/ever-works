@@ -30,6 +30,8 @@ The same fields are writable over the API with `PATCH /api/works/:id`.
 
 A [Mission that files Tasks](./missions.md#output) relies on this setting for a Repository Work: it files Tasks on one only while `taskIsolation` is `worktree`, because only then does each Task become a branch and a pull request. It never turns the setting on by itself.
 
+The Agent that runs those Tasks also has to be allowed to commit and to open pull requests. When the Work is served by an Agent shared with other Works, name it as the Work's [default Agent](./tasks.md#the-works-default-agent) (`defaultAgentId`, same `PATCH /api/works/:id`) so Tasks nobody assigned, including a Mission's, run with it.
+
 ## Per-Task override
 
 A single Task can opt in or out regardless of the Work setting. On the Task detail page, the **Branch** panel shows an isolation selector while the Task has no branch yet:

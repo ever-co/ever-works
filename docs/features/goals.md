@@ -114,9 +114,11 @@ the catalog card and the detail header.
 
 The loop routes each iteration to the Goal's **pinned agent** if one is set, otherwise round-robin over
 the agents that have already worked the Goal. A brand-new Goal has neither — so, when no agent is
-pinned and none has worked it yet, the router falls back to the **eligible agents in the Goal's own
-scope** (the same Organization / tenant ownership rule the rest of the platform applies) and
-round-robins over them, oldest first. It never picks an agent outside the Goal's scope, and a scope
+pinned and none has worked it yet, a Goal scoped to a Work goes to that Work's
+[default Agent](./tasks.md#the-works-default-agent) when it names one that is still usable; from the
+next iteration that Agent is part of the Goal's history. Otherwise the router falls back to the
+**eligible agents in the Goal's own scope** (the same Organization / tenant ownership rule the rest of
+the platform applies) and round-robins over them, oldest first. It never picks an agent outside the Goal's scope, and a scope
 with no agent still leaves the loop **stuck** with `no-candidate-agent` until you create or assign one.
 
 ## Concurrent iterations

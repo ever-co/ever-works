@@ -116,6 +116,9 @@ jest.mock('@src/ever-works-providers', () => ({
     EverWorksK8sDeployProvider: class EverWorksK8sDeployProvider {},
     EverWorksDnsService: class EverWorksDnsService {},
 }));
+jest.mock('@src/database/repositories/agent.repository', () => ({
+    AgentRepository: class AgentRepository {},
+}));
 jest.mock('@src/database/repositories/work.repository', () => ({
     WorkRepository: class WorkRepository {},
 }));
@@ -166,6 +169,7 @@ import { CommunityPrModule } from '../community-pr/community-pr.module';
 import { ComparisonGeneratorModule } from '../comparison-generator/comparison-generator.module';
 import { TemplateCatalogModule } from '../template-catalog/template-catalog.module';
 import { AppWorksModule } from '../app-works/app-works.module';
+import { AgentRepository } from '@src/database/repositories/agent.repository';
 
 const meta = (key: string): unknown[] => Reflect.getMetadata(key, WorkModule) ?? [];
 
@@ -256,6 +260,8 @@ describe('WorkModule', () => {
             EverWorksDnsService,
             ZeroFrictionFunnelService,
             DeployReadyPollerService,
+            // The Work's default Agent is validated against it (`WorkLifecycleService`).
+            AgentRepository,
         ];
 
         it.each(expectedProviders)('declares %p as a provider', (provider) => {
@@ -314,7 +320,8 @@ describe('WorkModule', () => {
                     provider === EverWorksDeployQuotaService ||
                     provider === EverWorksGitProvider ||
                     provider === EverWorksK8sDeployProvider ||
-                    provider === EverWorksDnsService
+                    provider === EverWorksDnsService ||
+                    provider === AgentRepository
                 ) {
                     // EW-614: EverWorksGitProvider is consumed inside the
                     // module (by WorkLifecycleService.createWork); not exported.
