@@ -188,6 +188,21 @@ describe('Work creation honours the managed Ever Works Git storage choice', () =
             expect(workAPICreateMock).toHaveBeenCalledTimes(1);
         });
 
+        it('answers with the created Work when its generation does not start (no orphan, no "slug taken" resubmit)', async () => {
+            itemsGenerateMock.mockRejectedValueOnce(new Error('Monthly credit limit reached'));
+            const { createWorkWithAI } = await import('./works');
+
+            const result = await createWorkWithAI(AI_REQUEST);
+
+            expect(workAPICreateMock).toHaveBeenCalledTimes(1);
+            expect(result.success).toBe(false);
+            expect(result.generationNotStarted).toBe(true);
+            expect(result.work).toEqual({ id: 'work-1', slug: 'k8s-operators' });
+            expect(result.error).toBe(
+                'generationNotStarted:{"reason":"Monthly credit limit reached"}',
+            );
+        });
+
         it('never asks whether a personal git provider is connected', async () => {
             const { createWorkWithAI } = await import('./works');
 
