@@ -303,6 +303,28 @@ describe('AppProvisioningFeedbackService (APW-04 loop)', () => {
         );
     });
 
+    it('still routes to an open provisioning Task untouched for weeks while its pull request is being read', async () => {
+        // The PR-status sweep's read keeps `updatedAt`, so "last changed" is old while the pull
+        // request waits for review; the read itself is what keeps the Task relevant.
+        const weeksAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+        const waiting = {
+            ...openTask(),
+            createdAt: weeksAgo,
+            updatedAt: weeksAgo,
+            ciCheckedAt: new Date(),
+        };
+        const { service, tasks, chat } = build(waiting);
+        await service.onBuildFailed(failed());
+        expect(chat.post).toHaveBeenCalled();
+        expect(tasks.runTask).toHaveBeenCalled();
+
+        // With no read and no change for weeks, it is not the Task this build is about.
+        const abandoned = build({ ...waiting, ciCheckedAt: weeksAgo });
+        await abandoned.service.onBuildFailed(failed());
+        expect(abandoned.chat.post).not.toHaveBeenCalled();
+        expect(abandoned.tasks.runTask).not.toHaveBeenCalled();
+    });
+
     it('ignores a build of another branch while the provisioning PR is open', async () => {
         const { service, chat } = build(openTask());
         await service.onBuildFailed(failed('feature/other'));

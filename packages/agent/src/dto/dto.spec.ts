@@ -390,6 +390,24 @@ describe('agent/dto submodule', () => {
             await expectValid(dto);
         });
 
+        it('defaultAgentId: a uuid passes, null and an empty string clear it, anything else is refused', async () => {
+            const uuid = '0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d';
+            const withUuid = plainToInstance(UpdateWorkDto, { defaultAgentId: ` ${uuid} ` });
+            await expectValid(withUuid);
+            expect(withUuid.defaultAgentId).toBe(uuid);
+            for (const clear of [null, '']) {
+                const dto = plainToInstance(UpdateWorkDto, { defaultAgentId: clear });
+                await expectValid(dto);
+                expect(dto.defaultAgentId).toBeNull();
+            }
+            for (const bad of ['agent-docs', 42, { id: uuid }]) {
+                const errs = await expectValidationErrors(
+                    plainToInstance(UpdateWorkDto, { defaultAgentId: bad }),
+                );
+                expect(errs).toContain('isUuid');
+            }
+        });
+
         it('lowercases deployProvider + websiteTemplateId', () => {
             const dto = plainToInstance(UpdateWorkDto, {
                 deployProvider: 'VERCEL',

@@ -88,6 +88,31 @@ describe('TaskPrPill', () => {
         expect(pill.textContent).toContain('closed');
     });
 
+    it('marks a PR the provider answered "not found" for, never as an open one', () => {
+        render(<TaskPrPill task={make({ prState: 'not_found' })} />);
+        const pill = screen.getByTestId('task-pr-pill');
+        expect(pill.getAttribute('data-pr-state')).toBe('not_found');
+        expect(pill.textContent).toContain('not found');
+        expect(pill.getAttribute('title')).toContain('#241 — not found');
+        expect(pill.className).not.toContain('bg-blue-100');
+    });
+
+    it('shows no CI dot and no checks for a "not found" PR, even with a stale failing cache', () => {
+        render(
+            <TaskPrPill
+                task={make({
+                    prState: 'not_found',
+                    ciState: 'failing',
+                    prChecks: [{ name: 'build', status: 'completed', conclusion: 'failure' }],
+                })}
+            />,
+        );
+        const pill = screen.getByTestId('task-pr-pill');
+        expect(screen.queryByTestId('task-pr-pill-ci-dot')).toBeNull();
+        expect(pill.getAttribute('title')).not.toContain('Failing');
+        expect(pill.getAttribute('title')).not.toContain('build');
+    });
+
     it('links out with noopener/noreferrer for a valid https URL', () => {
         render(<TaskPrPill task={make()} />);
         const pill = screen.getByTestId('task-pr-pill');

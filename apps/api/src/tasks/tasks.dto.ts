@@ -597,7 +597,8 @@ export class AddReviewerDto {
 export class RejectTaskDto {
     @ApiProperty({
         maxLength: 8000,
-        description: "Reviewer feedback; spliced into the next resumed run's first turn.",
+        description:
+            "Reviewer feedback. The next run of this Task — a resumed run, or a fresh one (Run, a transition, a recurring re-run) — is given it to fix on the Task's branch and pull request.",
     })
     @IsString()
     @MaxLength(8000)
@@ -612,6 +613,20 @@ export class RejectTaskDto {
     @IsOptional()
     @IsUUID()
     runId?: string;
+
+    /**
+     * Start the fix run right after recording, through `POST /:id/run`'s own
+     * path (same Agent resolution, same refusals). Default false.
+     */
+    @ApiProperty({
+        required: false,
+        default: false,
+        description:
+            'Start the fix run right after recording, exactly as `POST /api/tasks/:id/run` would (same Agent resolution and refusals). The rejection is recorded either way; `run` in the response reports the dispatch (`ok: false` with the error code when it could not start, e.g. `RUN_ALREADY_IN_FLIGHT`).',
+    })
+    @IsOptional()
+    @IsBoolean()
+    runNow?: boolean;
 }
 
 /** Judgment layer G3 — `POST /api/tasks/:id/escalations/:eid/resolve`. */

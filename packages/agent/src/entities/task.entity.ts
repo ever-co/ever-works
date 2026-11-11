@@ -308,7 +308,12 @@ export class Task {
     // PR. Plan 04 §4.1 put them on AgentRun; this is the same documented
     // deviation Wave 2 already made, kept consistent on purpose.
 
-    /** `open | draft | closed | merged` as last observed from the provider. */
+    /**
+     * `open | draft | closed | merged` as last observed from the provider, or
+     * `not_found` once the provider has kept answering "not found" for the pull
+     * request (`TASK_PR_NOT_FOUND_STATE`). The sweep polls null / open / draft,
+     * and re-reads `not_found` every 6 hours; `closed` / `merged` are terminal.
+     */
     @Column({ type: 'varchar', length: 16, nullable: true })
     prState?: string | null;
 

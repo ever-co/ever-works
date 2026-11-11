@@ -236,6 +236,10 @@ describe('ChatChangeCard — reply and chain (spec §6.4)', () => {
             chain({ prNumber: 7, prState: 'closed' }),
             ['done', 'failed', 'pending', 'pending', 'pending'],
         ],
+        [
+            chain({ prNumber: 7, prState: 'not_found' }),
+            ['done', 'failed', 'pending', 'pending', 'pending'],
+        ],
     ])('chain states %#', (value, expected) => {
         const steps = changeChainSteps(value);
         expect([steps.run, steps.pullRequest, steps.build, steps.deployment, steps.live]).toEqual(

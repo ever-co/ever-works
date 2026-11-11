@@ -450,7 +450,13 @@ export const HELP_ARTICLES = [
                 level: 2,
             },
             { id: 'run', text: 'Run', level: 3 },
+            { id: 'the-works-default-agent', text: 'The Work\'s default Agent', level: 3 },
             { id: 'moving-to-in-progress', text: 'Moving to In progress', level: 3 },
+            {
+                id: 'when-a-reviewer-rejects-the-work',
+                text: 'When a reviewer rejects the work',
+                level: 3,
+            },
             {
                 id: 'acceptance-checks-quality-gates',
                 text: 'Acceptance checks (quality gates)',
@@ -615,6 +621,11 @@ export const HELP_ARTICLES = [
             {
                 id: 'who-runs-a-brand-new-goal',
                 text: 'Who runs a brand-new Goal',
+                level: 3,
+            },
+            {
+                id: 'who-can-see-a-goals-iterations',
+                text: 'Who can see a Goal\'s iterations',
                 level: 3,
             },
             { id: 'concurrent-iterations', text: 'Concurrent iterations', level: 2 },

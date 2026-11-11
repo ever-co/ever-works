@@ -184,6 +184,9 @@ export * from './agent-workflow-tools';
 export * from './loop-detector';
 // Security — the nonce-fenced Task brief every task run starts from.
 export * from './task-brief';
+// Review feedback reaches the next run — the `# REVIEW FEEDBACK TO ADDRESS`
+// section a fix run carries (cloud rendering + the wording the fleet shares).
+export * from './review-feedback-brief';
 export {
     AgentEscalationRepository,
     type ListEscalationsForUserOptions,

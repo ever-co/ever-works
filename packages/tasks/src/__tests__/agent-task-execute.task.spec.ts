@@ -134,6 +134,13 @@ vi.mock('@ever-works/agent/agents', async () => ({
             '../../../agent/src/agents/task-brief',
         )
     ).buildFencedTaskBrief,
+    // Review feedback reaches the next run — the REAL renderer of a fix run's
+    // `# REVIEW FEEDBACK TO ADDRESS` section (a leaf beside the brief builder).
+    buildFencedReviewFeedback: (
+        await vi.importActual<typeof import('../../../agent/src/agents/review-feedback-brief')>(
+            '../../../agent/src/agents/review-feedback-brief',
+        )
+    ).buildFencedReviewFeedback,
     AgentRunService: AgentRunServiceToken,
     RunDispatchGateService: RunDispatchGateServiceToken,
     AgentEscalationService: AgentEscalationServiceToken,
@@ -284,7 +291,10 @@ describe('agentTaskExecuteTask — Task ownership IDOR guard', () => {
     };
     let works: { findById: ReturnType<typeof vi.fn> };
     let escalations: { record: ReturnType<typeof vi.fn> };
-    let reviewRejections: { recordGateRejection: ReturnType<typeof vi.fn> };
+    let reviewRejections: {
+        recordGateRejection: ReturnType<typeof vi.fn>;
+        claimFeedbackForRun: ReturnType<typeof vi.fn>;
+    };
     let registeredConfig: TaskConfig;
 
     /**
@@ -355,7 +365,12 @@ describe('agentTaskExecuteTask — Task ownership IDOR guard', () => {
         // the gate-exhausted path; resolve to no-ops by default so every
         // pre-existing case is unaffected.
         escalations = { record: vi.fn().mockResolvedValue({ id: 'esc-1' }) };
-        reviewRejections = { recordGateRejection: vi.fn().mockResolvedValue(null) };
+        // Review feedback reaches the next run — no unaddressed findings by
+        // default, so every pre-existing case keeps its byte-identical input.
+        reviewRejections = {
+            recordGateRejection: vi.fn().mockResolvedValue(null),
+            claimFeedbackForRun: vi.fn().mockResolvedValue(null),
+        };
         // Quality gates default OFF — pre-gate behavior everywhere unless a
         // test opts in. maxGateAttempts defaults to 1 (no iterate loop) so
         // every pre-M5 test keeps its single-attempt shape.
@@ -575,6 +590,91 @@ describe('agentTaskExecuteTask — Task ownership IDOR guard', () => {
             // Author-written fields sit inside the nonce-fenced Task brief.
             expect(arg.immediateInput).toMatch(/<task_brief id="[0-9a-f]{12}">\nTitle: /);
             expect(arg.immediateInput).toMatch(/Task to accomplish/);
+        });
+    });
+
+    /**
+     * Review feedback reaches the next run (2026-11-11). Production
+     * incident: a run started after findings were recorded with
+     * `POST /api/tasks/:id/reject` never saw them, read the standing brief,
+     * and pushed an unrelated feature onto the pull request under review.
+     * The cloud worker now claims the Task's unaddressed findings for the run
+     * (the same reader the fleet planner uses) and puts them after the brief.
+     */
+    describe('review feedback (a fix run)', () => {
+        const withPr = () =>
+            tasks.getOne.mockResolvedValueOnce({
+                id: OWNED_TASK_ID,
+                slug: 'owned-task',
+                title: 'Capability loop',
+                description: 'Ship one missing capability per run.',
+                status: 'in_review',
+                priority: 'medium',
+                labels: [],
+                missionId: null,
+                ideaId: null,
+                workId: null,
+                branchRef: 'ever-works/task-owned-task',
+                prUrl: 'https://github.com/acme/app/pull/5038',
+                tenantId: TENANT_ID,
+                organizationId: ORGANIZATION_ID,
+            });
+
+        it('claims the findings for THIS run and puts them after the brief, as a fix run', async () => {
+            withPr();
+            reviewRejections.claimFeedbackForRun.mockResolvedValueOnce({
+                items: [
+                    {
+                        id: 'rej-1',
+                        source: 'task-review',
+                        feedback: 'The retry path drops the auth header.',
+                        reviewerLabel: 'Independent reviewer',
+                        reviewerKind: 'human',
+                    },
+                ],
+                omitted: 0,
+            });
+
+            await registeredConfig.run(basePayload(OWNED_TASK_ID));
+
+            expect(reviewRejections.claimFeedbackForRun).toHaveBeenCalledWith({
+                taskId: OWNED_TASK_ID,
+                runId: 'run-1',
+                userId: OWNER,
+            });
+            const input: string = runner.execute.mock.calls[0][0].immediateInput;
+            expect(input).toContain('# REVIEW FEEDBACK TO ADDRESS');
+            expect(input.indexOf('</task_brief')).toBeLessThan(
+                input.indexOf('# REVIEW FEEDBACK TO ADDRESS'),
+            );
+            expect(input).toContain(
+                'already on branch `ever-works/task-owned-task` and its pull request https://github.com/acme/app/pull/5038',
+            );
+            expect(input).toMatch(/Fix exactly these findings/);
+            expect(input).toMatch(
+                /<review_feedback id="[0-9a-f]{12}">\nFinding 1 — Task review, reviewer "Independent reviewer":\nThe retry path drops the auth header\./,
+            );
+        });
+
+        it('no findings: the first input is exactly the brief, as before', async () => {
+            await registeredConfig.run(basePayload(OWNED_TASK_ID));
+            const input: string = runner.execute.mock.calls[0][0].immediateInput;
+            expect(reviewRejections.claimFeedbackForRun).toHaveBeenCalledTimes(1);
+            expect(input).not.toContain('REVIEW FEEDBACK');
+            expect(input.trimEnd().endsWith('>')).toBe(true);
+        });
+
+        it('a claim that fails over the RPC starts the run without the section', async () => {
+            reviewRejections.claimFeedbackForRun.mockRejectedValueOnce(new Error('rpc down'));
+            const result = await registeredConfig.run(basePayload(OWNED_TASK_ID));
+            expect(result).toMatchObject({ status: 'completed' });
+            expect(runner.execute.mock.calls[0][0].immediateInput).not.toContain('REVIEW FEEDBACK');
+        });
+
+        it('a REVIEW run never claims findings (it fixes nothing)', async () => {
+            isAgentReviewRunScopeMock.mockReturnValue(true);
+            await registeredConfig.run(basePayload(OWNED_TASK_ID));
+            expect(reviewRejections.claimFeedbackForRun).not.toHaveBeenCalled();
         });
     });
 
