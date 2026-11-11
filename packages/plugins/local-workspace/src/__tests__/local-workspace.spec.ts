@@ -113,6 +113,35 @@ describe('provision (persistent pool + worktree)', () => {
 		expect(configMtimeAfter).toBe(configMtimeBefore);
 	});
 
+	// Review feedback reaches the next run (2026-11-11) — a FIX run of a Task
+	// whose pull request is open must build on the pull request's commits, not
+	// on a fresh cut of the base: the platform describes the same Task branch
+	// for every run (`TaskWorkspaceService` reuses `task.branchRef`), and THIS
+	// provider decides where the checkout starts. Pinned on a machine that has
+	// never seen the Task (another fleet node, a fresh cloud worker): no
+	// worktree to reuse, only the pushed branch on the remote.
+	it('starts a fix run on ANOTHER machine from the pushed Task branch head, not from the base', async () => {
+		const branch = 'task/fix-run-cccc3333';
+		const first = await plugin.provision(spec('lw-fix-1', branch));
+		writeFileSync(join(first.path, 'feature.txt'), 'the pull request work\n');
+		const pushed = await plugin.finalize(first, { commitMessage: 'agent: pr work', push: true });
+		expect(pushed.pushed).toBe(true);
+		// The base moves on after the pull request was opened.
+		const newBase = seedCommit('later.txt', 'later\n', 'seed: base moves on');
+
+		const otherMachine = { baseDir: join(root, 'other-machine'), fetchDepth: 1 };
+		const fix = await plugin.provision({ ...spec('lw-fix-1', branch), settings: otherMachine });
+
+		expect(fix.path).not.toBe(first.path);
+		expect(fix.reused).toBe(true);
+		expect(git(fix.path, 'rev-parse', '--abbrev-ref', 'HEAD')).toBe(branch);
+		expect(git(fix.path, 'rev-parse', 'HEAD')).toBe(pushed.headSha);
+		expect(git(fix.path, 'rev-parse', 'HEAD')).not.toBe(newBase);
+		// Line endings follow the machine's `core.autocrlf`; the content is the point.
+		const content = await fs.readFile(join(fix.path, 'feature.txt'), 'utf8');
+		expect(content.replace(/\r\n/g, '\n')).toBe('the pull request work\n');
+	});
+
 	it('migrates an exact pre-v2 binding stamp under the existing Git registration and reuses the worktree', async () => {
 		const bindingKey = 'lw-task-v1-migrate';
 		const branch = 'task/v1-migrate-10101010';
