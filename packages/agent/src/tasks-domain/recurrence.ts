@@ -1,4 +1,5 @@
 import { RRule } from 'rrule';
+import { fleetZonedInstant } from '@ever-works/contracts';
 import { TaskStatus, type Task } from '../entities/task.entity';
 import { parseCron } from '../missions/cron-matcher';
 import { computeNextCronFire } from '../schedules/cadence';
@@ -16,7 +17,12 @@ import { computeNextCronFire } from '../schedules/cadence';
  * sends the browser's zone with the rule, yet the math ran in UTC, so every
  * user east or west of UTC got their Tasks an hour or more off. The math runs
  * on "floating" dates (UTC fields = wall-clock time in the zone) and converts
- * the result back to an instant.
+ * the result back to an instant the RFC 5545 way, with the same helper the
+ * Fleet schedule preview uses (`fleetZonedInstant`): a time the clock skips
+ * (spring forward) runs as far past the jump as it was written into the gap
+ * (02:30 → 03:30), and a time the clock repeats (fall back) runs once, the
+ * first time. The next run is always strictly after both the slot that fired
+ * and "now".
  *
  * RRULE strings follow RFC 5545 (e.g. `FREQ=DAILY;BYHOUR=9`).
  */
@@ -81,18 +87,30 @@ function cadenceTimeZone(timezone: string | null | undefined): string | null {
     }
 }
 
+const wallClockFormatters = new Map<string, Intl.DateTimeFormat>();
+
+function wallClockFormatter(timeZone: string): Intl.DateTimeFormat {
+    let formatter = wallClockFormatters.get(timeZone);
+    if (!formatter) {
+        formatter = new Intl.DateTimeFormat('en-US', {
+            timeZone,
+            hourCycle: 'h23',
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+        });
+        if (wallClockFormatters.size > 200) wallClockFormatters.clear();
+        wallClockFormatters.set(timeZone, formatter);
+    }
+    return formatter;
+}
+
 /** `instant`'s wall-clock time in `timeZone`, as a Date whose UTC fields hold it. */
 export function toFloatingTime(instant: Date, timeZone: string): Date {
-    const parts = new Intl.DateTimeFormat('en-US', {
-        timeZone,
-        hourCycle: 'h23',
-        year: 'numeric',
-        month: '2-digit',
-        day: '2-digit',
-        hour: '2-digit',
-        minute: '2-digit',
-        second: '2-digit',
-    }).formatToParts(instant);
+    const parts = wallClockFormatter(timeZone).formatToParts(instant);
     const field = (type: Intl.DateTimeFormatPartTypes) =>
         Number(parts.find((part) => part.type === type)?.value ?? 0);
     return new Date(
@@ -100,7 +118,7 @@ export function toFloatingTime(instant: Date, timeZone: string): Date {
             field('year'),
             field('month') - 1,
             field('day'),
-            field('hour'),
+            field('hour') % 24,
             field('minute'),
             field('second'),
             instant.getUTCMilliseconds(),
@@ -109,24 +127,100 @@ export function toFloatingTime(instant: Date, timeZone: string): Date {
 }
 
 /**
- * The instant whose wall-clock time in `timeZone` is `floating`'s UTC fields.
- * A wall time that does not exist (the spring-forward gap) lands just after
- * the gap.
+ * The instant whose wall-clock time in `timeZone` is `floating`'s UTC fields,
+ * read the RFC 5545 (§3.3.5) way through `fleetZonedInstant` (#3138), so a
+ * recurring Task and the Fleet schedule preview agree on every clock change:
+ *
+ *  - a wall time the clock skips (spring forward) is read with the offset in
+ *    force BEFORE the jump, so it lands as far past the jump as it was written
+ *    into the gap: 02:30 in New York on 2026-03-08 is 03:30 EDT;
+ *  - a wall time the clock repeats (fall back) is its FIRST occurrence: 02:30
+ *    in Berlin on 2026-10-25 is 02:30 CEST (00:30Z), not 02:30 CET.
+ *
+ * The old fixed-point iteration stopped wherever its count left it inside a
+ * gap, which west of UTC was an hour BEFORE the gap: the next run came out as
+ * the slot that had just fired, and the template fired every minute.
  */
 export function fromFloatingTime(floating: Date, timeZone: string): Date {
-    let guess = floating.getTime();
-    for (let i = 0; i < 4; i += 1) {
-        const offset = toFloatingTime(new Date(guess), timeZone).getTime() - guess;
-        const next = floating.getTime() - offset;
-        if (next === guess) break;
-        guess = next;
+    const minute = fleetZonedInstant(
+        floating.getUTCFullYear(),
+        floating.getUTCMonth() + 1,
+        floating.getUTCDate(),
+        floating.getUTCHours(),
+        floating.getUTCMinutes(),
+        timeZone,
+    );
+    return new Date(minute + floating.getUTCSeconds() * 1000 + floating.getUTCMilliseconds());
+}
+
+/** `timeZone`'s offset from UTC at `ms`, in ms (Berlin in summer: +7 200 000). */
+function zoneOffsetMs(ms: number, timeZone: string): number {
+    return toFloatingTime(new Date(ms), timeZone).getTime() - ms;
+}
+
+const DAY_MS = 86_400_000;
+
+/**
+ * How far BEFORE the wall-clock time of "after" a slot can be and still run
+ * after it: a slot written into a spring-forward gap runs past the jump (02:30
+ * is still owed at 03:10 EDT). Two hours covers every gap there is (the
+ * same margin as `nextFleetScheduleFire`).
+ */
+const GAP_SLACK_MS = 2 * 60 * 60_000;
+
+/** Upper bound on slots looked at for one answer; a real search needs a few hundred at most. */
+const MAX_SLOTS_SCANNED = 100_000;
+
+/**
+ * The first slot of a cadence that runs STRICTLY after `after`. `nextSlot(c)`
+ * answers the cadence's first floating slot strictly after the floating time
+ * `c` (slots are wall-clock times in `timeZone`).
+ *
+ * Wall-clock order is not run order around a clock change, so instead of
+ * converting one slot and trusting it, slots are walked in order until one
+ * runs after `after`. That is what makes the answer strictly later than the
+ * slot that fired and than "now" in every zone: a slot that resolves to the
+ * same instant as `after` (or earlier, in a repeated hour) is passed over.
+ * Near a clock change the walk starts {@link GAP_SLACK_MS} earlier, for the
+ * gap slots that run after the jump.
+ */
+function firstZonedSlotAfter(
+    nextSlot: (cursor: Date) => Date | null,
+    after: Date,
+    timeZone: string,
+): Date | null {
+    const afterMs = after.getTime();
+    const clockChangesNear =
+        zoneOffsetMs(afterMs - DAY_MS, timeZone) !== zoneOffsetMs(afterMs + DAY_MS, timeZone);
+    let cursor = new Date(
+        toFloatingTime(after, timeZone).getTime() - (clockChangesNear ? GAP_SLACK_MS : 0),
+    );
+    for (let scanned = 0; scanned < MAX_SLOTS_SCANNED; scanned += 1) {
+        const slot = nextSlot(cursor);
+        if (!slot || slot.getTime() <= cursor.getTime()) return null;
+        const at = fromFloatingTime(slot, timeZone);
+        if (at.getTime() > afterMs) return at;
+        cursor = slot;
     }
-    return new Date(guess);
+    return null;
+}
+
+/** The later of the slot that fired and "now": the next run is searched from there. */
+function searchStart(from: Date, now: Date | null | undefined): Date {
+    return now && now.getTime() > from.getTime() ? now : from;
 }
 
 export interface NextOccurrenceContext {
     rule: string;
+    /** The slot that just fired (or "now" for a new cadence): the series is anchored on it. */
     from: Date;
+    /**
+     * The current time. The next run is strictly after the later of `from` and
+     * `now`, so slots missed while the dispatcher was down are NOT replayed one
+     * per tick: after an outage a template fires once (the overdue slot) and
+     * then resumes its schedule from now. Absent = `from`.
+     */
+    now?: Date | null;
     /** IANA zone the rule's wall-clock times are in (`recurrenceTimezone`); UTC when absent. */
     timezone?: string | null;
     recurrenceEndsAt?: Date | null;
@@ -135,9 +229,9 @@ export interface NextOccurrenceContext {
 }
 
 /**
- * Compute the next occurrence strictly after `from`. Honors
- * `recurrenceEndsAt` + `recurrenceMaxOccurrences` caps. Returns
- * null when the recurrence is exhausted (no more fires).
+ * Compute the next occurrence strictly after `from` (and after `now` when
+ * given). Honors `recurrenceEndsAt` + `recurrenceMaxOccurrences` caps.
+ * Returns null when the recurrence is exhausted (no more fires).
  */
 export function computeNextOccurrence(ctx: NextOccurrenceContext): Date | null {
     if (
@@ -147,7 +241,7 @@ export function computeNextOccurrence(ctx: NextOccurrenceContext): Date | null {
         return null;
     }
     const timeZone = cadenceTimeZone(ctx.timezone);
-    const from = timeZone ? toFloatingTime(ctx.from, timeZone) : ctx.from;
+    const anchor = timeZone ? toFloatingTime(ctx.from, timeZone) : ctx.from;
     let parsed: RRule;
     try {
         const options = RRule.parseString(ctx.rule);
@@ -160,15 +254,17 @@ export function computeNextOccurrence(ctx: NextOccurrenceContext): Date | null {
         // moment this runs, so a rule's default time of day does not drift by
         // however late the dispatcher ran.
         if (!options.dtstart) {
-            options.dtstart = new Date(Math.floor(from.getTime() / 60_000) * 60_000);
+            options.dtstart = new Date(Math.floor(anchor.getTime() / 60_000) * 60_000);
         }
         parsed = new RRule(options);
     } catch {
         return null;
     }
-    const floatingNext = parsed.after(from, false);
-    if (!floatingNext) return null;
-    const next = timeZone ? fromFloatingTime(floatingNext, timeZone) : floatingNext;
+    const start = searchStart(ctx.from, ctx.now);
+    const next = timeZone
+        ? firstZonedSlotAfter((cursor) => parsed.after(cursor, false), start, timeZone)
+        : parsed.after(start, false);
+    if (!next) return null;
     if (ctx.recurrenceEndsAt && next.getTime() > ctx.recurrenceEndsAt.getTime()) {
         return null;
     }
@@ -180,7 +276,10 @@ export interface TemplateCadenceContext {
     rule?: string | null;
     /** 5-field cron expression — XOR with `rule`. */
     cron?: string | null;
+    /** The slot that just fired (or "now" for a new cadence). */
     from: Date;
+    /** The current time: the next run is strictly after the later of `from` and `now` (see {@link NextOccurrenceContext.now}). */
+    now?: Date | null;
     /** IANA zone the cadence's wall-clock times are in (`recurrenceTimezone`); UTC when absent. */
     timezone?: string | null;
     recurrenceEndsAt?: Date | null;
@@ -200,6 +299,7 @@ export function computeNextTemplateOccurrence(ctx: TemplateCadenceContext): Date
         return computeNextOccurrence({
             rule: ctx.rule,
             from: ctx.from,
+            now: ctx.now ?? null,
             timezone: ctx.timezone ?? null,
             recurrenceEndsAt: ctx.recurrenceEndsAt ?? null,
             recurrenceMaxOccurrences: ctx.recurrenceMaxOccurrences ?? null,
@@ -214,13 +314,17 @@ export function computeNextTemplateOccurrence(ctx: TemplateCadenceContext): Date
         return null;
     }
     // `computeNextCronFire` reads UTC fields, so it runs on floating times too.
+    const cron = ctx.cron;
     const timeZone = cadenceTimeZone(ctx.timezone);
-    const nextIso = computeNextCronFire(
-        ctx.cron,
-        timeZone ? toFloatingTime(ctx.from, timeZone) : ctx.from,
-    );
-    if (!nextIso) return null;
-    const next = timeZone ? fromFloatingTime(new Date(nextIso), timeZone) : new Date(nextIso);
+    const start = searchStart(ctx.from, ctx.now);
+    const nextCronSlot = (cursor: Date): Date | null => {
+        const iso = computeNextCronFire(cron, cursor);
+        return iso ? new Date(iso) : null;
+    };
+    const next = timeZone
+        ? firstZonedSlotAfter(nextCronSlot, start, timeZone)
+        : nextCronSlot(start);
+    if (!next) return null;
     if (ctx.recurrenceEndsAt && next.getTime() > ctx.recurrenceEndsAt.getTime()) {
         return null;
     }

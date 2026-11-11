@@ -179,7 +179,7 @@ export class TaskRecurrenceDispatcherService {
                 // exactly the path it always did, with no count and no claim.
                 const maxOpen = normalizeMaxOpenInstances(template.recurrenceMaxOpenInstances);
                 if (maxOpen === null) {
-                    await this.fireOccurrence(template, scheduledFor, summary);
+                    await this.fireOccurrence(template, scheduledFor, now, summary);
                     continue;
                 }
                 const held = await this.withFireClaim(template.id, () =>
@@ -407,16 +407,23 @@ export class TaskRecurrenceDispatcherService {
      * occurred count), spawn the instance, copy the assignees, dispatch it and notify. The
      * whole of a fire for a template with no overlap limit, the same steps as before the limit
      * existed; the tail of one under a limit.
+     *
+     * Missed slots COALESCE: the next slot is the first one after `now` (not after
+     * `scheduledFor`), so a template that was due several times while the dispatcher was down
+     * fires once for all of them and then resumes its schedule. Replaying each missed slot, one
+     * per tick, turned a three-day outage of an hourly template into 72 paid runs.
      */
     private async fireOccurrence(
         template: Task,
         scheduledFor: Date,
+        now: Date,
         summary: RecurrenceDispatchSummary,
     ): Promise<void> {
         const nextSlot = computeNextTemplateOccurrence({
             rule: template.recurrenceRule ?? null,
             cron: template.recurrenceCron ?? null,
             from: scheduledFor,
+            now,
             timezone: template.recurrenceTimezone ?? null,
             recurrenceEndsAt: template.recurrenceEndsAt ?? null,
             recurrenceMaxOccurrences: template.recurrenceMaxOccurrences ?? null,
@@ -513,7 +520,7 @@ export class TaskRecurrenceDispatcherService {
             await this.skipOccurrence(template, scheduledFor, maxOpen, open, now, summary);
             return;
         }
-        await this.fireOccurrence(template, scheduledFor, summary);
+        await this.fireOccurrence(template, scheduledFor, now, summary);
     }
 
     /**
@@ -532,10 +539,12 @@ export class TaskRecurrenceDispatcherService {
         now: Date,
         summary: RecurrenceDispatchSummary,
     ): Promise<void> {
+        // Missed slots coalesce here too: one skip passes every slot up to `now`.
         const nextSlot = computeNextTemplateOccurrence({
             rule: template.recurrenceRule ?? null,
             cron: template.recurrenceCron ?? null,
             from: scheduledFor,
+            now,
             timezone: template.recurrenceTimezone ?? null,
             recurrenceEndsAt: template.recurrenceEndsAt ?? null,
             recurrenceMaxOccurrences: template.recurrenceMaxOccurrences ?? null,
