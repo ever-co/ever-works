@@ -5,7 +5,12 @@ import { mkdtempSync, writeFileSync, mkdirSync, existsSync, readdirSync, rmSync 
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { pathToFileURL } from 'node:url';
-import { LocalWorkspacePlugin, assertRemoteCloneUrl } from '../local-workspace.plugin.js';
+import {
+	LocalWorkspacePlugin,
+	assertRemoteCloneUrl,
+	type LocalWorkspacePluginOptions
+} from '../local-workspace.plugin.js';
+import { withPoolLock } from '../pool-lock.js';
 
 /**
  * Hermetic loopback suite: a real local BARE repo plays "origin"
@@ -590,13 +595,17 @@ describe('one fetch into a pool at a time', () => {
 	// second provision's base fetch is HELD: its process has run and its result
 	// is not delivered yet, so the plugin is inside that fetch for as long as
 	// the test needs.
-	const poolFetchHarness = (name: string) => {
+	const poolFetchHarness = (name: string, pluginOptions: LocalWorkspacePluginOptions = {}) => {
 		const baseDir = join(root, `pool-fetch-${name}`);
 		const worktreesDir = join(baseDir, 'worktrees');
 		let holdNext = false;
 		let heldOpen = false;
 		let release: (() => void) | null = null;
 		let failNextWorktreeDiff = false;
+		let failNextWorktreeMergeTree = false;
+		let releaseMergeTree: (() => void) | null = null;
+		let worktreeFetchScript: ((args: readonly string[]) => 'stall' | 'succeed' | 'run') | null = null;
+		const stalled: unknown[] = [];
 		const fetchesWhileHeld: string[] = [];
 		const events: string[] = [];
 		const gatedExecFile = ((
@@ -614,10 +623,35 @@ describe('one fetch into a pool at a time', () => {
 				);
 				return { pid: 4646, kill: () => true };
 			}
+			if (failNextWorktreeMergeTree && where === 'worktree' && args[0] === 'merge-tree') {
+				// The same for the merge simulation, whose `merge-tree` exits 2
+				// without a merge base. Parked: the test decides when it returns.
+				failNextWorktreeMergeTree = false;
+				releaseMergeTree = () => {
+					releaseMergeTree = null;
+					callback(Object.assign(new Error('no merge base'), { code: 2 }), '', 'fatal: no merge base');
+				};
+				return { pid: 4747, kill: () => true };
+			}
 			const fetch = args[0] === 'fetch';
 			if (fetch) {
 				if (heldOpen) fetchesWhileHeld.push(`${where}: git ${args.join(' ')}`);
 				events.push(`${where} fetch started`);
+			}
+			const scripted = fetch && where === 'worktree' ? worktreeFetchScript?.(args) : undefined;
+			if (scripted === 'stall') {
+				// A transfer that stalls: no process, no result, ever. Only the
+				// plugin's deadline (through `terminateProcessTree`) ends it.
+				const child = { pid: 4848, kill: () => true };
+				stalled.push(child);
+				return child;
+			}
+			if (scripted === 'succeed') {
+				queueMicrotask(() => {
+					events.push(`${where} fetch ended`);
+					callback(null, '', '');
+				});
+				return { pid: 4949, kill: () => true };
 			}
 			const hold = fetch && where === 'pool' && args.includes('--depth') && holdNext;
 			if (hold) {
@@ -642,24 +676,41 @@ describe('one fetch into a pool at a time', () => {
 				}) as never
 			);
 		}) as unknown as typeof execFile;
-		const harnessPlugin = new LocalWorkspacePlugin({ execFile: gatedExecFile });
+		const harnessPlugin = new LocalWorkspacePlugin({ ...pluginOptions, execFile: gatedExecFile });
+		// The lock map is process-wide: find THIS harness's pool among the keys.
+		const poolKeyPrefix = `repo:${process.platform === 'win32' ? join(baseDir, 'repos').toLowerCase() : join(baseDir, 'repos')}`;
 		return {
 			plugin: harnessPlugin,
 			spec: (bindingKey: string, branch: string) => ({
 				...spec(bindingKey, branch),
 				settings: { baseDir, fetchDepth: 1 }
 			}),
+			poolDir: () => {
+				const entries = readdirSync(join(baseDir, 'repos'));
+				expect(entries).toHaveLength(1);
+				return join(baseDir, 'repos', entries[0]);
+			},
 			holdNextPoolFetch: () => {
 				holdNext = true;
 			},
 			failNextWorktreeDiff: () => {
 				failNextWorktreeDiff = true;
 			},
+			failNextWorktreeMergeTree: () => {
+				failNextWorktreeMergeTree = true;
+			},
+			mergeTreeParked: () => releaseMergeTree !== null,
+			releaseMergeTree: () => releaseMergeTree?.(),
+			/** Decide each later worktree fetch: stall it, answer it at once, or run real Git. */
+			scriptWorktreeFetches: (script: (args: readonly string[]) => 'stall' | 'succeed' | 'run') => {
+				worktreeFetchScript = script;
+			},
+			stalled,
 			parked: () => release !== null,
 			release: () => release?.(),
 			repoLockTail: () =>
 				[...(harnessPlugin as unknown as { repoLocks: Map<string, Promise<void>> }).repoLocks].find(([key]) =>
-					key.startsWith('repo:')
+					key.startsWith(poolKeyPrefix)
 				)?.[1],
 			fetchesWhileHeld,
 			events
@@ -694,7 +745,9 @@ describe('one fetch into a pool at a time', () => {
 		}
 		await provisioning;
 		const result = await work;
-		expect(h.events.indexOf('worktree fetch started')).toBeGreaterThan(h.events.lastIndexOf('pool fetch ended'));
+		expect(h.events.lastIndexOf('worktree fetch started')).toBeGreaterThan(
+			h.events.lastIndexOf('pool fetch ended')
+		);
 		return result;
 	};
 
@@ -715,6 +768,167 @@ describe('one fetch into a pool at a time', () => {
 		const changes = await whileAProvisionFetches(h, () => h.plugin.branchChanges(first, { headSha }));
 		expect(changes).toEqual({ paths: [], contents: {} });
 		expect(h.events).toContain('worktree fetch ended');
+	});
+
+	it("the merge simulation's --unshallow retry deepens the pool only once a provision of the same repository is done", async () => {
+		const h = poolFetchHarness('unshallow');
+		const first = await h.plugin.provision(h.spec('lw-pool-fetch-a', 'task/pool-fetch-a-1a2b3c4d'));
+
+		// The target fetch runs and ends first. Then `merge-tree` finds no merge
+		// base (exit 2, parked until the provision below is inside its fetch)
+		// and the simulation deepens the pool.
+		h.failNextWorktreeMergeTree();
+		const merge = h.plugin.simulateMerge(first, 'main');
+		void merge.catch(() => undefined);
+		await expect.poll(h.mergeTreeParked, { timeout: 20_000 }).toBe(true);
+
+		const result = await whileAProvisionFetches(h, () => {
+			h.releaseMergeTree();
+			return merge;
+		});
+		expect(result).toEqual({ clean: true, conflictPaths: [] });
+		// The target fetch, then the retry's `--unshallow`.
+		expect(h.events.filter((event) => event === 'worktree fetch started')).toHaveLength(2);
+	});
+
+	it('a provision waiting on the pool leaves the queue when its signal aborts, and the waiter behind it still waits', async () => {
+		const h = poolFetchHarness('abort');
+		await h.plugin.provision(h.spec('lw-pool-fetch-a', 'task/pool-fetch-a-1a2b3c4d'));
+		const poolDir = h.poolDir();
+		const waiterSpec = h.spec('lw-pool-fetch-c', 'task/pool-fetch-c-3c4d5e6f');
+		h.holdNextPoolFetch();
+		const holder = h.plugin.provision(h.spec('lw-pool-fetch-b', 'task/pool-fetch-b-2b3c4d5e'));
+		void holder.catch(() => undefined);
+		let behindRan = false;
+		let behind: Promise<void> | undefined;
+		try {
+			await expect.poll(h.parked, { timeout: 20_000 }).toBe(true);
+			const controller = new AbortController();
+			const tail = h.repoLockTail();
+			const waiter = h.plugin.provision({ ...waiterSpec, signal: controller.signal });
+			let waiterSettled = false;
+			const markSettled = (): void => {
+				waiterSettled = true;
+			};
+			void waiter.then(markSettled, markSettled);
+			await expect.poll(() => h.repoLockTail() !== tail, { timeout: 20_000 }).toBe(true);
+			// Behind it, work from outside the plugin on the same pool (the
+			// node's scan): the exported lock is the same queue.
+			behind = withPoolLock(poolDir, async () => {
+				behindRan = true;
+			});
+
+			controller.abort();
+			await expect.poll(() => waiterSettled, { timeout: 5_000 }).toBe(true);
+			await expect(waiter).rejects.toMatchObject({ name: 'AbortError' });
+			await new Promise((resolve) => setImmediate(resolve));
+			// The holder is still inside its fetch, so nothing behind it may run.
+			expect(h.parked()).toBe(true);
+			expect(behindRan).toBe(false);
+			expect(existsSync(join(waiterSpec.settings.baseDir, 'worktrees', 'lw-pool-fetch-c'))).toBe(false);
+		} finally {
+			h.release();
+		}
+		await holder;
+		await behind;
+		expect(behindRan).toBe(true);
+		await expect.poll(h.repoLockTail, { timeout: 1_000 }).toBeUndefined();
+	});
+
+	it("another plugin instance in the process (the node reaper's) takes the same lock: its teardown waits for a provision", async () => {
+		const h = poolFetchHarness('instances');
+		const first = await h.plugin.provision(h.spec('lw-pool-fetch-a', 'task/pool-fetch-a-1a2b3c4d'));
+		h.holdNextPoolFetch();
+		const provisioning = h.plugin.provision(h.spec('lw-pool-fetch-b', 'task/pool-fetch-b-2b3c4d5e'));
+		void provisioning.catch(() => undefined);
+		let teardown: Promise<void> | undefined;
+		try {
+			await expect.poll(h.parked, { timeout: 20_000 }).toBe(true);
+			const tail = h.repoLockTail();
+			teardown = new LocalWorkspacePlugin().teardown(first);
+			void teardown.catch(() => undefined);
+			await expect.poll(() => h.repoLockTail() !== tail, { timeout: 20_000 }).toBe(true);
+			expect(existsSync(first.path)).toBe(true);
+		} finally {
+			h.release();
+		}
+		await provisioning;
+		await teardown;
+		expect(existsSync(first.path)).toBe(false);
+	});
+
+	describe('a fetch that stalls while it holds the lock', () => {
+		// Git has no stall timeout of its own. Each locked fetch is stopped at
+		// its deadline, which hands the lock to whatever waits behind it and
+		// gives the caller an error naming the fetch.
+		const stopsAtTheDeadline = async (
+			name: string,
+			arrange: (h: ReturnType<typeof poolFetchHarness>) => void,
+			operate: (
+				h: ReturnType<typeof poolFetchHarness>,
+				first: Awaited<ReturnType<LocalWorkspacePlugin['provision']>>
+			) => Promise<unknown>,
+			message: RegExp
+		) => {
+			const terminated: unknown[] = [];
+			const h = poolFetchHarness(`deadline-${name}`, {
+				poolFetchTimeoutMs: 300,
+				terminateProcessTree: async (child) => {
+					terminated.push(child);
+				}
+			});
+			const first = await h.plugin.provision(h.spec('lw-pool-fetch-a', 'task/pool-fetch-a-1a2b3c4d'));
+			arrange(h);
+			const work = operate(h, first);
+			void work.catch(() => undefined);
+			await expect.poll(() => h.stalled.length, { timeout: 20_000 }).toBe(1);
+
+			// The next waiter on the pool (a provision, the node's scan) gets its
+			// turn only once the stalled fetch has been stopped.
+			const next = withPoolLock(h.poolDir(), async () => terminated.length);
+			await expect(work).rejects.toThrow(message);
+			expect(terminated).toEqual(h.stalled);
+			await expect(next).resolves.toBe(1);
+		};
+
+		it("the merge simulation's target fetch", async () => {
+			await stopsAtTheDeadline(
+				'target',
+				(h) => h.scriptWorktreeFetches(() => 'stall'),
+				(h, first) => h.plugin.simulateMerge(first, 'main'),
+				/^fetch of merge target 'main' did not finish within 0\.3s and was stopped/
+			);
+		});
+
+		it("the merge simulation's --unshallow retry", async () => {
+			await stopsAtTheDeadline(
+				'merge-deepen',
+				(h) => {
+					h.failNextWorktreeMergeTree();
+					h.scriptWorktreeFetches((args) => (args.includes('--unshallow') ? 'stall' : 'succeed'));
+				},
+				async (h, first) => {
+					const merge = h.plugin.simulateMerge(first, 'main');
+					void merge.catch(() => undefined);
+					await expect.poll(h.mergeTreeParked, { timeout: 20_000 }).toBe(true);
+					h.releaseMergeTree();
+					return merge;
+				},
+				/^deepening the pool's history \(fetch --unshallow\) did not finish within 0\.3s and was stopped/
+			);
+		});
+
+		it("the branch judge's --unshallow", async () => {
+			await stopsAtTheDeadline(
+				'judge-deepen',
+				(h) => {
+					h.failNextWorktreeDiff();
+					h.scriptWorktreeFetches(() => 'stall');
+				},
+				(h, first) => h.plugin.branchChanges(first, { headSha: git(first.path, 'rev-parse', 'HEAD') }),
+				/^deepening the pool's history \(fetch --unshallow\) did not finish within 0\.3s and was stopped/
+			);
+		});
 	});
 });
 

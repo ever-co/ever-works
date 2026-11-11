@@ -1,6 +1,10 @@
 import { promises as fs } from 'node:fs';
 import { join } from 'node:path';
-import { execFileWithVerifiedCancellation, LocalWorkspacePlugin } from '@ever-works/local-workspace-plugin';
+import {
+	execFileWithVerifiedCancellation,
+	LocalWorkspacePlugin,
+	withPoolLock
+} from '@ever-works/local-workspace-plugin';
 import type { WorkspaceHandle } from '@ever-works/plugin';
 import type { Scheduler } from '../heartbeat';
 import { systemScheduler } from '../heartbeat';
@@ -331,6 +335,8 @@ export async function runWorkspaceReap(
 	}
 	const isProcessAlive = deps.isProcessAlive ?? defaultIsProcessAlive;
 	const now = deps.now ?? (() => Date.now());
+	// A fresh instance still queues behind the runtime's provisions: the
+	// provider's repository and worktree locks are process-wide.
 	const plugin = deps.plugin ?? new LocalWorkspacePlugin();
 
 	const emptiedPools = new Map<string, WorkspacePoolRecord>();
@@ -378,7 +384,11 @@ export async function runWorkspaceReap(
 			result.keptPools.push({ pool: verdict.pool, reason: 'reaper stopped before this pool' });
 			continue;
 		}
-		const outcome = await removePool(verdict.pool, deps.signal);
+		// In the provider's queue for this pool (as `teardown` above is): a
+		// provision of the same repository — a job claimed while this cycle
+		// runs — must find the pool either gone or untouched, never half
+		// removed under its `worktree add`.
+		const outcome = await withPoolLock(verdict.pool.path, () => removePool(verdict.pool, deps.signal));
 		if (outcome.ok) {
 			result.removedPools.push({ pool: verdict.pool, freedBytes: verdict.pool.sizeBytes });
 			result.freedBytes += verdict.pool.sizeBytes;
