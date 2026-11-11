@@ -340,8 +340,10 @@ export function GoalDetailClient({
                     </div>
 
                     {/* Actions */}
-                    <div className="flex flex-wrap items-center gap-2 shrink-0">
-                        {canEdit ? (
+                    {/* Every action below is the owner’s: on a Goal shared with the viewer
+                        each one answered 404 (all Goal writes are owner-only). */}
+                    {canEdit ? (
+                        <div className="flex flex-wrap items-center gap-2 shrink-0">
                             <button
                                 type="button"
                                 data-testid="goal-edit-button"
@@ -351,163 +353,165 @@ export function GoalDetailClient({
                                 <Pencil className="w-3.5 h-3.5" />
                                 {t('actions.edit')}
                             </button>
-                        ) : null}
-                        {loopStartable ? (
+                            {loopStartable ? (
+                                <button
+                                    type="button"
+                                    onClick={() =>
+                                        loopControl('toasts.loopStarted', () =>
+                                            goalLoopAction(goal.id, 'start'),
+                                        )
+                                    }
+                                    disabled={pendingLoop}
+                                    className={btn}
+                                >
+                                    <Play className="w-3.5 h-3.5" />
+                                    {t('loop.actions.start')}
+                                </button>
+                            ) : null}
+                            {loopRunning ? (
+                                <>
+                                    <button
+                                        type="button"
+                                        onClick={() =>
+                                            loopControl('toasts.advanced', () =>
+                                                advanceGoalAction(goal.id),
+                                            )
+                                        }
+                                        disabled={pendingLoop}
+                                        className={btn}
+                                    >
+                                        <Zap className="w-3.5 h-3.5" />
+                                        {t('loop.actions.advance')}
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => setNudgeOpen((open) => !open)}
+                                        disabled={pendingLoop}
+                                        className={btn}
+                                    >
+                                        <MessageSquarePlus className="w-3.5 h-3.5" />
+                                        {t('loop.actions.nudge')}
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() =>
+                                            loopControl('toasts.loopPaused', () =>
+                                                goalLoopAction(goal.id, 'pause'),
+                                            )
+                                        }
+                                        disabled={pendingLoop}
+                                        className={btn}
+                                    >
+                                        <Pause className="w-3.5 h-3.5" />
+                                        {t('loop.actions.pause')}
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() =>
+                                            loopControl('toasts.restarted', () =>
+                                                restartGoalSessionAction(goal.id),
+                                            )
+                                        }
+                                        disabled={pendingLoop}
+                                        className={btn}
+                                    >
+                                        <RefreshCw className="w-3.5 h-3.5" />
+                                        {t('loop.actions.restart')}
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            if (!window.confirm(t('confirm.cancelLoop'))) return;
+                                            loopControl('toasts.loopCancelled', () =>
+                                                goalLoopAction(goal.id, 'cancel'),
+                                            );
+                                        }}
+                                        disabled={pendingLoop}
+                                        className={btnDanger}
+                                    >
+                                        <Square className="w-3.5 h-3.5" />
+                                        {t('loop.actions.cancel')}
+                                    </button>
+                                </>
+                            ) : null}
+                            <button
+                                type="button"
+                                onClick={() => setLimitsOpen(true)}
+                                className={btn}
+                                disabled={pendingLoop}
+                            >
+                                <SlidersHorizontal className="w-3.5 h-3.5" />
+                                {t('loop.actions.adjustLimits')}
+                            </button>
+                            {canEvaluate && (
+                                <button
+                                    type="button"
+                                    onClick={evaluateNow}
+                                    disabled={pendingEvaluate}
+                                    className={btn}
+                                >
+                                    <Activity className="w-3.5 h-3.5" />
+                                    {t('actions.evaluateNow')}
+                                </button>
+                            )}
+                            {canActivate && (
+                                <button
+                                    type="button"
+                                    onClick={() =>
+                                        lifecycle('activated', () => activateGoalAction(goal.id))
+                                    }
+                                    disabled={pendingLifecycle}
+                                    className={btn}
+                                >
+                                    <Play className="w-3.5 h-3.5" />
+                                    {t('actions.activate')}
+                                </button>
+                            )}
+                            {canPause && (
+                                <button
+                                    type="button"
+                                    onClick={() =>
+                                        lifecycle('paused', () => pauseGoalAction(goal.id))
+                                    }
+                                    disabled={pendingLifecycle}
+                                    className={btn}
+                                >
+                                    <Pause className="w-3.5 h-3.5" />
+                                    {t('actions.pause')}
+                                </button>
+                            )}
                             <button
                                 type="button"
                                 onClick={() =>
-                                    loopControl('toasts.loopStarted', () =>
-                                        goalLoopAction(goal.id, 'start'),
-                                    )
+                                    goal.archivedAt
+                                        ? loopControl('toasts.unarchived', () =>
+                                              unarchiveGoalAction(goal.id),
+                                          )
+                                        : loopControl('toasts.archived', () =>
+                                              archiveGoalAction(goal.id),
+                                          )
                                 }
                                 disabled={pendingLoop}
                                 className={btn}
                             >
-                                <Play className="w-3.5 h-3.5" />
-                                {t('loop.actions.start')}
+                                {goal.archivedAt ? (
+                                    <ArchiveRestore className="w-3.5 h-3.5" />
+                                ) : (
+                                    <Archive className="w-3.5 h-3.5" />
+                                )}
+                                {goal.archivedAt ? t('actions.unarchive') : t('actions.archive')}
                             </button>
-                        ) : null}
-                        {loopRunning ? (
-                            <>
-                                <button
-                                    type="button"
-                                    onClick={() =>
-                                        loopControl('toasts.advanced', () =>
-                                            advanceGoalAction(goal.id),
-                                        )
-                                    }
-                                    disabled={pendingLoop}
-                                    className={btn}
-                                >
-                                    <Zap className="w-3.5 h-3.5" />
-                                    {t('loop.actions.advance')}
-                                </button>
-                                <button
-                                    type="button"
-                                    onClick={() => setNudgeOpen((open) => !open)}
-                                    disabled={pendingLoop}
-                                    className={btn}
-                                >
-                                    <MessageSquarePlus className="w-3.5 h-3.5" />
-                                    {t('loop.actions.nudge')}
-                                </button>
-                                <button
-                                    type="button"
-                                    onClick={() =>
-                                        loopControl('toasts.loopPaused', () =>
-                                            goalLoopAction(goal.id, 'pause'),
-                                        )
-                                    }
-                                    disabled={pendingLoop}
-                                    className={btn}
-                                >
-                                    <Pause className="w-3.5 h-3.5" />
-                                    {t('loop.actions.pause')}
-                                </button>
-                                <button
-                                    type="button"
-                                    onClick={() =>
-                                        loopControl('toasts.restarted', () =>
-                                            restartGoalSessionAction(goal.id),
-                                        )
-                                    }
-                                    disabled={pendingLoop}
-                                    className={btn}
-                                >
-                                    <RefreshCw className="w-3.5 h-3.5" />
-                                    {t('loop.actions.restart')}
-                                </button>
-                                <button
-                                    type="button"
-                                    onClick={() => {
-                                        if (!window.confirm(t('confirm.cancelLoop'))) return;
-                                        loopControl('toasts.loopCancelled', () =>
-                                            goalLoopAction(goal.id, 'cancel'),
-                                        );
-                                    }}
-                                    disabled={pendingLoop}
-                                    className={btnDanger}
-                                >
-                                    <Square className="w-3.5 h-3.5" />
-                                    {t('loop.actions.cancel')}
-                                </button>
-                            </>
-                        ) : null}
-                        <button
-                            type="button"
-                            onClick={() => setLimitsOpen(true)}
-                            className={btn}
-                            disabled={pendingLoop}
-                        >
-                            <SlidersHorizontal className="w-3.5 h-3.5" />
-                            {t('loop.actions.adjustLimits')}
-                        </button>
-                        {canEvaluate && (
                             <button
                                 type="button"
-                                onClick={evaluateNow}
-                                disabled={pendingEvaluate}
-                                className={btn}
+                                onClick={handleDelete}
+                                disabled={pendingDelete}
+                                className={btnDanger}
                             >
-                                <Activity className="w-3.5 h-3.5" />
-                                {t('actions.evaluateNow')}
+                                <Trash2 className="w-3.5 h-3.5" />
+                                {t('actions.delete')}
                             </button>
-                        )}
-                        {canActivate && (
-                            <button
-                                type="button"
-                                onClick={() =>
-                                    lifecycle('activated', () => activateGoalAction(goal.id))
-                                }
-                                disabled={pendingLifecycle}
-                                className={btn}
-                            >
-                                <Play className="w-3.5 h-3.5" />
-                                {t('actions.activate')}
-                            </button>
-                        )}
-                        {canPause && (
-                            <button
-                                type="button"
-                                onClick={() => lifecycle('paused', () => pauseGoalAction(goal.id))}
-                                disabled={pendingLifecycle}
-                                className={btn}
-                            >
-                                <Pause className="w-3.5 h-3.5" />
-                                {t('actions.pause')}
-                            </button>
-                        )}
-                        <button
-                            type="button"
-                            onClick={() =>
-                                goal.archivedAt
-                                    ? loopControl('toasts.unarchived', () =>
-                                          unarchiveGoalAction(goal.id),
-                                      )
-                                    : loopControl('toasts.archived', () =>
-                                          archiveGoalAction(goal.id),
-                                      )
-                            }
-                            disabled={pendingLoop}
-                            className={btn}
-                        >
-                            {goal.archivedAt ? (
-                                <ArchiveRestore className="w-3.5 h-3.5" />
-                            ) : (
-                                <Archive className="w-3.5 h-3.5" />
-                            )}
-                            {goal.archivedAt ? t('actions.unarchive') : t('actions.archive')}
-                        </button>
-                        <button
-                            type="button"
-                            onClick={handleDelete}
-                            disabled={pendingDelete}
-                            className={btnDanger}
-                        >
-                            <Trash2 className="w-3.5 h-3.5" />
-                            {t('actions.delete')}
-                        </button>
-                    </div>
+                        </div>
+                    ) : null}
                 </div>
 
                 {nudgeOpen ? (
@@ -568,7 +572,11 @@ export function GoalDetailClient({
                 <RecordVisibilityPanel aggregate="goal" id={goal.id} showTeams />
             </section>
 
-            {tab === 'dod' ? <GoalDodPanel goal={goal} onGoalChange={setGoal} /> : null}
+            {tab === 'dod' ? (
+                <fieldset disabled={!canEdit} className="contents">
+                    <GoalDodPanel goal={goal} onGoalChange={setGoal} />
+                </fieldset>
+            ) : null}
 
             {tab === 'progress' ? (
                 <div className="space-y-6">
@@ -758,7 +766,9 @@ export function GoalDetailClient({
                         </section>
 
                         {/* APW-08 T33 (FR-45) — the Work the loop files its iterations on. */}
-                        <GoalWorkSection goal={goal} onGoalChange={setGoal} />
+                        <fieldset disabled={!canEdit} className="contents">
+                            <GoalWorkSection goal={goal} onGoalChange={setGoal} />
+                        </fieldset>
 
                         <section className={sectionCard}>
                             <h2 className="text-sm font-semibold text-text dark:text-text-dark mb-1">
@@ -773,7 +783,9 @@ export function GoalDetailClient({
                             <Select
                                 value={goal.outcome ?? ''}
                                 onValueChange={overrideOutcome}
-                                disabled={pendingOutcome}
+                                // Owner-only like every Goal write: a viewer the Goal is
+                                // shared with got a 404.
+                                disabled={pendingOutcome || !canEdit}
                                 placeholder={t('outcome.none')}
                                 data-testid="goal-detail-outcome-select"
                             >
