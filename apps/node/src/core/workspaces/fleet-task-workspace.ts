@@ -4,6 +4,7 @@ import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, parse, posix, relative, resolve, win32 } from 'node:path';
 import {
 	FLEET_AGENT_TASK_META_DIR,
+	FLEET_JOB_STALE_LEASE_REASON,
 	normalizeFleetRunEnvFileRefs,
 	neutralizeCiSkipDirectives,
 	normalizeFleetTaskWorkspaceMounts,
@@ -32,6 +33,7 @@ import { formatBytes } from '../resource-limits';
 import type { DiskProbeIo } from '../telemetry-probe';
 import { effectiveMinFreeDiskBytes } from '../types';
 import { measureWorkspaceFreeBytes } from './disk-headroom';
+import type { FetchCredentialProvider, ScopedFetchCredential } from './fetch-credential';
 import { PushCredentialError, type PushCredentialProvider, type ScopedPushCredential } from './push-credential';
 import { removeRunEnvFiles, sweepStaleRunEnvFiles, writeRunEnvFiles, type RunEnvFileWrite } from './run-env-files';
 
@@ -65,7 +67,21 @@ export type FleetTaskWorkspaceErrorCode =
 	 * without it — the machine's own long-lived credential helper — is
 	 * exactly what this code exists to stop from being used.
 	 */
-	| 'push-credential';
+	| 'push-credential'
+	/**
+	 * Scoped fetch credentials: the platform REFUSED this node's claim on
+	 * the job when it asked for a read credential (the job is not assigned
+	 * to this node, or it is no longer active). Nothing was fetched.
+	 *
+	 * TERMINAL, and deliberately the ONLY way a fetch credential fails a
+	 * provision. "The platform has no credential for this repository" is
+	 * not this code — that falls back to the fetch the node always ran,
+	 * because unlike a push a fetch never needed a scoped credential to be
+	 * correct. This code means the REQUEST was wrong, and cloning on for a
+	 * job this node was just told is not its own would be working on a
+	 * claim it does not hold.
+	 */
+	| 'fetch-credential';
 
 /** Stable, non-secret failure surface suitable for Fleet job diagnostics. */
 export class FleetTaskWorkspaceError extends Error {
@@ -85,6 +101,30 @@ export class FleetTaskWorkspaceError extends Error {
  * (and says so in the job result) rather than failing to construct.
  */
 export type FleetWorkspacePlugin = Pick<IWorkspacePlugin, 'provision'> & Partial<Pick<IWorkspacePlugin, 'finalize'>>;
+
+/** Options for {@link FleetTaskWorkspaceProvisioner.provision}. */
+export interface FleetTaskWorkspaceProvisionOptions {
+	/**
+	 * Scoped fetch credentials — the read twin of
+	 * {@link FleetTaskWorkspaceFinalizeOptions.pushCredentials}.
+	 *
+	 * Absent IS "fetch the way we used to", and that is the one place the
+	 * two options differ on purpose. A publish with no credential is
+	 * refused, because the only other thing that could authenticate it is
+	 * the machine's own long-lived helper. A fetch with none is simply the
+	 * fetch every provision ran before this option existed — a public
+	 * repository, or a machine whose operator configured a helper, keeps
+	 * working — so a caller with no job channel (a test, an embedder, a
+	 * node whose client predates the call) provisions exactly as before.
+	 *
+	 * Present, the provider is asked once per repository (the primary and
+	 * every mount). A repository it has a credential for is fetched with
+	 * that credential and nothing else; one it has none for is fetched as
+	 * before; and a provider that THROWS — the platform refused this node's
+	 * claim on the job — fails the provision with `fetch-credential`.
+	 */
+	fetchCredentials?: FetchCredentialProvider;
+}
 
 /** What {@link FleetTaskWorkspaceProvisioner.finalize} reports back to the executor. */
 export interface FleetTaskWorkspaceFinalizeResult {
@@ -657,7 +697,10 @@ export class FleetTaskWorkspaceProvisioner {
 	async provision(
 		taskId: string,
 		rawSpec: FleetTaskWorkspaceSpec,
-		signal?: AbortSignal
+		signal?: AbortSignal,
+		// Appended LAST and optional: every existing caller keeps its arity
+		// and, with no options, exactly the fetch it always ran.
+		options: FleetTaskWorkspaceProvisionOptions = {}
 	): Promise<FleetTaskWorkspaceDescriptor> {
 		const normalizedTaskId = validateTaskId(taskId);
 		const spec = validateWorkspaceSpec(rawSpec);
@@ -667,7 +710,7 @@ export class FleetTaskWorkspaceProvisioner {
 		await this.assertDiskHeadroom(signal);
 		const leased: string[] = [];
 		try {
-			return await this.provisionAll(normalizedTaskId, spec, leased, signal);
+			return await this.provisionAll(normalizedTaskId, spec, leased, signal, options);
 		} catch (error) {
 			// A provision that did not produce a workspace holds no job: drop
 			// whatever leases it took on the way, or the reaper would see a
@@ -681,9 +724,10 @@ export class FleetTaskWorkspaceProvisioner {
 		normalizedTaskId: string,
 		spec: FleetTaskWorkspaceSpec,
 		leased: string[],
-		signal?: AbortSignal
+		signal?: AbortSignal,
+		options: FleetTaskWorkspaceProvisionOptions = {}
 	): Promise<FleetTaskWorkspaceDescriptor> {
-		const primary = await this.provisionOne(normalizedTaskId, spec, leased, signal);
+		const primary = await this.provisionOne(normalizedTaskId, spec, leased, signal, options);
 		const mountSpecs = spec.mounts ?? [];
 		throwIfCancelled(signal);
 		// The primary worktree persists across runs, so `.mounts/` is
@@ -738,7 +782,10 @@ export class FleetTaskWorkspaceProvisioner {
 			});
 			let provisioned: FleetTaskWorkspaceDescriptor;
 			try {
-				provisioned = await this.provisionOne(normalizedTaskId, mountSpec, leased, signal);
+				// The SAME options as the primary: each mount is asked about on
+				// its own, so a mount the platform can cover is fetched with its
+				// scoped credential while one it cannot falls back, independently.
+				provisioned = await this.provisionOne(normalizedTaskId, mountSpec, leased, signal, options);
 				// A read-only mount is a pristine reference by contract. The
 				// binding is reused in place without a reset, so whatever a
 				// model left in it would survive into the next run — and be
@@ -1058,7 +1105,8 @@ export class FleetTaskWorkspaceProvisioner {
 		normalizedTaskId: string,
 		spec: FleetTaskWorkspaceSpec,
 		leased: string[],
-		signal?: AbortSignal
+		signal?: AbortSignal,
+		options: FleetTaskWorkspaceProvisionOptions = {}
 	): Promise<FleetTaskWorkspaceDescriptor> {
 		throwIfCancelled(signal);
 
@@ -1082,6 +1130,15 @@ export class FleetTaskWorkspaceProvisioner {
 			await this.leaseWorktree(expectedPath, repositoryRoot, bindingKey, normalizedTaskId, leased, signal);
 		}
 
+		// Scoped fetch credentials. Resolved HERE — after the path is proven
+		// safe and leased, immediately before the one call that fetches — so
+		// a refusal costs no network and a credential exists for exactly the
+		// provider's fetch and not one instant longer on this side of it.
+		const fetch = await this.authorizeFetch(options, spec, signal);
+		throwIfCancelled(signal);
+		// A holder, not a `let`: the provider writes it from a callback.
+		const fetchNote: { withheld: string | null } = { withheld: null };
+
 		let handle: WorkspaceHandle;
 		try {
 			handle = await this.plugin.provision({
@@ -1097,6 +1154,19 @@ export class FleetTaskWorkspaceProvisioner {
 				// filter driver (git-lfs included) the repository or a
 				// previous run's pool config could name.
 				hardenRepoHooks: true,
+				// Present ONLY when the platform scoped a read credential to
+				// this very remote. The provider installs it for its `git
+				// fetch` children through their environment — the mechanism
+				// the scoped push uses for `git push` — and for no other
+				// command. Absent, this call is byte-for-byte what it was.
+				...(fetch.credential
+					? {
+							fetchCredential: fetch.credential,
+							onFetchCredentialWithheld: (reason: string) => {
+								fetchNote.withheld = reason;
+							}
+						}
+					: {}),
 				settings: {
 					baseDir: repositoryRoot,
 					...(spec.depth === undefined ? {} : { fetchDepth: spec.depth })
@@ -1111,10 +1181,19 @@ export class FleetTaskWorkspaceProvisioner {
 					'Existing task workspace did not pass the provider ownership proof and was preserved'
 				);
 			}
+			// The provider's own text never reaches this message (it is the
+			// one place a credential could ride out on), so the clause added
+			// here is authored in this module from two fixed vocabularies.
 			throw new FleetTaskWorkspaceError(
 				'provision-failed',
-				`Git fetch or workspace provisioning failed for repository '${spec.repositoryId}' at '${spec.baseRef}'`
+				`Git fetch or workspace provisioning failed for repository '${spec.repositoryId}' at '${spec.baseRef}'${describeFetchAuthorization(fetch, fetchNote.withheld)}`
 			);
+		}
+		if (fetch.credential && fetchNote.withheld !== null) {
+			// The fetch succeeded WITHOUT the scoped credential: say so, where
+			// an operator will see it, rather than letting a tampered pool
+			// config pass silently.
+			options.fetchCredentials?.withheld?.(spec.repoUrl, fetchNote.withheld);
 		}
 
 		// If cancellation races the Git operation, keep the deterministic
@@ -1188,6 +1267,62 @@ export class FleetTaskWorkspaceProvisioner {
 	}
 
 	/**
+	 * May this repository be fetched with a scoped credential, and if not,
+	 * why not?
+	 *
+	 * The read twin of {@link authorizePublish}, with the opposite default
+	 * — and the difference is deliberate, not an oversight:
+	 *
+	 *  - {@link authorizePublish} FAILS CLOSED. A publish with no scoped
+	 *    credential is refused, because the only other way to authenticate
+	 *    it is the machine's own long-lived helper, which is the hole the
+	 *    scoped push closed.
+	 *  - this method FALLS BACK. No provider wired, or a provider with no
+	 *    credential for this remote, means "fetch exactly as this node did
+	 *    before": no field is added to the provider call and its Git
+	 *    commands are byte-for-byte unchanged. A fetch never needed a scoped
+	 *    credential to be correct, so refusing here would break every run
+	 *    that works today (a public repository, a machine with a configured
+	 *    helper) and close nothing.
+	 *
+	 * The one thing that does NOT fall back is a provider that THROWS: the
+	 * platform refused this node's claim on the job. That is a statement
+	 * about the request, not about credentials, and the provision fails with
+	 * `fetch-credential` and the reason. A stale lease is rethrown untouched
+	 * so the worker still reads it as "abort, and do not report".
+	 *
+	 * The credential is keyed to `spec.repoUrl` — the URL the provider is
+	 * about to fetch, already validated by this module — and the provider
+	 * re-checks that it is byte-identical before Git sees it.
+	 */
+	private async authorizeFetch(
+		options: FleetTaskWorkspaceProvisionOptions,
+		spec: FleetTaskWorkspaceSpec,
+		signal?: AbortSignal
+	): Promise<FetchAuthorization> {
+		const provider = options.fetchCredentials;
+		if (!provider) return { credential: null, unavailable: null };
+		try {
+			const decision = await provider.credentialFor(spec.repoUrl);
+			if (decision.credential?.token) {
+				return { credential: decision.credential, unavailable: null };
+			}
+			return { credential: null, unavailable: decision.unavailable };
+		} catch (error) {
+			if (isStaleLeaseError(error)) throw error;
+			if (error instanceof Error && error.name === 'ProcessTreeTerminationError') throw error;
+			if (signal?.aborted) throw cancelledError();
+			if (error instanceof FleetTaskWorkspaceError) throw error;
+			throw new FleetTaskWorkspaceError(
+				'fetch-credential',
+				`Refusing to fetch repository '${spec.repositoryId}': ${
+					error instanceof Error ? error.message : String(error)
+				}`
+			);
+		}
+	}
+
+	/**
 	 * Commit whatever the model left in the task worktree and push the
 	 * task branch (agent execution v2).
 	 *
@@ -1213,9 +1348,15 @@ export class FleetTaskWorkspaceProvisioner {
 	 * block records the node, agent, job and run. Both come from platform
 	 * state on the same authenticated response as the credential.
 	 *
-	 * The FETCH is unchanged and still uses the machine's own helper: it
-	 * needs read access only, and it happens before the run's first model
-	 * byte. Scoping it is a separate change.
+	 * The FETCH is scoped too now — that was the "separate change" this
+	 * paragraph used to defer. {@link provision} asks the platform for a
+	 * read credential per repository and the provider installs it for its
+	 * `git fetch` children the same way, through their environment; see
+	 * {@link authorizeFetch}. Unlike this publish, a fetch KEEPS the
+	 * machine's own Git configuration as its fallback when the platform has
+	 * no read credential to give: it needs read access only, it happens
+	 * before the run's first model byte, and a public repository or a
+	 * machine with a configured helper must keep cloning as it does today.
 	 *
 	 * The descriptor is re-validated against the configured root before
 	 * any Git command runs, so a job cannot point this at a directory the
@@ -1921,6 +2062,51 @@ function inspectGitHead(workspacePath: string, signal?: AbortSignal): Promise<st
  */
 function inspectGitOrigin(workspacePath: string, signal?: AbortSignal): Promise<string> {
 	return runGitOutput(['remote', 'get-url', 'origin'], workspacePath, signal);
+}
+
+/** What {@link FleetTaskWorkspaceProvisioner.authorizeFetch} decided for one repository. */
+interface FetchAuthorization {
+	/** The scoped read credential this fetch runs with, or null. */
+	readonly credential: ScopedFetchCredential | null;
+	/** With no credential and a provider wired: why there is none. */
+	readonly unavailable: string | null;
+}
+
+/**
+ * The clause a failed provision appends about HOW it tried to fetch.
+ *
+ * Empty when no fetch-credential provider was wired, so the message a
+ * caller without one sees is byte-for-byte what it always was. Otherwise it
+ * names which of the three things happened, because "Git fetch failed" on a
+ * private repository sends an operator hunting for a network fault when the
+ * actual fix is "install the Ever Works app on this repository".
+ *
+ * Never carries the credential or any text Git produced: both arguments
+ * are authored by this node (`fetch-credential.ts`) or by the workspace
+ * provider from a fixed vocabulary.
+ */
+function describeFetchAuthorization(fetch: FetchAuthorization, withheld: string | null): string {
+	if (fetch.credential) {
+		return withheld === null
+			? ' (fetched with the scoped read credential the platform issued for this repository)'
+			: ` (the scoped read credential for this repository was withheld — ${withheld} — so the fetch used this machine’s own Git configuration)`;
+	}
+	return fetch.unavailable
+		? ` (no scoped read credential: ${fetch.unavailable}; the fetch used this machine’s own Git configuration)`
+		: '';
+}
+
+/**
+ * Duck-typed like the worker loop's own check: a `409 stale-lease` from the
+ * job channel must reach the worker with its identity intact ("abort, and
+ * do not report"), so nothing here may wrap it.
+ */
+function isStaleLeaseError(error: unknown): boolean {
+	return (
+		typeof error === 'object' &&
+		error !== null &&
+		(error as { kind?: unknown }).kind === FLEET_JOB_STALE_LEASE_REASON
+	);
 }
 
 /**

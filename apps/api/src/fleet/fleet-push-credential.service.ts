@@ -8,6 +8,10 @@ import {
     fleetPushRemoteRepositoryId,
     normalizeFleetPushRepositoryId,
     sanitizeFleetPushIdentityText,
+    type FleetFetchCredential,
+    type FleetFetchCredentialUnavailableReason,
+    type FleetFetchCredentialUncovered,
+    type FleetJobFetchCredentialResponse,
     type FleetJobPushCredentialResponse,
     type FleetPushAttribution,
 } from '@ever-works/contracts';
@@ -79,6 +83,27 @@ export interface FleetPushRepositoryRequest {
 }
 
 /**
+ * What the READ resolver decided for ONE repository of a job, before
+ * anything is minted.
+ *
+ * Flat, with `reason` on every entry (null when it resolved), for the same
+ * reason {@link FleetPushScope} carries `reason` on both arms: `apps/api`
+ * compiles with `strictNullChecks: false`.
+ */
+interface FleetFetchTarget {
+    /** Normalized `owner/repo` when it is one; the plan's own identity otherwise. */
+    readonly repository: string;
+    /** GitHub's own numeric installation id; null when not covered. */
+    readonly installationId: string | null;
+    /** GitHub's numeric repository id, from the platform's snapshot; null when not covered. */
+    readonly repositoryId: string | null;
+    readonly reason: FleetFetchCredentialUnavailableReason | null;
+}
+
+/** The repository-identity alphabet a job payload may carry (the node validates the same one). */
+const REPOSITORY_LABEL_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$/;
+
+/**
  * Scoped push credentials (self-build slice AM, EW-810) — the platform
  * half of `POST /api/fleet/jobs/:id/push-credential`.
  *
@@ -114,6 +139,38 @@ export interface FleetPushRepositoryRequest {
  * - **Nothing about the token is logged, stored or echoed.** The log line
  *   names the job, the node and the repositories. The token exists in this
  *   process for the length of one response and is never written anywhere.
+ *
+ * ## The read mode — scoped FETCH credentials
+ *
+ * The platform half of `POST /api/fleet/jobs/:id/fetch-credential`
+ * ({@link mintFetch}). It is the "separate change" the fetch was left for:
+ * a fleet node that is a fenced VM holds no Git credential at all, so a job
+ * on a private repository could not clone even though the App was
+ * installed on it and the push would have worked.
+ *
+ * It keeps EVERY rule above by running the same code, not a copy of it:
+ * the same claim proof ({@link FleetJobService.authorizeRunSecretRequest}),
+ * the same re-read of the planner-written `payload.workspace`
+ * ({@link repositoriesOf}), the same clone-URL authority check
+ * ({@link pushTargetOf}), the same ownership-filtered snapshot lookup
+ * ({@link ownedSnapshotRows} → {@link ownsInstallation} /
+ * {@link loadInstallation}), numeric repository ids from that table only,
+ * and the same silence about the token. The token is narrower than the
+ * push's: ONE repository each, `contents: read` + `metadata: read`.
+ *
+ * It differs in exactly one place, and deliberately: **fetch keeps its
+ * fallback.** The push rule above is "fail closed, there is no fallback",
+ * because the only other way to authenticate a push is the ambient helper
+ * this service replaces. A fetch never needed a scoped credential to be
+ * correct — a public repository clones without one, and a machine whose
+ * operator configured a helper works on a repository the App is not
+ * installed on — so "the platform has nothing to give" is NOT a refusal
+ * here. Each repository is decided on its own, the ones that can be
+ * covered are, and the rest come back as `uncovered` with the same stable
+ * token a push would have been refused with; the node then fetches those
+ * exactly as it did before this mode existed. What still fails closed is
+ * the claim itself: a node that does not hold this job gets the channel's
+ * one 401, and a stale lease its 409.
  */
 @Injectable()
 export class FleetPushCredentialService {
@@ -243,6 +300,121 @@ export class FleetPushCredentialService {
     }
 
     /**
+     * Authorize the caller, then answer with a scoped READ credential for
+     * every repository of this job the platform can cover.
+     *
+     * The claim proof, the answer to a failed one (`null` → the channel's
+     * one undifferentiated 401) and a stale lease (`FleetJobStaleLeaseError`
+     * → 409) are {@link mint}'s, exactly. Past that point this method does
+     * not throw a refusal: see "The read mode" in the class header for why
+     * a repository the platform cannot cover is an entry in `uncovered` and
+     * not a 422.
+     *
+     * ONE TOKEN PER REPOSITORY, where a push mints one for the whole run.
+     * The node hands each token to the `git fetch` child of the repository
+     * it names and to nothing else, so no fetch ever holds a credential that
+     * could read a different repository of the same job — which is what
+     * bounds the damage if one checkout's pool on that machine has been
+     * tampered with. It also lets the job's repositories live under
+     * different installations of the same owner, which a single token
+     * cannot do and a fetch has no reason to refuse.
+     */
+    async mintFetch(input: {
+        nodeId: unknown;
+        secret: unknown;
+        jobId: string;
+        leaseGeneration?: unknown;
+    }): Promise<FleetJobFetchCredentialResponse | null> {
+        // The SAME four checks the push credential and `env-files` run.
+        // Only the node this job is assigned to, holding an ACTIVE claim at
+        // the CURRENT lease generation, gets past this line.
+        const claim = await this.jobs.authorizeRunSecretRequest({
+            nodeId: input.nodeId,
+            secret: input.secret,
+            jobId: input.jobId,
+            leaseGeneration: input.leaseGeneration,
+        });
+        if (!claim) return null;
+
+        const job = await this.jobRows.findById(claim.jobId);
+        if (!job) return null;
+
+        // Every repository the run CLONES: the primary and every mount,
+        // read-only references included. (A push leaves read-only mounts
+        // out; a fetch is what a read-only mount is.)
+        const requested = this.repositoriesOf(job, { readOnlyMounts: true });
+        const app = this.appCredentials();
+        const targets = app
+            ? await this.resolveFetchTargets(claim.userId, requested)
+            : this.uncoveredTargets(requested, FLEET_PUSH_CREDENTIAL_NOT_CONFIGURED_REASON);
+
+        const credentials: FleetFetchCredential[] = [];
+        const uncovered: FleetFetchCredentialUncovered[] = [];
+        for (const target of targets) {
+            if (target.reason || !target.installationId || !target.repositoryId) {
+                uncovered.push({
+                    repository: target.repository,
+                    reason: target.reason ?? FLEET_PUSH_CREDENTIAL_UNRESOLVED_REASON,
+                });
+                continue;
+            }
+            try {
+                const minted = await requestGitHubAppInstallationAccessTokenDetails(
+                    target.installationId,
+                    app,
+                    {
+                        // ONE repository, by the numeric id the platform's own
+                        // snapshot holds for it.
+                        repositoryIds: [target.repositoryId],
+                        // Exactly what `git fetch` needs and nothing else.
+                        // Anything omitted is not granted, so this token cannot
+                        // push, open a pull request, read a secret or touch an
+                        // Action, whatever the App itself may hold. `metadata`
+                        // is GitHub's mandatory baseline for repository access;
+                        // it is named so the grant is explicit, not implied.
+                        // The spec pins this object exactly.
+                        permissions: { contents: 'read', metadata: 'read' },
+                    },
+                );
+                credentials.push({
+                    token: minted.token,
+                    username: FLEET_PUSH_CREDENTIAL_USERNAME,
+                    expiresAt: minted.expiresAt ?? new Date(Date.now() + 55 * 60_000).toISOString(),
+                    repositories: [target.repository],
+                });
+            } catch (error) {
+                // The GitHub message can name the installation and the App;
+                // it reaches neither the node nor the job row. The repository
+                // falls back to today's fetch — a GitHub failure must not turn
+                // a run that would have cloned into one that cannot.
+                this.logger.error(
+                    `Fleet job ${claim.jobId}: scoped fetch token mint failed for ${target.repository} (${
+                        error instanceof Error ? error.name : 'unknown error'
+                    })`,
+                );
+                uncovered.push({
+                    repository: target.repository,
+                    reason: FLEET_PUSH_CREDENTIAL_MINT_FAILED_REASON,
+                });
+            }
+        }
+
+        // The audit record: job, node, what was covered and what was not.
+        // No TOKEN is in it and none must ever be.
+        this.logger.log(
+            `Fleet job ${claim.jobId}: scoped fetch credential for node ${claim.nodeId} covering ` +
+                `${credentials.map((entry) => entry.repositories[0]).join(', ') || 'nothing'}` +
+                (uncovered.length > 0
+                    ? `; not covered: ${uncovered
+                          .map((entry) => `${entry.repository} (${entry.reason})`)
+                          .join(', ')}`
+                    : ''),
+        );
+
+        return { credentials, uncovered };
+    }
+
+    /**
      * Can the platform mint a write credential for these repositories,
      * WITHOUT minting one?
      *
@@ -290,28 +462,13 @@ export class FleetPushCredentialService {
         // for the repositories we want.
         const byInstallation = new Map<string, Map<string, string>>();
         for (const fullName of wanted) {
-            let rows: Awaited<ReturnType<GitHubAppInstallationRepoRepository['findByFullName']>>;
-            try {
-                rows = await this.installationRepos.findByFullName(fullName);
-            } catch {
-                return { ok: false, reason: FLEET_PUSH_CREDENTIAL_UNRESOLVED_REASON };
-            }
-            for (const row of rows) {
-                // `findByFullName` matches case-INSENSITIVELY — `fullName` is
-                // stored verbatim from GitHub's `full_name`, so an exact
-                // comparison could never find `Ever-Works/Directory-Web-Template`
-                // from the lower-cased name this resolver asks with, and every
-                // repository carrying an upper-case character silently lost
-                // fleet execution. It is still global across the deployment, so
-                // the ownership filter below is what keeps a job away from
-                // somebody else's installation, and the normalized re-check
-                // here is what keeps a looser match from widening the scope.
-                if (normalizeFleetPushRepositoryId(row.fullName) !== fullName) continue;
-                if (!(await this.ownsInstallation(userId, row.installationEntityId))) continue;
+            const owned = await this.ownedSnapshotRows(userId, fullName);
+            if (!owned) return { ok: false, reason: FLEET_PUSH_CREDENTIAL_UNRESOLVED_REASON };
+            for (const [installationEntityId, githubRepoId] of owned) {
                 const bucket =
-                    byInstallation.get(row.installationEntityId) ?? new Map<string, string>();
-                bucket.set(fullName, row.githubRepoId);
-                byInstallation.set(row.installationEntityId, bucket);
+                    byInstallation.get(installationEntityId) ?? new Map<string, string>();
+                bucket.set(fullName, githubRepoId);
+                byInstallation.set(installationEntityId, bucket);
             }
         }
 
@@ -337,6 +494,159 @@ export class FleetPushCredentialService {
             repositoryIds: wanted.map((fullName) => repos.get(fullName) as string),
             repositories: wanted,
         };
+    }
+
+    /**
+     * Every installation THIS OWNER controls whose snapshot names
+     * `fullName`, with the numeric repository id that snapshot holds for it
+     * (`installationEntityId` → `githubRepoId`) — or null when the snapshot
+     * could not be read at all.
+     *
+     * The one lookup both resolvers stand on, so the ownership rule cannot
+     * differ between a write credential and a read one: {@link resolveScope}
+     * (push: one installation for the WHOLE run) and
+     * {@link resolveFetchTargets} (fetch: one installation per repository).
+     */
+    private async ownedSnapshotRows(
+        userId: string,
+        fullName: string,
+    ): Promise<Map<string, string> | null> {
+        let rows: Awaited<ReturnType<GitHubAppInstallationRepoRepository['findByFullName']>>;
+        try {
+            rows = await this.installationRepos.findByFullName(fullName);
+        } catch {
+            return null;
+        }
+        const owned = new Map<string, string>();
+        for (const row of rows) {
+            // `findByFullName` matches case-INSENSITIVELY — `fullName` is
+            // stored verbatim from GitHub's `full_name`, so an exact
+            // comparison could never find `Ever-Works/Directory-Web-Template`
+            // from the lower-cased name this resolver asks with, and every
+            // repository carrying an upper-case character silently lost
+            // fleet execution. It is still global across the deployment, so
+            // the ownership filter below is what keeps a job away from
+            // somebody else's installation, and the normalized re-check
+            // here is what keeps a looser match from widening the scope.
+            if (normalizeFleetPushRepositoryId(row.fullName) !== fullName) continue;
+            if (!(await this.ownsInstallation(userId, row.installationEntityId))) continue;
+            owned.set(row.installationEntityId, row.githubRepoId);
+        }
+        return owned;
+    }
+
+    /**
+     * Which installation covers EACH repository this job clones.
+     *
+     * The push resolver's rules, applied per repository instead of to the
+     * run as a whole — a fetch that cannot be covered falls back to the
+     * node's own fetch, so one uncoverable mount must not take the
+     * credential away from the repositories that can be covered:
+     *
+     *  - the name is decided by {@link pushTargetOf}: an `https://github.com`
+     *    clone URL or nothing, and a name that disagrees with its own URL is
+     *    not reconciled;
+     *  - the numeric repository id comes from {@link ownedSnapshotRows}, i.e.
+     *    from the installation snapshot, filtered to installations the JOB'S
+     *    OWNER controls that are neither suspended nor deleted;
+     *  - EXACTLY ONE such installation, or the repository is not covered.
+     *    Two is the same anomaly it is for a push, and is answered the same
+     *    way — by not guessing;
+     *  - more repositories than a workspace can have (the primary plus
+     *    `FLEET_TASK_WORKSPACE_MAX_MOUNTS`) covers none of them: the planner
+     *    never writes such a payload, and this bounds what one request can
+     *    ask GitHub to mint.
+     *
+     * Every uncovered repository carries the SAME stable token, whatever the
+     * cause, for the reason {@link resolveScope} gives: a differentiated
+     * answer would say which repositories the deployment has installations
+     * for.
+     */
+    private async resolveFetchTargets(
+        userId: string,
+        requested: readonly FleetPushRepositoryRequest[],
+    ): Promise<FleetFetchTarget[]> {
+        if (requested.length > FLEET_PUSH_CREDENTIAL_MAX_REPOSITORIES) {
+            return this.uncoveredTargets(requested, FLEET_PUSH_CREDENTIAL_UNRESOLVED_REASON);
+        }
+        const targets: FleetFetchTarget[] = [];
+        // Kept apart on purpose: an entry that is NOT a GitHub repository
+        // and happens to be called `acme/widgets` must not shadow the
+        // GitHub repository of that name mounted beside it.
+        const resolvable = new Set<string>();
+        const unresolvable = new Set<string>();
+        const uncovered = (repository: string): void => {
+            targets.push({
+                repository,
+                installationId: null,
+                repositoryId: null,
+                reason: FLEET_PUSH_CREDENTIAL_UNRESOLVED_REASON,
+            });
+        };
+        for (const entry of requested) {
+            const fullName = this.pushTargetOf(entry);
+            if (!fullName) {
+                const label = this.repositoryLabel(entry);
+                if (!unresolvable.has(label)) {
+                    unresolvable.add(label);
+                    uncovered(label);
+                }
+                continue;
+            }
+            // The same repository mounted twice is one fetch credential.
+            if (resolvable.has(fullName)) continue;
+            resolvable.add(fullName);
+            const owned = await this.ownedSnapshotRows(userId, fullName);
+            if (!owned || owned.size !== 1) {
+                uncovered(fullName);
+                continue;
+            }
+            const [[installationEntityId, githubRepoId]] = [...owned];
+            // Re-read rather than trusted from the filter above: the id the
+            // mint URL uses is GitHub's own, and it lives on this row.
+            const installation = await this.loadInstallation(installationEntityId);
+            if (!installation) {
+                uncovered(fullName);
+                continue;
+            }
+            targets.push({
+                repository: fullName,
+                installationId: installation.installationId,
+                repositoryId: githubRepoId,
+                reason: null,
+            });
+        }
+        return targets;
+    }
+
+    /** Every requested repository, uncovered for one deployment-wide reason. */
+    private uncoveredTargets(
+        requested: readonly FleetPushRepositoryRequest[],
+        reason: FleetFetchCredentialUnavailableReason,
+    ): FleetFetchTarget[] {
+        const labels = new Set<string>();
+        for (const entry of requested) {
+            labels.add(this.pushTargetOf(entry) ?? this.repositoryLabel(entry));
+        }
+        return [...labels].map((repository) => ({
+            repository,
+            installationId: null,
+            repositoryId: null,
+            reason,
+        }));
+    }
+
+    /**
+     * How an UNCOVERED repository is named back to the node that holds the
+     * job: the identity the planner wrote for it, and only when it is in the
+     * identity alphabet. The node already has this value on its own payload;
+     * it is echoed so a log line can say which repository fell back.
+     */
+    private repositoryLabel(entry: FleetPushRepositoryRequest): string {
+        const named = normalizeFleetPushRepositoryId(entry?.repositoryId);
+        if (named) return named;
+        const raw = typeof entry?.repositoryId === 'string' ? entry.repositoryId.trim() : '';
+        return REPOSITORY_LABEL_PATTERN.test(raw) ? raw : 'unknown';
     }
 
     /**
@@ -412,10 +722,18 @@ export class FleetPushCredentialService {
      * which is already game over — is a token for another of that same
      * owner's own repositories. It can never reach a repository, an
      * installation or an account the owner does not already hold.
+     *
+     * `readOnlyMounts` is the read mode's one difference: a FETCH credential
+     * covers every repository the run clones, the read-only references
+     * included — reading one is what a read-only mount is for. It defaults
+     * to off, so the push scope is exactly what it was.
      */
-    private repositoriesOf(job: {
-        payload?: Record<string, unknown> | null;
-    }): FleetPushRepositoryRequest[] {
+    private repositoriesOf(
+        job: {
+            payload?: Record<string, unknown> | null;
+        },
+        options: { readOnlyMounts?: boolean } = {},
+    ): FleetPushRepositoryRequest[] {
         const workspace = (
             job.payload as { workspace?: Record<string, unknown> } | null | undefined
         )?.workspace;
@@ -438,7 +756,7 @@ export class FleetPushCredentialService {
                 repoUrl?: unknown;
                 writable?: unknown;
             };
-            if (entry.writable === false) continue;
+            if (entry.writable === false && !options.readOnlyMounts) continue;
             if (typeof entry.repositoryId === 'string') {
                 out.push({
                     repositoryId: entry.repositoryId,

@@ -74,6 +74,64 @@ export interface WorkspaceProvisionSpec {
 	 * that predates it ignores it.
 	 */
 	readonly hardenRepoHooks?: boolean;
+	/**
+	 * A short-lived, repository-scoped READ credential lent to this
+	 * provision's FETCHES and to nothing else; see
+	 * {@link WorkspaceFetchCredential}. Optional and additive: absent, the
+	 * provision is byte-for-byte what it was, and a provider that predates
+	 * the field ignores it and fetches as it always did.
+	 */
+	readonly fetchCredential?: WorkspaceFetchCredential;
+	/**
+	 * Told, at most once per provision, that {@link fetchCredential} was NOT
+	 * handed to Git and why — the fetch then ran exactly as it would have
+	 * without one. The text is the provider's own: at most it names a
+	 * FAMILY of config keys, never a key, a value or anything Git printed.
+	 */
+	readonly onFetchCredentialWithheld?: (reason: string) => void;
+}
+
+/**
+ * A short-lived, repository-scoped read credential lent to the fetches of
+ * exactly ONE provision — the read twin of {@link WorkspacePushCredential}.
+ *
+ * Installed the same way and for the same reasons: through the `git fetch`
+ * child's ENVIRONMENT (`http.<url>.extraheader`, with the helper list,
+ * askpass and hooks reset), so it never reaches argv, a config file or a
+ * remote URL, and dies with the child. Every other Git command of the
+ * provision (`init`, `remote add`, `worktree add`, the ownership probes)
+ * runs without it.
+ *
+ * THE DIFFERENCE FROM PUSH IS THE FALLBACK. A push credential that cannot
+ * be honoured refuses the push, because the alternative is the ambient
+ * helper that credential replaces. A fetch credential that cannot be
+ * honoured is WITHHELD and the fetch runs exactly as it would have without
+ * one: a fetch never needed a scoped credential to be correct (a public
+ * repository, or a machine whose operator configured a helper, works
+ * today), so "do what you did before" is the safe answer — and it is the
+ * only answer in which the token is never exposed. A provider withholds it
+ * when `remoteUrl` is not byte-identical to the URL it is about to fetch,
+ * when that URL is not one a header can authenticate (`https`), or when
+ * the repository's own Git config carries any key that is not on the
+ * provider's allowlist.
+ *
+ * A CHILD THAT CARRIES IT MUST BE SAFE WHATEVER THAT CONFIG SAYS. The
+ * credential is in the child's environment, so any program the child
+ * starts inherits it, and a checkout's shared config is writable by the
+ * run that used it last (and by one running beside this one). A provider
+ * therefore does not rely on having inspected the config: it binds the
+ * child to the credential's own transport, addresses the remote by a name
+ * no config file can describe, and overrides every key that could run a
+ * program or move the connection. The same holds for
+ * {@link WorkspacePushCredential}.
+ */
+export interface WorkspaceFetchCredential {
+	/** Basic-auth username (a GitHub installation token uses `x-access-token`). */
+	readonly username: string;
+	/** The secret. Held in memory for the length of the fetches and nowhere else. */
+	readonly token: string;
+	/** The remote this credential was scoped to, verbatim; see the note above. */
+	readonly remoteUrl: string;
 }
 
 export interface WorkspaceHandle {
@@ -149,7 +207,11 @@ export interface WorkspacePublishFence {
  *
  * Providers that cannot honour it MUST refuse the push rather than fall
  * back to whatever the machine's own credential helper would answer:
- * that fallback is the exact hole this exists to close.
+ * that fallback is the exact hole this exists to close. That includes a
+ * remote no header can authenticate (anything but `https`), and a
+ * repository whose own Git config carries a key that is not on the
+ * provider's allowlist — see the note on {@link WorkspaceFetchCredential}
+ * about what a credentialed child must be safe against.
  */
 export interface WorkspacePushCredential {
 	/** Basic-auth username (a GitHub installation token uses `x-access-token`). */
