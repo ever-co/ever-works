@@ -71,4 +71,23 @@ describe('slugifyCheckId', () => {
         expect(ACCEPTANCE_CHECK_ID_PATTERN.test(id)).toBe(true);
         expect(id.endsWith('-')).toBe(false);
     });
+
+    it('keeps `_`, which the API accepts, and never starts the id with it', () => {
+        expect(slugifyCheckId('unit_tests')).toBe('unit_tests');
+        expect(slugifyCheckId('__lint_all')).toBe('lint_all');
+        expect(ACCEPTANCE_CHECK_ID_PATTERN.test(slugifyCheckId('_ e2e_suite'))).toBe(true);
+    });
+});
+
+describe('acceptanceCheckSchema mountDir', () => {
+    it.each(['.git', 'node_modules', '.mounts', 'NUL', 'com1'])(
+        'refuses the reserved name %s, as the API does',
+        (mountDir) => {
+            expect(acceptanceCheckSchema.safeParse({ ...base, mountDir }).success).toBe(false);
+        },
+    );
+
+    it('accepts an ordinary directory name', () => {
+        expect(acceptanceCheckSchema.safeParse({ ...base, mountDir: 'api_v2' }).success).toBe(true);
+    });
 });

@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import {
     FLEET_TASK_WORKSPACE_MOUNT_DIR_PATTERN,
+    isReservedMountDir,
     TASK_ACCEPTANCE_CHECK_KINDS,
     TASK_CHECK_PHASES,
     type TaskAcceptanceCheckKind,
@@ -35,7 +36,13 @@ export const acceptanceCheckSchema = z.object({
     ),
     command: z.string().min(1).max(2000),
     cwd: z.string().max(512).optional(),
-    mountDir: z.string().regex(FLEET_TASK_WORKSPACE_MOUNT_DIR_PATTERN).optional(),
+    // The API also refuses well-formed reserved names (`.git`, `node_modules`,
+    // `NUL`, `COM1` …) through the shared `isReservedMountDir`.
+    mountDir: z
+        .string()
+        .regex(FLEET_TASK_WORKSPACE_MOUNT_DIR_PATTERN)
+        .refine((value) => !isReservedMountDir(value))
+        .optional(),
     phase: z.enum(TASK_CHECK_PHASES as [TaskCheckPhase, ...TaskCheckPhase[]]).optional(),
     timeoutSec: z.number().int().min(1).max(3600).optional(),
     required: z.boolean(),
@@ -48,14 +55,16 @@ export const acceptanceCheckSchema = z.object({
 
 /**
  * "Type check!" → "type-check": the id the checks editor derives from a check's
- * name, cut to the API's 41 characters (without a trailing dash).
+ * name, cut to the API's 41 characters (without a trailing dash). `_` is kept,
+ * as the API accepts it ("unit_tests" stays "unit_tests"); the id still starts
+ * with a letter or digit.
  */
 export function slugifyCheckId(raw: string): string {
     return raw
         .toLowerCase()
         .trim()
-        .replace(/[^a-z0-9]+/g, '-')
-        .replace(/^-+|-+$/g, '')
+        .replace(/[^a-z0-9_]+/g, '-')
+        .replace(/^[-_]+|-+$/g, '')
         .slice(0, ACCEPTANCE_CHECK_ID_MAX_LENGTH)
         .replace(/-+$/g, '');
 }

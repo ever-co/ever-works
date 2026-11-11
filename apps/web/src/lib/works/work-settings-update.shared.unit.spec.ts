@@ -96,6 +96,28 @@ describe('ownershipForSettingsSave', () => {
         ).toBeNull();
     });
 
+    it('leaves the owner out for a chat rename of a Work that has not generated yet', () => {
+        // Before: an empty request re-derived `organization: false` + the
+        // saver's login, flipping an organization Work to personal.
+        expect(
+            ownershipForSettingsSave({ kind: 'directory', generateStatus: null }, manager, {}),
+        ).toBeNull();
+        expect(
+            ownershipForSettingsSave({ kind: 'directory', generateStatus: undefined }, manager, {
+                owner: undefined,
+                organization: undefined,
+            }),
+        ).toBeNull();
+    });
+
+    it('still re-derives before generation when the settings form sends only `organization`', () => {
+        expect(
+            ownershipForSettingsSave({ kind: 'directory', generateStatus: null }, manager, {
+                organization: false,
+            }),
+        ).toEqual({ organization: false, owner: 'manager-login' });
+    });
+
     it("leaves a Repository Work's owner out — the API refuses any change to it", () => {
         expect(
             ownershipForSettingsSave({ kind: 'repo', generateStatus: null }, manager, {

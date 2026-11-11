@@ -121,6 +121,11 @@ export function resolveRepositoryOwnership(
  * to the login of WHOEVER saved — a manager renaming a member's Work, or the
  * chat's rename tool — and the Work's repositories then resolved under that
  * account; for a Repository Work the API refused the save outright.
+ *
+ * A save that names neither field (the chat's rename tool sends only `name` /
+ * `description`) also leaves them out, even before generation: re-deriving
+ * from an empty request reads as "personal, under the saver's login" and
+ * flipped an organization Work to the saver's own account.
  */
 export function ownershipForSettingsSave(
     work: WorkKindSubject & { readonly generateStatus?: unknown },
@@ -128,6 +133,9 @@ export function ownershipForSettingsSave(
     data: { owner?: string; organization?: boolean },
 ): { organization: boolean; owner: string | undefined } | null {
     if (!mayChooseRepositoryOwner(work)) {
+        return null;
+    }
+    if (data.owner === undefined && data.organization === undefined) {
         return null;
     }
     return resolveRepositoryOwnership(connectionInfo, data);
