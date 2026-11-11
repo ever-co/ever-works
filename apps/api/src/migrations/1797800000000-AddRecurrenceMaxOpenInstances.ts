@@ -8,7 +8,7 @@ import {
 
 const TABLE = 'tasks';
 const INDEX = 'idx_tasks_parent_recurring';
-const INDEX_COLUMNS = ['parentRecurringTaskId', 'status'];
+const INDEX_COLUMNS = ['parentRecurringTaskId', 'createdAt'];
 
 /**
  * Recurring Tasks — the per-template overlap limit.
@@ -34,11 +34,16 @@ const INDEX_COLUMNS = ['parentRecurringTaskId', 'status'];
  *
  * ## One composite index
  *
- * `idx_tasks_parent_recurring (parentRecurringTaskId, status)`. The open-instance count (every
- * OR-ed branch is `parentRecurringTaskId = ?`, most with `status NOT IN (done, cancelled)`) and
- * run-now's latest-instance read had no index on `parentRecurringTaskId` at all, so each one
- * scanned the whole `tasks` table. Status second, like every other `(owner, status)` index on the
- * table.
+ * `idx_tasks_parent_recurring (parentRecurringTaskId, createdAt)`. The open-instance count (every
+ * OR-ed branch is `parentRecurringTaskId = ?`) and run-now's latest-instance read had no index on
+ * `parentRecurringTaskId` at all, so each one scanned the whole `tasks` table. `createdAt` second
+ * serves the two ordered reads: the oldest open instances a skip record names, and run-now's
+ * newest instance as a backward index scan. `status` second (the convention of the other owner
+ * indexes) was measured and bought nothing: the count only filters it with `NOT IN`.
+ *
+ * Measured on 298k tasks / 298k runs (70 templates x 400 instances, warm): the count went from a
+ * full scan to an index seek, Postgres 17 ~400 ms -> ~5 ms and SQLite ~110 ms -> ~1 ms; run-now's
+ * latest-instance read from ~50 ms to 0.03 ms (Postgres, backward index scan).
  *
  * Slot `1797800000000`: the next after `1797700000000-AddAgentRunLatestEndedIndex`, the newest
  * migration on `develop` when this was written. Forward-only with per-step guards so a partially

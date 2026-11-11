@@ -130,10 +130,12 @@ export interface TaskLinkedPullRequest {
 // Schedules — the due-scan also filters `recurrencePausedAt IS NULL`. Added
 // BESIDE the index above, never in place of it.
 @Index('idx_tasks_recurrence_due_active', ['isRecurring', 'recurrencePausedAt', 'nextOccurrenceAt'])
-// Recurring Tasks overlap limit — a template's instances: the open-instance count and run-now's
-// latest-instance read both seek on `parentRecurringTaskId`; status second, like every other
-// owner index. Shipped by 1797800000000-AddRecurrenceMaxOpenInstances.
-@Index('idx_tasks_parent_recurring', ['parentRecurringTaskId', 'status'])
+// Recurring Tasks overlap limit — a template's instances: the open-instance count seeks on
+// `parentRecurringTaskId`, and `createdAt` second serves the two ordered reads (the oldest open
+// instances a skip names, run-now's latest instance as a backward index scan). `status` second
+// was measured and bought nothing (it is only a NOT IN filter). Shipped by
+// 1797800000000-AddRecurrenceMaxOpenInstances.
+@Index('idx_tasks_parent_recurring', ['parentRecurringTaskId', 'createdAt'])
 // Schedule-modes hot path — the one-shot dispatcher walks rows where
 // (scheduledAt <= now AND scheduleClaimedAt IS NULL). A composite index
 // keeps the claim-filter cheap on both drivers (a partial index would

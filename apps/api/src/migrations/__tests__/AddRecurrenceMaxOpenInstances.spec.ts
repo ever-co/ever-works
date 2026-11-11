@@ -3,7 +3,7 @@ import { AddRecurrenceMaxOpenInstances1797800000000 } from '../1797800000000-Add
 
 /**
  * Recurring Tasks overlap limit — the two `tasks` columns and the
- * `(parentRecurringTaskId, status)` index, on in-memory better-sqlite3 (the PHYSICAL schema
+ * `(parentRecurringTaskId, createdAt)` index, on in-memory better-sqlite3 (the PHYSICAL schema
  * through `PRAGMA`): added, idempotent, every existing row reads as "no limit, nothing
  * skipped", dropped by `down`, and a no-op without the table.
  */
@@ -43,7 +43,7 @@ describe('AddRecurrenceMaxOpenInstances1797800000000', () => {
         });
         await dataSource.initialize();
         await dataSource.query(
-            `CREATE TABLE "tasks" ("id" varchar PRIMARY KEY, "status" varchar(16) NOT NULL DEFAULT ('backlog'), "isRecurring" boolean NOT NULL DEFAULT (0), "parentRecurringTaskId" varchar, "recurrenceMaxOccurrences" integer, "recurrencePausedAt" datetime)`,
+            `CREATE TABLE "tasks" ("id" varchar PRIMARY KEY, "status" varchar(16) NOT NULL DEFAULT ('backlog'), "isRecurring" boolean NOT NULL DEFAULT (0), "parentRecurringTaskId" varchar, "recurrenceMaxOccurrences" integer, "recurrencePausedAt" datetime, "createdAt" datetime NOT NULL DEFAULT (datetime('now')))`,
         );
         await dataSource.query(
             `CREATE INDEX "idx_tasks_recurrence_due_active" ON "tasks" ("isRecurring", "recurrencePausedAt")`,
@@ -66,7 +66,7 @@ describe('AddRecurrenceMaxOpenInstances1797800000000', () => {
         expect(byName.get('recurrenceSkippedAt')).toMatchObject({ notnull: 0 });
         expect(await indexColumns('idx_tasks_parent_recurring')).toEqual([
             'parentRecurringTaskId',
-            'status',
+            'createdAt',
         ]);
         expect(
             (await indexNames()).filter((name) => name === 'idx_tasks_parent_recurring'),
