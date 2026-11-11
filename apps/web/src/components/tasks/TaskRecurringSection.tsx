@@ -53,6 +53,9 @@ const FIELD_CLASS = 'h-8 px-2 py-0 text-xs';
 
 type Frequency = 'DAILY' | 'WEEKLY' | 'MONTHLY' | 'CUSTOM' | 'CRON';
 
+/** `HH:MM` from the time input (Daily / Weekly / Monthly need one). */
+const TIME_OF_DAY_PATTERN = /^(\d{1,2}):(\d{2})$/;
+
 export function TaskRecurringSection({ task }: { task: Task }) {
     if (task.isRecurring) {
         return <ActivePanel task={task} />;
@@ -238,8 +241,11 @@ function InactivePanel({ task }: { task: Task }) {
         if (frequency === 'CRON') return cronExpr.trim();
         if (frequency === 'CUSTOM') return customRule.trim();
         const parts: string[] = [`FREQ=${frequency}`];
-        // Parse HH:MM → BYHOUR + BYMINUTE. Skip when blank.
-        const match = /^(\d{1,2}):(\d{2})$/.exec(timeOfDay.trim());
+        // Parse HH:MM → BYHOUR + BYMINUTE. Blank is refused by `isValidRule`:
+        // without BYHOUR the rule takes its time of day from the slot that last
+        // fired, and a slot moved by a spring-forward gap (02:30 → 03:30) would
+        // then keep the moved time for good (see `nextOccurrenceFromRule`).
+        const match = TIME_OF_DAY_PATTERN.exec(timeOfDay.trim());
         if (match) {
             const hour = Math.min(23, Math.max(0, parseInt(match[1], 10) || 0));
             const minute = Math.min(59, Math.max(0, parseInt(match[2], 10) || 0));
@@ -267,8 +273,9 @@ function InactivePanel({ task }: { task: Task }) {
             return false;
         }
         if (frequency === 'WEEKLY' && daysOfWeek.length === 0) return false;
+        if (!TIME_OF_DAY_PATTERN.test(timeOfDay.trim())) return false;
         return true;
-    }, [ruleString, frequency, daysOfWeek]);
+    }, [ruleString, frequency, daysOfWeek, timeOfDay]);
 
     const toggleDay = (day: DayOfWeek) => {
         setDaysOfWeek((prev) =>
@@ -286,7 +293,9 @@ function InactivePanel({ task }: { task: Task }) {
                     ? t('errorPickWeekday')
                     : frequency === 'CRON'
                       ? t('errorInvalidCron')
-                      : t('errorInvalidRule'),
+                      : frequency !== 'CUSTOM' && !TIME_OF_DAY_PATTERN.test(timeOfDay.trim())
+                        ? t('errorTimeRequired')
+                        : t('errorInvalidRule'),
             );
             return;
         }
@@ -426,9 +435,25 @@ function InactivePanel({ task }: { task: Task }) {
                             value={timeOfDay}
                             onChange={(e) => setTimeOfDay(e.target.value)}
                             disabled={pending}
+                            required
+                            aria-invalid={!TIME_OF_DAY_PATTERN.test(timeOfDay.trim())}
+                            aria-describedby={
+                                TIME_OF_DAY_PATTERN.test(timeOfDay.trim())
+                                    ? undefined
+                                    : 'task-recurring-time-required'
+                            }
                             variant="form"
                             className={FIELD_CLASS}
                         />
+                        {!TIME_OF_DAY_PATTERN.test(timeOfDay.trim()) && (
+                            <p
+                                id="task-recurring-time-required"
+                                className="mt-1 text-[10px] leading-relaxed text-danger"
+                                data-testid="task-recurring-time-required"
+                            >
+                                {t('errorTimeRequired')}
+                            </p>
+                        )}
                     </Field>
                 )}
                 {frequency === 'WEEKLY' && (

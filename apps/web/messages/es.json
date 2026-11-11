@@ -1719,6 +1719,7 @@
                 "cron": "Cron expression",
                 "cronHint": "Five fields: minute hour day-of-month month day-of-week, evaluated in UTC. Examples: “0 9 * * 1” Mondays at 09:00, “*/15 * * * *” every 15 minutes, “0 0 1 * *” the 1st of each month.",
                 "errorPickWeekday": "Pick at least one weekday.",
+                "errorTimeRequired": "Pick a time of day: the schedule runs at that time in its time zone.",
                 "errorInvalidRule": "A valid recurrence rule is required.",
                 "errorInvalidCron": "A cron expression needs exactly 5 fields.",
                 "frequency": "Frecuencia",
