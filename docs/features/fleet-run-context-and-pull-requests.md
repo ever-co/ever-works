@@ -162,28 +162,56 @@ Quality gate: all 3 acceptance checks green.
 ### The summary is sanitized before it is posted
 
 The summary is text a model wrote (and a model can be steered by a file, an issue or a review comment it read), posted
-under the owner's identity. Before it reaches the provider (`sanitizeRunPullRequestBody`, `@ever-works/contracts`):
+under the owner's identity. Before it reaches the provider, the reconciler bounds it (its head and its last line),
+**redacts credentials** and **drops quoted private planning text**, once, for every pull request of the run; the
+composer redacts again on its own. Then (`sanitizeRunPullRequestBody`, `@ever-works/contracts`):
 
+- **credentials** are replaced by `[redacted secret]`: every shape the platform's shared scanner knows (GitHub,
+  GitLab, Slack, npm, Hugging Face, Google, Stripe, AWS access-key ids, `sk-…` keys, `Bearer …`, JWTs, PEM private
+  keys), the same shapes split by Markdown escapes, credentials in a URL (`https://user:pass@…`, `https://<token>@…`),
+  an `Authorization` value of any scheme, and the value of anything named like a credential (`AWS_SECRET_ACCESS_KEY=…`,
+  `DATABASE_PASSWORD=…`) when it looks like one;
 - `@mentions` (and full-width `＠`, `&#64;`, escaped or zero-width-split ones) get a zero-width space: nobody is
   notified;
 - `#12`, `owner/repo#12`, `GH-12` and issue, pull request and discussion links are broken, so no closing keyword
   closes anything and nothing is cross-linked (the Task's own pull request link is the one exception);
 - HTML comments and tags are removed, any other tag opener is escaped, images are reduced to their alternative text
-  (their URL is never kept), and `javascript:`, `vbscript:`, `data:`, `file:` and `blob:` links are broken;
+  (their URL is never kept), a line that is only an attachment URL the provider would embed
+  (`github.com/user-attachments/…`, `user-images.githubusercontent.com/…`) is shown as code, and `javascript:`,
+  `vbscript:`, `data:`, `file:` and `blob:` links are broken;
+- the reference, scheme and mention rules are **matched on the text with Markdown backslash escapes decoded** (what a
+  renderer shows) and applied to the text, so `GH\-12`, `issues\/12` or a `javascript\:` link destination are broken
+  like their plain spellings;
 - invisible format characters and bidirectional controls are removed; character references are shown as written;
-- fenced and inline code is kept byte-for-byte (fences are rewritten in one canonical, always-closed form);
-- CI-skip directives (`[skip ci]`, `skip-checks: true` …) are neutralised everywhere;
+- fenced and inline code is kept byte-for-byte (fences are rewritten in one canonical, always-closed form), except
+  for what a squash-merge commit message would act on, which is neutralised everywhere: CI-skip directives
+  (`[skip ci]`, `skip-checks: true` …), `BREAKING CHANGE` notes, and the reference after a closing keyword
+  (`fixes #12`);
 - the result is capped at 6,000 characters (code blocks cut at a line and closed), and the input is bounded before any
-  pattern runs: 1 MB of adversarial text costs at most a few tens of milliseconds.
+  pattern runs: 1 MB of adversarial text costs under 20 milliseconds.
 
 Only the run's final message is used: never the node's output tail, its logs or its environment. The title goes
-through the same rules on one line, with nothing left that a provider acts on.
+through the same rules on one line (escapes decoded, chat-template markers and credentials removed), with nothing left
+that a provider acts on. A breaking-change marker the run wrote (`feat!:`) is dropped: an agent never declares a major
+release on its own. Shell metacharacters in a title are kept: a title is text.
+
+### Private planning context stays out of the pull request
+
+`# RUN CONTEXT` carries the Mission and Goal descriptions and the Goal's Definition of Done, written by the members of
+an organisation, while the summary becomes a pull request description that is often public. The prompt says both
+sections are private planning context, not to be quoted or named in the summary, the `PR-TITLE:` line or a commit
+message. The reconciler also enforces it: a sentence of the summary that contains **eight or more consecutive words** of
+the Task's Mission or Goal title or description, or of a Goal criterion (case and punctuation aside), is left out of
+the pull request; a quote that crosses a sentence or a line takes every sentence it touches with it, and a quoting
+`PR-TITLE:` line means the pull request keeps its usual title. When the Mission or Goal cannot be read, the pull request
+carries its usual text and nothing of the summary.
 
 ### The commit subject
 
 From the next `ever-works-node` release, the node also commits under the `PR-TITLE:` subject (`fix: keep zero-minimum
-jobs in the salary filter`), keeping the planned body and its `Task: T-2286` trailer; it still re-types a docs-only or
-tests-only change and neutralises CI-skip directives. Older nodes commit under the Task title, as before.
+jobs in the salary filter`), keeping the planned body and its `Task: T-2286` trailer; it redacts credentials from the
+line first with the platform's own rules, drops a breaking-change marker, still re-types a docs-only or tests-only
+change and neutralises CI-skip directives. Older nodes commit under the Task title, as before.
 
 ## Related
 

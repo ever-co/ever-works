@@ -1495,6 +1495,24 @@ describe('FleetAgentTaskReconcilerService', () => {
             ],
         };
 
+        it('hands a mount the same REDACTED summary as the primary (review of #3145)', async () => {
+            const token = `ghp_${'A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8'}`;
+            await build().onCompleted(
+                new FleetJobCompletedEvent(mountedJob(), USER, 'node-report', NODE, {
+                    ...mountedResult,
+                    model: {
+                        ...mountedResult.model,
+                        summary: `Used GITHUB_TOKEN=${token}.\nPR-TITLE: fix: uses ${token}`,
+                    },
+                } as unknown as Record<string, unknown>),
+            );
+            const primary: string = taskWorkspace.finalizeRemotePush.mock.calls[0][0].summary;
+            const mount: string = taskWorkspace.finalizeMountPush.mock.calls[0][0].summary;
+            expect(primary).toBe(mount);
+            expect(primary).not.toContain(token);
+            expect(primary).toContain('[redacted secret]');
+        });
+
         it('hands a mount the same summary as the primary, and never the placeholder', async () => {
             await build().onCompleted(
                 new FleetJobCompletedEvent(mountedJob(), USER, 'node-report', NODE, {
