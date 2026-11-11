@@ -79,16 +79,20 @@ checkout's line endings nor uncommitted files reach the build) in a Rust image p
 (`rust:1.88.0-slim-bookworm`, Debian 12; the linux-x64 helper needs glibc 2.34 or newer: Debian 12, Ubuntu 22.04 and
 newer). The fingerprint therefore depends on the commit and the image, not on the machine: a CI runner and a
 workstation with Docker produce the same bytes, and anyone can check a released fingerprint by running
-`bash build-release-linux.sh` at the release's commit. The sources go into the container and the outputs come back as
-tar streams, so any Docker daemon works (local, remote, Docker-in-Docker).
+`bash build-release-linux.sh dist/linux-x64` (and the win32-x64 command below) at the release's commit. The sources go
+into the container and the outputs come back as tar streams, so any Docker daemon works (local, remote,
+Docker-in-Docker).
 
 `SCREEN_HELPER_TARGET=win32-x64 bash build-release-linux.sh dist/win32-x64` builds the **Windows** helper the same way,
 cross-compiled for `x86_64-pc-windows-gnu`:
 
 - The container first installs the mingw-w64 cross toolchain (GCC 12.2 driver, binutils 2.40 `ld`, mingw-w64 10.0 CRT
   and import libraries) at **exact versions from `snapshot.debian.org`**, at the snapshot the image itself was made
-  from, so the toolchain is as fixed as the image (apt checks every package against the snapshot's signed Release
-  file). The image digest, the snapshot and the package versions sit together in the script and change together.
+  from, so the toolchain is as fixed as the image (apt checks every package against the archive's signed Release
+  file). The image digest, the snapshot and the package versions sit together in the script and change together, and
+  the script refuses a non-bookworm image for this target. When `snapshot.debian.org` cannot be reached, the same exact
+  versions come from `deb.debian.org` while bookworm still carries them (Debian never reuses a version for other
+  bytes); otherwise the build fails and nothing is published.
 - The PE is deterministic: `--no-insert-timestamp` (the link time is otherwise stamped into the header; the MSVC build's
   `/Brepro`), and the header flags the MSVC linker sets (`--tsaware`, subsystem and OS version 6.0), so Windows treats
   both builds alike.
@@ -100,6 +104,10 @@ Proven on Windows 10 Pro 22H2 (19045) against the MSVC build of the same commit 
 `--version`, say `hello` with the same displays and features, answer a malformed command with `error`, refuse an input
 while nothing streams, start a stream and send a 1280 × 720 keyframe and changed tiles, and exit within 40 ms of stdin
 closing. Neither embeds an application manifest; DPI awareness is set by the helper at start in both.
+
+No pull-request check builds the gnu target (the `Screen Helper` workflow builds each platform's native target). A
+crate change that touches Windows code: before tagging, run the dispatch dry run below, which builds and compares
+both release targets in the cluster, and run the Windows build on a Windows machine (`--version`, a stream) as above.
 
 The macOS builds are reproducible on the machine that built them (two builds there are byte-identical), but another
 machine matches only with the same linker and system libraries, so for those targets a release would take the

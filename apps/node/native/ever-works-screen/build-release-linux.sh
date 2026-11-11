@@ -14,8 +14,9 @@
 # installs the mingw-w64 cross toolchain at exact versions from
 # snapshot.debian.org (the snapshot the image itself was made from, below), so
 # that toolchain is pinned as well; the .exe imports only DLLs Windows ships
-# (msvcrt, kernel32, user32, gdi32, ntdll). publish-node.yml builds the released
-# helpers with it (see PACKAGING.md, "Release builds").
+# (msvcrt, kernel32, user32, gdi32, ntdll, bcryptprimitives and two API sets).
+# publish-node.yml builds the released helpers with it (see PACKAGING.md,
+# "Release builds").
 #
 # Uncommitted changes in this folder are NOT built (the script says so).
 #
@@ -41,6 +42,10 @@ if [ -L "${out_dir%%/*}" ] || [ -L "$out_dir" ]; then
   echo "out_dir $out_dir is or goes through a symbolic link; pick another name (nothing was deleted)" >&2
   exit 2
 fi
+if [ -e "$out_dir" ] && [ ! -d "$out_dir" ]; then
+  echo "out_dir $out_dir is a file, not a folder; pick another name (nothing was deleted)" >&2
+  exit 2
+fi
 if [ -n "$(git ls-files -- "$out_dir")" ]; then
   echo "out_dir $out_dir holds files git tracks; pick another name (nothing was deleted)" >&2
   exit 2
@@ -62,8 +67,17 @@ esac
 # comes from these), at exact versions from the Debian snapshot the image above
 # was made from (its /etc/apt/sources.list.d/debian.sources names it), so the
 # toolchain is as fixed as the image. Change all three together. apt checks
-# every package against the snapshot's signed Release file.
+# every package against the archive's signed Release file. When
+# snapshot.debian.org cannot be reached, the same exact versions come from
+# deb.debian.org while bookworm still carries them: Debian never reuses a
+# version for other bytes, so the build is the same; otherwise the build fails.
 debian_snapshot="20250721T000000Z"
+if [ "$target" = win32-x64 ]; then
+  case "$image" in
+    *bookworm*) ;;
+    *) echo "win32-x64 installs the bookworm mingw-w64 toolchain, so the build image must be bookworm (got: $image)" >&2; exit 2 ;;
+  esac
+fi
 mingw_packages="binutils-mingw-w64-x86-64=2.40-2+10.4 \
 gcc-mingw-w64-base=12.2.0-14+deb12u1+25.2+b1 \
 gcc-mingw-w64-x86-64-win32=12.2.0-14+deb12u1+25.2+b1 \
@@ -104,12 +118,17 @@ git -C "$top" -c core.autocrlf=false -c core.eol=lf archive --format=tar "$commi
     "$image" \
     bash -c 'set -euo pipefail
       if [ "$SCREEN_HELPER_TARGET" = win32-x64 ]; then
-        printf "%s\n" "Types: deb" "URIs: https://snapshot.debian.org/archive/debian/$DEBIAN_SNAPSHOT" \
-          "Suites: bookworm" "Components: main" "Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg" \
-          > /etc/apt/sources.list.d/debian.sources
-        apt-get -o Acquire::Check-Valid-Until=false -o Acquire::Retries=5 update -qq >&2
-        # shellcheck disable=SC2086 # one word per package=version
-        DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=5 install -y -qq --no-install-recommends $MINGW_PACKAGES >&2
+        install_mingw() {
+          printf "%s\n" "Types: deb" "URIs: $1" "Suites: bookworm" "Components: main" \
+            "Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg" > /etc/apt/sources.list.d/debian.sources
+          # shellcheck disable=SC2086 # one word per package=version
+          apt-get -o Acquire::Check-Valid-Until=false -o Acquire::Retries=5 update -qq >&2 &&
+            DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=5 install -y -qq --no-install-recommends $MINGW_PACKAGES >&2
+        }
+        if ! install_mingw "https://snapshot.debian.org/archive/debian/$DEBIAN_SNAPSHOT"; then
+          echo "snapshot.debian.org failed; the same exact versions from deb.debian.org" >&2
+          install_mingw "https://deb.debian.org/debian"
+        fi
         x86_64-w64-mingw32-gcc --version | head -1 >&2
       fi
       mkdir -p /build/ever-works-screen /out
