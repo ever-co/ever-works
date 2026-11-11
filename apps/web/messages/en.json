@@ -9362,6 +9362,7 @@
                         },
                         "language": "Language",
                         "languagePlaceholder": "BCP-47 code (e.g. en, en-US)",
+                        "languageInvalid": "Use a language code of 2 to 8 characters (e.g. en, en-US).",
                         "source": "Source",
                         "history": "View Git history",
                         "historyComingSoon": "Coming in slice E",
