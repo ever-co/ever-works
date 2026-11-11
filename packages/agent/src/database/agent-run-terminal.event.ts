@@ -31,4 +31,10 @@ export interface AgentRunTerminalEvent {
      * listener can tell, without a read, whether the run has anything open.
      */
     attentionReason: string | null;
+    /**
+     * Why the run was parked while queued, as it stood when it ended
+     * (`concurrency-limit`, …), or `null` when it was not parked (a promoted
+     * run has its reason cleared before it is dispatched).
+     */
+    queuedReason: string | null;
 }

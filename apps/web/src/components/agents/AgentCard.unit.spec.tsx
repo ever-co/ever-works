@@ -152,26 +152,42 @@ describe('AgentCard', () => {
     });
 
     describe('last run', () => {
-        it('always shows "Last run <relative time> · <status>" once the Agent has run', () => {
+        it('shows "Last run <relative time> · <status>" from the latest ENDED run of any kind', () => {
             render(
                 <AgentCard
                     agent={makeAgent({
-                        lastRunAt: '2026-11-10T21:00:00.000Z',
-                        lastRunStatus: 'completed',
+                        latestRun: { status: 'completed', finishedAt: '2026-11-10T21:04:00.000Z' },
                     })}
                 />,
             );
             expect(screen.getByTestId('agent-card-last-run').textContent).toBe(
-                'lastRun {"time":"rel(2026-11-10T21:00:00.000Z)","status":"lastRunCompleted"}',
+                'lastRun {"time":"rel(2026-11-10T21:04:00.000Z)","status":"lastRunCompleted"}',
             );
+        });
+
+        it('never reads the heartbeat lastRunAt: a running heartbeat is not a finished run', () => {
+            render(
+                <AgentCard
+                    agent={makeAgent({
+                        status: 'running',
+                        lastRunAt: '2026-11-10T22:00:00.000Z',
+                        lastRunStatus: 'failed',
+                        latestRun: null,
+                    })}
+                />,
+            );
+            expect(screen.queryByTestId('agent-card-last-run')).toBeNull();
+            expect(screen.getByText('statusRunning')).toBeTruthy();
         });
 
         it('shows a status it has no copy for as-is', () => {
             render(
                 <AgentCard
                     agent={makeAgent({
-                        lastRunAt: '2026-11-10T21:00:00.000Z',
-                        lastRunStatus: 'something-new',
+                        latestRun: {
+                            status: 'something-new',
+                            finishedAt: '2026-11-10T21:04:00.000Z',
+                        },
                     })}
                 />,
             );
@@ -180,8 +196,11 @@ describe('AgentCard', () => {
             );
         });
 
-        it('shows no last-run line for an Agent that never ran', () => {
-            render(<AgentCard agent={makeAgent({ lastRunAt: null })} />);
+        it('shows no last-run line for an Agent that never ran, or when it was not computed', () => {
+            const { unmount } = render(<AgentCard agent={makeAgent({ latestRun: null })} />);
+            expect(screen.queryByTestId('agent-card-last-run')).toBeNull();
+            unmount();
+            render(<AgentCard agent={makeAgent({ lastRunAt: '2026-11-10T21:00:00.000Z' })} />);
             expect(screen.queryByTestId('agent-card-last-run')).toBeNull();
         });
     });

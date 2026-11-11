@@ -60,17 +60,26 @@ export interface AgentDto {
     /** Schedules — non-null when the heartbeat is paused (the Agent itself may be ACTIVE). */
     heartbeatPausedAt: Date | null;
     /**
-     * When the Agent's most recent run BEGAN, and the status it ended in.
-     * Written by every terminal run (cloud Task run, fleet run, heartbeat),
-     * monotonically — see `AgentRunRepository.recordTerminalEffects`.
+     * The HEARTBEAT's last run: when its claim was taken, and how it ended.
+     * Written only by the heartbeat claim / release (the Schedules page and
+     * Home's Today read them so); a Task run never touches them. For the
+     * Agent's last run of any kind, see {@link latestRun}.
      */
     lastRunAt: Date | null;
     lastRunStatus: string | null;
     /**
+     * The Agent's most recent ENDED run of any kind (Task, fleet, heartbeat,
+     * chat), read from `agent_runs`: when it finished and how. Present on the
+     * Agents LIST only (one batched read per page); `null` = it never ran to
+     * an end; absent = not computed.
+     */
+    latestRun?: AgentLatestRunSummary | null;
+    /**
      * The caller's ACTIVE recurring Tasks that drive this Agent: how many,
      * and the soonest next fire. Present on the Agents LIST only (one batched
-     * read per page); absent elsewhere, which means "not computed", never
-     * "none". `{ activeCount: 0, nextRunAt: null }` means none.
+     * read per page). `{ activeCount: 0, nextRunAt: null }` = none, claimed
+     * only for the caller's own Agents; absent = not computed (and, for a
+     * teammate's Agent, "no Task of yours drives it", which says nothing).
      */
     recurringTasks?: AgentRecurringTasksSummary;
     errorCount: number;
@@ -112,6 +121,13 @@ export interface AgentDto {
     contentHash: string | null;
     createdAt: Date;
     updatedAt: Date;
+}
+
+/** {@link AgentDto.latestRun}. */
+export interface AgentLatestRunSummary {
+    /** `completed`, `failed` or `cancelled`. */
+    status: string;
+    finishedAt: Date;
 }
 
 /** {@link AgentDto.recurringTasks}. */

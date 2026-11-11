@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { InjectRepository } from '@nestjs/typeorm';
-import { type EntityManager, In, Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import type { QueryDeepPartialEntity } from 'typeorm/query-builder/QueryPartialEntity';
 import type { GateStatus, TaskAcceptanceCheck, TaskCheckResult } from '@ever-works/contracts';
 import {
@@ -139,8 +139,9 @@ export class AgentRunRepository {
         // The terminal-run event (see `agent-run-terminal.event.ts`): the
         // escalation listener closes a `queued-too-long` card when its run
         // ends. @Optional() and appended LAST per the positional-spec rule;
-        // bound by the API's global EventEmitterModule, absent in unit tests
-        // and worker contexts, where nothing is emitted.
+        // bound by the API's global EventEmitterModule (pinned by
+        // `agent-run.terminal-event.nest.spec.ts`), absent in unit tests and
+        // worker contexts, where nothing is emitted.
         @Optional()
         private readonly events?: EventEmitter2,
     ) {}
@@ -149,108 +150,56 @@ export class AgentRunRepository {
      * Everything that hangs off a terminal transition, for every path that
      * writes one ({@link cancel}, {@link markStuckFailed},
      * {@link parkStaleRunning}, {@link tryMarkCompleted}, {@link markFailed},
-     * {@link markDispatchFailed}): the run-cost settlement, the Agent's
-     * last-run stamp and the terminal event. Called with the ids the write
-     * targeted; ids a concurrent writer finished first are harmless here
-     * (the settlement is idempotent, the stamp is monotonic, the listeners
-     * are CAS-guarded). Never throws.
+     * {@link markDispatchFailed}): the run-cost settlement and the terminal
+     * event. Called with the ids the write targeted; ids a concurrent writer
+     * finished first are harmless here (the settlement is idempotent, the
+     * listeners are CAS-guarded). Never throws.
+     *
+     * Deliberately NOT written here: `agents.lastRunAt` / `lastRunStatus`.
+     * Those two columns mean the HEARTBEAT's last run (the Schedules page and
+     * Home's Today read them so), and only the heartbeat claim / release
+     * writes them. The Agents card's "Last run" is read from `agent_runs`
+     * instead (`findLatestEndedRunsByAgent`).
      */
     private async afterTerminal(runIds: readonly string[]): Promise<void> {
         for (const runId of runIds) {
             await this.settleRunCost(runId);
         }
-        await this.recordTerminalEffects(runIds);
+        await this.emitTerminalEvents(runIds);
     }
 
     /**
-     * Stamp `agents.lastRunAt` / `lastRunStatus` from the runs that just went
-     * terminal, and raise {@link AGENT_RUN_TERMINAL_EVENT} for each.
-     *
-     * Before this, only the heartbeat claim wrote those two columns, so an
-     * Agent driven by Tasks (cloud or fleet) read "never ran" for ever. The
-     * stamp keeps the heartbeat's semantics: `lastRunAt` is when the run
-     * BEGAN (`startedAt`, or `createdAt` for a run that never started), and
-     * `lastRunStatus` is the status it ended in.
-     *
-     * Rules, all in the one UPDATE:
-     *  - **monotonic** — written only when the run is at least as recent as
-     *    the stored `lastRunAt`, so an older run finishing late never
-     *    overwrites a newer one;
-     *  - **not while the Agent is `running`** — that is the heartbeat / run-now
-     *    claim, which owns both columns until its release (the stuck-run
-     *    recovery reads `lastRunAt` as the claim time, and the release writes
-     *    the status itself). A Task run that ends inside that window is not
-     *    stamped;
-     *  - **`updatedAt` untouched** — the Agents list is ordered by it, and run
-     *    bookkeeping must not reshuffle the list.
-     *
-     * `errorCount` / `pauseAfterFailures` are deliberately NOT touched: they
-     * count heartbeat failures only (the heartbeat worker's
-     * `incrementErrorCount` / `releaseAfterRun`), and that stays so.
-     *
-     * Best-effort: a test double without an ORM manager, or a DataSource that
-     * does not know the Agent entity, skips silently; a failed write is logged.
+     * Raise {@link AGENT_RUN_TERMINAL_EVENT} for every run among `runIds`
+     * that is terminal now. Skipped entirely (no read) when no emitter is
+     * bound — unit tests and worker contexts. Best-effort: a failed read or
+     * listener is logged.
      */
-    private async recordTerminalEffects(runIds: readonly string[]): Promise<void> {
-        const manager = this.repository.manager;
-        if (!manager || runIds.length === 0) return;
+    private async emitTerminalEvents(runIds: readonly string[]): Promise<void> {
+        if (!this.events || runIds.length === 0) return;
         let rows: AgentRun[];
         try {
-            rows = await manager.find(AgentRun, {
+            rows = await this.repository.find({
                 where: { id: In([...new Set(runIds)]) },
                 select: [
                     'id',
                     'agentId',
                     'status',
-                    'startedAt',
-                    'createdAt',
                     'finishedAt',
                     'attentionReason',
+                    'queuedReason',
                 ],
             });
         } catch (err) {
             this.logger.warn(
-                `AgentRun terminal effects skipped for ${runIds.length} run(s): ${
+                `AgentRun terminal event skipped for ${runIds.length} run(s): ${
                     err instanceof Error ? err.message : String(err)
                 }`,
             );
             return;
         }
-        for (const run of rows) {
+        for (const run of rows ?? []) {
             if (!RETENTION_TERMINAL.includes(run.status)) continue;
-            await this.stampAgentLastRun(manager, run);
             await this.emitTerminal(run);
-        }
-    }
-
-    private async stampAgentLastRun(manager: EntityManager, run: AgentRun): Promise<void> {
-        if (!run.agentId || !manager.connection?.hasMetadata?.(Agent)) return;
-        const at = run.startedAt ?? run.createdAt;
-        if (!(at instanceof Date) || Number.isNaN(at.getTime())) return;
-        try {
-            const updatedAtColumn =
-                manager.connection.getMetadata(Agent).updateDateColumn?.databaseName ?? 'updatedAt';
-            const keepUpdatedAt = manager.connection.driver.escape(updatedAtColumn);
-            await manager
-                .createQueryBuilder()
-                .update(Agent)
-                .set({
-                    lastRunAt: at,
-                    lastRunStatus: run.status,
-                    // Assigning the column to itself stops TypeORM from
-                    // bumping it to CURRENT_TIMESTAMP (see the doc above).
-                    updatedAt: () => keepUpdatedAt,
-                })
-                .where('id = :agentId', { agentId: run.agentId })
-                .andWhere('status != :claimed', { claimed: AgentStatus.RUNNING })
-                .andWhere('(lastRunAt IS NULL OR lastRunAt <= :lastRunAt)', { lastRunAt: at })
-                .execute();
-        } catch (err) {
-            this.logger.warn(
-                `AgentRun ${run.id}: last-run stamp on Agent ${run.agentId} failed (ignored): ${
-                    err instanceof Error ? err.message : String(err)
-                }`,
-            );
         }
     }
 
@@ -262,6 +211,7 @@ export class AgentRunRepository {
             status: run.status,
             finishedAt: run.finishedAt ?? null,
             attentionReason: run.attentionReason ?? null,
+            queuedReason: run.queuedReason ?? null,
         };
         try {
             await this.events.emitAsync(AGENT_RUN_TERMINAL_EVENT, event);
@@ -815,8 +765,11 @@ export class AgentRunRepository {
      *
      * Guarded on `attentionReason IS NULL` when RAISING so the flag — and
      * therefore the notification the caller pairs with it — lands exactly
-     * once even if two sweeper ticks overlap. Clearing is unguarded: a
-     * resolved run must always be clearable.
+     * once even if two sweeper ticks overlap. Also guarded on the run still
+     * being `queued`: the only flag raised this way is `queued-too-long`,
+     * and a run that ended between the sweeper's scan and this write must
+     * not get a card (and a notification) for a wait that is already over.
+     * Clearing is unguarded: a resolved run must always be clearable.
      */
     async setAttention(runId: string, reason: string | null): Promise<boolean> {
         if (reason === null) {
@@ -829,6 +782,9 @@ export class AgentRunRepository {
             .set({ attentionReason: reason, attentionAt: new Date() })
             .where('id = :id', { id: runId })
             .andWhere('attentionReason IS NULL')
+            .andWhere('status = :stillQueued', {
+                stillQueued: 'queued' satisfies AgentRunStatus,
+            })
             .execute();
         return (result.affected ?? 0) > 0;
     }

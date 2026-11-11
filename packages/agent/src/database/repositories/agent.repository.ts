@@ -22,6 +22,8 @@ import {
 import { AgentMembership } from '../../entities/agent-membership.entity';
 import { Task } from '../../entities/task.entity';
 import { TaskAssignee } from '../../entities/task-assignee.entity';
+import { findLatestEndedRunsByAgent, type LatestEndedAgentRun } from './latest-agent-run.query';
+import { recurringTaskDriverIds, whereActiveRecurringTemplate } from './recurring-task-drivers';
 import { buildCaseInsensitiveLikeClause, prepareCaseInsensitiveContainsPattern } from '../utils';
 import { ownershipSqlPredicate, ownershipWhere, type OwnershipScope } from '../ownership-scope';
 import type { RecordListView } from '@ever-works/contracts';
@@ -442,15 +444,8 @@ export class AgentRepository {
             .getQuery();
         tasksQb
             .select(['task.id', 'task.agentId', 'task.nextOccurrenceAt'])
-            .where('task.userId = :userId', { userId })
-            .andWhere('task.isRecurring = :recurring', { recurring: true })
-            .andWhere('task.parentRecurringTaskId IS NULL')
-            .andWhere('task.recurrencePausedAt IS NULL')
-            .andWhere('task.nextOccurrenceAt IS NOT NULL')
-            .andWhere('(task.recurrenceEndsAt IS NULL OR task.recurrenceEndsAt > :now)', { now })
-            .andWhere(
-                '(task.recurrenceMaxOccurrences IS NULL OR task.recurrenceOccurredCount < task.recurrenceMaxOccurrences)',
-            )
+            .where('task.userId = :userId', { userId });
+        whereActiveRecurringTemplate(tasksQb, 'task', now)
             .andWhere(
                 new Brackets((driven) => {
                     driven
@@ -467,23 +462,11 @@ export class AgentRepository {
         const tasks = await tasksQb.orderBy('task.nextOccurrenceAt', 'ASC').take(1000).getMany();
         if (tasks.length === 0) return out;
 
-        const assignees = await manager.find(TaskAssignee, {
-            where: { taskId: In(tasks.map((task) => task.id)), assigneeType: 'agent' },
-            select: ['taskId', 'assigneeId'],
-        });
-        const assignedByTask = new Map<string, string[]>();
-        for (const row of assignees) {
-            assignedByTask.set(row.taskId, [
-                ...(assignedByTask.get(row.taskId) ?? []),
-                row.assigneeId,
-            ]);
-        }
+        const driversByTask = await recurringTaskDriverIds(manager, tasks);
 
         const wanted = new Set(ids);
         for (const task of tasks) {
-            const assigned = assignedByTask.get(task.id) ?? [];
-            const drivers = assigned.length > 0 ? assigned : task.agentId ? [task.agentId] : [];
-            for (const agentId of new Set(drivers)) {
+            for (const agentId of driversByTask.get(task.id) ?? []) {
                 if (!wanted.has(agentId)) continue;
                 const entry = out.get(agentId) ?? { activeCount: 0, nextRunAt: null };
                 entry.activeCount += 1;
@@ -495,6 +478,18 @@ export class AgentRepository {
             }
         }
         return out;
+    }
+
+    /**
+     * Per Agent, its most recent ENDED run of any kind (Task, fleet,
+     * heartbeat, chat) — the Agents card's "Last run" — in one statement for
+     * a list page. See {@link findLatestEndedRunsByAgent}; `agents.lastRunAt`
+     * keeps its heartbeat-only meaning.
+     */
+    async findLatestEndedRuns(
+        agentIds: readonly string[],
+    ): Promise<Map<string, LatestEndedAgentRun>> {
+        return findLatestEndedRunsByAgent(this.repository.manager, agentIds);
     }
 
     async save(agent: Agent): Promise<Agent> {

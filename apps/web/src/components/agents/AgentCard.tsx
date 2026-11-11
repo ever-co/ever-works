@@ -65,15 +65,20 @@ export function AgentCard({ agent, actions }: { agent: Agent; actions?: ReactNod
     } else {
         driveLabel = t('noCadence');
     }
-    const lastRunAt = agent.lastRunAt ? new Date(agent.lastRunAt) : null;
-    const lastRunStatusKey = agentLastRunStatusKey(agent.lastRunStatus);
+    // "Last run" is the Agent's most recent ENDED run of any kind (Task,
+    // fleet, heartbeat, chat), read from its runs by the list. Not
+    // `lastRunAt`: that is the heartbeat's own last run. A run in progress is
+    // not an ended run — the status pill already says "Running".
+    const latestRun = agent.latestRun ?? null;
+    const lastRunAt = latestRun ? new Date(latestRun.finishedAt) : null;
+    const lastRunStatusKey = agentLastRunStatusKey(latestRun?.status);
     const lastRunLabel =
         lastRunAt && !Number.isNaN(lastRunAt.getTime())
             ? t('lastRun', {
                   time: format.relativeTime(lastRunAt),
                   status: lastRunStatusKey
                       ? t(lastRunStatusKey)
-                      : (agent.lastRunStatus ?? t('lastRunUnknown')),
+                      : (latestRun?.status ?? t('lastRunUnknown')),
               })
             : null;
 

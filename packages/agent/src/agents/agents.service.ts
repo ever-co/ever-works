@@ -340,7 +340,7 @@ export class AgentsService {
                 ownershipScope,
             );
             return {
-                rows: await this.withRecurringTasks(
+                rows: await this.withListFacts(
                     userId,
                     visible.rows.map(toAgentDto),
                     ownershipScope,
@@ -354,43 +354,76 @@ export class AgentsService {
             ownershipScope,
         );
         return {
-            rows: await this.withRecurringTasks(userId, rows.map(toAgentDto), ownershipScope),
+            rows: await this.withListFacts(userId, rows.map(toAgentDto), ownershipScope),
             total,
         };
     }
 
     /**
-     * Attach {@link AgentDto.recurringTasks} to a list page — one batched read
-     * for the whole page (the Agents card says "Runs on schedule · next …"
-     * for an Agent with no heartbeat that recurring Tasks drive). Only the
-     * caller's own Tasks count. Best-effort: a failed read leaves the field
-     * absent ("not computed"), never fails the list.
+     * The two facts the Agents card shows beyond the row itself, each read for
+     * the whole page at once (never one query per card):
+     *
+     *  - {@link AgentDto.latestRun} — the Agent's most recent ENDED run of any
+     *    kind, from `agent_runs` ("Last run 2 hours ago · completed");
+     *  - {@link AgentDto.recurringTasks} — the caller's ACTIVE recurring Tasks
+     *    that drive it ("Runs on schedule · next …" / "Runs when assigned").
+     *    "None" (`activeCount: 0`) is only claimed for the caller's OWN
+     *    Agents: a teammate's Agent may be driven by Tasks the caller cannot
+     *    count, so for it the field is set only when the caller's Tasks drive
+     *    it, and is otherwise absent ("not computed") and the card says nothing.
+     *
+     * Best-effort, each independently: a failed read leaves its field absent,
+     * never fails the list.
      */
-    private async withRecurringTasks(
+    private async withListFacts(
         userId: string,
         rows: AgentDto[],
         ownershipScope?: OwnershipScope,
     ): Promise<AgentDto[]> {
-        if (rows.length === 0 || typeof this.agents.findRecurringTaskDrivers !== 'function') {
-            return rows;
-        }
+        if (rows.length === 0) return rows;
+        const ids = rows.map((row) => row.id);
+        const [drivers, latest] = await Promise.all([
+            this.readListFact('recurring-Task', () =>
+                typeof this.agents.findRecurringTaskDrivers === 'function'
+                    ? this.agents.findRecurringTaskDrivers(userId, ids, ownershipScope)
+                    : undefined,
+            ),
+            this.readListFact('latest-run', () =>
+                typeof this.agents.findLatestEndedRuns === 'function'
+                    ? this.agents.findLatestEndedRuns(ids)
+                    : undefined,
+            ),
+        ]);
+        return rows.map((row) => {
+            const next: AgentDto = { ...row };
+            if (drivers) {
+                const driven = drivers.get(row.id);
+                if (driven) next.recurringTasks = driven;
+                else if (row.userId === userId) {
+                    next.recurringTasks = { activeCount: 0, nextRunAt: null };
+                }
+            }
+            if (latest) {
+                const run = latest.get(row.id);
+                next.latestRun = run ? { status: run.status, finishedAt: run.finishedAt } : null;
+            }
+            return next;
+        });
+    }
+
+    private async readListFact<T>(
+        name: string,
+        read: () => Promise<T> | undefined,
+    ): Promise<T | undefined> {
         try {
-            const drivers = await this.agents.findRecurringTaskDrivers(
-                userId,
-                rows.map((row) => row.id),
-                ownershipScope,
-            );
-            return rows.map((row) => ({
-                ...row,
-                recurringTasks: drivers.get(row.id) ?? { activeCount: 0, nextRunAt: null },
-            }));
+            return await read();
         } catch (error) {
             this.logger.warn(
-                `Agents list: recurring-Task read failed (cards fall back): ${
+                `Agents list: ${name} read failed (cards fall back): ${
                     error instanceof Error ? error.message : String(error)
                 }`,
             );
-            return rows;
+            return undefined;
         }
     }
 
