@@ -19,6 +19,7 @@ import {
 } from '../run-pull-request-text.types.js';
 import { containsCiSkipDirective } from '../../fleet/fleet-commit-message.types.js';
 import { containsReservedFleetPushTrailer } from '../../fleet/fleet-push-credential.types.js';
+import { expectLinearTime } from '../../__tests__/linear-time.js';
 
 /**
  * The text a pull request gets from an agent run. The summary is
@@ -883,88 +884,89 @@ describe('composeRunPullRequestTitle', () => {
 	});
 });
 
+/**
+ * Linear on hostile text, from 256 characters to 1 MB. Not a wall-clock budget
+ * ("1 MB in under 50 ms" failed on a busy CI runner with nothing wrong): each
+ * step times one input against sixteen inputs a sixteenth its size, of the same
+ * shape, on the same machine a few milliseconds apart, so only a cost that grows
+ * faster than the text fails — see `expectLinearTime`.
+ */
 describe('bounded on adversarial input', () => {
 	const MB = 1024 * 1024;
-	const fill = (unit: string): string => unit.repeat(Math.ceil(MB / unit.length)).slice(0, MB);
-	const ladder = (): string => {
+	const fill = (unit: string, size = MB): string => unit.repeat(Math.ceil(size / unit.length)).slice(0, size);
+	const ladder = (size: number): string => {
 		// Backtick runs of every length 1, 2, 3 … — each one an opener with no
 		// closer of its own length: the worst case of the inline-code scan.
 		let out = '';
-		for (let run = 1; out.length < MB; run += 1) out += `${'`'.repeat(run)}a`;
-		return out.slice(0, MB);
+		for (let run = 1; out.length < size; run += 1) out += `${'`'.repeat(run)}a`;
+		return out.slice(0, size);
 	};
-	const HOSTILE: Array<[string, () => string]> = [
-		['one 1 MB line', () => fill('a')],
-		['image tags', () => fill('<img src=x ')],
-		['unclosed image links', () => fill('![a](')],
-		['one backtick run', () => fill('`')],
+	/**
+	 * The body sanitizer and the bound / redact / guard path take no costlier
+	 * path past their caps: their growth stays under 1.5× on every step, idle or
+	 * under load, so they get a tighter bound than the title readers (whose
+	 * bounded copy of a long summary grows ~3× on the step that crosses 32,000).
+	 * Tight enough for a quadratic that the 24,000-character cap keeps moderate
+	 * (a search from the start for every escape grows 3.7–7×).
+	 */
+	const maxGrowth = 3;
+	/** Each hostile shape at any size: a test runs it at 1 MB and on the way up to it. */
+	const HOSTILE: Array<[string, (size: number) => string]> = [
+		['one 1 MB line', (size) => fill('a', size)],
+		['image tags', (size) => fill('<img src=x ', size)],
+		['unclosed image links', (size) => fill('![a](', size)],
+		['one backtick run', (size) => fill('`', size)],
 		['a ladder of backtick runs', ladder],
-		['unclosed comments', () => fill('<!--')],
-		['mentions and references', () => fill('@octocat #1 ')],
-		['script links', () => fill('[x](javascript:')],
-		['backslashes before a span', () => `${fill('\\').slice(0, MB - 10)}\`@octocat\``],
-		['table cells and backticks', () => fill('| ` ')],
-		['character references', () => fill('&#64;')],
-		['emphasis openers', () => fill('**a')],
-		['zero-width characters inside mentions', () => fill('@​‍octo')],
-		['fence lines', () => fill('```\n')],
-		['short lines', () => fill('x\n')],
-		['closing keywords and issue URLs', () => fill('fixes https://github.com/a/b/issues/1 ')],
-		['marker lines', () => fill('PR-TITLE: Fix it\n')],
-		['whitespace before a title', () => `${fill(' ')}\nPR-TITLE: Fix the redirect`],
-		['a long body before a title', () => `${fill('word ')}\nPR-TITLE: Fix the redirect`],
-		['nested backticks and tildes', () => fill('~~~`` `~~~\n')],
+		['unclosed comments', (size) => fill('<!--', size)],
+		['mentions and references', (size) => fill('@octocat #1 ', size)],
+		['script links', (size) => fill('[x](javascript:', size)],
+		['backslashes before a span', (size) => `${fill('\\', size - 10)}\`@octocat\``],
+		['table cells and backticks', (size) => fill('| ` ', size)],
+		['character references', (size) => fill('&#64;', size)],
+		['emphasis openers', (size) => fill('**a', size)],
+		['zero-width characters inside mentions', (size) => fill('@​‍octo', size)],
+		['fence lines', (size) => fill('```\n', size)],
+		['short lines', (size) => fill('x\n', size)],
+		['closing keywords and issue URLs', (size) => fill('fixes https://github.com/a/b/issues/1 ', size)],
+		['marker lines', (size) => fill('PR-TITLE: Fix it\n', size)],
+		['whitespace before a title', (size) => `${fill(' ', size)}\nPR-TITLE: Fix the redirect`],
+		['a long body before a title', (size) => `${fill('word ', size)}\nPR-TITLE: Fix the redirect`],
+		['nested backticks and tildes', (size) => fill('~~~`` `~~~\n', size)],
 		// Round two of the review: the decoded view, the credential patterns and
 		// the new everywhere-rules must stay linear too.
-		['backslash escapes of punctuation', () => fill('GH\\-1 \\/issues\\/2 javascript\\: ')],
-		['escaped backslashes', () => fill('\\\\')],
-		['token prefixes', () => fill('ghp_ github_pat_ sk-ant- AKIA eyJ ')],
-		['near-miss tokens', () => fill(`ghp_${'a'.repeat(30)} `)],
-		['PEM headers without a footer', () => fill('-----BEGIN RSA PRIVATE KEY-----\n')],
-		['credential assignments', () => fill('GITHUB_TOKEN=x ')],
-		['long credential names', () => fill('A'.repeat(70) + 'TOKEN=')],
-		['URLs with userinfo', () => fill('https://a:b@')],
-		['authorization headers', () => fill('Authorization: Basic ')],
-		['closing keywords', () => fill('fixes ')],
-		['closing keywords before almost-references', () => fill('fixes acme/site#x ')],
-		['breaking-change notes', () => fill('BREAKING CHANGE: ')],
-		['attachment lines', () => fill('https://github.com/user-attachments/assets/0f2b7c1e\n')],
-		['chat-template markers', () => fill('<|im_start|><|')]
+		['backslash escapes of punctuation', (size) => fill('GH\\-1 \\/issues\\/2 javascript\\: ', size)],
+		['escaped backslashes', (size) => fill('\\\\', size)],
+		['token prefixes', (size) => fill('ghp_ github_pat_ sk-ant- AKIA eyJ ', size)],
+		['near-miss tokens', (size) => fill(`ghp_${'a'.repeat(30)} `, size)],
+		['PEM headers without a footer', (size) => fill('-----BEGIN RSA PRIVATE KEY-----\n', size)],
+		['credential assignments', (size) => fill('GITHUB_TOKEN=x ', size)],
+		['long credential names', (size) => fill('A'.repeat(70) + 'TOKEN=', size)],
+		['URLs with userinfo', (size) => fill('https://a:b@', size)],
+		['authorization headers', (size) => fill('Authorization: Basic ', size)],
+		['closing keywords', (size) => fill('fixes ', size)],
+		['closing keywords before almost-references', (size) => fill('fixes acme/site#x ', size)],
+		['breaking-change notes', (size) => fill('BREAKING CHANGE: ', size)],
+		['attachment lines', (size) => fill('https://github.com/user-attachments/assets/0f2b7c1e\n', size)],
+		['chat-template markers', (size) => fill('<|im_start|><|', size)]
 	];
 
-	/** Best of three, so a garbage-collection pause on a shared machine is not read as a quadratic pattern. */
-	function fastest(run: () => unknown): number {
-		let best = Number.POSITIVE_INFINITY;
-		for (let attempt = 0; attempt < 3; attempt += 1) {
-			const started = performance.now();
-			run();
-			best = Math.min(best, performance.now() - started);
-		}
-		return best;
-	}
-
-	it.each(HOSTILE)('sanitizes 1 MB of %s in under 50 ms, inert and capped', (_what, build) => {
-		const input = build();
+	it.each(HOSTILE)('sanitizes 1 MB of %s in linear time, inert and capped', (_what, build) => {
+		const input = build(MB);
 		expect(input.length).toBeGreaterThanOrEqual(MB);
-		let output = '';
-		const elapsed = fastest(() => {
-			output = sanitizeRunPullRequestBody(input);
-		});
-		expect(elapsed).toBeLessThan(50);
+		const output = sanitizeRunPullRequestBody(input);
 		expect(Array.from(output).length).toBeLessThanOrEqual(RUN_PULL_REQUEST_BODY_MAX_LENGTH);
 		expectInert(output);
+		expectLinearTime(build, (text) => sanitizeRunPullRequestBody(text), { maxGrowth });
 	});
 
-	it.each(HOSTILE)('reads the title and the one-line summary of 1 MB of %s in under 50 ms', (_what, build) => {
-		const input = build();
-		const elapsed = fastest(() => {
-			parseRunPullRequestTitle(input);
-			composeRunPullRequestTitle({ summary: input, slug: 'T-1' });
-			summarizeRunChangeInOneLine(input);
-			sanitizeRunPullRequestTitle(input);
-			applyRunPullRequestTitleToCommitMessage('feat: x\n\nTask: T-1', input);
-		});
-		expect(elapsed).toBeLessThan(50);
+	it.each(HOSTILE)('reads the title and the one-line summary of 1 MB of %s in linear time', (_what, build) => {
+		expectLinearTime(build, (text) => [
+			parseRunPullRequestTitle(text),
+			composeRunPullRequestTitle({ summary: text, slug: 'T-1' }),
+			summarizeRunChangeInOneLine(text),
+			sanitizeRunPullRequestTitle(text),
+			applyRunPullRequestTitleToCommitMessage('feat: x\n\nTask: T-1', text)
+		]);
 	});
 
 	it('still finds a title at the end of a 1 MB summary', () => {
@@ -974,13 +976,15 @@ describe('bounded on adversarial input', () => {
 		);
 	});
 
-	it.each(HOSTILE)('bounds, redacts and guards 1 MB of %s in under 50 ms', (_what, build) => {
-		const input = build();
-		const elapsed = fastest(() => {
-			const bounded = boundRunPullRequestSummary(input);
-			dropQuotedPrivateText(redactRunSummarySecrets(bounded), [input.slice(0, 20_000)]);
-		});
-		expect(elapsed).toBeLessThan(50);
+	it.each(HOSTILE)('bounds, redacts and guards 1 MB of %s in linear time', (_what, build) => {
+		expectLinearTime(
+			build,
+			(text) => {
+				const bounded = boundRunPullRequestSummary(text);
+				return dropQuotedPrivateText(redactRunSummarySecrets(bounded), [text.slice(0, 20_000)]);
+			},
+			{ maxGrowth }
+		);
 	});
 });
 

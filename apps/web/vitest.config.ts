@@ -39,7 +39,12 @@ export default defineConfig({
         // storage throws "Cannot read properties of undefined". Turning Node's
         // Web Storage off in the worker leaves jsdom's in place; the flag is
         // also accepted (as a no-op default) by Node 22.
-        execArgv: ['--no-experimental-webstorage'],
+        //
+        // `--expose-gc` for the time guards (`src/lib/__tests__/time-budget.ts`):
+        // a measurement over its bound is timed again from a full collection,
+        // so a collection cycle that earlier work left running on a busy runner
+        // is not read as a regression.
+        execArgv: ['--no-experimental-webstorage', '--expose-gc'],
         globals: true,
         include: ['src/**/*.unit.spec.{ts,tsx}'],
         setupFiles: ['./vitest.setup.ts'],

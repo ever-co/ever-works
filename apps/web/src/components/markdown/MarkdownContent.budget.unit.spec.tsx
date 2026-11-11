@@ -6,6 +6,7 @@ vi.mock('next-intl', () => ({
 }));
 
 import { MarkdownContent, MarkdownInline, assessMarkdownRender } from './MarkdownContent';
+import { relativeBudget } from '@/lib/__tests__/time-budget';
 
 /** Text pre-check + parse + exact tree walk, as the component does (no HTML step). */
 const acceptsBlock = (md: string) => assessMarkdownRender(md, 'block').render;
@@ -13,7 +14,7 @@ const acceptsInline = (md: string) => assessMarkdownRender(md, 'inline').render;
 
 /**
  * PR #3137, review B1 and its closure check: no description may keep its page
- * busy. Every input either renders as Markdown in under {@link BUDGET_MS}
+ * busy. Every input either renders as Markdown within {@link BUDGET_UNITS}
  * (jsdom, client render) or is refused by the pre-check and shown as plain
  * text — never something in between.
  *
@@ -26,9 +27,6 @@ const acceptsInline = (md: string) => assessMarkdownRender(md, 'inline').render;
  * parse and tree walk, so the suite follows the budgets if they change.
  */
 
-const BUDGET_MS = 500;
-const GOAL_PAGE_BUDGET_MS = 1000;
-
 type Generator = (n: number) => string;
 
 const cols = (n: number) => 'a|'.repeat(n - 1) + 'a';
@@ -36,6 +34,54 @@ const delim = (n: number) => '-|'.repeat(n - 1) + '-';
 const header = (n: number) => `${cols(n)}\n${delim(n)}\n`;
 const lines = (n: number, line: (k: number) => string) =>
     Array.from({ length: n }, (_, k) => line(k)).join('\n');
+
+/** A full 10,000-character Mission description: sections of prose, lists, code and a table. */
+function missionDescription(): string {
+    const prose =
+        'We grow weekly signups through the onboarding funnel, measured on the **activation** ' +
+        'dashboard, and ship each change behind a flag so `pnpm test` stays green. ';
+    const section = (k: number) =>
+        `## Step ${k}\n\n${prose.repeat(2)}\n\n` +
+        `- audit the [signup page](https://x.test/${k})\n- fix the *slowest* step\n- measure again\n\n` +
+        (k % 4 === 0
+            ? '| Metric | Target |\n| --- | ---: |\n| Signups | +20% |\n| Churn | -5% |\n\n'
+            : '');
+    let md = '';
+    for (let k = 1; md.length < 10000; k++) md += section(k);
+    return md.slice(0, 10000);
+}
+const MISSION_DESCRIPTION = missionDescription();
+
+/** Render, see whether the plain-text fallback showed, unmount: one timed piece of work. */
+function renderOnce(md: string): boolean {
+    const { container } = render(<MarkdownContent content={md} />);
+    const fallback = container.querySelector('[data-markdown-fallback]') !== null;
+    cleanup();
+    return fallback;
+}
+
+/**
+ * The budgets are counted in renders of {@link MISSION_DESCRIPTION} — the
+ * largest ORDINARY description — timed in this process (`relativeBudget`), not
+ * in milliseconds: stage CI rendered "1,000 headings" in 1,206 ms against a
+ * 500 ms budget, on a runner about ten times slower than a developer machine,
+ * with nothing wrong. One unit is ~60 ms on an idle developer machine. The
+ * costliest accepted text takes ~5 units idle, ~7.5 on a runner five to ten
+ * times slower and ~9 at twenty times (table renders allocate more than the
+ * reference, and garbage collection suffers most on a starved CPU); the Goal
+ * page ~4, and ~12 at twenty times. The budgets leave room above that and
+ * scale with the machine. A regression is still over on every attempt: a cap
+ * raised past what the parser can take costs seconds, not units.
+ */
+const BUDGET_UNITS = 12;
+const GOAL_PAGE_BUDGET_UNITS = 20;
+const budget = relativeBudget(() => renderOnce(MISSION_DESCRIPTION));
+
+/** One render of `md`, judged against {@link BUDGET_UNITS} (assert `ms < budgetMs`). */
+function renderBlock(md: string): { ms: number; budgetMs: number; fallback: boolean } {
+    const { value, ms, budgetMs } = budget.measure(BUDGET_UNITS, () => renderOnce(md));
+    return { ms, budgetMs, fallback: value };
+}
 
 /** The largest `n` whose text the pre-check accepts (0 when none). */
 function largestAccepted(generate: Generator, accepts: (md: string) => boolean): number {
@@ -50,33 +96,13 @@ function largestAccepted(generate: Generator, accepts: (md: string) => boolean):
     return low;
 }
 
-function renderOnce(md: string): { ms: number; fallback: boolean } {
-    const started = performance.now();
-    const { container } = render(<MarkdownContent content={md} />);
-    const ms = performance.now() - started;
-    const fallback = container.querySelector('[data-markdown-fallback]') !== null;
-    cleanup();
-    return { ms, fallback };
-}
-
-/**
- * The better of two renders: the bound must hold, but one garbage-collection
- * pause or a busy CI neighbour must not decide the run.
- */
-function renderBlock(md: string): { ms: number; fallback: boolean } {
-    const first = renderOnce(md);
-    if (first.ms < BUDGET_MS) return first;
-    const second = renderOnce(md);
-    return second.ms < first.ms ? second : first;
-}
-
 beforeAll(() => {
     // The first render pays for loading the parser; time the inputs, not that.
-    renderBlock(
-        '# warm up\n\n- a **b** `c` [d](https://x.test)\n\n| a | b |\n|---|---|\n| 1 | 2 |',
-    );
+    renderOnce('# warm up\n\n- a **b** `c` [d](https://x.test)\n\n| a | b |\n|---|---|\n| 1 | 2 |');
+    renderOnce(MISSION_DESCRIPTION);
     render(<MarkdownInline content="warm *up*" />);
     cleanup();
+    budget.calibrate();
 });
 
 describe('the review bypasses: refused, or rendered within budget', () => {
@@ -125,8 +151,8 @@ describe('the review bypasses: refused, or rendered within budget', () => {
     ];
 
     it.each(BYPASSES)('%s', (_name, md) => {
-        const { ms, fallback } = renderBlock(md);
-        expect(ms).toBeLessThan(BUDGET_MS);
+        const { ms, budgetMs, fallback } = renderBlock(md);
+        expect(ms).toBeLessThan(budgetMs);
         expect(fallback).toBe(!acceptsBlock(md));
     });
 });
@@ -174,8 +200,8 @@ const FENCE_CASES: Array<[string, string]> = FENCE_PREFIXES.flatMap(([where, pre
 
 describe('a fence opened inside a container hides nothing from the pre-check', () => {
     it.each(FENCE_CASES)('%s', (_name, md) => {
-        const { ms, fallback } = renderBlock(md);
-        expect(ms).toBeLessThan(BUDGET_MS);
+        const { ms, budgetMs, fallback } = renderBlock(md);
+        expect(ms).toBeLessThan(budgetMs);
         expect(fallback).toBe(!acceptsBlock(md));
         // None of these may render as Markdown.
         expect(fallback).toBe(true);
@@ -194,9 +220,9 @@ describe('a fence opened inside a container hides nothing from the pre-check', (
         ).join('\n');
         const prose = 'We migrate the export job to the new queue and keep the old one running. ';
         const md = `## Plan\n\n${prose.repeat(5)}\n\n\`\`\`python\n${python}\n\`\`\`\n\n${prose.repeat(3)}\n\n\`\`\`tsx\n${tsx}\n\`\`\`\n`;
-        const { ms, fallback } = renderBlock(md);
+        const { ms, budgetMs, fallback } = renderBlock(md);
         expect(fallback).toBe(false);
-        expect(ms).toBeLessThan(BUDGET_MS);
+        expect(ms).toBeLessThan(budgetMs);
     });
 });
 
@@ -237,8 +263,8 @@ const LINE_ENDING_CASES: Array<[string, string]> = [
 
 describe('line endings: "\\r" and "\\r\\n" end lines for the check as for the parser', () => {
     it.each(LINE_ENDING_CASES)('%s', (_name, md) => {
-        const { ms, fallback } = renderBlock(md);
-        expect(ms).toBeLessThan(BUDGET_MS);
+        const { ms, budgetMs, fallback } = renderBlock(md);
+        expect(ms).toBeLessThan(budgetMs);
         expect(fallback).toBe(true);
     });
 
@@ -372,33 +398,23 @@ describe('each construct at, just under and just over its limit', () => {
         expect(limit).toBeGreaterThan(0);
 
         for (const n of [limit - 1, limit].filter((value) => value > 0)) {
-            const { ms, fallback } = renderBlock(generate(n));
+            const { ms, budgetMs, fallback } = renderBlock(generate(n));
             expect(fallback).toBe(false);
-            expect(ms).toBeLessThan(BUDGET_MS);
+            expect(ms).toBeLessThan(budgetMs);
         }
 
         const over = renderBlock(generate(limit + 1));
         expect(over.fallback).toBe(true);
-        expect(over.ms).toBeLessThan(BUDGET_MS);
+        expect(over.ms).toBeLessThan(over.budgetMs);
     });
 
     it('a full 10,000-character Mission description renders as Markdown', () => {
-        // Sections of prose, lists, code and a table: the Mission/Goal maximum.
-        const prose =
-            'We grow weekly signups through the onboarding funnel, measured on the **activation** ' +
-            'dashboard, and ship each change behind a flag so `pnpm test` stays green. ';
-        const section = (k: number) =>
-            `## Step ${k}\n\n${prose.repeat(2)}\n\n` +
-            `- audit the [signup page](https://x.test/${k})\n- fix the *slowest* step\n- measure again\n\n` +
-            (k % 4 === 0
-                ? '| Metric | Target |\n| --- | ---: |\n| Signups | +20% |\n| Churn | -5% |\n\n'
-                : '');
-        let md = '';
-        for (let k = 1; md.length < 10000; k++) md += section(k);
-        md = md.slice(0, 10000);
-        const { ms, fallback } = renderBlock(md);
+        // Sections of prose, lists, code and a table: the Mission/Goal maximum
+        // (and the unit the budgets are counted in).
+        expect(MISSION_DESCRIPTION).toHaveLength(10000);
+        const { ms, budgetMs, fallback } = renderBlock(MISSION_DESCRIPTION);
         expect(fallback).toBe(false);
-        expect(ms).toBeLessThan(BUDGET_MS);
+        expect(ms).toBeLessThan(budgetMs);
     });
 });
 
@@ -422,7 +438,6 @@ describe('a Goal page: 50 Definition-of-Done criteria at the inline limit', () =
         const criterion = generate(limit);
 
         const renderPage = () => {
-            const started = performance.now();
             const { container } = render(
                 <ul>
                     {Array.from({ length: 50 }, (_, i) => (
@@ -433,16 +448,17 @@ describe('a Goal page: 50 Definition-of-Done criteria at the inline limit', () =
                     ))}
                 </ul>,
             );
-            const ms = performance.now() - started;
-            expect(container.querySelectorAll('[data-markdown-fallback]')).toHaveLength(0);
-            expect(container.querySelector('table,ul ul,blockquote,pre,h1,h2,h3')).toBeNull();
+            const page = {
+                fallbacks: container.querySelectorAll('[data-markdown-fallback]').length,
+                blocks: container.querySelector('table,ul ul,blockquote,pre,h1,h2,h3'),
+            };
             cleanup();
-            return ms;
+            return page;
         };
-        // The better of two pages, for the same reason as renderBlock.
-        const first = renderPage();
-        const ms = first < GOAL_PAGE_BUDGET_MS ? first : Math.min(first, renderPage());
-        expect(ms).toBeLessThan(GOAL_PAGE_BUDGET_MS);
+        const { value, ms, budgetMs } = budget.measure(GOAL_PAGE_BUDGET_UNITS, renderPage);
+        expect(value.fallbacks).toBe(0);
+        expect(value.blocks).toBeNull();
+        expect(ms).toBeLessThan(budgetMs);
 
         // One step over the limit: plain text, never parsed.
         const over = render(<MarkdownInline content={generate(limit + 1)} />);
