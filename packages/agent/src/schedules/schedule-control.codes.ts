@@ -35,6 +35,13 @@ export const SCHEDULE_CONTROL_UNAVAILABLE = 'SCHEDULE_CONTROL_UNAVAILABLE' as co
 /** The addressed Task is not a recurring template. */
 export const SCHEDULE_NOT_RECURRING = 'SCHEDULE_NOT_RECURRING' as const;
 
+/**
+ * A recurring template is at its open-instance limit (`recurrenceMaxOpenInstances`): run-now
+ * would add one more unfinished instance. The body names the open ones; `force: true` runs it
+ * anyway.
+ */
+export const SCHEDULE_TOO_MANY_OPEN = 'SCHEDULE_TOO_MANY_OPEN' as const;
+
 export type ScheduleControlCode =
     | typeof SCHEDULE_ALREADY_RUNNING
     | typeof SCHEDULE_NO_AGENT
@@ -42,4 +49,5 @@ export type ScheduleControlCode =
     | typeof SCHEDULE_CREDITS_EXHAUSTED
     | typeof MISSION_PAUSE_NOT_ACKNOWLEDGED
     | typeof SCHEDULE_CONTROL_UNAVAILABLE
-    | typeof SCHEDULE_NOT_RECURRING;
+    | typeof SCHEDULE_NOT_RECURRING
+    | typeof SCHEDULE_TOO_MANY_OPEN;

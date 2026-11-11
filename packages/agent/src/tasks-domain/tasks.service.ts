@@ -65,8 +65,15 @@ import {
     SCHEDULE_NO_AGENT,
     SCHEDULE_NOT_RECURRING,
     SCHEDULE_OWNER_ARCHIVED,
+    SCHEDULE_TOO_MANY_OPEN,
 } from '../schedules/schedule-control.codes';
 import { DistributedTaskLockService } from '../cache/distributed-task-lock.service';
+import {
+    RECURRENCE_MAX_OPEN_INSTANCES_LIMIT,
+    describeRecurrenceRefusal,
+    normalizeMaxOpenInstances,
+    recurrenceFireLockKey,
+} from './recurrence-overlap';
 import { RecordAccessPolicy } from '../record-visibility/record-access-policy.service';
 import { RecordVisibilityService } from '../record-visibility/record-visibility.service';
 import { AgentRepository } from '../database/repositories/agent.repository';
@@ -1331,6 +1338,13 @@ export class TasksService {
      * and flips the recurring columns. The Task row stays as the
      * TEMPLATE; the dispatcher spawns instances pointing back via
      * `parentRecurringTaskId`.
+     *
+     * Recurring Tasks overlap limit — `recurrenceMaxOpenInstances`: a whole
+     * number 1..100 sets it, `null` clears it (no limit), and leaving it out
+     * keeps whatever the template has, so every caller that predates it (the
+     * Schedules editor, the Fleet session schedules) keeps the owner's limit.
+     * With NO cadence in `input`, a limit alone updates just the limit of a
+     * template that is already recurring (its cadence and next fire untouched).
      */
     async setRecurring(
         userId: string,
@@ -1341,12 +1355,25 @@ export class TasksService {
             recurrenceTimezone?: string;
             recurrenceEndsAt?: Date | null;
             recurrenceMaxOccurrences?: number | null;
+            recurrenceMaxOpenInstances?: number | null;
         },
         ownershipScope?: OwnershipScope,
     ): Promise<Task> {
-        await this.getOne(userId, id, ownershipScope);
+        const current = await this.getOne(userId, id, ownershipScope);
         const hasRule = !!input.recurrenceRule;
         const hasCron = !!input.recurrenceCron;
+        const maxOpenInstances = this.assertMaxOpenInstances(input.recurrenceMaxOpenInstances);
+        if (!hasRule && !hasCron && maxOpenInstances !== undefined) {
+            if (!current.isRecurring || current.parentRecurringTaskId) {
+                throw new BadRequestException(
+                    'This Task is not a recurring template — set a cadence (recurrenceRule or recurrenceCron) with the limit.',
+                );
+            }
+            if ((current.recurrenceMaxOpenInstances ?? null) !== maxOpenInstances) {
+                await this.updateTaskRow(id, { recurrenceMaxOpenInstances: maxOpenInstances });
+            }
+            return this.getOne(userId, id, ownershipScope);
+        }
         if (hasRule === hasCron) {
             // XOR: both or neither is a caller error — the two cadence
             // dialects would disagree about the next fire.
@@ -1383,7 +1410,7 @@ export class TasksService {
             );
         }
 
-        await this.updateTaskRow(id, {
+        const patch: Partial<Task> = {
             isRecurring: true,
             recurrenceRule: input.recurrenceRule ?? null,
             recurrenceCron: input.recurrenceCron ?? null,
@@ -1391,8 +1418,34 @@ export class TasksService {
             nextOccurrenceAt: next,
             recurrenceEndsAt: input.recurrenceEndsAt ?? null,
             recurrenceMaxOccurrences: input.recurrenceMaxOccurrences ?? null,
-        });
+        };
+        // Only written when the caller said something about it, so a cadence
+        // edit that predates the limit leaves the owner's limit alone.
+        if (maxOpenInstances !== undefined) {
+            patch.recurrenceMaxOpenInstances = maxOpenInstances;
+        }
+        await this.updateTaskRow(id, patch);
         return this.getOne(userId, id, ownershipScope);
+    }
+
+    /**
+     * `recurrenceMaxOpenInstances` as written: `undefined` (not given — keep),
+     * `null` (no limit) or a whole number 1..100. Anything else is a 400 — the
+     * DTO already refuses it on the HTTP path; this covers every other caller.
+     */
+    private assertMaxOpenInstances(raw: number | null | undefined): number | null | undefined {
+        if (raw === undefined || raw === null) return raw;
+        if (
+            typeof raw !== 'number' ||
+            !Number.isInteger(raw) ||
+            raw < 1 ||
+            raw > RECURRENCE_MAX_OPEN_INSTANCES_LIMIT
+        ) {
+            throw new BadRequestException(
+                `recurrenceMaxOpenInstances must be a whole number from 1 to ${RECURRENCE_MAX_OPEN_INSTANCES_LIMIT}, or null for no limit.`,
+            );
+        }
+        return raw;
     }
 
     /** Phase 17.2 — turn off recurrence on a template. Existing
@@ -1417,6 +1470,14 @@ export class TasksService {
         // when there is a pause to clear, so every other clear is unchanged.
         if (current?.recurrencePausedAt) {
             patch.recurrencePausedAt = null;
+        }
+        // Recurring Tasks overlap limit — the limit and the skip marker belong
+        // to the recurrence that is ending, same posture as the pause above.
+        if (current?.recurrenceMaxOpenInstances != null) {
+            patch.recurrenceMaxOpenInstances = null;
+        }
+        if (current?.recurrenceSkippedAt) {
+            patch.recurrenceSkippedAt = null;
         }
         await this.updateTaskRow(id, patch);
         return this.getOne(userId, id, ownershipScope);
@@ -1511,21 +1572,28 @@ export class TasksService {
      *    run-now of the same template holds the claim right now (`runId`
      *    null — its run row does not exist yet);
      *  - `SCHEDULE_OWNER_ARCHIVED` — the only resolvable Agent is archived;
-     *  - `SCHEDULE_NO_AGENT` — no Agent assignee and no `agentId`.
+     *  - `SCHEDULE_NO_AGENT` — no Agent assignee and no `agentId`;
+     *  - `SCHEDULE_TOO_MANY_OPEN` — the template carries an overlap limit
+     *    (`recurrenceMaxOpenInstances`) and that many instances are still open
+     *    (`openInstances`, `maxOpenInstances` and up to ten `instances` in the
+     *    body). `opts.force` (an owner action) runs it anyway; it bypasses
+     *    this limit only, never the in-flight check above.
      *
-     * The in-flight check, the instance insert and the dispatch (which
-     * writes the queued run row the check reads) run under ONE per-template
-     * claim, so two simultaneous requests can never both pass the check —
+     * The in-flight check, the open-instance count, the instance insert and
+     * the dispatch (which writes the queued run row the check reads) run under
+     * ONE per-template claim — the same one a scheduled fire under a limit
+     * holds — so two simultaneous requests can never both pass the checks;
      * the second is refused instead of spawning a second instance.
      */
     async runRecurringNow(
         userId: string,
         id: string,
         ownershipScope?: OwnershipScope,
+        opts: { force?: boolean } = {},
     ): Promise<RecurringRunNowResult> {
         const template = await this.getRecurringTemplate(userId, id, ownershipScope);
         return this.withRunNowClaim(template.id, () =>
-            this.fireRecurringTemplate(userId, template, ownershipScope),
+            this.fireRecurringTemplate(userId, template, ownershipScope, opts.force === true),
         );
     }
 
@@ -1550,7 +1618,7 @@ export class TasksService {
 
         if (this.runNowLock) {
             const outcome = await this.runNowLock.runExclusive(
-                `schedule-run-now:${templateId}`,
+                recurrenceFireLockKey(templateId),
                 fire,
                 {
                     ttlMs: RUN_NOW_CLAIM_TTL_MS,
@@ -1574,6 +1642,7 @@ export class TasksService {
         userId: string,
         template: Task,
         ownershipScope?: OwnershipScope,
+        force = false,
     ): Promise<RecurringRunNowResult> {
         if (this.agentRuns) {
             const latest = await this.tasks
@@ -1589,6 +1658,32 @@ export class TasksService {
                     runId: latestRun.id,
                     taskId: latest?.id ?? null,
                     startedAt: latestRun.startedAt ?? latestRun.createdAt ?? null,
+                });
+            }
+        }
+
+        // Recurring Tasks overlap limit — counted under the claim, so neither a
+        // second run-now nor a scheduled fire can slip in between this count and
+        // the insert below.
+        const maxOpenInstances = normalizeMaxOpenInstances(template.recurrenceMaxOpenInstances);
+        let openAtFire: number | null = null;
+        if (maxOpenInstances !== null) {
+            const open = await this.tasks.countOpenRecurrenceInstances(template.id, new Date());
+            openAtFire = open.count;
+            if (open.count >= maxOpenInstances && !force) {
+                throw new ConflictException({
+                    code: SCHEDULE_TOO_MANY_OPEN,
+                    message: describeRecurrenceRefusal(open, maxOpenInstances),
+                    maxOpenInstances,
+                    openInstances: open.count,
+                    instances: open.instances.map((instance) => ({
+                        id: instance.id,
+                        slug: instance.slug,
+                        title: instance.title,
+                        status: instance.status,
+                        prNumber: instance.prNumber,
+                        prUrl: instance.prUrl,
+                    })),
                 });
             }
         }
@@ -1680,6 +1775,15 @@ export class TasksService {
                 scheduleId: `recurring_task:${template.id}`,
                 instanceId: instance.id,
                 runIds: runs.map((run) => run.runId).filter(Boolean),
+                // Overlap limit — only on a template that has one, so every
+                // other run-now row is what it always was.
+                ...(maxOpenInstances !== null
+                    ? {
+                          maxOpenInstances,
+                          openInstances: openAtFire,
+                          forced: force && (openAtFire ?? 0) >= maxOpenInstances,
+                      }
+                    : {}),
             },
         });
 

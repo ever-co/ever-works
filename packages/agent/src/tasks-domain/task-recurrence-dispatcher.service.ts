@@ -9,12 +9,41 @@ import { TaskNotificationService } from './task-notification.service';
 import { TaskTransitionService } from './task-transition.service';
 import { TaskGraphFanoutService, type TaskFanoutSummary } from './task-graph-fanout.service';
 import { TaskStatus, type Task } from '../entities/task.entity';
+import { DistributedTaskLockService } from '../cache/distributed-task-lock.service';
+import { ActivityLogService } from '../activity-log/activity-log.service';
+import { ActivityActionType, ActivityStatus } from '../entities/activity-log.types';
+import { ownershipScopeOf } from '../database/ownership-scope';
+import {
+    describeRecurrenceSkip,
+    normalizeMaxOpenInstances,
+    recurrenceFireLockKey,
+    shouldRecordRecurrenceSkip,
+    type OpenRecurrenceInstances,
+} from './recurrence-overlap';
+
+/**
+ * The per-template claim a scheduled fire under an overlap limit holds while it counts the open
+ * instances, claims the slot and inserts the instance. The same lease as run-now's
+ * (`TasksService`, same key), refreshed while held.
+ */
+const RECURRENCE_FIRE_CLAIM_TTL_MS = 60_000;
+/** Hard ceiling on one scheduled fire holding that claim (count + spawn + dispatch). */
+const RECURRENCE_FIRE_CLAIM_MAX_LIFETIME_MS = 10 * 60_000;
 
 export interface RecurrenceDispatchEntry {
     templateId: string;
     templateSlug: string;
     scheduledFor: string;
     outcome: 'spawned' | 'skipped' | 'failed';
+    /**
+     * Why a `skipped` entry was skipped: `cas-lost` (another dispatcher claimed the slot first),
+     * `busy` (another fire of this template held its claim; the slot stays due and the next tick
+     * retries it) or `over-limit` (the template is at its open-instance limit; the slot passed).
+     */
+    skipReason?: 'cas-lost' | 'busy' | 'over-limit';
+    /** `over-limit` only — the open instances counted and the template's limit. */
+    openInstances?: number;
+    maxOpenInstances?: number;
     instanceId?: string;
     instanceSlug?: string;
     nextOccurrenceAt?: string | null;
@@ -121,7 +150,16 @@ export class TaskRecurrenceDispatcherService {
         // same positional-construction reason as the two above; unbound,
         // `dispatchUnblockedTodo` reports a tick that started nothing.
         @Optional() private readonly fanout?: TaskGraphFanoutService,
+        // Recurring Tasks overlap limit. Appended LAST + Optional for the same positional
+        // reason. The lock is the shared DB-backed claim run-now holds (same key); unbound, a
+        // per-process claim stands in. Without the activity log a skip is still made and still
+        // shown on the Schedules page, it just leaves no activity row.
+        @Optional() private readonly fireLock?: DistributedTaskLockService,
+        @Optional() private readonly activityLog?: ActivityLogService,
     ) {}
+
+    /** Per-process fire claims, used only when `fireLock` is unbound. */
+    private readonly fireInFlight = new Set<string>();
 
     async dispatchDue(limit = 50, now: Date = new Date()): Promise<RecurrenceDispatchSummary> {
         const templates = await this.tasks.findDueRecurringTemplates(limit, now);
@@ -137,80 +175,29 @@ export class TaskRecurrenceDispatcherService {
         for (const template of templates) {
             const scheduledFor = template.nextOccurrenceAt!;
             try {
-                const nextSlot = computeNextTemplateOccurrence({
-                    rule: template.recurrenceRule ?? null,
-                    cron: template.recurrenceCron ?? null,
-                    from: scheduledFor,
-                    recurrenceEndsAt: template.recurrenceEndsAt ?? null,
-                    recurrenceMaxOccurrences: template.recurrenceMaxOccurrences ?? null,
-                    recurrenceOccurredCount: (template.recurrenceOccurredCount ?? 0) + 1,
-                });
-
-                // CAS-claim — only one worker advances nextOccurrenceAt.
-                const claimed = await this.tasks.casClaimRecurrence(
-                    template.id,
-                    scheduledFor,
-                    nextSlot,
+                // Recurring Tasks overlap limit. NULL (the default) = no limit: the fire takes
+                // exactly the path it always did, with no count and no claim.
+                const maxOpen = normalizeMaxOpenInstances(template.recurrenceMaxOpenInstances);
+                if (maxOpen === null) {
+                    await this.fireOccurrence(template, scheduledFor, summary);
+                    continue;
+                }
+                const held = await this.withFireClaim(template.id, () =>
+                    this.fireWithinLimit(template, scheduledFor, maxOpen, now, summary),
                 );
-                if (!claimed) {
+                if (!held) {
+                    // A run-now (or another tick) of this template is counting and spawning
+                    // right now. Nothing is claimed, so the slot stays due and the next tick
+                    // decides it against the count that fire leaves behind.
                     summary.skipped += 1;
                     summary.entries.push({
                         templateId: template.id,
                         templateSlug: template.slug,
                         scheduledFor: scheduledFor.toISOString(),
                         outcome: 'skipped',
-                        message: 'CAS lost — another dispatcher claimed first',
+                        skipReason: 'busy',
+                        message: 'Another fire of this schedule holds its claim; retried next tick',
                     });
-                    continue;
-                }
-
-                // Spawn the instance with a fresh per-user slug.
-                const nextNumber = await this.counter.nextSlug(template.userId);
-                const slug = `T-${nextNumber}`;
-                const instanceData = {
-                    ...cloneRecurringTaskAsInstance(template),
-                    slug,
-                };
-                const instance = await this.tasks.create(instanceData);
-
-                // Copy the template's assignee rows so the instance is
-                // runnable by the same actors. Best-effort: a copy failure
-                // must not fail the spawn (the instance still exists).
-                await this.copyAssignees(template.id, instance.id);
-
-                // Dispatch through THE gated path (concurrency valve,
-                // credits precheck, denorm — all apply unchanged).
-                const dispatchOutcome = await this.dispatchInstance(instance);
-
-                summary.spawned += 1;
-                summary.entries.push({
-                    templateId: template.id,
-                    templateSlug: template.slug,
-                    scheduledFor: scheduledFor.toISOString(),
-                    outcome: 'spawned',
-                    instanceId: instance.id,
-                    instanceSlug: instance.slug,
-                    nextOccurrenceAt: nextSlot?.toISOString() ?? null,
-                    dispatch: dispatchOutcome,
-                });
-
-                // Third-pass fix: in-app notification for the spawned
-                // instance. Discriminator uses recurrenceOccurredCount
-                // (advanced by casClaimRecurrence) so consecutive
-                // occurrences don't dedup-collapse. Best-effort.
-                if (this.notifications) {
-                    void this.notifications
-                        .emit(
-                            'task_recurrence_fired',
-                            {
-                                taskId: instance.id,
-                                taskSlug: instance.slug,
-                                taskTitle: instance.title,
-                                occurrenceCount: (template.recurrenceOccurredCount ?? 0) + 1,
-                            },
-                            [template.userId],
-                        )
-                        .catch(() => undefined);
                 }
             } catch (err) {
                 const message = err instanceof Error ? err.message : String(err);
@@ -414,6 +401,247 @@ export class TaskRecurrenceDispatcherService {
     }
 
     // ── internals ─────────────────────────────────────────────────
+
+    /**
+     * One scheduled occurrence: CAS-claim the slot (advances `nextOccurrenceAt` and the
+     * occurred count), spawn the instance, copy the assignees, dispatch it and notify. The
+     * whole of a fire for a template with no overlap limit, the same steps as before the limit
+     * existed; the tail of one under a limit.
+     */
+    private async fireOccurrence(
+        template: Task,
+        scheduledFor: Date,
+        summary: RecurrenceDispatchSummary,
+    ): Promise<void> {
+        const nextSlot = computeNextTemplateOccurrence({
+            rule: template.recurrenceRule ?? null,
+            cron: template.recurrenceCron ?? null,
+            from: scheduledFor,
+            recurrenceEndsAt: template.recurrenceEndsAt ?? null,
+            recurrenceMaxOccurrences: template.recurrenceMaxOccurrences ?? null,
+            recurrenceOccurredCount: (template.recurrenceOccurredCount ?? 0) + 1,
+        });
+
+        // CAS-claim — only one worker advances nextOccurrenceAt. A fire after a skipped one
+        // clears the skip marker in the same write (only then, so every other claim is the
+        // call it always was).
+        const claimed = template.recurrenceSkippedAt
+            ? await this.tasks.casClaimRecurrence(template.id, scheduledFor, nextSlot, {
+                  clearSkip: true,
+              })
+            : await this.tasks.casClaimRecurrence(template.id, scheduledFor, nextSlot);
+        if (!claimed) {
+            summary.skipped += 1;
+            summary.entries.push({
+                templateId: template.id,
+                templateSlug: template.slug,
+                scheduledFor: scheduledFor.toISOString(),
+                outcome: 'skipped',
+                skipReason: 'cas-lost',
+                message: 'CAS lost — another dispatcher claimed first',
+            });
+            return;
+        }
+
+        // Spawn the instance with a fresh per-user slug.
+        const nextNumber = await this.counter.nextSlug(template.userId);
+        const slug = `T-${nextNumber}`;
+        const instanceData = {
+            ...cloneRecurringTaskAsInstance(template),
+            slug,
+        };
+        const instance = await this.tasks.create(instanceData);
+
+        // Copy the template's assignee rows so the instance is
+        // runnable by the same actors. Best-effort: a copy failure
+        // must not fail the spawn (the instance still exists).
+        await this.copyAssignees(template.id, instance.id);
+
+        // Dispatch through THE gated path (concurrency valve,
+        // credits precheck, denorm — all apply unchanged).
+        const dispatchOutcome = await this.dispatchInstance(instance);
+
+        summary.spawned += 1;
+        summary.entries.push({
+            templateId: template.id,
+            templateSlug: template.slug,
+            scheduledFor: scheduledFor.toISOString(),
+            outcome: 'spawned',
+            instanceId: instance.id,
+            instanceSlug: instance.slug,
+            nextOccurrenceAt: nextSlot?.toISOString() ?? null,
+            dispatch: dispatchOutcome,
+        });
+
+        // Third-pass fix: in-app notification for the spawned
+        // instance. Discriminator uses recurrenceOccurredCount
+        // (advanced by casClaimRecurrence) so consecutive
+        // occurrences don't dedup-collapse. Best-effort.
+        if (this.notifications) {
+            void this.notifications
+                .emit(
+                    'task_recurrence_fired',
+                    {
+                        taskId: instance.id,
+                        taskSlug: instance.slug,
+                        taskTitle: instance.title,
+                        occurrenceCount: (template.recurrenceOccurredCount ?? 0) + 1,
+                    },
+                    [template.userId],
+                )
+                .catch(() => undefined);
+        }
+    }
+
+    /**
+     * Recurring Tasks overlap limit — one scheduled fire of a template that carries a limit,
+     * run under the per-template claim ({@link withFireClaim}). The count, the slot claim and the
+     * instance insert all happen while the claim is held, and run-now holds the same claim, so
+     * two dispatcher ticks (or a tick and a run-now) can never both see "below the limit" and
+     * both spawn. At the limit the slot is SKIPPED instead ({@link skipOccurrence}).
+     */
+    private async fireWithinLimit(
+        template: Task,
+        scheduledFor: Date,
+        maxOpen: number,
+        now: Date,
+        summary: RecurrenceDispatchSummary,
+    ): Promise<void> {
+        const open = await this.tasks.countOpenRecurrenceInstances(template.id, now);
+        if (open.count >= maxOpen) {
+            await this.skipOccurrence(template, scheduledFor, maxOpen, open, now, summary);
+            return;
+        }
+        await this.fireOccurrence(template, scheduledFor, summary);
+    }
+
+    /**
+     * Skip one scheduled slot of a template at its limit: `nextOccurrenceAt` still advances (or
+     * the slot would stay due and re-fire every minute), `recurrenceOccurredCount` does not (a
+     * skipped slot is not an occurrence, so the next slot is computed from the same count), and
+     * `recurrenceSkippedAt` records it for the Schedules page. The first skip of a run of skips,
+     * and any skip at least `RECURRENCE_SKIP_RECORD_GAP_MS` after the previous one, also writes a
+     * `schedule_skipped` activity row on the template naming the open instances.
+     */
+    private async skipOccurrence(
+        template: Task,
+        scheduledFor: Date,
+        maxOpen: number,
+        open: OpenRecurrenceInstances,
+        now: Date,
+        summary: RecurrenceDispatchSummary,
+    ): Promise<void> {
+        const nextSlot = computeNextTemplateOccurrence({
+            rule: template.recurrenceRule ?? null,
+            cron: template.recurrenceCron ?? null,
+            from: scheduledFor,
+            recurrenceEndsAt: template.recurrenceEndsAt ?? null,
+            recurrenceMaxOccurrences: template.recurrenceMaxOccurrences ?? null,
+            recurrenceOccurredCount: template.recurrenceOccurredCount ?? 0,
+        });
+        const skipped = await this.tasks.casSkipRecurrence(
+            template.id,
+            scheduledFor,
+            nextSlot,
+            now,
+        );
+        summary.skipped += 1;
+        if (!skipped) {
+            summary.entries.push({
+                templateId: template.id,
+                templateSlug: template.slug,
+                scheduledFor: scheduledFor.toISOString(),
+                outcome: 'skipped',
+                skipReason: 'cas-lost',
+                message: 'CAS lost — another dispatcher claimed first',
+            });
+            return;
+        }
+        const message = describeRecurrenceSkip(open, maxOpen);
+        summary.entries.push({
+            templateId: template.id,
+            templateSlug: template.slug,
+            scheduledFor: scheduledFor.toISOString(),
+            outcome: 'skipped',
+            skipReason: 'over-limit',
+            openInstances: open.count,
+            maxOpenInstances: maxOpen,
+            nextOccurrenceAt: nextSlot?.toISOString() ?? null,
+            message,
+        });
+        if (shouldRecordRecurrenceSkip(template.recurrenceSkippedAt, now)) {
+            await this.recordSkip(template, scheduledFor, nextSlot, maxOpen, open, message);
+        }
+    }
+
+    /** The `schedule_skipped` activity row on the template. Best-effort: never fails a tick. */
+    private async recordSkip(
+        template: Task,
+        scheduledFor: Date,
+        nextSlot: Date | null,
+        maxOpen: number,
+        open: OpenRecurrenceInstances,
+        summary: string,
+    ): Promise<void> {
+        if (!this.activityLog) return;
+        try {
+            const scope = ownershipScopeOf(template);
+            await this.activityLog.log({
+                userId: template.userId,
+                tenantId: scope.tenantId,
+                organizationId: scope.organizationId,
+                workId: template.workId ?? undefined,
+                actionType: ActivityActionType.SCHEDULE_SKIPPED,
+                action: ActivityActionType.SCHEDULE_SKIPPED,
+                status: ActivityStatus.CANCELLED,
+                summary,
+                details: {
+                    source: 'schedule',
+                    reason: 'max-open-instances',
+                    scheduleId: `recurring_task:${template.id}`,
+                    scheduledFor: scheduledFor.toISOString(),
+                    nextOccurrenceAt: nextSlot?.toISOString() ?? null,
+                    maxOpenInstances: maxOpen,
+                    openInstances: open.count,
+                    openInstanceIds: open.instances.map((instance) => instance.id),
+                    openInstanceSlugs: open.instances.map((instance) => instance.slug),
+                    resourceType: 'task',
+                    resourceId: template.id,
+                },
+            });
+        } catch (err) {
+            this.logger.warn(`Skip record failed for template ${template.id}: ${err}`);
+        }
+    }
+
+    /**
+     * Hold the per-template fire claim for `fire`; `false` when another holder has it (nothing
+     * ran). The shared DB-backed `DistributedTaskLockService` under the key run-now uses
+     * (`recurrenceFireLockKey`), so the claim serialises across API replicas and against run-now;
+     * a graph without it falls back to a per-process claim with the same refuse-don't-wait
+     * semantics.
+     */
+    private async withFireClaim(templateId: string, fire: () => Promise<void>): Promise<boolean> {
+        if (this.fireLock) {
+            const outcome = await this.fireLock.runExclusive(
+                recurrenceFireLockKey(templateId),
+                fire,
+                {
+                    ttlMs: RECURRENCE_FIRE_CLAIM_TTL_MS,
+                    maxLifetimeMs: RECURRENCE_FIRE_CLAIM_MAX_LIFETIME_MS,
+                },
+            );
+            return outcome.acquired;
+        }
+        if (this.fireInFlight.has(templateId)) return false;
+        this.fireInFlight.add(templateId);
+        try {
+            await fire();
+            return true;
+        } finally {
+            this.fireInFlight.delete(templateId);
+        }
+    }
 
     private async copyAssignees(templateTaskId: string, instanceTaskId: string): Promise<void> {
         if (!this.assignees) return;

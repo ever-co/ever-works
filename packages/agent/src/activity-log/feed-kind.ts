@@ -118,6 +118,9 @@ export const FEED_KIND_RULES: Readonly<Record<string, FeedKindRule>> = {
     // control state, the same configuration shape as create/update/delete.
     [ActivityActionType.SCHEDULE_PAUSED]: 'system',
     [ActivityActionType.SCHEDULE_RESUMED]: 'system',
+    // Recurring Tasks overlap limit — the dispatcher skipped a scheduled fire. The same family
+    // as the fire it stands in for (`schedule_executed` is 'work').
+    [ActivityActionType.SCHEDULE_SKIPPED]: 'work',
 
     // Import / export
     [ActivityActionType.IMPORT]: 'work',

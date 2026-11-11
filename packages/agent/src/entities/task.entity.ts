@@ -130,6 +130,10 @@ export interface TaskLinkedPullRequest {
 // Schedules — the due-scan also filters `recurrencePausedAt IS NULL`. Added
 // BESIDE the index above, never in place of it.
 @Index('idx_tasks_recurrence_due_active', ['isRecurring', 'recurrencePausedAt', 'nextOccurrenceAt'])
+// Recurring Tasks overlap limit — a template's instances: the open-instance count and run-now's
+// latest-instance read both seek on `parentRecurringTaskId`; status second, like every other
+// owner index. Shipped by 1797800000000-AddRecurrenceMaxOpenInstances.
+@Index('idx_tasks_parent_recurring', ['parentRecurringTaskId', 'status'])
 // Schedule-modes hot path — the one-shot dispatcher walks rows where
 // (scheduledAt <= now AND scheduleClaimedAt IS NULL). A composite index
 // keeps the claim-filter cheap on both drivers (a partial index would
@@ -688,6 +692,27 @@ export class Task {
      */
     @PortableDateColumn({ nullable: true })
     recurrencePausedAt?: Date | null;
+
+    /**
+     * Recurring Tasks — the overlap limit: at most this many instances of the template may be
+     * unfinished at once (a run in flight, an open pull request, or spawned in the last week with
+     * no pull-request outcome; the rule is `recurrenceOpenInstancesWhere` in
+     * `tasks-domain/recurrence-overlap.ts`). A scheduled fire at the limit is skipped (its slot
+     * passes, `recurrenceOccurredCount` does not move) and run-now answers 409 unless forced.
+     * `null` (every row that predates the column, and the default) = no limit, today's
+     * behaviour. 1..100 (`RECURRENCE_MAX_OPEN_INSTANCES_LIMIT`). Never copied to an instance.
+     */
+    @Column({ type: 'int', nullable: true })
+    recurrenceMaxOpenInstances?: number | null;
+
+    /**
+     * When the template's last scheduled fire was SKIPPED by the overlap limit above. Cleared by
+     * the next fire that spawns an instance, so non-null means "the latest scheduled slot was
+     * skipped" (the Schedules page shows it as the last run). Server-written by the recurrence
+     * dispatcher only.
+     */
+    @PortableDateColumn({ nullable: true })
+    recurrenceSkippedAt?: Date | null;
 
     // EW-655 (Tenants & Organizations Phase 3) — Tier A scope FKs.
     // Both NULL until the owning user creates their first Organization

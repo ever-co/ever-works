@@ -7,6 +7,7 @@ import {
     Repository,
     type SelectQueryBuilder,
 } from 'typeorm';
+import type { QueryDeepPartialEntity } from 'typeorm/query-builder/QueryPartialEntity';
 import { ExternalRecordLink } from '../../entities/external-record-link.entity';
 import { Task, TaskStatus } from '../../entities/task.entity';
 import {
@@ -21,6 +22,12 @@ import {
     type TaskDeliveryStateFilter,
 } from '@ever-works/contracts';
 import type { RecordAccessContext } from '../../record-visibility/record-access.types';
+import {
+    RECURRENCE_OPEN_INSTANCES_NAMED,
+    recurrenceActiveRunExists,
+    recurrenceOpenInstancesWhere,
+    type OpenRecurrenceInstances,
+} from '../../tasks-domain/recurrence-overlap';
 import { visibleToPredicate } from '../../record-visibility/visible-to';
 
 export interface ListTasksFilter {
@@ -781,15 +788,20 @@ export class TaskRepository {
         taskId: string,
         expected: Date,
         newNextOccurrence: Date | null,
+        // Recurring Tasks overlap limit — a fire that spawns after a skipped one clears the
+        // skip marker in the same write. Omitted = the SET is exactly what it always was.
+        opts?: { clearSkip?: boolean },
     ): Promise<boolean> {
+        const patch: QueryDeepPartialEntity<Task> = {
+            nextOccurrenceAt: newNextOccurrence,
+            recurrenceOccurredCount: () => 'recurrenceOccurredCount + 1',
+            updatedAt: new Date(),
+        };
+        if (opts?.clearSkip) patch.recurrenceSkippedAt = null;
         const result = await this.repository
             .createQueryBuilder()
             .update(Task)
-            .set({
-                nextOccurrenceAt: newNextOccurrence,
-                recurrenceOccurredCount: () => 'recurrenceOccurredCount + 1',
-                updatedAt: new Date(),
-            })
+            .set(patch)
             .where('id = :id', { id: taskId })
             .andWhere('isRecurring = :rec', { rec: true })
             .andWhere('nextOccurrenceAt = :expected', { expected })
@@ -798,6 +810,80 @@ export class TaskRepository {
             .andWhere('recurrencePausedAt IS NULL')
             .execute();
         return (result.affected ?? 0) > 0;
+    }
+
+    /**
+     * Recurring Tasks overlap limit — CAS-SKIP one scheduled slot of a template at its
+     * open-instance limit. The same guards as {@link casClaimRecurrence} (still recurring, still
+     * at `expected`, not paused), and the same advance of `nextOccurrenceAt` (without it the slot
+     * would stay due and re-fire every minute), but `recurrenceOccurredCount` does NOT move: a
+     * skipped slot is not an occurrence, so a `recurrenceMaxOccurrences` cap still gets every
+     * fire it promised. Stamps `recurrenceSkippedAt`. Returns true iff this caller won.
+     *
+     * Bookkeeping about a background scan, so it keeps `updatedAt` (the same posture as
+     * `updateLatestRun`: TypeORM's update builder would otherwise set it to now).
+     */
+    async casSkipRecurrence(
+        taskId: string,
+        expected: Date,
+        newNextOccurrence: Date | null,
+        skippedAt: Date,
+    ): Promise<boolean> {
+        const keepUpdatedAt = this.repository.manager.connection.driver.escape('updatedAt');
+        const result = await this.repository
+            .createQueryBuilder()
+            .update(Task)
+            .set({
+                nextOccurrenceAt: newNextOccurrence,
+                recurrenceSkippedAt: skippedAt,
+                updatedAt: () => keepUpdatedAt,
+            })
+            .where('id = :id', { id: taskId })
+            .andWhere('isRecurring = :rec', { rec: true })
+            .andWhere('nextOccurrenceAt = :expected', { expected })
+            .andWhere('recurrencePausedAt IS NULL')
+            .execute();
+        return (result.affected ?? 0) > 0;
+    }
+
+    /**
+     * Recurring Tasks overlap limit — how many instances of `templateId` are still OPEN by
+     * `recurrenceOpenInstancesWhere` (a run in flight, an open pull request, no pull-request
+     * outcome yet and spawned in the last week, or a pull request closed unmerged in the last
+     * day), plus the oldest {@link RECURRENCE_OPEN_INSTANCES_NAMED} of them to name in a skip
+     * record or a 409. Seeks `idx_tasks_parent_recurring`.
+     *
+     * @internal Unscoped — callers must have resolved the template through an owner-scoped read
+     * (`TasksService.getOne`) or be the CRON-ONLY recurrence dispatcher, which already holds the
+     * template row.
+     */
+    async countOpenRecurrenceInstances(
+        templateId: string,
+        now: Date = new Date(),
+    ): Promise<OpenRecurrenceInstances> {
+        const driver = this.repository.manager.connection.driver;
+        const [rows, count] = await this.repository.findAndCount({
+            where: recurrenceOpenInstancesWhere(templateId, {
+                now,
+                activeRunExists: recurrenceActiveRunExists((name) => driver.escape(name)),
+            }),
+            select: ['id', 'slug', 'title', 'status', 'prNumber', 'prUrl', 'prState', 'createdAt'],
+            order: { createdAt: 'ASC', id: 'ASC' },
+            take: RECURRENCE_OPEN_INSTANCES_NAMED,
+        });
+        return {
+            count,
+            instances: rows.map((row) => ({
+                id: row.id,
+                slug: row.slug,
+                title: row.title,
+                status: row.status,
+                prNumber: row.prNumber ?? null,
+                prUrl: row.prUrl ?? null,
+                prState: row.prState ?? null,
+                createdAt: row.createdAt,
+            })),
+        };
     }
 
     /**
