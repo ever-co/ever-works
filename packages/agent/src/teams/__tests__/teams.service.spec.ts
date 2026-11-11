@@ -124,6 +124,36 @@ describe('TeamsService', () => {
             );
         });
 
+        it.each(['开发团队', 'Отдел продаж', 'فريق المبيعات', 'צוות', 'विकास टीम'])(
+            'creates a team named %s — a non-Latin name used to 422',
+            async (name) => {
+                const { service, teams } = build();
+                await service.create('u1', 'org-1', { name });
+                const slug = (teams.create.mock.calls[0][0] as { slug: string }).slug;
+                expect(slug).toMatch(/^team-[0-9a-f]{10}$/);
+            },
+        );
+
+        it('derives the same slug for the same non-Latin name, and different ones otherwise', async () => {
+            const first = build();
+            const second = build();
+            const third = build();
+            await first.service.create('u1', 'org-1', { name: '开发团队' });
+            await second.service.create('u1', 'org-1', { name: '开发团队' });
+            await third.service.create('u1', 'org-1', { name: '销售团队' });
+            const slugOf = (b: ReturnType<typeof build>) =>
+                (b.teams.create.mock.calls[0][0] as { slug: string }).slug;
+            expect(slugOf(first)).toBe(slugOf(second));
+            expect(slugOf(first)).not.toBe(slugOf(third));
+        });
+
+        it('still rejects an explicit slug that reduces to nothing', async () => {
+            const { service } = build();
+            await expect(
+                service.create('u1', 'org-1', { name: 'Sales', slug: '开发' }),
+            ).rejects.toThrow(UnprocessableEntityException);
+        });
+
         it('404s a parent team from another org (no existence leak)', async () => {
             const { service, teams } = build();
             teams.findOne.mockResolvedValue(null); // parent lookup is org-filtered

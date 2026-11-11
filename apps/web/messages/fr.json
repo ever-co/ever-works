@@ -1571,6 +1571,7 @@
                 "priority": "Priorité",
                 "labels": "Étiquettes",
                 "labelsPlaceholder": "séparées par des virgules",
+                "labelsTooLong": "Les étiquettes de plus de {max} caractères sont raccourcies à leurs {max} premiers.",
                 "labelsHint": "Séparez plusieurs étiquettes par des virgules.",
                 "labelsAutoHint": "Déduites du titre tant que vous ne les modifiez pas. Séparez plusieurs étiquettes par des virgules.",
                 "organize": "Organiser",
@@ -1845,6 +1846,8 @@
                 "required": "Required",
                 "remove": "Remove",
                 "addCheck": "Add check",
+                "tooManyChecks": "A Task can have at most {max} checks; this one has {count}. Remove some, then save.",
+                "commandTooLong": "The command of the check “{name}” is {length} characters long; a check command can be at most {max} characters.",
                 "kinds": {
                     "build": "Build",
                     "test": "Test",
@@ -3577,7 +3580,8 @@
                     "notManageable": "Seats are adjusted on a paid plan once card payments are enabled.",
                     "save": "Save",
                     "saved": "Seats updated",
-                    "saveError": "Failed to update seats"
+                    "saveError": "Failed to update seats",
+                    "tooMany": "Vous pouvez définir au maximum {max} sièges."
                 },
                 "payg": {
                     "title": "Pay-as-you-go",
@@ -9285,6 +9289,7 @@
                 "targetInvalid": "Target value must be a number.",
                 "unitRequired": "Unit is required.",
                 "dodRequired": "A delivery Goal needs at least one Definition-of-Done criterion.",
+                "dodTooLong": "Au plus 50 critères, de 500 caractères maximum chacun.",
                 "deadlineInvalid": "Deadline is not a valid date.",
                 "createFailed": "Couldn't create the Goal. Please try again."
             },
@@ -9493,7 +9498,9 @@
                     "workerModelHelp": "Free text; passed through to iteration runs.",
                     "assignedAgent": "Pinned agent",
                     "assignedAgentNone": "No pin (round-robin)",
-                    "assignedAgentHelp": "Routing always picks this agent. Without a pin the router round-robins over the agents that have already worked this Goal — and, for a brand-new Goal, over the eligible agents in its scope — so the loop can start without one."
+                    "assignedAgentHelp": "Routing always picks this agent. Without a pin the router round-robins over the agents that have already worked this Goal — and, for a brand-new Goal, over the eligible agents in its scope — so the loop can start without one.",
+                    "assignedAgentDeleted": "Agent supprimé",
+                    "assignedAgentDeletedHelp": "L’agent épinglé a été supprimé ou n’est plus disponible : aucun agent ne prend ce travail en charge. Choisissez un autre agent ou retirez l’épinglage."
                 },
                 "executionTargets": {
                     "cloud": "Cloud",
@@ -10945,7 +10952,7 @@
             },
             "prompt": {
                 "minLength": "L'invite doit comporter au moins 10 caractères",
-                "maxLength": "L'invite doit comporter moins de 1000 caractères"
+                "maxLength": "L'invite doit comporter moins de 4000 caractères"
             },
             "oauthRequired": "Connexion OAuth requise. Veuillez connecter votre compte {provider} en premier.",
             "githubRequired": "Connexion GitHub requise. Veuillez connecter votre compte GitHub en premier.",

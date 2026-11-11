@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { TerminalFrame, TerminalTransport } from '@ever-works/plugin';
 import { PtyLocalPlugin, makePtyLocalSessionId } from '../pty-local.plugin.js';
+import { detectMuslLinux, muslBlocksPtyAddon, type MuslProbe } from '../musl.js';
 
 /**
  * The suite exercises the full pump contract against PLAIN child
@@ -72,6 +73,14 @@ function decodeStdout(frames: TerminalFrame[]): string {
 }
 
 const NODE = process.execPath;
+/**
+ * The child's environment. Empty, except on Windows: once the real PTY loads
+ * there (0.15 does on Node 26), ConPTY refuses an empty environment block
+ * (exit 87), where the pipe floor never cared. Real callers pass the node's
+ * allowlisted env, which carries `SystemRoot`.
+ */
+const ENV: Record<string, string> =
+	process.platform === 'win32' ? { SystemRoot: process.env.SystemRoot ?? 'C:\\Windows' } : {};
 
 describe('PtyLocalPlugin', () => {
 	it('streams stdout as sequenced frames and publishes the exit frame BEFORE resolving', async () => {
@@ -83,7 +92,7 @@ describe('PtyLocalPlugin', () => {
 				runId: '2f9d1f2a-9c7e-4b1a-8f0d-0a1b2c3d4e5f',
 				command: [NODE, '-e', 'process.stdout.write("hello-terminal")'],
 				cwd: process.cwd(),
-				env: {},
+				env: ENV,
 				preamble: [{ kind: 'error', message: 'starting…' }]
 			},
 			h.transport
@@ -122,7 +131,7 @@ describe('PtyLocalPlugin', () => {
 				runId,
 				command: [NODE, '-e', 'process.exit(0)'],
 				cwd: process.cwd(),
-				env: {}
+				env: ENV
 			},
 			h.transport
 		);
@@ -138,6 +147,42 @@ describe('PtyLocalPlugin', () => {
 		expect(makePtyLocalSessionId('run-1', 4242)).toBe('pty-local:run-1:4242');
 		expect(makePtyLocalSessionId('run-1', undefined)).toBe('pty-local:run-1:no-pid');
 		expect(makePtyLocalSessionId('run-1', Number.NaN)).toBe('pty-local:run-1:no-pid');
+		expect(makePtyLocalSessionId('run-1', 0)).toBe('pty-local:run-1:no-pid');
+	});
+
+	it('detectMuslLinux: files first, the report only when they say nothing, never throwing', () => {
+		const probe = (over: Partial<MuslProbe>): MuslProbe => ({
+			platform: 'linux',
+			readFile: () => null,
+			readDir: () => [],
+			reportHeader: () => {
+				throw new Error('the report must not be read');
+			},
+			...over
+		});
+		expect(detectMuslLinux(probe({ readDir: () => ['ld-musl-x86_64.so.1'] }))).toBe(true);
+		expect(detectMuslLinux(probe({ readFile: () => 'exec /lib/ld-musl-x86_64.so.1 --list "$@"' }))).toBe(true);
+		expect(detectMuslLinux(probe({ readFile: () => '#! /bin/bash\n# GNU C Library ldd' }))).toBe(false);
+		expect(detectMuslLinux(probe({ reportHeader: () => ({ glibcVersionRuntime: '2.36' }) }))).toBe(false);
+		expect(detectMuslLinux(probe({ reportHeader: () => ({}) }))).toBe(true);
+		expect(detectMuslLinux(probe({ platform: 'win32', readDir: () => ['ld-musl-x86_64.so.1'] }))).toBe(false);
+		expect(detectMuslLinux(probe({}))).toBe(false);
+	});
+
+	it('muslBlocksPtyAddon: only on musl, and not when a source build of the addon exists', () => {
+		const pkg = () => '/app/node_modules/@homebridge/node-pty-prebuilt-multiarch/package.json';
+		expect(muslBlocksPtyAddon(pkg, false, () => false)).toBe(false);
+		expect(muslBlocksPtyAddon(pkg, true, () => false)).toBe(true);
+		expect(muslBlocksPtyAddon(pkg, true, (path) => /build[\\/]Release[\\/]pty\.node$/.test(path))).toBe(false);
+		expect(
+			muslBlocksPtyAddon(
+				() => {
+					throw new Error('not installed');
+				},
+				true,
+				() => true
+			)
+		).toBe(true);
 	});
 
 	it('a non-zero exit is reported as crashed', async () => {
@@ -148,7 +193,7 @@ describe('PtyLocalPlugin', () => {
 				runId: '2f9d1f2a-9c7e-4b1a-8f0d-0a1b2c3d4e5f',
 				command: [NODE, '-e', 'process.exit(3)'],
 				cwd: process.cwd(),
-				env: {}
+				env: ENV
 			},
 			h.transport
 		);
@@ -171,7 +216,7 @@ describe('PtyLocalPlugin', () => {
 					'process.stdin.once("data",(d)=>{process.stdout.write("echo:"+d.toString().trim());process.exit(0);})'
 				],
 				cwd: process.cwd(),
-				env: {}
+				env: ENV
 			},
 			h.transport
 		);
@@ -191,7 +236,7 @@ describe('PtyLocalPlugin', () => {
 				runId: '2f9d1f2a-9c7e-4b1a-8f0d-0a1b2c3d4e5f',
 				command: [NODE, '-e', 'setInterval(()=>{},1000)'],
 				cwd: process.cwd(),
-				env: {}
+				env: ENV
 			},
 			h.transport
 		);
@@ -208,7 +253,7 @@ describe('PtyLocalPlugin', () => {
 				runId: '2f9d1f2a-9c7e-4b1a-8f0d-0a1b2c3d4e5f',
 				command: [NODE, '-e', 'process.stderr.write("warn-line");process.exit(0)'],
 				cwd: process.cwd(),
-				env: {}
+				env: ENV
 			},
 			h.transport
 		);
@@ -230,7 +275,7 @@ describe('PtyLocalPlugin', () => {
 					runId: '2f9d1f2a-9c7e-4b1a-8f0d-0a1b2c3d4e5f',
 					command: [],
 					cwd: process.cwd(),
-					env: {}
+					env: ENV
 				},
 				h.transport
 			)
@@ -263,7 +308,7 @@ describe('PtyLocalPlugin', () => {
 					runId: '2f9d1f2a-9c7e-4b1a-8f0d-0a1b2c3d4e5f',
 					command: [NODE, '-e', 'process.stdout.write("floor-ok")'],
 					cwd: process.cwd(),
-					env: {}
+					env: ENV
 				},
 				h.transport
 			);
@@ -299,7 +344,7 @@ describe('PtyLocalPlugin', () => {
 					runId: '2f9d1f2a-9c7e-4b1a-8f0d-0a1b2c3d4e5f',
 					command: [NODE, '-e', 'process.stdout.write("degraded")'],
 					cwd: process.cwd(),
-					env: {}
+					env: ENV
 				},
 				h.transport
 			);

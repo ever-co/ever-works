@@ -18,7 +18,7 @@ export const WAVE5_OPERATIONS: OperationSpec[] = [
         summary: 'AI-generate a work’s name and description from a prompt.',
         kind: 'action',
         body: true,
-        bodyHint: 'prompt or topic describing the work (string).',
+        bodyHint: 'work_name, prompt (what the Work is about), optional ai_provider.',
     },
     {
         toolName: 'cancel_generation',
@@ -50,7 +50,7 @@ export const WAVE5_OPERATIONS: OperationSpec[] = [
         summary: 'Analyze a repository to link it to a work.',
         kind: 'action',
         body: true,
-        bodyHint: 'repository URL (and optional provider).',
+        bodyHint: 'sourceUrl (the repository URL), optional gitProvider.',
     },
     {
         toolName: 'process_community_prs',
@@ -98,7 +98,11 @@ export const WAVE5_OPERATIONS: OperationSpec[] = [
             },
         ],
         body: true,
-        bodyHint: 'Any of: name, settings.',
+        bodyHint:
+            'kind ("website" | "work" | "mission" | "company"), and any of: name, description, branch, betaBranch.',
+        // Works-security: re-points the branch new Works are built from.
+        requiresConfirmation: true,
+        confirmationKind: 'privileged',
     },
 
     // Organizations
@@ -193,7 +197,7 @@ export const WAVE5_OPERATIONS: OperationSpec[] = [
             },
         ],
         body: true,
-        bodyHint: 'enabled (boolean) and/or channels (array of channel ids).',
+        bodyHint: 'channelIds (array of notification channel ids; [] mutes the event).',
     },
 
     // Memory facts (AW-07) — "remember…" in chat lands as an ACTIVE fact

@@ -3,6 +3,7 @@ import {
     TASK_CREATE_ALLOWED_FIELDS,
     TASK_PRIVILEGED_FIELDS,
     TASK_UPDATE_ALLOWED_FIELDS,
+    addsAgentToTask,
     changesTaskLabels,
     createsStartedTask,
     mentionsSomeone,
@@ -175,7 +176,8 @@ export const OPERATION_REGISTRY: OperationSpec[] = [
         requiresConfirmation: true,
         confirmationKind: 'privileged',
         body: true,
-        bodyHint: 'name, title, scope, scopeId, aiProvider, model, capabilities[].',
+        bodyHint:
+            'scope ("tenant" | "mission" | "idea" | "work"), missionId / ideaId / workId (the id the scope names; none for tenant), name, optional title, capabilities (free text, one string), aiProviderId, modelId.',
     },
     {
         toolName: 'list_agent_templates',
@@ -217,7 +219,7 @@ export const OPERATION_REGISTRY: OperationSpec[] = [
         params: [id('Agent id')],
         body: true,
         bodyHint:
-            'Any of: name, title, model, capabilities, permissions, avatar, heartbeatCadence.',
+            'Any of: name, title, capabilities (free text, one string), aiProviderId, modelId, heartbeatCadence, idleBehavior, permissions, targets, avatarMode, avatarIcon.',
     },
     {
         toolName: 'delete_agent',
@@ -516,7 +518,11 @@ export const OPERATION_REGISTRY: OperationSpec[] = [
         kind: 'update',
         params: [id('Task id')],
         body: true,
-        bodyHint: 'assigneeId.',
+        bodyHint: 'assigneeType ("user" | "agent"), assigneeId (that user’s or agent’s id).',
+        // Works-security: an assigned Agent runs on the next `→ in_progress`;
+        // picking it is the user's call, as `agentId` is on update_task.
+        confirmWhen: addsAgentToTask,
+        confirmationKind: 'privileged',
     },
     {
         toolName: 'add_task_reviewer',
@@ -526,7 +532,10 @@ export const OPERATION_REGISTRY: OperationSpec[] = [
         kind: 'update',
         params: [id('Task id')],
         body: true,
-        bodyHint: 'reviewerId.',
+        bodyHint: 'reviewerType ("user" | "agent"), reviewerId (that user’s or agent’s id).',
+        // Works-security: a reviewer Agent runs on `→ in_review` (see add_task_assignee).
+        confirmWhen: addsAgentToTask,
+        confirmationKind: 'privileged',
     },
     {
         toolName: 'add_task_approver',
@@ -536,7 +545,10 @@ export const OPERATION_REGISTRY: OperationSpec[] = [
         kind: 'update',
         params: [id('Task id')],
         body: true,
-        bodyHint: 'approverId.',
+        bodyHint: 'approverType ("user" | "agent"), approverId (that user’s or agent’s id).',
+        // Works-security: an approver Agent decides the `→ done` gate (see add_task_assignee).
+        confirmWhen: addsAgentToTask,
+        confirmationKind: 'privileged',
     },
     {
         toolName: 'get_task_chat',
@@ -556,7 +568,7 @@ export const OPERATION_REGISTRY: OperationSpec[] = [
         confirmationKind: 'privileged',
         params: [id('Task id')],
         body: true,
-        bodyHint: 'content.',
+        bodyHint: 'body (the message text; an @mention wakes that agent or pings that person).',
     },
     {
         toolName: 'get_task_spend',
@@ -593,7 +605,8 @@ export const OPERATION_REGISTRY: OperationSpec[] = [
         requiresConfirmation: true,
         confirmationKind: 'privileged',
         body: true,
-        bodyHint: 'name, description, definition.',
+        bodyHint:
+            'ownerType ("tenant" | "mission" | "idea" | "work" | "agent"), ownerId, title, description, instructionsMd (the skill’s instructions, Markdown), optional slug.',
     },
     {
         toolName: 'update_skill',
@@ -605,7 +618,7 @@ export const OPERATION_REGISTRY: OperationSpec[] = [
         confirmationKind: 'privileged',
         params: [id('Skill id')],
         body: true,
-        bodyHint: 'Any of: name, description, definition.',
+        bodyHint: 'Any of: title, description, instructionsMd, version.',
     },
     {
         toolName: 'delete_skill',
@@ -633,7 +646,8 @@ export const OPERATION_REGISTRY: OperationSpec[] = [
         requiresConfirmation: true,
         confirmationKind: 'privileged',
         body: true,
-        bodyHint: 'slug.',
+        bodyHint:
+            'slug (of the catalog skill), ownerType ("tenant" | "mission" | "idea" | "work" | "agent"), ownerId.',
     },
     {
         toolName: 'list_skill_bindings',
@@ -653,7 +667,8 @@ export const OPERATION_REGISTRY: OperationSpec[] = [
         confirmationKind: 'privileged',
         params: [id('Skill id')],
         body: true,
-        bodyHint: 'agentId, priority.',
+        bodyHint:
+            'targetType ("tenant" | "mission" | "idea" | "work" | "agent"), targetId (none for tenant), optional priority.',
     },
     {
         toolName: 'delete_skill_binding',
@@ -718,7 +733,8 @@ export const OPERATION_REGISTRY: OperationSpec[] = [
         summary: 'Create a notification channel.',
         kind: 'create',
         body: true,
-        bodyHint: 'type, name, config.',
+        bodyHint:
+            'pluginId (the channel plugin), name, targetConfig (object: that plugin’s destination settings).',
         // Works-security: a channel is a destination the platform sends
         // notification content to — an injected one would forward it out.
         requiresConfirmation: true,
@@ -732,8 +748,9 @@ export const OPERATION_REGISTRY: OperationSpec[] = [
         kind: 'update',
         params: [id('Channel id')],
         body: true,
-        bodyHint: 'Any of: name, config, enabled.',
-        // Works-security: changing `config` re-points the destination.
+        bodyHint: 'Any of: name, targetConfig (object), disabled (boolean).',
+        // Works-security: changing `targetConfig` re-points the destination;
+        // `disabled: false` turns delivery back on.
         confirmWhen: redirectsNotificationChannel,
         confirmationKind: 'privileged',
     },
@@ -770,7 +787,7 @@ export const OPERATION_REGISTRY: OperationSpec[] = [
         summary: 'Create a new API key.',
         kind: 'create',
         body: true,
-        bodyHint: 'name, optional expiresAt/scopes.',
+        bodyHint: 'name, optional expiresAt (ISO date).',
         // Works-security: a personal key acts as the user everywhere. It is
         // minted only on the user's confirmation, and the plaintext key goes
         // to the user's screen once — never into the model's context (where a
@@ -807,7 +824,7 @@ export const OPERATION_REGISTRY: OperationSpec[] = [
         kind: 'create',
         params: [workId],
         body: true,
-        bodyHint: 'userId or email, role.',
+        bodyHint: 'email, role ("viewer" | "editor" | "manager").',
         // Works-security: grants a person access to the Work.
         requiresConfirmation: true,
         confirmationKind: 'privileged',
@@ -882,7 +899,8 @@ export const OPERATION_REGISTRY: OperationSpec[] = [
         kind: 'create',
         params: [workId],
         body: true,
-        bodyHint: 'cap, currency, scope (global or pluginId), overageBehaviour.',
+        bodyHint:
+            'scope ("global" | "plugin"), pluginId (only for scope "plugin"), monthlyCapCents (integer, in cents), optional allowOverage (boolean), currency.',
         // Works-security: a budget decides how much the platform may spend.
         requiresConfirmation: true,
         confirmationKind: 'privileged',
@@ -895,7 +913,7 @@ export const OPERATION_REGISTRY: OperationSpec[] = [
         kind: 'update',
         params: [workId, { name: 'budgetId', in: 'path', required: true, type: 'string' }],
         body: true,
-        bodyHint: 'Any of: cap, overageBehaviour.',
+        bodyHint: 'Any of: monthlyCapCents (integer, in cents), allowOverage (boolean), currency.',
         // Works-security: raising a cap / changing overage allows more spend.
         requiresConfirmation: true,
         confirmationKind: 'privileged',
@@ -951,7 +969,8 @@ export const OPERATION_REGISTRY: OperationSpec[] = [
         summary: 'Create a webhook.',
         kind: 'create',
         body: true,
-        bodyHint: 'url, events[], optional secret.',
+        bodyHint:
+            'url, optional events[], workId, description. The platform generates the signing key itself.',
         // Works-security: a webhook ships event payloads to an outside URL.
         requiresConfirmation: true,
         confirmationKind: 'privileged',
@@ -964,8 +983,9 @@ export const OPERATION_REGISTRY: OperationSpec[] = [
         kind: 'update',
         params: [id('Webhook id')],
         body: true,
-        bodyHint: 'Any of: url, events, enabled.',
-        // Works-security: changing url / events re-points what goes out.
+        bodyHint: 'Any of: status ("active" | "paused"), url, events[], description.',
+        // Works-security: changing url / events re-points what goes out;
+        // `status: 'active'` resumes delivery.
         confirmWhen: redirectsWebhook,
         confirmationKind: 'privileged',
     },
@@ -1036,7 +1056,7 @@ export const OPERATION_REGISTRY: OperationSpec[] = [
         kind: 'update',
         params: [id('Organization id')],
         body: true,
-        bodyHint: 'Any of: name, slug, settings.',
+        bodyHint: 'Any of: displayName, legalName, countryCode, vision.',
     },
     {
         toolName: 'check_organization_slug',
@@ -1075,7 +1095,8 @@ export const OPERATION_REGISTRY: OperationSpec[] = [
         confirmationKind: 'privileged',
         params: [id('Work id')],
         body: true,
-        bodyHint: 'path, title, content.',
+        bodyHint:
+            'path, title, class ("brand" | "legal" | "seo" | "style" | "glossary" | "competitors" | "personas" | "research" | "output" | "freeform" | "decision"), body (Markdown), optional description, tags[].',
     },
     {
         toolName: 'update_kb_document',
@@ -1087,7 +1108,7 @@ export const OPERATION_REGISTRY: OperationSpec[] = [
         confirmationKind: 'privileged',
         params: [id('Work id'), { name: 'docId', in: 'path', required: true, type: 'string' }],
         body: true,
-        bodyHint: 'Any of: title, content.',
+        bodyHint: 'Any of: title, description, body (Markdown), tags[].',
     },
     {
         toolName: 'delete_kb_document',
@@ -1114,7 +1135,7 @@ export const OPERATION_REGISTRY: OperationSpec[] = [
         kind: 'create',
         params: [id('Work id')],
         body: true,
-        bodyHint: 'name, optional color.',
+        bodyHint: 'slug, name, optional color, description.',
     },
 
     // ── Templates ────────────────────────────────────────────────
@@ -1132,7 +1153,12 @@ export const OPERATION_REGISTRY: OperationSpec[] = [
         summary: 'Create a custom website template.',
         kind: 'create',
         body: true,
-        bodyHint: 'name, baseTemplateId, settings.',
+        bodyHint:
+            'kind ("website" | "work" | "mission" | "company"), repositoryUrl, optional name, description, branch.',
+        // Works-security: any GitHub repository becomes a template the user's
+        // next Work can start from — an injected tool result must not add one.
+        requiresConfirmation: true,
+        confirmationKind: 'privileged',
     },
     {
         toolName: 'set_default_template',
@@ -1141,7 +1167,11 @@ export const OPERATION_REGISTRY: OperationSpec[] = [
         summary: 'Set the default website template.',
         kind: 'update',
         body: true,
-        bodyHint: 'templateId.',
+        bodyHint: 'kind ("website" | "work" | "mission" | "company"), templateId.',
+        // Works-security: the default decides which repository every new Work
+        // of that kind is built from.
+        requiresConfirmation: true,
+        confirmationKind: 'privileged',
     },
     {
         toolName: 'fork_template',
@@ -1150,7 +1180,11 @@ export const OPERATION_REGISTRY: OperationSpec[] = [
         summary: 'Fork an existing template.',
         kind: 'create',
         body: true,
-        bodyHint: 'templateId, name.',
+        bodyHint:
+            'kind ("website" | "work" | "mission" | "company"), templateId, targetOwner (the GitHub account or organization to fork into).',
+        // Works-security: creates a repository in the user's GitHub account or organization.
+        requiresConfirmation: true,
+        confirmationKind: 'privileged',
     },
 
     // ── Plugins & integrations ───────────────────────────────────

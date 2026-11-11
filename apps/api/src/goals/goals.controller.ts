@@ -48,6 +48,7 @@ import {
 import { ScopeContextService } from '../scope';
 import { CreateGoalDto, UpdateGoalDto } from './dto/goal.dto';
 import {
+    AddGoalDodCriterionDto,
     ApproveGoalDodDto,
     NudgeGoalDto,
     PatchGoalDodCriterionDto,
@@ -75,6 +76,8 @@ import {
  * Autonomy layer (`GoalOrchestratorService`) adds the execution loop:
  *   PATCH  /api/me/goals/:id/limits            budgets + routing hints
  *   PUT    /api/me/goals/:id/dod               replace the DoD checklist
+ *   POST   /api/me/goals/:id/dod/criteria      add one operator criterion
+ *   DELETE /api/me/goals/:id/dod/:criterionId  remove one criterion
  *   POST   /api/me/goals/:id/dod/propose       planner-authored entries
  *   POST   /api/me/goals/:id/dod/approve       approve proposed entries
  *   PATCH  /api/me/goals/:id/dod/:criterionId  tick / untick / waive one
@@ -455,6 +458,70 @@ export class GoalsController {
             requireHumanSession(auth, "sign off a Goal's definition of done");
         }
         return this.orchestrator.setDodCriteria(auth.userId, id, body.criteria ?? null);
+    }
+
+    // Review of #3172 — the DoD tab adds and removes ONE criterion here, applied
+    // to the list as stored at the write. Replacing the whole list (PUT above)
+    // from a copy read a moment earlier overwrote a planner proposal or another
+    // tab's edit that landed in between.
+
+    @Post(':id/dod/criteria')
+    @ApiOperation({
+        summary:
+            'Add one operator criterion (open, approved) to the Definition of Done as stored now.',
+    })
+    @HttpCode(HttpStatus.OK)
+    @Throttle({ long: { limit: 30, ttl: 60_000 } })
+    async addDodCriterion(
+        @CurrentUser() auth: AuthenticatedUser,
+        @Param('id', ParseUUIDPipe) id: string,
+        @Body() body: AddGoalDodCriterionDto,
+        // Appended LAST so positional callers (specs) keep their meaning.
+        @Req() req?: MachinePrincipalRequest,
+    ): Promise<GoalDto> {
+        // The same gate as replacing the list: a machine principal proposes.
+        // An open criterion signs nothing off, so a personal API key may add one.
+        refuseMachinePrincipalAction(
+            auth,
+            req,
+            "add to a Goal's definition of done",
+            'propose criteria with /dod/propose; a person approves them.',
+        );
+        await this.requireScopedGoal(auth.userId, id);
+        return this.orchestrator.addDodCriterion(auth.userId, id, body.text);
+    }
+
+    @Delete(':id/dod/:criterionId')
+    @ApiOperation({
+        summary: 'Remove one criterion from the Definition of Done as stored now.',
+    })
+    @HttpCode(HttpStatus.OK)
+    @Throttle({ long: { limit: 30, ttl: 60_000 } })
+    async removeDodCriterion(
+        @CurrentUser() auth: AuthenticatedUser,
+        @Param('id', ParseUUIDPipe) id: string,
+        @Param('criterionId') criterionId: string,
+        // Appended LAST so positional callers (specs) keep their meaning.
+        @Req() req?: MachinePrincipalRequest,
+    ): Promise<GoalDto> {
+        refuseMachinePrincipalAction(
+            auth,
+            req,
+            "remove from a Goal's definition of done",
+            'a person edits the definition of done in the app.',
+        );
+        const current = await this.service.getForUser(
+            auth.userId,
+            id,
+            this.scopeContext?.getScope(),
+        );
+        // Dropping an open, approved criterion is a sign-off, exactly as it is
+        // through the PUT: a person's session only.
+        const remaining = (current.dodCriteria ?? []).filter((entry) => entry.id !== criterionId);
+        if (dodSignOffChanges(current.dodCriteria, remaining).length > 0) {
+            requireHumanSession(auth, "sign off a Goal's definition of done");
+        }
+        return this.orchestrator.removeDodCriterion(auth.userId, id, criterionId);
     }
 
     @Post(':id/dod/propose')

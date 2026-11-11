@@ -5,6 +5,7 @@ import {
     Optional,
     UnprocessableEntityException,
 } from '@nestjs/common';
+import { createHash } from 'node:crypto';
 import { Task } from '../entities/task.entity';
 import type { VisibilityAggregate } from '@ever-works/contracts';
 import { RecordVisibilityService } from '../record-visibility/record-visibility.service';
@@ -114,7 +115,9 @@ export class TeamsService {
             throw new NotFoundException(`Organization ${orgId} not found`);
         }
 
-        const slug = this.normalizeSlug(input.slug ?? input.name);
+        const requestedSlug =
+            typeof input.slug === 'string' && input.slug.trim() ? input.slug : undefined;
+        const slug = this.normalizeSlug(requestedSlug ?? input.name, requestedSlug !== undefined);
         if (input.parentTeamId) {
             await this.assertValidParent(orgId, null, input.parentTeamId);
         }
@@ -659,9 +662,23 @@ export class TeamsService {
         return agent;
     }
 
-    private normalizeSlug(raw: string): string {
+    /**
+     * The team's slug: `slugifyText` of the requested slug, else of the name.
+     *
+     * `slugifyText` keeps ASCII word characters only, so a team NAMED in a
+     * script it drops — "开发团队", "Отдел продаж", "فريق المبيعات" — came out as
+     * '' or '-' and the create answered 422, although the web's New Team dialog
+     * sends only the name and the app ships those locales. Such a name now gets
+     * `team-<hash of the name>` (stable, unique enough; a clash is the usual
+     * 409). A name with no letter or digit at all, and an explicit `slug` that
+     * reduces to nothing, are still refused.
+     */
+    private normalizeSlug(raw: string, explicitSlug = false): string {
         const slug = slugifyText(raw);
         if (!slug || slug === '-') {
+            if (!explicitSlug && /[\p{L}\p{N}]/u.test(raw)) {
+                return `team-${createHash('sha256').update(raw.trim()).digest('hex').slice(0, 10)}`;
+            }
             throw new UnprocessableEntityException('Team name does not produce a valid slug');
         }
         return slug.slice(0, 100);

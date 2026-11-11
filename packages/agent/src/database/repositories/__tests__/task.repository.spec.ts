@@ -183,6 +183,55 @@ describe('TaskRepository.findFanoutCandidates — integration Tasks (SQLite)', (
     });
 });
 
+// Review of #3164 (finding 1): a recurring TEMPLATE is the recurrence scan's to
+// fire. One made recurring while a one-time run was pending (before
+// `setRecurring` cleared `scheduledAt`) still carries both, and the one-time
+// scan must not dispatch it on top of its recurring copies.
+describe('TaskRepository.findDueScheduledTasks (SQLite)', () => {
+    let dataSource: DataSource;
+    let tasks: TaskRepository;
+    const OWNER = randomUUID();
+    const NOW = new Date('2026-11-11T09:00:00.000Z');
+    const DUE = new Date('2026-11-11T08:00:00.000Z');
+
+    const makeTask = (overrides: Partial<Task>) =>
+        dataSource.getRepository(Task).save(
+            dataSource.getRepository(Task).create({
+                userId: OWNER,
+                slug: `T-${randomUUID().slice(0, 6)}`,
+                title: 'Ship it',
+                status: TaskStatus.TODO,
+                createdByType: 'user',
+                createdById: OWNER,
+                tenantId: TENANT,
+                organizationId: ORG_A,
+                ...overrides,
+            } as Partial<Task>),
+        );
+
+    beforeAll(async () => {
+        dataSource = await createDomainEventsDataSource();
+        tasks = new TaskRepository(dataSource.getRepository(Task));
+    });
+
+    afterAll(async () => {
+        if (dataSource?.isInitialized) await dataSource.destroy();
+    });
+
+    it('returns a due one-time Task but never a recurring template that still has scheduledAt', async () => {
+        const oneTime = await makeTask({ scheduledAt: DUE });
+        await makeTask({
+            scheduledAt: DUE,
+            isRecurring: true,
+            recurrenceCron: '0 9 * * 5',
+            nextOccurrenceAt: new Date('2026-11-13T09:00:00.000Z'),
+        });
+
+        const ids = (await tasks.findDueScheduledTasks(50, NOW)).map((task) => task.id);
+        expect(ids).toEqual([oneTime.id]);
+    });
+});
+
 describe('TaskRepository.wouldCreateCycle', () => {
     function makeSvc(parentChain: Record<string, string | null>) {
         const repo = {

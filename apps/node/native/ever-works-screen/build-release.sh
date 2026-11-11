@@ -4,7 +4,11 @@
 # Builds twice in clean target directories and compares the SHA-256 of both
 # binaries; a mismatch fails. Writes unsigned-release-metadata.json with
 # productionEligible: false. Uploads nothing. Run by the Screen Helper workflow
-# on Linux and macOS (see PACKAGING.md).
+# on Linux and macOS (see PACKAGING.md); the released linux-x64 build runs it in
+# a pinned container (build-release-linux.sh).
+#
+# SCREEN_HELPER_TARGET (optional) builds another target than the host's, where
+# the host can: darwin-x64 on an Apple silicon Mac, darwin-arm64 on an Intel one.
 set -euo pipefail
 
 cd "$(dirname "$0")"
@@ -12,11 +16,25 @@ out_dir="${1:-dist}"
 mkdir -p "$out_dir"
 
 case "$(uname -s)-$(uname -m)" in
-  Linux-x86_64) target_name="linux-x64" ;;
-  Darwin-arm64) target_name="darwin-arm64" ;;
-  Darwin-x86_64) target_name="darwin-x64" ;;
+  Linux-x86_64) host_target="linux-x64" ;;
+  Darwin-arm64) host_target="darwin-arm64" ;;
+  Darwin-x86_64) host_target="darwin-x64" ;;
   *) echo "unsupported build host: $(uname -s)-$(uname -m)" >&2; exit 2 ;;
 esac
+
+target_name="${SCREEN_HELPER_TARGET:-$host_target}"
+cargo_target=()
+binary_dir="release"
+if [ "$target_name" != "$host_target" ]; then
+  case "$host_target>$target_name" in
+    darwin-*">darwin-x64") triple="x86_64-apple-darwin" ;;
+    darwin-*">darwin-arm64") triple="aarch64-apple-darwin" ;;
+    *) echo "cannot build $target_name on a $host_target host" >&2; exit 2 ;;
+  esac
+  rustup target add "$triple"
+  cargo_target=(--target "$triple")
+  binary_dir="$triple/release"
+fi
 
 if [ ! -f Cargo.lock ]; then
   echo "Cargo.lock is missing: generate it once (cargo generate-lockfile), review and commit it first" >&2
@@ -33,11 +51,11 @@ hash_of() {
 
 for pass in 1 2; do
   rm -rf "target-repro-$pass"
-  cargo build --release --locked --target-dir "target-repro-$pass"
+  cargo build --release --locked ${cargo_target[@]+"${cargo_target[@]}"} --target-dir "target-repro-$pass"
 done
 
-first="target-repro-1/release/ever-works-screen"
-second="target-repro-2/release/ever-works-screen"
+first="target-repro-1/$binary_dir/ever-works-screen"
+second="target-repro-2/$binary_dir/ever-works-screen"
 sha_one="$(hash_of "$first")"
 sha_two="$(hash_of "$second")"
 if [ "$sha_one" != "$sha_two" ]; then
@@ -46,7 +64,7 @@ if [ "$sha_one" != "$sha_two" ]; then
 fi
 
 cp "$first" "$out_dir/ever-works-screen"
-version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
+version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1 | tr -d '\r')"
 cat > "$out_dir/unsigned-release-metadata.json" <<JSON
 {
   "schemaVersion": 1,

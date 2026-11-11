@@ -77,6 +77,13 @@ export async function exportAccountData(includeSecretsOrToggles: boolean | Expor
     }
 }
 
+/**
+ * Server-action import (`previewImport` / `applyImport`). The Settings import
+ * dialog no longer uses these: Next caps a server action body at 1 MB, so it
+ * posts to the route handlers `/api/account/import/{preview,apply}`
+ * (`lib/account/account-import-route.ts`), which take exports up to the import
+ * limit. Kept for any other caller; through these an import stays at 1 MB.
+ */
 export async function previewImport(payload: AccountExportPayload) {
     await ensureAuth();
     const parsed = accountExportPayloadSchema.safeParse(payload);

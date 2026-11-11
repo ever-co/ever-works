@@ -1571,6 +1571,7 @@
                 "priority": "Приоритет",
                 "labels": "Етикети",
                 "labelsPlaceholder": "разделени с запетая",
+                "labelsTooLong": "Етикетите, по-дълги от {max} знака, се съкращават до първите {max}.",
                 "labelsHint": "Разделяйте няколко етикета със запетаи.",
                 "labelsAutoHint": "Извличат се от заглавието, докато не ги редактирате. Разделяйте няколко етикета със запетаи.",
                 "organize": "Организиране",
@@ -1845,6 +1846,8 @@
                 "required": "Required",
                 "remove": "Remove",
                 "addCheck": "Add check",
+                "tooManyChecks": "A Task can have at most {max} checks; this one has {count}. Remove some, then save.",
+                "commandTooLong": "The command of the check “{name}” is {length} characters long; a check command can be at most {max} characters.",
                 "kinds": {
                     "build": "Build",
                     "test": "Test",
@@ -3577,7 +3580,8 @@
                     "notManageable": "Seats are adjusted on a paid plan once card payments are enabled.",
                     "save": "Save",
                     "saved": "Seats updated",
-                    "saveError": "Failed to update seats"
+                    "saveError": "Failed to update seats",
+                    "tooMany": "Можете да зададете най-много {max} места."
                 },
                 "payg": {
                     "title": "Pay-as-you-go",
@@ -9285,6 +9289,7 @@
                 "targetInvalid": "Target value must be a number.",
                 "unitRequired": "Unit is required.",
                 "dodRequired": "A delivery Goal needs at least one Definition-of-Done criterion.",
+                "dodTooLong": "Най-много 50 критерия, всеки до 500 знака.",
                 "deadlineInvalid": "Deadline is not a valid date.",
                 "createFailed": "Couldn't create the Goal. Please try again."
             },
@@ -9493,7 +9498,9 @@
                     "workerModelHelp": "Free text; passed through to iteration runs.",
                     "assignedAgent": "Pinned agent",
                     "assignedAgentNone": "No pin (round-robin)",
-                    "assignedAgentHelp": "Routing always picks this agent. Without a pin the router round-robins over the agents that have already worked this Goal — and, for a brand-new Goal, over the eligible agents in its scope — so the loop can start without one."
+                    "assignedAgentHelp": "Routing always picks this agent. Without a pin the router round-robins over the agents that have already worked this Goal — and, for a brand-new Goal, over the eligible agents in its scope — so the loop can start without one.",
+                    "assignedAgentDeleted": "Изтрит агент",
+                    "assignedAgentDeletedHelp": "Закаченият агент е изтрит или вече не е достъпен, затова никой агент не поема тази работа. Изберете друг агент или премахнете закачането."
                 },
                 "executionTargets": {
                     "cloud": "Cloud",
@@ -10945,7 +10952,7 @@
             },
             "prompt": {
                 "minLength": "Подсказката трябва да е поне 10 символа",
-                "maxLength": "Подсказката трябва да е по-малко от 1000 символа"
+                "maxLength": "Подсказката трябва да е по-малко от 4000 символа"
             },
             "oauthRequired": "Изисква се OAuth връзка. Моля, свържете акаунта си {provider} първо.",
             "githubRequired": "Изисква се GitHub връзка. Моля, свържете GitHub акаунта си първо.",

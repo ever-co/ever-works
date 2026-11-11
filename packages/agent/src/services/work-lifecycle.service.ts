@@ -84,8 +84,10 @@ import {
 } from '@src/ever-works-providers';
 import { config } from '@src/config';
 import {
+    getWorkCapabilities,
     isRepositoryWorkKind,
     normalizeWorkRepoDeclaredCommandPolicy,
+    workKindHasRepository,
     type AppSourceRecord,
 } from '@ever-works/contracts';
 import type { OnboardingWizardStateV2 } from '@ever-works/contracts/api';
@@ -602,6 +604,16 @@ export class WorkLifecycleService {
             createWorkDto,
             user.id,
         );
+        // `k8s-apps-tier` ("Ever Works Apps (managed)") deploys App Works only
+        // (an App Work returned above, through its own create path). Stored on
+        // a website Work it let the create succeed and failed every deploy
+        // after (`NoDeployCredentialsError`, or the plugin's own refusal).
+        if (deployProvider && this.deployFacade.isHiddenProvider(deployProvider)) {
+            throw new BadRequestException({
+                status: 'error',
+                message: `Unsupported deploy provider: ${deployProvider}`,
+            });
+        }
 
         // Ever Works Deploy is capped per user. The check is a no-op when
         // the user isn't picking it; we still want a hard fail BEFORE the
@@ -1583,6 +1595,225 @@ export class WorkLifecycleService {
         throw error;
     }
 
+    /**
+     * The `owner` / `organization` an update writes.
+     *
+     * - A value equal to the stored one, or to the RESOLVED owner the API
+     *   answers on GET (`getRepoOwner()`: a Work built from an Idea stores no
+     *   owner), is no change, so reading a Work and saving it back never fails.
+     * - A real change is refused once the Work's repositories exist
+     *   ({@link workRepositoriesExist}): every later read, push and sync
+     *   resolves them under the current owner.
+     * - A personal Work's repositories belong to its creator's account. When
+     *   the result is personal and the caller is not the creator (a manager
+     *   renaming a member's Work, or switching it from an organization to
+     *   personal), or nobody named an owner, the owner is the creator's
+     *   connected login, never the caller's.
+     */
+    private async resolveOwnershipUpdate(
+        work: Work,
+        updateDto: UpdateWorkDto,
+        user: User,
+    ): Promise<{ owner: string | undefined; organization: boolean }> {
+        const stored = { owner: work.owner ?? undefined, organization: Boolean(work.organization) };
+        const storedOwner = (work.owner ?? '').trim();
+        const resolvedOwner =
+            typeof work.getRepoOwner === 'function'
+                ? (work.getRepoOwner() ?? '').trim()
+                : storedOwner;
+        const requestedOwner =
+            typeof updateDto.owner === 'string' ? updateDto.owner.trim() : undefined;
+        const ownerChanged =
+            requestedOwner !== undefined &&
+            requestedOwner !== storedOwner &&
+            requestedOwner !== resolvedOwner;
+        const organizationChanged =
+            typeof updateDto.organization === 'boolean' &&
+            updateDto.organization !== stored.organization;
+        if (!ownerChanged && !organizationChanged) {
+            return stored;
+        }
+
+        const repositories = await this.workRepositoriesExist(work, user);
+        if (repositories === 'exist') {
+            throw new BadRequestException({
+                status: 'error',
+                message:
+                    'The owner of a Work’s repositories cannot be changed once they exist: ' +
+                    'they were created under the current owner.',
+            });
+        }
+        if (repositories === 'unknown') {
+            // Fail closed: a check that errored or timed out is not "no repository".
+            throw new ServiceUnavailableException({
+                status: 'error',
+                message:
+                    'Could not check whether this Work’s repositories already exist (the Git provider ' +
+                    'did not answer). Nothing was changed — try again in a moment.',
+            });
+        }
+
+        const organization = organizationChanged
+            ? (updateDto.organization as boolean)
+            : stored.organization;
+        let owner: string | undefined;
+        if (organization) {
+            owner = ownerChanged ? requestedOwner : stored.owner;
+        } else {
+            const isCreator = !work.userId || work.userId === user.id;
+            owner =
+                isCreator && ownerChanged && requestedOwner
+                    ? requestedOwner
+                    : await this.creatorGitLogin(work);
+        }
+        await this.assertGenerateStatusUnchanged(work);
+        return { owner, organization };
+    }
+
+    /**
+     * The checks above made Git provider calls; a generation may have started
+     * (and created repositories under the old owner) meanwhile. Re-read the
+     * row just before the write and refuse if its generate state moved.
+     */
+    private async assertGenerateStatusUnchanged(work: Work): Promise<void> {
+        const current = await this.workRepository.findById(work.id);
+        const before = work.generateStatus?.status ?? null;
+        const now = current ? (current.generateStatus?.status ?? null) : before;
+        if (now !== before) {
+            throw new ConflictException({
+                status: 'error',
+                message:
+                    'This Work’s generation state changed while its owner was being saved. ' +
+                    'Nothing was changed — reload and try again.',
+            });
+        }
+    }
+
+    /** Upper bound for each Git provider call an ownership change makes. */
+    private ownershipCheckTimeoutMs = 10_000;
+
+    /**
+     * `call`, or a rejection after {@link ownershipCheckTimeoutMs}. The provider
+     * client has no request timeout and its rate-limit handling may wait and
+     * retry for a long time; an ownership save must answer instead.
+     */
+    private withOwnershipCheckTimeout<T>(call: Promise<T>, what: string): Promise<T> {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const timeout = new Promise<never>((_, reject) => {
+            timer = setTimeout(
+                () =>
+                    reject(
+                        new Error(
+                            `${what} did not answer within ${this.ownershipCheckTimeoutMs} ms`,
+                        ),
+                    ),
+                this.ownershipCheckTimeoutMs,
+            );
+        });
+        return Promise.race([call, timeout]).finally(() => clearTimeout(timer));
+    }
+
+    /**
+     * Do the Work's repositories exist yet? `'exist'` after a successful (or a
+     * running) generation and for an App Work (its repository comes from its
+     * source). After a failed or cancelled first generation, `'exist'` only
+     * when a repository was recorded, or is found under the CURRENT owner, so
+     * a Work whose generation failed because its owner was wrong stays
+     * fixable. A provider call that errored (other than "not found") or timed
+     * out, with no repository found, answers `'unknown'`: the caller fails
+     * closed rather than reading it as "no repository".
+     */
+    private async workRepositoriesExist(
+        work: Work,
+        user: User,
+    ): Promise<'exist' | 'none' | 'unknown'> {
+        if (!workKindHasRepository(work.kind)) {
+            return 'none';
+        }
+        if (isAppWorkKind(work.kind)) {
+            return 'exist';
+        }
+        const status = work.generateStatus?.status;
+        if (status === GenerateStatusType.GENERATED || status === GenerateStatusType.GENERATING) {
+            return 'exist';
+        }
+        if (!status) {
+            return 'none';
+        }
+        // What `WorkWebsiteRepositoryStateService.isInitialized` reads as
+        // "the website repository was made": recorded on the row.
+        if (
+            work.website ||
+            work.deployProjectId ||
+            work.websiteTemplateLastCommit ||
+            work.websiteTemplateLastUpdatedAt ||
+            work.websiteTemplateLastCheckedAt
+        ) {
+            return 'exist';
+        }
+        const targets: Array<{ owner: string; repo: string }> = [];
+        if (typeof work.getWebsiteRepo === 'function') {
+            targets.push({ owner: work.getRepoOwner('website'), repo: work.getWebsiteRepo() });
+        }
+        if (getWorkCapabilities(work.kind).repos.data && typeof work.getDataRepo === 'function') {
+            targets.push({ owner: work.getRepoOwner('data'), repo: work.getDataRepo() });
+        }
+        let unsure = false;
+        for (const userId of [...new Set([user.id, work.userId].filter(Boolean))]) {
+            const authOptions = { userId, providerId: work.gitProvider, workId: work.id };
+            try {
+                const hasCredentials = await this.withOwnershipCheckTimeout(
+                    this.gitFacade.hasValidCredentials(authOptions),
+                    'The Git credential check',
+                );
+                if (!hasCredentials) continue;
+                for (const target of targets) {
+                    const exists = await this.withOwnershipCheckTimeout(
+                        this.gitFacade.repositoryExists(target.owner, target.repo, authOptions),
+                        `The ${target.owner}/${target.repo} lookup`,
+                    );
+                    if (exists) {
+                        return 'exist';
+                    }
+                }
+            } catch (error) {
+                unsure = true;
+                this.logger.warn(
+                    `Could not check the repositories of work ${work.id}: ${
+                        error instanceof Error ? error.message : String(error)
+                    }`,
+                );
+            }
+        }
+        return unsure ? 'unknown' : 'none';
+    }
+
+    /** The Work creator's login on the Work's git provider (a personal Work's owner). */
+    private async creatorGitLogin(work: Work): Promise<string> {
+        try {
+            const gitUser = await this.withOwnershipCheckTimeout(
+                this.gitFacade.getUser({ userId: work.userId, providerId: work.gitProvider }),
+                'The creator’s Git account lookup',
+            );
+            if (gitUser?.login) {
+                return gitUser.login;
+            }
+        } catch (error) {
+            this.logger.warn(
+                `Could not read the git login of the creator of work ${work.id}: ${
+                    error instanceof Error ? error.message : String(error)
+                }`,
+            );
+        }
+        throw new BadRequestException({
+            status: 'error',
+            message:
+                'A personal Work’s repositories belong to its creator, and the creator’s Git account ' +
+                'could not be read. Nothing was changed — try again, ask the creator to choose the ' +
+                'owner, or keep the organization.',
+        });
+    }
+
     async updateWork(id: string, updateDto: UpdateWorkDto, user: User) {
         // Require at least editor role to update work
         const { work } = await this.ownershipService.ensureCanEdit(id, user.id);
@@ -1606,16 +1837,18 @@ export class WorkLifecycleService {
             });
         }
 
+        // `owner` / `organization` decide where the Work's repositories live.
+        // Resolved (and refused when the repositories already exist) before
+        // anything is written; see `resolveOwnershipUpdate`.
+        const ownership = await this.resolveOwnershipUpdate(work, updateDto, user);
+
         try {
             // Build update data object
             const updateData: Record<string, any> = {
                 name: updateDto.name || work.name,
                 description: updateDto.description || work.description,
-                owner: updateDto.owner ?? work.owner,
-                organization:
-                    updateDto.organization !== undefined
-                        ? updateDto.organization
-                        : work.organization,
+                owner: ownership.owner,
+                organization: ownership.organization,
                 readmeConfig: updateDto.readmeConfig ?? work.readmeConfig,
             };
 
@@ -1629,9 +1862,12 @@ export class WorkLifecycleService {
                     // persisting a provider that can never run.
                     assertNotRepositoryWork(work, 'choosing a deploy provider');
                     const availableProviders = this.deployFacade.getAvailableProviders();
-                    const isSupported = availableProviders.some(
-                        (p) => p.id === updateDto.deployProvider,
-                    );
+                    // A hidden provider (`k8s-apps-tier`) deploys App Works only;
+                    // an App Work's target is set through its own picker.
+                    const isSupported =
+                        availableProviders.some((p) => p.id === updateDto.deployProvider) &&
+                        (isAppWorkKind(work.kind) ||
+                            !this.deployFacade.isHiddenProvider(updateDto.deployProvider));
                     if (!isSupported) {
                         throw new BadRequestException({
                             status: 'error',

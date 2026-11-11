@@ -687,6 +687,8 @@ export function TaskDetailClient({
                                 value={draft}
                                 onChange={(e) => setDraft(e.target.value)}
                                 onKeyDown={(e) => slash.handleKeyDown(e)}
+                                // The API's chat body cap (16384 characters).
+                                maxLength={16384}
                                 rows={3}
                                 placeholder={t('draftPlaceholder')}
                                 className="w-full rounded-md border border-border/60 dark:border-border-dark/60 bg-card dark:bg-card-primary-dark p-3 text-sm text-text dark:text-text-dark"
@@ -777,6 +779,8 @@ export function TaskDetailClient({
                                     noneLabel={t('workNone')}
                                     placeholder={t('workPlaceholder')}
                                     testId="task-detail-work"
+                                    // The API files a Task / Goal only on a Work the caller owns.
+                                    ownedOnly
                                 />
                             </AssignmentRow>
                             <AssignmentRow

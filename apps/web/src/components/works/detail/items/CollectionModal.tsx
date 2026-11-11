@@ -76,8 +76,11 @@ function CollectionModalContent({
 
         const data: Partial<Collection> = {
             name: name.trim(),
-            description: description.trim() || undefined,
-            icon_url: iconUrl.trim() || undefined,
+            // Editing: an emptied field goes out as '' so the API clears it — it
+            // keeps any field the request leaves out, so `undefined` made the
+            // modal report success while the old value came back on reload.
+            description: description.trim() || (isEditing ? '' : undefined),
+            icon_url: iconUrl.trim() || (isEditing ? '' : undefined),
             priority: priority ? parseInt(priority, 10) : undefined,
         };
 

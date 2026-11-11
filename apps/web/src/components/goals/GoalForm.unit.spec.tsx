@@ -64,6 +64,7 @@ vi.mock('@/components/tasks/WorkSelect', () => ({
         noneLabel,
         testId,
         id,
+        ownedOnly,
     }: {
         value: string;
         onValueChange: (v: string) => void;
@@ -71,9 +72,11 @@ vi.mock('@/components/tasks/WorkSelect', () => ({
         noneLabel: string;
         testId?: string;
         id?: string;
+        ownedOnly?: boolean;
     }) => (
         <select
             data-testid={testId}
+            data-owned-only={String(Boolean(ownedOnly))}
             id={id}
             value={value}
             disabled={disabled}
@@ -342,6 +345,17 @@ describe('goal-form-payload helpers', () => {
         expect(validateGoalFormFields('delivery', fields({ dodText: '\n \n' }))).toBe(
             'errors.dodRequired',
         );
+        // Refused, not cut: the payload kept the first 50 lines of 500
+        // characters and dropped the rest without a word.
+        const lines = (n: number) =>
+            Array.from({ length: n }, (_, i) => `criterion ${i}`).join('\n');
+        expect(validateGoalFormFields('delivery', fields({ dodText: lines(50) }))).toBeNull();
+        expect(validateGoalFormFields('delivery', fields({ dodText: lines(51) }))).toBe(
+            'errors.dodTooLong',
+        );
+        expect(validateGoalFormFields('delivery', fields({ dodText: 'x'.repeat(501) }))).toBe(
+            'errors.dodTooLong',
+        );
         // A delivery Goal ignores the metric fields entirely.
         expect(
             validateGoalFormFields('delivery', fields({ pluginId: '', targetValue: '', unit: '' })),
@@ -403,6 +417,12 @@ describe('GoalForm — the Goal’s Work (APW-08 T33)', () => {
         expect(screen.getByTestId('goal-work-select')).toHaveValue('');
         expect(screen.getByLabelText('work.label')).toBeInTheDocument();
         expect(screen.getByText('work.hint')).toBeInTheDocument();
+    });
+
+    // Review of #3164 — the Goals API files a Goal only on a Work the caller owns.
+    it('offers only the Works the caller owns', () => {
+        render(<GoalForm />);
+        expect(screen.getByTestId('goal-work-select')).toHaveAttribute('data-owned-only', 'true');
     });
 
     it('a picked Work is sent as workId; no Work sends no workId key at all', async () => {

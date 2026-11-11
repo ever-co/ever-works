@@ -19,6 +19,14 @@ import {
     INBOUND_EMAIL_WEBHOOK_PATH,
     resolveInboundEmailBodyLimit,
 } from './email/inbound-email-body-limit';
+import {
+    accountImportCallerCheck,
+    mountAccountImportBodyParser,
+} from './account/account-import-body-limit';
+import { AUTH_PROVIDER } from './auth/providers/auth-provider.constants';
+import type { AuthProvider } from './auth/providers/auth-provider.abstract';
+import { ApiKeyService } from './auth/services/api-key.service';
+import { UserRepository } from '@ever-works/agent/database';
 import { assertProductionCorsConfig } from './cors-validation';
 import { config as appConfig } from './config/constants';
 import { config as agentConfig } from '@ever-works/agent/config';
@@ -194,6 +202,37 @@ async function bootstrap() {
     app.use(
         INBOUND_EMAIL_WEBHOOK_PATH,
         urlencoded({ limit: inboundEmailBodyLimit, extended: true, verify: captureRawBody }),
+    );
+    // Account import: an export larger than the global limit could be exported
+    // but never imported back. Its two signed-in routes get their own limit
+    // (25 MB default, `ACCOUNT_IMPORT_BODY_LIMIT`, capped), mounted before the
+    // global parser like the inbound-email one above — but used only when the
+    // caller's session or personal API key verifies, so an anonymous request
+    // still meets the 1 MB parser (body parsers run before the auth guard).
+    const resolveOptional = <T>(token: unknown): T | undefined => {
+        try {
+            return app.get(token as never, { strict: false }) as T;
+        } catch {
+            return undefined;
+        }
+    };
+    mountAccountImportBodyParser(
+        app,
+        accountImportCallerCheck({
+            authenticateSession: () => {
+                const provider = resolveOptional<AuthProvider>(AUTH_PROVIDER);
+                return provider ? (headers) => provider.authenticate(headers) : undefined;
+            },
+            validatePersonalKey: () => {
+                const keys = resolveOptional<ApiKeyService>(ApiKeyService);
+                return keys ? (rawKey) => keys.validateKey(rawKey) : undefined;
+            },
+            // The guard's second check on a personal key: its owner is active.
+            findKeyOwner: () => {
+                const users = resolveOptional<UserRepository>(UserRepository);
+                return users ? (userId) => users.findById(userId) : undefined;
+            },
+        }),
     );
     app.use(json({ limit: bodyLimit, verify: captureRawBody }));
     app.use(urlencoded({ limit: bodyLimit, extended: true, verify: captureRawBody }));

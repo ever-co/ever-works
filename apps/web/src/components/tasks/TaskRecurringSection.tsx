@@ -11,6 +11,7 @@ import type { Task } from '@/lib/api/tasks';
 import { clearTaskRecurringAction, setTaskRecurringAction } from '@/app/actions/tasks';
 import { MaxOpenInstancesEditor, MaxOpenInstancesField } from './TaskRecurringOverlapControl';
 import { parseMaxOpenInstances } from './recurring-overlap';
+import { recurrenceEndsAtFor } from '@/lib/tasks/recurrence-ends-at.shared';
 
 /**
  * Agents/Skills/Tasks PR #1017 — Phase 17.8 UI.
@@ -299,12 +300,16 @@ function InactivePanel({ task }: { task: Task }) {
                     await setTaskRecurringAction(task.id, {
                         recurrenceRule: frequency === 'CRON' ? undefined : ruleString,
                         recurrenceCron: frequency === 'CRON' ? ruleString : undefined,
-                        // Cron expressions are evaluated in UTC by
-                        // `computeNextCronFire`; stamping the browser zone
-                        // would render a next-fire time in a zone the
-                        // dispatcher never used.
+                        // The dispatcher evaluates both dialects in
+                        // `recurrenceTimezone`. This form's cron field is
+                        // written in UTC (its hint says so), so a cron
+                        // cadence is filed with 'UTC' rather than the
+                        // browser zone; an RRULE's times are local.
                         recurrenceTimezone: frequency === 'CRON' ? 'UTC' : timezone || undefined,
-                        recurrenceEndsAt: endsAt ? new Date(endsAt).toISOString() : undefined,
+                        // End of the chosen day in the template's zone (the last day runs).
+                        recurrenceEndsAt: endsAt
+                            ? recurrenceEndsAtFor(endsAt, frequency === 'CRON' ? 'UTC' : timezone)
+                            : undefined,
                         recurrenceMaxOccurrences:
                             maxOccurrences.trim().length > 0
                                 ? Math.max(1, Math.min(9999, parseInt(maxOccurrences, 10) || 1))

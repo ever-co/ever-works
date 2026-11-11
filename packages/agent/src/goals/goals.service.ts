@@ -52,6 +52,7 @@ import { Work } from '../entities/work.entity';
 import {
     DEFAULT_CHECK_FREQUENCY_MINUTES,
     MIN_CHECK_FREQUENCY_MINUTES,
+    MAX_CHECK_FREQUENCY_MINUTES,
     toGoalDto,
     toGoalMetricSampleDto,
     toMissionGoalLinkDto,
@@ -1221,7 +1222,10 @@ export class GoalsService {
         if (!Number.isInteger(minutes)) {
             throw new BadRequestException('checkFrequencyMinutes must be an integer.');
         }
-        return Math.max(MIN_CHECK_FREQUENCY_MINUTES, minutes);
+        return Math.min(
+            MAX_CHECK_FREQUENCY_MINUTES,
+            Math.max(MIN_CHECK_FREQUENCY_MINUTES, minutes),
+        );
     }
 
     /**

@@ -235,6 +235,10 @@ export const WAVE2_OPERATIONS: OperationSpec[] = [
         ],
         body: true,
         bodyHint: 'websiteTemplateId (required, string or null)',
+        // Works-security: rewrites the Work's existing website repository with
+        // another template, so a tool result must not trigger it unconfirmed.
+        requiresConfirmation: true,
+        confirmationKind: 'privileged',
     },
     {
         toolName: 'update_website',
@@ -2302,7 +2306,8 @@ export const WAVE2_OPERATIONS: OperationSpec[] = [
             },
         ],
         body: true,
-        bodyHint: 'file (required, multipart), targetClass, title, description, tags',
+        bodyHint:
+            'NOT usable from chat: the route takes a multipart file upload, which a chat tool cannot send. Ask the user to upload the file in the Work’s Knowledge Base instead.',
     },
     {
         toolName: 'list_work_uploads',
@@ -3157,6 +3162,11 @@ export const WAVE2_OPERATIONS: OperationSpec[] = [
         ],
         body: true,
         bodyHint: 'prompt (required), providerId (required), aiProviderId',
+        // Works-security: re-runs a paid agent with a free-text prompt on the
+        // user's custom template and pushes the result (it may be their default
+        // template), so a tool result must not trigger it unconfirmed.
+        requiresConfirmation: true,
+        confirmationKind: 'privileged',
     },
     {
         toolName: 'sync_template_from_base',
@@ -3233,6 +3243,10 @@ export const WAVE2_OPERATIONS: OperationSpec[] = [
         body: true,
         bodyHint:
             'baseTemplateId (required), name (required), prompt (required), providerId (required), aiProviderId, targetOwner, description',
+        // Works-security: creates a repository in the user's GitHub account or
+        // organization and runs a paid agent, as fork_template does.
+        requiresConfirmation: true,
+        confirmationKind: 'privileged',
     },
     {
         toolName: 'refresh_templates',

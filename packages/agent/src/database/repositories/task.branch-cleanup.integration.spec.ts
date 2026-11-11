@@ -118,8 +118,15 @@ describe('TaskRepository.findBranchCleanupCandidates (real SQLite)', () => {
         const blip = await sweepWithProvider(null);
         expect(blip.summary.scanned).toBe(1);
 
-        // 15 days later: the last stamp the sweep left is old, and access is back.
-        await repository.updatePrStatusCache(waiting.id, { ciCheckedAt: ago(15 * DAY) });
+        // 15 days later: every stamp the sweep left is old (the last read, the first "not found"
+        // and the retry it scheduled), and access is back.
+        const blipRow = await taskRows.findOneByOrFail({ id: waiting.id });
+        expect(blipRow.prState).toBe('open');
+        await repository.updatePrStatusCache(waiting.id, {
+            ciCheckedAt: ago(15 * DAY),
+            prNotFoundSince: ago(15 * DAY),
+            prReadRetryAt: ago(15 * DAY - 5 * 60_000),
+        });
         const recovered = await sweepWithProvider({
             number: waiting.prNumber!,
             state: 'open',

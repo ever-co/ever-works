@@ -57,6 +57,7 @@ describe('DeployController', () => {
     let deployFacade: {
         getAvailableProviders: jest.Mock;
         getAvailableProvidersForUser: jest.Mock;
+        getSelectableProvidersForUser: jest.Mock;
         isProviderConfigured: jest.Mock;
         isConfigured: jest.Mock;
         validateToken: jest.Mock;
@@ -129,6 +130,7 @@ describe('DeployController', () => {
         deployFacade = {
             getAvailableProviders: jest.fn(),
             getAvailableProvidersForUser: jest.fn(),
+            getSelectableProvidersForUser: jest.fn(),
             isProviderConfigured: jest.fn(),
             isConfigured: jest.fn(),
             validateToken: jest.fn(),
@@ -455,18 +457,21 @@ describe('DeployController', () => {
     });
 
     describe('listProviders', () => {
-        it('returns user-scoped providers in success envelope', async () => {
+        it('returns the user-selectable providers in success envelope', async () => {
             const providers = [{ id: 'vercel', name: 'Vercel', enabled: true }];
-            deployFacade.getAvailableProvidersForUser.mockResolvedValue(providers);
+            deployFacade.getSelectableProvidersForUser.mockResolvedValue(providers);
 
             const result = await controller.listProviders(auth);
 
-            expect(deployFacade.getAvailableProvidersForUser).toHaveBeenCalledWith('caller-1');
+            // Selectable = without App-only hidden providers (k8s-apps-tier),
+            // which a website Work must not be able to pick.
+            expect(deployFacade.getSelectableProvidersForUser).toHaveBeenCalledWith('caller-1');
+            expect(deployFacade.getAvailableProvidersForUser).not.toHaveBeenCalled();
             expect(result).toEqual({ status: 'success', providers });
         });
 
         it('preserves an empty providers array verbatim (no fallback)', async () => {
-            deployFacade.getAvailableProvidersForUser.mockResolvedValue([]);
+            deployFacade.getSelectableProvidersForUser.mockResolvedValue([]);
             const result = await controller.listProviders(auth);
             expect(result).toEqual({ status: 'success', providers: [] });
         });

@@ -317,4 +317,138 @@ describe('KbMetadataPanel', () => {
             });
         });
     });
+
+    // `UpdateKbDocumentDto` takes at most 32 tags of 64 characters. Beyond
+    // that the whole tag PATCH was refused, yet the chip stayed on screen
+    // and vanished on reload.
+    describe('API limits', () => {
+        it('does not add a 33rd tag (no chip, no PATCH)', async () => {
+            const full = Array.from({ length: 32 }, (_, i) => `tag-${i}`);
+            render(
+                <KbMetadataPanel
+                    workId="work-1"
+                    document={doc({ tags: full })}
+                    debounceOverrides={{ tagsMs: 0 }}
+                />,
+            );
+            expect(screen.getAllByTestId('kb-workbench-metadata-tag-chip')).toHaveLength(32);
+
+            const input = screen.getByTestId('kb-workbench-metadata-tag-input') as HTMLInputElement;
+            fireEvent.change(input, { target: { value: 'one-too-many' } });
+            fireEvent.keyDown(input, { key: 'Enter' });
+
+            await act(async () => {});
+            expect(screen.getAllByTestId('kb-workbench-metadata-tag-chip')).toHaveLength(32);
+            expect(updateActionMock).not.toHaveBeenCalled();
+        });
+
+        it('still adds the 32nd tag', async () => {
+            const almost = Array.from({ length: 31 }, (_, i) => `tag-${i}`);
+            updateActionMock.mockResolvedValueOnce({
+                success: true,
+                data: doc({ tags: [...almost, 'last'] }),
+            });
+            render(
+                <KbMetadataPanel
+                    workId="work-1"
+                    document={doc({ tags: almost })}
+                    debounceOverrides={{ tagsMs: 0 }}
+                />,
+            );
+
+            const input = screen.getByTestId('kb-workbench-metadata-tag-input') as HTMLInputElement;
+            fireEvent.change(input, { target: { value: 'last' } });
+            fireEvent.keyDown(input, { key: 'Enter' });
+
+            await waitFor(() => {
+                expect(updateActionMock).toHaveBeenCalledWith({
+                    workId: 'work-1',
+                    docId: 'doc-1',
+                    body: { tags: [...almost, 'last'] },
+                });
+            });
+        });
+
+        it('cuts a tag to 64 characters (and the input says so)', async () => {
+            updateActionMock.mockResolvedValueOnce({ success: true, data: doc() });
+            render(
+                <KbMetadataPanel
+                    workId="work-1"
+                    document={doc()}
+                    debounceOverrides={{ tagsMs: 0 }}
+                />,
+            );
+
+            const input = screen.getByTestId('kb-workbench-metadata-tag-input') as HTMLInputElement;
+            expect(input.maxLength).toBe(64);
+            // A paste or a script is not held back by `maxLength`.
+            fireEvent.change(input, { target: { value: 'x'.repeat(80) } });
+            fireEvent.keyDown(input, { key: 'Enter' });
+
+            await waitFor(() => {
+                expect(updateActionMock).toHaveBeenCalledWith({
+                    workId: 'work-1',
+                    docId: 'doc-1',
+                    body: { tags: ['voice', 'x'.repeat(64)] },
+                });
+            });
+        });
+
+        it('takes a language of 2 to 8 characters, like the API', () => {
+            render(<KbMetadataPanel workId="work-1" document={doc()} />);
+            const input = screen.getByTestId(
+                'kb-workbench-metadata-language-input',
+            ) as HTMLInputElement;
+            expect(input.minLength).toBe(2);
+            expect(input.maxLength).toBe(8);
+        });
+
+        it('says why a one-letter language is not saved instead of dropping it silently', async () => {
+            render(
+                <KbMetadataPanel
+                    workId="work-1"
+                    document={doc()}
+                    debounceOverrides={{ languageMs: 0 }}
+                />,
+            );
+            const input = screen.getByTestId(
+                'kb-workbench-metadata-language-input',
+            ) as HTMLInputElement;
+            fireEvent.change(input, { target: { value: 'e' } });
+
+            await waitFor(() => {
+                expect(screen.getByTestId('kb-workbench-metadata-language-error').textContent).toBe(
+                    'languageInvalid',
+                );
+            });
+            expect(updateActionMock).not.toHaveBeenCalled();
+        });
+
+        it('saves a two-letter language', async () => {
+            updateActionMock.mockResolvedValueOnce({
+                success: true,
+                data: doc({ language: 'fr' }),
+            });
+            render(
+                <KbMetadataPanel
+                    workId="work-1"
+                    document={doc()}
+                    debounceOverrides={{ languageMs: 0 }}
+                />,
+            );
+            const input = screen.getByTestId(
+                'kb-workbench-metadata-language-input',
+            ) as HTMLInputElement;
+            fireEvent.change(input, { target: { value: 'fr' } });
+
+            await waitFor(() => {
+                expect(updateActionMock).toHaveBeenCalledWith({
+                    workId: 'work-1',
+                    docId: 'doc-1',
+                    body: { language: 'fr' },
+                });
+            });
+            expect(screen.queryByTestId('kb-workbench-metadata-language-error')).toBeNull();
+        });
+    });
 });

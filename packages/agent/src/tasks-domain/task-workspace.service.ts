@@ -4328,9 +4328,12 @@ function mountBranchAlreadyGone(message: string): boolean {
 }
 
 /**
- * The PR-status cache (`TaskPrStatusService.toCachePatch` writes all five) as it
+ * The PR-status cache (`TaskPrStatusService.toCachePatch` writes the first five) as it
  * is before any pull request was read: what a Task's first pull request starts
- * with, and what a NEW pull request on a Task resets it to.
+ * with, and what a NEW pull request on a Task resets it to. That includes the
+ * sweep's memory of reads of the OLD pull request that did not succeed
+ * (`prReadRetryAt`, `prNotFoundSince`): the new one is read on the usual
+ * cadence, and its own first "not found" starts its own 30 minutes.
  */
 const CLEARED_PR_STATUS_CACHE = Object.freeze({
     prState: null,
@@ -4338,6 +4341,8 @@ const CLEARED_PR_STATUS_CACHE = Object.freeze({
     ciCheckedAt: null,
     prChecks: null,
     prHeadSha: null,
+    prReadRetryAt: null,
+    prNotFoundSince: null,
 });
 
 /**
@@ -4352,7 +4357,9 @@ function carriesAnotherPullRequestsStatus(task: Task, prNumber: number): boolean
         task.ciState != null ||
         task.ciCheckedAt != null ||
         task.prChecks != null ||
-        task.prHeadSha != null
+        task.prHeadSha != null ||
+        task.prReadRetryAt != null ||
+        task.prNotFoundSince != null
     );
 }
 

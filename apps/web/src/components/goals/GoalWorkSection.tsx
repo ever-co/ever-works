@@ -79,6 +79,8 @@ export function GoalWorkSection({
                 disabled={pending || loopRunning}
                 noneLabel={t('work.none')}
                 testId="goal-detail-work-select"
+                // The API files a Task / Goal only on a Work the caller owns.
+                ownedOnly
             />
             <p
                 className="mt-2 text-[11px] text-text-muted dark:text-text-muted-dark"

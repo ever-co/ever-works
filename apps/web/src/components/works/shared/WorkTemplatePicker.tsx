@@ -18,6 +18,7 @@ import {
 import { cn } from '@/lib/utils/cn';
 import type { WebsiteTemplateOption } from '@/lib/api/work';
 import type { WorkBlueprintEntry } from '@/lib/api/work-templates';
+import { buildTemplatePickerOptions, type PickerOption } from './work-template-picker-options';
 
 /**
  * Create-Work template picker (Works Templates spec, ADR-014 §4.2–4.5).
@@ -31,7 +32,9 @@ import type { WorkBlueprintEntry } from '@/lib/api/work-templates';
  * Sources, merged in precedence order for the selected chip:
  *   1. the user's own custom `Template` rows ("Your templates") — FIRST;
  *   2. the manifest blueprints for that chipType ("Blueprints").
- * Placeholder blueprints (no repo yet) are excluded from the pickable list.
+ * Placeholder blueprints (no repo yet) are excluded from the pickable list,
+ * and a blueprint submits the id of the catalog row built from its repository,
+ * never its own slug (`work-template-picker-options.ts` has the rules).
  * The selector line renders only when the selected chip resolves to ≥1
  * pickable template. The manifest `default: true` blueprint (or the user's
  * default custom row) is highlighted when no explicit value is set — an empty
@@ -101,20 +104,6 @@ function resolveOptionIcon(iconName?: string, chipType?: string): LucideIcon {
     );
 }
 
-interface PickerOption {
-    /** websiteTemplateId — custom row id or blueprint slug. */
-    value: string;
-    name: string;
-    description: string;
-    group: 'yours' | 'blueprints';
-    iconName?: string;
-    chipType?: string;
-    featured: boolean;
-    isDefault: boolean;
-    tags?: string[];
-    category?: string;
-}
-
 export interface WorkTemplatePickerProps {
     /** The user's custom + built-in DB template rows (from the website catalog). */
     customTemplates: WebsiteTemplateOption[];
@@ -172,51 +161,18 @@ export function WorkTemplatePicker({
     }
     const [query, setQuery] = useState('');
 
-    // Custom rows always lead ("Your templates"), on every chip.
-    const customOptions = useMemo<PickerOption[]>(
+    // Custom rows lead ("Your templates"), then the selected chip's blueprints,
+    // each valued with the catalog row id it stands for.
+    const { customOptions, blueprintOptions } = useMemo(
         () =>
-            customTemplates.map((tpl) => ({
-                value: tpl.id,
-                name: tpl.name,
-                description: tpl.description,
-                group: 'yours',
-                featured: false,
-                isDefault: tpl.isDefault,
-                chipType: currentChipType,
-            })),
-        [customTemplates, currentChipType],
+            buildTemplatePickerOptions({
+                customTemplates,
+                blueprints,
+                selectedChip,
+                currentChipType,
+            }),
+        [customTemplates, blueprints, selectedChip, currentChipType],
     );
-
-    const customValueSet = useMemo(
-        () => new Set(customOptions.map((o) => o.value)),
-        [customOptions],
-    );
-
-    // Blueprint options for the selected chip, placeholders excluded, deduped
-    // against custom rows (a custom/DB row wins — it's already resolvable).
-    const blueprintOptions = useMemo<PickerOption[]>(() => {
-        const rows = blueprints
-            .filter(
-                (b) =>
-                    b.chipType === selectedChip &&
-                    b.status !== 'placeholder' &&
-                    !customValueSet.has(b.slug),
-            )
-            .map<PickerOption>((b) => ({
-                value: b.slug,
-                name: b.name,
-                description: b.description,
-                group: 'blueprints',
-                iconName: b.iconName,
-                chipType: b.chipType,
-                featured: b.featured,
-                isDefault: b.isDefault,
-                tags: b.tags,
-                category: b.category,
-            }));
-        // Featured pinned to the top within the blueprint group.
-        return rows.sort((a, b) => Number(b.featured) - Number(a.featured));
-    }, [blueprints, selectedChip, customValueSet]);
 
     const allOptions = useMemo<PickerOption[]>(
         () => [...customOptions, ...blueprintOptions],

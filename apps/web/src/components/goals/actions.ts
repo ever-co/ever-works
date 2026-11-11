@@ -109,6 +109,29 @@ export async function setGoalDodAction(id: string, criteria: GoalDoDCriterion[] 
     return goal;
 }
 
+/**
+ * Add one operator criterion to a Goal's Definition of Done. The API applies
+ * it to the list as stored at the write (`POST …/dod/criteria`): replacing the
+ * whole list from a copy — the page's, or one read a moment earlier — wiped a
+ * criterion the Goal's planner proposed in between.
+ */
+export async function addGoalDodCriterionAction(id: string, text: string) {
+    await requireGoalAuth();
+    const goal = await goalsAPI.addDodCriterion(id, text);
+    revalidatePath(GOALS_LIST_PATH, 'page');
+    revalidateGoalDetail(id);
+    return goal;
+}
+
+/** Remove one criterion (`DELETE …/dod/:criterionId`), for the same reason. */
+export async function removeGoalDodCriterionAction(id: string, criterionId: string) {
+    await requireGoalAuth();
+    const goal = await goalsAPI.removeDodCriterion(id, criterionId);
+    revalidatePath(GOALS_LIST_PATH, 'page');
+    revalidateGoalDetail(id);
+    return goal;
+}
+
 export async function patchGoalDodCriterionAction(
     id: string,
     criterionId: string,

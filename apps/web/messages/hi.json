@@ -1540,6 +1540,7 @@
                 "priority": "प्राथमिकता",
                 "labels": "लेबल",
                 "labelsPlaceholder": "अल्पविराम से अलग किए गए",
+                "labelsTooLong": "{max} वर्णों से लंबे लेबल उनके पहले {max} वर्णों तक छोटे कर दिए जाते हैं।",
                 "labelsHint": "एकाधिक लेबल को अल्पविराम से अलग करें।",
                 "labelsAutoHint": "जब तक आप इन्हें संपादित नहीं करते, ये शीर्षक से लिए जाते हैं। एकाधिक लेबल को अल्पविराम से अलग करें।",
                 "organize": "व्यवस्थित करें",
@@ -1814,6 +1815,8 @@
                 "required": "Required",
                 "remove": "Remove",
                 "addCheck": "Add check",
+                "tooManyChecks": "A Task can have at most {max} checks; this one has {count}. Remove some, then save.",
+                "commandTooLong": "The command of the check “{name}” is {length} characters long; a check command can be at most {max} characters.",
                 "kinds": {
                     "build": "Build",
                     "test": "Test",
@@ -3503,7 +3506,8 @@
                     "notManageable": "Seats are adjusted on a paid plan once card payments are enabled.",
                     "save": "Save",
                     "saved": "Seats updated",
-                    "saveError": "Failed to update seats"
+                    "saveError": "Failed to update seats",
+                    "tooMany": "आप अधिकतम {max} सीटें सेट कर सकते हैं।"
                 },
                 "payg": {
                     "title": "Pay-as-you-go",
@@ -9212,6 +9216,7 @@
                 "targetInvalid": "Target value must be a number.",
                 "unitRequired": "Unit is required.",
                 "dodRequired": "A delivery Goal needs at least one Definition-of-Done criterion.",
+                "dodTooLong": "अधिकतम 50 मानदंड, प्रत्येक अधिकतम 500 वर्णों का।",
                 "deadlineInvalid": "Deadline is not a valid date.",
                 "createFailed": "Couldn't create the Goal. Please try again."
             },
@@ -9420,7 +9425,9 @@
                     "workerModelHelp": "Free text; passed through to iteration runs.",
                     "assignedAgent": "Pinned agent",
                     "assignedAgentNone": "No pin (round-robin)",
-                    "assignedAgentHelp": "Routing always picks this agent. Without a pin the router round-robins over the agents that have already worked this Goal — and, for a brand-new Goal, over the eligible agents in its scope — so the loop can start without one."
+                    "assignedAgentHelp": "Routing always picks this agent. Without a pin the router round-robins over the agents that have already worked this Goal — and, for a brand-new Goal, over the eligible agents in its scope — so the loop can start without one.",
+                    "assignedAgentDeleted": "हटाया गया एजेंट",
+                    "assignedAgentDeletedHelp": "पिन किया गया एजेंट हटा दिया गया है या अब उपलब्ध नहीं है, इसलिए कोई भी एजेंट यह काम नहीं लेता। कोई दूसरा एजेंट चुनें या पिन हटाएँ।"
                 },
                 "executionTargets": {
                     "cloud": "Cloud",
@@ -10946,7 +10953,7 @@
             },
             "prompt": {
                 "minLength": "प्रॉम्प्ट कम से कम 10 वर्णों का होना चाहिए",
-                "maxLength": "प्रॉम्प्ट 1000 वर्णों से कम होना चाहिए"
+                "maxLength": "प्रॉम्प्ट 4000 वर्णों से कम होना चाहिए"
             },
             "oauthRequired": "OAuth कनेक्शन आवश्यक। कृपया पहले अपना {provider} खाता कनेक्ट करें।",
             "githubRequired": "GitHub कनेक्शन आवश्यक। कृपया पहले अपना GitHub खाता कनेक्ट करें।",

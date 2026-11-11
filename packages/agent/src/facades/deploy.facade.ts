@@ -231,6 +231,15 @@ export class DeployFacadeService implements IDeployFacade {
     }
 
     /**
+     * Is this deploy provider an internal one (`visibility: 'hidden'` in its
+     * manifest) that a user must not pick for a website Work?
+     */
+    isHiddenProvider(providerId: string): boolean {
+        const registered = this.registry.get(resolvePluginProviderId(providerId));
+        return (registered?.manifest?.visibility ?? 'public') === 'hidden';
+    }
+
+    /**
      * Get deployment providers with user-scoped credential state.
      *
      * `enabled` means the plugin is loaded. `configured` means this user has
@@ -246,6 +255,23 @@ export class DeployFacadeService implements IDeployFacade {
                     : false,
             })),
         );
+    }
+
+    /**
+     * The providers a user may PICK for a Work in the deploy selectors
+     * (`GET /api/deploy/providers`: Create-Work, the Deploy tab, the chat's
+     * deploy tools): {@link getAvailableProvidersForUser} without the
+     * `visibility: 'hidden'` plugins. The only one is `k8s-apps-tier`
+     * ("Ever Works Apps (managed)"), which deploys App Works only and is chosen
+     * through the App Work's own target picker; listed, a website Work could
+     * pick it, the create succeeded and every deploy then failed.
+     *
+     * Internal callers keep the full list: the App source inspector filters
+     * the apps-tier plugin by {@link getAvailableProvidersForUser}.
+     */
+    async getSelectableProvidersForUser(userId: string): Promise<DeployProviderInfo[]> {
+        const providers = await this.getAvailableProvidersForUser(userId);
+        return providers.filter((provider) => !this.isHiddenProvider(provider.id));
     }
 
     /**

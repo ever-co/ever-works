@@ -53,14 +53,9 @@ export function canonicalRepositoryUrl(value: string): string | null {
     return coords ? `https://github.com/${coords.owner}/${coords.repo}` : null;
 }
 
-/** Same rules as the API slug regex: lowercase letters, digits, hyphens. */
-export function slugifyForWork(value: string): string {
-    return value
-        .trim()
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, '-')
-        .replace(/^-+|-+$/g, '');
-}
+/** Same rules as the API slug regex: lowercase letters, digits, hyphens (one implementation, shared). */
+export { slugifyForWork } from '@/lib/works/work-slug.shared';
+import { slugifyForWork } from '@/lib/works/work-slug.shared';
 
 /**
  * A slug the API will accept: already canonical, so the value the user sees is

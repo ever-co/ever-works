@@ -72,9 +72,12 @@ function resolveAlias(token: string, spec: FieldSpec): string {
     return token;
 }
 
+/** Plain decimal digits only: `Number()` alone also accepts `''` (0), `1e1`, `0x10` and `1.0`. */
+const DIGITS = /^\d+$/;
+
 function parseInteger(token: string, spec: FieldSpec): number {
     const resolved = resolveAlias(token, spec);
-    const n = Number(resolved);
+    const n = DIGITS.test(resolved) ? Number(resolved) : NaN;
     if (!Number.isInteger(n) || n < spec.min || n > spec.max) {
         throw new Error(
             `Invalid cron value "${token}" — expected integer in [${spec.min}, ${spec.max}].`,
@@ -86,10 +89,14 @@ function parseInteger(token: string, spec: FieldSpec): number {
 function parseFieldPart(part: string, spec: FieldSpec): Set<number> {
     const out = new Set<number>();
     // Step: <range>/<step>
-    const [rangeRaw, stepRaw] = part.split('/');
+    const stepParts = part.split('/');
+    if (stepParts.length > 2) {
+        throw new Error(`Invalid cron field "${part}" — only one "/" step is allowed.`);
+    }
+    const [rangeRaw, stepRaw] = stepParts;
     let step = 1;
     if (stepRaw !== undefined) {
-        const parsedStep = Number(stepRaw);
+        const parsedStep = DIGITS.test(stepRaw) ? Number(stepRaw) : NaN;
         if (!Number.isInteger(parsedStep) || parsedStep < 1) {
             throw new Error(`Invalid cron step "${stepRaw}" — must be a positive integer.`);
         }
@@ -98,11 +105,15 @@ function parseFieldPart(part: string, spec: FieldSpec): Set<number> {
 
     let start: number;
     let end: number;
-    if (rangeRaw === '*' || rangeRaw === '') {
+    if (rangeRaw === '*') {
         start = spec.min;
         end = spec.max;
     } else if (rangeRaw.includes('-')) {
-        const [a, b] = rangeRaw.split('-');
+        const bounds = rangeRaw.split('-');
+        if (bounds.length !== 2) {
+            throw new Error(`Invalid cron range "${rangeRaw}" — expected "start-end".`);
+        }
+        const [a, b] = bounds;
         start = parseInteger(a, spec);
         end = parseInteger(b, spec);
         if (start > end) {

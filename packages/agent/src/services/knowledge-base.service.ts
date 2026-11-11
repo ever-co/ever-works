@@ -895,6 +895,13 @@ export class KnowledgeBaseService {
             if (opts.sources && opts.sources.length > 0 && !opts.sources.includes(d.source)) {
                 return false;
             }
+            // The Status / Tag / Locked / Language chips leaked the same way:
+            // a draft or archived document, or one without the tag, came back
+            // through the semantic leg whenever the Work had embeddings.
+            if (opts.status && d.status !== opts.status) return false;
+            if (opts.tag && !(Array.isArray(d.tags) && d.tags.includes(opts.tag))) return false;
+            if (opts.locked !== undefined && Boolean(d.locked) !== opts.locked) return false;
+            if (opts.language && d.language !== opts.language) return false;
             return true;
         });
 
