@@ -1306,31 +1306,6 @@ export class AgentRunRepository {
     }
 
     /**
-     * The summaries of a handful of runs, in ONE query — for a list that
-     * says what each of several Tasks' latest runs changed (the planner's
-     * "work in flight" section) without a read per Task.
-     *
-     * Owner-scoped: `userId` is a predicate, so an id that names another
-     * owner's run answers nothing. Narrow: only `id` and `summary` are
-     * selected, never a run's `pendingInput`, its check results or its
-     * session. Bounded: at most 50 ids are read (callers pass a page of
-     * Tasks); a longer list is cut, not refused. The order of the answer is
-     * the database's, so callers index it by id.
-     */
-    async findSummariesByIds(
-        ids: readonly string[],
-        userId: string,
-    ): Promise<Array<Pick<AgentRun, 'id' | 'summary'>>> {
-        const wanted = [...new Set(ids.filter((id) => typeof id === 'string' && id))].slice(0, 50);
-        // TypeORM renders `In([])` as invalid SQL on some drivers.
-        if (wanted.length === 0 || !userId) return [];
-        return this.repository.find({
-            where: { id: In(wanted), userId },
-            select: { id: true, summary: true },
-        });
-    }
-
-    /**
      * EVERY distinct agent that has had a run on this Task, over the
      * Task's whole life, except the runs named in `excludeRunIds`.
      *
