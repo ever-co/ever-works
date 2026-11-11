@@ -8475,6 +8475,7 @@
                     "nameRequired": "कार्य का नाम आवश्यक है",
                     "slugRequired": "कार्य स्लग आवश्यक है",
                     "slugTaken": "यह slug पहले से ही आपके कार्यों में मौजूद है। कोई दूसरा चुनें।",
+                    "slugTooLong": "slug अधिकतम {max} अक्षरों का हो सकता है। इसे छोटा करें।",
                     "descriptionRequired": "कार्य विवरण आवश्यक है",
                     "githubRequired": "कृपया पहले अपना GitHub खाता जोड़ें।",
                     "createFailed": "कार्य बनाने में विफल"

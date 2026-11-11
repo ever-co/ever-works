@@ -8475,6 +8475,7 @@
                     "nameRequired": "Nama karya wajib",
                     "slugRequired": "Slug karya wajib",
                     "slugTaken": "Slug ini sudah ada di karya Anda. Pilih yang lain.",
+                    "slugTooLong": "Slug paling banyak {max} karakter. Persingkat slug ini.",
                     "descriptionRequired": "Deskripsi karya wajib",
                     "githubRequired": "Harap hubungkan akun GitHub Anda terlebih dahulu.",
                     "createFailed": "Gagal membuat karya"

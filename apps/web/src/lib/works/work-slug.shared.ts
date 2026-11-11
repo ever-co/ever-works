@@ -171,6 +171,18 @@ export function quickCreateSlugFromPrompt(
     return base ? `${base}-${safeSuffix}` : `quick-${safeSuffix}`;
 }
 
+/**
+ * Is a slug the user TYPED longer than a derived one may be? The API's slug
+ * rule has no length cap, so an over-long slug was accepted and the create
+ * failed late, at repository creation (`<slug>-website` past GitHub's
+ * 100-character name limit). The Create-Work form holds a typed slug to
+ * {@link GENERATED_WORK_SLUG_MAX_LENGTH}, the cap a derived slug already gets,
+ * so both follow one rule.
+ */
+export function isWorkSlugTooLong(slug: string): boolean {
+    return slug.length > GENERATED_WORK_SLUG_MAX_LENGTH;
+}
+
 /** Does `slug` satisfy the API's slug contract? */
 export function isValidWorkSlug(slug: string | null | undefined): slug is string {
     return typeof slug === 'string' && WORK_SLUG_PATTERN.test(slug);

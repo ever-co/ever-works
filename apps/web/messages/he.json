@@ -8579,6 +8579,7 @@
                     "nameRequired": "שם עבודה נדרש",
                     "slugRequired": "Slug עבודה נדרש",
                     "slugTaken": "ה-slug הזה כבר קיים בעבודות שלך. בחר אחר.",
+                    "slugTooLong": "ה-slug יכול להכיל לכל היותר {max} תווים. קצר אותו.",
                     "descriptionRequired": "תיאור עבודה נדרש",
                     "githubRequired": "נא לחבר את חשבון GitHub שלך תחילה.",
                     "createFailed": "נכשל ביצירת עבודה"

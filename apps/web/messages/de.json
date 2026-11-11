@@ -8579,6 +8579,7 @@
                     "nameRequired": "Werkname ist erforderlich",
                     "slugRequired": "Werkslug ist erforderlich",
                     "slugTaken": "Dieser Slug existiert bereits in deinen Werken. Wähle einen anderen.",
+                    "slugTooLong": "Der Slug darf höchstens {max} Zeichen lang sein. Kürze ihn.",
                     "descriptionRequired": "Werkbeschreibung ist erforderlich",
                     "githubRequired": "Bitte verbinden Sie zuerst Ihr GitHub-Konto.",
                     "createFailed": "Fehler beim Erstellen des Werks"

@@ -5,6 +5,7 @@ import { PLACEHOLDERS_BY_CHIP } from '@/components/new/new-prompt.shared';
 import {
     GENERATED_WORK_SLUG_MAX_LENGTH,
     isValidWorkSlug,
+    isWorkSlugTooLong,
     quickCreateSlugFromPrompt,
     slugifyForWork,
     WORK_SLUG_PATTERN,
@@ -111,4 +112,15 @@ describe('quickCreateSlugFromPrompt', () => {
             expect(quickCreateSlugFromPrompt(prompt)).toMatch(WORK_SLUG_PATTERN);
         },
     );
+});
+
+describe('isWorkSlugTooLong — a typed slug gets the cap a derived one has', () => {
+    it('allows up to GENERATED_WORK_SLUG_MAX_LENGTH characters', () => {
+        expect(isWorkSlugTooLong('a'.repeat(GENERATED_WORK_SLUG_MAX_LENGTH))).toBe(false);
+        expect(isWorkSlugTooLong('a'.repeat(GENERATED_WORK_SLUG_MAX_LENGTH + 1))).toBe(true);
+    });
+
+    it('never flags a slug derived from a name', () => {
+        expect(isWorkSlugTooLong(workSlugFromName('x '.repeat(200)))).toBe(false);
+    });
 });

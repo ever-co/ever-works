@@ -10825,6 +10825,7 @@
                     "nameRequired": "Work name is required",
                     "slugRequired": "Work slug is required",
                     "slugTaken": "This slug already exists in your works. Choose another.",
+                    "slugTooLong": "The slug can be at most {max} characters long. Shorten it.",
                     "descriptionRequired": "Work description is required",
                     "githubRequired": "Please connect your GitHub account first.",
                     "createFailed": "Failed to create Work"

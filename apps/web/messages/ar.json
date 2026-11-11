@@ -8579,6 +8579,7 @@
                     "nameRequired": "اسم العمل مطلوب",
                     "slugRequired": "معرف العمل مطلوب",
                     "slugTaken": "هذا المُعرّف موجود بالفعل في أعمالك. اختر غيره.",
+                    "slugTooLong": "يمكن أن يصل طول المُعرّف إلى {max} حرفًا كحد أقصى. اختصره.",
                     "descriptionRequired": "وصف العمل مطلوب",
                     "githubRequired": "يرجى ربط حساب GitHub الخاص بك أولاً.",
                     "createFailed": "فشل في إنشاء العمل"

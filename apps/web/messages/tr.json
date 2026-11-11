@@ -8475,6 +8475,7 @@
                     "nameRequired": "İş adı gerekli",
                     "slugRequired": "İş slug'ı gerekli",
                     "slugTaken": "Bu slug işlerinizde zaten mevcut. Başka bir tane seçin.",
+                    "slugTooLong": "Slug en fazla {max} karakter olabilir. Kısaltın.",
                     "descriptionRequired": "İş açıklaması gerekli",
                     "githubRequired": "Lütfen önce GitHub hesabınızı bağlayın.",
                     "createFailed": "İş oluşturulamadı"

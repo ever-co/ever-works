@@ -8475,6 +8475,7 @@
                     "nameRequired": "ワーク名が必要です",
                     "slugRequired": "ワーク スラグが必要です",
                     "slugTaken": "このスラッグはすでにワークに存在します。別のものを選んでください。",
+                    "slugTooLong": "スラッグは最大 {max} 文字です。短くしてください。",
                     "descriptionRequired": "ワーク説明が必要です",
                     "githubRequired": "まず GitHub アカウントを接続してください。",
                     "createFailed": "ワーク作成に失敗しました"

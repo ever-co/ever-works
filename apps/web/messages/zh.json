@@ -8475,6 +8475,7 @@
                     "nameRequired": "作品名称是必填的",
                     "slugRequired": "作品 slug 是必填的",
                     "slugTaken": "该 slug 已存在于你的作品中。请选择其他。",
+                    "slugTooLong": "slug 最多只能有 {max} 个字符，请缩短。",
                     "descriptionRequired": "作品描述是必填的",
                     "githubRequired": "请先连接您的 GitHub 账户。",
                     "createFailed": "创建作品失败"

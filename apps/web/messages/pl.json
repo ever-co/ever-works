@@ -8475,6 +8475,7 @@
                     "nameRequired": "Nazwa pracy jest wymagana",
                     "slugRequired": "Slug pracy jest wymagany",
                     "slugTaken": "Ten slug już istnieje w Twoich pracach. Wybierz inny.",
+                    "slugTooLong": "Slug może mieć najwyżej {max} znaków. Skróć go.",
                     "descriptionRequired": "Opis pracy jest wymagany",
                     "githubRequired": "Najpierw połącz konto GitHub.",
                     "createFailed": "Nie udało się utworzyć pracy"

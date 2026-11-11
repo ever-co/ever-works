@@ -8475,6 +8475,7 @@
                     "nameRequired": "Tên công việc là bắt buộc",
                     "slugRequired": "Slug công việc là bắt buộc",
                     "slugTaken": "Slug này đã tồn tại trong các công việc của bạn. Hãy chọn slug khác.",
+                    "slugTooLong": "Slug chỉ được dài tối đa {max} ký tự. Hãy rút ngắn.",
                     "descriptionRequired": "Mô tả công việc là bắt buộc",
                     "githubRequired": "Vui lòng kết nối tài khoản GitHub của bạn trước.",
                     "createFailed": "Tạo công việc thất bại"

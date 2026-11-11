@@ -8475,6 +8475,7 @@
                     "nameRequired": "Werk-naam is verplicht",
                     "slugRequired": "Werk-slug is verplicht",
                     "slugTaken": "Deze slug bestaat al in je werken. Kies een andere.",
+                    "slugTooLong": "De slug mag maximaal {max} tekens lang zijn. Maak hem korter.",
                     "descriptionRequired": "Werk-beschrijving is verplicht",
                     "githubRequired": "Verbind eerst je GitHub-account.",
                     "createFailed": "Fout bij aanmaken werk"

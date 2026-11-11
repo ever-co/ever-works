@@ -8475,6 +8475,7 @@
                     "nameRequired": "ชื่องานจำเป็นต้องมี",
                     "slugRequired": "Slug ของงานจำเป็นต้องมี",
                     "slugTaken": "slug นี้มีอยู่แล้วในงานของคุณ โปรดเลือกอันอื่น",
+                    "slugTooLong": "slug ยาวได้ไม่เกิน {max} อักขระ โปรดย่อให้สั้นลง",
                     "descriptionRequired": "คำอธิบายงานจำเป็นต้องมี",
                     "githubRequired": "กรุณาเชื่อมต่อบัญชี GitHub ของคุณก่อน",
                     "createFailed": "ไม่สามารถสร้างงานได้"

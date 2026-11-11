@@ -8475,6 +8475,7 @@
                     "nameRequired": "Il nome della lavori è obbligatorio",
                     "slugRequired": "Lo slug della lavori è obbligatorio",
                     "slugTaken": "Questo slug esiste già nei tuoi lavori. Scegline un altro.",
+                    "slugTooLong": "Lo slug può avere al massimo {max} caratteri. Accorcialo.",
                     "descriptionRequired": "La descrizione della lavori è obbligatoria",
                     "githubRequired": "Collega prima il tuo account GitHub.",
                     "createFailed": "Impossibile creare la lavori"
