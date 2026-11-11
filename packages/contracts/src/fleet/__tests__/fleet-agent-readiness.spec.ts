@@ -1027,7 +1027,10 @@ describe('masking and normalising are bounded for any input (review N1)', () => 
 					{ provider: huge, installed: true, status: 'ready' }
 				]
 			};
-			let normalised: ReturnType<typeof normalizeFleetAgentReadinessReport> = null;
+			// Asserted, not annotated: an annotated `= null` narrows the variable
+			// to `null` for the type checker, which cannot see the assignment
+			// inside the callback (so `normalised?.agents` would be on `never`).
+			let normalised = null as ReturnType<typeof normalizeFleetAgentReadinessReport>;
 			expect(fastestMs(() => (normalised = normalizeFleetAgentReadinessReport(report)))).toBeLessThan(BUDGET_MS);
 			// One entry survives (the megabyte "provider" is not a token), and nothing of it is long.
 			expect(normalised?.agents).toHaveLength(1);
@@ -1042,7 +1045,8 @@ describe('masking and normalising are bounded for any input (review N1)', () => 
 			status: 'ready',
 			account: 'a-'.repeat(2048)
 		}));
-		let normalised: ReturnType<typeof normalizeFleetAgentReadinessReport> = null;
+		// Asserted, not annotated — see the case above.
+		let normalised = null as ReturnType<typeof normalizeFleetAgentReadinessReport>;
 		expect(fastestMs(() => (normalised = normalizeFleetAgentReadinessReport({ agents })))).toBeLessThan(BUDGET_MS);
 		expect(normalised?.agents.map((agent) => agent.provider)).toEqual(
 			Array.from({ length: 8 }, (_, index) => `cli-${index}`)
