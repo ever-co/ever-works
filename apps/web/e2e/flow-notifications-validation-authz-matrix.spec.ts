@@ -41,12 +41,13 @@
  *       extra field → 400.
  *   • DELETE /preferences/mute/:category (ParseEnumPipe) → **204**; bad category →
  *       400 "Validation failed (enum string is expected)"; unmuting a non-muted category → 204 (idempotent).
- *   • PUT /preferences/event/:eventKey — body is a PLAIN INTERFACE, NOT a DTO, so there is NO
- *       forbidNonWhitelisted / array validation. Observed: extra field PASSES (200); missing
- *       channelIds coerces to [] (200); a string body is char-iterated (400 "Unknown or unauthorized
- *       notification channel: <firstChar>"); unknown eventKey → 400 "Unknown notification event type";
- *       unknown channel uuid → 400 "Unknown or unauthorized notification channel"; >20 unique ids →
- *       400 "Too many notification channels: maximum 20 allowed per subscription."
+ *   • PUT /preferences/event/:eventKey (SetEventSubscriptionBody DTO, since #3160 — it used to be a
+ *       plain inline type that validated nothing, so a body without channelIds saved [] and muted
+ *       the event): missing channelIds → 400 ["channelIds must be an array"]; a string channelIds →
+ *       400 ["channelIds must be an array"]; extra field → 400 ["property <x> should not exist"];
+ *       [] stays a valid "deliver nowhere" (200); unknown eventKey → 400 "Unknown notification event
+ *       type"; unknown channel uuid → 400 "Unknown or unauthorized notification channel"; >20 unique
+ *       ids → 400 "Too many notification channels: maximum 20 allowed per subscription."
  *   • GET /preferences → 200 { subscriptions, preference, mutes }; strictly per-user (cross-user isolated).
  *
  * Fully API-orchestrated; a FRESH registerUserViaAPI() owner per test (never the seeded user).
@@ -527,10 +528,10 @@ test.describe('Unmute DELETE — ParseEnumPipe param matrix', () => {
 });
 
 // ────────────────────────────────────────────────────────────────────────────
-test.describe('Event subscription PUT — untyped-body contract (no DTO validation)', () => {
+test.describe('Event subscription PUT — SetEventSubscriptionBody DTO contract', () => {
     const sub = (key: string) => `${NOTIF}/preferences/event/${key}`;
 
-    test('valid in-app subscription → 200 shape; empty array and missing channelIds both → 200', async ({
+    test('valid in-app subscription → 200 shape; empty array → 200; missing channelIds → 400', async ({
         request,
     }) => {
         const user = await registerUserViaAPI(request);
@@ -554,10 +555,32 @@ test.describe('Event subscription PUT — untyped-body contract (no DTO validati
         expect(empty.status()).toBe(200);
         expect((await empty.json()).subscription.channelIds).toEqual([]);
 
-        // Missing channelIds is coerced to [] (new Set(undefined)) — NOT a 400.
+        // Missing channelIds is a 400 now. Before the DTO it reached the service as
+        // undefined, `new Set(undefined)` saved [] and the event went silently mute.
         const missing = await request.put(sub(VALID_EVENT_KEY), { headers: h, data: {} });
-        expect(missing.status()).toBe(200);
-        expect((await missing.json()).subscription.channelIds).toEqual([]);
+        expect(missing.status()).toBe(400);
+        expect(msgText(await missing.json())).toContain('channelIds must be an array');
+        // The chat tool's old body shape (`enabled` / `channels`) is refused too,
+        // and leaves the saved selection alone instead of muting the event.
+        const reset = await request.put(sub(VALID_EVENT_KEY), {
+            headers: h,
+            data: { channelIds: ['in-app'] },
+        });
+        expect(reset.status()).toBe(200);
+        const oldShape = await request.put(sub(VALID_EVENT_KEY), {
+            headers: h,
+            data: { enabled: true, channels: ['in-app'] },
+        });
+        expect(oldShape.status()).toBe(400);
+        const after = await request.get(`${NOTIF}/preferences`, { headers: h });
+        expect(after.status()).toBe(200);
+        const saved = (
+            (await after.json()).subscriptions as Array<{
+                eventTypeKey: string;
+                channelIds: string[];
+            }>
+        ).find((s) => s.eventTypeKey === VALID_EVENT_KEY);
+        expect(saved?.channelIds).toEqual(['in-app']);
     });
 
     test('service-level rejections: unknown event key, unknown channel id, and the >20 cap all → 400', async ({
@@ -592,33 +615,34 @@ test.describe('Event subscription PUT — untyped-body contract (no DTO validati
         expect(msgText(await overCap.json())).toContain('maximum 20');
     });
 
-    test('a string body is char-iterated by new Set() → 400 on the first unowned character', async ({
+    test('a string channelIds is refused by @IsArray → 400 before the service sees it', async ({
         request,
     }) => {
         const user = await registerUserViaAPI(request);
         const h = { ...authedHeaders(user.access_token), ...JSON_HEADERS };
-        // channelIds:"in-app" (a string, not an array) → Set('in-app') = {i,n,-,a,p} → first
-        // char 'i' fails the ownership check. Proves the body is unvalidated (no @IsArray).
+        // channelIds:"in-app" (a string, not an array). Before the DTO the service
+        // char-iterated it (Set('in-app') = {i,n,-,a,p}) and failed on 'i'.
         const res = await request.put(sub(VALID_EVENT_KEY), {
             headers: h,
             data: { channelIds: 'in-app' },
         });
         expect(res.status()).toBe(400);
-        expect(msgText(await res.json())).toContain('Unknown or unauthorized notification channel');
+        const text = msgText(await res.json());
+        expect(text).toContain('channelIds must be an array');
+        expect(text).not.toContain('Unknown or unauthorized notification channel');
     });
 
-    test('an unknown property PASSES (plain-interface body has no forbidNonWhitelisted); anon → 401', async ({
+    test('an unknown property → 400 (forbidNonWhitelisted, like quiet-hours/mute); anon → 401', async ({
         request,
     }) => {
         const user = await registerUserViaAPI(request);
         const h = { ...authedHeaders(user.access_token), ...JSON_HEADERS };
-        // Contrast with quiet-hours/mute (DTO classes): here the extra field is silently ignored.
         const res = await request.put(sub(VALID_EVENT_KEY), {
             headers: h,
             data: { channelIds: ['in-app'], evilField: 'x' },
         });
-        expect(res.status()).toBe(200);
-        expect((await res.json()).subscription.channelIds).toEqual(['in-app']);
+        expect(res.status()).toBe(400);
+        expect(msgText(await res.json())).toContain('property evilField should not exist');
 
         await expectUnauthorized(
             await request.put(sub(VALID_EVENT_KEY), {

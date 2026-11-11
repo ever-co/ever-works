@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ALL_OPERATIONS } from './registry.all';
-import { redirectsNotificationChannel } from './privileged';
+import { addsAgentToTask, redirectsNotificationChannel, redirectsWebhook } from './privileged';
 
 /**
  * The chat assistant fills a tool's request `body` from its `bodyHint`. The API
@@ -167,6 +167,81 @@ describe('generated chat tools name the fields their API DTO accepts', () => {
     it('tells the model that create_work_upload cannot take a file from chat', () => {
         expect(byName.get('create_work_upload')?.bodyHint).toMatch(/NOT usable from chat/);
     });
+
+    // `CreateAgentDto` / `UpdateAgentDto` declare `capabilities` as ONE string
+    // (`@IsString() @MaxLength(5000)`): a hint saying `capabilities[]` makes the
+    // model send an array and get 400 "capabilities must be a string".
+    it.each(['create_agent', 'update_agent'])(
+        '%s types capabilities as one free-text string, not an array',
+        (tool) => {
+            const hint = byName.get(tool)?.bodyHint ?? '';
+            expect(hint).not.toMatch(/\bcapabilities\s*\[\]/);
+            expect(hint).toMatch(/\bcapabilities \(free text, one string\)/);
+        },
+    );
+});
+
+describe('template tools need the user’s confirmation on every call', () => {
+    // Prompt-injection hardening: once the hints named `kind`, these calls
+    // stopped being 400s, so an injected tool result could add an attacker's
+    // repository as a template, make it the default, or fork into the user's
+    // GitHub — all without a card.
+    it.each([
+        'create_custom_template',
+        'set_default_template',
+        'fork_template',
+        'update_custom_template',
+    ])('%s is always gated as privileged', (tool) => {
+        const op = ALL_OPERATIONS.find((o) => o.toolName === tool);
+        expect(op, tool).toBeDefined();
+        expect(op?.requiresConfirmation).toBe(true);
+        expect(op?.confirmationKind).toBe('privileged');
+    });
+});
+
+describe('addsAgentToTask — putting an Agent on a Task asks, like agentId on update_task', () => {
+    it.each([
+        ['add_task_assignee', 'assigneeType', 'assigneeId'],
+        ['add_task_reviewer', 'reviewerType', 'reviewerId'],
+        ['add_task_approver', 'approverType', 'approverId'],
+    ])('%s asks before adding an agent, not before adding a person', (tool, typeField, idField) => {
+        const op = ALL_OPERATIONS.find((o) => o.toolName === tool);
+        expect(op?.confirmWhen).toBe(addsAgentToTask);
+        expect(op?.confirmationKind).toBe('privileged');
+        const confirmWhen = op!.confirmWhen!;
+        expect(confirmWhen({ id: 't1', body: { [typeField]: 'agent', [idField]: 'a1' } })).toBe(
+            true,
+        );
+        expect(confirmWhen({ id: 't1', body: { [typeField]: 'user', [idField]: 'u1' } })).toBe(
+            false,
+        );
+    });
+
+    it('fails closed on any actor type other than "user"', () => {
+        expect(addsAgentToTask({ body: { assigneeType: 'Agent', assigneeId: 'a1' } })).toBe(true);
+        expect(addsAgentToTask({ body: { reviewerType: null, reviewerId: 'a1' } })).toBe(true);
+        expect(addsAgentToTask({ body: {} })).toBe(false);
+        expect(addsAgentToTask({})).toBe(false);
+    });
+});
+
+describe('redirectsWebhook', () => {
+    it('asks when the call resumes a paused webhook (status "active")', () => {
+        expect(redirectsWebhook({ id: 'w1', body: { status: 'active' } })).toBe(true);
+        // Fails closed on anything that is not a pause.
+        expect(redirectsWebhook({ id: 'w1', body: { status: 'ACTIVE' } })).toBe(true);
+    });
+
+    it('still asks when the call changes url, events or secret', () => {
+        expect(redirectsWebhook({ id: 'w1', body: { url: 'https://x.example' } })).toBe(true);
+        expect(redirectsWebhook({ id: 'w1', body: { events: ['*'] } })).toBe(true);
+        expect(redirectsWebhook({ id: 'w1', body: { secret: 's' } })).toBe(true);
+    });
+
+    it('does not ask for a pause or a description change', () => {
+        expect(redirectsWebhook({ id: 'w1', body: { status: 'paused' } })).toBe(false);
+        expect(redirectsWebhook({ id: 'w1', body: { description: 'ops' } })).toBe(false);
+    });
 });
 
 describe('redirectsNotificationChannel', () => {
@@ -179,6 +254,12 @@ describe('redirectsNotificationChannel', () => {
     it('asks when the call changes the channel plugin, or uses the old config name', () => {
         expect(redirectsNotificationChannel({ id: 'c1', body: { pluginId: 'slack' } })).toBe(true);
         expect(redirectsNotificationChannel({ id: 'c1', body: { config: {} } })).toBe(true);
+    });
+
+    it('asks when the call re-enables a disabled channel', () => {
+        expect(redirectsNotificationChannel({ id: 'c1', body: { disabled: false } })).toBe(true);
+        // Fails closed on anything that is not a plain `true`.
+        expect(redirectsNotificationChannel({ id: 'c1', body: { disabled: 'false' } })).toBe(true);
     });
 
     it('does not ask for a rename or a pause', () => {

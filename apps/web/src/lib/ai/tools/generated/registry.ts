@@ -3,6 +3,7 @@ import {
     TASK_CREATE_ALLOWED_FIELDS,
     TASK_PRIVILEGED_FIELDS,
     TASK_UPDATE_ALLOWED_FIELDS,
+    addsAgentToTask,
     changesTaskLabels,
     createsStartedTask,
     mentionsSomeone,
@@ -176,7 +177,7 @@ export const OPERATION_REGISTRY: OperationSpec[] = [
         confirmationKind: 'privileged',
         body: true,
         bodyHint:
-            'scope ("tenant" | "mission" | "idea" | "work"), missionId / ideaId / workId (the id the scope names; none for tenant), name, optional title, capabilities[], aiProviderId, modelId.',
+            'scope ("tenant" | "mission" | "idea" | "work"), missionId / ideaId / workId (the id the scope names; none for tenant), name, optional title, capabilities (free text, one string), aiProviderId, modelId.',
     },
     {
         toolName: 'list_agent_templates',
@@ -218,7 +219,7 @@ export const OPERATION_REGISTRY: OperationSpec[] = [
         params: [id('Agent id')],
         body: true,
         bodyHint:
-            'Any of: name, title, capabilities[], aiProviderId, modelId, heartbeatCadence, idleBehavior, permissions, targets, avatarMode, avatarIcon.',
+            'Any of: name, title, capabilities (free text, one string), aiProviderId, modelId, heartbeatCadence, idleBehavior, permissions, targets, avatarMode, avatarIcon.',
     },
     {
         toolName: 'delete_agent',
@@ -518,6 +519,10 @@ export const OPERATION_REGISTRY: OperationSpec[] = [
         params: [id('Task id')],
         body: true,
         bodyHint: 'assigneeType ("user" | "agent"), assigneeId (that user’s or agent’s id).',
+        // Works-security: an assigned Agent runs on the next `→ in_progress`;
+        // picking it is the user's call, as `agentId` is on update_task.
+        confirmWhen: addsAgentToTask,
+        confirmationKind: 'privileged',
     },
     {
         toolName: 'add_task_reviewer',
@@ -528,6 +533,9 @@ export const OPERATION_REGISTRY: OperationSpec[] = [
         params: [id('Task id')],
         body: true,
         bodyHint: 'reviewerType ("user" | "agent"), reviewerId (that user’s or agent’s id).',
+        // Works-security: a reviewer Agent runs on `→ in_review` (see add_task_assignee).
+        confirmWhen: addsAgentToTask,
+        confirmationKind: 'privileged',
     },
     {
         toolName: 'add_task_approver',
@@ -538,6 +546,9 @@ export const OPERATION_REGISTRY: OperationSpec[] = [
         params: [id('Task id')],
         body: true,
         bodyHint: 'approverType ("user" | "agent"), approverId (that user’s or agent’s id).',
+        // Works-security: an approver Agent decides the `→ done` gate (see add_task_assignee).
+        confirmWhen: addsAgentToTask,
+        confirmationKind: 'privileged',
     },
     {
         toolName: 'get_task_chat',
@@ -738,7 +749,8 @@ export const OPERATION_REGISTRY: OperationSpec[] = [
         params: [id('Channel id')],
         body: true,
         bodyHint: 'Any of: name, targetConfig (object), disabled (boolean).',
-        // Works-security: changing `config` re-points the destination.
+        // Works-security: changing `targetConfig` re-points the destination;
+        // `disabled: false` turns delivery back on.
         confirmWhen: redirectsNotificationChannel,
         confirmationKind: 'privileged',
     },
@@ -972,7 +984,8 @@ export const OPERATION_REGISTRY: OperationSpec[] = [
         params: [id('Webhook id')],
         body: true,
         bodyHint: 'Any of: status ("active" | "paused"), url, events[], description.',
-        // Works-security: changing url / events re-points what goes out.
+        // Works-security: changing url / events re-points what goes out;
+        // `status: 'active'` resumes delivery.
         confirmWhen: redirectsWebhook,
         confirmationKind: 'privileged',
     },
@@ -1142,6 +1155,10 @@ export const OPERATION_REGISTRY: OperationSpec[] = [
         body: true,
         bodyHint:
             'kind ("website" | "work" | "mission" | "company"), repositoryUrl, optional name, description, branch.',
+        // Works-security: any GitHub repository becomes a template the user's
+        // next Work can start from — an injected tool result must not add one.
+        requiresConfirmation: true,
+        confirmationKind: 'privileged',
     },
     {
         toolName: 'set_default_template',
@@ -1151,6 +1168,10 @@ export const OPERATION_REGISTRY: OperationSpec[] = [
         kind: 'update',
         body: true,
         bodyHint: 'kind ("website" | "work" | "mission" | "company"), templateId.',
+        // Works-security: the default decides which repository every new Work
+        // of that kind is built from.
+        requiresConfirmation: true,
+        confirmationKind: 'privileged',
     },
     {
         toolName: 'fork_template',
@@ -1161,6 +1182,9 @@ export const OPERATION_REGISTRY: OperationSpec[] = [
         body: true,
         bodyHint:
             'kind ("website" | "work" | "mission" | "company"), templateId, targetOwner (the GitHub account or organization to fork into).',
+        // Works-security: creates a repository in the user's GitHub account or organization.
+        requiresConfirmation: true,
+        confirmationKind: 'privileged',
     },
 
     // ── Plugins & integrations ───────────────────────────────────

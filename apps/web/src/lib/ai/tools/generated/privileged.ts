@@ -114,6 +114,23 @@ export const TASK_PRIVILEGED_FIELDS: readonly string[] = Object.freeze([
     'goalId',
 ]);
 
+/** The body field naming who is added, per Task people tool (`AddAssigneeDto` & co). */
+const TASK_ACTOR_TYPE_FIELDS = ['assigneeType', 'reviewerType', 'approverType'] as const;
+
+/**
+ * `add_task_assignee` / `add_task_reviewer` / `add_task_approver`: confirm when
+ * the call puts an Agent on the Task. Choosing the Agent through `update_task`
+ * (`agentId`) already needs the user's confirmation; an assigned Agent runs on
+ * the next `→ in_progress` and a reviewer Agent on `→ in_review`, so an
+ * injected instruction must not attach one this way either. Adding a person
+ * starts nothing. Fails closed: any actor type other than `user` asks.
+ */
+export function addsAgentToTask(args: Record<string, unknown>): boolean {
+    const body = bodyOf(args);
+    if (!body) return false;
+    return TASK_ACTOR_TYPE_FIELDS.some((key) => body[key] !== undefined && body[key] !== 'user');
+}
+
 /** Statuses a NEW Task may be filed in without asking (nothing has started). */
 const NOT_STARTED_TASK_STATUSES = new Set(['backlog', 'todo']);
 
@@ -157,11 +174,20 @@ export function startsTaskWork(args: Record<string, unknown>): boolean {
 
 // ── Outbound destinations (works-security, 2026-10-18) ───────────────────────
 
-/** `update_webhook`: confirm when the call moves where (or what) the webhook delivers. */
+/**
+ * `update_webhook`: confirm when the call moves where (or what) the webhook
+ * delivers, or turns delivery back on: `status: 'active'` resumes a paused
+ * webhook, so outbound payloads start flowing again. Pausing stays one step.
+ * Fails closed: any `status` other than `paused` asks.
+ */
 export function redirectsWebhook(args: Record<string, unknown>): boolean {
     const body = bodyOf(args);
     return Boolean(
-        body && (body.url !== undefined || body.events !== undefined || body.secret !== undefined),
+        body &&
+        (body.url !== undefined ||
+            body.events !== undefined ||
+            body.secret !== undefined ||
+            (body.status !== undefined && body.status !== 'paused')),
     );
 }
 
@@ -170,7 +196,10 @@ export function redirectsWebhook(args: Record<string, unknown>): boolean {
  * channel delivers. The API field is `targetConfig` (`UpdateChannelDto`); this
  * checked only `config`, the name the tool's old hint used, so once the hint
  * named the real field the redirect would have gone through unconfirmed.
- * `config` is still caught in case a model sends it.
+ * `config` is still caught in case a model sends it. Re-enabling a disabled
+ * channel (`disabled: false`) restarts delivery to its destination, so it asks
+ * too; disabling stays one step. Fails closed: any `disabled` other than
+ * `true` asks.
  */
 export function redirectsNotificationChannel(args: Record<string, unknown>): boolean {
     const body = bodyOf(args);
@@ -178,6 +207,7 @@ export function redirectsNotificationChannel(args: Record<string, unknown>): boo
         body &&
         (body.targetConfig !== undefined ||
             body.config !== undefined ||
-            body.pluginId !== undefined),
+            body.pluginId !== undefined ||
+            (body.disabled !== undefined && body.disabled !== true)),
     );
 }

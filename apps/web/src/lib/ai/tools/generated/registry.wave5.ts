@@ -100,6 +100,9 @@ export const WAVE5_OPERATIONS: OperationSpec[] = [
         body: true,
         bodyHint:
             'kind ("website" | "work" | "mission" | "company"), and any of: name, description, branch, betaBranch.',
+        // Works-security: re-points the branch new Works are built from.
+        requiresConfirmation: true,
+        confirmationKind: 'privileged',
     },
 
     // Organizations

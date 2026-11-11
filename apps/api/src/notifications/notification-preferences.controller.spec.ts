@@ -103,6 +103,18 @@ describe('SetEventSubscriptionBody (PUT preferences/event/:eventKey)', () => {
             forbidNonWhitelisted: true,
         });
 
+    /**
+     * The constraints that failed on `channelIds`. Asserting on the property
+     * (not just "some error") keeps these tests honest: with the DTO class
+     * gone, `validate()` still reports an error — "an unknown value was passed
+     * to the validate function", on no property — so a bare non-empty check
+     * passed with the fix reverted.
+     */
+    const channelIdsConstraints = async (body: Record<string, unknown>) =>
+        Object.keys(
+            (await errorsFor(body)).find((e) => e.property === 'channelIds')?.constraints ?? {},
+        );
+
     it('accepts a channel selection, including [] (mute) and built-in channel ids', async () => {
         expect(await errorsFor({ channelIds: [] })).toHaveLength(0);
         expect(await errorsFor({ channelIds: ['in-app', 'email'] })).toHaveLength(0);
@@ -111,11 +123,25 @@ describe('SetEventSubscriptionBody (PUT preferences/event/:eventKey)', () => {
     it('refuses a body without channelIds — it used to save an empty selection and mute the event', async () => {
         // The chat tool's old hint sent `{ enabled, channels }`; the inline type
         // validated nothing and `channelIds` reached the service as undefined.
-        expect(await errorsFor({ enabled: true, channels: ['in-app'] })).not.toHaveLength(0);
-        expect(await errorsFor({})).not.toHaveLength(0);
+        expect(await channelIdsConstraints({ enabled: true, channels: ['in-app'] })).toContain(
+            'isArray',
+        );
+        expect(await channelIdsConstraints({})).toContain('isArray');
     });
 
     it('refuses non-string channel ids', async () => {
-        expect(await errorsFor({ channelIds: [1, 2] })).not.toHaveLength(0);
+        expect(await channelIdsConstraints({ channelIds: [1, 2] })).toContain('isString');
+    });
+
+    it('is the type the route validates its body against', () => {
+        // The global ValidationPipe reads the handler's reflected parameter
+        // types; an inline `{ channelIds: string[] }` reflects as `Object` and
+        // validates nothing.
+        const paramTypes = Reflect.getMetadata(
+            'design:paramtypes',
+            NotificationPreferencesController.prototype,
+            'setEventSubscription',
+        ) as unknown[];
+        expect(paramTypes[2]).toBe(SetEventSubscriptionBody);
     });
 });

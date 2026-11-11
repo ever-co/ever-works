@@ -242,6 +242,12 @@ describe('privileged / run-starting generated tools are gated on every call', ()
         'configure_sync_repo',
         // Review of #2804: a standing inbound event feed, like a webhook.
         'create_composio_trigger',
+        // Review of #3160: a template is the repository new Works start from,
+        // and a fork creates a repository in the user's GitHub.
+        'create_custom_template',
+        'set_default_template',
+        'fork_template',
+        'update_custom_template',
     ])('%s', async (name) => {
         const op = byName(name);
         expect(op, name).toBeDefined();
@@ -277,6 +283,75 @@ describe('privileged / run-starting generated tools are gated on every call', ()
                 })
             ).__confirmationRequired,
         ).toBe(true);
+    });
+
+    it('turning delivery back on needs confirmation; turning it off does not (review of #3160)', async () => {
+        const tools = unconfirmedTools();
+        expect(
+            (await run(tools.update_webhook, { id: 'w', body: { status: 'active' } }))
+                .__confirmationRequired,
+        ).toBe(true);
+        expect(
+            (
+                await run(tools.update_notification_channel, {
+                    id: 'c',
+                    body: { disabled: false },
+                })
+            ).__confirmationRequired,
+        ).toBe(true);
+        expect(callApi).not.toHaveBeenCalled();
+
+        expect(
+            (await run(tools.update_webhook, { id: 'w', body: { status: 'paused' } }))
+                .__confirmationRequired,
+        ).toBeUndefined();
+        expect(
+            (await run(tools.update_notification_channel, { id: 'c', body: { disabled: true } }))
+                .__confirmationRequired,
+        ).toBeUndefined();
+        expect(callApi).toHaveBeenCalledTimes(2);
+    });
+});
+
+describe('add_task_assignee / add_task_reviewer / add_task_approver (review of #3160)', () => {
+    it.each([
+        ['add_task_assignee', 'assigneeType', 'assigneeId', '/api/tasks/{id}/assignees'],
+        ['add_task_reviewer', 'reviewerType', 'reviewerId', '/api/tasks/{id}/reviewers'],
+        ['add_task_approver', 'approverType', 'approverId', '/api/tasks/{id}/approvers'],
+    ])(
+        '%s: an Agent needs confirmation (like agentId on update_task); a person goes straight through',
+        async (name, typeField, idField, path) => {
+            const tools = unconfirmedTools();
+            const agent = await run(tools[name], {
+                id: 't1',
+                confirmed: true,
+                body: { [typeField]: 'agent', [idField]: 'a1' },
+            });
+            expect(agent.__confirmationRequired).toBe(true);
+            expect(callApi).not.toHaveBeenCalled();
+
+            const person = await run(tools[name], {
+                id: 't1',
+                body: { [typeField]: 'user', [idField]: 'u1' },
+            });
+            expect(person.__confirmationRequired).toBeUndefined();
+            expect(callApi).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    method: 'POST',
+                    path,
+                    pathParams: { id: 't1' },
+                    body: { [typeField]: 'user', [idField]: 'u1' },
+                }),
+            );
+        },
+    );
+
+    it('the confirmed card adds the Agent once', async () => {
+        const args = { id: 't1', body: { assigneeType: 'agent', assigneeId: 'a1' } };
+        const tools = toolsConfirming('add_task_assignee', args);
+        const out = await run(tools.add_task_assignee, { ...args, confirmed: true });
+        expect(out.__confirmationRequired).toBeUndefined();
+        expect(callApi).toHaveBeenCalledTimes(1);
     });
 });
 
