@@ -196,7 +196,16 @@ jobs:
 
       - name: Install Playwright browsers
         working-directory: apps/web
-        run: pnpm exec playwright install --with-deps chromium
+        # The system packages come from apt mirrors that fail now and then on the in-cluster runner
+        # ("Unable to fetch some archives", exit 100). Retry with a fresh package index before failing.
+        run: |
+          for attempt in 1 2 3; do
+            if pnpm exec playwright install --with-deps chromium; then exit 0; fi
+            echo "playwright install failed (attempt $attempt of 3); refreshing the package index"
+            if command -v sudo >/dev/null 2>&1; then sudo apt-get update || true; else apt-get update || true; fi
+            sleep $((attempt * 15))
+          done
+          exit 1
 
       - name: Start dev servers, wait, run Playwright
         # Background processes started in one `run:` step are killed when the
@@ -748,7 +757,16 @@ jobs:
 
       - name: Install Playwright browsers
         working-directory: apps/web
-        run: pnpm exec playwright install --with-deps chromium
+        # The system packages come from apt mirrors that fail now and then on the in-cluster runner
+        # ("Unable to fetch some archives", exit 100). Retry with a fresh package index before failing.
+        run: |
+          for attempt in 1 2 3; do
+            if pnpm exec playwright install --with-deps chromium; then exit 0; fi
+            echo "playwright install failed (attempt $attempt of 3); refreshing the package index"
+            if command -v sudo >/dev/null 2>&1; then sudo apt-get update || true; else apt-get update || true; fi
+            sleep $((attempt * 15))
+          done
+          exit 1
 
       - name: Start API + prod web (`next start`), run prod-only specs
         working-directory: apps/web
@@ -934,7 +952,16 @@ jobs:
 
       - name: Install Playwright browsers
         working-directory: apps/web
-        run: pnpm exec playwright install --with-deps chromium
+        # The system packages come from apt mirrors that fail now and then on the in-cluster runner
+        # ("Unable to fetch some archives", exit 100). Retry with a fresh package index before failing.
+        run: |
+          for attempt in 1 2 3; do
+            if pnpm exec playwright install --with-deps chromium; then exit 0; fi
+            echo "playwright install failed (attempt $attempt of 3); refreshing the package index"
+            if command -v sudo >/dev/null 2>&1; then sudo apt-get update || true; else apt-get update || true; fi
+            sleep $((attempt * 15))
+          done
+          exit 1
 
       - name: Start the flags-on stack, run the two flag-on files
         # One step for the same reason as the matrix: background processes die
