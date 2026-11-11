@@ -7,8 +7,8 @@
 # machine or its checkout: a GitHub runner, an in-cluster runner and a
 # workstation with Docker produce the same bytes, and anyone can check a
 # published fingerprint by running this script at the release's commit. The
-# image is Debian 12 (glibc 2.36), so the helper runs on Debian 12 / Ubuntu
-# 22.04 and newer. publish-node.yml builds the released linux-x64 helper with
+# image is Debian 12; the helper it builds needs glibc 2.34 or newer (Debian 12,
+# Ubuntu 22.04 and newer). publish-node.yml builds the released linux-x64 helper with
 # it (see PACKAGING.md, "Release builds").
 #
 # Uncommitted changes in this folder are NOT built (the script says so).

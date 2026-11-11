@@ -74,10 +74,13 @@ the fingerprint the node package's `helper-manifest.json` (`helper-manifest.sche
 target. `SCREEN_HELPER_TARGET=darwin-x64 bash build-release.sh <dir>` builds the Intel Mac helper on an Apple silicon
 Mac. The build scripts upload nothing.
 
-`build-release-linux.sh` runs `build-release.sh` in a Rust image pinned by digest (`rust:1.88.0-slim-bookworm`, Debian
-12, glibc 2.36: the helper runs on Debian 12 / Ubuntu 22.04 and newer). The linux-x64 fingerprint therefore depends on
-the image, not on the machine: a CI runner and a workstation with Docker produce the same bytes, and anyone can check a
-released fingerprint by running `bash build-release-linux.sh` at the release's commit. The macOS and Windows builds
+`build-release-linux.sh` runs `build-release.sh` on this folder as committed (`git archive` of `HEAD`, so neither the
+checkout's line endings nor uncommitted files reach the build) in a Rust image pinned by digest
+(`rust:1.88.0-slim-bookworm`, Debian 12; the helper needs glibc 2.34 or newer: Debian 12, Ubuntu 22.04 and newer). The
+linux-x64 fingerprint therefore depends on the commit and the image, not on the machine: a CI runner and a workstation
+with Docker produce the same bytes, and anyone can check a released fingerprint by running `bash build-release-linux.sh`
+at the release's commit. The sources go into the container and the outputs come back as tar streams, so any Docker
+daemon works (local, remote, Docker-in-Docker). The macOS and Windows builds
 are reproducible on the machine that built them (two builds there are byte-identical), but another machine matches
 only with the same linker and system libraries, so for those targets a release takes the fingerprint of its own build.
 
