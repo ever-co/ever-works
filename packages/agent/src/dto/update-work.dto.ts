@@ -122,6 +122,9 @@ export class UpdateWorkDto {
             "output, a Goal's first iteration, an App Work change), tried before the Work's only " +
             'Agent. Must be an Agent you own, not archived, in the same tenant/organization as the ' +
             'Work; any other id answers 404. Pass `null` to clear it.',
+        // Explicit: a `string | null` property emits `Object` metadata, which would document
+        // (and give MCP tool schemas) an object.
+        type: String,
         nullable: true,
         format: 'uuid',
     })
