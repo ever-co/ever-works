@@ -397,4 +397,79 @@ describe('KbController — duplicate (the KB tree menu called a route that did n
             title: 'Voice v2',
         });
     });
+
+    // Review of #3167: Duplicate read as a copy, yet it was an approval. An
+    // unreviewed agent document's copy landed accepted and user-authored, and a
+    // draft or archived source's copy landed active — both reached agent context.
+    it('keeps an unreviewed agent source unreviewed and agent-authored', async () => {
+        kb.getDocument.mockResolvedValue({
+            ...source,
+            status: 'active',
+            source: 'agent',
+            reviewState: 'proposed',
+        });
+        await controller.duplicateDocument(auth, WORK_ID, DOC_ID, {}, {});
+        expect(kb.createDocument.mock.calls[0][0]).toMatchObject({
+            reviewState: 'proposed',
+            source: 'agent',
+            status: 'active',
+        });
+    });
+
+    it.each(['draft', 'archived'])(
+        'the copy of a source in status %s keeps it (out of agent context)',
+        async (status) => {
+            kb.getDocument.mockResolvedValue({ ...source, status, source: 'user' });
+            await controller.duplicateDocument(auth, WORK_ID, DOC_ID, {}, {});
+            expect(kb.createDocument.mock.calls[0][0].status).toBe(status);
+        },
+    );
+
+    it('keeps an accepted agent source accepted (agent provenance alone would make it proposed)', async () => {
+        kb.getDocument.mockResolvedValue({
+            ...source,
+            status: 'active',
+            source: 'agent',
+            reviewState: 'accepted',
+        });
+        await controller.duplicateDocument(auth, WORK_ID, DOC_ID, {}, {});
+        expect(kb.createDocument.mock.calls[0][0]).toMatchObject({
+            reviewState: 'accepted',
+            source: 'agent',
+            status: 'active',
+        });
+    });
+
+    it('never raises a copy: an accepted source copied with a personal key lands proposed', async () => {
+        const personalKey = { userId: 'u-1', authMethod: 'api-key' } as AuthenticatedUser;
+        const previous = process.env.KB_NON_SESSION_WRITES_PROPOSED;
+        delete process.env.KB_NON_SESSION_WRITES_PROPOSED;
+        try {
+            kb.getDocument.mockResolvedValue({
+                ...source,
+                status: 'active',
+                source: 'agent',
+                reviewState: 'accepted',
+            });
+            await controller.duplicateDocument(personalKey, WORK_ID, DOC_ID, {}, {});
+            expect(kb.createDocument.mock.calls[0][0].reviewState).toBe('proposed');
+        } finally {
+            if (previous === undefined) delete process.env.KB_NON_SESSION_WRITES_PROPOSED;
+            else process.env.KB_NON_SESSION_WRITES_PROPOSED = previous;
+        }
+    });
+
+    it('a human copy of an accepted user document stays accepted (no override)', async () => {
+        kb.getDocument.mockResolvedValue({
+            ...source,
+            status: 'active',
+            source: 'user',
+            reviewState: 'accepted',
+        });
+        await controller.duplicateDocument(auth, WORK_ID, DOC_ID, {}, {});
+        const input = kb.createDocument.mock.calls[0][0];
+        expect(input.reviewState).toBeUndefined();
+        expect(input.source).toBeUndefined();
+        expect(input.status).toBe('active');
+    });
 });
