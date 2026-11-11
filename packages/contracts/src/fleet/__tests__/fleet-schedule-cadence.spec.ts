@@ -238,6 +238,69 @@ describe('previousFleetScheduleFire and the missed-run collapse (FR-16, ACC-FL13
 	});
 });
 
+describe('transition days — a minute the clock moved is not lost', () => {
+	it('still owes a spring-forward fire when asked after the jump but before it fires', () => {
+		// 2026-03-29 Paris: 02:30 does not exist and fires at 03:30 CEST = 01:30Z.
+		// At 03:10 CEST (01:10Z) it is still ahead.
+		expect(iso(nextFleetScheduleFire(daily('02:30'), 'Europe/Paris', at('2026-03-29T01:10:00Z')))).toBe(
+			'2026-03-29T01:30:00.000Z'
+		);
+		// Once it has fired, the next one is the next day's.
+		expect(iso(nextFleetScheduleFire(daily('02:30'), 'Europe/Paris', at('2026-03-29T01:30:00Z')))).toBe(
+			'2026-03-30T00:30:00.000Z'
+		);
+		expect(iso(nextFleetScheduleFire(daily('02:30'), 'Europe/Paris', at('2026-03-29T01:40:00Z')))).toBe(
+			'2026-03-30T00:30:00.000Z'
+		);
+	});
+
+	it('still owes a fire moved by a 30-minute gap (Lord Howe)', () => {
+		// 2026-10-04: the clock goes 02:00 → 02:30, so 02:15 fires at 02:45 (+11) = 15:45Z the day before in UTC.
+		expect(iso(nextFleetScheduleFire(daily('02:15'), 'Australia/Lord_Howe', at('2026-10-03T15:35:00Z')))).toBe(
+			'2026-10-03T15:45:00.000Z'
+		);
+	});
+
+	it('finds the fire a repeated hour already had when asked in its second pass', () => {
+		// 2026-10-25 Paris: 02:30 CEST (00:30Z) happened; at 02:10 CET (01:10Z) it is the last fire.
+		expect(iso(previousFleetScheduleFire(daily('02:30'), 'Europe/Paris', at('2026-10-25T01:10:00Z')))).toBe(
+			'2026-10-25T00:30:00.000Z'
+		);
+	});
+
+	it('owes a node that starts in the second pass the run it missed (FR-16)', () => {
+		const result = fleetScheduleCatchUp({
+			cadence: daily('02:30'),
+			timeZone: 'Europe/Paris',
+			sinceMs: at('2026-10-24T00:30:00Z'),
+			nowMs: at('2026-10-25T01:10:00Z')
+		});
+		expect(iso(result.run)).toBe('2026-10-25T00:30:00.000Z');
+		expect(result.skipped).toBeNull();
+	});
+
+	it('keeps the old answer on an ordinary day and on a transition day for unaffected times', () => {
+		// An ordinary day: a time already past is tomorrow's, a time ahead is today's.
+		expect(iso(nextFleetScheduleFire(daily('02:00'), 'Europe/Paris', at('2026-01-14T12:00:00Z')))).toBe(
+			'2026-01-15T01:00:00.000Z'
+		);
+		expect(iso(nextFleetScheduleFire(daily('14:00'), 'Europe/Paris', at('2026-01-14T12:00:00Z')))).toBe(
+			'2026-01-14T13:00:00.000Z'
+		);
+		expect(iso(previousFleetScheduleFire(daily('02:30'), 'Europe/Paris', at('2026-01-14T01:10:00Z')))).toBe(
+			'2026-01-13T01:30:00.000Z'
+		);
+		// On the spring-forward day a time that exists and has passed is NOT owed again.
+		expect(iso(nextFleetScheduleFire(daily('03:00'), 'Europe/Paris', at('2026-03-29T01:10:00Z')))).toBe(
+			'2026-03-30T01:00:00.000Z'
+		);
+		// On the fall-back day the repeated minute still fires once (the first pass).
+		expect(iso(nextFleetScheduleFire(daily('02:30'), 'Europe/Paris', at('2026-10-25T01:10:00Z')))).toBe(
+			'2026-10-26T01:30:00.000Z'
+		);
+	});
+});
+
 describe('time zones', () => {
 	it('knows IANA zones and refuses anything else', () => {
 		expect(isFleetTimeZone('Europe/Paris')).toBe(true);
