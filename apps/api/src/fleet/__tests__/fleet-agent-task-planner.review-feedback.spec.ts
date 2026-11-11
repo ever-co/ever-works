@@ -1,6 +1,14 @@
+import { Test } from '@nestjs/testing';
 import { PromptAssemblerService } from '@ever-works/agent/agents';
+import { AgentRepository, AgentRunRepository, WorkRepository } from '@ever-works/agent/database';
 import type { Agent, Task } from '@ever-works/agent/entities';
-import { TaskReviewRejectionService, TaskStatus } from '@ever-works/agent/tasks-domain';
+import { PluginSettingsService } from '@ever-works/agent/plugins';
+import {
+    TaskRepository,
+    TaskReviewRejectionService,
+    TaskStatus,
+    TaskWorkspaceService,
+} from '@ever-works/agent/tasks-domain';
 import { FLEET_AGENT_EXECUTION_MAX_INSTRUCTIONS_BYTES } from '@ever-works/contracts';
 import { FleetAgentTaskPlannerService } from '../fleet-agent-task-planner.service';
 
@@ -99,27 +107,50 @@ describe('FleetAgentTaskPlannerService — # REVIEW FEEDBACK TO ADDRESS', () => 
     let runs: { findById: jest.Mock; findRecentForTask: jest.Mock };
     let reviewFeedback: { claimFeedbackForRun: jest.Mock };
 
-    const build = (feedbackService: unknown = reviewFeedback) =>
-        new FleetAgentTaskPlannerService(
-            tasks as never,
-            { findByIdAndUser: jest.fn().mockResolvedValue(agent) } as never,
-            { findById: jest.fn().mockResolvedValue({ id: 'work-1', checkDefaults: [] }) } as never,
-            {
-                describeFleetWorkspace,
-                resolveFleetRunEnvGrants: jest.fn().mockResolvedValue([]),
-                readFleetRepoDeclaredCommands: jest
-                    .fn()
-                    .mockResolvedValue({ setup: [], checks: [] }),
-            } as never,
-            new PromptAssemblerService(),
-            undefined,
-            { getResolvedSettings: jest.fn().mockResolvedValue({}) } as never,
-            runs as never,
-            undefined,
-            undefined,
-            undefined,
-            feedbackService as never,
-        );
+    /**
+     * Built through Nest's container, not positionally: the review-feedback
+     * reader is injected by its class, which is also what production does,
+     * so this spec does not depend on where the constructor's optional tail
+     * puts it. `null` = the reader is not in the graph.
+     */
+    const build = async (feedbackService: unknown = reviewFeedback) => {
+        const moduleRef = await Test.createTestingModule({
+            providers: [
+                FleetAgentTaskPlannerService,
+                { provide: TaskRepository, useValue: tasks },
+                {
+                    provide: AgentRepository,
+                    useValue: { findByIdAndUser: jest.fn().mockResolvedValue(agent) },
+                },
+                {
+                    provide: WorkRepository,
+                    useValue: {
+                        findById: jest.fn().mockResolvedValue({ id: 'work-1', checkDefaults: [] }),
+                    },
+                },
+                {
+                    provide: TaskWorkspaceService,
+                    useValue: {
+                        describeFleetWorkspace,
+                        resolveFleetRunEnvGrants: jest.fn().mockResolvedValue([]),
+                        readFleetRepoDeclaredCommands: jest
+                            .fn()
+                            .mockResolvedValue({ setup: [], checks: [] }),
+                    },
+                },
+                { provide: PromptAssemblerService, useValue: new PromptAssemblerService() },
+                {
+                    provide: PluginSettingsService,
+                    useValue: { getResolvedSettings: jest.fn().mockResolvedValue({}) },
+                },
+                { provide: AgentRunRepository, useValue: runs },
+                ...(feedbackService
+                    ? [{ provide: TaskReviewRejectionService, useValue: feedbackService }]
+                    : []),
+            ],
+        }).compile();
+        return moduleRef.get(FleetAgentTaskPlannerService);
+    };
 
     beforeEach(() => {
         process.env = { ...originalEnv, FLEET_NODE_AGENT_EXECUTION_MODE: 'model-cli' };
@@ -136,8 +167,8 @@ describe('FleetAgentTaskPlannerService — # REVIEW FEEDBACK TO ADDRESS', () => 
         process.env = originalEnv;
     });
 
-    const instructionsOf = async (service: FleetAgentTaskPlannerService = build()) => {
-        const plan = await service.plan(payload);
+    const instructionsOf = async (service?: FleetAgentTaskPlannerService) => {
+        const plan = await (service ?? (await build())).plan(payload);
         return plan!.execution.instructions;
     };
 
@@ -200,13 +231,13 @@ describe('FleetAgentTaskPlannerService — # REVIEW FEEDBACK TO ADDRESS', () => 
     });
 
     it('asks nothing for a dispatch with no run row (nothing could consume the findings)', async () => {
-        const plan = await build().plan({ ...payload, runId: undefined } as never);
+        const plan = await (await build()).plan({ ...payload, runId: undefined } as never);
         expect(plan).not.toBeNull();
         expect(reviewFeedback.claimFeedbackForRun).not.toHaveBeenCalled();
     });
 
     it('without the service bound (a reduced graph) plans exactly as before', async () => {
-        const text = await instructionsOf(build(undefined));
+        const text = await instructionsOf(await build(null));
         expect(text).not.toContain('REVIEW FEEDBACK');
     });
 
@@ -354,7 +385,9 @@ describe('FleetAgentTaskPlannerService — # REVIEW FEEDBACK TO ADDRESS', () => 
             const service = realService(rows, runRows);
 
             // run-2 is planned: it carries the finding.
-            expect(await instructionsOf(build(service))).toContain('Revert the unrelated feature');
+            expect(await instructionsOf(await build(service))).toContain(
+                'Revert the unrelated feature',
+            );
             // run-2 fails: the finding goes back.
             runRows[1].status = 'failed';
             await service.settleFeedbackForRun('run-2', 'failed');
@@ -369,7 +402,7 @@ describe('FleetAgentTaskPlannerService — # REVIEW FEEDBACK TO ADDRESS', () => 
                 status: 'queued',
                 createdAt: at(40),
             });
-            const run3 = await build(service).plan({ ...payload, runId: 'run-3' });
+            const run3 = await (await build(service)).plan({ ...payload, runId: 'run-3' });
             expect(run3!.execution.instructions).toContain('Revert the unrelated feature');
             runRows[2].status = 'completed';
             await service.settleFeedbackForRun('run-3', 'completed');
@@ -383,7 +416,7 @@ describe('FleetAgentTaskPlannerService — # REVIEW FEEDBACK TO ADDRESS', () => 
                 status: 'queued',
                 createdAt: at(50),
             });
-            const run4 = await build(service).plan({ ...payload, runId: 'run-4' });
+            const run4 = await (await build(service)).plan({ ...payload, runId: 'run-4' });
             expect(run4!.execution.instructions).not.toContain('REVIEW FEEDBACK');
         });
     });

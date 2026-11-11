@@ -389,6 +389,54 @@ export class LocalWorkspacePlugin implements IPlugin, IWorkspacePlugin {
 	}
 
 	/**
+	 * Review feedback reaches the next run (2026-11-11) — bring a REUSED
+	 * worktree up to its pushed Task branch.
+	 *
+	 * A reused checkout used to resume exactly where this machine left it,
+	 * even when the remote branch had moved on since: a person reverted an
+	 * unrelated commit on the pull request, or another machine pushed the
+	 * last fix. The next run (a fix run for review findings, typically) then
+	 * built on a stale branch, and its push was refused as a non-fast-forward
+	 * — after the model had done the work.
+	 *
+	 * Taken ONLY when it is a plain fast-forward of a clean checkout: the
+	 * local head is an ancestor of the fetched `origin/<branch>`, and no
+	 * tracked file is modified. Anything else — local commits the remote does
+	 * not have, a dirty tree, a merge Git refuses — leaves the worktree
+	 * exactly as before. Inside a hardened provision every command here runs
+	 * under the same overlay as `worktree add` (no hooks, no fsmonitor, no
+	 * filter drivers), re-read from the checkout right before the merge
+	 * writes files. Never throws except to honour cancellation.
+	 */
+	private async fastForwardReusedWorktree(worktreeDir: string, spec: WorkspaceProvisionSpec): Promise<void> {
+		const remoteRef = `refs/remotes/origin/${spec.branch}`;
+		try {
+			const head = await this.git(['rev-parse', 'HEAD'], worktreeDir, spec.auth, spec.signal);
+			const remote = await this.git(['rev-parse', '--verify', remoteRef], worktreeDir, spec.auth, spec.signal);
+			if (head.code !== 0 || remote.code !== 0) return;
+			if (head.stdout.trim() === remote.stdout.trim()) return;
+			const behind = await this.git(
+				['merge-base', '--is-ancestor', 'HEAD', remoteRef],
+				worktreeDir,
+				spec.auth,
+				spec.signal
+			);
+			if (behind.code !== 0) return;
+			const status = await this.git(
+				['status', '--porcelain', '--untracked-files=no', '--ignore-submodules=dirty'],
+				worktreeDir,
+				spec.auth,
+				spec.signal
+			);
+			if (status.code !== 0 || status.stdout.trim().length > 0) return;
+			await this.refreshCheckoutHardening(worktreeDir, spec.signal);
+			await this.git(['merge', '--ff-only', '--no-edit', remoteRef], worktreeDir, spec.auth, spec.signal);
+		} catch (error) {
+			if (isAbortError(error)) throw error;
+		}
+	}
+
+	/**
 	 * Re-read the filter drivers visible from `dir` and rebuild the scope's
 	 * overlay. A no-op outside a hardened provision.
 	 */
@@ -567,7 +615,10 @@ export class LocalWorkspacePlugin implements IPlugin, IWorkspacePlugin {
 			if (existing.stamp.branch === spec.branch) {
 				await this.removeProvisionIntent(poolDir, worktreeDir, spec);
 				// The worktree persists across runs on purpose — resume in
-				// place, no re-clone, no branch re-cut.
+				// place, no re-clone, no branch re-cut. Resuming in place
+				// includes the commits pushed onto the branch since this
+				// checkout last ran, when taking them is a plain fast-forward.
+				if (remoteBranchExists) await this.fastForwardReusedWorktree(worktreeDir, spec);
 				return {
 					path: worktreeDir,
 					baseSha,

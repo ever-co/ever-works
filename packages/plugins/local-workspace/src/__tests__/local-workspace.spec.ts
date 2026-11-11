@@ -142,6 +142,77 @@ describe('provision (persistent pool + worktree)', () => {
 		expect(content.replace(/\r\n/g, '\n')).toBe('the pull request work\n');
 	});
 
+	// The same incident on the SAME machine: the run's worktree is reused, but a
+	// person reverted the unrelated commit on the pull request branch meanwhile.
+	// The fix run must start from the reverted head — a stale checkout would
+	// rebuild on the unrelated work, and its push would be refused as a
+	// non-fast-forward after the model had done the work.
+	const pushFromAnotherClone = (branch: string, dir: string, edit: (clone: string) => void): string => {
+		git(root, 'clone', '--quiet', '--branch', branch, originUrl, dir);
+		edit(dir);
+		git(dir, 'push', '--quiet', originUrl, `HEAD:refs/heads/${branch}`);
+		return git(dir, 'rev-parse', 'HEAD');
+	};
+	const asReviewer = ['-c', 'user.name=Reviewer', '-c', 'user.email=reviewer@test.local'];
+
+	it('catches a REUSED worktree up with commits pushed onto its branch since (a revert on the PR)', async () => {
+		const branch = 'task/catch-up-dddd4444';
+		const h1 = await plugin.provision(spec('lw-catch-up-1', branch));
+		writeFileSync(join(h1.path, 'unrelated.txt'), 'an unrelated feature\n');
+		const pushed = await plugin.finalize(h1, { commitMessage: 'agent: unrelated', push: true });
+		const reverted = pushFromAnotherClone(branch, join(root, 'reviewer-clone-1'), (clone) =>
+			git(clone, ...asReviewer, 'revert', '--no-edit', 'HEAD')
+		);
+		expect(reverted).not.toBe(pushed.headSha);
+
+		const h2 = await plugin.provision(spec('lw-catch-up-1', branch));
+
+		expect(h2.path).toBe(h1.path);
+		expect(h2.reused).toBe(true);
+		expect(git(h2.path, 'rev-parse', 'HEAD')).toBe(reverted);
+		expect(existsSync(join(h2.path, 'unrelated.txt'))).toBe(false);
+	});
+
+	it('leaves a reused worktree exactly as it was when catching up is not a clean fast-forward', async () => {
+		// Diverged: this machine has a commit the remote does not, and the
+		// remote has one this machine does not.
+		const branch = 'task/diverged-eeee5555';
+		const h1 = await plugin.provision(spec('lw-catch-up-2', branch));
+		writeFileSync(join(h1.path, 'diverged-agent.txt'), 'agent\n');
+		const pushed1 = await plugin.finalize(h1, { commitMessage: 'agent: work', push: true });
+		expect(pushed1.pushed).toBe(true);
+		pushFromAnotherClone(branch, join(root, 'reviewer-clone-2'), (clone) => {
+			writeFileSync(join(clone, 'diverged-reviewer.txt'), 'reviewer\n');
+			git(clone, 'add', '-A');
+			git(clone, ...asReviewer, 'commit', '-m', 'reviewer: fix');
+		});
+		writeFileSync(join(h1.path, 'diverged-local.txt'), 'local only\n');
+		git(h1.path, 'add', '-A');
+		git(h1.path, ...asReviewer, 'commit', '-m', 'local: not pushed');
+		const localHead = git(h1.path, 'rev-parse', 'HEAD');
+
+		const h2 = await plugin.provision(spec('lw-catch-up-2', branch));
+		expect(git(h2.path, 'rev-parse', 'HEAD')).toBe(localHead);
+
+		// Dirty: a modified tracked file is never overwritten by a catch-up.
+		const branch3 = 'task/dirty-ffff6666';
+		const h3 = await plugin.provision(spec('lw-catch-up-3', branch3));
+		writeFileSync(join(h3.path, 'dirty-agent.txt'), 'agent\n');
+		const pushed3 = await plugin.finalize(h3, { commitMessage: 'agent: work', push: true });
+		expect(pushed3.pushed).toBe(true);
+		pushFromAnotherClone(branch3, join(root, 'reviewer-clone-3'), (clone) => {
+			writeFileSync(join(clone, 'dirty-reviewer.txt'), 'reviewer\n');
+			git(clone, 'add', '-A');
+			git(clone, ...asReviewer, 'commit', '-m', 'reviewer: fix');
+		});
+		writeFileSync(join(h3.path, 'dirty-agent.txt'), 'edited, not committed\n');
+
+		const h4 = await plugin.provision(spec('lw-catch-up-3', branch3));
+		expect(git(h4.path, 'rev-parse', 'HEAD')).toBe(pushed3.headSha);
+		const edited = await fs.readFile(join(h4.path, 'dirty-agent.txt'), 'utf8');
+		expect(edited.replace(/\r\n/g, '\n')).toBe('edited, not committed\n');
+	});
+
 	it('migrates an exact pre-v2 binding stamp under the existing Git registration and reuses the worktree', async () => {
 		const bindingKey = 'lw-task-v1-migrate';
 		const branch = 'task/v1-migrate-10101010';
