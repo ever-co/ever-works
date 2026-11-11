@@ -20,7 +20,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { execFile, type ChildProcess } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
-import { isAbsolute, join, relative, resolve as resolvePath } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve as resolvePath } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFileWithVerifiedCancellation } from './verified-exec.js';
 import {
@@ -253,7 +253,10 @@ export const POOL_MAINTENANCE_TIMEOUT_MS = 120_000;
  * Sharp edges this provider owns:
  *  - **Per-repo creation serialization**: concurrent `git worktree add`
  *    against one clone corrupts refs, so provision calls are serialized
- *    per repo-key with an in-process promise-chain mutex.
+ *    per repo-key with an in-process promise-chain mutex. Every other
+ *    fetch into a pool (the merge simulation's, the branch judge's) takes
+ *    the same lock: two fetches into one depth-limited pool race on its
+ *    `shallow` file.
  *  - **Binding stamps with self-heal**: every worktree is stamped (in
  *    its gitdir, never the working tree) with `{ bindingKey, branch }`.
  *    A mismatch on reuse removes and re-provisions the worktree instead
@@ -1057,7 +1060,9 @@ export class LocalWorkspacePlugin implements IPlugin, IWorkspacePlugin {
 			const repoUrl = (
 				await this.gitOrThrow(['remote', 'get-url', 'origin'], dir, undefined, 'origin remote missing')
 			).stdout.trim();
-			await this.git(['fetch', this.authedUrl(repoUrl, undefined), '--unshallow'], dir, undefined);
+			await this.withPoolFetchLock(dir, () =>
+				this.git(['fetch', this.authedUrl(repoUrl, undefined), '--unshallow'], dir, undefined)
+			);
 			diff = await this.gitLiteral(diffArgs, dir, undefined);
 			if (diff.code !== 0) {
 				throw new Error(
@@ -1202,11 +1207,13 @@ export class LocalWorkspacePlugin implements IPlugin, IWorkspacePlugin {
 
 		// Merge against the target AS OF NOW — a stale target is how you
 		// end up shipping a PR with a red merge banner.
-		await this.gitOrThrow(
-			['fetch', this.authedUrl(repoUrl, auth), `+refs/heads/${targetRef}:refs/remotes/origin/${targetRef}`],
-			dir,
-			auth,
-			`fetch of merge target '${targetRef}' failed`
+		await this.withPoolFetchLock(dir, () =>
+			this.gitOrThrow(
+				['fetch', this.authedUrl(repoUrl, auth), `+refs/heads/${targetRef}:refs/remotes/origin/${targetRef}`],
+				dir,
+				auth,
+				`fetch of merge target '${targetRef}' failed`
+			)
 		);
 
 		let result = await this.git(
@@ -1217,7 +1224,9 @@ export class LocalWorkspacePlugin implements IPlugin, IWorkspacePlugin {
 
 		// Shallow histories can lack a merge base; deepen once and retry.
 		if (result.code > 1) {
-			await this.git(['fetch', this.authedUrl(repoUrl, auth), '--unshallow'], dir, auth);
+			await this.withPoolFetchLock(dir, () =>
+				this.git(['fetch', this.authedUrl(repoUrl, auth), '--unshallow'], dir, auth)
+			);
 			result = await this.git(
 				['merge-tree', '--write-tree', '--name-only', `refs/remotes/origin/${targetRef}`, 'HEAD'],
 				dir,
@@ -1349,6 +1358,41 @@ export class LocalWorkspacePlugin implements IPlugin, IWorkspacePlugin {
 		if (result.code !== 0) return null;
 		const common = result.stdout.trim();
 		return common ? resolvePath(common) : null;
+	}
+
+	/**
+	 * Run a fetch from a Task worktree under the repository lock of its pool —
+	 * the lock every provision of that repository holds across its own fetches.
+	 *
+	 * A worktree's fetch writes the POOL: the `refs/remotes/origin/*` a
+	 * provision's fetch updates too, and the `shallow` file a depth-limited
+	 * pool keeps in its common directory. Two fetches into one pool fail each
+	 * other: "shallow file has changed since we read it", "Unable to create
+	 * '…/shallow.lock'", or "incorrect old value provided" for the base's
+	 * tracking ref. The merge simulation's and the branch judge's fetches ran
+	 * outside the lock, and a provision of another Task of the same repository
+	 * beside a merge simulation failed 49 times in 50 (real Git, measured).
+	 *
+	 * Unlocked only when the pool does not resolve; that fetch then fails on
+	 * its own, as it always did.
+	 */
+	private async withPoolFetchLock<T>(worktreePath: string, fetch: () => Promise<T>): Promise<T> {
+		const key = await this.poolLockKeyOf(worktreePath);
+		return key ? this.withRepoLock(key, fetch) : fetch();
+	}
+
+	/**
+	 * The key {@link provision} locks for the pool `worktreePath` belongs to.
+	 * Provision keys it on the path it builds (`<baseDir>/repos/<repo-key>`),
+	 * while Git names the common directory with links (and Windows short
+	 * names) resolved: the built spelling is used whenever it is the same
+	 * directory, so both sides take one lock.
+	 */
+	private async poolLockKeyOf(worktreePath: string): Promise<string | null> {
+		const poolDir = await this.poolDirOf(worktreePath);
+		if (!poolDir) return null;
+		const built = join(dirname(dirname(worktreePath)), REPOS_DIR, basename(poolDir));
+		return `repo:${normalizedPath((await sameDirectory(built, poolDir)) ? built : poolDir)}`;
 	}
 
 	/** Final provisioning deletion gate. This runs under both repository and
@@ -2700,6 +2744,16 @@ function normalizedPath(value: string): string {
 
 function samePath(left: string, right: string): boolean {
 	return normalizedPath(left) === normalizedPath(right);
+}
+
+/** Two spellings of one directory: the same path, or the same file identity. */
+async function sameDirectory(left: string, right: string): Promise<boolean> {
+	if (samePath(left, right)) return true;
+	const [a, b] = await Promise.all([
+		fs.stat(left, { bigint: true }).catch(() => null),
+		fs.stat(right, { bigint: true }).catch(() => null)
+	]);
+	return a !== null && b !== null && a.isDirectory() && a.dev === b.dev && a.ino === b.ino;
 }
 
 function isStrictDescendant(root: string, candidate: string): boolean {
