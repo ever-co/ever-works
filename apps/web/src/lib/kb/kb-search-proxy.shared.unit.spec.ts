@@ -48,9 +48,7 @@ describe('KB search proxy — what goes upstream', () => {
     });
 
     it('fetches the maximum when it must filter several statuses or tags itself', () => {
-        const upstream = upstreamKbSearchParams(
-            request('q=x&status=draft&status=active&limit=5'),
-        );
+        const upstream = upstreamKbSearchParams(request('q=x&status=draft&status=active&limit=5'));
         expect(upstream.has('status')).toBe(false);
         expect(upstream.get('limit')).toBe(String(KB_SEARCH_MAX_LIMIT));
     });
