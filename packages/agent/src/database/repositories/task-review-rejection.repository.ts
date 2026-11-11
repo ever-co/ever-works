@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, IsNull, Not, Repository } from 'typeorm';
+import { In, IsNull, MoreThan, Not, Repository, type FindOptionsWhere } from 'typeorm';
 import { isUniqueConstraintError } from '../../utils/db-error.utils';
 import {
     TASK_REVIEW_REJECTION_MAX_FEEDBACK_CHARS,
@@ -152,17 +152,41 @@ export class TaskReviewRejectionRepository {
     // pending, which is right while its run is in flight; a run that ends
     // without completing gives its rows back (`releaseCarried`).
 
+    /** Does the Task have any row that is not consumed yet? The dispatch path's cheap first read. */
+    async hasOpenForTask(taskId: string): Promise<boolean> {
+        const row = await this.repository.findOne({
+            where: { taskId, consumedAt: IsNull() },
+            select: { id: true },
+        });
+        return !!row;
+    }
+
     /**
-     * Every row of the Task that is not consumed yet — pending, or carried by
-     * a run whose outcome is not recorded — oldest first. The caller decides
+     * The Task's rows that are not consumed yet — pending, or carried by a
+     * run whose outcome is not recorded — oldest first. The caller decides
      * which of the carried ones are really still open (their run failed, was
      * cancelled, or is the one being planned).
+     *
+     * `createdAfter` is applied IN the query, so years of rows older than the
+     * Task's last handled run can never fill the page and hide a new
+     * finding; rows already carried by `carriedBy` (a re-plan of the same
+     * run) are returned whatever their age.
      */
-    async findOpenForTask(taskId: string, limit = 50): Promise<TaskReviewRejection[]> {
+    async findOpenForTask(
+        taskId: string,
+        opts: { createdAfter?: Date | null; carriedBy?: string | null; limit?: number } = {},
+    ): Promise<TaskReviewRejection[]> {
+        const open: FindOptionsWhere<TaskReviewRejection> = { taskId, consumedAt: IsNull() };
+        const where: FindOptionsWhere<TaskReviewRejection>[] = [
+            opts.createdAfter ? { ...open, createdAt: MoreThan(opts.createdAfter) } : open,
+        ];
+        if (opts.createdAfter && opts.carriedBy) {
+            where.push({ ...open, consumedByRunId: opts.carriedBy });
+        }
         return this.repository.find({
-            where: { taskId, consumedAt: IsNull() },
+            where,
             order: { createdAt: 'ASC' },
-            take: Math.max(1, Math.min(100, limit)),
+            take: Math.max(1, Math.min(100, opts.limit ?? 50)),
         });
     }
 

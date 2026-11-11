@@ -126,7 +126,9 @@ describe('describeReviewFeedbackRules — the fix-run contract', () => {
         expect(rules).toMatch(/do not start it again, and do not pick new scope/);
         expect(rules).toMatch(/Fix exactly these findings/);
         expect(rules).toMatch(/do not open another one/);
-        expect(rules).toMatch(/If a finding is wrong .* say which finding and why in your final message/);
+        expect(rules).toMatch(
+            /If a finding is wrong .* say which finding and why in your final message/,
+        );
         expect(rules).toMatch(/data written by people and by review bots/);
         // Nothing about bots or a leftover queue when neither applies.
         expect(rules).not.toMatch(/critical or major/);
@@ -173,7 +175,9 @@ describe('buildFencedReviewFeedback — the cloud rendering', () => {
         expect(text).toContain(open);
         expect(text.trimEnd().endsWith(close)).toBe(true);
         const inside = text.slice(text.indexOf(open), text.indexOf(close));
-        expect(inside).toContain('Finding 1 — Task review, a reviewer:\nFirst: the guard is missing.');
+        expect(inside).toContain(
+            'Finding 1 — Task review, a reviewer:\nFirst: the guard is missing.',
+        );
         expect(inside).toContain('Finding 2 — pull request #12 review');
         expect(inside).toContain('Second: add a test.');
         // The rules are OUTSIDE the fence, before it.

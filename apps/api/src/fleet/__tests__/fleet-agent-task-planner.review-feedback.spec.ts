@@ -271,6 +271,7 @@ describe('FleetAgentTaskPlannerService — # REVIEW FEEDBACK TO ADDRESS', () => 
 
         const realService = (rows: Row[], runRows: Array<Record<string, unknown>>) => {
             const rejections = {
+                hasOpenForTask: async () => rows.some((row) => row.consumedAt === null),
                 findOpenForTask: async () => rows.filter((row) => row.consumedAt === null),
                 findCarrierRunIds: async () =>
                     new Set(

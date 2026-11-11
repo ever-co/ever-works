@@ -57,10 +57,30 @@ const at = (minute: number) => new Date(Date.UTC(2026, 10, 11, 10, minute));
 function makeRejections(rows: Row[]) {
     return {
         rows,
-        findOpenForTask: jest.fn(async (taskId: string) =>
-            rows
-                .filter((row) => row.taskId === taskId && row.consumedAt === null)
-                .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime()),
+        hasOpenForTask: jest.fn(async (taskId: string) =>
+            rows.some((row) => row.taskId === taskId && row.consumedAt === null),
+        ),
+        // Models the real query: the cutoff is applied IN the read (rows the
+        // run already carries excepted), then the page is cut.
+        findOpenForTask: jest.fn(
+            async (
+                taskId: string,
+                opts: {
+                    createdAfter?: Date | null;
+                    carriedBy?: string | null;
+                    limit?: number;
+                } = {},
+            ) =>
+                rows
+                    .filter((row) => row.taskId === taskId && row.consumedAt === null)
+                    .filter(
+                        (row) =>
+                            !opts.createdAfter ||
+                            row.createdAt > opts.createdAfter ||
+                            (!!opts.carriedBy && row.consumedByRunId === opts.carriedBy),
+                    )
+                    .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
+                    .slice(0, opts.limit ?? 50),
         ),
         findCarrierRunIds: jest.fn(
             async (taskId: string) =>
@@ -266,13 +286,45 @@ describe('TaskReviewRejectionService.claimFeedbackForRun — what is NOT replaye
         // `old` predates r1, which completed with no findings in front of it —
         // it was answered (or abandoned) long ago.
         const rows = [row({ id: 'old', createdAt: at(1) }), row({ id: 'new', createdAt: at(20) })];
-        const { svc } = build(rows, [
+        const { svc, rejections } = build(rows, [
             run({ id: 'r1', status: 'completed', startedAt: at(5), createdAt: at(5) }),
             run({ id: 'r2', status: 'queued', createdAt: at(30) }),
         ]);
         const feedback = await claim(svc, 'r2');
         expect(feedback?.items.map((item) => item.id)).toEqual(['new']);
         expect(rows[0].consumedByRunId).toBeNull();
+        // The cutoff is part of the READ, not a filter after a page was cut.
+        expect(rejections.findOpenForTask).toHaveBeenCalledWith(TASK, {
+            createdAfter: at(5),
+            carriedBy: 'r2',
+            limit: 50,
+        });
+    });
+
+    it('years of old unconsumed rows never hide a new finding', async () => {
+        const rows = [
+            ...Array.from({ length: 60 }, (_, i) =>
+                row({ id: `legacy-${i}`, createdAt: new Date(Date.UTC(2025, 0, 1, 0, i)) }),
+            ),
+            row({ id: 'new', createdAt: at(20) }),
+        ];
+        const { svc } = build(rows, [
+            run({ id: 'r1', status: 'completed', startedAt: at(5), createdAt: at(5) }),
+            run({ id: 'r2', status: 'queued', createdAt: at(30) }),
+        ]);
+        const feedback = await claim(svc, 'r2');
+        expect(feedback?.items.map((item) => item.id)).toEqual(['new']);
+    });
+
+    it('the common case — nothing open — costs one read', async () => {
+        const { svc, rejections, runRepo } = build(
+            [row({ id: 'done', createdAt: at(1), consumedByRunId: 'r0', consumedAt: at(2) })],
+            [run({ id: 'r2', status: 'queued', createdAt: at(30) })],
+        );
+        await expect(claim(svc, 'r2')).resolves.toBeNull();
+        expect(rejections.hasOpenForTask).toHaveBeenCalledWith(TASK);
+        expect(runRepo.findRecentForTask).not.toHaveBeenCalled();
+        expect(rejections.findOpenForTask).not.toHaveBeenCalled();
     });
 
     it('still replays what a capped run left behind (a run that carried findings is no cutoff)', async () => {
@@ -290,7 +342,9 @@ describe('TaskReviewRejectionService.claimFeedbackForRun — what is NOT replaye
     });
 
     it('leaves findings beyond the caps pending and says how many', async () => {
-        const rows = Array.from({ length: 12 }, (_, i) => row({ id: `f${i}`, createdAt: at(10 + i) }));
+        const rows = Array.from({ length: 12 }, (_, i) =>
+            row({ id: `f${i}`, createdAt: at(10 + i) }),
+        );
         const { svc } = build(rows, [run({ id: 'r2', status: 'queued', createdAt: at(30) })]);
         const feedback = await claim(svc, 'r2');
         expect(feedback?.items).toHaveLength(10);
@@ -352,6 +406,7 @@ describe('TaskReviewRejectionService.claimFeedbackForRun — what is NOT replaye
             {} as never,
         );
         await expect(claim(svc, 'r2')).resolves.toBeNull();
+        expect(rejections.hasOpenForTask).not.toHaveBeenCalled();
         expect(rejections.findOpenForTask).not.toHaveBeenCalled();
     });
 });

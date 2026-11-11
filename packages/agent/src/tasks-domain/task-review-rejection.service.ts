@@ -285,11 +285,23 @@ export class TaskReviewRejectionService {
             if (run.triggerKind !== 'task' || isAgentReviewRunScope(run.delegationScope)) {
                 return null;
             }
-            const open = await this.rejections.findOpenForTask(taskId, REVIEW_FEEDBACK_SCAN);
-            if (open.length === 0) return null;
+            // The common case — nothing was ever rejected, or all of it is
+            // consumed — costs this one read.
+            if (!(await this.rejections.hasOpenForTask(taskId))) return null;
 
             const recent =
                 (await this.runs.findRecentForTask(taskId, REVIEW_FEEDBACK_RUN_SCAN)) ?? [];
+            const carriers = await this.rejections.findCarrierRunIds(taskId);
+            const cutoff = feedbackCutoff(recent, carriers, runId);
+            // The cutoff goes INTO the read, so old rows nobody will replay can
+            // never fill the page and hide a new finding.
+            const open = await this.rejections.findOpenForTask(taskId, {
+                createdAfter: cutoff,
+                carriedBy: runId,
+                limit: REVIEW_FEEDBACK_SCAN,
+            });
+            if (open.length === 0) return null;
+
             const runsById = new Map<string, AgentRun>(recent.map((row) => [row.id, row]));
             const unknownCarriers = [
                 ...new Set(
@@ -303,8 +315,6 @@ export class TaskReviewRejectionService {
                     runsById.set(row.id, row);
                 }
             }
-            const carriers = await this.rejections.findCarrierRunIds(taskId);
-            const cutoff = feedbackCutoff(recent, carriers, runId);
 
             const reclaimFrom = new Set<string>();
             const eligible = open.filter((row) => {
