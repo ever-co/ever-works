@@ -310,6 +310,44 @@ Other things that happen around a run:
 - **A run already in flight** for the same Task and Agent is a refusal, not a second run: _"A run is already in flight for this Agent."_ Steer or cancel the live run instead.
 - If too many runs are already in flight, the run is accepted but **parked**, and it starts when a slot frees. Clicking **Run** reports _"Queued — waiting for capacity"_ in the run menu; a run parked by the move-to-In-progress fan-out says nothing about capacity — the card shows only a **Queued** chip.
 
+### When a reviewer rejects the work
+
+When a run's work has problems, record them on the Task. One finding per rejection reads best:
+
+```http
+POST /api/tasks/:id/reject
+{ "feedback": "The retry path drops the auth header: add it back and cover it with a test.", "runNow": true }
+```
+
+| Field      | Required             | Meaning                                                                                                                                                         |
+| ---------- | -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `feedback` | Yes                  | The finding, up to 8,000 characters.                                                                                                                            |
+| `runId`    | No                   | The run whose output you are rejecting, when you know it.                                                                                                       |
+| `runNow`   | No (default `false`) | Start the fix run right after recording, exactly as **Run** (`POST /api/tasks/:id/run`) would: the same Agent resolution, the same refusals, the same capacity. |
+
+The answer is `201` with the recorded rejection: `id`, `taskId`, `source` and `createdAt`. With `runNow: true` it also carries `run` — `{ "ok": true, "run": { "runId", "agentId", "dispatched", "parked" } }`, or `{ "ok": false, "error": { "code", "message" } }` when the run could not start (`RUN_ALREADY_IN_FLIGHT`, or no single Agent to run it). The rejection is recorded either way, so do not send it again; start the run later with **Run**. A fleet-run credential cannot record a rejection, with or without `runNow`.
+
+Changes requested on the pull request itself — by a repository collaborator or an allow-listed review bot — are recorded the same way by the review bridge; see [CI feedback and the fix loop](./ci-auto-resume.md#reviewer-rejections).
+
+**The next run is a fix run.** The next run of the Task — **Run**, `runNow`, a move to In progress, a recurring re-run, on the platform or on one of your computers — carries a `# REVIEW FEEDBACK TO ADDRESS` section with the findings recorded since the Task's last finished run, oldest first. It tells the run to:
+
+- fix exactly those findings, on top of the commits already on the Task's branch;
+- start nothing new: the Task's own description is the work that is already done;
+- explain in its final message any finding it believes is wrong, instead of changing code for it, and account for every finding.
+
+The findings are data, not instructions: they sit between fence markers carrying a code their authors cannot know, and nothing inside them can change the run's rules, grant it permissions or send its push anywhere else.
+
+**Same branch, same pull request.** A fix run checks out the Task's branch at its pushed head (on another computer too), pushes to that branch, and the open pull request picks the commits up. No second pull request is opened. When the Task's pull request was merged or closed, the next run opens a new one, as before.
+
+**Each finding is fixed once.** A run carries the findings it was given. When it completes they are used up, and a later run is not told about them again. When it fails or is cancelled they go back, and the next run gets them. A run that stops to ask you a question keeps them, and the run your answer starts carries them on.
+
+- One run carries at most **10** findings, each cut at 4,000 characters and 24,000 in all. The rest wait for the next run, and the run is told how many are waiting.
+- A finding recorded before the Task's last completed run that carried no findings is treated as handled (that run started after it). If it still applies, record it again.
+
+:::note A resumed run
+Resuming a parked run — its Inbox answer, or **Resume** — still replays pending findings as the first message of the resumed run, as before.
+:::
+
 :::warning No screen assigns a person
 The Task detail page has an **Agent** picker and nothing else. Reviewers, approvers, blockers, relations, and assignees of either kind (`user` or `agent`) exist in the data model and in the API, but no screen creates them. Add an assignee with `POST /api/tasks/:id/assignees`, passing `assigneeType` (`user` or `agent`) and `assigneeId`. Watchers exist as a table only — there is no endpoint for them either.
 :::
