@@ -1112,7 +1112,17 @@
                 "statusArchived": "संग्रहीत",
                 "noTitle": "(कोई शीर्षक नहीं)",
                 "noCadence": "कोई हार्टबीट नहीं",
-                "cadencePrefix": "हार्टबीट:"
+                "cadencePrefix": "हार्टबीट:",
+                "runsOnSchedule": "Runs on schedule",
+                "runsOnScheduleNext": "Runs on schedule · next {time}",
+                "runsWhenAssigned": "Runs when assigned",
+                "lastRun": "Last run {time} · {status}",
+                "lastRunCompleted": "completed",
+                "lastRunFailed": "failed",
+                "lastRunCancelled": "cancelled",
+                "lastRunDispatchFailed": "could not start",
+                "lastRunRecoveredStuck": "recovered after getting stuck",
+                "lastRunUnknown": "unknown"
             },
             "tabs": {
                 "dashboard": "डैशबोर्ड",
@@ -1682,6 +1692,9 @@
                 "frequency": "आवृत्ति",
                 "endsAt": "समाप्ति (वैकल्पिक)",
                 "maxOccurrences": "अधिकतम पुनरावृत्तियाँ (वैकल्पिक)",
+                "maxOpenInstances": "एक साथ अधिकतम खुले",
+                "maxOpenInstancesHint": "जब तक इतने पिछले रन अभी भी खुले हैं (चल रहे हैं, या किसी खुले पुल रिक्वेस्ट की प्रतीक्षा में हैं), तब तक निर्धारित रन छोड़ देता है। खाली = कोई सीमा नहीं।",
+                "maxOpenInstancesInvalid": "1 से {max} तक कोई पूर्ण संख्या दर्ज करें, या कोई सीमा न रखने के लिए खाली छोड़ें।",
                 "rulePreview": "नियम पूर्वावलोकन",
                 "ruleInvalid": "अमान्य",
                 "cancel": "रद्द करें",
@@ -1690,6 +1703,7 @@
                 "nextAt": "अगला",
                 "ends": "समाप्त",
                 "max": "अधिकतम",
+                "lastSkipped": "पिछली बार छोड़ा गया",
                 "stopConfirm": "पुनरावर्ती अनुसूची रोकें? मौजूदा इंस्टेंस बने रहेंगे; नए नहीं बनाए जाएंगे।",
                 "stopError": "पुनरावर्ती अनुसूची रोकी नहीं जा सकी",
                 "saveError": "अनुसूची सहेजी नहीं जा सकी"
@@ -2265,6 +2279,7 @@
                 "outstandingCap": "Outstanding-Ideas cap (-1 = unlimited)"
             },
             "actions": {
+                "edit": "Edit",
                 "saveSettings": "Save settings",
                 "pause": "Pause",
                 "resume": "Resume",
@@ -2280,6 +2295,11 @@
                 "cancel": "रद्द करें",
                 "deleting": "हटाया जा रहा है…",
                 "error": "मिशन हटाया नहीं जा सका"
+            },
+            "editDialog": {
+                "title": "Edit Mission",
+                "description": "Change the title and the description. The description is Markdown: switch to Preview to see how it will look on this page.",
+                "saved": "Mission updated"
             },
             "guardrails": {
                 "activeOverride": "Custom guardrail overrides are active on this Mission.",
@@ -2407,6 +2427,21 @@
                 "unavailable": "Tasks लोड नहीं हो सके।",
                 "previous": "पिछला",
                 "next": "अगला"
+            },
+            "team": {
+                "title": "Team and agents",
+                "loading": "Loading…",
+                "unavailable": "Could not load who works on this Mission.",
+                "empty": "No Team holds this Mission yet, and no Agent is scoped to it or to its attached Works.",
+                "teamNoAgents": "No agents on this Team that you can see.",
+                "otherAgents": "Other agents",
+                "agents": "Agents",
+                "viaMission": "Scoped to this Mission",
+                "viaWork": "Works on {name}",
+                "viaWorkUnnamed": "Works on an attached Work",
+                "neverRan": "Never ran",
+                "viaStandingTasks": "Standing tasks on {name}",
+                "viaStandingTasksUnnamed": "Standing tasks on an attached Work"
             }
         },
         "ideasPage": {
@@ -2696,6 +2731,7 @@
                     "memberRemoved": "सदस्य हटाया गया",
                     "scheduleCreated": "शेड्यूल बनाया गया",
                     "scheduleExecuted": "शेड्यूल निष्पादित किया गया",
+                    "scheduleSkipped": "शेड्यूल छोड़ा गया",
                     "import": "आयात",
                     "login": "लॉगिन",
                     "signup": "साइनअप",
@@ -9192,12 +9228,18 @@
         "goalDetail": {
             "backToGoals": "Back to Goals",
             "actions": {
+                "edit": "Edit",
                 "evaluateNow": "Evaluate now",
                 "activate": "Activate",
                 "pause": "Pause",
                 "delete": "Delete",
                 "archive": "Archive",
                 "unarchive": "Unarchive"
+            },
+            "editDialog": {
+                "title": "Edit Goal",
+                "description": "Change the title and the description. The description is Markdown: switch to Preview to see how it will look on this page.",
+                "saved": "Goal updated"
             },
             "sections": {
                 "progress": "Progress",
@@ -9322,6 +9364,9 @@
                 "waive": "Waive",
                 "reopen": "Reopen",
                 "remove": "Remove",
+                "edit": "Edit",
+                "editLabel": "Criterion text",
+                "save": "Save",
                 "confirmRemove": "Remove this criterion from the Definition of Done?",
                 "confirmWaive": "Waive it",
                 "cancel": "Cancel",
@@ -10219,6 +10264,11 @@
                 "title": "अभी तक कुछ भी शेड्यूल नहीं किया गया",
                 "description": "आवर्ती टास्क, एजेंट हार्टबीट, वर्क शेड्यूल, Mission टिक, स्रोत सत्यापन और डेटा सिंक सेट करने के बाद यहाँ दिखाई देंगे।",
                 "noResults": "वर्तमान फ़िल्टर से मेल खाने वाला कोई शेड्यूल नहीं है।"
+            },
+            "lastSkipped": "छोड़ा गया",
+            "lastSkippedHint": "पिछला निर्धारित रन छोड़ दिया गया: इस शेड्यूल के बहुत सारे पिछले रन अभी भी खुले हैं।",
+            "runNow": {
+                "tooManyOpenConfirm": "“{name}” के बहुत सारे पिछले रन अभी भी खुले हैं, इसलिए इसकी सीमा इस रन को रोक रही है। फिर भी चलाएँ?"
             }
         },
         "triggers": {
@@ -11051,6 +11101,31 @@
             "build": "Build",
             "web": "Web",
             "api": "API"
+        },
+        "markdown": {
+            "showMore": "Show more",
+            "showLess": "Show less",
+            "write": "Write",
+            "preview": "Preview",
+            "tabsLabel": "{field}: write or preview",
+            "emptyPreview": "Nothing to preview yet.",
+            "hint": "Markdown: **bold**, _italic_, lists, `code`, tables and links.",
+            "counter": "{count} / {max}",
+            "plainTextFallback": "Shown as plain text: this text is too long or too complex to format safely."
+        },
+        "recordEdit": {
+            "titleLabel": "Title",
+            "descriptionLabel": "Description",
+            "descriptionPlaceholder": "Describe it in Markdown: ## sections, - lists, `code`, [links](https://…)",
+            "save": "Save changes",
+            "saving": "Saving…",
+            "cancel": "Cancel",
+            "titleRequired": "Enter a title.",
+            "titleTooLong": "Keep the title to {max} characters or fewer.",
+            "descriptionRequired": "Enter a description.",
+            "descriptionTooLong": "Keep the description to {max} characters or fewer.",
+            "saveError": "The changes could not be saved. Try again.",
+            "discardConfirm": "Discard your unsaved changes?"
         }
     },
     "organizations": {

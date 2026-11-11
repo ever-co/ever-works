@@ -110,6 +110,11 @@ export interface ExportedTask {
     recurrenceTimezone: string | null;
     recurrenceEndsAt: string | null;
     recurrenceMaxOccurrences: number | null;
+    /**
+     * The template's overlap limit (at most this many instances open at once); `null` = no
+     * limit. Optional: exports written before the column existed omit it.
+     */
+    recurrenceMaxOpenInstances?: number | null;
     /** Parent recurring template slug — same slug-resolution semantics as parentTaskSlug. */
     parentRecurringTaskSlug: string | null;
     assignees: Array<{ type: 'user' | 'agent'; identifier: string }>;

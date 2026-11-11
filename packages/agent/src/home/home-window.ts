@@ -27,14 +27,25 @@ export interface ResolvedHomeTimezone {
 }
 
 /**
- * Resolution order: the explicit `candidate` (the browser's own zone), then
- * the profile timezone, then UTC. An explicit candidate that is not a real
- * zone is refused rather than silently replaced — a wrong day boundary is a
- * wrong number. A stale profile value simply falls through to UTC.
+ * Resolution order:
+ *
+ *  1. the explicit `candidate` (`?tz=`) — an override that wins over
+ *     everything, and that is refused when it is not a real zone rather than
+ *     silently replaced: a wrong day boundary is a wrong number;
+ *  2. the profile timezone — the account's own choice, so it wins over
+ *     whatever zone the device happens to be in;
+ *  3. the `browserTimezone` hint (`?browserTz=`, what the dashboard sends
+ *     for an account with no profile zone) — used only when the profile has
+ *     none, and simply ignored when it is not a real zone: a hint is never a
+ *     reason to refuse the page;
+ *  4. UTC, reported as the fallback.
+ *
+ * A stale profile value falls through to the hint, then to UTC.
  */
 export function resolveHomeTimezone(
     candidate: string | null | undefined,
     profileTimezone: string | null | undefined,
+    browserTimezone?: string | null,
 ): ResolvedHomeTimezone {
     if (typeof candidate === 'string' && candidate.trim().length > 0) {
         const trimmed = candidate.trim();
@@ -45,6 +56,10 @@ export function resolveHomeTimezone(
     }
     if (isValidTimezone(profileTimezone)) {
         return { timezone: profileTimezone, fallback: false };
+    }
+    const hint = typeof browserTimezone === 'string' ? browserTimezone.trim() : '';
+    if (hint.length > 0 && isValidTimezone(hint)) {
+        return { timezone: hint, fallback: false };
     }
     return { timezone: 'UTC', fallback: true };
 }

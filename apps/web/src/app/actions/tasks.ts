@@ -673,6 +673,8 @@ export async function setTaskRecurringAction(
         recurrenceTimezone?: string;
         recurrenceEndsAt?: string;
         recurrenceMaxOccurrences?: number;
+        /** Overlap limit — 1..100, `null` = no limit, omitted = keep. Alone: updates only the limit. */
+        recurrenceMaxOpenInstances?: number | null;
     },
 ): Promise<Task> {
     // Security: verify session server-side before mutating data

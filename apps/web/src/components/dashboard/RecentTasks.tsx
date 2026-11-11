@@ -7,6 +7,7 @@ import { Link } from '@/i18n/navigation';
 import { ROUTES } from '@/lib/constants';
 import { cn } from '@/lib/utils/cn';
 import type { Task, TaskStatus, TaskPriority } from '@/lib/api/tasks';
+import { markdownExcerpt } from '@/lib/markdown/markdown-excerpt';
 
 const STATUS_TONES: Record<TaskStatus, string> = {
     backlog: 'bg-surface-secondary text-text-secondary',
@@ -213,7 +214,7 @@ function TaskCard({ task }: { task: Task }) {
             </h3>
             {task.description && (
                 <p className="text-xs text-text-secondary dark:text-text-secondary-dark line-clamp-2">
-                    {task.description}
+                    {markdownExcerpt(task.description)}
                 </p>
             )}
             <div className="mt-auto flex flex-wrap items-center gap-1.5 pt-1">

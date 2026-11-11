@@ -172,6 +172,7 @@ export { PluginUsageRepository } from '../database/repositories/plugin-usage.rep
 export { WorkRepository } from '../database/repositories/work.repository';
 // Judgment layer G3 - escalation records.
 export * from './agent-escalation.service';
+export * from './agent-run-terminal-escalation.listener';
 // Judgment layer G3 - the confidence scorer behind the column.
 export * from './escalation-confidence';
 // Judgment layer G3/G10 - escalation chat tools (DoD: every entity

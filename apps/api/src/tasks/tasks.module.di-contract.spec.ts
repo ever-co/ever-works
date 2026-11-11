@@ -29,6 +29,9 @@ jest.mock('@ever-works/trigger-tasks', () => ({
 jest.mock('./tasks.controller', () => ({ TasksController: class TasksController {} }));
 jest.mock('./task-chat.controller', () => ({ TaskChatController: class TaskChatController {} }));
 
+import { getRepositoryToken, TypeOrmModule } from '@nestjs/typeorm';
+import { DatabaseModule } from '@ever-works/agent/database';
+import { Goal, Mission } from '@ever-works/agent/entities';
 import { PluginSettingsService } from '@ever-works/agent/plugins';
 import { AGENT_CONVERSATION_REPLY_DISPATCHER } from '@ever-works/agent/conversations';
 import { AGENT_CHAT_REPLY_DISPATCHER, TaskBoardService } from '@ever-works/agent/tasks-domain';
@@ -190,6 +193,32 @@ describe('TasksModule — the fleet providers can resolve their dependencies', (
         expect(factory.inject.filter((dep) => typeof dep !== 'function')).toEqual(
             factory.inject.filter((dep) => typeof dep !== 'function' && resolvable.has(dep)),
         );
+    });
+
+    it('reaches the Mission and Goal repositories the planner and the reconciler inject by token', () => {
+        // The class-typed probe below skips `@Inject(TOKEN)` parameters, and a
+        // repository token is not in any module's STATIC `exports`: it is
+        // exported by the dynamic module `TypeOrmModule.forFeature(ENTITIES)`,
+        // which `DatabaseModule` imports and republishes by exporting
+        // `TypeOrmModule`. So this reads that dynamic module's own export list,
+        // which is the list Nest walks at boot (review of #3145).
+        const wanted = [getRepositoryToken(Mission), getRepositoryToken(Goal)];
+        for (const Service of [FleetAgentTaskPlannerService, FleetAgentTaskReconcilerService]) {
+            const injected = (Reflect.getMetadata('self:paramtypes', Service) ?? []) as Array<{
+                param: unknown;
+            }>;
+            expect(injected.map((entry) => entry.param)).toEqual(expect.arrayContaining(wanted));
+        }
+        expect(moduleImports).toContain(DatabaseModule);
+        expect(Reflect.getMetadata('exports', DatabaseModule) ?? []).toContain(TypeOrmModule);
+        const databaseImports = (Reflect.getMetadata('imports', DatabaseModule) ?? []) as Array<{
+            module?: unknown;
+            exports?: unknown[];
+        }>;
+        const featureExports = databaseImports
+            .filter((entry) => entry && typeof entry === 'object' && entry.module === TypeOrmModule)
+            .flatMap((entry) => (entry.exports ?? []).map(asToken));
+        expect(featureExports).toEqual(expect.arrayContaining(wanted));
     });
 
     it.each(SERVICES)('%s — every class-typed constructor parameter is reachable', (_, Service) => {

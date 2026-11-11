@@ -2,10 +2,11 @@
 
 import type { ReactNode } from 'react';
 import { Bot } from 'lucide-react';
-import { useTranslations } from 'next-intl';
+import { useFormatter, useTranslations } from 'next-intl';
 import { Link } from '@/i18n/navigation';
 import { ROUTES } from '@/lib/constants';
 import type { Agent } from '@/lib/api/agents';
+import { agentDriveOf, agentLastRunStatusKey } from './agent-card.shared';
 
 /**
  * Agents/Skills/Tasks PR #1017 — Phase 5. Minimal first-pass card,
@@ -21,6 +22,7 @@ import type { Agent } from '@/lib/api/agents';
  */
 export function AgentCard({ agent, actions }: { agent: Agent; actions?: ReactNode }) {
     const t = useTranslations('dashboard.agentsPage.card');
+    const format = useFormatter();
 
     const scopeLabel: Record<Agent['scope'], string> = {
         tenant: t('scopeTenant'),
@@ -44,6 +46,41 @@ export function AgentCard({ agent, actions }: { agent: Agent; actions?: ReactNod
         error: 'bg-danger/10 text-danger',
         archived: 'bg-text-muted/10 text-text-muted',
     };
+
+    // What drives this Agent. A heartbeat cadence is shown as before; an Agent
+    // without one says what runs it instead of a bare "No heartbeat": its
+    // active recurring Tasks (with the soonest next fire), or "when assigned".
+    // `recurringTasks` is only present on the Agents list — absent, nothing is
+    // known about Tasks and the old label stays.
+    const drive = agentDriveOf(agent);
+    let driveLabel: string;
+    if (drive.kind === 'heartbeat') {
+        driveLabel = `${t('cadencePrefix')} ${drive.cadence}`;
+    } else if (drive.kind === 'schedule') {
+        driveLabel = drive.nextRunAt
+            ? t('runsOnScheduleNext', { time: format.relativeTime(drive.nextRunAt) })
+            : t('runsOnSchedule');
+    } else if (drive.kind === 'assigned') {
+        driveLabel = t('runsWhenAssigned');
+    } else {
+        driveLabel = t('noCadence');
+    }
+    // "Last run" is the Agent's most recent ENDED run of any kind (Task,
+    // fleet, heartbeat, chat), read from its runs by the list. Not
+    // `lastRunAt`: that is the heartbeat's own last run. A run in progress is
+    // not an ended run — the status pill already says "Running".
+    const latestRun = agent.latestRun ?? null;
+    const lastRunAt = latestRun ? new Date(latestRun.finishedAt) : null;
+    const lastRunStatusKey = agentLastRunStatusKey(latestRun?.status);
+    const lastRunLabel =
+        lastRunAt && !Number.isNaN(lastRunAt.getTime())
+            ? t('lastRun', {
+                  time: format.relativeTime(lastRunAt),
+                  status: lastRunStatusKey
+                      ? t(lastRunStatusKey)
+                      : (latestRun?.status ?? t('lastRunUnknown')),
+              })
+            : null;
 
     const initials =
         agent.name
@@ -94,12 +131,26 @@ export function AgentCard({ agent, actions }: { agent: Agent; actions?: ReactNod
                         <span className="px-1.5 py-0.5 rounded bg-surface-secondary dark:bg-surface-secondary-dark">
                             {scopeLabel[agent.scope]}
                         </span>
-                        <span className="truncate">
-                            {agent.heartbeatCadence
-                                ? `${t('cadencePrefix')} ${agent.heartbeatCadence}`
-                                : t('noCadence')}
+                        <span
+                            className="truncate"
+                            data-testid="agent-card-drive"
+                            data-drive={drive.kind}
+                            // A relative time can differ by a minute between
+                            // the server render and hydration.
+                            suppressHydrationWarning
+                        >
+                            {driveLabel}
                         </span>
                     </div>
+                    {lastRunLabel ? (
+                        <p
+                            className="mt-1.5 text-[11px] text-text-muted dark:text-text-muted-dark truncate"
+                            data-testid="agent-card-last-run"
+                            suppressHydrationWarning
+                        >
+                            {lastRunLabel}
+                        </p>
+                    ) : null}
                 </div>
             </div>
         </div>

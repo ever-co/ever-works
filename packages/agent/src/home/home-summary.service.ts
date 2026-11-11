@@ -23,8 +23,17 @@ import { buildHomeDay, resolveHomeTimezone } from './home-window';
 export interface HomeSummaryRequest {
     /** The request's workspace scope, from the authenticated request only. */
     scope: OwnershipScope;
-    /** An explicit IANA timezone (the browser's); omitted = the profile timezone, else UTC. */
+    /**
+     * An explicit IANA timezone override; omitted = the profile timezone, else
+     * the {@link browserTimezone} hint, else UTC.
+     */
     timezone?: string | null;
+    /**
+     * The browser's own IANA timezone, used ONLY when the profile has none
+     * (the profile, when set, always wins over the device). An unknown zone
+     * here is ignored, never refused.
+     */
+    browserTimezone?: string | null;
     /** Only these blocks; omitted or empty = every block. */
     blocks?: readonly HomeBlockId[] | null;
     /** Injected clock for tests. A pinned clock bypasses the micro-cache. */
@@ -71,7 +80,11 @@ export class HomeSummaryService {
         const profileTimezone = request.timezone ? null : await this.profileTimezone(userId);
         // Throws InvalidHomeTimezoneError for an explicit unknown zone — the
         // caller's 400, decided before any block is read.
-        const { timezone, fallback } = resolveHomeTimezone(request.timezone, profileTimezone);
+        const { timezone, fallback } = resolveHomeTimezone(
+            request.timezone,
+            profileTimezone,
+            request.browserTimezone,
+        );
 
         const cacheKey = [
             userId,

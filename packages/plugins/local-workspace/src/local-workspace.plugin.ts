@@ -30,6 +30,8 @@ import {
 	effectiveRemoteUrls,
 	foreignRepositoryConfig,
 	parseScopedConfigList,
+	POOL_MAINTENANCE_ENV,
+	poolMaintenanceEntries,
 	privateRemoteName,
 	recoveryHint,
 	SCOPED_CONFIG_LIST_ARGS,
@@ -182,12 +184,19 @@ interface CheckoutHardeningScope {
  * plugin's layout, with the entry disabled: a `reference-transaction` hook
  * in the bare pool fired on the fetch and read
  * `GIT_CONFIG_VALUE_<n>=Authorization: Basic …` (the spec keeps that case).
+ *
+ *  - `maintenance` — a FETCH's only: the command-scope config of the pool
+ *    maintenance that follows it ({@link LocalWorkspacePlugin.maintainPool}),
+ *    a child that never carries the credential but runs over the same,
+ *    possibly re-written, pool config. Decided from the same listing as
+ *    `safety`.
  */
 type ChildCredential = WorkspacePushCredential & {
 	readonly protocol: CredentialedProtocol;
 	readonly remoteName: string;
 	readonly safety: ReadonlyArray<readonly [string, string]>;
 	readonly hooksPath?: string;
+	readonly maintenance?: ReadonlyArray<readonly [string, string]>;
 };
 
 export interface LocalWorkspacePluginOptions {
@@ -548,8 +557,10 @@ export class LocalWorkspacePlugin implements IPlugin, IWorkspacePlugin {
 			// to start a program the pool's config names (`gc.recentObjectsHook`),
 			// and it would inherit the token. So the pool is maintained HERE,
 			// by the same command a plain fetch runs at its end, in a child
-			// that carries nothing. Its verdict is not this provision's.
-			await this.maintainPool(poolDir, spec);
+			// that carries nothing — and that is hardened all the same, since
+			// it reads the same pool config. Its verdict is not this
+			// provision's.
+			await this.maintainPool(poolDir, spec, fetchCredential);
 		}
 
 		const baseSha = (
@@ -1561,7 +1572,10 @@ export class LocalWorkspacePlugin implements IPlugin, IWorkspacePlugin {
 					config,
 					env: process.env
 				}),
-				...(hooksPath === undefined ? {} : { hooksPath })
+				...(hooksPath === undefined ? {} : { hooksPath }),
+				...(purpose === 'fetch' && hooksPath !== undefined
+					? { maintenance: poolMaintenanceEntries({ hooksPath, config }) }
+					: {})
 			},
 			refusal: null
 		};
@@ -1622,13 +1636,26 @@ export class LocalWorkspacePlugin implements IPlugin, IWorkspacePlugin {
 	 * started with no signal at all and left to finish in the background,
 	 * exactly as a detached one would; the caller's cancellation, like the
 	 * bound, only stops this provision from waiting for it.
+	 *
+	 * It never carries the credential, and it is HARDENED like the
+	 * credentialed fetch all the same ({@link poolMaintenanceEnv}): it runs
+	 * over the pool config a concurrent job may have written after the
+	 * allowlist looked. Measured, git 2.56 on Linux: with a promisor remote
+	 * planted then, `maintenance run --auto` started a lazy
+	 * `git fetch <promisor remote>` — before it detached and again after —
+	 * which ran that remote's planted `uploadpack` / `core.sshCommand`.
 	 */
-	private async maintainPool(poolDir: string, spec: WorkspaceProvisionSpec): Promise<void> {
+	private async maintainPool(
+		poolDir: string,
+		spec: WorkspaceProvisionSpec,
+		credential: ChildCredential
+	): Promise<void> {
 		const { signal } = spec;
+		const env = await this.poolMaintenanceEnv(credential);
 		const waitFor = async (args: string[]): Promise<GitResult | null> => {
 			throwIfAborted(signal);
 			// No signal: nothing in this provider may kill it (see above).
-			const running = this.git(args, poolDir, spec.auth).catch(() => null);
+			const running = this.git(args, poolDir, spec.auth, undefined, null, env).catch(() => null);
 			let timer: ReturnType<typeof setTimeout> | undefined;
 			let stopWaiting: (() => void) | undefined;
 			const released = new Promise<null>((resolve) => {
@@ -1647,6 +1674,26 @@ export class LocalWorkspacePlugin implements IPlugin, IWorkspacePlugin {
 		};
 		const detached = await waitFor(['maintenance', 'run', '--auto', '--quiet', '--detach']);
 		if (detached?.code === 129) await waitFor(['maintenance', 'run', '--auto', '--quiet']);
+	}
+
+	/**
+	 * The environment of {@link maintainPool}'s child: whatever overlay this
+	 * provision is already hardened with, then the maintenance's own
+	 * command-scope entries APPENDED after it (`credentialed-command.ts` →
+	 * `poolMaintenanceEntries`), then no lazy fetch and no transport
+	 * (`POOL_MAINTENANCE_ENV`). Never the credential: nothing of it but the
+	 * listing-derived entries is read here.
+	 */
+	private async poolMaintenanceEnv(credential: ChildCredential): Promise<Record<string, string>> {
+		const scoped = this.checkoutHardening.getStore()?.env ?? {};
+		const entries =
+			credential.maintenance ??
+			poolMaintenanceEntries({ hooksPath: (await emptyHooksDir()).replace(/\\/g, '/'), config: [] });
+		return {
+			...scoped,
+			...gitConfigEnvOverlay(entries, { ...process.env, ...scoped }),
+			...POOL_MAINTENANCE_ENV
+		};
 	}
 
 	/**
@@ -1943,8 +1990,9 @@ export class LocalWorkspacePlugin implements IPlugin, IWorkspacePlugin {
 		// arity, and only the publish — and a provision's two fetches, when
 		// it was lent a scoped fetch credential — ever passes one.
 		credential?: ChildCredential | null,
-		// Likewise: only {@link gitLiteral} passes one, and never together
-		// with a credential.
+		// Likewise: only {@link gitLiteral} and the pool maintenance
+		// ({@link poolMaintenanceEnv}) pass one, and never together with a
+		// credential.
 		extraEnv?: Readonly<Record<string, string>>
 	): Promise<GitResult> {
 		throwIfAborted(signal);

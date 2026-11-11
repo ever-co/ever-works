@@ -1143,7 +1143,17 @@
                 "statusArchived": "Archivado",
                 "noTitle": "(sin título)",
                 "noCadence": "Sin pulso",
-                "cadencePrefix": "Pulso:"
+                "cadencePrefix": "Pulso:",
+                "runsOnSchedule": "Runs on schedule",
+                "runsOnScheduleNext": "Runs on schedule · next {time}",
+                "runsWhenAssigned": "Runs when assigned",
+                "lastRun": "Last run {time} · {status}",
+                "lastRunCompleted": "completed",
+                "lastRunFailed": "failed",
+                "lastRunCancelled": "cancelled",
+                "lastRunDispatchFailed": "could not start",
+                "lastRunRecoveredStuck": "recovered after getting stuck",
+                "lastRunUnknown": "unknown"
             },
             "tabs": {
                 "dashboard": "Panel de control",
@@ -1713,6 +1723,9 @@
                 "frequency": "Frecuencia",
                 "endsAt": "Finaliza (opcional)",
                 "maxOccurrences": "Máx. repeticiones (opcional)",
+                "maxOpenInstances": "Máximo abiertas a la vez",
+                "maxOpenInstancesHint": "Omite una ejecución programada mientras haya esta cantidad de ejecuciones anteriores aún abiertas (en curso o esperando una pull request abierta). Vacío = sin límite.",
+                "maxOpenInstancesInvalid": "Introduce un número entero de 1 a {max}, o déjalo vacío para no poner límite.",
                 "rulePreview": "Vista previa de la regla",
                 "ruleInvalid": "no válida",
                 "cancel": "Cancelar",
@@ -1721,6 +1734,7 @@
                 "nextAt": "Siguiente el",
                 "ends": "Finaliza",
                 "max": "Máx.",
+                "lastSkipped": "Última omitida",
                 "stopConfirm": "¿Detener la programación recurrente? Las instancias existentes se mantienen; no se crearán nuevas.",
                 "stopError": "No se pudo detener la programación recurrente",
                 "saveError": "No se pudo guardar la programación"
@@ -2296,6 +2310,7 @@
                 "outstandingCap": "Outstanding-Ideas cap (-1 = unlimited)"
             },
             "actions": {
+                "edit": "Edit",
                 "saveSettings": "Save settings",
                 "pause": "Pause",
                 "resume": "Resume",
@@ -2311,6 +2326,11 @@
                 "cancel": "Cancelar",
                 "deleting": "Eliminando…",
                 "error": "No se pudo eliminar la Misión"
+            },
+            "editDialog": {
+                "title": "Edit Mission",
+                "description": "Change the title and the description. The description is Markdown: switch to Preview to see how it will look on this page.",
+                "saved": "Mission updated"
             },
             "guardrails": {
                 "activeOverride": "Custom guardrail overrides are active on this Mission.",
@@ -2438,6 +2458,21 @@
                 "unavailable": "No se pudieron cargar las tareas.",
                 "previous": "Anterior",
                 "next": "Siguiente"
+            },
+            "team": {
+                "title": "Team and agents",
+                "loading": "Loading…",
+                "unavailable": "Could not load who works on this Mission.",
+                "empty": "No Team holds this Mission yet, and no Agent is scoped to it or to its attached Works.",
+                "teamNoAgents": "No agents on this Team that you can see.",
+                "otherAgents": "Other agents",
+                "agents": "Agents",
+                "viaMission": "Scoped to this Mission",
+                "viaWork": "Works on {name}",
+                "viaWorkUnnamed": "Works on an attached Work",
+                "neverRan": "Never ran",
+                "viaStandingTasks": "Standing tasks on {name}",
+                "viaStandingTasksUnnamed": "Standing tasks on an attached Work"
             }
         },
         "ideasPage": {
@@ -2727,6 +2762,11 @@
                 "title": "Nada programado todavía",
                 "description": "Las tareas recurrentes, los latidos de agentes, las programaciones de trabajo, los ticks de Mission, la validación de fuentes y la sincronización de datos aparecerán aquí una vez que los configures.",
                 "noResults": "Ninguna programación coincide con el filtro actual."
+            },
+            "lastSkipped": "Omitida",
+            "lastSkippedHint": "Se omitió la última ejecución programada: demasiadas ejecuciones anteriores de esta programación siguen abiertas.",
+            "runNow": {
+                "tooManyOpenConfirm": "Demasiadas ejecuciones anteriores de «{name}» siguen abiertas, así que su límite retiene esta ejecución. ¿Ejecutarla de todos modos?"
             }
         },
         "activity": {
@@ -2769,6 +2809,7 @@
                     "memberRemoved": "Miembro eliminado",
                     "scheduleCreated": "Programación creada",
                     "scheduleExecuted": "Programación ejecutada",
+                    "scheduleSkipped": "Programación omitida",
                     "import": "Importación",
                     "login": "Inicio de sesión",
                     "signup": "Registro",
@@ -9260,12 +9301,18 @@
         "goalDetail": {
             "backToGoals": "Back to Goals",
             "actions": {
+                "edit": "Edit",
                 "evaluateNow": "Evaluate now",
                 "activate": "Activate",
                 "pause": "Pause",
                 "delete": "Delete",
                 "archive": "Archive",
                 "unarchive": "Unarchive"
+            },
+            "editDialog": {
+                "title": "Edit Goal",
+                "description": "Change the title and the description. The description is Markdown: switch to Preview to see how it will look on this page.",
+                "saved": "Goal updated"
             },
             "sections": {
                 "progress": "Progress",
@@ -9390,6 +9437,9 @@
                 "waive": "Waive",
                 "reopen": "Reopen",
                 "remove": "Remove",
+                "edit": "Edit",
+                "editLabel": "Criterion text",
+                "save": "Save",
                 "confirmRemove": "Remove this criterion from the Definition of Done?",
                 "confirmWaive": "Waive it",
                 "cancel": "Cancel",
@@ -11050,6 +11100,31 @@
             "build": "Construir",
             "web": "Web",
             "api": "API"
+        },
+        "markdown": {
+            "showMore": "Show more",
+            "showLess": "Show less",
+            "write": "Write",
+            "preview": "Preview",
+            "tabsLabel": "{field}: write or preview",
+            "emptyPreview": "Nothing to preview yet.",
+            "hint": "Markdown: **bold**, _italic_, lists, `code`, tables and links.",
+            "counter": "{count} / {max}",
+            "plainTextFallback": "Shown as plain text: this text is too long or too complex to format safely."
+        },
+        "recordEdit": {
+            "titleLabel": "Title",
+            "descriptionLabel": "Description",
+            "descriptionPlaceholder": "Describe it in Markdown: ## sections, - lists, `code`, [links](https://…)",
+            "save": "Save changes",
+            "saving": "Saving…",
+            "cancel": "Cancel",
+            "titleRequired": "Enter a title.",
+            "titleTooLong": "Keep the title to {max} characters or fewer.",
+            "descriptionRequired": "Enter a description.",
+            "descriptionTooLong": "Keep the description to {max} characters or fewer.",
+            "saveError": "The changes could not be saved. Try again.",
+            "discardConfirm": "Discard your unsaved changes?"
         }
     },
     "organizations": {

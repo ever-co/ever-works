@@ -18,7 +18,7 @@ import {
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Textarea } from '@/components/ui/textarea';
+import { MarkdownEditor } from '@/components/markdown/MarkdownEditor';
 import { Select } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
 import { useRouter } from '@/i18n/navigation';
@@ -418,12 +418,16 @@ export function AgentSettingsClient({
                         onChange={(event) => setTitle(event.target.value)}
                     />
                 </div>
-                <Textarea
+                {/* Markdown with Write / Preview; the Agent page renders it.
+                    5000 = `UpdateAgentDto.capabilities` @MaxLength. */}
+                <MarkdownEditor
+                    id="agent-settings-capabilities"
                     label="Capabilities"
-                    variant="form"
-                    rows={4}
+                    rows={6}
+                    maxLength={5000}
                     value={capabilities}
-                    onChange={(event) => setCapabilities(event.target.value)}
+                    onChange={setCapabilities}
+                    data-testid="agent-settings-capabilities"
                 />
             </section>
 

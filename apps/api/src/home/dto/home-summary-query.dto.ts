@@ -30,7 +30,7 @@ function toList({ value }: { value: unknown }): unknown {
 export class HomeSummaryQueryDto {
     @ApiPropertyOptional({
         description:
-            'IANA timezone "today" is computed in, e.g. `Europe/Kyiv`. Omitted = the profile timezone, else UTC.',
+            'IANA timezone "today" is computed in, e.g. `Europe/Kyiv` — an override that wins over the profile. Omitted = the profile timezone, else `browserTz`, else UTC.',
         maxLength: 64,
         type: String,
     })
@@ -48,6 +48,17 @@ export class HomeSummaryQueryDto {
         },
     })
     tz?: string;
+
+    @ApiPropertyOptional({
+        description:
+            "The browser's own IANA timezone, used only when the profile has no timezone (the profile always wins). An unknown zone is ignored, never refused.",
+        maxLength: 64,
+        type: String,
+    })
+    @IsOptional()
+    @IsString()
+    @MaxLength(64)
+    browserTz?: string;
 
     @ApiPropertyOptional({
         description: 'Comma-separated blocks to read (a per-block retry). Omitted = every block.',

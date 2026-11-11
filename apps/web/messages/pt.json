@@ -1112,7 +1112,17 @@
                 "statusArchived": "Arquivado",
                 "noTitle": "(sem título)",
                 "noCadence": "Nenhuma batida de coração",
-                "cadencePrefix": "Batida de coração:"
+                "cadencePrefix": "Batida de coração:",
+                "runsOnSchedule": "Runs on schedule",
+                "runsOnScheduleNext": "Runs on schedule · next {time}",
+                "runsWhenAssigned": "Runs when assigned",
+                "lastRun": "Last run {time} · {status}",
+                "lastRunCompleted": "completed",
+                "lastRunFailed": "failed",
+                "lastRunCancelled": "cancelled",
+                "lastRunDispatchFailed": "could not start",
+                "lastRunRecoveredStuck": "recovered after getting stuck",
+                "lastRunUnknown": "unknown"
             },
             "tabs": {
                 "dashboard": "Dashboard",
@@ -1682,6 +1692,9 @@
                 "frequency": "Frequência",
                 "endsAt": "Termina (opcional)",
                 "maxOccurrences": "Máx. de ocorrências (opcional)",
+                "maxOpenInstances": "No máximo abertas ao mesmo tempo",
+                "maxOpenInstancesHint": "Ignora uma execução agendada enquanto esta quantidade de execuções anteriores ainda estiver aberta (em andamento ou aguardando um pull request aberto). Vazio = sem limite.",
+                "maxOpenInstancesInvalid": "Digite um número inteiro de 1 a {max}, ou deixe em branco para não ter limite.",
                 "rulePreview": "Pré-visualização da regra",
                 "ruleInvalid": "inválida",
                 "cancel": "Cancelar",
@@ -1690,6 +1703,7 @@
                 "nextAt": "Próxima em",
                 "ends": "Termina",
                 "max": "Máx.",
+                "lastSkipped": "Última ignorada",
                 "stopConfirm": "Parar a agenda recorrente? As instâncias existentes permanecem; nenhuma nova será criada.",
                 "stopError": "Não foi possível parar a agenda recorrente",
                 "saveError": "Não foi possível salvar a agenda"
@@ -2265,6 +2279,7 @@
                 "outstandingCap": "Outstanding-Ideas cap (-1 = unlimited)"
             },
             "actions": {
+                "edit": "Edit",
                 "saveSettings": "Save settings",
                 "pause": "Pause",
                 "resume": "Resume",
@@ -2280,6 +2295,11 @@
                 "cancel": "Cancelar",
                 "deleting": "Excluindo…",
                 "error": "Falha ao excluir a Missão"
+            },
+            "editDialog": {
+                "title": "Edit Mission",
+                "description": "Change the title and the description. The description is Markdown: switch to Preview to see how it will look on this page.",
+                "saved": "Mission updated"
             },
             "guardrails": {
                 "activeOverride": "Custom guardrail overrides are active on this Mission.",
@@ -2407,6 +2427,21 @@
                 "unavailable": "Não foi possível carregar as tarefas.",
                 "previous": "Anterior",
                 "next": "Próxima"
+            },
+            "team": {
+                "title": "Team and agents",
+                "loading": "Loading…",
+                "unavailable": "Could not load who works on this Mission.",
+                "empty": "No Team holds this Mission yet, and no Agent is scoped to it or to its attached Works.",
+                "teamNoAgents": "No agents on this Team that you can see.",
+                "otherAgents": "Other agents",
+                "agents": "Agents",
+                "viaMission": "Scoped to this Mission",
+                "viaWork": "Works on {name}",
+                "viaWorkUnnamed": "Works on an attached Work",
+                "neverRan": "Never ran",
+                "viaStandingTasks": "Standing tasks on {name}",
+                "viaStandingTasksUnnamed": "Standing tasks on an attached Work"
             }
         },
         "ideasPage": {
@@ -2696,6 +2731,7 @@
                     "memberRemoved": "Membro Removido",
                     "scheduleCreated": "Agendamento Criado",
                     "scheduleExecuted": "Agendamento Executado",
+                    "scheduleSkipped": "Agendamento Ignorado",
                     "import": "Importação",
                     "login": "Login",
                     "signup": "Cadastro",
@@ -9192,12 +9228,18 @@
         "goalDetail": {
             "backToGoals": "Back to Goals",
             "actions": {
+                "edit": "Edit",
                 "evaluateNow": "Evaluate now",
                 "activate": "Activate",
                 "pause": "Pause",
                 "delete": "Delete",
                 "archive": "Archive",
                 "unarchive": "Unarchive"
+            },
+            "editDialog": {
+                "title": "Edit Goal",
+                "description": "Change the title and the description. The description is Markdown: switch to Preview to see how it will look on this page.",
+                "saved": "Goal updated"
             },
             "sections": {
                 "progress": "Progress",
@@ -9322,6 +9364,9 @@
                 "waive": "Waive",
                 "reopen": "Reopen",
                 "remove": "Remove",
+                "edit": "Edit",
+                "editLabel": "Criterion text",
+                "save": "Save",
                 "confirmRemove": "Remove this criterion from the Definition of Done?",
                 "confirmWaive": "Waive it",
                 "cancel": "Cancel",
@@ -10219,6 +10264,11 @@
                 "title": "Nada agendado ainda",
                 "description": "Tarefas recorrentes, heartbeats de agentes, agendamentos de trabalho, ticks de Mission, validação de fontes e sincronização de dados aparecerão aqui assim que você os configurar.",
                 "noResults": "Nenhum agendamento corresponde ao filtro atual."
+            },
+            "lastSkipped": "Ignorada",
+            "lastSkippedHint": "A última execução agendada foi ignorada: muitas execuções anteriores deste agendamento ainda estão abertas.",
+            "runNow": {
+                "tooManyOpenConfirm": "Muitas execuções anteriores de “{name}” ainda estão abertas, por isso o limite segura esta execução. Executar mesmo assim?"
             }
         },
         "triggers": {
@@ -11051,6 +11101,31 @@
             "build": "Build",
             "web": "Web",
             "api": "API"
+        },
+        "markdown": {
+            "showMore": "Show more",
+            "showLess": "Show less",
+            "write": "Write",
+            "preview": "Preview",
+            "tabsLabel": "{field}: write or preview",
+            "emptyPreview": "Nothing to preview yet.",
+            "hint": "Markdown: **bold**, _italic_, lists, `code`, tables and links.",
+            "counter": "{count} / {max}",
+            "plainTextFallback": "Shown as plain text: this text is too long or too complex to format safely."
+        },
+        "recordEdit": {
+            "titleLabel": "Title",
+            "descriptionLabel": "Description",
+            "descriptionPlaceholder": "Describe it in Markdown: ## sections, - lists, `code`, [links](https://…)",
+            "save": "Save changes",
+            "saving": "Saving…",
+            "cancel": "Cancel",
+            "titleRequired": "Enter a title.",
+            "titleTooLong": "Keep the title to {max} characters or fewer.",
+            "descriptionRequired": "Enter a description.",
+            "descriptionTooLong": "Keep the description to {max} characters or fewer.",
+            "saveError": "The changes could not be saved. Try again.",
+            "discardConfirm": "Discard your unsaved changes?"
         }
     },
     "organizations": {

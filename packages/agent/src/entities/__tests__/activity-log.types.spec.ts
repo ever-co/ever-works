@@ -52,6 +52,7 @@ describe('activity-log.types', () => {
             ['SCHEDULE_EXECUTED', 'schedule_executed'],
             ['SCHEDULE_PAUSED', 'schedule_paused'],
             ['SCHEDULE_RESUMED', 'schedule_resumed'],
+            ['SCHEDULE_SKIPPED', 'schedule_skipped'],
             // Import / Export
             ['IMPORT', 'import'],
             ['EXPORT', 'export'],
@@ -524,7 +525,10 @@ describe('activity-log.types', () => {
             //    `feed-kind.ts` row in the same change -> 223. Nothing existing moves.
             // +1 mission_nothing_to_file (APW-08 T35, FR-54 — a Task-output tick that had nothing
             //    to file, once per Mission per day) -> 224. Nothing existing moves.
-            expect(literals).toHaveLength(224);
+            // +1 schedule_skipped (Recurring Tasks overlap limit — a scheduled fire skipped
+            //    because the template is at its open-instance limit), with its `feed-kind.ts`
+            //    row in the same change -> 225. Nothing existing moves.
+            expect(literals).toHaveLength(225);
         });
 
         it('every literal fits the varchar(50) action_type column', () => {

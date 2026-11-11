@@ -50,6 +50,14 @@ vi.mock('@/app/actions/dashboard/work-proposals', () => ({
     dismissProposalAction: vi.fn(),
 }));
 
+// The "Team and agents" panel fetches its own data and has its own spec
+// (`MissionTeamPanel.unit.spec.tsx`); here it is only a placeholder.
+vi.mock('./MissionTeamPanel', () => ({
+    MissionTeamPanel: ({ missionId }: { missionId: string }) => (
+        <div data-testid="mission-team-stub" data-mission-id={missionId} />
+    ),
+}));
+
 import { MissionDetailClient } from './MissionDetailClient';
 import type { Mission } from '@/lib/api/missions';
 import type { WorkProposal } from '@/lib/api/work-proposals';
@@ -104,6 +112,11 @@ describe('MissionDetailClient (Phase 6 PR R)', () => {
         // Back link.
         const backLink = screen.getByText('backToMissions').closest('a');
         expect(backLink?.getAttribute('href')).toBe('/missions');
+    });
+
+    it('renders the "Team and agents" panel for this Mission', () => {
+        render(<MissionDetailClient mission={mkMission({ id: 'm1' })} ideas={[]} />);
+        expect(screen.getByTestId('mission-team-stub').getAttribute('data-mission-id')).toBe('m1');
     });
 
     it('lifecycle buttons reflect the current status (ACTIVE shows pause+complete+runNow)', () => {

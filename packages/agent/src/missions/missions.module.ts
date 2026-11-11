@@ -24,6 +24,10 @@ import { Task } from '../entities/task.entity';
 import { Agent } from '../entities/agent.entity';
 import { FacadesModule } from '../facades/facades.module';
 import { MissionTaskPlannerService } from './mission-task-planner.service';
+import { MissionTeamService } from './mission-team.service';
+import { Team } from '../entities/team.entity';
+import { TeamMember } from '../entities/team-member.entity';
+import { TeamResource } from '../entities/team-resource.entity';
 
 /**
  * Phase 3 PR G — MissionsModule skeleton (Missions/Ideas/Works
@@ -64,6 +68,11 @@ import { MissionTaskPlannerService } from './mission-task-planner.service';
             // APW-08 T34 (review of #3061) — MissionsService checks a Task output's `agentId` is an
             // Agent the caller may use; injected `@Optional()`, so it MUST be registered here.
             Agent,
+            // The Mission page's "Team and agents" panel (MissionTeamService): the Teams that
+            // hold the Mission as a resource and their Agent members.
+            Team,
+            TeamMember,
+            TeamResource,
         ]),
         TitlerModule,
         // Provides ActivityLogService so MissionTickService can emit
@@ -91,6 +100,8 @@ import { MissionTaskPlannerService } from './mission-task-planner.service';
         MissionAttachmentRepository,
         // APW-08 T35 (FR-51) — proposes the Tasks a Mission files on its App or Repository Works.
         MissionTaskPlannerService,
+        // The Mission page's "Team and agents" panel (`GET /me/missions/:id/team`).
+        MissionTeamService,
     ],
     exports: [
         MissionsService,
@@ -100,6 +111,7 @@ import { MissionTaskPlannerService } from './mission-task-planner.service';
         MissionTemplateManifestService,
         MissionTemplateManifestReader,
         MissionAttachmentRepository,
+        MissionTeamService,
     ],
 })
 export class MissionsModule {}

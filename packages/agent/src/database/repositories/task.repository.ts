@@ -7,6 +7,8 @@ import {
     Repository,
     type SelectQueryBuilder,
 } from 'typeorm';
+import type { QueryDeepPartialEntity } from 'typeorm/query-builder/QueryPartialEntity';
+import { AgentRun } from '../../entities/agent-run.entity';
 import { ExternalRecordLink } from '../../entities/external-record-link.entity';
 import { Task, TaskStatus } from '../../entities/task.entity';
 import {
@@ -21,6 +23,12 @@ import {
     type TaskDeliveryStateFilter,
 } from '@ever-works/contracts';
 import type { RecordAccessContext } from '../../record-visibility/record-access.types';
+import {
+    RECURRENCE_OPEN_INSTANCES_NAMED,
+    recurrenceOpenInstancesWhere,
+    type OpenRecurrenceInstances,
+    type RecurrenceTemplateRef,
+} from '../../tasks-domain/recurrence-overlap';
 import { visibleToPredicate } from '../../record-visibility/visible-to';
 
 export interface ListTasksFilter {
@@ -98,6 +106,35 @@ export interface ListTasksFilter {
     limit?: number;
     offset?: number;
 }
+
+/**
+ * One Task with a pull request, as {@link TaskRepository.findPullRequestsByWork}
+ * reads it: only what a one-line list entry needs.
+ */
+export interface TaskPullRequestRow {
+    taskId: string;
+    slug: string | null;
+    title: string | null;
+    prNumber: number;
+    prUrl: string | null;
+    /** The cached provider state (`open | draft | closed | merged`), `null` when not read yet. */
+    prState: string | null;
+    /**
+     * The head of the summary of the Task's latest run (at most
+     * {@link TASK_PULL_REQUEST_SUMMARY_HEAD_CHARS} characters), or `null`
+     * when it has no run or the run wrote none. Model-authored text.
+     */
+    summary: string | null;
+}
+
+/**
+ * How much of a run summary {@link TaskRepository.findPullRequestsByWork}
+ * reads per row: enough for its first sentence, never the whole column.
+ */
+export const TASK_PULL_REQUEST_SUMMARY_HEAD_CHARS = 1000;
+
+/** Most rows one {@link TaskRepository.findPullRequestsByWork} call answers. */
+export const TASK_PULL_REQUESTS_BY_WORK_MAX = 50;
 
 /** Task statuses the board bounds to a recent window. */
 const TERMINAL_TASK_STATUSES: TaskStatus[] = [TaskStatus.DONE, TaskStatus.CANCELLED];
@@ -198,6 +235,113 @@ export class TaskRepository {
             where: { workId, branchRef },
             order: { updatedAt: 'DESC' },
         });
+    }
+
+    /**
+     * Work in flight — the Tasks of ONE Work whose branch carries a pull
+     * request that is still open (`state: 'open'`) or has landed
+     * (`state: 'merged'`), for the planner's "what is already being worked
+     * on here" section of a fleet run's instructions.
+     *
+     * Why this exists: every scheduled fire of a recurring Task is a NEW
+     * Task on a fresh checkout of the base branch, so a run cannot see the
+     * unmerged work of the runs before it and repeats or collides with it.
+     *
+     * - **One query, no N+1.** Each row carries the head of its Task's
+     *   latest run summary through a join on `latestRunId` (the board's
+     *   denormalised pointer), so a list of fifteen costs one round trip.
+     * - **Owner-scoped.** `userId` is a predicate on the Task AND on the
+     *   joined run, not a filter applied afterwards: the caller is planning a
+     *   run for that owner and learns nothing about anyone else's Tasks or
+     *   runs. A Task's Work is always its owner's
+     *   (`TasksService.assertScopeReachable`), so this loses none of the
+     *   owner's own work.
+     * - **Open means open.** `branchState = 'pr-open'` stays set on a pull
+     *   request that was CLOSED without merging (only a merge moves it), so
+     *   the cached provider state is read too: not read yet (`NULL`, which is
+     *   also what opening a NEW pull request resets it to), `open` and
+     *   `draft` count; `closed` and `merged` do not.
+     * - **Merged means merged.** The provider said so (`prState`), or the
+     *   platform recorded the merge (`branchState`); a branch the sweep later
+     *   cleaned keeps its `prState`.
+     * - **Newest first.** Open pull requests by number, which only grows
+     *   inside one repository (a Work has one Task repository); merged ones
+     *   by the row's last write, which is the merge being recorded.
+     * - **Bounded and narrow.** At most `limit` rows (1 to
+     *   {@link TASK_PULL_REQUESTS_BY_WORK_MAX}), only the columns a list line
+     *   needs, and only the head of the summary — never the description, the
+     *   checks or the review memory. The Work predicate is served by
+     *   `idx_tasks_branch_state` (`workId`, `branchState`).
+     */
+    async findPullRequestsByWork(input: {
+        workId: string;
+        userId: string;
+        state: 'open' | 'merged';
+        limit: number;
+        /** The Task being planned: its own pull request is not "other work". */
+        excludeTaskId?: string | null;
+    }): Promise<TaskPullRequestRow[]> {
+        if (!input.workId || !input.userId) return [];
+        const take = Math.min(
+            Math.max(Math.floor(input.limit) || 0, 1),
+            TASK_PULL_REQUESTS_BY_WORK_MAX,
+        );
+        const qb = this.repository
+            .createQueryBuilder('task')
+            .leftJoin(AgentRun, 'run', 'run.id = task.latestRunId AND run.userId = task.userId')
+            .select('task.id', 'taskId')
+            .addSelect('task.slug', 'slug')
+            .addSelect('task.title', 'title')
+            .addSelect('task.prNumber', 'prNumber')
+            .addSelect('task.prUrl', 'prUrl')
+            .addSelect('task.prState', 'prState')
+            .addSelect(`SUBSTR(run.summary, 1, ${TASK_PULL_REQUEST_SUMMARY_HEAD_CHARS})`, 'summary')
+            .where('task.workId = :workId', { workId: input.workId })
+            .andWhere('task.userId = :userId', { userId: input.userId })
+            .andWhere('task.prNumber IS NOT NULL');
+        if (input.state === 'open') {
+            qb.andWhere('task.branchState = :prOpen', { prOpen: 'pr-open' })
+                .andWhere(
+                    new Brackets((open) =>
+                        open
+                            .where('task.prState IS NULL')
+                            .orWhere('task.prState IN (:...openStates)', {
+                                openStates: ['open', 'draft'],
+                            }),
+                    ),
+                )
+                .orderBy('task.prNumber', 'DESC');
+        } else {
+            qb.andWhere(
+                new Brackets((merged) =>
+                    merged
+                        .where('task.prState = :mergedState', { mergedState: 'merged' })
+                        .orWhere('task.branchState = :mergedBranch', { mergedBranch: 'merged' }),
+                ),
+            ).orderBy('task.updatedAt', 'DESC');
+        }
+        qb.addOrderBy('task.id', 'DESC');
+        if (input.excludeTaskId) {
+            qb.andWhere('task.id != :excludeTaskId', { excludeTaskId: input.excludeTaskId });
+        }
+        const rows = await qb.limit(take).getRawMany<{
+            taskId: string;
+            slug: string | null;
+            title: string | null;
+            prNumber: number | string | null;
+            prUrl: string | null;
+            prState: string | null;
+            summary: string | null;
+        }>();
+        return rows.map((row) => ({
+            taskId: row.taskId,
+            slug: row.slug ?? null,
+            title: row.title ?? null,
+            prNumber: Number(row.prNumber),
+            prUrl: row.prUrl ?? null,
+            prState: row.prState ?? null,
+            summary: typeof row.summary === 'string' && row.summary ? row.summary : null,
+        }));
     }
 
     async findByUserIdFiltered(
@@ -781,15 +925,20 @@ export class TaskRepository {
         taskId: string,
         expected: Date,
         newNextOccurrence: Date | null,
+        // Recurring Tasks overlap limit — a fire that spawns after a skipped one clears the
+        // skip marker in the same write. Omitted = the SET is exactly what it always was.
+        opts?: { clearSkip?: boolean },
     ): Promise<boolean> {
+        const patch: QueryDeepPartialEntity<Task> = {
+            nextOccurrenceAt: newNextOccurrence,
+            recurrenceOccurredCount: () => 'recurrenceOccurredCount + 1',
+            updatedAt: new Date(),
+        };
+        if (opts?.clearSkip) patch.recurrenceSkippedAt = null;
         const result = await this.repository
             .createQueryBuilder()
             .update(Task)
-            .set({
-                nextOccurrenceAt: newNextOccurrence,
-                recurrenceOccurredCount: () => 'recurrenceOccurredCount + 1',
-                updatedAt: new Date(),
-            })
+            .set(patch)
             .where('id = :id', { id: taskId })
             .andWhere('isRecurring = :rec', { rec: true })
             .andWhere('nextOccurrenceAt = :expected', { expected })
@@ -798,6 +947,98 @@ export class TaskRepository {
             .andWhere('recurrencePausedAt IS NULL')
             .execute();
         return (result.affected ?? 0) > 0;
+    }
+
+    /**
+     * Recurring Tasks overlap limit — CAS-SKIP one scheduled slot of a template at its
+     * open-instance limit. The same guards as {@link casClaimRecurrence} (still recurring, still
+     * at `expected`, not paused), and the same advance of `nextOccurrenceAt` (without it the slot
+     * would stay due and re-fire every minute), but `recurrenceOccurredCount` does NOT move: a
+     * skipped slot is not an occurrence, so a `recurrenceMaxOccurrences` cap still gets every
+     * fire it promised. Stamps `recurrenceSkippedAt`. Returns true iff this caller won.
+     *
+     * Bookkeeping about a background scan, so it keeps `updatedAt` (the same posture as
+     * `updateLatestRun`: TypeORM's update builder would otherwise set it to now).
+     */
+    async casSkipRecurrence(
+        taskId: string,
+        expected: Date,
+        newNextOccurrence: Date | null,
+        skippedAt: Date,
+    ): Promise<boolean> {
+        const keepUpdatedAt = this.repository.manager.connection.driver.escape('updatedAt');
+        const result = await this.repository
+            .createQueryBuilder()
+            .update(Task)
+            .set({
+                nextOccurrenceAt: newNextOccurrence,
+                recurrenceSkippedAt: skippedAt,
+                updatedAt: () => keepUpdatedAt,
+            })
+            .where('id = :id', { id: taskId })
+            .andWhere('isRecurring = :rec', { rec: true })
+            .andWhere('nextOccurrenceAt = :expected', { expected })
+            .andWhere('recurrencePausedAt IS NULL')
+            .execute();
+        return (result.affected ?? 0) > 0;
+    }
+
+    /**
+     * Recurring Tasks overlap limit — clear the skip marker once its reason is gone (an instance
+     * was spawned out of band). Only a row that carries one is written, and `updatedAt` is kept:
+     * it is bookkeeping, not an edit, and run-now otherwise never writes the template.
+     */
+    async clearRecurrenceSkip(taskId: string): Promise<boolean> {
+        const keepUpdatedAt = this.repository.manager.connection.driver.escape('updatedAt');
+        const result = await this.repository
+            .createQueryBuilder()
+            .update(Task)
+            .set({ recurrenceSkippedAt: null, updatedAt: () => keepUpdatedAt })
+            .where('id = :id', { id: taskId })
+            .andWhere('recurrenceSkippedAt IS NOT NULL')
+            .execute();
+        return (result.affected ?? 0) > 0;
+    }
+
+    /**
+     * Recurring Tasks overlap limit — how many instances of `template` are still OPEN by
+     * `recurrenceOpenInstancesWhere` (a run in flight that started in the last week, an open pull
+     * request the PR-status sweep still reads on the template's Work or that changed in the last
+     * week, no pull-request outcome yet and spawned in the last week, or a pull request closed
+     * unmerged in the last day), plus the oldest {@link RECURRENCE_OPEN_INSTANCES_NAMED} of them
+     * to name in a skip record or a 409. Seeks `idx_tasks_parent_recurring`.
+     *
+     * @internal Unscoped — callers must have resolved the template through an owner-scoped read
+     * (`TasksService.getOne`) or be the CRON-ONLY recurrence dispatcher, which already holds the
+     * template row.
+     */
+    async countOpenRecurrenceInstances(
+        template: RecurrenceTemplateRef,
+        now: Date = new Date(),
+    ): Promise<OpenRecurrenceInstances> {
+        const driver = this.repository.manager.connection.driver;
+        const [rows, count] = await this.repository.findAndCount({
+            where: recurrenceOpenInstancesWhere(template, {
+                now,
+                escape: (name) => driver.escape(name),
+            }),
+            select: ['id', 'slug', 'title', 'status', 'prNumber', 'prUrl', 'prState', 'createdAt'],
+            order: { createdAt: 'ASC', id: 'ASC' },
+            take: RECURRENCE_OPEN_INSTANCES_NAMED,
+        });
+        return {
+            count,
+            instances: rows.map((row) => ({
+                id: row.id,
+                slug: row.slug,
+                title: row.title,
+                status: row.status,
+                prNumber: row.prNumber ?? null,
+                prUrl: row.prUrl ?? null,
+                prState: row.prState ?? null,
+                createdAt: row.createdAt,
+            })),
+        };
     }
 
     /**

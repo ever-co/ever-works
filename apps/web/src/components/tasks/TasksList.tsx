@@ -39,6 +39,7 @@ import {
 import { TaskScopeRowMenu } from './TaskScopeRowMenu';
 import { TaskDeliveryChips } from './TaskDeliveryChips';
 import { LayoutGrid, Table2, Kanban, type LucideIcon } from 'lucide-react';
+import { markdownExcerpt } from '@/lib/markdown/markdown-excerpt';
 
 const STATUS_TONES: Record<TaskStatus, string> = {
     backlog: 'bg-surface-secondary text-text-secondary',
@@ -538,7 +539,7 @@ function TaskCard({ task, scope }: { task: Task; scope?: TaskScopeRef }) {
             </h3>
             {task.description ? (
                 <p className="text-xs text-text-muted dark:text-text-muted-dark mt-1 line-clamp-2">
-                    {task.description}
+                    {markdownExcerpt(task.description)}
                 </p>
             ) : (
                 <p className="text-xs text-text-muted dark:text-text-muted-dark mt-1 italic">

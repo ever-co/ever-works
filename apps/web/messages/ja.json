@@ -1112,7 +1112,17 @@
                 "statusArchived": "アーカイブ済み",
                 "noTitle": "(タイトルなし)",
                 "noCadence": "ハートビートなし",
-                "cadencePrefix": "ハートビット:"
+                "cadencePrefix": "ハートビット:",
+                "runsOnSchedule": "Runs on schedule",
+                "runsOnScheduleNext": "Runs on schedule · next {time}",
+                "runsWhenAssigned": "Runs when assigned",
+                "lastRun": "Last run {time} · {status}",
+                "lastRunCompleted": "completed",
+                "lastRunFailed": "failed",
+                "lastRunCancelled": "cancelled",
+                "lastRunDispatchFailed": "could not start",
+                "lastRunRecoveredStuck": "recovered after getting stuck",
+                "lastRunUnknown": "unknown"
             },
             "tabs": {
                 "dashboard": "ダッシュボード",
@@ -1682,6 +1692,9 @@
                 "frequency": "頻度",
                 "endsAt": "終了（任意）",
                 "maxOccurrences": "最大実行回数（任意）",
+                "maxOpenInstances": "同時に開いておける上限",
+                "maxOpenInstancesHint": "以前の実行がこの数だけまだ開いている間（実行中、または開いているプルリクエストの待機中）は、予定された実行をスキップします。空欄 = 上限なし。",
+                "maxOpenInstancesInvalid": "1 から {max} までの整数を入力するか、上限なしにする場合は空欄のままにしてください。",
                 "rulePreview": "ルールのプレビュー",
                 "ruleInvalid": "無効",
                 "cancel": "キャンセル",
@@ -1690,6 +1703,7 @@
                 "nextAt": "次回",
                 "ends": "終了",
                 "max": "最大",
+                "lastSkipped": "最後のスキップ",
                 "stopConfirm": "繰り返しスケジュールを停止しますか？既存のインスタンスは残り、新しいものは作成されません。",
                 "stopError": "繰り返しスケジュールを停止できませんでした",
                 "saveError": "スケジュールを保存できませんでした"
@@ -2265,6 +2279,7 @@
                 "outstandingCap": "Outstanding-Ideas cap (-1 = unlimited)"
             },
             "actions": {
+                "edit": "Edit",
                 "saveSettings": "Save settings",
                 "pause": "Pause",
                 "resume": "Resume",
@@ -2280,6 +2295,11 @@
                 "cancel": "キャンセル",
                 "deleting": "削除しています…",
                 "error": "ミッションを削除できませんでした"
+            },
+            "editDialog": {
+                "title": "Edit Mission",
+                "description": "Change the title and the description. The description is Markdown: switch to Preview to see how it will look on this page.",
+                "saved": "Mission updated"
             },
             "guardrails": {
                 "activeOverride": "Custom guardrail overrides are active on this Mission.",
@@ -2407,6 +2427,21 @@
                 "unavailable": "タスクを読み込めませんでした。",
                 "previous": "前へ",
                 "next": "次へ"
+            },
+            "team": {
+                "title": "Team and agents",
+                "loading": "Loading…",
+                "unavailable": "Could not load who works on this Mission.",
+                "empty": "No Team holds this Mission yet, and no Agent is scoped to it or to its attached Works.",
+                "teamNoAgents": "No agents on this Team that you can see.",
+                "otherAgents": "Other agents",
+                "agents": "Agents",
+                "viaMission": "Scoped to this Mission",
+                "viaWork": "Works on {name}",
+                "viaWorkUnnamed": "Works on an attached Work",
+                "neverRan": "Never ran",
+                "viaStandingTasks": "Standing tasks on {name}",
+                "viaStandingTasksUnnamed": "Standing tasks on an attached Work"
             }
         },
         "ideasPage": {
@@ -2696,6 +2731,7 @@
                     "memberRemoved": "メンバー削除",
                     "scheduleCreated": "スケジュール作成",
                     "scheduleExecuted": "スケジュール実行",
+                    "scheduleSkipped": "スケジュールのスキップ",
                     "import": "インポート",
                     "login": "ログイン",
                     "signup": "サインアップ",
@@ -9192,12 +9228,18 @@
         "goalDetail": {
             "backToGoals": "Back to Goals",
             "actions": {
+                "edit": "Edit",
                 "evaluateNow": "Evaluate now",
                 "activate": "Activate",
                 "pause": "Pause",
                 "delete": "Delete",
                 "archive": "Archive",
                 "unarchive": "Unarchive"
+            },
+            "editDialog": {
+                "title": "Edit Goal",
+                "description": "Change the title and the description. The description is Markdown: switch to Preview to see how it will look on this page.",
+                "saved": "Goal updated"
             },
             "sections": {
                 "progress": "Progress",
@@ -9322,6 +9364,9 @@
                 "waive": "Waive",
                 "reopen": "Reopen",
                 "remove": "Remove",
+                "edit": "Edit",
+                "editLabel": "Criterion text",
+                "save": "Save",
                 "confirmRemove": "Remove this criterion from the Definition of Done?",
                 "confirmWaive": "Waive it",
                 "cancel": "Cancel",
@@ -10219,6 +10264,11 @@
                 "title": "まだ何も予定されていません",
                 "description": "定期タスク、エージェントのハートビート、ワークのスケジュール、Mission のティック、ソースの検証、データ同期を設定すると、ここに表示されます。",
                 "noResults": "現在のフィルターに一致するスケジュールはありません。"
+            },
+            "lastSkipped": "スキップ",
+            "lastSkippedHint": "最後の予定された実行はスキップされました。このスケジュールの以前の実行がまだ多く開いています。",
+            "runNow": {
+                "tooManyOpenConfirm": "「{name}」の以前の実行がまだ多く開いているため、上限によりこの実行が保留されています。それでも実行しますか？"
             }
         },
         "triggers": {
@@ -11051,6 +11101,31 @@
             "build": "Build",
             "web": "Web",
             "api": "API"
+        },
+        "markdown": {
+            "showMore": "Show more",
+            "showLess": "Show less",
+            "write": "Write",
+            "preview": "Preview",
+            "tabsLabel": "{field}: write or preview",
+            "emptyPreview": "Nothing to preview yet.",
+            "hint": "Markdown: **bold**, _italic_, lists, `code`, tables and links.",
+            "counter": "{count} / {max}",
+            "plainTextFallback": "Shown as plain text: this text is too long or too complex to format safely."
+        },
+        "recordEdit": {
+            "titleLabel": "Title",
+            "descriptionLabel": "Description",
+            "descriptionPlaceholder": "Describe it in Markdown: ## sections, - lists, `code`, [links](https://…)",
+            "save": "Save changes",
+            "saving": "Saving…",
+            "cancel": "Cancel",
+            "titleRequired": "Enter a title.",
+            "titleTooLong": "Keep the title to {max} characters or fewer.",
+            "descriptionRequired": "Enter a description.",
+            "descriptionTooLong": "Keep the description to {max} characters or fewer.",
+            "saveError": "The changes could not be saved. Try again.",
+            "discardConfirm": "Discard your unsaved changes?"
         }
     },
     "organizations": {

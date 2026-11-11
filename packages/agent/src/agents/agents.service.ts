@@ -339,14 +339,92 @@ export class AgentsService {
                 filter,
                 ownershipScope,
             );
-            return { rows: visible.rows.map(toAgentDto), total: visible.total };
+            return {
+                rows: await this.withListFacts(
+                    userId,
+                    visible.rows.map(toAgentDto),
+                    ownershipScope,
+                ),
+                total: visible.total,
+            };
         }
         const { rows, total } = await this.agents.findByUserIdScoped(
             userId,
             filter,
             ownershipScope,
         );
-        return { rows: rows.map(toAgentDto), total };
+        return {
+            rows: await this.withListFacts(userId, rows.map(toAgentDto), ownershipScope),
+            total,
+        };
+    }
+
+    /**
+     * The two facts the Agents card shows beyond the row itself, each read for
+     * the whole page at once (never one query per card):
+     *
+     *  - {@link AgentDto.latestRun} — the Agent's most recent ENDED run of any
+     *    kind, from `agent_runs` ("Last run 2 hours ago · completed");
+     *  - {@link AgentDto.recurringTasks} — the caller's ACTIVE recurring Tasks
+     *    that drive it ("Runs on schedule · next …" / "Runs when assigned").
+     *    "None" (`activeCount: 0`) is only claimed for the caller's OWN
+     *    Agents: a teammate's Agent may be driven by Tasks the caller cannot
+     *    count, so for it the field is set only when the caller's Tasks drive
+     *    it, and is otherwise absent ("not computed") and the card says nothing.
+     *
+     * Best-effort, each independently: a failed read leaves its field absent,
+     * never fails the list.
+     */
+    private async withListFacts(
+        userId: string,
+        rows: AgentDto[],
+        ownershipScope?: OwnershipScope,
+    ): Promise<AgentDto[]> {
+        if (rows.length === 0) return rows;
+        const ids = rows.map((row) => row.id);
+        const [drivers, latest] = await Promise.all([
+            this.readListFact('recurring-Task', () =>
+                typeof this.agents.findRecurringTaskDrivers === 'function'
+                    ? this.agents.findRecurringTaskDrivers(userId, ids, ownershipScope)
+                    : undefined,
+            ),
+            this.readListFact('latest-run', () =>
+                typeof this.agents.findLatestEndedRuns === 'function'
+                    ? this.agents.findLatestEndedRuns(ids)
+                    : undefined,
+            ),
+        ]);
+        return rows.map((row) => {
+            const next: AgentDto = { ...row };
+            if (drivers) {
+                const driven = drivers.get(row.id);
+                if (driven) next.recurringTasks = driven;
+                else if (row.userId === userId) {
+                    next.recurringTasks = { activeCount: 0, nextRunAt: null };
+                }
+            }
+            if (latest) {
+                const run = latest.get(row.id);
+                next.latestRun = run ? { status: run.status, finishedAt: run.finishedAt } : null;
+            }
+            return next;
+        });
+    }
+
+    private async readListFact<T>(
+        name: string,
+        read: () => Promise<T> | undefined,
+    ): Promise<T | undefined> {
+        try {
+            return await read();
+        } catch (error) {
+            this.logger.warn(
+                `Agents list: ${name} read failed (cards fall back): ${
+                    error instanceof Error ? error.message : String(error)
+                }`,
+            );
+            return undefined;
+        }
     }
 
     async getOne(userId: string, id: string, ownershipScope?: OwnershipScope): Promise<AgentDto> {
