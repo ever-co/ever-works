@@ -126,9 +126,18 @@ export function resolveRepositoryOwnership(
  * `description`) also leaves them out, even before generation: re-deriving
  * from an empty request reads as "personal, under the saver's login" and
  * flipped an organization Work to the saver's own account.
+ *
+ * So does a save whose fields still hold the stored values: the General
+ * settings form always sends both, so a rename by someone other than the
+ * creator (before generation) re-derived a personal Work's owner as the
+ * SAVER's login. Only a change the user made is re-derived.
  */
 export function ownershipForSettingsSave(
-    work: WorkKindSubject & { readonly generateStatus?: unknown },
+    work: WorkKindSubject & {
+        readonly generateStatus?: unknown;
+        readonly owner?: string | null;
+        readonly organization?: boolean | null;
+    },
     connectionInfo: GitProviderConnectionInfo | null,
     data: { owner?: string; organization?: boolean },
 ): { organization: boolean; owner: string | undefined } | null {
@@ -136,6 +145,14 @@ export function ownershipForSettingsSave(
         return null;
     }
     if (data.owner === undefined && data.organization === undefined) {
+        return null;
+    }
+    const sameOwner =
+        data.owner === undefined || (data.owner ?? '').trim() === (work.owner ?? '').trim();
+    const sameOrganization =
+        data.organization === undefined ||
+        Boolean(data.organization) === Boolean(work.organization);
+    if (sameOwner && sameOrganization && work.owner) {
         return null;
     }
     return resolveRepositoryOwnership(connectionInfo, data);
