@@ -675,9 +675,19 @@ export async function createWorkWithAI(request: AIWorkOptions) {
 
         const { work } = await workAPI.create(workValidation.data);
 
-        // The Work exists from here on. If its generation cannot start (a plan
-        // or credit limit, a provider refusing), answer with the Work so the
-        // caller opens it — its Generator tab starts generation again. Failing
+        // A proposal becomes this Work the moment the Work exists — whether or
+        // not its generation starts below. Left open, it could be accepted
+        // again into a second Work.
+        if (request.proposalId) {
+            await markProposalAcceptedWithRetry(request.proposalId, work.id);
+        }
+
+        // The Work exists from here on. If its generation cannot start (a
+        // provider not enabled or set up for it, a run already in progress, a
+        // refusal from the API), answer with the Work so the caller opens it —
+        // its Generator tab starts generation again. A refused start leaves the
+        // Work as it was: the API refuses before it records a run or sets
+        // GENERATING (`WorkGenerationService.generateItems`). Failing
         // the whole action left the Work behind unseen, and submitting the
         // form again then failed with "slug taken".
         try {
@@ -706,10 +716,6 @@ export async function createWorkWithAI(request: AIWorkOptions) {
                             : t('createFailed'),
                 }),
             };
-        }
-
-        if (request.proposalId) {
-            await markProposalAcceptedWithRetry(request.proposalId, work.id);
         }
 
         return {

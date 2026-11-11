@@ -77,8 +77,9 @@ vi.mock('@/lib/api', () => ({
     },
 }));
 
+const proposalAcceptMock = vi.hoisted(() => vi.fn());
 vi.mock('@/lib/api/work-proposals', () => ({
-    workProposalsAPI: { accept: vi.fn() },
+    workProposalsAPI: { accept: proposalAcceptMock },
 }));
 
 vi.mock('@/lib/api/server-api', () => ({
@@ -200,6 +201,24 @@ describe('Work creation honours the managed Ever Works Git storage choice', () =
             expect(result.work).toEqual({ id: 'work-1', slug: 'k8s-operators' });
             expect(result.error).toBe(
                 'generationNotStarted:{"reason":"Monthly credit limit reached"}',
+            );
+        });
+
+        it('accepts the proposal into the created Work even when generation is refused', async () => {
+            // Left open, the proposal could be accepted again into a second Work.
+            proposalAcceptMock.mockClear();
+            itemsGenerateMock.mockRejectedValueOnce(new Error('Provider not enabled'));
+            const { createWorkWithAI } = await import('./works');
+
+            const result = await createWorkWithAI({
+                ...AI_REQUEST,
+                proposalId: '00000000-0000-4000-8000-0000000000a1',
+            });
+
+            expect(result.generationNotStarted).toBe(true);
+            expect(proposalAcceptMock).toHaveBeenCalledWith(
+                '00000000-0000-4000-8000-0000000000a1',
+                'work-1',
             );
         });
 

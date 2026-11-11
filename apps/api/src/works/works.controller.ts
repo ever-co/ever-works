@@ -1172,6 +1172,16 @@ export class WorksController {
     ): Promise<ItemsGeneratorResponseDto> {
         const user = await this.authService.getUser(auth.userId);
 
+        // Recorded only once the run really started: a refused start (no
+        // provider set up, a run already in progress) used to leave a
+        // "Started item generation" entry for a run that never existed.
+        const started = await this.workGenerationService.generateItems(
+            id,
+            createItemsGeneratorDto,
+            user,
+            false,
+        );
+
         this.activityLogService
             .log({
                 userId: auth.userId,
@@ -1183,7 +1193,7 @@ export class WorksController {
             })
             .catch(() => {});
 
-        return this.workGenerationService.generateItems(id, createItemsGeneratorDto, user, false);
+        return started;
     }
 
     @Post('works/:id/update')
