@@ -51,6 +51,9 @@ export class UpdateWorkDto {
 
     @ApiPropertyOptional({ description: 'Whether the owner is an organization' })
     @IsOptional()
+    // Without it `"true"` reached the service as a string (and `null` as a
+    // NULL for a NOT NULL column); CreateWorkDto has always required a boolean.
+    @IsBoolean()
     organization?: boolean;
 
     @ApiPropertyOptional({ description: 'Deploy provider (e.g., vercel)' })

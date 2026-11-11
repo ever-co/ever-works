@@ -38,6 +38,7 @@ describe('WorkLifecycleService', () => {
     let deployFacade: any;
     let templateCatalogService: any;
     let websiteRepositoryState: any;
+    let gitFacade: any;
     let eventEmitter: any;
     let service: WorkLifecycleService;
 
@@ -122,6 +123,13 @@ describe('WorkLifecycleService', () => {
         } as never;
         // EW-617 G8: funnel emit sink — no-op stub.
         const funnel = { emit: jest.fn() } as never;
+        // The Repository Work create path, and an owner change before the
+        // repositories exist (creator login, data-repository probe).
+        gitFacade = {
+            getUser: jest.fn(),
+            hasValidCredentials: jest.fn().mockResolvedValue(false),
+            repositoryExists: jest.fn().mockResolvedValue(false),
+        };
 
         service = new WorkLifecycleService(
             workRepository,
@@ -140,9 +148,7 @@ describe('WorkLifecycleService', () => {
             funnel,
             eventEmitter as never,
             organizationRepository,
-            // Self-build slice D (EW-766): the git facade is only touched by
-            // the Repository Work create path, which this spec never takes.
-            {} as never,
+            gitFacade,
         );
     });
 
@@ -531,70 +537,175 @@ describe('WorkLifecycleService', () => {
         });
     });
 
-    describe('updateWork — owner / organization after generation', () => {
-        const generatedWork = (overrides: Record<string, unknown> = {}) =>
+    describe('updateWork — owner / organization', () => {
+        const makeWork = (overrides: Record<string, unknown> = {}) =>
             ({
                 id: 'dir-1',
+                kind: 'directory',
                 name: 'Test Work',
                 description: 'Test description',
                 owner: 'member-login',
                 organization: false,
                 readmeConfig: {},
                 gitProvider: 'github',
-                userId: user.id,
-                website: 'https://example.com',
+                userId: 'member-1',
+                website: null,
                 websiteTemplateId: 'classic',
-                generateStatus: { status: 'generated' },
+                generateStatus: { status: GenerateStatusType.GENERATED },
                 getRepoOwner: jest.fn().mockReturnValue('member-login'),
+                getDataRepo: jest.fn().mockReturnValue('test-work-data'),
                 getWebsiteRepo: jest.fn().mockReturnValue('test-work-website'),
                 ...overrides,
             }) as any;
+        const manager = { id: 'manager-1' } as any;
+        const member = { id: 'member-1' } as any;
+        const arm = (work: any) => {
+            ownershipService.ensureCanEdit.mockResolvedValue({ work });
+            workRepository.update.mockResolvedValueOnce({ ...work });
+        };
+        const written = () => workRepository.update.mock.calls[0][1];
+        const refused = 'cannot be changed once they exist';
 
         it.each([
             ['another owner', { owner: 'manager-login' }],
             ['organization on', { organization: true, owner: 'acme' }],
-        ])('refuses %s on a generated Work', async (_label, dto) => {
-            const work = generatedWork();
-            ownershipService.ensureCanEdit.mockResolvedValue({ work });
-
-            await expect(service.updateWork(work.id, dto as any, user)).rejects.toThrow(
-                'cannot be changed after it has generated',
-            );
+            // Review of #3177: with the organization check removed every test
+            // still passed — an organization-only change must be refused too.
+            ['the organization flag alone', { organization: true }],
+        ])('refuses %s once the Work has generated', async (_label, dto) => {
+            arm(makeWork());
+            await expect(service.updateWork('dir-1', dto as any, manager)).rejects.toThrow(refused);
             expect(workRepository.update).not.toHaveBeenCalled();
         });
 
-        it('accepts the stored owner sent back with a rename', async () => {
-            const work = generatedWork();
-            ownershipService.ensureCanEdit.mockResolvedValue({ work });
-            workRepository.update.mockResolvedValueOnce({ ...work, name: 'Renamed' });
-
-            await service.updateWork(
-                work.id,
-                { name: 'Renamed', owner: 'member-login', organization: false } as any,
-                user,
-            );
-
-            expect(workRepository.update).toHaveBeenCalledWith(
-                work.id,
-                expect.objectContaining({
-                    name: 'Renamed',
-                    owner: 'member-login',
-                    organization: false,
-                }),
-            );
+        it('refuses while the first generation is running', async () => {
+            arm(makeWork({ generateStatus: { status: GenerateStatusType.GENERATING } }));
+            await expect(
+                service.updateWork('dir-1', { owner: 'acme', organization: true } as any, member),
+            ).rejects.toThrow(refused);
         });
 
-        it('still lets a Work that has not generated choose its owner', async () => {
-            const work = generatedWork({ generateStatus: null });
-            ownershipService.ensureCanEdit.mockResolvedValue({ work });
-            workRepository.update.mockResolvedValueOnce({ ...work, owner: 'acme' });
-
-            await service.updateWork(work.id, { owner: 'acme', organization: true } as any, user);
-
-            expect(workRepository.update).toHaveBeenCalledWith(
-                work.id,
-                expect.objectContaining({ owner: 'acme', organization: true }),
+        it('accepts the stored values sent back with a rename, and writes them unchanged', async () => {
+            arm(makeWork());
+            await service.updateWork(
+                'dir-1',
+                { name: 'Renamed', owner: 'member-login', organization: false } as any,
+                manager,
             );
+            expect(written()).toMatchObject({
+                name: 'Renamed',
+                owner: 'member-login',
+                organization: false,
+            });
+        });
+
+        it('treats the RESOLVED owner (what GET answers) as unchanged when none is stored', async () => {
+            // A Work built from an Idea stores no owner; GET answers
+            // getRepoOwner() — reading it and saving it back must not 400.
+            arm(makeWork({ owner: null, getRepoOwner: jest.fn().mockReturnValue('member-login') }));
+            await service.updateWork(
+                'dir-1',
+                { name: 'Renamed', owner: 'member-login' } as any,
+                member,
+            );
+            expect(written()).toMatchObject({
+                name: 'Renamed',
+                owner: undefined,
+                organization: false,
+            });
+        });
+
+        it('keeps the stored organization when the request sends null', async () => {
+            arm(makeWork({ organization: true, owner: 'acme' }));
+            await service.updateWork(
+                'dir-1',
+                { name: 'Renamed', organization: null } as any,
+                member,
+            );
+            expect(written()).toMatchObject({ organization: true, owner: 'acme' });
+        });
+
+        it('lets a Work whose first generation FAILED with no repository change its owner', async () => {
+            // The owner was wrong (the manager's login), generation created the
+            // repository elsewhere and stopped with ERROR: it must stay fixable.
+            arm(
+                makeWork({
+                    owner: 'manager-login',
+                    getRepoOwner: jest.fn().mockReturnValue('manager-login'),
+                    generateStatus: { status: GenerateStatusType.ERROR },
+                }),
+            );
+            gitFacade.getUser.mockResolvedValue({ login: 'member-login' });
+            await service.updateWork('dir-1', { owner: 'member-login' } as any, member);
+            expect(written()).toMatchObject({ owner: 'member-login', organization: false });
+        });
+
+        it.each([
+            [
+                'its website repository',
+                () => websiteRepositoryState.isInitialized.mockResolvedValue(true),
+            ],
+            [
+                'its data repository',
+                () => {
+                    gitFacade.hasValidCredentials.mockResolvedValue(true);
+                    gitFacade.repositoryExists.mockResolvedValue(true);
+                },
+            ],
+        ])('refuses after a failed generation that created %s', async (_label, created) => {
+            arm(makeWork({ generateStatus: { status: GenerateStatusType.ERROR } }));
+            created();
+            await expect(
+                service.updateWork('dir-1', { owner: 'acme', organization: true } as any, member),
+            ).rejects.toThrow(refused);
+        });
+
+        it("before generation, a non-creator moving the Work to personal sets the CREATOR's login", async () => {
+            arm(makeWork({ generateStatus: null, owner: 'acme', organization: true }));
+            gitFacade.getUser.mockResolvedValue({ login: 'member-login' });
+
+            await service.updateWork(
+                'dir-1',
+                // What the settings form sends: the SAVER's login.
+                { owner: 'manager-login', organization: false } as any,
+                manager,
+            );
+
+            expect(gitFacade.getUser).toHaveBeenCalledWith({
+                userId: 'member-1',
+                providerId: 'github',
+            });
+            expect(written()).toMatchObject({ owner: 'member-login', organization: false });
+        });
+
+        it('before generation, the creator keeps the owner they chose', async () => {
+            arm(makeWork({ generateStatus: null, owner: 'acme', organization: true }));
+            await service.updateWork(
+                'dir-1',
+                { owner: 'member-alt', organization: false } as any,
+                member,
+            );
+            expect(gitFacade.getUser).not.toHaveBeenCalled();
+            expect(written()).toMatchObject({ owner: 'member-alt', organization: false });
+        });
+
+        it('before generation, an organization chosen by anyone is kept as sent', async () => {
+            arm(makeWork({ generateStatus: null }));
+            await service.updateWork(
+                'dir-1',
+                { owner: 'acme', organization: true } as any,
+                manager,
+            );
+            expect(written()).toMatchObject({ owner: 'acme', organization: true });
+        });
+
+        it("refuses a move to personal when the creator's login cannot be read", async () => {
+            arm(makeWork({ generateStatus: null, owner: 'acme', organization: true }));
+            gitFacade.getUser.mockRejectedValue(new Error('no token'));
+            await expect(
+                service.updateWork('dir-1', { organization: false } as any, manager),
+            ).rejects.toThrow('creator’s Git account could not be read');
+            expect(workRepository.update).not.toHaveBeenCalled();
         });
     });
 

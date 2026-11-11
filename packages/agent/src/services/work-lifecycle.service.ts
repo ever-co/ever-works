@@ -84,8 +84,10 @@ import {
 } from '@src/ever-works-providers';
 import { config } from '@src/config';
 import {
+    getWorkCapabilities,
     isRepositoryWorkKind,
     normalizeWorkRepoDeclaredCommandPolicy,
+    workKindHasRepository,
     type AppSourceRecord,
 } from '@ever-works/contracts';
 import type { OnboardingWizardStateV2 } from '@ever-works/contracts/api';
@@ -1593,6 +1595,143 @@ export class WorkLifecycleService {
         throw error;
     }
 
+    /**
+     * The `owner` / `organization` an update writes.
+     *
+     * - A value equal to the stored one, or to the RESOLVED owner the API
+     *   answers on GET (`getRepoOwner()`: a Work built from an Idea stores no
+     *   owner), is no change, so reading a Work and saving it back never fails.
+     * - A real change is refused once the Work's repositories exist
+     *   ({@link workRepositoriesExist}): every later read, push and sync
+     *   resolves them under the current owner.
+     * - A personal Work's repositories belong to its creator's account. When
+     *   the result is personal and the caller is not the creator (a manager
+     *   renaming a member's Work, or switching it from an organization to
+     *   personal), or nobody named an owner, the owner is the creator's
+     *   connected login, never the caller's.
+     */
+    private async resolveOwnershipUpdate(
+        work: Work,
+        updateDto: UpdateWorkDto,
+        user: User,
+    ): Promise<{ owner: string | undefined; organization: boolean }> {
+        const stored = { owner: work.owner ?? undefined, organization: Boolean(work.organization) };
+        const storedOwner = (work.owner ?? '').trim();
+        const resolvedOwner =
+            typeof work.getRepoOwner === 'function'
+                ? (work.getRepoOwner() ?? '').trim()
+                : storedOwner;
+        const requestedOwner =
+            typeof updateDto.owner === 'string' ? updateDto.owner.trim() : undefined;
+        const ownerChanged =
+            requestedOwner !== undefined &&
+            requestedOwner !== storedOwner &&
+            requestedOwner !== resolvedOwner;
+        const organizationChanged =
+            typeof updateDto.organization === 'boolean' &&
+            updateDto.organization !== stored.organization;
+        if (!ownerChanged && !organizationChanged) {
+            return stored;
+        }
+
+        if (await this.workRepositoriesExist(work, user)) {
+            throw new BadRequestException({
+                status: 'error',
+                message:
+                    'The owner of a Work’s repositories cannot be changed once they exist: ' +
+                    'they were created under the current owner.',
+            });
+        }
+
+        const organization = organizationChanged
+            ? (updateDto.organization as boolean)
+            : stored.organization;
+        if (organization) {
+            return { owner: ownerChanged ? requestedOwner : stored.owner, organization };
+        }
+        const isCreator = !work.userId || work.userId === user.id;
+        if (isCreator && ownerChanged && requestedOwner) {
+            return { owner: requestedOwner, organization };
+        }
+        return { owner: await this.creatorGitLogin(work), organization };
+    }
+
+    /**
+     * Do the Work's repositories exist yet? True after a successful (or a
+     * running) generation and for an App Work (its repository comes from its
+     * source). After a failed or cancelled first generation, only when a
+     * repository was actually recorded or created under the CURRENT owner, so
+     * a Work whose generation failed because its owner was wrong stays fixable.
+     */
+    private async workRepositoriesExist(work: Work, user: User): Promise<boolean> {
+        if (!workKindHasRepository(work.kind)) {
+            return false;
+        }
+        if (isAppWorkKind(work.kind)) {
+            return true;
+        }
+        const status = work.generateStatus?.status;
+        if (status === GenerateStatusType.GENERATED || status === GenerateStatusType.GENERATING) {
+            return true;
+        }
+        if (!status) {
+            return false;
+        }
+        if (await this.websiteRepositoryState.isInitialized(work, user)) {
+            return true;
+        }
+        if (!getWorkCapabilities(work.kind).repos.data || typeof work.getDataRepo !== 'function') {
+            return false;
+        }
+        for (const userId of [...new Set([user.id, work.userId].filter(Boolean))]) {
+            const authOptions = { userId, providerId: work.gitProvider, workId: work.id };
+            try {
+                if (!(await this.gitFacade.hasValidCredentials(authOptions))) continue;
+                if (
+                    await this.gitFacade.repositoryExists(
+                        work.getRepoOwner('data'),
+                        work.getDataRepo(),
+                        authOptions,
+                    )
+                ) {
+                    return true;
+                }
+            } catch (error) {
+                this.logger.warn(
+                    `Could not check the data repository of work ${work.id}: ${
+                        error instanceof Error ? error.message : String(error)
+                    }`,
+                );
+            }
+        }
+        return false;
+    }
+
+    /** The Work creator's login on the Work's git provider (a personal Work's owner). */
+    private async creatorGitLogin(work: Work): Promise<string> {
+        try {
+            const gitUser = await this.gitFacade.getUser({
+                userId: work.userId,
+                providerId: work.gitProvider,
+            });
+            if (gitUser?.login) {
+                return gitUser.login;
+            }
+        } catch (error) {
+            this.logger.warn(
+                `Could not read the git login of the creator of work ${work.id}: ${
+                    error instanceof Error ? error.message : String(error)
+                }`,
+            );
+        }
+        throw new BadRequestException({
+            status: 'error',
+            message:
+                'A personal Work’s repositories belong to its creator, and the creator’s Git account ' +
+                'could not be read. Ask the creator to choose the owner, or keep the organization.',
+        });
+    }
+
     async updateWork(id: string, updateDto: UpdateWorkDto, user: User) {
         // Require at least editor role to update work
         const { work } = await this.ownershipService.ensureCanEdit(id, user.id);
@@ -1616,39 +1755,18 @@ export class WorkLifecycleService {
             });
         }
 
-        // Once a Work has generated, its repositories exist under `owner` (an
-        // organization when `organization` is set): every later read, push and
-        // sync resolves them there. Changing either field then points the Work
-        // at repositories that do not exist; the settings form already locks
-        // both fields after generation, so only a direct API call reached this.
-        // Sending the stored values back is still accepted.
-        if (work.generateStatus !== null && work.generateStatus !== undefined) {
-            const ownerChanged =
-                updateDto.owner !== undefined &&
-                (updateDto.owner ?? '').trim() !== (work.owner ?? '').trim();
-            const organizationChanged =
-                updateDto.organization !== undefined &&
-                Boolean(updateDto.organization) !== Boolean(work.organization);
-            if (ownerChanged || organizationChanged) {
-                throw new BadRequestException({
-                    status: 'error',
-                    message:
-                        'The owner of a Work’s repositories cannot be changed after it has generated: ' +
-                        'its repositories already exist under the current owner.',
-                });
-            }
-        }
+        // `owner` / `organization` decide where the Work's repositories live.
+        // Resolved (and refused when the repositories already exist) before
+        // anything is written; see `resolveOwnershipUpdate`.
+        const ownership = await this.resolveOwnershipUpdate(work, updateDto, user);
 
         try {
             // Build update data object
             const updateData: Record<string, any> = {
                 name: updateDto.name || work.name,
                 description: updateDto.description || work.description,
-                owner: updateDto.owner ?? work.owner,
-                organization:
-                    updateDto.organization !== undefined
-                        ? updateDto.organization
-                        : work.organization,
+                owner: ownership.owner,
+                organization: ownership.organization,
                 readmeConfig: updateDto.readmeConfig ?? work.readmeConfig,
             };
 
