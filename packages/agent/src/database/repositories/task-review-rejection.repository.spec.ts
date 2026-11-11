@@ -1,4 +1,4 @@
-import { In, IsNull, MoreThan, QueryFailedError } from 'typeorm';
+import { In, IsNull, QueryFailedError } from 'typeorm';
 import { TaskReviewRejectionRepository } from './task-review-rejection.repository';
 
 /**
@@ -77,34 +77,28 @@ describe('TaskReviewRejectionRepository — carried review feedback', () => {
         return { repository, rejections: new TaskReviewRejectionRepository(repository as never) };
     }
 
-    it('applies the cutoff IN the read, and still returns what the planned run already carries', async () => {
+    it('scopes the read by pull request IN the query: rows with none, and rows about the open one', async () => {
         const { repository, rejections } = build();
-        const cutoff = new Date('2026-11-11T09:00:00Z');
-        await rejections.findOpenForTask('task-1', { createdAfter: cutoff, carriedBy: 'run-2' });
+        await rejections.findOpenForTask('task-1', { openPullRequest: 5038 });
         const [{ where, order, take }] = repository.find.mock.calls[0] as unknown as [
-            {
-                where: Array<Record<string, { _type?: string; _value?: unknown }>>;
-                order: unknown;
-                take: number;
-            },
+            { where: unknown[]; order: unknown; take: number },
         ];
-        expect(where).toHaveLength(2);
-        expect(where[0].taskId).toBe('task-1');
-        expect(where[0].consumedAt).toEqual(IsNull());
-        expect(where[0].createdAt).toEqual(MoreThan(cutoff));
-        expect(where[1]).toMatchObject({ taskId: 'task-1', consumedByRunId: 'run-2' });
-        expect(where[1].consumedAt).toEqual(IsNull());
+        expect(where).toEqual([
+            { taskId: 'task-1', consumedAt: IsNull(), prNumber: IsNull() },
+            { taskId: 'task-1', consumedAt: IsNull(), prNumber: 5038 },
+        ]);
         expect(order).toEqual({ createdAt: 'ASC' });
         expect(take).toBe(50);
     });
 
-    it('reads every open row when there is no cutoff', async () => {
+    it('with no open pull request, only the rows that name none — and no age cutoff at all', async () => {
         const { repository, rejections } = build();
-        await rejections.findOpenForTask('task-1', { carriedBy: 'run-2', limit: 500 });
+        await rejections.findOpenForTask('task-1', { openPullRequest: null, limit: 500 });
         const [{ where, take }] = repository.find.mock.calls[0] as unknown as [
-            { where: unknown[]; take: number },
+            { where: Array<Record<string, unknown>>; take: number },
         ];
-        expect(where).toEqual([{ taskId: 'task-1', consumedAt: IsNull() }]);
+        expect(where).toEqual([{ taskId: 'task-1', consumedAt: IsNull(), prNumber: IsNull() }]);
+        expect(where[0]).not.toHaveProperty('createdAt');
         expect(take).toBe(100);
     });
 
@@ -140,18 +134,19 @@ describe('TaskReviewRejectionRepository — carried review feedback', () => {
             { consumedByRunId: 'run-3', consumedAt: IsNull() },
             { consumedByRunId: null },
         );
+        // Only the named rows — the ones a plan could not show.
+        await rejections.releaseCarried('run-3', ['b']);
+        expect(repository.update).toHaveBeenLastCalledWith(
+            { consumedByRunId: 'run-3', consumedAt: IsNull(), id: In(['b']) },
+            { consumedByRunId: null },
+        );
+        const calls = repository.update.mock.calls.length;
+        await expect(rejections.releaseCarried('run-3', [])).resolves.toBe(0);
+        expect(repository.update.mock.calls.length).toBe(calls);
     });
 
-    it('knows the runs that ever carried a finding, and whether anything is open', async () => {
+    it('knows whether anything is open', async () => {
         const { repository, rejections } = build();
-        repository.find.mockResolvedValueOnce([
-            { id: 'a', consumedByRunId: 'run-1' },
-            { id: 'b', consumedByRunId: 'run-1' },
-            { id: 'c', consumedByRunId: 'run-2' },
-        ]);
-        await expect(rejections.findCarrierRunIds('task-1')).resolves.toEqual(
-            new Set(['run-1', 'run-2']),
-        );
         await expect(rejections.hasOpenForTask('task-1')).resolves.toBe(false);
         repository.findOne.mockResolvedValueOnce({ id: 'a' });
         await expect(rejections.hasOpenForTask('task-1')).resolves.toBe(true);

@@ -2,8 +2,8 @@ import {
     buildFencedReviewFeedback,
     capReviewFeedbackText,
     describeReviewFeedbackRules,
-    REVIEW_FEEDBACK_ITEM_MAX_CHARS,
-    REVIEW_FEEDBACK_MAX_CHARS,
+    REVIEW_FEEDBACK_ITEM_MAX_BYTES,
+    REVIEW_FEEDBACK_MAX_BYTES,
     REVIEW_FEEDBACK_MAX_ITEMS,
     REVIEW_FEEDBACK_SECTION_HEADING,
     reviewFeedbackItemLabel,
@@ -50,10 +50,9 @@ describe('selectReviewFeedback — caps, oldest first', () => {
         expect(omitted).toBe(3);
     });
 
-    it('stops at the first finding over the character budget, so what is carried is a prefix', () => {
-        const big = 'x'.repeat(REVIEW_FEEDBACK_ITEM_MAX_CHARS * 3);
-        const perItem = REVIEW_FEEDBACK_ITEM_MAX_CHARS;
-        const fits = Math.floor(REVIEW_FEEDBACK_MAX_CHARS / perItem);
+    it('stops at the first finding over the BYTE budget, so what is carried is a prefix', () => {
+        const big = 'x'.repeat(REVIEW_FEEDBACK_ITEM_MAX_BYTES * 3);
+        const fits = Math.floor(REVIEW_FEEDBACK_MAX_BYTES / REVIEW_FEEDBACK_ITEM_MAX_BYTES);
         const rows = Array.from({ length: fits + 2 }, (_, i) =>
             finding({ id: `b${i}`, feedback: big }),
         );
@@ -65,10 +64,33 @@ describe('selectReviewFeedback — caps, oldest first', () => {
         expect(omitted).toBe(rows.length - fits);
     });
 
-    it('cuts one long finding and marks the cut', () => {
-        const capped = capReviewFeedbackText('y'.repeat(REVIEW_FEEDBACK_ITEM_MAX_CHARS + 50));
-        expect(capped.startsWith('y'.repeat(REVIEW_FEEDBACK_ITEM_MAX_CHARS))).toBe(true);
+    it('counts UTF-8 bytes, not characters: a non-Latin finding costs what it weighs', () => {
+        // 3 bytes per character: 1,400 characters is 4,200 bytes, over one finding's cap.
+        const cjk = '漢'.repeat(1_400);
+        expect(cjk.length).toBeLessThan(REVIEW_FEEDBACK_ITEM_MAX_BYTES);
+        const capped = capReviewFeedbackText(cjk);
+        expect(Buffer.byteLength(capped, 'utf8')).toBeLessThanOrEqual(
+            REVIEW_FEEDBACK_ITEM_MAX_BYTES,
+        );
         expect(capped).toContain('[… finding truncated …]');
+        // Never a split character.
+        expect(capped).not.toContain('�');
+        // Six of them fill the 24 KiB budget; a character count would have taken all ten.
+        const rows = Array.from({ length: 10 }, (_, i) => finding({ id: `c${i}`, feedback: cjk }));
+        const { selected } = selectReviewFeedback(rows);
+        expect(selected.length).toBe(
+            Math.floor(REVIEW_FEEDBACK_MAX_BYTES / Buffer.byteLength(capped, 'utf8')),
+        );
+        expect(selected.length).toBeLessThan(10);
+    });
+
+    it('cuts one long finding and marks the cut, the marker inside the cap', () => {
+        const capped = capReviewFeedbackText('y'.repeat(REVIEW_FEEDBACK_ITEM_MAX_BYTES + 50));
+        expect(capped.startsWith('y'.repeat(REVIEW_FEEDBACK_ITEM_MAX_BYTES - 64))).toBe(true);
+        expect(capped).toContain('[… finding truncated …]');
+        expect(Buffer.byteLength(capped, 'utf8')).toBeLessThanOrEqual(
+            REVIEW_FEEDBACK_ITEM_MAX_BYTES,
+        );
         expect(capReviewFeedbackText('  fine  ')).toBe('fine');
     });
 });

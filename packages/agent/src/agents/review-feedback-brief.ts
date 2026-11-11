@@ -35,16 +35,31 @@ import { fenceUntrustedContent, neutralizeUntrustedLine } from '../utils/untrust
 export const REVIEW_FEEDBACK_SECTION_HEADING = '# REVIEW FEEDBACK TO ADDRESS';
 
 /**
- * Caps. A finding is stored up to 8000 characters
- * (`TASK_REVIEW_REJECTION_MAX_FEEDBACK_CHARS`); one run carries at most
- * {@link REVIEW_FEEDBACK_MAX_ITEMS} of them, each cut to
- * {@link REVIEW_FEEDBACK_ITEM_MAX_CHARS}, and no more than
- * {@link REVIEW_FEEDBACK_MAX_CHARS} in all. What does not fit is NOT
- * claimed: it stays pending and reaches the next run.
+ * Caps, in UTF-8 BYTES (the fleet job payload is limited in bytes, and a
+ * finding in a non-Latin script is up to four bytes a character). A finding
+ * is stored up to 8000 characters (`TASK_REVIEW_REJECTION_MAX_FEEDBACK_CHARS`);
+ * one run carries at most {@link REVIEW_FEEDBACK_MAX_ITEMS} of them, each cut
+ * to {@link REVIEW_FEEDBACK_ITEM_MAX_BYTES} (cut marker included), and no more
+ * than {@link REVIEW_FEEDBACK_MAX_BYTES} of finding text in all. What does not
+ * fit is NOT claimed: it stays pending and reaches the next run.
  */
 export const REVIEW_FEEDBACK_MAX_ITEMS = 10;
-export const REVIEW_FEEDBACK_ITEM_MAX_CHARS = 4_000;
-export const REVIEW_FEEDBACK_MAX_CHARS = 24_000;
+export const REVIEW_FEEDBACK_ITEM_MAX_BYTES = 4 * 1024;
+export const REVIEW_FEEDBACK_MAX_BYTES = 24 * 1024;
+
+const TRUNCATION_NOTE = '\n[… finding truncated …]';
+
+function utf8Bytes(value: string): number {
+    return Buffer.byteLength(value, 'utf8');
+}
+
+/** Cut to `maxBytes` of UTF-8, never splitting a code point. */
+function truncateUtf8(value: string, maxBytes: number): string {
+    if (utf8Bytes(value) <= maxBytes) return value;
+    const cut = Buffer.from(value, 'utf8').subarray(0, Math.max(0, maxBytes)).toString('utf8');
+    // A split code point decodes to U+FFFD at the end: drop it.
+    return cut.replace(/�+$/u, '');
+}
 
 /** One recorded finding, as a run is given it (a `task_review_rejections` row, projected). */
 export interface ReviewFeedbackItem {
@@ -78,10 +93,10 @@ export function selectReviewFeedback<T extends { feedback: string }>(
     rows: readonly T[],
 ): { selected: T[]; omitted: number } {
     const selected: T[] = [];
-    let budget = REVIEW_FEEDBACK_MAX_CHARS;
+    let budget = REVIEW_FEEDBACK_MAX_BYTES;
     for (const row of rows) {
         if (selected.length >= REVIEW_FEEDBACK_MAX_ITEMS) break;
-        const cost = Math.min(String(row.feedback ?? '').length, REVIEW_FEEDBACK_ITEM_MAX_CHARS);
+        const cost = utf8Bytes(capReviewFeedbackText(String(row.feedback ?? '')));
         if (cost > budget) break;
         selected.push(row);
         budget -= cost;
@@ -89,11 +104,14 @@ export function selectReviewFeedback<T extends { feedback: string }>(
     return { selected, omitted: rows.length - selected.length };
 }
 
-/** A finding's text cut to {@link REVIEW_FEEDBACK_ITEM_MAX_CHARS}, the cut marked. */
+/**
+ * A finding's text cut to {@link REVIEW_FEEDBACK_ITEM_MAX_BYTES} of UTF-8,
+ * the cut marked and the marker counted inside the cap.
+ */
 export function capReviewFeedbackText(value: string): string {
     const text = String(value ?? '').trim();
-    if (text.length <= REVIEW_FEEDBACK_ITEM_MAX_CHARS) return text;
-    return `${text.slice(0, REVIEW_FEEDBACK_ITEM_MAX_CHARS)}\n[… finding truncated …]`;
+    if (utf8Bytes(text) <= REVIEW_FEEDBACK_ITEM_MAX_BYTES) return text;
+    return `${truncateUtf8(text, REVIEW_FEEDBACK_ITEM_MAX_BYTES - utf8Bytes(TRUNCATION_NOTE))}${TRUNCATION_NOTE}`;
 }
 
 /**

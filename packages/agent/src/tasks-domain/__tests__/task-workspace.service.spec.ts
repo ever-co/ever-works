@@ -354,43 +354,72 @@ describe('TaskWorkspaceService', () => {
                     prState: 'open',
                     ...overrides,
                 });
-            const buildWithPr = () => {
+            /**
+             * `current` is the Task as finalize re-reads it; `live` what the
+             * provider says about the pull request NOW (a throw = no answer).
+             */
+            const buildWithPr = (
+                opts: { current?: Record<string, unknown>; live?: string | Error | null } = {},
+            ) => {
                 const createPullRequest = jest.fn().mockResolvedValue({
                     number: 9,
                     url: 'https://github.com/acme/site-data/pull/9',
                 });
+                const getPullRequest = jest.fn(async () => {
+                    if (opts.live instanceof Error) throw opts.live;
+                    if (opts.live === null) return null;
+                    return { number: 5038, state: opts.live ?? 'open', url: PR_URL };
+                });
                 const svc = new TaskWorkspaceService(
                     works as any,
-                    { ...tasks, findById: jest.fn().mockResolvedValue(openPrTask()) } as any,
+                    {
+                        ...tasks,
+                        findById: jest.fn().mockResolvedValue(openPrTask(opts.current ?? {})),
+                    } as any,
                     runs as any,
                     facadeExt as any,
-                    { ...gitFacade, createPullRequest } as any,
+                    { ...gitFacade, createPullRequest, getPullRequest } as any,
                     transitions as any,
                     taskChat as any,
                 );
-                return { svc, createPullRequest };
+                return { svc, createPullRequest, getPullRequest };
             };
 
-            it('publishes to the Task branch and opens NO second pull request', async () => {
-                const { svc, createPullRequest } = buildWithPr();
+            it('publishes to the Task branch, opens NO second pull request, and is reviewable again', async () => {
+                const { svc, createPullRequest, getPullRequest } = buildWithPr();
                 const result = await svc.finalizeRun({ ...finalizeInput(), task: openPrTask() });
 
                 expect(result).toEqual({ outcome: 'pr-opened', prNumber: 5038, prUrl: PR_URL });
                 expect(createPullRequest).not.toHaveBeenCalled();
+                expect(getPullRequest).toHaveBeenCalledWith(
+                    'acme',
+                    'site-data',
+                    5038,
+                    expect.objectContaining({ userId: 'user-1', workId: 'work-1' }),
+                );
                 // Every commit/publish went to the existing Task branch.
                 expect(facadeExt.finalize).toHaveBeenCalled();
                 for (const [publishedHandle] of facadeExt.finalize.mock.calls) {
                     expect(publishedHandle.branch).toBe(workspace.branch);
                 }
-                expect(tasks.updateById).toHaveBeenLastCalledWith(expect.any(String), {
+                expect(tasks.updateById).toHaveBeenCalledWith(expect.any(String), {
                     branchState: 'pr-open',
                 });
+                // The same tail as an opened pull request: back to review.
+                expect(transitions.transition).toHaveBeenCalledWith(
+                    expect.anything(),
+                    'in_review',
+                    {
+                        actorType: 'agent',
+                        ownRunTask: true,
+                    },
+                );
             });
 
             it.each(['merged', 'closed'])(
                 'a %s pull request is followed by a new one, exactly as before',
                 async (prState) => {
-                    const { svc, createPullRequest } = buildWithPr();
+                    const { svc, createPullRequest } = buildWithPr({ current: { prState } });
                     const result = await svc.finalizeRun({
                         ...finalizeInput(),
                         task: openPrTask({ prState }),
@@ -401,6 +430,38 @@ describe('TaskWorkspaceService', () => {
                     );
                 },
             );
+
+            it('a pull request merged WHILE the run worked (re-read Task) gets a new one', async () => {
+                // The run started with the pull request open; the row read at
+                // finalize says it was merged since.
+                const { svc, createPullRequest } = buildWithPr({ current: { prState: 'merged' } });
+                const result = await svc.finalizeRun({ ...finalizeInput(), task: openPrTask() });
+                expect(createPullRequest).toHaveBeenCalledTimes(1);
+                expect(result).toEqual(expect.objectContaining({ prNumber: 9 }));
+            });
+
+            it.each(['merged', 'closed'])(
+                'the provider says %s while the cached state still says open: a new pull request',
+                async (live) => {
+                    const { svc, createPullRequest } = buildWithPr({ live });
+                    const result = await svc.finalizeRun({
+                        ...finalizeInput(),
+                        task: openPrTask(),
+                    });
+                    expect(createPullRequest).toHaveBeenCalledTimes(1);
+                    expect(result).toEqual(expect.objectContaining({ prNumber: 9 }));
+                },
+            );
+
+            it.each([
+                ['cannot be read', new Error('provider down')],
+                ['has no record of it', null],
+            ] as const)('when the provider %s, the Task record decides', async (_, live) => {
+                const { svc, createPullRequest } = buildWithPr({ live });
+                const result = await svc.finalizeRun({ ...finalizeInput(), task: openPrTask() });
+                expect(createPullRequest).not.toHaveBeenCalled();
+                expect(result).toEqual({ outcome: 'pr-opened', prNumber: 5038, prUrl: PR_URL });
+            });
         });
 
         // Review of #2769 (CodeRabbit, outside the diff): a check-first push needs

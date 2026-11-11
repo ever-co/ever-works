@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, IsNull, MoreThan, Not, Repository, type FindOptionsWhere } from 'typeorm';
+import { In, IsNull, Repository, type FindOptionsWhere } from 'typeorm';
 import { isUniqueConstraintError } from '../../utils/db-error.utils';
 import {
     TASK_REVIEW_REJECTION_MAX_FEEDBACK_CHARS,
@@ -167,44 +167,28 @@ export class TaskReviewRejectionRepository {
      * which of the carried ones are really still open (their run failed, was
      * cancelled, or is the one being planned).
      *
-     * `createdAfter` is applied IN the query, so years of rows older than the
-     * Task's last handled run can never fill the page and hide a new
-     * finding; rows already carried by `carriedBy` (a re-plan of the same
-     * run) are returned whatever their age.
+     * No age cutoff: a finding stays open until a run that was given it
+     * completes. What scopes the read is the pull request, IN the query: a
+     * row recorded on a pull request (`prNumber` set) is read only while that
+     * pull request is the Task's open one (`openPullRequest`); a row with no
+     * pull request (a Task review, the platform's own gate) always is. So
+     * rows about a pull request that was merged, closed or replaced can never
+     * fill the page and hide a finding about the current one.
      */
     async findOpenForTask(
         taskId: string,
-        opts: { createdAfter?: Date | null; carriedBy?: string | null; limit?: number } = {},
+        opts: { openPullRequest?: number | null; limit?: number } = {},
     ): Promise<TaskReviewRejection[]> {
         const open: FindOptionsWhere<TaskReviewRejection> = { taskId, consumedAt: IsNull() };
-        const where: FindOptionsWhere<TaskReviewRejection>[] = [
-            opts.createdAfter ? { ...open, createdAt: MoreThan(opts.createdAfter) } : open,
-        ];
-        if (opts.createdAfter && opts.carriedBy) {
-            where.push({ ...open, consumedByRunId: opts.carriedBy });
+        const where: FindOptionsWhere<TaskReviewRejection>[] = [{ ...open, prNumber: IsNull() }];
+        if (typeof opts.openPullRequest === 'number') {
+            where.push({ ...open, prNumber: opts.openPullRequest });
         }
         return this.repository.find({
             where,
             order: { createdAt: 'ASC' },
             take: Math.max(1, Math.min(100, opts.limit ?? 50)),
         });
-    }
-
-    /**
-     * The runs that ever carried or consumed a finding of this Task. A run in
-     * this set is never used as the "already handled everything before it"
-     * cutoff: it may have carried only the first part of a longer queue.
-     */
-    async findCarrierRunIds(taskId: string): Promise<Set<string>> {
-        const rows = await this.repository.find({
-            where: { taskId, consumedByRunId: Not(IsNull()) },
-            select: { id: true, consumedByRunId: true },
-        });
-        return new Set(
-            rows
-                .map((row) => row.consumedByRunId)
-                .filter((runId): runId is string => typeof runId === 'string' && runId !== ''),
-        );
     }
 
     /**
@@ -246,10 +230,19 @@ export class TaskReviewRejectionRepository {
         return result.affected ?? 0;
     }
 
-    /** The run that carried rows did NOT complete: they are pending again. */
-    async releaseCarried(runId: string): Promise<number> {
+    /**
+     * The run that carried rows did NOT finish them — it failed, was
+     * cancelled, or stopped to ask its owner a question: they are pending
+     * again. With `ids`, only those rows (the ones a plan could not fit).
+     */
+    async releaseCarried(runId: string, ids?: readonly string[]): Promise<number> {
+        if (ids && ids.length === 0) return 0;
         const result = await this.repository.update(
-            { consumedByRunId: runId, consumedAt: IsNull() },
+            {
+                consumedByRunId: runId,
+                consumedAt: IsNull(),
+                ...(ids ? { id: In([...ids]) } : {}),
+            },
             { consumedByRunId: null },
         );
         return result.affected ?? 0;

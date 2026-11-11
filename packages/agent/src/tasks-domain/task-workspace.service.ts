@@ -1994,8 +1994,15 @@ export class TaskWorkspaceService {
         // the provider (one open pull request per head) AFTER the push landed, so
         // the run whose work IS on the pull request ended `failed`. Mirrors
         // `finalizeRemotePush`, the fleet path; a merged or closed pull request
-        // (or none) is still followed by a new one, exactly as before.
-        const existingPullRequest = openPullRequestOf(task);
+        // (or none) is still followed by a new one, exactly as before. Read as
+        // the pull request is NOW, not as the run started: it may have been
+        // merged or closed while the run worked (review of #3150).
+        const existingPullRequest = await this.openPullRequestAtFinalize(
+            task,
+            owner,
+            repo,
+            gitOptions,
+        );
         const guarded = await this.guardAppChange({
             input,
             work,
@@ -2010,13 +2017,24 @@ export class TaskWorkspaceService {
 
         if (existingPullRequest) {
             await this.tasks.updateById(task.id, { branchState: 'pr-open' });
+            // The same tail as a newly opened pull request, minus opening it:
+            // the run's work is reviewable again, and the merge question is
+            // asked for the commits now on the pull request.
+            await this.transitionTask(task, TaskStatus.IN_REVIEW);
             this.logger.log(
                 `Task ${task.id} already has PR #${existingPullRequest.number}; push of ${workspace.branch} recorded without opening another.`,
             );
+            const merge = await this.evaluateMergeAtPullRequestOpen({
+                task,
+                work,
+                agentId: input.agentId,
+                prNumber: existingPullRequest.number,
+            });
             return {
                 outcome: 'pr-opened',
                 prNumber: existingPullRequest.number,
                 prUrl: existingPullRequest.url,
+                ...(merge ? { merge } : {}),
             };
         }
 
@@ -2035,6 +2053,57 @@ export class TaskWorkspaceService {
             gateStatus: input.gateStatus ?? null,
             summary: input.summary ?? null,
         });
+    }
+
+    /**
+     * The Task's pull request if it is still OPEN as the run finalizes, or
+     * `undefined` to open a new one as before.
+     *
+     * The Task is read again (the row `finalizeRun` was handed is the one the
+     * run STARTED with), and the git provider is asked about the pull request
+     * itself, because the cached `prState` is only as fresh as the last status
+     * sweep: one merged or closed while the run worked gets a new pull request
+     * for the commits just pushed, rather than an outcome naming a dead one.
+     * When the provider cannot answer (no such read, an error, no record of
+     * it), the Task's own record decides — the answer before this read.
+     */
+    private async openPullRequestAtFinalize(
+        task: Task,
+        owner: string,
+        repo: string,
+        gitOptions: { userId: string; providerId: string; workId: string },
+    ): Promise<{ number: number; url: string } | undefined> {
+        let current: Task = task;
+        try {
+            current = (await this.tasks.findById(task.id)) ?? task;
+        } catch {
+            // The row the run started with is the best record there is.
+        }
+        const recorded = openPullRequestOf(current);
+        if (!recorded || !this.gitFacade || typeof this.gitFacade.getPullRequest !== 'function') {
+            return recorded;
+        }
+        try {
+            const live = await this.gitFacade.getPullRequest(
+                owner,
+                repo,
+                recorded.number,
+                gitOptions,
+            );
+            if (live && live.state !== 'open') {
+                this.logger.log(
+                    `Task ${task.id}: PR #${recorded.number} is ${live.state} — the run's commits get a new pull request.`,
+                );
+                return undefined;
+            }
+        } catch (error) {
+            this.logger.warn(
+                `Task ${task.id}: could not read PR #${recorded.number} from the provider — keeping the recorded one: ${
+                    error instanceof Error ? error.message : String(error)
+                }`,
+            );
+        }
+        return recorded;
     }
 
     /**

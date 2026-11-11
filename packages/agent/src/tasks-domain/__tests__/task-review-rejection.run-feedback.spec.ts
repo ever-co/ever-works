@@ -1,5 +1,14 @@
 import { agentReviewRunScope } from '../task-agent-review';
-import { feedbackCutoff, TaskReviewRejectionService } from '../task-review-rejection.service';
+import {
+    openPullRequestNumberOf,
+    TaskReviewRejectionService,
+} from '../task-review-rejection.service';
+import {
+    makeRejectionStore,
+    makeRunStore,
+    type FakeRejectionRow,
+    type FakeRun,
+} from './review-feedback-store.fake';
 
 /**
  * Review feedback reaches the next run (2026-11-11).
@@ -10,149 +19,50 @@ import { feedbackCutoff, TaskReviewRejectionService } from '../task-review-rejec
  * Task's standing brief, treated itself as fresh work and pushed an
  * unrelated feature onto the pull request under review.
  *
- * What these pin, against an in-memory model of `task_review_rejections`
- * (so claim → settle → claim is the real state machine, not a mock's say-so):
+ * What these pin, against an in-memory `task_review_rejections` with the
+ * repository's semantics (so claim → settle → claim is the real state
+ * machine, not a mock's say-so):
  *
  *  - a fresh run CARRIES the open findings (`consumedByRunId` set,
  *    `consumedAt` not yet), oldest first, within the caps;
  *  - completing consumes them, so a later run is not told again;
- *  - failing or being cancelled hands them back, and the next run gets them;
- *  - a finding older than the Task's last completed run that carried
- *    nothing is not replayed; a finding a capped run left behind is;
+ *  - failing, being cancelled, or parking on an owner question hands them
+ *    back, and the next run gets them;
+ *  - NO run ever becomes a cutoff: a finding stays open until a run that was
+ *    given it completes — the four ways a timestamp cutoff hid findings no
+ *    run saw (review of #3150) are each pinned below;
+ *  - a finding recorded on a pull request is replayed only while that pull
+ *    request is the Task's open one;
  *  - review runs, runs of another Task or owner, and non-Task runs get
  *    nothing; a run still in flight keeps what it carries.
  */
-
-type Row = {
-    id: string;
-    taskId: string;
-    source: string;
-    feedback: string;
-    reviewerKind?: string | null;
-    reviewerLabel?: string | null;
-    severity?: string | null;
-    prNumber?: number | null;
-    consumedByRunId: string | null;
-    consumedAt: Date | null;
-    createdAt: Date;
-};
-
-type Run = {
-    id: string;
-    taskId: string;
-    userId: string;
-    triggerKind: string;
-    status: string;
-    awaitingInput?: boolean;
-    resumeSuccessorRunId?: string | null;
-    delegationScope?: unknown;
-    startedAt?: Date | null;
-    createdAt: Date;
-};
 
 const TASK = 'task-1';
 const USER = 'user-1';
 const at = (minute: number) => new Date(Date.UTC(2026, 10, 11, 10, minute));
 
-function makeRejections(rows: Row[]) {
-    return {
-        rows,
-        hasOpenForTask: jest.fn(async (taskId: string) =>
-            rows.some((row) => row.taskId === taskId && row.consumedAt === null),
-        ),
-        // Models the real query: the cutoff is applied IN the read (rows the
-        // run already carries excepted), then the page is cut.
-        findOpenForTask: jest.fn(
-            async (
-                taskId: string,
-                opts: {
-                    createdAfter?: Date | null;
-                    carriedBy?: string | null;
-                    limit?: number;
-                } = {},
-            ) =>
-                rows
-                    .filter((row) => row.taskId === taskId && row.consumedAt === null)
-                    .filter(
-                        (row) =>
-                            !opts.createdAfter ||
-                            row.createdAt > opts.createdAfter ||
-                            (!!opts.carriedBy && row.consumedByRunId === opts.carriedBy),
-                    )
-                    .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
-                    .slice(0, opts.limit ?? 50),
-        ),
-        findCarrierRunIds: jest.fn(
-            async (taskId: string) =>
-                new Set(
-                    rows
-                        .filter((row) => row.taskId === taskId && row.consumedByRunId)
-                        .map((row) => row.consumedByRunId as string),
-                ),
-        ),
-        carryForRun: jest.fn(async (ids: string[], runId: string, from: string[] = []) => {
-            for (const row of rows) {
-                if (!ids.includes(row.id) || row.consumedAt !== null) continue;
-                if (row.consumedByRunId === null || from.includes(row.consumedByRunId)) {
-                    row.consumedByRunId = runId;
-                }
-            }
-            return rows
-                .filter(
-                    (row) =>
-                        ids.includes(row.id) &&
-                        row.consumedByRunId === runId &&
-                        row.consumedAt === null,
-                )
-                .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
-        }),
-        markCarriedConsumed: jest.fn(async (runId: string) => {
-            let n = 0;
-            for (const row of rows) {
-                if (row.consumedByRunId === runId && row.consumedAt === null) {
-                    row.consumedAt = new Date();
-                    n += 1;
-                }
-            }
-            return n;
-        }),
-        releaseCarried: jest.fn(async (runId: string) => {
-            let n = 0;
-            for (const row of rows) {
-                if (row.consumedByRunId === runId && row.consumedAt === null) {
-                    row.consumedByRunId = null;
-                    n += 1;
-                }
-            }
-            return n;
-        }),
-    };
-}
+type TaskRow = {
+    id: string;
+    userId: string;
+    prNumber?: number | null;
+    prState?: string | null;
+    branchState?: string | null;
+};
 
-function makeRuns(runs: Run[]) {
-    return {
-        runs,
-        findById: jest.fn(async (id: string) => runs.find((run) => run.id === id) ?? null),
-        findByIds: jest.fn(async (ids: string[]) => runs.filter((run) => ids.includes(run.id))),
-        findRecentForTask: jest.fn(async (taskId: string) =>
-            runs
-                .filter((run) => run.taskId === taskId)
-                .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime()),
-        ),
-    };
-}
-
-const row = (over: Partial<Row> & Pick<Row, 'id' | 'createdAt'>): Row => ({
+const row = (
+    over: Partial<FakeRejectionRow> & Pick<FakeRejectionRow, 'id' | 'createdAt'>,
+): FakeRejectionRow => ({
     taskId: TASK,
     source: 'task-review',
     feedback: `finding ${over.id}`,
     reviewerKind: 'human',
+    prNumber: null,
     consumedByRunId: null,
     consumedAt: null,
     ...over,
 });
 
-const run = (over: Partial<Run> & Pick<Run, 'id' | 'createdAt'>): Run => ({
+const run = (over: Partial<FakeRun> & Pick<FakeRun, 'id' | 'createdAt'>): FakeRun => ({
     taskId: TASK,
     userId: USER,
     triggerKind: 'task',
@@ -161,11 +71,20 @@ const run = (over: Partial<Run> & Pick<Run, 'id' | 'createdAt'>): Run => ({
     ...over,
 });
 
-function build(rows: Row[], runs: Run[]) {
-    const rejections = makeRejections(rows);
-    const runRepo = makeRuns(runs);
+function build(rows: FakeRejectionRow[], runs: FakeRun[], task: Partial<TaskRow> = {}) {
+    const rejections = makeRejectionStore(rows);
+    const runRepo = makeRunStore(runs);
+    const taskRow: TaskRow = {
+        id: TASK,
+        userId: USER,
+        prNumber: 5038,
+        prState: 'open',
+        branchState: 'pr-open',
+        ...task,
+    };
+    const tasks = { findById: jest.fn(async (id: string) => (id === TASK ? taskRow : null)) };
     const svc = new TaskReviewRejectionService(
-        {} as never,
+        tasks as never,
         rejections as never,
         {} as never,
         {} as never,
@@ -178,16 +97,15 @@ function build(rows: Row[], runs: Run[]) {
             level,
         ).mockImplementation(() => undefined);
     }
-    return { svc, rejections, runRepo };
+    return { svc, rejections, runRepo, tasks, taskRow };
 }
 
 const claim = (svc: TaskReviewRejectionService, runId: string, userId = USER) =>
     svc.claimFeedbackForRun({ taskId: TASK, runId, userId });
+const ids = (feedback: Awaited<ReturnType<typeof claim>>) => feedback?.items.map((item) => item.id);
 
 describe('TaskReviewRejectionService.claimFeedbackForRun — the incident', () => {
     it('gives a fresh run the findings recorded after the run that opened the pull request', async () => {
-        // r1 completed (opened PR #5038), then a reviewer rejected twice, then
-        // POST /run started r2 — the exact sequence from production.
         const rows = [row({ id: 'a', createdAt: at(20) }), row({ id: 'b', createdAt: at(21) })];
         const { svc } = build(rows, [
             run({ id: 'r1', status: 'completed', startedAt: at(0), createdAt: at(0) }),
@@ -196,7 +114,7 @@ describe('TaskReviewRejectionService.claimFeedbackForRun — the incident', () =
 
         const feedback = await claim(svc, 'r2');
 
-        expect(feedback?.items.map((item) => item.id)).toEqual(['a', 'b']);
+        expect(ids(feedback)).toEqual(['a', 'b']);
         expect(feedback?.omitted).toBe(0);
         // Carried, not consumed: the run has not done anything yet.
         expect(rows.map((r) => [r.consumedByRunId, r.consumedAt])).toEqual([
@@ -205,16 +123,24 @@ describe('TaskReviewRejectionService.claimFeedbackForRun — the incident', () =
         ]);
     });
 
+    it('replays findings recorded BEFORE a run that completed without them (the incident’s own rows)', async () => {
+        // a, b were recorded; the bad run r2 then completed without seeing
+        // them (it predates this feature). They are still unaddressed.
+        const rows = [row({ id: 'a', createdAt: at(20) }), row({ id: 'b', createdAt: at(21) })];
+        const { svc } = build(rows, [
+            run({ id: 'r2', status: 'completed', startedAt: at(25), createdAt: at(25) }),
+            run({ id: 'r3', status: 'queued', createdAt: at(40) }),
+        ]);
+        expect(ids(await claim(svc, 'r3'))).toEqual(['a', 'b']);
+    });
+
     it('a later run is not told again once the fix run completed', async () => {
         const rows = [row({ id: 'a', createdAt: at(20) })];
-        const runs = [
-            run({ id: 'r1', status: 'completed', startedAt: at(0), createdAt: at(0) }),
-            run({ id: 'r2', status: 'running', startedAt: at(30), createdAt: at(30) }),
-        ];
+        const runs = [run({ id: 'r2', status: 'running', startedAt: at(30), createdAt: at(30) })];
         const { svc, rejections } = build(rows, runs);
         await claim(svc, 'r2');
 
-        runs[1].status = 'completed';
+        runs[0].status = 'completed';
         await svc.settleFeedbackForRun('r2', 'completed');
         expect(rejections.markCarriedConsumed).toHaveBeenCalledWith('r2');
         expect(rows[0].consumedAt).toBeInstanceOf(Date);
@@ -227,36 +153,60 @@ describe('TaskReviewRejectionService.claimFeedbackForRun — the incident', () =
         for (const outcome of ['failed', 'cancelled'] as const) {
             const rows = [row({ id: 'a', createdAt: at(20) })];
             const runs = [
-                run({ id: 'r1', status: 'completed', startedAt: at(0), createdAt: at(0) }),
                 run({ id: 'r2', status: 'running', startedAt: at(30), createdAt: at(30) }),
             ];
             const { svc, rejections } = build(rows, runs);
             await claim(svc, 'r2');
 
-            runs[1].status = outcome;
+            runs[0].status = outcome;
             await svc.settleFeedbackForRun('r2', outcome);
             expect(rejections.releaseCarried).toHaveBeenCalledWith('r2');
             expect(rows[0]).toMatchObject({ consumedByRunId: null, consumedAt: null });
 
             runs.push(run({ id: 'r3', status: 'running', createdAt: at(50) }));
-            const feedback = await claim(svc, 'r3');
-            expect(feedback?.items.map((item) => item.id)).toEqual(['a']);
+            expect(ids(await claim(svc, 'r3'))).toEqual(['a']);
         }
     });
 
-    it('a failed run whose settle never happened is still taken over (the claim reads its status)', async () => {
+    it('a run that PARKS on an owner question hands its findings back as it settles', async () => {
+        const rows = [row({ id: 'a', createdAt: at(20) })];
+        const runs = [run({ id: 'r2', status: 'running', startedAt: at(30), createdAt: at(30) })];
+        const { svc, rejections } = build(rows, runs);
+        await claim(svc, 'r2');
+
+        Object.assign(runs[0], { status: 'completed', awaitingInput: true });
+        await svc.settleFeedbackForRun('r2', 'completed');
+
+        expect(rejections.markCarriedConsumed).not.toHaveBeenCalled();
+        expect(rows[0]).toMatchObject({ consumedByRunId: null, consumedAt: null });
+    });
+
+    it('takes over from a carrier whose settle never happened: failed, cancelled, or parked', async () => {
+        for (const carrier of [
+            { status: 'failed' },
+            { status: 'cancelled' },
+            { status: 'completed', awaitingInput: true },
+        ]) {
+            const rows = [row({ id: 'a', createdAt: at(20), consumedByRunId: 'r2' })];
+            const { svc, rejections } = build(rows, [
+                run({ id: 'r2', startedAt: at(30), createdAt: at(30), ...carrier }),
+                run({ id: 'r3', status: 'running', createdAt: at(50) }),
+            ]);
+            expect(ids(await claim(svc, 'r3'))).toEqual(['a']);
+            expect(rejections.carryForRun).toHaveBeenCalledWith(['a'], 'r3', ['r2']);
+            expect(rows[0].consumedByRunId).toBe('r3');
+        }
+    });
+
+    it('settles a completed carrier’s missed consume itself, so the row stops looking open', async () => {
         const rows = [row({ id: 'a', createdAt: at(20), consumedByRunId: 'r2' })];
         const { svc, rejections } = build(rows, [
-            run({ id: 'r1', status: 'completed', startedAt: at(0), createdAt: at(0) }),
-            run({ id: 'r2', status: 'failed', startedAt: at(30), createdAt: at(30) }),
+            run({ id: 'r2', status: 'completed', startedAt: at(30), createdAt: at(30) }),
             run({ id: 'r3', status: 'running', createdAt: at(50) }),
         ]);
-
-        const feedback = await claim(svc, 'r3');
-
-        expect(feedback?.items.map((item) => item.id)).toEqual(['a']);
-        expect(rejections.carryForRun).toHaveBeenCalledWith(['a'], 'r3', ['r2']);
-        expect(rows[0].consumedByRunId).toBe('r3');
+        await expect(claim(svc, 'r3')).resolves.toBeNull();
+        expect(rejections.markCarriedConsumed).toHaveBeenCalledWith('r2');
+        expect(rows[0].consumedAt).toBeInstanceOf(Date);
     });
 
     it('a run still in flight keeps what it carries; a second run gets nothing of it', async () => {
@@ -271,76 +221,121 @@ describe('TaskReviewRejectionService.claimFeedbackForRun — the incident', () =
 
     it('a re-plan of the same run (a retried enqueue) is handed the same findings', async () => {
         const rows = [row({ id: 'a', createdAt: at(20) })];
-        const { svc } = build(rows, [
-            run({ id: 'r1', status: 'completed', startedAt: at(0), createdAt: at(0) }),
-            run({ id: 'r2', status: 'queued', createdAt: at(30) }),
-        ]);
+        const { svc } = build(rows, [run({ id: 'r2', status: 'queued', createdAt: at(30) })]);
         await claim(svc, 'r2');
-        const again = await claim(svc, 'r2');
-        expect(again?.items.map((item) => item.id)).toEqual(['a']);
+        expect(ids(await claim(svc, 'r2'))).toEqual(['a']);
+    });
+
+    it('hands back exactly the findings a plan could not show, keeping the rest', async () => {
+        const rows = [row({ id: 'a', createdAt: at(20) }), row({ id: 'b', createdAt: at(21) })];
+        const { svc } = build(rows, [run({ id: 'r2', status: 'queued', createdAt: at(30) })]);
+        await claim(svc, 'r2');
+        await svc.releaseFeedbackForRun('r2', ['b']);
+        expect(rows.map((r) => r.consumedByRunId)).toEqual(['r2', null]);
     });
 });
 
-describe('TaskReviewRejectionService.claimFeedbackForRun — what is NOT replayed', () => {
-    it('skips findings older than the last completed run that carried nothing', async () => {
-        // `old` predates r1, which completed with no findings in front of it —
-        // it was answered (or abandoned) long ago.
-        const rows = [row({ id: 'old', createdAt: at(1) }), row({ id: 'new', createdAt: at(20) })];
-        const { svc, rejections } = build(rows, [
-            run({ id: 'r1', status: 'completed', startedAt: at(5), createdAt: at(5) }),
-            run({ id: 'r2', status: 'queued', createdAt: at(30) }),
-        ]);
-        const feedback = await claim(svc, 'r2');
-        expect(feedback?.items.map((item) => item.id)).toEqual(['new']);
-        expect(rows[0].consumedByRunId).toBeNull();
-        // The cutoff is part of the READ, not a filter after a page was cut.
-        expect(rejections.findOpenForTask).toHaveBeenCalledWith(TASK, {
-            createdAfter: at(5),
-            carriedBy: 'r2',
-            limit: 50,
-        });
-    });
-
-    it('years of old unconsumed rows never hide a new finding', async () => {
-        const rows = [
-            ...Array.from({ length: 60 }, (_, i) =>
-                row({ id: `legacy-${i}`, createdAt: new Date(Date.UTC(2025, 0, 1, 0, i)) }),
-            ),
-            row({ id: 'new', createdAt: at(20) }),
-        ];
-        const { svc } = build(rows, [
-            run({ id: 'r1', status: 'completed', startedAt: at(5), createdAt: at(5) }),
-            run({ id: 'r2', status: 'queued', createdAt: at(30) }),
-        ]);
-        const feedback = await claim(svc, 'r2');
-        expect(feedback?.items.map((item) => item.id)).toEqual(['new']);
-    });
-
-    it('the common case — nothing open — costs one read', async () => {
-        const { svc, rejections, runRepo } = build(
-            [row({ id: 'done', createdAt: at(1), consumedByRunId: 'r0', consumedAt: at(2) })],
-            [run({ id: 'r2', status: 'queued', createdAt: at(30) })],
-        );
+/**
+ * Review of #3150, finding 4: a cutoff inferred from "the latest completed
+ * run that carried nothing" hid findings that run never saw. Each of the
+ * reviewer's cases, with the rule that replaced it: no run is ever a cutoff.
+ */
+describe('no finding is hidden by another run (review of #3150)', () => {
+    it('fleet: a finding recorded while the job waited for a node reaches the next run', async () => {
+        // r2 was planned (claimed: nothing open yet) at enqueue, waited for a
+        // node, and was stamped started at lease — after `late` was recorded.
+        const rows: FakeRejectionRow[] = [];
+        const runs = [run({ id: 'r2', status: 'queued', createdAt: at(10) })];
+        const { svc } = build(rows, runs);
         await expect(claim(svc, 'r2')).resolves.toBeNull();
-        expect(rejections.hasOpenForTask).toHaveBeenCalledWith(TASK);
-        expect(runRepo.findRecentForTask).not.toHaveBeenCalled();
-        expect(rejections.findOpenForTask).not.toHaveBeenCalled();
+        rows.push(row({ id: 'late', createdAt: at(15) }));
+        Object.assign(runs[0], { status: 'completed', startedAt: at(20) });
+        await svc.settleFeedbackForRun('r2', 'completed');
+
+        runs.push(run({ id: 'r3', status: 'queued', createdAt: at(40) }));
+        expect(ids(await claim(svc, 'r3'))).toEqual(['late']);
     });
 
-    it('still replays what a capped run left behind (a run that carried findings is no cutoff)', async () => {
-        const rows = [
-            row({ id: 'carried', createdAt: at(10), consumedByRunId: 'r2', consumedAt: at(40) }),
-            row({ id: 'left-behind', createdAt: at(11) }),
+    it('a claim that failed (and was swallowed) leaves its run no power over the findings', async () => {
+        const rows = [row({ id: 'a', createdAt: at(5) })];
+        const runs = [run({ id: 'r2', status: 'queued', createdAt: at(10) })];
+        const { svc, rejections } = build(rows, runs);
+        rejections.hasOpenForTask.mockRejectedValueOnce(new Error('db hiccup'));
+        await expect(claim(svc, 'r2')).resolves.toBeNull();
+        Object.assign(runs[0], { status: 'completed', startedAt: at(11) });
+        await svc.settleFeedbackForRun('r2', 'completed');
+
+        runs.push(run({ id: 'r3', status: 'queued', createdAt: at(40) }));
+        expect(ids(await claim(svc, 'r3'))).toEqual(['a']);
+    });
+
+    it('two agents on one Task: the run that carried nothing does not hide what the other hands back', async () => {
+        const rows = [row({ id: 'f', createdAt: at(5) })];
+        const runs = [
+            run({ id: 'r1', status: 'running', startedAt: at(10), createdAt: at(10) }),
+            run({ id: 'r2', status: 'running', startedAt: at(11), createdAt: at(11) }),
         ];
-        const { svc } = build(rows, [
-            run({ id: 'r1', status: 'completed', startedAt: at(0), createdAt: at(0) }),
-            run({ id: 'r2', status: 'completed', startedAt: at(30), createdAt: at(30) }),
-            run({ id: 'r3', status: 'queued', createdAt: at(50) }),
-        ]);
-        const feedback = await claim(svc, 'r3');
-        expect(feedback?.items.map((item) => item.id)).toEqual(['left-behind']);
+        const { svc } = build(rows, runs);
+        expect(ids(await claim(svc, 'r1'))).toEqual(['f']);
+        await expect(claim(svc, 'r2')).resolves.toBeNull();
+        // r2 completes first, carrying nothing; then r1 fails and hands f back.
+        runs[1].status = 'completed';
+        await svc.settleFeedbackForRun('r2', 'completed');
+        runs[0].status = 'failed';
+        await svc.settleFeedbackForRun('r1', 'failed');
+
+        runs.push(run({ id: 'r3', status: 'queued', createdAt: at(40) }));
+        expect(ids(await claim(svc, 'r3'))).toEqual(['f']);
     });
 
+    it('with no qualifying run at all, only findings about the CURRENT pull request (or none) are replayed', async () => {
+        const rows = [
+            row({ id: 'old-pr', createdAt: at(1), source: 'pull-request', prNumber: 4100 }),
+            row({ id: 'task-review', createdAt: at(2) }),
+            row({ id: 'current-pr', createdAt: at(3), source: 'pull-request', prNumber: 5038 }),
+        ];
+        const { svc } = build(rows, [run({ id: 'r9', status: 'queued', createdAt: at(40) })]);
+        expect(ids(await claim(svc, 'r9'))).toEqual(['task-review', 'current-pr']);
+        expect(rows[0].consumedByRunId).toBeNull();
+    });
+});
+
+describe('findings recorded on a pull request follow that pull request', () => {
+    const prRows = () => [
+        row({ id: 'pr', createdAt: at(1), source: 'pull-request', prNumber: 5038 }),
+        row({ id: 'plain', createdAt: at(2) }),
+    ];
+
+    it.each([
+        ['merged', { prState: 'merged' }],
+        ['closed', { prState: 'closed' }],
+        ['branch merged', { branchState: 'merged' }],
+        ['branch discarded', { branchState: 'discarded' }],
+        ['no pull request', { prNumber: null }],
+        ['another pull request', { prNumber: 6000 }],
+    ] as const)('%s: only the findings that name no pull request', async (_, task) => {
+        const rows = prRows();
+        const { svc } = build(rows, [run({ id: 'r2', status: 'queued', createdAt: at(30) })], task);
+        expect(ids(await claim(svc, 'r2'))).toEqual(['plain']);
+    });
+
+    it('openPullRequestNumberOf reads the Task the way the workspace does', () => {
+        expect(
+            openPullRequestNumberOf({ prNumber: 7, prState: 'open', branchState: 'pr-open' }),
+        ).toBe(7);
+        expect(openPullRequestNumberOf({ prNumber: 7, prState: null, branchState: 'pushed' })).toBe(
+            7,
+        );
+        expect(
+            openPullRequestNumberOf({ prNumber: 7, prState: 'merged', branchState: 'pr-open' }),
+        ).toBeNull();
+        expect(
+            openPullRequestNumberOf({ prNumber: null, prState: null, branchState: null }),
+        ).toBeNull();
+    });
+});
+
+describe('TaskReviewRejectionService.claimFeedbackForRun — who gets nothing', () => {
     it('leaves findings beyond the caps pending and says how many', async () => {
         const rows = Array.from({ length: 12 }, (_, i) =>
             row({ id: `f${i}`, createdAt: at(10 + i) }),
@@ -370,25 +365,15 @@ describe('TaskReviewRejectionService.claimFeedbackForRun — what is NOT replaye
         expect(rows[0].consumedByRunId).toBeNull();
     });
 
-    it('a parked fix run (owner question) keeps its findings; the run its answer starts takes them', async () => {
-        const rows = [row({ id: 'a', createdAt: at(20) })];
-        const runs = [
-            run({ id: 'r1', status: 'completed', startedAt: at(0), createdAt: at(0) }),
-            run({ id: 'r2', status: 'running', startedAt: at(30), createdAt: at(30) }),
-        ];
-        const { svc, rejections } = build(rows, runs);
-        await claim(svc, 'r2');
-
-        Object.assign(runs[1], { status: 'completed', awaitingInput: true });
-        await svc.settleFeedbackForRun('r2', 'completed');
-        expect(rejections.markCarriedConsumed).not.toHaveBeenCalled();
-
-        // The Inbox answer resumes r2 as r3; resume clears the parked flag.
-        Object.assign(runs[1], { awaitingInput: false, resumeSuccessorRunId: 'r3' });
-        runs.push(run({ id: 'r3', status: 'queued', createdAt: at(60) }));
-        const feedback = await claim(svc, 'r3');
-        expect(feedback?.items.map((item) => item.id)).toEqual(['a']);
-        expect(rows[0].consumedByRunId).toBe('r3');
+    it('the common case — nothing open — costs one read', async () => {
+        const { svc, rejections, tasks } = build(
+            [row({ id: 'done', createdAt: at(1), consumedByRunId: 'r0', consumedAt: at(2) })],
+            [run({ id: 'r2', status: 'queued', createdAt: at(30) })],
+        );
+        await expect(claim(svc, 'r2')).resolves.toBeNull();
+        expect(rejections.hasOpenForTask).toHaveBeenCalledWith(TASK);
+        expect(tasks.findById).not.toHaveBeenCalled();
+        expect(rejections.findOpenForTask).not.toHaveBeenCalled();
     });
 
     it('never throws: a failed read starts the run without the section', async () => {
@@ -398,7 +383,7 @@ describe('TaskReviewRejectionService.claimFeedbackForRun — what is NOT replaye
     });
 
     it('without a run repository (a reduced graph) nothing is claimed', async () => {
-        const rejections = makeRejections([row({ id: 'a', createdAt: at(20) })]);
+        const rejections = makeRejectionStore([row({ id: 'a', createdAt: at(20) })]);
         const svc = new TaskReviewRejectionService(
             {} as never,
             rejections as never,
@@ -408,32 +393,5 @@ describe('TaskReviewRejectionService.claimFeedbackForRun — what is NOT replaye
         await expect(claim(svc, 'r2')).resolves.toBeNull();
         expect(rejections.hasOpenForTask).not.toHaveBeenCalled();
         expect(rejections.findOpenForTask).not.toHaveBeenCalled();
-    });
-});
-
-describe('feedbackCutoff', () => {
-    it('is the start of the newest completed authoring run that carried nothing', () => {
-        const runs = [
-            run({ id: 'mine', status: 'queued', createdAt: at(50) }),
-            run({ id: 'carried', status: 'completed', startedAt: at(40), createdAt: at(40) }),
-            run({
-                id: 'parked',
-                status: 'completed',
-                awaitingInput: true,
-                startedAt: at(35),
-                createdAt: at(35),
-            }),
-            run({
-                id: 'review',
-                status: 'completed',
-                delegationScope: agentReviewRunScope(),
-                startedAt: at(32),
-                createdAt: at(32),
-            }),
-            run({ id: 'failed', status: 'failed', startedAt: at(31), createdAt: at(31) }),
-            run({ id: 'plain', status: 'completed', startedAt: at(30), createdAt: at(29) }),
-        ] as never[];
-        expect(feedbackCutoff(runs, new Set(['carried']), 'mine')).toEqual(at(30));
-        expect(feedbackCutoff([], new Set(), 'mine')).toBeNull();
     });
 });
