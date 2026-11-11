@@ -59,14 +59,25 @@ describe('mayChooseRepositoryOwner', () => {
         expect(mayChooseRepositoryOwner({ kind: 'directory' })).toBe(true);
     });
 
-    it('refuses once the Work has generated — the form disables the fields too', () => {
-        expect(
-            mayChooseRepositoryOwner({
-                kind: 'directory',
-                generateStatus: { status: 'generated' },
-            }),
-        ).toBe(false);
-    });
+    it.each(['generated', 'generating'])(
+        'refuses once the Work has %s — its repositories exist (or are being made)',
+        (status) => {
+            expect(
+                mayChooseRepositoryOwner({ kind: 'directory', generateStatus: { status } }),
+            ).toBe(false);
+        },
+    );
+
+    it.each(['error', 'cancelled'])(
+        'still allows choosing after a first generation that ended %s (the API decides)',
+        (status) => {
+            // A Work whose generation failed because its owner was wrong must
+            // be fixable from the form, as it is through the API (#3177).
+            expect(
+                mayChooseRepositoryOwner({ kind: 'directory', generateStatus: { status } }),
+            ).toBe(true);
+        },
+    );
 
     it.each(['repo', 'app', 'project'])('refuses for a %s Work even before generation', (kind) => {
         expect(mayChooseRepositoryOwner({ kind, generateStatus: null })).toBe(false);
@@ -157,6 +168,21 @@ describe('ownershipForSettingsSave', () => {
                 organization: false,
             }),
         ).toBeNull();
+    });
+
+    it('re-derives a changed owner after a failed first generation', () => {
+        expect(
+            ownershipForSettingsSave(
+                {
+                    kind: 'directory',
+                    generateStatus: { status: 'error' },
+                    owner: 'manager-login',
+                    organization: false,
+                },
+                manager,
+                { owner: 'acme', organization: true },
+            ),
+        ).toEqual({ organization: true, owner: 'acme' });
     });
 
     it('still resolves the owner for a Work whose repositories do not exist yet', () => {

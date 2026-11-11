@@ -50,14 +50,31 @@ export function workSupportsSourceSync(
 }
 
 /**
+ * Generate states after which a Work may still have NO repositories: never
+ * generated, or a first generation that failed or was cancelled (perhaps
+ * because its owner was wrong). The API makes the final call on a save — it
+ * refuses an owner change once a repository exists under the current owner
+ * (`WorkLifecycleService.resolveOwnershipUpdate`) — so the form offers the
+ * fields in exactly the states the API may accept.
+ */
+const OWNER_EDITABLE_GENERATE_STATUSES = new Set(['error', 'cancelled']);
+
+export function generationMayHaveLeftNoRepositories(generateStatus: unknown): boolean {
+    if (generateStatus === null || generateStatus === undefined) return true;
+    const status = (generateStatus as { status?: unknown }).status;
+    return typeof status === 'string' && OWNER_EDITABLE_GENERATE_STATUSES.has(status);
+}
+
+/**
  * May a settings save still choose where the Work's repositories live
  * (`owner` / `organization`)?
  *
- * Only before the repositories exist: the settings form disables the fields
- * once the Work has generated (`canEditOrganization = !isGenerated` in
- * `SettingsContext`). A Repository Work's owner is the owner of the repository
- * it wraps and the API refuses any change; an App Work's repository is the one
- * its source mode made; a Project Work has none.
+ * Only while the repositories may not exist yet (see
+ * {@link generationMayHaveLeftNoRepositories}); the settings form enables the
+ * fields on the same rule (`canEditOrganization` in `SettingsContext`). A
+ * Repository Work's owner is the owner of the repository it wraps and the API
+ * refuses any change; an App Work's repository is the one its source mode
+ * made; a Project Work has none.
  */
 export function mayChooseRepositoryOwner(
     work: WorkKindSubject & { readonly generateStatus?: unknown },
@@ -69,7 +86,7 @@ export function mayChooseRepositoryOwner(
     ) {
         return false;
     }
-    return work.generateStatus === null || work.generateStatus === undefined;
+    return generationMayHaveLeftNoRepositories(work.generateStatus);
 }
 
 /**

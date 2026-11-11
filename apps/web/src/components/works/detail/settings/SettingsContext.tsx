@@ -13,6 +13,7 @@ import {
     useTransition,
 } from 'react';
 import { toast } from 'sonner';
+import { mayChooseRepositoryOwner } from '@/lib/works/work-settings-update.shared';
 
 type SettingsContextType = {
     work: Work;
@@ -70,8 +71,10 @@ export const useSettings = () => {
 
     const { work, formData } = context;
 
-    const isGenerated = work.generateStatus !== null && work.generateStatus !== undefined;
-    const canEditOrganization = !isGenerated;
+    // The owner fields stay editable while the Work may still have no
+    // repositories (never generated, or a first generation that failed or was
+    // cancelled) — the rule the API applies; it refuses once one exists.
+    const canEditOrganization = mayChooseRepositoryOwner(work);
 
     const handleUpdate = useCallback(
         (e: React.FormEvent) => {
