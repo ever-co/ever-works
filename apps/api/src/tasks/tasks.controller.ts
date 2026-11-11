@@ -947,7 +947,14 @@ export class TasksController {
         if (!body?.recurrenceRule && !body?.recurrenceCron) {
             throw new BadRequestException('recurrenceRule or recurrenceCron is required.');
         }
-        const input: Parameters<TasksService['setRecurring']>[2] = {
+        const input: {
+            recurrenceRule: string | null;
+            recurrenceCron: string | null;
+            recurrenceTimezone?: string;
+            recurrenceEndsAt: Date | null;
+            recurrenceMaxOccurrences: number | null;
+            recurrenceMaxOpenInstances?: number | null;
+        } = {
             recurrenceRule: body.recurrenceRule ?? null,
             recurrenceCron: body.recurrenceCron ?? null,
             recurrenceTimezone: body.recurrenceTimezone,

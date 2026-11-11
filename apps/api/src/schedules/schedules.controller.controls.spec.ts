@@ -60,6 +60,18 @@ describe('SchedulesController — run-now / pause / resume', () => {
         expect(controls.runNow).toHaveBeenLastCalledWith(context, SCHEDULE_ID, { confirm: false });
     });
 
+    it('run-now forwards `force` (a recurring Task over its open-instance limit) only when true', async () => {
+        const controls = { runNow: jest.fn().mockResolvedValue({ kind: 'run', runIds: [] }) };
+        const controller = build(controls);
+        await controller.runNow(auth, SCHEDULE_ID, { force: true });
+        expect(controls.runNow).toHaveBeenLastCalledWith(context, SCHEDULE_ID, {
+            confirm: false,
+            force: true,
+        });
+        await controller.runNow(auth, SCHEDULE_ID, { force: 'yes' } as never);
+        expect(controls.runNow).toHaveBeenLastCalledWith(context, SCHEDULE_ID, { confirm: false });
+    });
+
     it('run-now on a Mission tick returns the Mission link and no run id', async () => {
         const result = {
             kind: 'mission-tick',
