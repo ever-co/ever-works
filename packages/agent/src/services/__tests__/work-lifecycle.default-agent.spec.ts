@@ -11,7 +11,7 @@ jest.mock('github-slugger', () => ({
 }));
 
 import { Test, TestingModule } from '@nestjs/testing';
-import { NotFoundException, type Provider } from '@nestjs/common';
+import { ForbiddenException, NotFoundException, type Provider } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { WorkLifecycleService } from '../work-lifecycle.service';
 import { WorkRepository } from '@src/database/repositories/work.repository';
@@ -55,6 +55,8 @@ const FOREIGN_AGENT = '00000000-0000-4000-8000-0000000000d2';
 const ARCHIVED_AGENT = '00000000-0000-4000-8000-0000000000d3';
 const SOMEONE_ELSES_AGENT = '00000000-0000-4000-8000-0000000000d4';
 const MISSING_AGENT = '00000000-0000-4000-8000-0000000000d5';
+const PERSONAL_AGENT = '00000000-0000-4000-8000-0000000000d6';
+const EDITORS_AGENT = '00000000-0000-4000-8000-0000000000d7';
 
 const AGENTS: Agent[] = [
     {
@@ -81,6 +83,20 @@ const AGENTS: Agent[] = [
     {
         id: SOMEONE_ELSES_AGENT,
         userId: 'user-2',
+        status: AgentStatus.ACTIVE,
+        tenantId: TENANT,
+        organizationId: ORG,
+    },
+    {
+        id: PERSONAL_AGENT,
+        userId: 'user-1',
+        status: AgentStatus.ACTIVE,
+        tenantId: null,
+        organizationId: null,
+    },
+    {
+        id: EDITORS_AGENT,
+        userId: 'user-3',
         status: AgentStatus.ACTIVE,
         tenantId: TENANT,
         organizationId: ORG,
@@ -235,5 +251,77 @@ describe('WorkLifecycleService — the Work default Agent', () => {
         await expect(
             service.updateWork(WORK_ID, { defaultAgentId: null }, user),
         ).resolves.toMatchObject({ status: 'success' });
+    });
+
+    // Review of #3159, finding 2: a shared Work has ONE default, so only its owner sets or
+    // clears it — another editor's write would silently re-route the owner's Missions, Run and
+    // Goals. A save that leaves the value as it is stays harmless for every editor.
+    describe('only the Work owner changes it', () => {
+        const editor = { id: 'user-3', username: 'user-3' } as unknown as User;
+
+        it.each([
+            ['setting it', EDITORS_AGENT],
+            ['clearing it', null],
+        ])(
+            'refuses an editor %s with 403 workDefaultAgentOwnerOnly, and writes nothing',
+            async (_label, value) => {
+                work = buildWork({ defaultAgentId: SHARED_AGENT });
+                const service = await compile(agentRepository);
+                const error = await service
+                    .updateWork(WORK_ID, { defaultAgentId: value }, editor)
+                    .catch((e: unknown) => e);
+
+                expect(error).toBeInstanceOf(ForbiddenException);
+                expect((error as ForbiddenException).getResponse()).toMatchObject({
+                    code: 'workDefaultAgentOwnerOnly',
+                });
+                expect(agentRepository.findByIdAndUser).not.toHaveBeenCalled();
+                expect(workRepository.update).not.toHaveBeenCalled();
+            },
+        );
+
+        it("lets an editor's save through when it echoes the stored value, without touching it", async () => {
+            work = buildWork({ defaultAgentId: SHARED_AGENT });
+            const service = await compile(agentRepository);
+            await expect(
+                service.updateWork(
+                    WORK_ID,
+                    { name: 'Renamed', defaultAgentId: SHARED_AGENT },
+                    editor,
+                ),
+            ).resolves.toMatchObject({ status: 'success' });
+            expect(workRepository.update.mock.calls[0][1]).not.toHaveProperty('defaultAgentId');
+        });
+    });
+
+    // Review of #3159, finding 3: a Work with no tenant/organization recorded admits only the
+    // owner's personal Agents — the write no longer accepts an Agent of any organization.
+    describe('a Work with no recorded tenant or organization', () => {
+        beforeEach(() => {
+            work = buildWork({ tenantId: null, organizationId: null });
+        });
+
+        it("stores the owner's personal Agent", async () => {
+            const service = await compile(agentRepository);
+            await service.updateWork(WORK_ID, { defaultAgentId: PERSONAL_AGENT }, user);
+            expect(workRepository.update.mock.calls[0][1]).toMatchObject({
+                defaultAgentId: PERSONAL_AGENT,
+            });
+        });
+
+        it('refuses an organization Agent with the same 404 — even through a read that ignores the scope', async () => {
+            const leaky = {
+                findByIdAndUser: jest.fn(async (id: string) =>
+                    AGENTS.find((agent) => agent.id === id),
+                ),
+            };
+            for (const agents of [agentRepository, leaky]) {
+                const service = await compile(agents);
+                await expect(
+                    service.updateWork(WORK_ID, { defaultAgentId: SHARED_AGENT }, user),
+                ).rejects.toBeInstanceOf(NotFoundException);
+            }
+            expect(workRepository.update).not.toHaveBeenCalled();
+        });
     });
 });

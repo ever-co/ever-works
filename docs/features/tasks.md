@@ -292,7 +292,7 @@ There are two different paths that start a run, and they resolve the Agent diffe
 
 If exactly one candidate resolves, the run starts. If several do, or none, the picker opens and tells you which it is — each option is tagged **Assigned**, **Task agent** or **Work default**. With no candidate at all you get: _"No Agent is assigned to this Task and its Work has no default Agent."_
 
-The Work's default Agent only applies to a Task that has no Agent of its own (steps 2 and 3). A Task that has one resolves exactly as it did before the default existed, so naming a default never makes such a Task ambiguous. The picker still lists the default, tagged **Work default**, first among the Work's Agents.
+The Work's default Agent only applies to a Task that has no Agent of its own (steps 2 and 3). A Task that has one resolves exactly as it did before the default existed, also when its own Agent is the default itself (for example the first iteration of a [Goal](./goals.md#who-runs-a-brand-new-goal), which records the default as its Agent). Naming a default never makes such a Task ambiguous and never starts a different Agent for it. The picker still lists the default, tagged **Work default**, first among the Work's Agents.
 
 ### The Work's default Agent
 
@@ -305,7 +305,11 @@ Every path that starts a Task without a named Agent tries the default before its
 - a [Goal](./goals.md#who-runs-a-brand-new-goal)'s first iteration, when the Goal is scoped to the Work;
 - a change requested on an [App Work](./app-works-evolve.md), before the Agent of its most recent Task (it must still be allowed to commit).
 
-The setting only accepts an Agent you own, that is not archived, in the same tenant and organization as the Work. Any other id answers `404 Agent not found`, the same for an Agent of another organization as for one that does not exist. The default is checked again every time it is used: an Agent you archive, delete or move out of the Work's scope later is skipped, and the Work falls back to its only Agent until you pick another default. Automated credentials (a fleet-run token, an integration key) cannot change it.
+Only the Work's **owner** can set or clear it: a shared Work has one default, and it decides what the owner's Tasks, Missions and Goals start. Any other editor gets `403` with the code `workDefaultAgentOwnerOnly`, and the settings card is read-only for them. A save that sends the value already stored is accepted and changes nothing. The default only ever runs the owner's Tasks; a Task another member starts falls back to the Work's only Agent. Automated credentials (a fleet-run token, an integration key) cannot change it.
+
+The setting only accepts an Agent the owner owns, that is not archived, in the same tenant and organization as the Work. A Work with no tenant or organization recorded accepts only a personal Agent (one that belongs to no organization). Any other id answers `404 Agent not found`, the same for an Agent of another organization as for one that does not exist. The default is checked again every time it is used, by every path including background ones: an Agent you archive, delete or move out of the Work's scope later is skipped, and the Work falls back to its only Agent until you pick another default.
+
+An Agent that is still usable but loses a permission the Task needs is not skipped. For a Repository Work, a default that may no longer commit or open pull requests keeps resolving, so a Mission files nothing on that Work and its save warns `repoWorkAgentCannotOpenPullRequests` until you grant the permission or pick another default.
 
 Moving a Task to **In progress** and recurring Tasks do not use it: both start only the Task's own assignees or Agent.
 

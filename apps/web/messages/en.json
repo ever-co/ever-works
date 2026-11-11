@@ -8595,6 +8595,7 @@
                     "label": "Default Agent",
                     "description": "Use it for an Agent that serves several Works. Without a default, the Work's only Agent runs its Tasks. An Agent you archive later is skipped.",
                     "none": "No default (use the Work's only Agent)",
+                    "ownerOnly": "Only the Work's owner can change the default Agent. It runs the owner's Tasks.",
                     "saved": "Default Agent updated",
                     "saveFailed": "Failed to update the default Agent"
                 },

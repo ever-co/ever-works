@@ -47,7 +47,7 @@ vi.mock('@/components/tasks/AgentSelect', () => ({
     ),
 }));
 
-let work: Record<string, unknown> = { id: 'work-1', defaultAgentId: null };
+let work: Record<string, unknown> = { id: 'work-1', defaultAgentId: null, userRole: 'owner' };
 vi.mock('./SettingsContext', () => ({
     useSettings: () => ({ context: { work } }),
 }));
@@ -57,7 +57,7 @@ import { DefaultAgentSettings } from './DefaultAgentSettings';
 describe('DefaultAgentSettings', () => {
     beforeEach(() => {
         vi.clearAllMocks();
-        work = { id: 'work-1', defaultAgentId: null };
+        work = { id: 'work-1', defaultAgentId: null, userRole: 'owner' };
         updateWorkDefaultAgent.mockResolvedValue({ success: true });
     });
 
@@ -67,7 +67,7 @@ describe('DefaultAgentSettings', () => {
         render(<DefaultAgentSettings />);
         expect(select().value).toBe('');
 
-        work = { id: 'work-1', defaultAgentId: 'agent-shared' };
+        work = { id: 'work-1', defaultAgentId: 'agent-shared', userRole: 'owner' };
         render(<DefaultAgentSettings />);
         expect(
             (screen.getAllByTestId('work-default-agent-select')[1] as HTMLSelectElement).value,
@@ -86,7 +86,7 @@ describe('DefaultAgentSettings', () => {
     });
 
     it('clears the default with null when "none" is picked', async () => {
-        work = { id: 'work-1', defaultAgentId: 'agent-shared' };
+        work = { id: 'work-1', defaultAgentId: 'agent-shared', userRole: 'owner' };
         render(<DefaultAgentSettings />);
         fireEvent.change(select(), { target: { value: '' } });
 
@@ -101,5 +101,21 @@ describe('DefaultAgentSettings', () => {
         await waitFor(() => expect(toastError).toHaveBeenCalledWith('Agent not found'));
         await waitFor(() => expect(select().value).toBe(''));
         expect(refresh).not.toHaveBeenCalled();
+    });
+
+    it('is read-only for an editor who is not the owner, and says why', () => {
+        work = { id: 'work-1', defaultAgentId: 'agent-shared', userRole: 'editor' };
+        render(<DefaultAgentSettings />);
+
+        expect(select().disabled).toBe(true);
+        expect(select().value).toBe('agent-shared');
+        expect(screen.getByTestId('work-default-agent-owner-only').textContent).toBe('ownerOnly');
+        expect(updateWorkDefaultAgent).not.toHaveBeenCalled();
+    });
+
+    it('is editable, with no owner-only note, for the owner', () => {
+        render(<DefaultAgentSettings />);
+        expect(select().disabled).toBe(false);
+        expect(screen.queryByTestId('work-default-agent-owner-only')).toBeNull();
     });
 });

@@ -112,22 +112,36 @@ describe('usableWorkDefaultAgent', () => {
         ).resolves.toBeNull();
     });
 
-    it('a Work stamped before ownership stamping is bounded by the request scope instead', async () => {
-        const own = agent();
-        const lookup = scopedLookup([own]);
+    // Review of #3159, finding 3: a Work with no tenant/organization recorded admits only the
+    // owner's PERSONAL Agents (no organization) — on the write AND on every read, including a
+    // scope-less background call, and whatever the request scope is.
+    it('a Work with no recorded scope admits only a personal Agent, with or without a request scope', async () => {
+        const personal = agent({ id: 'agent-personal', organizationId: null });
+        const orgAgent = agent({ id: 'agent-org' });
         const legacyWork = { tenantId: null, organizationId: null };
+        for (const lookup of [
+            scopedLookup([personal, orgAgent]),
+            leakyLookup([personal, orgAgent]),
+        ]) {
+            for (const requestScope of [undefined, { tenantId: TENANT, organizationId: ORG }]) {
+                await expect(
+                    usableWorkDefaultAgent(lookup, orgAgent.id, legacyWork, 'u1', requestScope),
+                ).resolves.toBeNull();
+            }
+            await expect(
+                usableWorkDefaultAgent(lookup, personal.id, legacyWork, 'u1'),
+            ).resolves.toBe(personal);
+        }
+    });
+
+    it("refuses an Agent that is not the Work owner's, even when the caller owns it", async () => {
+        const own = agent();
         await expect(
-            usableWorkDefaultAgent(lookup, own.id, legacyWork, 'u1', {
-                tenantId: TENANT,
-                organizationId: ORG,
-            }),
-        ).resolves.toBe(own);
-        await expect(
-            usableWorkDefaultAgent(lookup, own.id, legacyWork, 'u1', {
-                tenantId: TENANT,
-                organizationId: OTHER_ORG,
-            }),
+            usableWorkDefaultAgent(scopedLookup([own]), own.id, { ...orgWork, userId: 'u2' }, 'u1'),
         ).resolves.toBeNull();
+        await expect(
+            usableWorkDefaultAgent(scopedLookup([own]), own.id, { ...orgWork, userId: 'u1' }, 'u1'),
+        ).resolves.toBe(own);
     });
 });
 
@@ -148,6 +162,17 @@ describe('resolveWorkDefaultAgent', () => {
             resolveWorkDefaultAgent(
                 scopedLookup([{ ...own, status: AgentStatus.ARCHIVED } as Agent]),
                 work,
+                'u1',
+            ),
+        ).resolves.toBeNull();
+    });
+
+    it('a scope-less background read of an unstamped Work never resolves an organization Agent', async () => {
+        const orgAgent = agent({ id: 'agent-org' });
+        await expect(
+            resolveWorkDefaultAgent(
+                leakyLookup([orgAgent]),
+                { tenantId: null, organizationId: null, defaultAgentId: orgAgent.id },
                 'u1',
             ),
         ).resolves.toBeNull();

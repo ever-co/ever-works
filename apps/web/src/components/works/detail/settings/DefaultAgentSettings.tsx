@@ -5,6 +5,7 @@ import { useTranslations } from 'next-intl';
 import { Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
+import { isOwner } from '@/lib/permissions';
 import { useRouter } from '@/i18n/navigation';
 import { updateWorkDefaultAgent } from '@/app/actions/dashboard/works';
 import { AgentSelect } from '@/components/tasks/AgentSelect';
@@ -20,12 +21,17 @@ import { useSettings } from './SettingsContext';
  * change through the same `PATCH /works/:id` path as the sibling cards; the API refuses an
  * Agent outside the Work's scope with a 404, which surfaces as the error toast and leaves the
  * stored value as it was.
+ *
+ * Only the Work's owner changes it (the API answers `403 workDefaultAgentOwnerOnly` to any
+ * other editor): a shared Work has one default, and it decides what the owner's Missions, Run
+ * and Goals start. For everyone else the picker is read-only and says so.
  */
 export function DefaultAgentSettings() {
     const t = useTranslations('dashboard.workDetail.settings.defaultAgent');
     const { context } = useSettings();
     const { work } = context;
     const router = useRouter();
+    const ownerOnly = !isOwner(work.userRole);
 
     const [value, setValue] = useState(work.defaultAgentId ?? '');
     const [pending, startTransition] = useTransition();
@@ -78,13 +84,21 @@ export function DefaultAgentSettings() {
                 <p className="text-xs text-text-muted dark:text-text-muted-dark">
                     {t('description')}
                 </p>
+                {ownerOnly && (
+                    <p
+                        className="text-xs text-text-muted dark:text-text-muted-dark"
+                        data-testid="work-default-agent-owner-only"
+                    >
+                        {t('ownerOnly')}
+                    </p>
+                )}
                 <div className="flex items-center gap-2">
                     <div className="min-w-0 flex-1">
                         <AgentSelect
                             id="work-default-agent"
                             value={value}
                             onValueChange={save}
-                            disabled={pending}
+                            disabled={pending || ownerOnly}
                             size="sm"
                             noneLabel={t('none')}
                             testId="work-default-agent-select"

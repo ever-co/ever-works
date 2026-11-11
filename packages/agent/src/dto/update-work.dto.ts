@@ -120,8 +120,10 @@ export class UpdateWorkDto {
         description:
             "The Agent that runs this Work's new Tasks when none is named (Run, a Mission's Task " +
             "output, a Goal's first iteration, an App Work change), tried before the Work's only " +
-            'Agent. Must be an Agent you own, not archived, in the same tenant/organization as the ' +
-            'Work; any other id answers 404. Pass `null` to clear it.',
+            "Agent. Only the Work's owner can set or clear it (any other editor gets 403 " +
+            '`workDefaultAgentOwnerOnly`). Must be an Agent the owner owns, not archived, in the same ' +
+            'tenant/organization as the Work (a personal Agent when the Work records neither); any ' +
+            'other id answers 404. Pass `null` to clear it.',
         // Explicit: a `string | null` property emits `Object` metadata, which would document
         // (and give MCP tool schemas) an object.
         type: String,

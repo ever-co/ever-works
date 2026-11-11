@@ -1,6 +1,7 @@
 import {
     BadRequestException,
     ConflictException,
+    ForbiddenException,
     HttpException,
     Inject,
     Injectable,
@@ -23,7 +24,10 @@ import { OrganizationRepository } from '@src/database/repositories/organization.
 import { GitHubAppInstallationRepository } from '@src/database/repositories/github-app-installation.repository';
 import { GitHubAppInstallationRepoRepository } from '@src/database/repositories/github-app-installation-repository.repository';
 import { AgentRepository } from '@src/database/repositories/agent.repository';
-import { usableWorkDefaultAgent } from '@src/tasks-domain/work-default-agent';
+import {
+    usableWorkDefaultAgent,
+    WORK_DEFAULT_AGENT_OWNER_ONLY,
+} from '@src/tasks-domain/work-default-agent';
 import type { GitHubAppInstallation } from '@src/entities/github-app-installation.entity';
 import {
     WorkCreatedEvent,
@@ -1707,10 +1711,15 @@ export class WorkLifecycleService {
             }
 
             // The Work's default Agent — tried for its new Tasks before "the Work's only
-            // Agent". `null` clears it; an id is stored only for an Agent the caller owns, not
-            // archived, inside this Work's tenant/organization scope, and every other id answers
+            // Agent". Only the Work's owner changes it (403 for any other editor; a save that
+            // echoes the stored value is left alone). `null` clears it; an id is stored only for
+            // an Agent the owner owns, not archived, inside this Work's tenant/organization
+            // scope (a personal Agent for a Work with none recorded), and every other id answers
             // the same 404 (an Agent of another tenant and one that never existed look alike).
-            if (updateDto.defaultAgentId !== undefined) {
+            if (
+                updateDto.defaultAgentId !== undefined &&
+                updateDto.defaultAgentId !== (work.defaultAgentId ?? null)
+            ) {
                 updateData.defaultAgentId = await this.resolveDefaultAgentUpdate(
                     work,
                     user.id,
@@ -1906,16 +1915,26 @@ export class WorkLifecycleService {
     }
 
     /**
-     * The value `PATCH /api/works/:id` stores for `defaultAgentId`: `null` clears it, an id must
-     * name an Agent `userId` may use as this Work's default (`usableWorkDefaultAgent`: owned,
-     * not archived, in the Work's tenant/organization scope) and is stored in its canonical form.
+     * The value `PATCH /api/works/:id` stores for `defaultAgentId`. Only the Work's owner may
+     * change it: a shared Work has one default, and it decides what the OWNER's Missions, Run
+     * and Goals start, so another editor gets `403 workDefaultAgentOwnerOnly` (before any Agent
+     * read). `null` clears it; an id must name an Agent the owner may use as this Work's default
+     * (`usableWorkDefaultAgent`: owned, not archived, in the Work's tenant/organization scope, a
+     * personal Agent for a Work with none recorded) and is stored in its canonical form.
      * Anything else is a 404 that never says whether the Agent exists.
      */
     private async resolveDefaultAgentUpdate(
-        work: Pick<Work, 'tenantId' | 'organizationId'>,
+        work: Pick<Work, 'userId' | 'tenantId' | 'organizationId'>,
         userId: string,
         agentId: string | null,
     ): Promise<string | null> {
+        if (work.userId !== userId) {
+            throw new ForbiddenException({
+                status: 'error',
+                code: WORK_DEFAULT_AGENT_OWNER_ONLY,
+                message: "Only the Work's owner can change its default Agent.",
+            });
+        }
         if (agentId === null) return null;
         const agent = this.agents
             ? await usableWorkDefaultAgent(this.agents, agentId, work, userId)
