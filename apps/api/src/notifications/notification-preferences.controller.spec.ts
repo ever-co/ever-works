@@ -92,5 +92,20 @@ describe('NotificationPreferencesController — quiet hours', () => {
             expect(await errorsFor({ quietHoursStart: '25:00' })).not.toHaveLength(0);
             expect(await errorsFor({ timezone: 'Mars/Phobos' })).not.toHaveLength(0);
         });
+
+        it('accepts the zone names browsers report today (Asia/Kolkata, Europe/Kyiv) as well as the old ones', async () => {
+            // The exact-match list from Node's ICU held only Asia/Calcutta and
+            // Europe/Kiev, so "Local time" was a 400 for users in India and Ukraine.
+            for (const timezone of [
+                'Asia/Kolkata',
+                'Europe/Kyiv',
+                'Asia/Calcutta',
+                'Europe/Kiev',
+                'UTC',
+            ]) {
+                expect(await errorsFor({ timezone })).toHaveLength(0);
+            }
+            expect(await errorsFor({ timezone: '+05:00' })).not.toHaveLength(0);
+        });
     });
 });

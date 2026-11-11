@@ -1,6 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { API_URL } from '@/lib/constants';
 import { getAuthAccessCookie } from '@/lib/auth/cookies';
+import type { KbSearchResult } from '@ever-works/contracts';
+import {
+    parseKbSearchRequest,
+    toKbSearchResult,
+    upstreamKbSearchParams,
+} from '@/lib/kb/kb-search-proxy.shared';
 
 type RouteContext = { params: Promise<{ id: string }> };
 
@@ -15,9 +21,10 @@ type RouteContext = { params: Promise<{ id: string }> };
  * straight to that endpoint here. The row 30 RRF rewrite (Phase 2)
  * will swap the underlying ranker without changing this contract.
  *
- * `GET /api/works/:id/kb/search?q=&limit=`
- *   200 → `{ items: KbDocumentDto[]; total: number }` (verbatim
- *         passthrough from the upstream).
+ * `GET /api/works/:id/kb/search?q=&limit=&class=&status=&tag=&locked=&language=`
+ *   200 → `{ items: KbDocumentDto[]; hits: KbSearchHit[]; total }` — `items`
+ *         for the wikilink / mention pickers, `hits` for the workbench
+ *         palette; mapping and filters in `@/lib/kb/kb-search-proxy.shared`.
  *
  * Server-side proxy keeps the JWT cookie + `API_URL` resolution on the
  * server (matches `kb/tags` and `kb/uploads`). Empty `q` short-circuits
@@ -25,12 +32,15 @@ type RouteContext = { params: Promise<{ id: string }> };
  */
 export async function GET(request: NextRequest, { params }: RouteContext) {
     const { id } = await params;
-    const q = (request.nextUrl.searchParams.get('q') ?? '').trim();
-    const limitRaw = request.nextUrl.searchParams.get('limit');
-    const limit = limitRaw && /^\d+$/.test(limitRaw) ? Math.min(Number(limitRaw), 50) : 20;
+    const search = parseKbSearchRequest(request.nextUrl.searchParams);
 
-    if (q.length === 0) {
-        return NextResponse.json({ items: [], total: 0 }, { status: 200 });
+    if (search.q.length === 0) {
+        return NextResponse.json(
+            { items: [], hits: [], total: 0 } satisfies KbSearchResult & { items: [] },
+            {
+                status: 200,
+            },
+        );
     }
 
     const token = await getAuthAccessCookie();
@@ -41,9 +51,7 @@ export async function GET(request: NextRequest, { params }: RouteContext) {
         headers.set('Authorization', `Bearer ${token}`);
     }
 
-    const upstreamParams = new URLSearchParams();
-    upstreamParams.set('q', q);
-    upstreamParams.set('limit', String(limit));
+    const upstreamParams = upstreamKbSearchParams(search);
 
     // Security: percent-encode the `id` path segment so a crafted Work ID
     // (containing `/`, `..`, or `@`) can't break out of the `works/:id/...`
@@ -69,5 +77,5 @@ export async function GET(request: NextRequest, { params }: RouteContext) {
     }
 
     const json = await upstream.json().catch(() => null);
-    return NextResponse.json(json ?? { items: [], total: 0 }, { status: 200 });
+    return NextResponse.json(toKbSearchResult(search, json), { status: 200 });
 }

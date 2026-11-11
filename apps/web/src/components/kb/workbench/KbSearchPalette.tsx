@@ -130,6 +130,9 @@ export function KbSearchPalette({
         (rawQuery: string, filterState: PaletteFilters) => {
             const params = new URLSearchParams();
             params.set('q', rawQuery);
+            // Full-text: search document bodies too (the proxy keeps title +
+            // description only for the wikilink / mention pickers).
+            params.set('searchBody', 'true');
             for (const cls of filterState.classes) params.append('class', cls);
             for (const status of filterState.statuses) params.append('status', status);
             const tags = filterState.tags
