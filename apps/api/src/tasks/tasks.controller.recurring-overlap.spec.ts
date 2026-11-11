@@ -25,7 +25,9 @@ jest.mock('@ever-works/agent/services', () => ({ DecisionConflictService: class 
 jest.mock('@ever-works/agent/activity-log', () => ({ ActivityLogService: class {} }));
 jest.mock('@ever-works/agent/agents', () => ({ AgentEscalationService: class {} }));
 
-import { BadRequestException, ConflictException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ValidationPipe } from '@nestjs/common';
+import { ROUTE_ARGS_METADATA } from '@nestjs/common/constants';
+import { RouteParamtypes } from '@nestjs/common/enums/route-paramtypes.enum';
 import { Test } from '@nestjs/testing';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
@@ -168,19 +170,87 @@ describe('TasksController — recurring overlap limit', () => {
             );
             expect(service.setRecurring).not.toHaveBeenCalled();
         });
+
+        it.each([
+            { recurrenceMaxOccurrences: 5 },
+            { recurrenceTimezone: 'UTC' },
+            { recurrenceEndsAt: '2027-01-01T00:00:00.000Z' },
+            { recurrenceEndsAt: null },
+        ])(
+            'the limit with any other recurrence field and no cadence is still a 400 (%p)',
+            async (extra) => {
+                const { controller, service } = await build();
+                await expect(
+                    controller.setRecurring(auth, taskId, {
+                        recurrenceMaxOpenInstances: 2,
+                        ...extra,
+                    } as never),
+                ).rejects.toBeInstanceOf(BadRequestException);
+                expect(service.setRecurring).not.toHaveBeenCalled();
+            },
+        );
     });
 
     describe('POST :id/recurring/run-now', () => {
-        it('passes force only when it is true', async () => {
+        it('passes force only when it is a literal true', async () => {
             const { controller, service } = await build();
-            await controller.runRecurringNow(auth, taskId, undefined, { force: true });
+            await controller.runRecurringNow(auth, taskId, undefined, true);
             expect(service.runRecurringNow).toHaveBeenCalledWith(userId, taskId, scope, {
                 force: true,
             });
-            await controller.runRecurringNow(auth, taskId, undefined, { force: false });
-            expect(service.runRecurringNow).toHaveBeenLastCalledWith(userId, taskId, scope);
+            for (const force of [false, 'true', 1, undefined]) {
+                await controller.runRecurringNow(auth, taskId, undefined, force);
+                expect(service.runRecurringNow).toHaveBeenLastCalledWith(userId, taskId, scope);
+            }
             await controller.runRecurringNow(auth, taskId);
             expect(service.runRecurringNow).toHaveBeenLastCalledWith(userId, taskId, scope);
+        });
+
+        /**
+         * Run-now took no body before #3146, so callers may send anything. The route's body
+         * parameter goes through the GLOBAL pipe of `main.ts` (`whitelist` +
+         * `forbidNonWhitelisted` + `transform`): this replays exactly what Nest does with the
+         * handler's real parameter metadata, so a whole-body DTO here would fail it.
+         */
+        it('still accepts any body under the global pipe (unknown fields are ignored)', async () => {
+            const args = Reflect.getMetadata(
+                ROUTE_ARGS_METADATA,
+                TasksController,
+                'runRecurringNow',
+            ) as Record<string, { index: number; data?: string }>;
+            const bodyArgs = Object.entries(args).filter(([key]) =>
+                key.startsWith(`${RouteParamtypes.BODY}:`),
+            );
+            expect(bodyArgs).toHaveLength(1);
+            const [, { index, data }] = bodyArgs[0];
+            expect(data).toBe('force');
+            const metatype = (
+                Reflect.getMetadata(
+                    'design:paramtypes',
+                    TasksController.prototype,
+                    'runRecurringNow',
+                ) as unknown[]
+            )[index] as never;
+            const pipe = new ValidationPipe({
+                whitelist: true,
+                transform: true,
+                forbidNonWhitelisted: true,
+            });
+            const run = (body: Record<string, unknown>) =>
+                pipe.transform(data ? body[data] : body, { type: 'body', metatype, data });
+
+            await expect(run({ force: true, confirm: true, note: 'from a script' })).resolves.toBe(
+                true,
+            );
+            await expect(run({ somethingElse: 1 })).resolves.toBeUndefined();
+            await expect(run({})).resolves.toBeUndefined();
+            // What a whole-body DTO would have done to the first body: refuse it.
+            await expect(
+                pipe.transform(
+                    { force: true, note: 'from a script' },
+                    { type: 'body', metatype: RunRecurringNowDto, data: undefined },
+                ),
+            ).rejects.toBeInstanceOf(BadRequestException);
         });
 
         it('surfaces the 409 SCHEDULE_TOO_MANY_OPEN body unchanged', async () => {
