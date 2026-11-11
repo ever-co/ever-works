@@ -125,7 +125,9 @@ export class DeployController {
     })
     @ApiResponse({ status: 200, description: 'List of providers' })
     async listProviders(@CurrentUser() auth: AuthenticatedUser) {
-        const providers = await this.deployFacade.getAvailableProvidersForUser(auth.userId);
+        // Selectable ones only: an App-only (hidden) provider is not offered
+        // for a website Work (`DeployFacadeService.getSelectableProvidersForUser`).
+        const providers = await this.deployFacade.getSelectableProvidersForUser(auth.userId);
         return {
             status: 'success',
             providers,

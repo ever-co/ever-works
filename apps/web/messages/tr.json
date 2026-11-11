@@ -10946,7 +10946,7 @@
             },
             "prompt": {
                 "minLength": "Prompt en az 10 karakter olmalı",
-                "maxLength": "Prompt 1000 karakterden az olmalı"
+                "maxLength": "Prompt 4000 karakterden az olmalı"
             },
             "oauthRequired": "OAuth bağlantısı gerekli. Lütfen önce {provider} hesabınızı bağlayın.",
             "githubRequired": "GitHub bağlantısı gerekli. Lütfen önce GitHub hesabınızı bağlayın.",

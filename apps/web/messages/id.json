@@ -10946,7 +10946,7 @@
             },
             "prompt": {
                 "minLength": "Prompt harus setidaknya 10 karakter",
-                "maxLength": "Prompt harus kurang dari 1000 karakter"
+                "maxLength": "Prompt harus kurang dari 4000 karakter"
             },
             "oauthRequired": "Koneksi OAuth diperlukan. Silakan hubungkan akun {provider} Anda terlebih dahulu.",
             "githubRequired": "Koneksi GitHub diperlukan. Silakan hubungkan akun GitHub Anda terlebih dahulu.",

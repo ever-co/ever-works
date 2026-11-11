@@ -416,6 +416,8 @@ export function WorkAICreator({
                     <Textarea
                         label={`${t('promptLabel')} *`}
                         name="prompt"
+                        // The server action's limit (AI_WORK_PROMPT_MAX_LENGTH).
+                        maxLength={4000}
                         value={prompt}
                         onChange={(e) => setPrompt(e.target.value)}
                         placeholder={t('promptPlaceholder')}

@@ -10945,7 +10945,7 @@
             },
             "prompt": {
                 "minLength": "L'invite doit comporter au moins 10 caractères",
-                "maxLength": "L'invite doit comporter moins de 1000 caractères"
+                "maxLength": "L'invite doit comporter moins de 4000 caractères"
             },
             "oauthRequired": "Connexion OAuth requise. Veuillez connecter votre compte {provider} en premier.",
             "githubRequired": "Connexion GitHub requise. Veuillez connecter votre compte GitHub en premier.",

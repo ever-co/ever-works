@@ -696,3 +696,42 @@ describe('Upstream actions', () => {
         expect(retryUpstreamReadinessMock).not.toHaveBeenCalled();
     });
 });
+
+describe('createWorkWithAI — prompt length (UI ↔ API contract)', () => {
+    beforeEach(() => {
+        vi.clearAllMocks();
+        getAuthFromCookieMock.mockResolvedValue({ id: 'user-1', username: 'qa-user' });
+        workAPICreateMock.mockResolvedValue({ work: { id: 'work-1', slug: 'k8s-operators' } });
+        itemsGenerateMock.mockResolvedValue({});
+        getStateMock.mockResolvedValue(onboardingStateWith('ever-works-git'));
+        getCatalogMock.mockResolvedValue(catalogWithEverWorksGit(true));
+    });
+
+    afterEach(() => {
+        vi.resetModules();
+    });
+
+    it('sends a prompt longer than the old 1000-character cap to generation in full', async () => {
+        // It used to be cut to 1000 characters without a word (the max() check
+        // ran after the truncation), although generation accepts 5000.
+        const prompt =
+            `A directory of Kubernetes operators. ${'Include maturity, licence and maintainers. '.repeat(50)}`.trim();
+        expect(prompt.length).toBeGreaterThan(2000);
+        const { createWorkWithAI } = await import('./works');
+
+        const result = await createWorkWithAI({ ...AI_REQUEST, prompt });
+
+        expect(result.success).toBe(true);
+        expect(itemsGenerateMock.mock.calls[0]![1].prompt).toContain(prompt);
+    });
+
+    it('refuses a prompt over the limit with the "too long" message instead of truncating it', async () => {
+        const { createWorkWithAI } = await import('./works');
+
+        const result = await createWorkWithAI({ ...AI_REQUEST, prompt: 'x'.repeat(4001) });
+
+        expect(result.success).toBe(false);
+        expect(result.error).toBe('prompt.maxLength');
+        expect(workAPICreateMock).not.toHaveBeenCalled();
+    });
+});

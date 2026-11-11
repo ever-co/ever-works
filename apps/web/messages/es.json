@@ -10945,7 +10945,7 @@
             },
             "prompt": {
                 "minLength": "El prompt debe tener al menos 10 caracteres",
-                "maxLength": "El prompt debe tener menos de 1000 caracteres"
+                "maxLength": "El prompt debe tener menos de 4000 caracteres"
             },
             "oauthRequired": "Conexión OAuth requerida. Por favor, conecta tu cuenta {provider} primero.",
             "githubRequired": "Conexión de GitHub requerida. Por favor, conecta tu cuenta de GitHub primero.",

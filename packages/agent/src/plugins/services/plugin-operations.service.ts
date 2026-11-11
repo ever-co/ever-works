@@ -7,6 +7,7 @@ import {
     Optional,
     UnprocessableEntityException,
 } from '@nestjs/common';
+import { withoutBlankOptionalValues } from './settings-blank-values';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -2186,7 +2187,13 @@ export class PluginOperationsService {
         scope: SettingsScope,
         plugin?: IPlugin,
     ): Promise<void> {
-        const result = this.settingsValidator.validate(settings, schema, scope);
+        // An empty optional value is "not set" for the schema check (it is still
+        // stored as the user saved it) — see `withoutBlankOptionalValues`.
+        const result = this.settingsValidator.validate(
+            withoutBlankOptionalValues(settings, schema),
+            schema,
+            scope,
+        );
         if (!result.valid) {
             throw new BadRequestException({
                 message: 'Invalid plugin settings',

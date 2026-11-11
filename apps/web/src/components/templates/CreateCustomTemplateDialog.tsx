@@ -310,6 +310,11 @@ export function CreateCustomTemplateDialog({
                                 placeholder={t('namePlaceholder')}
                                 value={name}
                                 onChange={(e) => setName(e.target.value)}
+                                // The API's limits (CustomizeTemplateFromBaseDto: name 120,
+                                // prompt 4000; IterateCustomTemplateDto: prompt 4000 — both in
+                                // template-catalog/dto/list-templates.dto.ts); without them a long
+                                // value came back as a raw 400.
+                                maxLength={120}
                                 disabled={disabled}
                                 helperText={t('nameHelp')}
                             />
@@ -403,6 +408,7 @@ export function CreateCustomTemplateDialog({
                                     : t('promptPlaceholder')
                             }
                             rows={6}
+                            maxLength={4000}
                             value={prompt}
                             onChange={(e) => setPrompt(e.target.value)}
                             disabled={disabled}

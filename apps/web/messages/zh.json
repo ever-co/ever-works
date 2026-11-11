@@ -10946,7 +10946,7 @@
             },
             "prompt": {
                 "minLength": "提示必须至少 10 个字符",
-                "maxLength": "提示必须少于 1000 个字符"
+                "maxLength": "提示必须少于 4000 个字符"
             },
             "oauthRequired": "需要 OAuth 连接。请先连接您的 {provider} 账户。",
             "githubRequired": "需要 GitHub 连接。请先连接您的 GitHub 账户。",

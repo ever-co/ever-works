@@ -481,6 +481,54 @@ describe('WorkLifecycleService', () => {
             const updateArg = workRepository.update.mock.calls[0][1];
             expect(updateArg).not.toHaveProperty('organizationId');
         });
+
+        describe('deployProvider: the App-only managed target (hidden k8s-apps-tier)', () => {
+            beforeEach(() => {
+                deployFacade.getAvailableProviders.mockReturnValue([
+                    { id: 'vercel', enabled: true },
+                    { id: 'k8s-apps-tier', enabled: true },
+                ]);
+                deployFacade.isHiddenProvider = jest.fn((id: string) => id === 'k8s-apps-tier');
+            });
+
+            it('is refused for a website Work', async () => {
+                const work = baseWork({ kind: 'directory' });
+                ownershipService.ensureCanEdit.mockResolvedValue({ work });
+
+                await expect(
+                    service.updateWork(work.id, { deployProvider: 'k8s-apps-tier' } as any, user),
+                ).rejects.toMatchObject({
+                    response: { message: 'Unsupported deploy provider: k8s-apps-tier' },
+                });
+                expect(workRepository.update).not.toHaveBeenCalled();
+            });
+
+            it('is kept for an App Work, whose own target picker sets it', async () => {
+                const work = baseWork({ kind: 'app' });
+                ownershipService.ensureCanEdit.mockResolvedValue({ work });
+                workRepository.update.mockResolvedValueOnce({ ...work });
+
+                await service.updateWork(work.id, { deployProvider: 'k8s-apps-tier' } as any, user);
+
+                expect(workRepository.update).toHaveBeenCalledWith(
+                    work.id,
+                    expect.objectContaining({ deployProvider: 'k8s-apps-tier' }),
+                );
+            });
+
+            it('leaves a visible provider unaffected', async () => {
+                const work = baseWork({ kind: 'directory' });
+                ownershipService.ensureCanEdit.mockResolvedValue({ work });
+                workRepository.update.mockResolvedValueOnce({ ...work });
+
+                await service.updateWork(work.id, { deployProvider: 'vercel' } as any, user);
+
+                expect(workRepository.update).toHaveBeenCalledWith(
+                    work.id,
+                    expect.objectContaining({ deployProvider: 'vercel' }),
+                );
+            });
+        });
     });
 
     it('rejects website template changes after website repository initialization', async () => {
