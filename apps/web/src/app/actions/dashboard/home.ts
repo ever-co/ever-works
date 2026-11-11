@@ -20,17 +20,25 @@ async function requireHomeAuth() {
 }
 
 /**
- * The composed morning read. A timezone the API refuses (a browser reporting
- * a zone this runtime does not know) is retried once without it, which
- * resolves to the profile timezone or UTC and says so — never a blank screen.
+ * The composed morning read.
+ *
+ * `tz` is an explicit override (it wins over the profile). `browserTz` is the
+ * browser's own zone, which the API uses ONLY when the profile has no
+ * timezone — the dashboard always sends it, so the profile keeps winning when
+ * set. A `tz` the API refuses (a zone this runtime does not know) is retried
+ * once without it, which resolves to the profile timezone, the browser hint
+ * or UTC and says so — never a blank screen.
  */
-export async function getHomeSummaryAction(tz?: string | null): Promise<HomeSummaryDto> {
+export async function getHomeSummaryAction(
+    tz?: string | null,
+    browserTz?: string | null,
+): Promise<HomeSummaryDto> {
     await requireHomeAuth();
     try {
-        return await homeAPI.summary({ tz });
+        return await homeAPI.summary({ tz, browserTz });
     } catch (error) {
         if (tz && error instanceof ApiResponseError && error.statusCode === 400) {
-            return homeAPI.summary();
+            return homeAPI.summary({ browserTz });
         }
         throw error;
     }
@@ -40,9 +48,10 @@ export async function getHomeSummaryAction(tz?: string | null): Promise<HomeSumm
 export async function refreshHomeBlockAction(
     blockId: HomeBlockId,
     tz?: string | null,
+    browserTz?: string | null,
 ): Promise<HomeSummaryDto> {
     await requireHomeAuth();
-    return homeAPI.summary({ tz, blocks: [blockId] });
+    return homeAPI.summary({ tz, browserTz, blocks: [blockId] });
 }
 
 export type CreateHomeTaskResult =

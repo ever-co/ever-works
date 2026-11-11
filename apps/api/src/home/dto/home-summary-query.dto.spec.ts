@@ -36,6 +36,18 @@ describe('HomeSummaryQueryDto', () => {
         await expectRejected({ tz: 'Europe/' + 'x'.repeat(70) });
     });
 
+    it("accepts the browser's timezone hint, and does not refuse one the runtime does not know", async () => {
+        await expect(transform({ browserTz: 'Europe/Kyiv' })).resolves.toMatchObject({
+            browserTz: 'Europe/Kyiv',
+        });
+        // A hint is resolved (or ignored) by the service — never a 400 that
+        // would cost the person their dashboard.
+        await expect(transform({ browserTz: 'Mars/Olympus_Mons' })).resolves.toMatchObject({
+            browserTz: 'Mars/Olympus_Mons',
+        });
+        await expectRejected({ browserTz: 'x'.repeat(65) });
+    });
+
     it('parses blocks from a CSV and from repeated parameters', async () => {
         await expect(transform({ blocks: 'today, needsYou' })).resolves.toMatchObject({
             blocks: ['today', 'needsYou'],

@@ -11,8 +11,16 @@ import { serverFetch } from './server-api';
  * with `/api` — `API_URL` already ends in it.
  */
 export interface HomeSummaryParams {
-    /** The browser's IANA timezone; omitted = the profile timezone, else UTC. */
+    /**
+     * An explicit IANA timezone override — it wins over the profile timezone.
+     * Omitted = the profile timezone, else `browserTz`, else UTC.
+     */
     tz?: string | null;
+    /**
+     * The browser's own IANA timezone, used by the API ONLY when the profile
+     * has no timezone. Safe to always send: the profile still wins.
+     */
+    browserTz?: string | null;
     /** Only these blocks (a per-block retry); omitted = every block. */
     blocks?: readonly HomeBlockId[];
 }
@@ -20,6 +28,7 @@ export interface HomeSummaryParams {
 export function buildHomeSummaryQuery(params: HomeSummaryParams = {}): string {
     const searchParams = new URLSearchParams();
     if (params.tz) searchParams.set('tz', params.tz);
+    if (params.browserTz) searchParams.set('browserTz', params.browserTz);
     if (params.blocks && params.blocks.length > 0)
         searchParams.set('blocks', params.blocks.join(','));
     const query = searchParams.toString();
