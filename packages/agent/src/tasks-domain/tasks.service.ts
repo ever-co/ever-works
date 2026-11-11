@@ -6,6 +6,7 @@ import {
     Logger,
     NotFoundException,
     Optional,
+    ServiceUnavailableException,
 } from '@nestjs/common';
 import type { TaskIsolationMode } from './task-isolation';
 import type { MissionRepoRunRefusal } from './mission-repo-run';
@@ -99,6 +100,7 @@ import {
     type OwnershipScope,
 } from '../database/ownership-scope';
 import { isAwaitingOwner, withoutAwaitingOwner } from './awaiting-owner';
+import { resolveWorkDefaultAgent } from './work-default-agent';
 
 /**
  * Options of {@link TasksService.create} (T17a). `withinCreate` runs right
@@ -1891,17 +1893,43 @@ export class TasksService {
      *   1. its Agent assignees (the fan-out set a drag-to-in-progress
      *      would dispatch), then
      *   2. its own `agentId` column, then
-     *   3. the Works's Work-scoped Agents — "the Work's default agent".
+     *   3. the Agent its Work names as default (`works.defaultAgentId`,
+     *      when it still resolves for this owner in this scope), then
+     *   4. the Works's Work-scoped Agents.
      *
-     * Deduped by id, owner-scoped throughout, never throws (a lookup
-     * failure degrades to the candidates gathered so far, so the picker
-     * still opens with whatever is knowable).
+     * 3 and 4 are both offered as `work-default`. Deduped by id,
+     * owner-scoped throughout, never throws (a lookup failure degrades to
+     * the candidates gathered so far, so the picker still opens with
+     * whatever is knowable).
      */
     async listRunCandidates(
         userId: string,
         taskId: string,
         ownershipScope?: OwnershipScope,
     ): Promise<RunCandidateAgent[]> {
+        return (await this.gatherRunCandidates(userId, taskId, ownershipScope)).candidates;
+    }
+
+    /**
+     * {@link listRunCandidates}, plus what {@link resolveRunAgentId} needs to apply the Work's
+     * default Agent without changing the rule it applied before that existed:
+     *
+     *   - `workDefault` — the Work's default Agent, or `null` (none set, or it no longer
+     *     resolves); `'unreadable'` when it could not be read;
+     *   - `ownCount` — how many candidates the Task itself names (assignees + its `agentId`);
+     *   - `ruleCandidates` — the candidates the older rule counts: every one EXCEPT a Work
+     *     default that is not also one of the Work's Work-scoped Agents.
+     */
+    private async gatherRunCandidates(
+        userId: string,
+        taskId: string,
+        ownershipScope?: OwnershipScope,
+    ): Promise<{
+        candidates: RunCandidateAgent[];
+        ruleCandidates: RunCandidateAgent[];
+        ownCount: number;
+        workDefault: Agent | null | 'unreadable';
+    }> {
         const task = await this.getOne(userId, taskId, ownershipScope);
         const out = new Map<string, RunCandidateAgent>();
 
@@ -1939,7 +1967,24 @@ export class TasksService {
                 .catch(() => null);
             if (agent) push(task.agentId, 'task', agent);
         }
+        const ownCount = out.size;
 
+        let workDefault: Agent | null | 'unreadable' = null;
+        if (task.workId) {
+            try {
+                workDefault = await this.workDefaultAgent(userId, task.workId, ownershipScope);
+            } catch (err) {
+                workDefault = 'unreadable';
+                this.logger.warn(
+                    `Run candidates: the default Agent of Work ${task.workId} could not be read for ${taskId}: ${err}`,
+                );
+            }
+            if (workDefault && workDefault !== 'unreadable') {
+                push(workDefault.id, 'work-default', workDefault);
+            }
+        }
+
+        const workScopedIds = new Set<string>();
         if (task.workId && this.agents) {
             try {
                 const { rows } = await this.agents.findByUserIdScoped(
@@ -1950,20 +1995,51 @@ export class TasksService {
                     },
                     ownershipScope,
                 );
-                for (const agent of rows) push(agent.id, 'work-default', agent);
+                for (const agent of rows) {
+                    workScopedIds.add(agent.id);
+                    push(agent.id, 'work-default', agent);
+                }
             } catch (err) {
                 this.logger.warn(`Run candidates: Work-agent lookup failed for ${taskId}: ${err}`);
             }
         }
 
-        return [...out.values()];
+        const candidates = [...out.values()];
+        const defaultId = workDefault && workDefault !== 'unreadable' ? workDefault.id : null;
+        return {
+            candidates,
+            ruleCandidates: candidates.filter(
+                (candidate) => candidate.id !== defaultId || workScopedIds.has(candidate.id),
+            ),
+            ownCount,
+            workDefault,
+        };
+    }
+
+    /**
+     * The Agent `workId` names as its default (`works.defaultAgentId`) when `userId` may still use
+     * it in `ownershipScope` — owned, not archived, inside the Work's and the caller's scope
+     * (`resolveWorkDefaultAgent`); `null` when none is set, it no longer resolves, or this service
+     * has no Work / Agent repository. A failed READ throws: each caller decides whether it may
+     * fall back to the older rule (the picker does, Run does not).
+     */
+    private async workDefaultAgent(
+        userId: string,
+        workId: string,
+        ownershipScope?: OwnershipScope,
+    ): Promise<Agent | null> {
+        if (!this.agents || !this.works) return null;
+        const work = await this.works.findById(workId);
+        if (!work?.defaultAgentId) return null;
+        return resolveWorkDefaultAgent(this.agents, work, userId, ownershipScope);
     }
 
     /**
      * Board dispatch (kanban M3) — run this Task now.
      *
      * Resolution order is `agentId` (explicit) → the Task's assigned
-     * Agent → the Work's default Agent, and an AMBIGUOUS or EMPTY
+     * Agent → the Agent its Work names as default → the Work's only
+     * Agent ({@link resolveRunAgentId}), and an AMBIGUOUS or EMPTY
      * resolution is a 400 carrying the candidate list, which is exactly
      * what the board's agent picker renders. Dispatch itself goes
      * through `TaskTransitionService.dispatchAgentRun` — the same path
@@ -2090,8 +2166,11 @@ export class TasksService {
      * The Agent {@link runTask} will start a NEW Task with, before the Task exists: the one a
      * caller passes (owned by `userId` in `ownershipScope`, as `resolveRunAgentId` checks it),
      * else — a new Task has no assignee rows, and its own `agentId` is that same explicit one —
-     * the Work's only Agent (`listRunCandidates`' Work lookup: the same query, the same page).
-     * `null` exactly where `runTask` would refuse with a 400: no such Agent, none, or several.
+     * the Agent the Work names as default when it still resolves (`works.defaultAgentId`, the
+     * same lookup `resolveRunAgentId` makes), else the Work's only Agent (`listRunCandidates`'
+     * Work lookup: the same query, the same page). `null` exactly where `runTask` would refuse
+     * with a 400: no such Agent, none, or several. A Work that cannot be read throws, as
+     * `runTask` does, so a Mission skips the Work this tick instead of judging another Agent.
      */
     async resolveRunAgentForNewTask(
         userId: string,
@@ -2103,6 +2182,8 @@ export class TasksService {
             const agent = await this.agents.findByIdAndUser(input.agentId, userId, ownershipScope);
             return agent && ownershipScopeMatches(agent, ownershipScope) ? agent : null;
         }
+        const workDefault = await this.workDefaultAgent(userId, input.workId, ownershipScope);
+        if (workDefault) return workDefault;
         const { rows } = await this.agents.findByUserIdScoped(
             userId,
             { workId: input.workId, limit: 25 },
@@ -2134,7 +2215,15 @@ export class TasksService {
         );
     }
 
-    /** Explicit → assignee → Work default, with the picker-shaped 400s. */
+    /**
+     * Explicit → assignee / the Task's Agent → the Work's default Agent → the Work's only Agent,
+     * with the picker-shaped 400s.
+     *
+     * The Work's default applies only to a Task that names no Agent of its own: one that does
+     * keeps exactly the rule it had (its own candidates plus the Work-scoped Agents, exactly one
+     * runs), so naming a default never turns a Task that ran into an ambiguous one. A default
+     * that could not be READ refuses the run rather than silently starting another Agent.
+     */
     private async resolveRunAgentId(
         userId: string,
         taskId: string,
@@ -2162,8 +2251,17 @@ export class TasksService {
             return explicitAgentId;
         }
 
-        const candidates = await this.listRunCandidates(userId, taskId, ownershipScope);
-        if (candidates.length === 1) return candidates[0].id;
+        const { candidates, ruleCandidates, ownCount, workDefault } =
+            await this.gatherRunCandidates(userId, taskId, ownershipScope);
+        if (ownCount === 0) {
+            if (workDefault === 'unreadable') {
+                throw new ServiceUnavailableException(
+                    "This Task's Work could not be read to find its default Agent. Try again, or pass agentId.",
+                );
+            }
+            if (workDefault) return workDefault.id;
+        }
+        if (ruleCandidates.length === 1) return ruleCandidates[0].id;
         if (candidates.length === 0) {
             throw new BadRequestException({
                 code: RUN_NO_AGENT,

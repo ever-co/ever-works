@@ -22,6 +22,8 @@ import { UserRepository } from '@src/database/repositories/user.repository';
 import { OrganizationRepository } from '@src/database/repositories/organization.repository';
 import { GitHubAppInstallationRepository } from '@src/database/repositories/github-app-installation.repository';
 import { GitHubAppInstallationRepoRepository } from '@src/database/repositories/github-app-installation-repository.repository';
+import { AgentRepository } from '@src/database/repositories/agent.repository';
+import { usableWorkDefaultAgent } from '@src/tasks-domain/work-default-agent';
 import type { GitHubAppInstallation } from '@src/entities/github-app-installation.entity';
 import {
     WorkCreatedEvent,
@@ -340,6 +342,13 @@ export class WorkLifecycleService {
         @Optional()
         @Inject(GitHubAppInstallationRepoRepository)
         private readonly gitHubAppInstallationRepos?: GitHubAppInstallationRepoRepository,
+        // Appended LAST, `@Optional()` and self-declared for the same two reasons as the pair
+        // above: the Work's default Agent (`defaultAgentId`) is validated against it. Absent,
+        // a non-null default is REFUSED (the same 404 as an unusable Agent) and `null` still
+        // clears it — the absence can never store an Agent nobody checked.
+        @Optional()
+        @Inject(AgentRepository)
+        private readonly agents?: AgentRepository,
     ) {}
 
     /**
@@ -1697,6 +1706,18 @@ export class WorkLifecycleService {
                 updateData.taskBranchCleanup = updateDto.taskBranchCleanup;
             }
 
+            // The Work's default Agent — tried for its new Tasks before "the Work's only
+            // Agent". `null` clears it; an id is stored only for an Agent the caller owns, not
+            // archived, inside this Work's tenant/organization scope, and every other id answers
+            // the same 404 (an Agent of another tenant and one that never existed look alike).
+            if (updateDto.defaultAgentId !== undefined) {
+                updateData.defaultAgentId = await this.resolveDefaultAgentUpdate(
+                    work,
+                    user.id,
+                    updateDto.defaultAgentId,
+                );
+            }
+
             // Memory recall injection toggle (memory upgrades M3) —
             // boolean, on by default; false disables the pipeline
             // preamble splice for this Work.
@@ -1882,6 +1903,27 @@ export class WorkLifecycleService {
         } catch (error) {
             rethrowAsNormalized(error, this.logger, 'updating work');
         }
+    }
+
+    /**
+     * The value `PATCH /api/works/:id` stores for `defaultAgentId`: `null` clears it, an id must
+     * name an Agent `userId` may use as this Work's default (`usableWorkDefaultAgent`: owned,
+     * not archived, in the Work's tenant/organization scope) and is stored in its canonical form.
+     * Anything else is a 404 that never says whether the Agent exists.
+     */
+    private async resolveDefaultAgentUpdate(
+        work: Pick<Work, 'tenantId' | 'organizationId'>,
+        userId: string,
+        agentId: string | null,
+    ): Promise<string | null> {
+        if (agentId === null) return null;
+        const agent = this.agents
+            ? await usableWorkDefaultAgent(this.agents, agentId, work, userId)
+            : null;
+        if (!agent) {
+            throw new NotFoundException({ status: 'error', message: 'Agent not found' });
+        }
+        return agent.id;
     }
 
     /**

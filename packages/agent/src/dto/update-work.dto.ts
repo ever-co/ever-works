@@ -118,6 +118,24 @@ export class UpdateWorkDto {
 
     @ApiPropertyOptional({
         description:
+            "The Agent that runs this Work's new Tasks when none is named (Run, a Mission's Task " +
+            "output, a Goal's first iteration, an App Work change), tried before the Work's only " +
+            'Agent. Must be an Agent you own, not archived, in the same tenant/organization as the ' +
+            'Work; any other id answers 404. Pass `null` to clear it.',
+        nullable: true,
+        format: 'uuid',
+    })
+    @IsOptional()
+    // `null` (and '') clear the default and skip `@IsUUID` through `@IsOptional`; whether the
+    // Agent may be used is decided in `WorkLifecycleService.updateWork`, not here.
+    @IsUUID()
+    @Transform(({ value }) =>
+        value === null || value === '' ? null : typeof value === 'string' ? value.trim() : value,
+    )
+    defaultAgentId?: string | null;
+
+    @ApiPropertyOptional({
+        description:
             'Memory recall injection toggle (on by default). When false, self-managed pipeline runs for this Work skip the fenced agent-memory recall block in their session preamble.',
     })
     @IsOptional()

@@ -5,6 +5,7 @@ import type { GoalEvent } from '../../entities/goal-event.entity';
 import type { AgentRun } from '../../entities/agent-run.entity';
 import { Task } from '../../entities/task.entity';
 import { GoalOrchestratorService, MAX_CONCURRENT_ITERATIONS } from '../goal-orchestrator.service';
+import { ownershipScopeMatches } from '../../database/ownership-scope';
 
 /**
  * Autonomy layer — orchestrator service (the I/O half).
@@ -1714,6 +1715,100 @@ describe('GoalOrchestratorService — cold start (scope fallback)', () => {
 
         expect(result.action).toBe('stuck');
         expect(result.reasonCode).toBe('no-candidate-agent');
+    });
+});
+
+describe('GoalOrchestratorService — cold start on a Work that names its default Agent', () => {
+    const everScope = {
+        tenantId: '11111111-1111-4111-8111-111111111111',
+        organizationId: '22222222-2222-4222-8222-222222222222',
+    };
+    const agentRow = (id: string, over: Record<string, unknown> = {}) => ({
+        id,
+        userId: 'u1',
+        name: `Agent ${id}`,
+        slug: id,
+        status: 'active',
+        createdAt: new Date('2026-08-01T00:00:00.000Z'),
+        ...everScope,
+        ...over,
+    });
+    const workRow = (defaultAgentId: string | null) => ({
+        id: 'w-docs',
+        userId: 'u1',
+        kind: 'directory',
+        defaultAgentId,
+        ...everScope,
+    });
+
+    /** A fresh Goal on `w-docs`; Agent reads are owner- and scope-bound like the repository's. */
+    function onWork(defaultAgentId: string | null, rows: Array<Record<string, unknown>>) {
+        const built = build({
+            goal: { loopStatus: 'running', workId: 'w-docs', ...everScope },
+            works: { findOne: jest.fn(async () => workRow(defaultAgentId)) },
+        });
+        built.agents.findByIdAndUser.mockImplementation((async (
+            id: string,
+            userId: string,
+            scope?: { tenantId: string | null; organizationId: string | null },
+        ) => {
+            const row = rows.find(
+                (candidate) => candidate.id === id && candidate.userId === userId,
+            );
+            return row && ownershipScopeMatches(row, scope) ? row : null;
+        }) as never);
+        built.agents.findByUserIdScoped.mockResolvedValue({
+            rows: [agentRow('agent-scope')],
+            total: 1,
+        });
+        return built;
+    }
+
+    it('routes the first iteration to the Work default Agent, not round-robin over the scope', async () => {
+        const { service, agents, transitions, events } = onWork('agent-docs', [
+            agentRow('agent-docs'),
+        ]);
+
+        const result = await service.advance('u1', 'g1');
+
+        expect(result.action).toBe('dispatch');
+        expect(result.reasonCode).toBe('routed-work-default');
+        expect(result.agentId).toBe('agent-docs');
+        expect(agents.findByUserIdScoped).not.toHaveBeenCalled();
+        expect(transitions.dispatchAgentRun).toHaveBeenCalledWith(
+            expect.objectContaining({ workId: 'w-docs' }),
+            'agent-docs',
+            expect.anything(),
+        );
+        expect(eventMessages(events)[0]).toContain("its Work's default agent");
+    });
+
+    it('ignores an archived, deleted or cross-organization default and uses the scope pool', async () => {
+        const rows = [
+            agentRow('agent-archived', { status: 'archived' }),
+            agentRow('agent-foreign', {
+                organizationId: '33333333-3333-4333-8333-333333333333',
+            }),
+        ];
+        for (const defaultAgentId of ['agent-archived', 'agent-foreign', 'agent-deleted']) {
+            const { service } = onWork(defaultAgentId, rows);
+            const result = await service.advance('u1', 'g1');
+            expect(result.reasonCode).toBe('routed-scope-fallback');
+            expect(result.agentId).toBe('agent-scope');
+        }
+    });
+
+    it('a pin still wins over the Work default', async () => {
+        const { service, goals } = onWork('agent-docs', [
+            agentRow('agent-docs'),
+            agentRow('agent-pin'),
+        ]);
+        goals._rows[0].assignedAgentId = 'agent-pin';
+
+        const result = await service.advance('u1', 'g1');
+
+        expect(result.reasonCode).toBe('routed-assigned-agent');
+        expect(result.agentId).toBe('agent-pin');
     });
 });
 

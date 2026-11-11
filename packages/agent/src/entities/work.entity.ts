@@ -442,6 +442,20 @@ export class Work {
     @Column({ type: 'varchar', length: 16, default: 'on-merge' })
     taskBranchCleanup: string;
 
+    /**
+     * The Agent that runs this Work's new Tasks when nobody names one: **Run**, a Mission's
+     * Task output, a Goal's first iteration and an App Work change all try it before their
+     * older "the Work's only Agent" rule. NULL — every existing Work — keeps that rule alone.
+     *
+     * Set through `PATCH /api/works/:id`, which admits only an Agent the caller owns, not
+     * archived, inside this Work's tenant/organization scope. Deliberately NOT a foreign key:
+     * every read re-checks the Agent (`tasks-domain/work-default-agent.ts`), so an Agent that
+     * is archived, deleted or moved out of the Work's scope later is simply skipped and the
+     * older rule applies — the column never has to be cleaned up for resolution to stay safe.
+     */
+    @Column({ type: 'uuid', nullable: true })
+    defaultAgentId?: string | null;
+
     // ── Release promotion lane (self-build slice AI, EW-808) ─────────
 
     /**
