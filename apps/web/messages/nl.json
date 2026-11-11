@@ -1540,6 +1540,7 @@
                 "priority": "Prioriteit",
                 "labels": "Labels",
                 "labelsPlaceholder": "komma-gescheiden",
+                "labelsTooLong": "Labels langer dan {max} tekens worden ingekort tot de eerste {max}.",
                 "labelsHint": "Scheid meerdere labels met komma’s.",
                 "labelsAutoHint": "Afgeleid van de titel totdat je ze bewerkt. Scheid meerdere labels met komma’s.",
                 "organize": "Ordenen",

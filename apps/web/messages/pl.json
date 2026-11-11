@@ -1540,6 +1540,7 @@
                 "priority": "Priorytet",
                 "labels": "Etykiety",
                 "labelsPlaceholder": "oddzielone przecinkami",
+                "labelsTooLong": "Etykiety dłuższe niż {max} znaków są skracane do pierwszych {max}.",
                 "labelsHint": "Oddziel wiele etykiet przecinkami.",
                 "labelsAutoHint": "Tworzone na podstawie tytułu, dopóki ich nie zmienisz. Oddziel wiele etykiet przecinkami.",
                 "organize": "Organizuj",

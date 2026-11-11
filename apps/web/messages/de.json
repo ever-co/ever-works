@@ -1571,6 +1571,7 @@
                 "priority": "Priorität",
                 "labels": "Labels",
                 "labelsPlaceholder": "durch Komma getrennt",
+                "labelsTooLong": "Labels mit mehr als {max} Zeichen werden auf die ersten {max} gekürzt.",
                 "labelsHint": "Trennen Sie mehrere Labels durch Kommas.",
                 "labelsAutoHint": "Wird aus dem Titel abgeleitet, bis Sie sie bearbeiten. Trennen Sie mehrere Labels durch Kommas.",
                 "organize": "Organisieren",

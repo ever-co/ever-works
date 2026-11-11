@@ -1540,6 +1540,7 @@
                 "priority": "우선순위",
                 "labels": "레이블",
                 "labelsPlaceholder": "쉼표로 구분",
+                "labelsTooLong": "{max}자를 넘는 레이블은 앞의 {max}자로 줄어듭니다.",
                 "labelsHint": "여러 레이블은 쉼표로 구분하세요.",
                 "labelsAutoHint": "직접 수정하기 전까지는 제목에서 자동으로 만들어집니다. 여러 레이블은 쉼표로 구분하세요.",
                 "organize": "정리",

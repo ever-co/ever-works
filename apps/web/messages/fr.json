@@ -1571,6 +1571,7 @@
                 "priority": "Priorité",
                 "labels": "Étiquettes",
                 "labelsPlaceholder": "séparées par des virgules",
+                "labelsTooLong": "Les étiquettes de plus de {max} caractères sont raccourcies à leurs {max} premiers.",
                 "labelsHint": "Séparez plusieurs étiquettes par des virgules.",
                 "labelsAutoHint": "Déduites du titre tant que vous ne les modifiez pas. Séparez plusieurs étiquettes par des virgules.",
                 "organize": "Organiser",

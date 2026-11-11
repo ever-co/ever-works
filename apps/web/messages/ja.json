@@ -1540,6 +1540,7 @@
                 "priority": "優先度",
                 "labels": "ラベル",
                 "labelsPlaceholder": "コンマ区切り",
+                "labelsTooLong": "{max} 文字を超えるラベルは先頭の {max} 文字に短縮されます。",
                 "labelsHint": "複数のラベルはコンマで区切ってください。",
                 "labelsAutoHint": "編集するまではタイトルから自動生成されます。複数のラベルはコンマで区切ってください。",
                 "organize": "整理",

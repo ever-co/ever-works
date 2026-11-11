@@ -294,6 +294,11 @@ export function NewTaskForm({ createTask }: { createTask: CreateTaskFn }) {
     // Until the field is touched, the Labels input mirrors the slugified
     // title — auto-filling directly as the user types (spaces become "-").
     const labelsValue = labelsTouched ? labelsRaw : slugifyTitle(title);
+    // A typed label past the API's cap is shortened on create — say so here
+    // rather than cut it without a word.
+    const labelTooLong = labelsValue
+        .split(',')
+        .some((label) => label.trim().length > MAX_LABEL_LENGTH);
 
     const handleSubmit = (e: React.FormEvent) => {
         e.preventDefault();
@@ -332,9 +337,10 @@ export function NewTaskForm({ createTask }: { createTask: CreateTaskFn }) {
                     // Each label within the API's 80 characters
                     // (`@MaxLength(80, { each: true })`): a longer one failed
                     // the whole create with a generic error.
+                    // The field says so when one is longer (`labelsTooLong`).
                     const labels = labelsValue
                         .split(',')
-                        .map((l) => l.trim().slice(0, 80).trim())
+                        .map((l) => l.trim().slice(0, MAX_LABEL_LENGTH).trim())
                         .filter(Boolean);
                     const planning = planningPayload(dueDate, startDate, estimateRaw);
                     if (planning.error) {
@@ -601,8 +607,20 @@ export function NewTaskForm({ createTask }: { createTask: CreateTaskFn }) {
                                     setLabelsRaw(e.target.value);
                                 }}
                                 placeholder={t('labelsPlaceholder')}
+                                aria-describedby={
+                                    labelTooLong ? 'new-task-labels-too-long' : undefined
+                                }
                                 className="w-full rounded-md border border-border/60 dark:border-border-dark/60 bg-card dark:bg-card-primary-dark px-3 h-9 text-sm text-text dark:text-text-dark"
                             />
+                            {labelTooLong ? (
+                                <p
+                                    id="new-task-labels-too-long"
+                                    className="mt-1 text-[11px] text-warning"
+                                    data-testid="new-task-labels-too-long"
+                                >
+                                    {t('labelsTooLong', { max: MAX_LABEL_LENGTH })}
+                                </p>
+                            ) : null}
                         </div>
                     </div>
                 )}

@@ -1540,6 +1540,7 @@
                 "priority": "Prioritas",
                 "labels": "Label",
                 "labelsPlaceholder": "dipisahkan koma",
+                "labelsTooLong": "Label yang lebih dari {max} karakter dipendekkan menjadi {max} karakter pertamanya.",
                 "labelsHint": "Pisahkan beberapa label dengan koma.",
                 "labelsAutoHint": "Diambil dari judul sampai Anda mengubahnya. Pisahkan beberapa label dengan koma.",
                 "organize": "Atur",

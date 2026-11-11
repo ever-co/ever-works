@@ -1540,6 +1540,7 @@
                 "priority": "Ưu tiên",
                 "labels": "Nhãn",
                 "labelsPlaceholder": "phân cách bằng dấu phẩy",
+                "labelsTooLong": "Nhãn dài hơn {max} ký tự sẽ được rút gọn còn {max} ký tự đầu.",
                 "labelsHint": "Phân tách nhiều nhãn bằng dấu phẩy.",
                 "labelsAutoHint": "Được lấy từ tiêu đề cho đến khi bạn chỉnh sửa. Phân tách nhiều nhãn bằng dấu phẩy.",
                 "organize": "Sắp xếp",

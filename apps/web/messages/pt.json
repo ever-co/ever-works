@@ -1540,6 +1540,7 @@
                 "priority": "Prioridade",
                 "labels": "Etiquetas",
                 "labelsPlaceholder": "separadas por vírgula",
+                "labelsTooLong": "Etiquetas com mais de {max} caracteres são encurtadas para os primeiros {max}.",
                 "labelsHint": "Separe várias etiquetas com vírgulas.",
                 "labelsAutoHint": "Derivadas do título até você editá-las. Separe várias etiquetas com vírgulas.",
                 "organize": "Organizar",
