@@ -1683,19 +1683,21 @@ export class FleetAgentTaskPlannerService implements FleetAgentTaskPlanner {
         // that fails on every run because a Task's brief plus its findings are too big.
         const reviewItems = input.reviewFeedback?.items ?? [];
         let reviewShown = reviewItems.length;
+        const reviewSectionShowing = (shown: number): string | null =>
+            shown > 0 && input.reviewFeedback
+                ? composeReviewFeedbackSection(
+                      {
+                          items: reviewItems.slice(0, shown),
+                          omitted: input.reviewFeedback.omitted + (reviewItems.length - shown),
+                      },
+                      task,
+                      workspace,
+                      fenceNonce,
+                  )
+                : null;
         const fleetSectionsShowing = (shown: number): string =>
             [
-                shown > 0 && input.reviewFeedback
-                    ? composeReviewFeedbackSection(
-                          {
-                              items: reviewItems.slice(0, shown),
-                              omitted: input.reviewFeedback.omitted + (reviewItems.length - shown),
-                          },
-                          task,
-                          workspace,
-                          fenceNonce,
-                      )
-                    : null,
+                reviewSectionShowing(shown),
                 '# WORKSPACE (fleet node)',
                 describeWorkspaceSection(workspace, {
                     canAskOwner,
@@ -1817,8 +1819,18 @@ export class FleetAgentTaskPlannerService implements FleetAgentTaskPlanner {
         }
         return {
             instructions: system ? `${system}\n\n${tail}` : tail,
+            // Review of #3150 (closure, item A): a RESUMED session reads only this, so it
+            // carries the very review section the fresh instructions show (same findings,
+            // same caps and guards) — a finding shown in neither would still be consumed when
+            // the run completes. `resolveSessionResume` offers the resume only when this fits
+            // beside the instructions; otherwise the node runs `instructions`, which show it.
             continuation: ownerSection
-                ? composeContinuation(ownerSection, outputContract, fenceNonce)
+                ? composeContinuation(
+                      ownerSection,
+                      outputContract,
+                      fenceNonce,
+                      reviewSectionShowing(reviewShown),
+                  )
                 : null,
             unshownReviewFeedbackIds: reviewItems.slice(reviewShown).map((item) => item.id),
         };
@@ -2123,18 +2135,34 @@ function composeReviewFeedbackSection(
  * contract restated verbatim — the summary rule and the question protocol
  * are what the node parses, and a long session is exactly where a model
  * drifts from them.
+ *
+ * Review feedback reaches the next run: when the run carries review findings,
+ * the same `# REVIEW FEEDBACK TO ADDRESS` section the fresh instructions show
+ * follows the owner's answer — same findings, same fence code, same guards.
+ * The session never saw them (they were recorded after it started, or did not
+ * fit the resume's own replay), and the run consumes them when it completes.
  */
-function composeContinuation(ownerSection: string, outputContract: string, nonce: string): string {
+function composeContinuation(
+    ownerSection: string,
+    outputContract: string,
+    nonce: string,
+    reviewSection: string | null = null,
+): string {
     return [
         ownerSection,
+        reviewSection,
         '# CONTINUE',
         'You are continuing your own earlier session of this Task, on the same machine and in the same worktree. ' +
             'Everything you were told when it started still applies — the Task, the workspace, the acceptance checks and the rules below. ' +
             `One thing changes: the owner's words now arrive between markers carrying the code \`${nonce}\`, which replaces the code you were given when the session started. ` +
-            'Pick up from the owner’s answer above; do not start over.',
+            (reviewSection
+                ? 'Pick up from the owner’s answer above and fix the review findings above as that section says; do not start over.'
+                : 'Pick up from the owner’s answer above; do not start over.'),
         '# OUTPUT CONTRACT',
         outputContract,
-    ].join('\n\n');
+    ]
+        .filter(Boolean)
+        .join('\n\n');
 }
 
 /**
