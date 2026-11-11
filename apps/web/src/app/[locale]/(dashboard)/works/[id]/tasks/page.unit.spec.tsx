@@ -25,7 +25,9 @@ vi.mock('@/i18n/navigation', () => ({
 vi.mock('@/lib/api/tasks', () => ({ tasksAPI: { list } }));
 vi.mock('@/lib/api', () => ({ workAPI: { get: getWork, getRunsSummary } }));
 vi.mock('@/components/tasks/TasksScopedSection', () => ({
-    TasksScopedSection: () => <div data-testid="tasks-scoped-section" />,
+    TasksScopedSection: ({ canFileTasks }: { canFileTasks?: boolean }) => (
+        <div data-testid="tasks-scoped-section" data-can-file-tasks={String(canFileTasks)} />
+    ),
 }));
 vi.mock('@/components/tasks/TasksFilterSelects', () => ({
     TasksFilterSelects: () => <div data-testid="tasks-filter-selects" />,
@@ -40,8 +42,8 @@ vi.mock('@/components/works/app/RequestChangeDialog', () => ({
 
 import WorkTasksTabPage from './page';
 
-async function renderPage(kind: string) {
-    getWork.mockResolvedValue({ work: { id: 'work-1', kind } });
+async function renderPage(kind: string, userRole?: string) {
+    getWork.mockResolvedValue({ work: { id: 'work-1', kind, userRole } });
     const element = await WorkTasksTabPage({
         params: Promise.resolve({ id: 'work-1' }),
         searchParams: Promise.resolve({}),
@@ -85,5 +87,26 @@ describe('Work Tasks tab — header (APW-08 T27)', () => {
         render(element);
         expect(screen.queryByTestId('app-change-open')).toBeNull();
         expect(screen.getByTestId('tasks-scoped-section')).toBeTruthy();
+        // An unknown role keeps the file-Task buttons; the API still decides.
+        expect(screen.getByTestId('tasks-scoped-section')).toHaveAttribute(
+            'data-can-file-tasks',
+            'true',
+        );
+    });
+});
+
+// Review of #3164 — the Tasks API files a Task only on a Work the caller OWNS, so a member of a
+// shared Work is not offered "Add existing" / "New task" (they could only end in a 400).
+describe('Work Tasks tab — who may file Tasks here', () => {
+    it.each([
+        ['owner', 'true'],
+        ['editor', 'false'],
+        ['viewer', 'false'],
+    ])('a Work whose userRole is %s → canFileTasks %s', async (role, expected) => {
+        await renderPage('directory', role);
+        expect(screen.getByTestId('tasks-scoped-section')).toHaveAttribute(
+            'data-can-file-tasks',
+            expected,
+        );
     });
 });

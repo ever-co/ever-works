@@ -64,6 +64,7 @@ vi.mock('@/components/tasks/WorkSelect', () => ({
         noneLabel,
         testId,
         id,
+        ownedOnly,
     }: {
         value: string;
         onValueChange: (v: string) => void;
@@ -71,9 +72,11 @@ vi.mock('@/components/tasks/WorkSelect', () => ({
         noneLabel: string;
         testId?: string;
         id?: string;
+        ownedOnly?: boolean;
     }) => (
         <select
             data-testid={testId}
+            data-owned-only={String(Boolean(ownedOnly))}
             id={id}
             value={value}
             disabled={disabled}
@@ -403,6 +406,12 @@ describe('GoalForm — the Goal’s Work (APW-08 T33)', () => {
         expect(screen.getByTestId('goal-work-select')).toHaveValue('');
         expect(screen.getByLabelText('work.label')).toBeInTheDocument();
         expect(screen.getByText('work.hint')).toBeInTheDocument();
+    });
+
+    // Review of #3164 — the Goals API files a Goal only on a Work the caller owns.
+    it('offers only the Works the caller owns', () => {
+        render(<GoalForm />);
+        expect(screen.getByTestId('goal-work-select')).toHaveAttribute('data-owned-only', 'true');
     });
 
     it('a picked Work is sent as workId; no Work sends no workId key at all', async () => {
