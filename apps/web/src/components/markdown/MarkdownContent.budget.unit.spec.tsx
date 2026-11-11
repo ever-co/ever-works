@@ -200,6 +200,76 @@ describe('a fence opened inside a container hides nothing from the pre-check', (
     });
 });
 
+/**
+ * Fourth closure check: the parser ends a line at "\r" and "\r\n" as well as
+ * "\n". Text written with lone "\r" was one line to the pre-check; the
+ * renderer now normalizes line endings once, before the check and the parse.
+ */
+const tabbedQuoteLines = (n: number) =>
+    Array.from(
+        { length: n },
+        (_, k) => '>' + '\t'.repeat(Math.floor(k / 2)) + (k % 2 ? '  ' : '') + '- x',
+    );
+/** Line endings cycling through "\r", "\r\n" and "\n". */
+const mixedEndings = (lines: string[]) =>
+    lines.map((line, k) => line + ['\r', '\r\n', '\n'][k % 3]).join('');
+
+const LINE_ENDING_CASES: Array<[string, string]> = [
+    ['8,000 table rows ended by "\\r" (12.9 s in the review)', 'a|b\r-|-\r' + 'x|y\r'.repeat(8000)],
+    ['3,000 table rows ended by "\\r" (1.1 s)', 'a|b\r-|-\r' + 'x|y\r'.repeat(3000)],
+    ['4,000 nested list levels after "x\\r" (8.6 s)', 'x\r' + '- '.repeat(4000) + 'x'],
+    ['2,000 nested list levels after "x\\r" (2.2 s)', 'x\r' + '- '.repeat(2000) + 'x'],
+    [
+        'a tab-nested quote list joined by "\\r", 300 levels (1.8 s)',
+        'x\r' + tabbedQuoteLines(300).join('\r'),
+    ],
+    ['a "\\r" table after "\\n" lines (1.1 s)', 'intro\n\n' + 'a|b\r-|-\r' + 'x|y\r'.repeat(3000)],
+    [
+        '3,000 table rows with mixed "\\r", "\\r\\n" and "\\n"',
+        mixedEndings(['a|b', '-|-', ...Array.from({ length: 3000 }, () => 'x|y')]),
+    ],
+    ['2,000 nested list levels after a "\\r\\n" line', 'x\r\n' + '- '.repeat(2000) + 'x'],
+    [
+        'a tab-nested quote list with mixed endings, 300 levels',
+        mixedEndings(['x', ...tabbedQuoteLines(300)]),
+    ],
+];
+
+describe('line endings: "\\r" and "\\r\\n" end lines for the check as for the parser', () => {
+    it.each(LINE_ENDING_CASES)('%s', (_name, md) => {
+        const { ms, fallback } = renderBlock(md);
+        expect(ms).toBeLessThan(BUDGET_MS);
+        expect(fallback).toBe(true);
+    });
+
+    it('a "\\r\\n" description renders exactly like its "\\n" twin', () => {
+        const lf =
+            '## Plan\n\nShip **pricing** with `three` tiers.\n\n- one\n- two\n  - nested\n\n' +
+            '| a | b |\n|---|---|\n| 1 | 2 |\n\n> quoted\n\n```ts\nconst x = 1;\n```\n';
+        const crlf = lf.replace(/\n/g, '\r\n');
+        const cr = lf.replace(/\n/g, '\r');
+        const html = (md: string) => {
+            const { container } = render(<MarkdownContent content={md} />);
+            const out = container.innerHTML;
+            cleanup();
+            return out;
+        };
+        const expected = html(lf);
+        expect(expected).toContain('<table');
+        expect(expected).not.toContain('data-markdown-fallback');
+        expect(html(crlf)).toBe(expected);
+        expect(html(cr)).toBe(expected);
+    });
+
+    it('the inline variant normalizes too', () => {
+        const { container } = render(<MarkdownInline content={'**a**\r\n*b*\rc'} />);
+        expect(container.querySelector('strong')?.textContent).toBe('a');
+        expect(container.querySelector('em')?.textContent).toBe('b');
+        expect(container.textContent).not.toContain('\r');
+        cleanup();
+    });
+});
+
 /** Lines that look like they end a table but that the parser keeps as rows. */
 const ROW_LINES: Array<[string, string]> = [
     ['"```x`" (not a fence)', '```x`'],

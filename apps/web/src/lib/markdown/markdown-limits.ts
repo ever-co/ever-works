@@ -180,11 +180,25 @@ interface TextOptions {
     blockConstructs: boolean;
 }
 
+/**
+ * Line endings as the parser sees them: micromark ends a line at "\n", "\r"
+ * and "\r\n" (not at U+2028 / U+2029). A text written with lone "\r" is ONE
+ * line to a split on "\n" but thousands to the parser (PR #3137, fourth
+ * closure check: 8,000 table rows ended by "\r" took 12.9 s), so the renderer
+ * normalizes once at its entry, and the pre-check and the parser both read
+ * the result.
+ */
+export function normalizeLineEndings(text: string): string {
+    return text.includes('\r') ? text.replace(/\r\n?/g, '\n') : text;
+}
+
 function assessText(
-    content: string,
+    text: string,
     { caps, maxLength, blockConstructs }: TextOptions,
 ): MarkdownTextAssessment {
-    if (content.length > maxLength) return { render: false, reason: 'length' };
+    if (text.length > maxLength) return { render: false, reason: 'length' };
+    // Defensive: the renderer already passes normalized text; a direct caller may not.
+    const content = normalizeLineEndings(text);
 
     const counts: MarkdownTextCounts = {
         lines: 0,

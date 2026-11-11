@@ -20,6 +20,7 @@ import { resolveMarkdownHref, resolveMarkdownImageSrc } from '@/lib/markdown/mar
 import {
     assessInlineMarkdownText,
     assessMarkdownText,
+    normalizeLineEndings,
     type MarkdownTextLimitReason,
 } from '@/lib/markdown/markdown-limits';
 import {
@@ -348,9 +349,10 @@ export type MarkdownRenderAssessment =
  * times (tests search for each budget's limit with it).
  */
 export function assessMarkdownRender(
-    content: string,
+    rawContent: string,
     variant: 'block' | 'inline' = 'block',
 ): MarkdownRenderAssessment {
+    const content = normalizeLineEndings(rawContent);
     const text =
         variant === 'block' ? assessMarkdownText(content) : assessInlineMarkdownText(content);
     if (!text.render) return { render: false, reason: text.reason };
@@ -434,12 +436,15 @@ export interface MarkdownContentProps {
  * a form) does not parse the same text again.
  */
 export const MarkdownContent = memo(function MarkdownContent({
-    content,
+    content: rawContent,
     size = 'sm',
     className,
     id,
     'data-testid': testId,
 }: MarkdownContentProps) {
+    // Once, at the entry: the pre-check, the parser and the fallback all read
+    // the same text (a lone "\r" ends a line for the parser).
+    const content = normalizeLineEndings(rawContent);
     const parsed = assessMarkdownText(content).render
         ? parseMarkdown({
               children: content,
@@ -473,10 +478,11 @@ export const MarkdownContent = memo(function MarkdownContent({
  * are dropped. Text the renderer will not parse shows as plain text.
  */
 export const MarkdownInline = memo(function MarkdownInline({
-    content,
+    content: rawContent,
     className,
     'data-testid': testId,
 }: Omit<MarkdownContentProps, 'size' | 'id'>) {
+    const content = normalizeLineEndings(rawContent);
     const parsed = assessInlineMarkdownText(content).render
         ? parseMarkdown({
               children: content,

@@ -7,6 +7,7 @@ import {
     MAX_MARKDOWN_NESTING,
     assessInlineMarkdownText,
     assessMarkdownText,
+    normalizeLineEndings,
 } from './markdown-limits';
 
 const reason = (md: string) => {
@@ -101,6 +102,15 @@ describe('assessMarkdownText', () => {
             expect(reason(prefix + '- '.repeat(MAX_MARKDOWN_NESTING + 1) + 'x')).toBe('nesting');
             expect(reason(prefix + '*a'.repeat(BLOCK_TEXT_CAPS.emphasis + 1))).toBe('emphasis');
         }
+    });
+
+    it('ends lines at "\\r" and "\\r\\n" as the parser does (fourth closure check)', () => {
+        expect(reason('a|b\r-|-\r' + 'x|y\r'.repeat(BLOCK_TEXT_CAPS.tableRows))).toBe('tableRows');
+        expect(reason('x\r' + '- '.repeat(MAX_MARKDOWN_NESTING + 1) + 'x')).toBe('nesting');
+        expect(reason('x\r\n' + '- '.repeat(MAX_MARKDOWN_NESTING + 1) + 'x')).toBe('nesting');
+        expect(normalizeLineEndings('a\r\nb\rc\nd')).toBe('a\nb\nc\nd');
+        // U+2028 / U+2029 are not line endings for the parser: left alone.
+        expect(normalizeLineEndings('a\u2028b\u2029c')).toBe('a\u2028b\u2029c');
     });
 
     it('passes descriptions with large real code blocks', () => {
