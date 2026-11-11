@@ -73,7 +73,8 @@ const defaultsSchema = z
         guardrails: guardrailsSchema.optional(),
         /**
          * APW-08 T38 (FR-57) — what the spawned Mission's tick files: Ideas, Tasks on its
-         * attached App Works, or both. Omitted = the Mission's own default (`ideas`).
+         * attached App or Repository Works, or both. Omitted = the Mission's own default
+         * (`ideas`).
          */
         outputMode: z.enum(MISSION_OUTPUT_MODES).optional(),
         /** APW-08 T38 — the Task output's bounds, the same ranges the Mission write accepts. */

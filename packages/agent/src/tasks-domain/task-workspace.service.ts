@@ -2275,6 +2275,13 @@ export class TaskWorkspaceService {
             branchState: 'pr-open',
             prNumber: pr.number,
             prUrl: pr.url,
+            // A NEW pull request on a Task that already carries the PR-status cache of an earlier
+            // one (closed or merged, then run again): that cache describes the old pull request,
+            // and a `closed` / `merged` row is never polled again (`findDuePrStatusSync`), so the
+            // new one would read as closed to the status sweep, the Goal loop's wait-for-merge
+            // and a Mission's open-Tasks cap. Cleared to "not read yet", exactly as for a Task's
+            // first pull request; the next sweep fills it in.
+            ...(carriesAnotherPullRequestsStatus(task, pr.number) ? CLEARED_PR_STATUS_CACHE : {}),
         });
         // APW-08 T26 / T54 (FR-43) — **Opened pull request #{number}.**, once: only when the
         // number recorded now differs from the one the Task carried (`task` is the row as it was
@@ -4194,6 +4201,35 @@ export class TaskWorkspaceService {
  */
 function mountBranchAlreadyGone(message: string): boolean {
     return message.toLowerCase().includes('reference does not exist');
+}
+
+/**
+ * The PR-status cache (`TaskPrStatusService.toCachePatch` writes all five) as it
+ * is before any pull request was read: what a Task's first pull request starts
+ * with, and what a NEW pull request on a Task resets it to.
+ */
+const CLEARED_PR_STATUS_CACHE = Object.freeze({
+    prState: null,
+    ciState: null,
+    ciCheckedAt: null,
+    prChecks: null,
+    prHeadSha: null,
+});
+
+/**
+ * Does the Task carry the PR-status cache of a pull request OTHER than
+ * `prNumber`? Only then is there anything stale to clear; a Task's first pull
+ * request (no cache yet) keeps its write exactly as it was.
+ */
+function carriesAnotherPullRequestsStatus(task: Task, prNumber: number): boolean {
+    if (task.prNumber === prNumber) return false;
+    return (
+        task.prState != null ||
+        task.ciState != null ||
+        task.ciCheckedAt != null ||
+        task.prChecks != null ||
+        task.prHeadSha != null
+    );
 }
 
 /**

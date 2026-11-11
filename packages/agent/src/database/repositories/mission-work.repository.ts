@@ -15,8 +15,17 @@ export interface MissionWorkWithWork {
     createdAt: Date;
     workName: string | null;
     workSlug: string | null;
-    /** APW-08 T34 — the Work's kind (`app` decides whether a Mission can file Tasks on it). */
+    /**
+     * APW-08 T34 — the Work's kind: a Mission can file Tasks on the kinds whose Tasks are
+     * delivered as pull requests (`app`, `repo`; `workKindDeliversTasksAsPullRequests`).
+     */
     workKind?: string | null;
+    /**
+     * The Work's `taskIsolation` setting (`worktree` = on). Read with the kind: a Task on a
+     * Repository Work only becomes a branch and a pull request while it is on, so a Mission
+     * files nothing on one where it is off (`missionTaskOutputEligibility`).
+     */
+    workTaskIsolation?: string | null;
 }
 
 /** A mission_works row hydrated with the Mission's display fields
@@ -127,6 +136,7 @@ export class MissionWorkRepository {
                 'work.name AS "workName"',
                 'work.slug AS "workSlug"',
                 'work.kind AS "workKind"',
+                'work.taskIsolation AS "workTaskIsolation"',
             ])
             .where('rel.missionId = :missionId AND rel.userId = :userId', { missionId, userId })
             .orderBy('rel.createdAt', 'DESC');

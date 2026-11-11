@@ -44,7 +44,7 @@ import {
     ownershipWhereWith,
     type OwnershipScope,
 } from '../database/ownership-scope';
-import { isAppWorkKind } from '@ever-works/contracts';
+import { workKindDeliversTasksAsPullRequests } from '@ever-works/contracts';
 import { Work } from '../entities/work.entity';
 import { addInsertionOrderTieBreak, isSqliteFamilyDriver } from '../database/insertion-order';
 import {
@@ -260,8 +260,9 @@ export class GoalOrchestratorService {
         // (start / pause / cancel / limits / spend) is runtime: no event, no version.
         // TRAILING + @Optional() per the arity rule above.
         @Optional() private readonly domainEvents?: DomainEventPublisher,
-        // APW-08 T32 (FR-47, FR-48) — the Goal's Work: is it still there, and is it an App Work
-        // (whose open pull requests hold the concurrency ceiling)? TRAILING + @Optional():
+        // APW-08 T32 (FR-47, FR-48) — the Goal's Work: is it still there, and are its Tasks
+        // delivered as pull requests (an App or Repository Work, whose open pull requests hold
+        // the concurrency ceiling)? TRAILING + @Optional():
         // unbound, a Goal's Work is not checked and its iterations still carry it.
         @Optional() @InjectRepository(Work) private readonly works?: Repository<Work>,
     ) {}
@@ -1623,9 +1624,13 @@ export class GoalOrchestratorService {
      * - **FR-48 / S26:** a Work that is gone, or no longer the Goal owner's in the Goal's scope,
      *   is `unavailable` (the loop pauses). A failed READ is `unreadable`: neither proof that it
      *   is gone nor that nothing awaits a merge, so the loop waits (review of #3058).
-     * - **FR-47 / S10:** for an App Work, this Goal's Tasks ON THAT WORK that are not finished,
-     *   have no run in flight (a running one is already counted) and still have an open pull
-     *   request await a merge, oldest first. "Open" is the workspace's own rule
+     * - **FR-47 / S10:** for a Work whose Tasks are delivered as pull requests (an App Work or
+     *   a Repository Work — `workKindDeliversTasksAsPullRequests`), this Goal's Tasks ON THAT WORK
+     *   that are not finished, have no run in flight (a running one is already counted) and
+     *   still have an open pull request await a merge, oldest first. Without the wait, iteration
+     *   N+1 would branch from a base that lacks iteration N's unmerged change and repeat it or
+     *   conflict with it — on a Repository Work exactly as on an App Work. Every other kind is
+     *   never gated, as before. "Open" is the workspace's own rule
      *   (`openPullRequestOf`): a PR number and URL, not merged or closed (an unknown state, as
      *   before the PR sweep first runs, and a draft both count as open), and a branch that is
      *   still live. Status is not narrowed to `in_review`: a change the CI budget moved to
@@ -1633,6 +1638,12 @@ export class GoalOrchestratorService {
      *   Goal's 500-Task window can never hide one; the open-PR rule is applied in SQL before the
      *   scan's limit, and the runs in flight are read for exactly those Tasks, not taken from the
      *   500-Task window (review of #3060).
+     *
+     * The rule needs a RECORDED pull request, so two Repository Work cases never hold a slot and
+     * cannot stall the loop: a Task whose branch was pushed with no pull request (its Agent may
+     * not open one — `pushed-no-pr` leaves `prNumber` unset), and a Task on a Work whose Task
+     * isolation is off (no branch, no pull request at all). In both the next iteration starts
+     * when the run ends, as it did before this gate covered Repository Works.
      */
     private async goalWorkState(goal: Goal): Promise<{
         unavailable: boolean;
@@ -1658,7 +1669,7 @@ export class GoalOrchestratorService {
         ) {
             return { ...fine, unavailable: true };
         }
-        if (!isAppWorkKind(work.kind)) return fine;
+        if (!workKindDeliversTasksAsPullRequests(work.kind)) return fine;
         let candidates: Task[];
         let running: Set<string>;
         try {

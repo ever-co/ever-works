@@ -42,7 +42,7 @@ You can edit the prompt before submitting — the template is a starting point, 
 - The template's **cadence** (`defaults.cadence` in the manifest — written as a 5-field cron string). It applies to a **scheduled** Mission only: a Mission you create as one-shot stays one-shot.
 - The template's **auto-build flag** and **outstanding-Ideas cap** if set.
 - The template's **guardrails** (max-Works-per-run, max-budget, approval requirements).
-- The template's **Output** — whether the Mission files Ideas, Tasks on its attached App Works, or both — and its Task limits (`defaults.outputMode`, `defaults.taskOutput`; see [Missions → Output](./missions.md#output)).
+- The template's **Output** — whether the Mission files Ideas, Tasks on its attached App or Repository Works, or both — and its Task limits (`defaults.outputMode`, `defaults.taskOutput`; see [Missions → Output](./missions.md#output)).
 
 Your own create-time values **override** template defaults — the manifest is a starting point, not enforcement. If you pass `schedule: null` explicitly, the template's cadence is also cleared (explicit nulls aren't clobbered by defaults).
 
@@ -120,7 +120,7 @@ suggestedGoals:
 | `defaults.outstandingIdeasCap` | Cap on un-built Ideas. `-1` = unlimited; omit = inherit account default.                          |
 | `defaults.guardrails`          | WorkAgent guardrails the Mission's builds inherit.                                                |
 | `defaults.outputMode`          | `ideas`, `tasks` or `both` — what the Mission's tick files.                                       |
-| `defaults.taskOutput`          | `tasksPerTick` (1–3) and `openTasksCap` (1–10) for Tasks on attached App Works.                   |
+| `defaults.taskOutput`          | `tasksPerTick` (1–3) and `openTasksCap` (1–10) for Tasks on attached App or Repository Works.     |
 | `kb.seedPaths`                 | Files from the template repo the scaffolder copies into the new Mission's repo at fork time.      |
 | `recommendedWorkTemplates`     | Work-template IDs the Idea→Work scaffolder pre-picks when building Ideas spawned by this Mission. |
 | `appWork.requiredRelation`     | `improves` or `operates` — how the chosen App Work is attached. Present = the form asks for one.  |

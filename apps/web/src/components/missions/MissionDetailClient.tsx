@@ -52,6 +52,7 @@ import type { WorkProposal } from '@/lib/api/work-proposals';
 import { IdeaCard } from '@/components/ideas';
 import { MissionAttachedWorksPanel, type AttachableWorkOption } from './MissionAttachedWorksPanel';
 import { MissionOutputCard } from './MissionOutputCard';
+import { missionTaskOutputWorks } from './mission-task-output-works';
 import { MissionTasksOnWorksPanel } from './MissionTasksOnWorksPanel';
 import { MissionGoalsPanel, type AttachableGoalOption } from './MissionGoalsPanel';
 import { BudgetSummaryCard } from '@/components/budgets';
@@ -248,6 +249,10 @@ export function MissionDetailClient({
                 })),
         [inheritedIdeas],
     );
+
+    // What the attached Works mean for the Output card's Task output: is there an App or
+    // Repository Work to file on, and is one a Repository Work with its Task isolation off?
+    const taskOutputWorks = missionTaskOutputWorks(workRelations);
 
     const saveSettings = () => {
         startSettings(async () => {
@@ -693,12 +698,8 @@ export function MissionDetailClient({
                     {/* ── Output (APW-08 T36, FR-51…FR-53) ─────────────── */}
                     <MissionOutputCard
                         mission={mission}
-                        hasAppWork={(workRelations ?? []).some(
-                            (relation) =>
-                                (relation.relation === 'improves' ||
-                                    relation.relation === 'operates') &&
-                                relation.workKind === 'app',
-                        )}
+                        hasTaskWork={taskOutputWorks.hasTaskWork}
+                        isolationOffWorks={taskOutputWorks.isolationOffWorks}
                         onMissionChange={setMission}
                     />
                     {/* Record visibility (EW-P1-3): who else can see this Mission. */}

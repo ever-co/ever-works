@@ -28,6 +28,8 @@ Isolation is a Work setting under **Work → Settings → Tasks & Branches**.
 
 The same fields are writable over the API with `PATCH /api/works/:id`.
 
+A [Mission that files Tasks](./missions.md#output) relies on this setting for a Repository Work: it files Tasks on one only while `taskIsolation` is `worktree`, because only then does each Task become a branch and a pull request. It never turns the setting on by itself.
+
 ## Per-Task override
 
 A single Task can opt in or out regardless of the Work setting. On the Task detail page, the **Branch** panel shows an isolation selector while the Task has no branch yet:
