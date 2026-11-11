@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_EXCERPT_LENGTH, markdownExcerpt, markdownToPlainText } from './markdown-excerpt';
+import {
+    DEFAULT_EXCERPT_LENGTH,
+    EXCERPT_INPUT_LIMIT,
+    graphemes,
+    graphemesFallback,
+    markdownExcerpt,
+    markdownToPlainText,
+} from './markdown-excerpt';
 
 const MISSION = `## Goal
 
@@ -93,5 +100,115 @@ describe('markdownExcerpt', () => {
     it('excerpts a structured description without leaking markup', () => {
         const excerpt = markdownExcerpt(MISSION, 60);
         expect(excerpt).toBe('Goal. Grow weekly signups by 20% through the onboarding…');
+    });
+});
+
+describe('markdownToPlainText — cost (PR #3137 review B2)', () => {
+    const MB = 1024 * 1024;
+    // Before the fix a 64 KB line of `[` took 11.5 s on every render of the Task list.
+    it.each([
+        '[',
+        '](',
+        '`',
+        '*',
+        '_',
+        '<',
+        '!',
+        '![',
+        '[a](',
+        '<a',
+        '**a ',
+        '~~a ',
+        '``a',
+        '\\',
+        '<!--',
+        '|',
+    ])('1 MB of %j takes under 50 ms (one line and many lines)', (unit) => {
+        const oneLine = unit.repeat(Math.ceil(MB / unit.length));
+        const manyLines = (unit.repeat(200) + '\n').repeat(Math.ceil(MB / (unit.length * 200 + 1)));
+        for (const input of [oneLine, manyLines]) {
+            const started = performance.now();
+            markdownToPlainText(input);
+            markdownExcerpt(input);
+            expect(performance.now() - started).toBeLessThan(50);
+        }
+    });
+
+    it(`reads only the first ${EXCERPT_INPUT_LIMIT} characters`, () => {
+        const text = 'a '.repeat(EXCERPT_INPUT_LIMIT) + 'TAIL';
+        expect(markdownToPlainText(text)).not.toContain('TAIL');
+    });
+});
+
+describe('markdownToPlainText — the cases the review found', () => {
+    it.each([
+        [
+            'a line starting with inline triple-backtick code is not a fence',
+            '```npm i``` first\n\n## Next\n\n**Bold** [l](https://x.test)',
+            'npm i first. Next. Bold l',
+        ],
+        [
+            'a fence indented inside a list item',
+            '- item\n\n    ```\n    code\n    ```\n\n**after**',
+            'item. code. after',
+        ],
+        ['`~~~` inside a backtick fence is content', '```\n~~~\n```\n**after**', '~~~ after'],
+        ['a URL with parentheses', '[Foo](https://en.wikipedia.org/wiki/Foo_(bar)) baz', 'Foo baz'],
+        ['nested brackets in a link label', '[a [b] c](https://x.test) tail', 'a [b] c tail'],
+        ['a multi-line HTML comment', 'a <!--\nhidden\n--> b', 'a b'],
+        [
+            'a link label with inline code',
+            'Run [`pnpm test`](https://x.test) now',
+            'Run pnpm test now',
+        ],
+        ['nested links', '[[x](https://a.test)](https://b.test)', 'x'],
+        ['an image inside a link', '[![logo](https://x.test/a.png)](https://x.test)', 'logo'],
+        ['a reference link and its definition', '[x][r] y\n\n[r]: https://x.test', 'x y.'],
+        ['a footnote reference and its definition', 'Text[^1]\n\n[^1]: The note', 'Text.'],
+        [
+            'escaped markup stays literal',
+            '\\*not bold\\* and \\[not a link\\](x)',
+            '*not bold* and [not a link](x)',
+        ],
+        ['emphasis inside code is kept', 'use `**kwargs` and `a_b_c`', 'use **kwargs and a_b_c'],
+        ['an unclosed emphasis stays literal', '5* rating and **open', '5* rating and **open'],
+        ['tags split by a tag', '<scr<b>ipt>alert(1)</script>', '<scr ipt>alert(1)'],
+        ['an indented setext underline', 'Title\n  ===\nBody', 'Title. Body'],
+    ])('%s', (_name, md, expected) => {
+        expect(markdownToPlainText(md)).toBe(expected);
+    });
+});
+
+describe('markdownExcerpt — grapheme-safe truncation', () => {
+    const segmenter = new Intl.Segmenter('en', { granularity: 'grapheme' });
+    const clusters = (text: string) => Array.from(segmenter.segment(text), (part) => part.segment);
+
+    it.each([
+        ['an emoji family (ZWJ sequence)', 'ab ' + '👨‍👩‍👧‍👦'.repeat(40)],
+        ['flags (regional-indicator pairs)', 'ab ' + '🇫🇷🇩🇪'.repeat(40)],
+        ['skin tones', 'ab ' + '👍🏽'.repeat(60)],
+        ['combining marks', 'ab ' + 'é'.repeat(200)],
+        ['plain astral emoji', 'ab ' + '🚀'.repeat(60)],
+    ])('never cuts %s', (_name, md) => {
+        const source = new Set(clusters(md));
+        for (let max = 2; max <= 14; max++) {
+            const excerpt = markdownExcerpt(md, max);
+            expect(clusters(excerpt).length).toBeLessThanOrEqual(max);
+            const body = excerpt.endsWith('…') ? excerpt.slice(0, -1) : excerpt;
+            for (const cluster of clusters(body)) expect(source.has(cluster)).toBe(true);
+        }
+    });
+
+    it('max = 1 answers at most one grapheme', () => {
+        expect(markdownExcerpt('hello world', 1)).toBe('…');
+        expect(clusters(markdownExcerpt('👨‍👩‍👧‍👦👨‍👩‍👧‍👦', 1))).toHaveLength(1);
+        expect(markdownExcerpt('h', 1)).toBe('h');
+    });
+
+    it('the fallback without Intl.Segmenter keeps the same clusters together', () => {
+        for (const sample of ['👨‍👩‍👧‍👦👍🏽', '🇫🇷🇩🇪🇮🇹', 'éä', '❤️🚀', 'abc']) {
+            expect(graphemesFallback(sample)).toEqual(clusters(sample));
+        }
+        expect(graphemes('🇫🇷🇩🇪')).toEqual(['🇫🇷', '🇩🇪']);
     });
 });
