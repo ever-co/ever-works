@@ -1814,6 +1814,8 @@
                 "required": "Required",
                 "remove": "Remove",
                 "addCheck": "Add check",
+                "tooManyChecks": "A Task can have at most {max} checks; this one has {count}. Remove some, then save.",
+                "commandTooLong": "The command of the check “{name}” is {length} characters long; a check command can be at most {max} characters.",
                 "kinds": {
                     "build": "Build",
                     "test": "Test",

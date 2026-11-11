@@ -14,12 +14,51 @@ import type { TaskAcceptanceCheck } from '@ever-works/contracts';
  *   - a timeout below 1 (the field allows typing 0) → none; above 3600 → 3600.
  *
  * Every other field (phase, mountDir, envPassthrough, …) is kept as is.
+ *
+ * Two limits are not fixed here, because fixing them would change what the
+ * user asked for (cut a command, drop a check): `acceptanceChecksSaveProblem`
+ * names them so the form can say why it will not save.
  */
 
 const ID_PATTERN = /^[a-z0-9][a-z0-9-_]{0,40}$/;
 const ID_MAX = 41;
 const NAME_MAX = 120;
 const TIMEOUT_MAX = 3600;
+
+/** `@ArrayMaxSize(20)` on `acceptanceChecks` in the API's CreateTaskDto and UpdateTaskDto. */
+export const ACCEPTANCE_CHECKS_MAX = 20;
+/** `@MaxLength(2000)` on `AcceptanceCheckDto.command`. */
+export const ACCEPTANCE_CHECK_COMMAND_MAX = 2000;
+
+/** A limit the API would still refuse the saved checks for; the key names its message. */
+export type AcceptanceChecksSaveProblem =
+    | { reason: 'tooManyChecks'; count: number; max: number }
+    | { reason: 'commandTooLong'; name: string; length: number; max: number };
+
+/**
+ * What the API would refuse in rows `acceptanceChecksForSave` produced, or
+ * null when they will save: more checks than the DTO takes, or a command
+ * longer than it takes (counted in characters, as class-validator does).
+ */
+export function acceptanceChecksSaveProblem(
+    rows: readonly TaskAcceptanceCheck[],
+): AcceptanceChecksSaveProblem | null {
+    if (rows.length > ACCEPTANCE_CHECKS_MAX) {
+        return { reason: 'tooManyChecks', count: rows.length, max: ACCEPTANCE_CHECKS_MAX };
+    }
+    for (const row of rows) {
+        const length = Array.from(row.command).length;
+        if (length > ACCEPTANCE_CHECK_COMMAND_MAX) {
+            return {
+                reason: 'commandTooLong',
+                name: row.name,
+                length,
+                max: ACCEPTANCE_CHECK_COMMAND_MAX,
+            };
+        }
+    }
+    return null;
+}
 
 function slug(raw: string): string {
     return raw

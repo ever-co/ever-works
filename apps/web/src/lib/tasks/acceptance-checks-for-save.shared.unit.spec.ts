@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type { TaskAcceptanceCheck } from '@ever-works/contracts';
-import { acceptanceChecksForSave } from './acceptance-checks-for-save.shared';
+import {
+    acceptanceChecksForSave,
+    acceptanceChecksSaveProblem,
+} from './acceptance-checks-for-save.shared';
 
 /** `AcceptanceCheckDto`'s id rule (`packages/agent/src/dto/acceptance-check.dto.ts`). */
 const API_ID = /^[a-z0-9][a-z0-9-_]{0,40}$/;
@@ -67,5 +70,42 @@ describe('acceptanceChecksForSave', () => {
             check({ phase: 'setup', mountDir: 'api', envPassthrough: ['CI'] }),
         ]);
         expect(row).toMatchObject({ phase: 'setup', mountDir: 'api', envPassthrough: ['CI'] });
+    });
+});
+
+// Review of #3164 (finding 4): the two DTO limits the save cannot fix by
+// itself — `@ArrayMaxSize(20)` on acceptanceChecks (apps/api/src/tasks/tasks.dto.ts)
+// and `@MaxLength(2000)` on the command — are named instead of sent for a 400.
+describe('acceptanceChecksSaveProblem', () => {
+    const rows = (count: number) =>
+        Array.from({ length: count }, (_, i) => check({ id: `c-${i}`, name: `Check ${i}` }));
+
+    it('accepts 20 checks with commands of up to 2000 characters', () => {
+        const atLimit = rows(20);
+        atLimit[0] = check({ id: 'long', command: 'x'.repeat(2000) });
+        expect(acceptanceChecksSaveProblem(atLimit)).toBeNull();
+        expect(acceptanceChecksSaveProblem([])).toBeNull();
+    });
+
+    it('names a 21st check', () => {
+        expect(acceptanceChecksSaveProblem(rows(21))).toEqual({
+            reason: 'tooManyChecks',
+            count: 21,
+            max: 20,
+        });
+    });
+
+    it('names the check whose command is over 2000 characters', () => {
+        expect(
+            acceptanceChecksSaveProblem([
+                check({}),
+                check({ id: 'e2e', name: 'E2E', command: 'y'.repeat(2001) }),
+            ]),
+        ).toEqual({ reason: 'commandTooLong', name: 'E2E', length: 2001, max: 2000 });
+    });
+
+    it('counts characters, not UTF-16 units, as the API validator does', () => {
+        // 1500 emoji = 3000 UTF-16 units but 1500 characters: the API accepts it.
+        expect(acceptanceChecksSaveProblem([check({ command: '🚀'.repeat(1500) })])).toBeNull();
     });
 });
