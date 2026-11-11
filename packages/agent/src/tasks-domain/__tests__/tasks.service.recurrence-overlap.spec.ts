@@ -73,6 +73,7 @@ function build(task: Task, open: OpenRecurrenceInstances = openInstances(0)) {
             create: jest.fn(async (data: Partial<Task>) => ({ ...data, id: 'instance-1' }) as Task),
             findLatestRecurrenceInstance: jest.fn().mockResolvedValue(null),
             countOpenRecurrenceInstances: jest.fn().mockResolvedValue(open),
+            clearRecurrenceSkip: jest.fn().mockResolvedValue(true),
         },
         assignees: {
             findAgentAssignees: jest.fn().mockResolvedValue([]),
@@ -139,8 +140,9 @@ describe('TasksService — recurring overlap limit', () => {
                 expect.objectContaining({ id: 'inst-2', slug: 'T-11' }),
                 expect.objectContaining({ id: 'inst-3', slug: 'T-12' }),
             ]);
+            // The rule reads the template row (its id and its Work), not just an id.
             expect(repos.tasks.countOpenRecurrenceInstances).toHaveBeenCalledWith(
-                'tpl-1',
+                expect.objectContaining({ id: 'tpl-1' }),
                 expect.any(Date),
             );
             expect(repos.tasks.create).not.toHaveBeenCalled();
@@ -246,6 +248,34 @@ describe('TasksService — recurring overlap limit', () => {
             );
             expect(repos.tasks.countOpenRecurrenceInstances).toHaveBeenCalledTimes(1);
         });
+
+        it('an instance spawned out of band clears a skip marker, forced or not', async () => {
+            const skippedAt = new Date('2026-11-10T09:00:00Z');
+            const normal = build(template({ recurrenceSkippedAt: skippedAt }), openInstances(1));
+            await normal.service.runRecurringNow('user-1', 'tpl-1');
+            expect(normal.repos.tasks.clearRecurrenceSkip).toHaveBeenCalledWith('tpl-1');
+
+            const forced = build(template({ recurrenceSkippedAt: skippedAt }), openInstances(3));
+            await forced.service.runRecurringNow('user-1', 'tpl-1', undefined, { force: true });
+            expect(forced.repos.tasks.clearRecurrenceSkip).toHaveBeenCalledWith('tpl-1');
+            // A quiet write: the template row itself is never updated by run-now.
+            expect(forced.repos.tasks.updateById).not.toHaveBeenCalled();
+        });
+
+        it('no skip marker, no clear; a refused run-now clears nothing', async () => {
+            const plain = build(template({ recurrenceSkippedAt: null }), openInstances(0));
+            await plain.service.runRecurringNow('user-1', 'tpl-1');
+            expect(plain.repos.tasks.clearRecurrenceSkip).not.toHaveBeenCalled();
+
+            const refused = build(
+                template({ recurrenceSkippedAt: new Date('2026-11-10T09:00:00Z') }),
+                openInstances(3),
+            );
+            await expect(refused.service.runRecurringNow('user-1', 'tpl-1')).rejects.toBeInstanceOf(
+                ConflictException,
+            );
+            expect(refused.repos.tasks.clearRecurrenceSkip).not.toHaveBeenCalled();
+        });
     });
 
     describe('setRecurring', () => {
@@ -272,6 +302,58 @@ describe('TasksService — recurring overlap limit', () => {
                 recurrenceMaxOpenInstances: null,
             });
         });
+
+        it('clearing the limit (null) also clears the skip marker; changing it does not', async () => {
+            const skippedAt = new Date('2026-11-10T09:00:00Z');
+            const cleared = build(
+                template({ recurrenceMaxOpenInstances: 3, recurrenceSkippedAt: skippedAt }),
+            );
+            await cleared.service.setRecurring('user-1', 'tpl-1', {
+                recurrenceMaxOpenInstances: null,
+            });
+            expect(cleared.repos.tasks.updateById.mock.calls[0][1]).toEqual({
+                recurrenceMaxOpenInstances: null,
+                recurrenceSkippedAt: null,
+            });
+
+            const viaCadence = build(
+                template({ recurrenceMaxOpenInstances: 3, recurrenceSkippedAt: skippedAt }),
+            );
+            await viaCadence.service.setRecurring('user-1', 'tpl-1', {
+                recurrenceCron: '0 9 * * *',
+                recurrenceMaxOpenInstances: null,
+            });
+            expect(viaCadence.repos.tasks.updateById.mock.calls[0][1]).toMatchObject({
+                recurrenceMaxOpenInstances: null,
+                recurrenceSkippedAt: null,
+            });
+
+            const raised = build(
+                template({ recurrenceMaxOpenInstances: 3, recurrenceSkippedAt: skippedAt }),
+            );
+            await raised.service.setRecurring('user-1', 'tpl-1', { recurrenceMaxOpenInstances: 5 });
+            expect(raised.repos.tasks.updateById.mock.calls[0][1]).toEqual({
+                recurrenceMaxOpenInstances: 5,
+            });
+        });
+
+        it.each([
+            { recurrenceMaxOccurrences: 5 },
+            { recurrenceTimezone: 'UTC' },
+            { recurrenceEndsAt: null },
+        ])(
+            'the limit with another recurrence field and no cadence stays a 400 (%p)',
+            async (extra) => {
+                const { service, repos } = build(template());
+                await expect(
+                    service.setRecurring('user-1', 'tpl-1', {
+                        recurrenceMaxOpenInstances: 2,
+                        ...extra,
+                    }),
+                ).rejects.toBeInstanceOf(BadRequestException);
+                expect(repos.tasks.updateById).not.toHaveBeenCalled();
+            },
+        );
 
         it('a limit alone on a Task that is not a recurring template is a 400', async () => {
             const plain = build(template({ isRecurring: false }));

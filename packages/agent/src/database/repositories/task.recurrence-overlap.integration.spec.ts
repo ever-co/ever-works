@@ -8,7 +8,6 @@ import { DistributedTaskLockService } from '../../cache/distributed-task-lock.se
 import { TaskRecurrenceDispatcherService } from '../../tasks-domain/task-recurrence-dispatcher.service';
 import {
     RECURRENCE_OPEN_INSTANCE_WINDOW_MS,
-    RECURRENCE_SKIP_RECORD_GAP_MS,
     recurrenceFireLockKey,
     recurrenceOpenInstancesWhere,
 } from '../../tasks-domain/recurrence-overlap';
@@ -30,6 +29,8 @@ describe('Recurring Tasks overlap limit (real SQLite)', () => {
     let slugSeq = 0;
 
     const OWNER = '11111111-1111-4111-8111-111111111111';
+    const WORK = '33333333-3333-4333-8333-333333333333';
+    const OTHER_WORK = '44444444-4444-4444-8444-444444444444';
     const AGENT = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
     const ORG = '55555555-5555-4555-8555-555555555555';
     const TENANT = '99999999-9999-4999-8999-999999999999';
@@ -135,14 +136,45 @@ describe('Recurring Tasks overlap limit (real SQLite)', () => {
             .execute();
     }
 
-    async function run(taskId: string, status: AgentRun['status']): Promise<void> {
-        await runRows.save(
-            runRows.create({ agentId: AGENT, userId: OWNER, triggerKind: 'task', status, taskId }),
+    async function run(
+        taskId: string,
+        status: AgentRun['status'],
+        extra: {
+            awaitingInput?: boolean;
+            startedAt?: Date | null;
+            createdAt?: Date;
+            queuedReason?: string | null;
+        } = {},
+    ): Promise<void> {
+        const row = await runRows.save(
+            runRows.create({
+                agentId: AGENT,
+                userId: OWNER,
+                triggerKind: 'task',
+                status,
+                taskId,
+                awaitingInput: extra.awaitingInput ?? false,
+                startedAt: extra.startedAt ?? null,
+                queuedReason: extra.queuedReason ?? null,
+            }),
         );
+        if (extra.createdAt) {
+            await runRows
+                .createQueryBuilder()
+                .update(AgentRun)
+                .set({ createdAt: extra.createdAt })
+                .where('id = :id', { id: row.id })
+                .execute();
+        }
     }
 
     const count = async (parent: Task, now = NOW) =>
-        (await repository.countOpenRecurrenceInstances(parent.id, now)).count;
+        (await repository.countOpenRecurrenceInstances(parent, now)).count;
+    const openIds = async (parent: Task, now = NOW) =>
+        (await repository.countOpenRecurrenceInstances(parent, now)).instances
+            .map((row) => row.id)
+            .sort();
+    const ago = (ms: number) => new Date(NOW.getTime() - ms);
 
     describe('countOpenRecurrenceInstances', () => {
         it('counts a queued or running run whatever the status, and never a finished one', async () => {
@@ -163,25 +195,135 @@ describe('Recurring Tasks overlap limit (real SQLite)', () => {
             expect(await count(parent)).toBe(2);
         });
 
-        it('counts an open or draft pull request with no age bound, until Done or Cancelled', async () => {
-            const parent = await template();
-            const old = new Date(NOW.getTime() - 60 * DAY);
-            await instance(
+        it('counts an open or draft pull request the sweep still reads on the Work, with no age bound', async () => {
+            const parent = await template({ workId: WORK });
+            const old = ago(60 * DAY);
+            const open = await instance(
                 parent,
-                { status: TaskStatus.IN_REVIEW, prNumber: 7, prState: 'open' },
+                { status: TaskStatus.IN_REVIEW, prNumber: 7, prState: 'open', workId: WORK },
                 { createdAt: old, updatedAt: old },
             );
-            await instance(
+            await setTimes(open.id, { ciCheckedAt: ago(HOUR) });
+            const draft = await instance(
                 parent,
-                { status: TaskStatus.BLOCKED, prNumber: 8, prState: 'draft' },
+                { status: TaskStatus.BLOCKED, prNumber: 8, prState: 'draft', workId: WORK },
                 { createdAt: old, updatedAt: old },
             );
-            await instance(parent, {
+            await setTimes(draft.id, { ciCheckedAt: ago(10 * 60_000) });
+            const cancelled = await instance(parent, {
                 status: TaskStatus.CANCELLED,
                 prNumber: 9,
                 prState: 'open',
+                workId: WORK,
             });
-            expect(await count(parent)).toBe(2);
+            await setTimes(cancelled.id, { ciCheckedAt: ago(HOUR) });
+            expect(await openIds(parent)).toEqual([open.id, draft.id].sort());
+        });
+
+        it('an open pull request NOT confirmed on the template’s Work counts only 7 days after it last changed', async () => {
+            const parent = await template({ workId: WORK });
+            const old = ago(60 * DAY);
+            // Moved out of the Work (the sweep never polls `workId IS NULL`): bounded by updatedAt.
+            const movedOutStale = await instance(
+                parent,
+                { status: TaskStatus.IN_REVIEW, prNumber: 30, prState: 'open', workId: null },
+                { createdAt: old, updatedAt: ago(8 * DAY) },
+            );
+            await setTimes(movedOutStale.id, { ciCheckedAt: ago(HOUR) });
+            const movedOutRecent = await instance(
+                parent,
+                { status: TaskStatus.IN_REVIEW, prNumber: 31, prState: 'open', workId: null },
+                { createdAt: old, updatedAt: ago(6 * DAY) },
+            );
+            // Moved to another Work, read fresh there: still bounded by updatedAt.
+            const otherWork = await instance(
+                parent,
+                { status: TaskStatus.IN_REVIEW, prNumber: 32, prState: 'open', workId: OTHER_WORK },
+                { createdAt: old, updatedAt: ago(8 * DAY) },
+            );
+            await setTimes(otherWork.id, { ciCheckedAt: ago(HOUR) });
+            // On the Work, but the sweep has not read it for 8 days.
+            const sweepStopped = await instance(
+                parent,
+                { status: TaskStatus.IN_REVIEW, prNumber: 33, prState: 'open', workId: WORK },
+                { createdAt: old, updatedAt: old },
+            );
+            await setTimes(sweepStopped.id, { ciCheckedAt: ago(8 * DAY) });
+            expect(await openIds(parent)).toEqual([movedOutRecent.id]);
+            expect(movedOutStale.id && otherWork.id && sweepStopped.id).toBeTruthy();
+        });
+
+        it('a template with no Work bounds every open pull request by its last change', async () => {
+            const parent = await template({ workId: null });
+            const confirmedButOld = await instance(
+                parent,
+                { status: TaskStatus.IN_REVIEW, prNumber: 40, prState: 'open', workId: WORK },
+                { createdAt: ago(60 * DAY), updatedAt: ago(8 * DAY) },
+            );
+            await setTimes(confirmedButOld.id, { ciCheckedAt: ago(HOUR) });
+            const recent = await instance(
+                parent,
+                { status: TaskStatus.IN_REVIEW, prNumber: 41, prState: 'open' },
+                { createdAt: ago(60 * DAY), updatedAt: ago(DAY) },
+            );
+            expect(await openIds(parent)).toEqual([recent.id]);
+        });
+
+        it('a run waiting on a human counts for 7 days after it started, then stops', async () => {
+            const parent = await template();
+            // Old instances with no PR, so only the run can make them count.
+            const fresh = await instance(
+                parent,
+                { status: TaskStatus.IN_PROGRESS },
+                {
+                    createdAt: ago(30 * DAY),
+                },
+            );
+            await run(fresh.id, 'running', {
+                awaitingInput: true,
+                startedAt: ago(6 * DAY),
+                createdAt: ago(6 * DAY),
+            });
+            const stale = await instance(
+                parent,
+                { status: TaskStatus.IN_PROGRESS },
+                {
+                    createdAt: ago(30 * DAY),
+                },
+            );
+            await run(stale.id, 'running', {
+                awaitingInput: true,
+                startedAt: ago(8 * DAY),
+                createdAt: ago(8 * DAY),
+            });
+            expect(await openIds(parent)).toEqual([fresh.id]);
+        });
+
+        it('a held queued run counts for 7 days after it was queued, then stops', async () => {
+            const parent = await template();
+            const fresh = await instance(
+                parent,
+                { status: TaskStatus.TODO },
+                {
+                    createdAt: ago(30 * DAY),
+                },
+            );
+            await run(fresh.id, 'queued', {
+                queuedReason: 'agent-paused',
+                createdAt: ago(2 * DAY),
+            });
+            const stale = await instance(
+                parent,
+                { status: TaskStatus.TODO },
+                {
+                    createdAt: ago(30 * DAY),
+                },
+            );
+            await run(stale.id, 'queued', {
+                queuedReason: 'agent-paused',
+                createdAt: ago(8 * DAY),
+            });
+            expect(await openIds(parent)).toEqual([fresh.id]);
         });
 
         it('counts no pull-request outcome yet for 7 days after the spawn, then stops', async () => {
@@ -261,7 +403,7 @@ describe('Recurring Tasks overlap limit (real SQLite)', () => {
                     },
                 );
             }
-            const open = await repository.countOpenRecurrenceInstances(parent.id, NOW);
+            const open = await repository.countOpenRecurrenceInstances(parent, NOW);
             expect(open.count).toBe(12);
             expect(open.instances).toHaveLength(10);
             const times = open.instances.map((row) => new Date(row.createdAt).getTime());
@@ -275,7 +417,7 @@ describe('Recurring Tasks overlap limit (real SQLite)', () => {
             const parent = await template();
             await instance(parent);
             const qb = taskRows.createQueryBuilder('task').setFindOptions({
-                where: recurrenceOpenInstancesWhere(parent.id, { now: NOW }),
+                where: recurrenceOpenInstancesWhere(parent, { now: NOW }),
             });
             const [sql, params] = qb.getQueryAndParameters();
             const plan = (await dataSource.query(`EXPLAIN QUERY PLAN ${sql}`, params)) as Array<{
@@ -306,6 +448,16 @@ describe('Recurring Tasks overlap limit (real SQLite)', () => {
         it('refuses a paused template', async () => {
             const parent = await template({ recurrencePausedAt: NOW });
             expect(await repository.casSkipRecurrence(parent.id, DUE, null, NOW)).toBe(false);
+        });
+
+        it('clearRecurrenceSkip clears only a set marker and keeps updatedAt', async () => {
+            const parent = await template({ recurrenceSkippedAt: NOW });
+            const before = await taskRows.findOneByOrFail({ id: parent.id });
+            expect(await repository.clearRecurrenceSkip(parent.id)).toBe(true);
+            const after = await taskRows.findOneByOrFail({ id: parent.id });
+            expect(after.recurrenceSkippedAt).toBeNull();
+            expect(after.updatedAt).toEqual(before.updatedAt);
+            expect(await repository.clearRecurrenceSkip(parent.id)).toBe(false);
         });
 
         it('a claim clears the skip marker only when asked', async () => {
@@ -465,21 +617,31 @@ describe('Recurring Tasks overlap limit (real SQLite)', () => {
             expect((await service.dispatchDue(50, NOW)).dueCount).toBe(0);
         });
 
-        it('records a run of skips once, and again only after the gap', async () => {
+        it('records the first skip of a stall, then at most one skip per UTC day', async () => {
             const parent = await template();
             await instance(parent, { status: TaskStatus.TODO });
             const activity: Array<Record<string, unknown>> = [];
             const { service } = dispatcher({ fireLock: lock, activity });
-            await service.dispatchDue(50, NOW);
-            const soon = new Date(NOW.getTime() + 10 * 60_000);
-            await dueAgain(parent, new Date(soon.getTime() - 1_000));
-            await service.dispatchDue(50, soon);
-            expect(activity).toHaveLength(1);
-            expect((await reload(parent)).recurrenceSkippedAt).toEqual(soon);
-            const later = new Date(soon.getTime() + RECURRENCE_SKIP_RECORD_GAP_MS);
-            await dueAgain(parent, new Date(later.getTime() - 1_000));
-            await service.dispatchDue(50, later);
-            expect(activity).toHaveLength(2);
+            const tomorrow = Date.UTC(
+                NOW.getUTCFullYear(),
+                NOW.getUTCMonth(),
+                NOW.getUTCDate() + 1,
+            );
+            const at = (hours: number) => new Date(tomorrow + hours * HOUR);
+            // A fast schedule stalled for two days: five skips, two UTC days.
+            for (const when of [at(1), at(1.2), at(20), at(25), at(26)]) {
+                await dueAgain(parent, new Date(when.getTime() - 1_000));
+                const summary = await service.dispatchDue(50, when);
+                expect(summary.entries[0].skipReason).toBe('over-limit');
+            }
+            expect(
+                activity.map((entry) => (entry.details as { scheduledFor: string }).scheduledFor),
+            ).toEqual([
+                new Date(at(1).getTime() - 1_000).toISOString(),
+                new Date(at(25).getTime() - 1_000).toISOString(),
+            ]);
+            // The Schedules page still shows the latest skip.
+            expect((await reload(parent)).recurrenceSkippedAt).toEqual(at(26));
         });
 
         it('fires again once the open instance finishes, and clears the skip marker', async () => {
@@ -557,6 +719,61 @@ describe('Recurring Tasks overlap limit (real SQLite)', () => {
             expect(after.recurrenceSkippedAt ?? null).toBeNull();
             // Released: the next tick fires it.
             expect((await service.dispatchDue(50, NOW)).spawned).toBe(1);
+        });
+
+        /**
+         * The count must run INSIDE the claim. A tick starts while a run-now of the same template
+         * holds the claim and has not inserted its instance yet; the run-now inserts and releases;
+         * only then does the tick get the claim. Counting inside the claim, the tick sees the
+         * run-now's instance and skips. A tick that counted before taking the claim would carry a
+         * stale 0 in and spawn past the limit (the reviewer's mutant of #3146 does exactly that).
+         */
+        it('a tick that waits on a run-now counts what that run-now spawned, and skips', async () => {
+            const parent = await template({ recurrenceMaxOpenInstances: 1 });
+            let runNowHolds!: () => void;
+            const runNowHolding = new Promise<void>((resolve) => (runNowHolds = resolve));
+            let tickAtClaim!: () => void;
+            const tickReachedClaim = new Promise<void>((resolve) => (tickAtClaim = resolve));
+            let releaseTick!: () => void;
+            const runNowDone = new Promise<void>((resolve) => (releaseTick = resolve));
+            // The tick's view of the shared claim: it reports that it reached the claim, then
+            // waits for the run-now to finish before asking the real lock.
+            const tickLock = {
+                runExclusive: async <T>(
+                    key: string,
+                    fn: () => Promise<T>,
+                    options?: Record<string, unknown>,
+                ) => {
+                    tickAtClaim();
+                    await runNowDone;
+                    return lock.runExclusive(key, fn, options);
+                },
+            };
+            let runNowInstance: Task | null = null;
+            const runNow = lock.runExclusive(recurrenceFireLockKey(parent.id), async () => {
+                runNowHolds();
+                await tickReachedClaim;
+                runNowInstance = await instance(parent, { status: TaskStatus.TODO });
+                await run(runNowInstance.id, 'queued');
+            });
+            await runNowHolding;
+            const tick = dispatcher({ fireLock: tickLock as never }).service.dispatchDue(50, NOW);
+            expect((await runNow).acquired).toBe(true);
+            releaseTick();
+            const summary = await tick;
+
+            expect(summary.spawned).toBe(0);
+            expect(summary.entries[0]).toEqual(
+                expect.objectContaining({
+                    outcome: 'skipped',
+                    skipReason: 'over-limit',
+                    openInstances: 1,
+                }),
+            );
+            expect((await instancesOf(parent)).map((row) => row.id)).toEqual([runNowInstance!.id]);
+            const after = await reload(parent);
+            expect(after.nextOccurrenceAt!.getTime()).toBeGreaterThan(NOW.getTime());
+            expect(after.recurrenceOccurredCount).toBe(4);
         });
 
         /**

@@ -32,23 +32,17 @@ import {
 export const RECURRENCE_MAX_OPEN_INSTANCES_LIMIT = 100;
 
 /**
- * How long an instance with NO pull-request outcome (no pull request yet, or one the status
- * sweep has not read) counts as open: 7 days after it was spawned. This is the rule that keeps
- * the limit from stalling a schedule for good: a run that failed and left its instance in To do,
- * or a pull request on a provider the sweep can no longer read, stops holding a slot a week
- * later even if nobody touches it.
+ * The bound on every open-instance branch that nothing else ends: 7 days. A run in flight counts
+ * for 7 days after it started (or was queued); an open pull request the PR-status sweep no
+ * longer reads on the template's Work counts for 7 days after the instance last changed; an
+ * instance with no pull-request outcome counts for 7 days after it was spawned. So a question
+ * nobody answers, a run parked behind a paused Agent, a failed run left in To do or a pull
+ * request moved out of its Work stops holding a slot a week later even if nobody touches it.
  */
 export const RECURRENCE_OPEN_INSTANCE_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
 /** Pull-request states (`tasks.prState`) of a pull request still waiting on a reviewer. */
 export const RECURRENCE_OPEN_PR_STATES = ['open', 'draft'] as const;
-
-/**
- * A skip writes an activity row when it starts a run of skips, or comes at least this long after
- * the previous skip. So an hourly or slower schedule records every skip, and a faster one only
- * the first of a run of skips (the Schedules page still shows the latest one).
- */
-export const RECURRENCE_SKIP_RECORD_GAP_MS = 55 * 60_000;
 
 /** At most this many open instances are named in a skip record or a 409 body. */
 export const RECURRENCE_OPEN_INSTANCES_NAMED = 10;
@@ -92,66 +86,110 @@ export function recurrenceFireLockKey(templateId: string): string {
     return `schedule-run-now:${templateId}`;
 }
 
+/** The template fields the open-instance rule reads. */
+export type RecurrenceTemplateRef = Pick<Task, 'id'> & { workId?: string | null };
+
 /**
- * The instances of `templateId` that count against its limit. An instance is OPEN while ANY of:
+ * The instances of `template` that count against its limit. An instance is OPEN while ANY of:
  *
- *  1. **a run of it is queued or running** (any status, any pull-request state; a run waiting on
- *     a human's answer is still running) — work in flight always counts;
- *  2. **it is not Done or Cancelled and its pull request is open or a draft** — an unreviewed pull
- *     request is exactly the backlog the limit is for, so this branch has NO age bound: the
- *     reviewer frees the slot by merging or closing it, the owner by cancelling the instance;
- *  3. **it is not Done or Cancelled, has no pull-request outcome yet (`prState` NULL: no pull
- *     request, or one the status sweep has not read) and was spawned in the last 7 days**
- *     ({@link RECURRENCE_OPEN_INSTANCE_WINDOW_MS});
- *  4. **it is not Done or Cancelled, its pull request was closed without merging, and it changed
- *     in the last 24 hours** (by `updatedAt` or by `ciCheckedAt`, the read that saw it close) —
+ *  1. **a run of it is queued or running, and that run started (or, never started, was queued)
+ *     in the last 7 days**: `COALESCE(startedAt, createdAt)`, the age the run sweeper measures.
+ *     Any status, any pull-request state. A run waiting on a human (`awaitingInput`, which the
+ *     sweeper never reaps) or held queued (a paused Agent, the global stop flag, a fleet usage
+ *     limit, all exempt from the sweeper) therefore stops counting a week after it started;
+ *  2. **it is not Done or Cancelled, its pull request is open or a draft, it is still on the
+ *     template's Work, and the PR-status sweep read it in the last 7 days** (`ciCheckedAt`, which
+ *     the sweep stamps on every read). An unreviewed pull request is the backlog the limit is
+ *     for, so while the sweep keeps confirming it there is no age bound: the reviewer frees the
+ *     slot by merging or closing it, the owner by cancelling the instance;
+ *  3. **it is not Done or Cancelled, its pull request is open or a draft, and it changed in the
+ *     last 7 days** (`updatedAt`): the same pull request when 2 does not confirm it (moved out
+ *     of the Work, a template with no Work, a sweep that stopped reading it);
+ *  4. **it is not Done or Cancelled, has no pull-request outcome yet (`prState` NULL: no pull
+ *     request, or one the status sweep has not read) and was spawned in the last 7 days**;
+ *  5. **it is not Done or Cancelled, its pull request was closed without merging, and it changed
+ *     in the last 24 hours** (by `updatedAt` or by `ciCheckedAt`, the read that saw it close):
  *     the hold a Mission's open-Tasks cap uses ({@link TASK_CLOSED_PR_SLOT_HOLD_MS}), two branches
  *     because SQL has no GREATEST on every driver.
  *
  * A merged pull request frees the slot at once (the review happened), and so does Done or
- * Cancelled. Every branch but 1 and 2 is bounded in time, and those two end by themselves (a
- * run finishes or is reaped; a pull request is merged or closed), so no instance holds a slot
- * forever. `prState` is nullable and SQL's `<>` drops NULLs, hence OR-ed branches.
+ * Cancelled. Every branch ends by itself: 1, 3 and 4 a week after their timestamp, 5 a day
+ * after, and 2 when the pull request is merged or closed or the sweep stops reading it on the
+ * template's Work. Branch 2 is left out when the template has no Work (an `undefined` key would
+ * drop the predicate rather than match nothing). `prState` is nullable and SQL's `<>` drops
+ * NULLs, hence OR-ed branches.
  */
 export function recurrenceOpenInstancesWhere(
-    templateId: string,
-    opts: { now: Date; activeRunExists?: FindOperator<string> },
+    template: RecurrenceTemplateRef,
+    opts: { now: Date; escape?: (name: string) => string },
 ): FindOptionsWhere<Task>[] {
-    const base: FindOptionsWhere<Task> = { parentRecurringTaskId: templateId };
+    // An `undefined` key would DROP the predicate and count every Task in the table.
+    if (typeof template?.id !== 'string' || template.id.length === 0) {
+        throw new Error('recurrenceOpenInstancesWhere needs the template row (its id).');
+    }
+    const base: FindOptionsWhere<Task> = { parentRecurringTaskId: template.id };
     const unfinished: FindOptionsWhere<Task> = {
         ...base,
         status: Not(In([TaskStatus.DONE, TaskStatus.CANCELLED])),
     };
-    const freshSince = new Date(opts.now.getTime() - RECURRENCE_OPEN_INSTANCE_WINDOW_MS);
+    const windowSince = new Date(opts.now.getTime() - RECURRENCE_OPEN_INSTANCE_WINDOW_MS);
     const closedSince = new Date(opts.now.getTime() - TASK_CLOSED_PR_SLOT_HOLD_MS);
+    const openPr: FindOptionsWhere<Task> = {
+        ...unfinished,
+        prState: In([...RECURRENCE_OPEN_PR_STATES]),
+    };
     const closed: FindOptionsWhere<Task> = {
         ...unfinished,
         prState: TASK_CLOSED_UNMERGED_PR_STATE,
     };
-    return [
-        { ...base, id: opts.activeRunExists ?? taskActiveRunExists(undefined, 'overlap_run') },
-        { ...unfinished, prState: In([...RECURRENCE_OPEN_PR_STATES]) },
-        { ...unfinished, prState: IsNull(), createdAt: MoreThanOrEqual(freshSince) },
+    const branches: FindOptionsWhere<Task>[] = [
+        { ...base, id: recurrenceActiveRunExists(opts.escape, opts.now) },
+    ];
+    if (template.workId) {
+        branches.push({
+            ...openPr,
+            workId: template.workId,
+            ciCheckedAt: MoreThanOrEqual(windowSince),
+        });
+    }
+    branches.push(
+        { ...openPr, updatedAt: MoreThanOrEqual(windowSince) },
+        { ...unfinished, prState: IsNull(), createdAt: MoreThanOrEqual(windowSince) },
         { ...closed, updatedAt: MoreThanOrEqual(closedSince) },
         { ...closed, ciCheckedAt: MoreThanOrEqual(closedSince) },
-    ];
-}
-
-/** `escape`-aware run operator for {@link recurrenceOpenInstancesWhere}, alias `overlap_run`. */
-export function recurrenceActiveRunExists(escape?: (name: string) => string): FindOperator<string> {
-    return taskActiveRunExists(escape, 'overlap_run');
+    );
+    return branches;
 }
 
 /**
- * Whether a skip writes an activity row: the first skip of a run of skips (`previousSkipAt`
- * null), or one at least {@link RECURRENCE_SKIP_RECORD_GAP_MS} after the previous skip.
+ * The run-in-flight operator of {@link recurrenceOpenInstancesWhere} (alias `overlap_run`): a
+ * queued or running run that started, or was queued, in the 7 days before `now`.
+ */
+export function recurrenceActiveRunExists(
+    escape: ((name: string) => string) | undefined,
+    now: Date,
+): FindOperator<string> {
+    return taskActiveRunExists(escape, 'overlap_run', {
+        startedSince: new Date(now.getTime() - RECURRENCE_OPEN_INSTANCE_WINDOW_MS),
+    });
+}
+
+/** `YYYY-MM-DD` of an instant in UTC. */
+function utcDay(at: Date): string {
+    return at.toISOString().slice(0, 10);
+}
+
+/**
+ * Whether a skip writes an activity row: the FIRST skip of a stall (`previousSkipAt` null; the
+ * next spawn clears it), then the first skip of each UTC day the stall lasts. At most one row
+ * per template per day however fast the schedule, and a long stall still shows up every day.
  */
 export function shouldRecordRecurrenceSkip(
     previousSkipAt: Date | null | undefined,
     now: Date,
 ): boolean {
     if (!previousSkipAt) return true;
-    return now.getTime() - previousSkipAt.getTime() >= RECURRENCE_SKIP_RECORD_GAP_MS;
+    return utcDay(previousSkipAt) !== utcDay(now);
 }
 
 /** `T-12, T-15 and 1 more` — the open instances a skip or a refusal names. */

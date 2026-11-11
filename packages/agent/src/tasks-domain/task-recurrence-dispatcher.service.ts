@@ -507,7 +507,7 @@ export class TaskRecurrenceDispatcherService {
         now: Date,
         summary: RecurrenceDispatchSummary,
     ): Promise<void> {
-        const open = await this.tasks.countOpenRecurrenceInstances(template.id, now);
+        const open = await this.tasks.countOpenRecurrenceInstances(template, now);
         if (open.count >= maxOpen) {
             await this.skipOccurrence(template, scheduledFor, maxOpen, open, now, summary);
             return;
@@ -519,8 +519,8 @@ export class TaskRecurrenceDispatcherService {
      * Skip one scheduled slot of a template at its limit: `nextOccurrenceAt` still advances (or
      * the slot would stay due and re-fire every minute), `recurrenceOccurredCount` does not (a
      * skipped slot is not an occurrence, so the next slot is computed from the same count), and
-     * `recurrenceSkippedAt` records it for the Schedules page. The first skip of a run of skips,
-     * and any skip at least `RECURRENCE_SKIP_RECORD_GAP_MS` after the previous one, also writes a
+     * `recurrenceSkippedAt` records it for the Schedules page. The first skip of a stall, then
+     * the first skip of each UTC day it lasts (`shouldRecordRecurrenceSkip`), also writes a
      * `schedule_skipped` activity row on the template naming the open instances.
      */
     private async skipOccurrence(

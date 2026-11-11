@@ -4,11 +4,9 @@ import { Task, TaskStatus } from '../../entities/task.entity';
 import {
     RECURRENCE_MAX_OPEN_INSTANCES_LIMIT,
     RECURRENCE_OPEN_INSTANCE_WINDOW_MS,
-    RECURRENCE_SKIP_RECORD_GAP_MS,
     describeRecurrenceRefusal,
     describeRecurrenceSkip,
     normalizeMaxOpenInstances,
-    recurrenceActiveRunExists,
     recurrenceFireLockKey,
     recurrenceOpenInstancesWhere,
     shouldRecordRecurrenceSkip,
@@ -51,15 +49,27 @@ describe('recurrence overlap rules', () => {
         expect(recurrenceFireLockKey('tpl-1')).toBe('schedule-run-now:tpl-1');
     });
 
-    it('shouldRecordRecurrenceSkip: the first of a run of skips, then one per gap', () => {
+    it('shouldRecordRecurrenceSkip: the first skip of a stall, then the first of each UTC day', () => {
         expect(shouldRecordRecurrenceSkip(null, NOW)).toBe(true);
         expect(shouldRecordRecurrenceSkip(undefined, NOW)).toBe(true);
-        const justBefore = new Date(NOW.getTime() - RECURRENCE_SKIP_RECORD_GAP_MS + 1);
-        expect(shouldRecordRecurrenceSkip(justBefore, NOW)).toBe(false);
-        const gapAgo = new Date(NOW.getTime() - RECURRENCE_SKIP_RECORD_GAP_MS);
-        expect(shouldRecordRecurrenceSkip(gapAgo, NOW)).toBe(true);
-        // A daily schedule's previous skip is a day old: every skip is recorded.
+        // Same UTC day, however long ago that day's previous skip was.
+        expect(shouldRecordRecurrenceSkip(new Date('2026-11-11T00:00:00.000Z'), NOW)).toBe(false);
+        expect(shouldRecordRecurrenceSkip(new Date(NOW.getTime() - 60_000), NOW)).toBe(false);
+        // A new UTC day: recorded, so a long stall shows up every day.
+        expect(
+            shouldRecordRecurrenceSkip(
+                new Date('2026-11-10T23:59:00.000Z'),
+                new Date('2026-11-11T00:00:30.000Z'),
+            ),
+        ).toBe(true);
         expect(shouldRecordRecurrenceSkip(new Date(NOW.getTime() - 86_400_000), NOW)).toBe(true);
+    });
+
+    it('refuses to build the rule without a template id (an undefined key would match every Task)', () => {
+        expect(() =>
+            recurrenceOpenInstancesWhere({ id: undefined as never }, { now: NOW }),
+        ).toThrow(/template/);
+        expect(() => recurrenceOpenInstancesWhere(undefined as never, { now: NOW })).toThrow();
     });
 
     it('describes a skip and a refusal, naming at most five instances', () => {
@@ -78,7 +88,7 @@ describe('recurrence overlap rules', () => {
     });
 
     // The rule against the REAL Task entity: what the count asks Postgres.
-    it('compiles to five OR-ed branches on Postgres, each scoped to the template', async () => {
+    async function compile(template: { id: string; workId?: string | null }) {
         const dataSource = new DataSource({
             type: 'postgres',
             host: '127.0.0.1',
@@ -92,48 +102,84 @@ describe('recurrence overlap rules', () => {
             .getRepository(Task)
             .createQueryBuilder('task')
             .setFindOptions({
-                where: recurrenceOpenInstancesWhere('tpl-1', {
+                where: recurrenceOpenInstancesWhere(template, {
                     now: NOW,
-                    activeRunExists: recurrenceActiveRunExists((name) =>
-                        dataSource.driver.escape(name),
-                    ),
+                    escape: (name) => dataSource.driver.escape(name),
                 }),
             });
         const sql = query.getQuery().replace(/\s+/g, ' ');
         const where = sql.slice(sql.indexOf(' WHERE ') + ' WHERE '.length);
-        const branches = where.split(' OR ');
-        expect(branches).toHaveLength(5);
+        return { branches: where.split(' OR '), parameters: Object.values(query.getParameters()) };
+    }
+
+    const ages = (parameters: unknown[]) =>
+        parameters
+            .filter((value): value is Date => value instanceof Date)
+            .map((date) => NOW.getTime() - date.getTime())
+            .sort((a, b) => a - b);
+
+    it('compiles to six OR-ed branches on Postgres for a template on a Work, every one bounded', async () => {
+        const { branches, parameters } = await compile({ id: 'tpl-1', workId: 'work-1' });
+        expect(branches).toHaveLength(6);
         for (const branch of branches) {
             expect(branch).toContain('"task"."parentRecurringTaskId" = ');
         }
-        // 1: a run in flight — any status, any pull-request state.
+        // 1: a run in flight that started (or was queued) in the window — any status.
         expect(branches[0]).not.toContain('"task"."status"');
         expect(branches[0]).toContain(
-            'EXISTS (SELECT 1 FROM "agent_runs" "overlap_run" WHERE "overlap_run"."taskId" = "task"."id" AND "overlap_run"."status" IN (\'queued\', \'running\'))',
+            'EXISTS (SELECT 1 FROM "agent_runs" "overlap_run" WHERE "overlap_run"."taskId" = "task"."id" ' +
+                `AND "overlap_run"."status" IN ('queued', 'running') ` +
+                'AND COALESCE("overlap_run"."startedAt", "overlap_run"."createdAt") >= :overlap_run_since)',
         );
-        // 2-5: not Done or Cancelled.
+        // 2-6: not Done or Cancelled.
         for (const branch of branches.slice(1)) {
             expect(branch).toContain('NOT("task"."status" IN (');
         }
-        // 2: an open or draft pull request — no age bound.
+        // 2: an open or draft PR still on the template's Work, read by the sweep in the window.
         expect(branches[1]).toContain('"task"."prState" IN (');
-        expect(branches[1]).not.toContain('"task"."createdAt"');
-        // 3: no pull-request outcome yet, spawned in the window.
-        expect(branches[2]).toContain('"task"."prState" IS NULL');
-        expect(branches[2]).toContain('"task"."createdAt" >= ');
-        // 4-5: closed unmerged, changed in the last day by either timestamp.
-        expect(branches[3]).toContain('"task"."updatedAt" >= ');
-        expect(branches[4]).toContain('"task"."ciCheckedAt" >= ');
+        expect(branches[1]).toContain('"task"."workId" = ');
+        expect(branches[1]).toContain('"task"."ciCheckedAt" >= ');
+        // 3: the same PR otherwise, for a week after the instance last changed.
+        expect(branches[2]).toContain('"task"."prState" IN (');
+        expect(branches[2]).not.toContain('"task"."workId"');
+        expect(branches[2]).toContain('"task"."updatedAt" >= ');
+        // 4: no pull-request outcome yet, spawned in the window.
+        expect(branches[3]).toContain('"task"."prState" IS NULL');
+        expect(branches[3]).toContain('"task"."createdAt" >= ');
+        // 5-6: closed unmerged, changed in the last day by either timestamp.
+        expect(branches[4]).toContain('"task"."updatedAt" >= ');
+        expect(branches[5]).toContain('"task"."ciCheckedAt" >= ');
 
-        const parameters = Object.values(query.getParameters());
         expect(parameters).toEqual(
-            expect.arrayContaining(['tpl-1', 'done', 'cancelled', 'open', 'draft', 'closed']),
+            expect.arrayContaining([
+                'tpl-1',
+                'work-1',
+                'done',
+                'cancelled',
+                'open',
+                'draft',
+                'closed',
+            ]),
         );
-        const dates = parameters.filter((value): value is Date => value instanceof Date);
-        expect(dates.map((date) => NOW.getTime() - date.getTime()).sort((a, b) => a - b)).toEqual([
+        // Four week-long bounds (run, sweep read, last change, spawn) and the two-sided day hold.
+        expect(ages(parameters)).toEqual([
             TASK_CLOSED_PR_SLOT_HOLD_MS,
             TASK_CLOSED_PR_SLOT_HOLD_MS,
             RECURRENCE_OPEN_INSTANCE_WINDOW_MS,
+            RECURRENCE_OPEN_INSTANCE_WINDOW_MS,
+            RECURRENCE_OPEN_INSTANCE_WINDOW_MS,
+            RECURRENCE_OPEN_INSTANCE_WINDOW_MS,
         ]);
+    });
+
+    it('a template with no Work drops the sweep-confirmed branch instead of matching any Work', async () => {
+        for (const workId of [null, undefined]) {
+            const { branches, parameters } = await compile({ id: 'tpl-1', workId });
+            expect(branches).toHaveLength(5);
+            for (const branch of branches) {
+                expect(branch).not.toContain('"task"."workId"');
+            }
+            expect(ages(parameters)).toHaveLength(5);
+        }
     });
 });

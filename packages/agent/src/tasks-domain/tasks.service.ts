@@ -1363,14 +1363,31 @@ export class TasksService {
         const hasRule = !!input.recurrenceRule;
         const hasCron = !!input.recurrenceCron;
         const maxOpenInstances = this.assertMaxOpenInstances(input.recurrenceMaxOpenInstances);
-        if (!hasRule && !hasCron && maxOpenInstances !== undefined) {
+        // Only an input made of the limit ALONE may leave the cadence out: anything else that
+        // names a recurrence field without a cadence stays the XOR 400 below.
+        const limitOnly =
+            !hasRule &&
+            !hasCron &&
+            maxOpenInstances !== undefined &&
+            input.recurrenceTimezone === undefined &&
+            input.recurrenceEndsAt === undefined &&
+            input.recurrenceMaxOccurrences === undefined;
+        if (limitOnly) {
             if (!current.isRecurring || current.parentRecurringTaskId) {
                 throw new BadRequestException(
                     'This Task is not a recurring template — set a cadence (recurrenceRule or recurrenceCron) with the limit.',
                 );
             }
+            const patch: Partial<Task> = {};
             if ((current.recurrenceMaxOpenInstances ?? null) !== maxOpenInstances) {
-                await this.updateTaskRow(id, { recurrenceMaxOpenInstances: maxOpenInstances });
+                patch.recurrenceMaxOpenInstances = maxOpenInstances;
+            }
+            // No limit, no reason for a "Skipped" to stay on the Schedules page.
+            if (maxOpenInstances === null && current.recurrenceSkippedAt) {
+                patch.recurrenceSkippedAt = null;
+            }
+            if (Object.keys(patch).length > 0) {
+                await this.updateTaskRow(id, patch);
             }
             return this.getOne(userId, id, ownershipScope);
         }
@@ -1423,6 +1440,9 @@ export class TasksService {
         // edit that predates the limit leaves the owner's limit alone.
         if (maxOpenInstances !== undefined) {
             patch.recurrenceMaxOpenInstances = maxOpenInstances;
+        }
+        if (maxOpenInstances === null && current.recurrenceSkippedAt) {
+            patch.recurrenceSkippedAt = null;
         }
         await this.updateTaskRow(id, patch);
         return this.getOne(userId, id, ownershipScope);
@@ -1668,7 +1688,7 @@ export class TasksService {
         const maxOpenInstances = normalizeMaxOpenInstances(template.recurrenceMaxOpenInstances);
         let openAtFire: number | null = null;
         if (maxOpenInstances !== null) {
-            const open = await this.tasks.countOpenRecurrenceInstances(template.id, new Date());
+            const open = await this.tasks.countOpenRecurrenceInstances(template, new Date());
             openAtFire = open.count;
             if (open.count >= maxOpenInstances && !force) {
                 throw new ConflictException({
@@ -1739,6 +1759,14 @@ export class TasksService {
             ...cloneRecurringTaskAsInstance(template),
             slug: `T-${nextNumber}`,
         });
+        // Overlap limit — an instance exists again, so "the last scheduled slot was skipped" is
+        // no longer the news (forced or not). A quiet write, only when there is a marker.
+        if (template.recurrenceSkippedAt) {
+            await this.tasks.clearRecurrenceSkip(template.id).catch((err) => {
+                this.logger.warn(`Run-now: skip marker clear failed for ${template.id}: ${err}`);
+                return false;
+            });
+        }
         try {
             for (const row of await this.assignees.findByTaskId(template.id)) {
                 await this.assignees

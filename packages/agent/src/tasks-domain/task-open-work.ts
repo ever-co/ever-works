@@ -33,17 +33,31 @@ export const TASK_ACTIVE_RUN_STATUSES = ['queued', 'running'] as const;
  * the status says". `escape` quotes an identifier for the connection's driver (Postgres, SQLite
  * and MySQL quote differently); the two statuses are constants, inlined as literals. `runAlias`
  * names the sub-query's table so two caps never collide in one statement.
+ *
+ * `opts.startedSince` bounds it: only a run that started (or, never started, was queued) at or
+ * after that instant counts — `COALESCE(startedAt, createdAt)`, the same age the run sweeper
+ * measures. Without it the SQL is exactly what it always was (the Mission cap's).
  */
 export function taskActiveRunExists(
     escape: (name: string) => string = (name) => `"${name}"`,
     runAlias = 'open_work_run',
+    opts: { startedSince?: Date } = {},
 ): FindOperator<string> {
     const run = escape(runAlias);
     const statuses = TASK_ACTIVE_RUN_STATUSES.map((status) => `'${status}'`).join(', ');
+    const inFlight = (alias: string) =>
+        `${run}.${escape('taskId')} = ${alias} AND ${run}.${escape('status')} IN (${statuses})`;
+    if (!opts.startedSince) {
+        return Raw(
+            (alias) =>
+                `EXISTS (SELECT 1 FROM ${escape('agent_runs')} ${run} WHERE ${inFlight(alias)})`,
+        );
+    }
+    const parameter = `${runAlias}_since`;
     return Raw(
         (alias) =>
-            `EXISTS (SELECT 1 FROM ${escape('agent_runs')} ${run} WHERE ${run}.${escape(
-                'taskId',
-            )} = ${alias} AND ${run}.${escape('status')} IN (${statuses}))`,
+            `EXISTS (SELECT 1 FROM ${escape('agent_runs')} ${run} WHERE ${inFlight(alias)} AND ` +
+            `COALESCE(${run}.${escape('startedAt')}, ${run}.${escape('createdAt')}) >= :${parameter})`,
+        { [parameter]: opts.startedSince },
     );
 }

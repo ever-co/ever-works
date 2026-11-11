@@ -24,9 +24,9 @@ import {
 import type { RecordAccessContext } from '../../record-visibility/record-access.types';
 import {
     RECURRENCE_OPEN_INSTANCES_NAMED,
-    recurrenceActiveRunExists,
     recurrenceOpenInstancesWhere,
     type OpenRecurrenceInstances,
+    type RecurrenceTemplateRef,
 } from '../../tasks-domain/recurrence-overlap';
 import { visibleToPredicate } from '../../record-visibility/visible-to';
 
@@ -847,25 +847,43 @@ export class TaskRepository {
     }
 
     /**
-     * Recurring Tasks overlap limit — how many instances of `templateId` are still OPEN by
-     * `recurrenceOpenInstancesWhere` (a run in flight, an open pull request, no pull-request
-     * outcome yet and spawned in the last week, or a pull request closed unmerged in the last
-     * day), plus the oldest {@link RECURRENCE_OPEN_INSTANCES_NAMED} of them to name in a skip
-     * record or a 409. Seeks `idx_tasks_parent_recurring`.
+     * Recurring Tasks overlap limit — clear the skip marker once its reason is gone (an instance
+     * was spawned out of band). Only a row that carries one is written, and `updatedAt` is kept:
+     * it is bookkeeping, not an edit, and run-now otherwise never writes the template.
+     */
+    async clearRecurrenceSkip(taskId: string): Promise<boolean> {
+        const keepUpdatedAt = this.repository.manager.connection.driver.escape('updatedAt');
+        const result = await this.repository
+            .createQueryBuilder()
+            .update(Task)
+            .set({ recurrenceSkippedAt: null, updatedAt: () => keepUpdatedAt })
+            .where('id = :id', { id: taskId })
+            .andWhere('recurrenceSkippedAt IS NOT NULL')
+            .execute();
+        return (result.affected ?? 0) > 0;
+    }
+
+    /**
+     * Recurring Tasks overlap limit — how many instances of `template` are still OPEN by
+     * `recurrenceOpenInstancesWhere` (a run in flight that started in the last week, an open pull
+     * request the PR-status sweep still reads on the template's Work or that changed in the last
+     * week, no pull-request outcome yet and spawned in the last week, or a pull request closed
+     * unmerged in the last day), plus the oldest {@link RECURRENCE_OPEN_INSTANCES_NAMED} of them
+     * to name in a skip record or a 409. Seeks `idx_tasks_parent_recurring`.
      *
      * @internal Unscoped — callers must have resolved the template through an owner-scoped read
      * (`TasksService.getOne`) or be the CRON-ONLY recurrence dispatcher, which already holds the
      * template row.
      */
     async countOpenRecurrenceInstances(
-        templateId: string,
+        template: RecurrenceTemplateRef,
         now: Date = new Date(),
     ): Promise<OpenRecurrenceInstances> {
         const driver = this.repository.manager.connection.driver;
         const [rows, count] = await this.repository.findAndCount({
-            where: recurrenceOpenInstancesWhere(templateId, {
+            where: recurrenceOpenInstancesWhere(template, {
                 now,
-                activeRunExists: recurrenceActiveRunExists((name) => driver.escape(name)),
+                escape: (name) => driver.escape(name),
             }),
             select: ['id', 'slug', 'title', 'status', 'prNumber', 'prUrl', 'prState', 'createdAt'],
             order: { createdAt: 'ASC', id: 'ASC' },
