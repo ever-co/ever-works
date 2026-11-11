@@ -43,6 +43,9 @@ import { randomUUID } from 'node:crypto';
  *    child's environment ({@link privateRemoteName}), never by its URL. Git
  *    reads `remote.<name>.*` for a fetch-by-URL when a section is NAMED by
  *    that URL; a name minted per invocation is one no config can describe.
+ *  - `GIT_NO_LAZY_FETCH=1` (Git 2.44+): no lazy fetch of a missing object.
+ *    That grandchild names the PROMISOR remote — a plain name any config
+ *    file may describe — so the private name protects it from nothing.
  *  - {@link credentialedCommandEntries}: command-scope config, which Git
  *    reads last, for every remaining key that can run a program or move
  *    the connection.
@@ -93,7 +96,7 @@ import { randomUUID } from 'node:crypto';
  * | other `http.*` (`cookieFile`, `sslCert`, `pinnedPubkey`, …) | none for the token | not overridden | blocks, except transfer tuning |
  * | `include.path`, `includeIf.*` | pulls any of the above in from another file | whatever it pulls in is read BEFORE command scope | followed, then blocks |
  * | `extensions.worktreeConfig`, `extensions.relativeWorktrees` | adds the per-worktree file; records how worktrees are linked | same overrides | allowed; that file is read too |
- * | `extensions.partialClone`, `remote.<name>.promisor`, `.partialCloneFilter` | a missing object makes the command start `git fetch <promisor remote>` — a grandchild that names a remote the config DOES describe — measured: a planted promisor remote ran `core.sshCommand` with the header | the grandchild inherits this environment: one transport, the header keyed to the original URL, every override — measured | allowed (Git writes them itself after `fetch --filter`) |
+ * | `extensions.partialClone`, `remote.<name>.promisor`, `.partialCloneFilter` | a missing object makes the command start a lazy `git fetch <promisor remote>` — a grandchild that names a PLAIN remote, so nothing pinned on the private remote covers it: its `uploadpack` runs (file transport) and its `proxy` outranks the `http.<url>.proxy` pin (https) — measured: a planted promisor `uploadpack` ran there, header in its environment | `GIT_NO_LAZY_FETCH=1` (Git 2.44+): no lazy fetch at all, and the fetch still succeeds — measured; the grandchild would also inherit the one transport | blocks: the provider never runs `fetch --filter`, so in a pool these are planted |
  * | `fetch.bundleURI`, `promisor.*` | downloads from another URI — never with our header | none needed | blocks |
  * | `core.editor`, `core.pager`, `pager.*`, `sequence.editor` | none: Git starts a pager only on a terminal and an editor only to edit — measured, one case per key | n/a | allowed |
  * | `diff.<x>.textconv` / `.command`, `diff.external`, `merge.<x>.driver`, `filter.<x>.clean` / `.smudge` / `.process`, `mergetool.*`, `difftool.*` | none: a fetch or a push converts, merges and diffs no content — measured, one case per key, with `info/attributes` selecting the driver | n/a | allowed |
@@ -491,13 +494,12 @@ const REMOTE_VARIABLES: ReadonlySet<string> = new Set([
 	'skipdefaultupdate',
 	'skipfetchall',
 	// The GitHub CLI records which remote is the base repository here.
-	'gh-resolved',
-	// Written by Git itself after `git fetch --filter=…` (measured, git
-	// 2.52). They make a missing object start `git fetch <that remote>`, a
-	// grandchild of the credentialed command that inherits everything layer
-	// 1 put in its environment — see the key table.
-	'promisor',
-	'partialclonefilter'
+	'gh-resolved'
+	// NOT `promisor` / `partialclonefilter`: Git writes them after a
+	// `fetch --filter`, which this provider never runs, so in a pool they are
+	// planted — and they make a missing object start a lazy `git fetch
+	// <promisor remote>`, a grandchild naming a PLAIN remote that none of the
+	// private remote's pins cover. See the key table.
 ]);
 /** `http.*` with no host in the key and no say over where the request goes or whom it trusts. */
 const HTTP_TUNING_VARIABLES: ReadonlySet<string> = new Set([
@@ -540,9 +542,8 @@ const EXTENSION_VARIABLES: ReadonlySet<string> = new Set([
 	'objectformat',
 	'refstorage',
 	'worktreeconfig',
-	// Written by Git itself: by `clone --filter`, and (2.48+) by `worktree
-	// add --relative-paths` / `worktree.useRelativePaths`.
-	'partialclone',
+	// Written by Git itself (2.48+) by `worktree add --relative-paths` /
+	// `worktree.useRelativePaths`. Not `partialclone`: see `REMOTE_VARIABLES`.
 	'relativeworktrees'
 ]);
 

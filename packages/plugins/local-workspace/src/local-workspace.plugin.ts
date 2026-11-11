@@ -1981,6 +1981,16 @@ export class LocalWorkspacePlugin implements IPlugin, IWorkspacePlugin {
 				// `core.sshCommand` program that transport would run with this
 				// environment — dies as `transport '…' not allowed`.
 				...(credential ? { GIT_ALLOW_PROTOCOL: credential.protocol } : {}),
+				// And no lazy fetch (Git 2.44+). With a partial clone configured,
+				// a missing object makes Git start `git fetch <promisor remote>`:
+				// a grandchild that names a PLAIN remote, so the private name and
+				// everything pinned on it cover nothing there — its `uploadpack`
+				// ran with this environment (measured), and its `proxy` would
+				// outrank the `http.<url>.proxy` pin. The allowlist refuses the
+				// partial-clone keys; this holds when they are written after it
+				// looked. The fetch itself still succeeds (measured). An older Git
+				// ignores the variable.
+				...(credential ? { GIT_NO_LAZY_FETCH: '1' } : {}),
 				// And no trace2 output from the one child that carries a token,
 				// even where the operator's own config asks for it — see
 				// {@link LocalWorkspacePlugin.credentialedChildTraceOff}.

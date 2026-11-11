@@ -285,25 +285,30 @@ const fetchVectors: FetchVector[] = [
 		// A GRANDCHILD, and one that names a remote the config does describe.
 		// With a promisor remote configured, an object that is missing makes
 		// the fetch start `git fetch <that remote>` to go and get it — so the
-		// private remote name is no help here, and only what the credentialed
-		// child's ENVIRONMENT carries reaches the process that runs the
-		// program. The keys of a partial clone are allowed (Git writes them
-		// itself); this is what stands behind that decision.
+		// private remote name is no help here. This one goes over ssh; the
+		// file-transport form, and `GIT_NO_LAZY_FETCH`, are the describe
+		// "the lazy fetch of a promisor remote" below.
 		name: 'a promisor remote → ssh with core.sshCommand, and a ref whose object is missing',
 		plant: (pool, _remoteUrl, at) => {
 			git(pool, 'config', 'extensions.partialclone', 'ew-planted');
 			git(pool, 'config', 'remote.ew-planted.promisor', 'true');
 			git(pool, 'config', 'remote.ew-planted.url', 'ssh://nowhere.invalid/x/y');
 			git(pool, 'config', 'core.sshCommand', `${at.harvest} false`);
-			// What sends Git looking: the refs the fetch is about to move point
-			// at an object that is not there.
-			const tracking = join(pool, 'refs', 'remotes', 'origin');
-			mkdirSync(tracking, { recursive: true });
-			for (const ref of ['main', 'control']) writeFileSync(join(tracking, ref), `${'1'.repeat(40)}\n`);
+			missingTrackingRefs(pool);
 		},
-		reported: ['core.sshcommand']
+		reported: ['extensions.partialclone', 'remote.<…>.promisor', 'core.sshcommand']
 	}
 ];
+
+/**
+ * What sends Git looking for a missing object: the tracking refs the fetch is
+ * about to move point at one that is not there.
+ */
+function missingTrackingRefs(pool: string): void {
+	const tracking = join(pool, 'refs', 'remotes', 'origin');
+	mkdirSync(tracking, { recursive: true });
+	for (const ref of ['main', 'control']) writeFileSync(join(tracking, ref), `${'1'.repeat(40)}\n`);
+}
 
 beforeAll(() => {
 	root = mkdtempSync(join(tmpdir(), 'ew-lw-attack-'));
@@ -1837,5 +1842,119 @@ describe('remote.<private name>.proxy — the one remote key that outranks the p
 		// through the planted proxy.
 		expect(error?.message).toMatch(/fetch of base ref 'main' failed/);
 		expect(proxy.connects).toEqual([]);
+	});
+});
+
+describe('the lazy fetch of a promisor remote — a grandchild that names a PLAIN remote', () => {
+	// With a partial clone configured, an object the command needs and does
+	// not have makes Git start `git fetch <promisor remote>` to get it. That
+	// grandchild names the promisor remote — a plain name any config file may
+	// describe — so nothing layer 1 pins on the PRIVATE remote applies there:
+	// its `uploadpack` runs (file transport, below), and its `proxy` outranks
+	// the `http.<url>.proxy` pin (https; reproduced by the closure review on
+	// Debian 13.7 / git 2.47.3). The allowlist refuses the partial-clone keys,
+	// but a concurrent job can write them after it looked: `GIT_NO_LAZY_FETCH=1`
+	// (Git 2.44+) in the credentialed child is what stops the grandchild then.
+
+	/** A promisor remote with a harvester for its `uploadpack`, and a missing object to send Git there. */
+	function plantPromisor(pool: string, at: Scene): void {
+		git(pool, 'config', 'extensions.partialclone', 'ew-planted');
+		git(pool, 'config', 'remote.ew-planted.promisor', 'true');
+		git(pool, 'config', 'remote.ew-planted.url', originUrl);
+		git(pool, 'config', 'remote.ew-planted.uploadpack', `${at.harvest} git-upload-pack`);
+		missingTrackingRefs(pool);
+	}
+
+	const credential = (): { username: string; token: string; remoteUrl: string } => ({
+		username: 'x-access-token',
+		token: TOKEN,
+		remoteUrl: originUrl
+	});
+
+	it('CONTROL: the credentialed fetch’s own command and environment minus GIT_NO_LAZY_FETCH — the grandchild runs, and reads the header', async () => {
+		const at = scene();
+		const pool = await seedPool(at.baseDir, originUrl);
+		const invocations: Invocation[] = [];
+		const plugin = new LocalWorkspacePlugin({ execFile: recordingGit(invocations) });
+		const handle = await plugin.provision(
+			provisionSpec(at.baseDir, originUrl, 'lazy-control', { fetchCredential: credential() })
+		);
+		writeFileSync(join(handle.path, 'work.txt'), 'lazy\n');
+		await plugin.finalize(handle, { commitMessage: 'feat: work', push: true, pushCredential: credential() });
+		// Every credentialed child — the two fetches and the push — carries it.
+		const credentialed = invocations.filter(carriesHeader);
+		expect(credentialed.map((entry) => entry.args[0])).toEqual(['fetch', 'fetch', 'push']);
+		expect(credentialed.every((entry) => entry.env.GIT_NO_LAZY_FETCH === '1')).toBe(true);
+
+		// The base fetch again, exactly as the provider ran it, in the planted
+		// pool — without that one variable.
+		const [fetch] = credentialed;
+		plantPromisor(pool, at);
+		const env = { ...fetch.env };
+		delete env.GIT_NO_LAZY_FETCH;
+		try {
+			execFileSync('git', fetch.args, { cwd: pool, env, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+		} catch {
+			// The receipt is the verdict.
+		}
+
+		expect(at.didRun()).toBe(true);
+		expect(at.leaked()).toContain(BASIC);
+	});
+
+	it('planted BEFORE the run: the partial-clone keys withhold the credential', async () => {
+		const at = scene();
+		const pool = await seedPool(at.baseDir, originUrl);
+		plantPromisor(pool, at);
+		const invocations: Invocation[] = [];
+		const reasons: string[] = [];
+		const plugin = new LocalWorkspacePlugin({ execFile: recordingGit(invocations) });
+
+		await plugin
+			.provision(
+				provisionSpec(at.baseDir, originUrl, 'lazy-withheld', {
+					fetchCredential: credential(),
+					onFetchCredentialWithheld: (reason) => reasons.push(reason)
+				})
+			)
+			.catch(() => undefined);
+
+		expect(reasons).toHaveLength(1);
+		for (const name of ['extensions.partialclone', 'remote.<…>.promisor', 'remote.<…>.uploadpack']) {
+			expect(reasons[0]).toContain(name);
+		}
+		expect(invocations.some(carriesHeader)).toBe(false);
+		// The uncredentialed fetch is the one this provider always ran (its lazy
+		// fetch may well run the planted program); it holds no credential.
+		expect(at.leaked()).toBe('');
+	});
+
+	it('planted BETWEEN the check and the fetch: no lazy fetch runs, the program never fires, and the fetch succeeds', async () => {
+		const at = scene();
+		const pool = await seedPool(at.baseDir, originUrl);
+		const invocations: Invocation[] = [];
+		const reasons: string[] = [];
+		const plugin = new LocalWorkspacePlugin({
+			execFile: recordingGit(invocations, () => plantPromisor(pool, at))
+		});
+
+		const handle = await plugin.provision(
+			provisionSpec(at.baseDir, originUrl, 'lazy-raced', {
+				fetchCredential: credential(),
+				onFetchCredentialWithheld: (reason) => reasons.push(reason)
+			})
+		);
+
+		// The allowlist saw a clean pool, so the credential was used…
+		expect(reasons).toEqual([]);
+		const fetches = invocations.filter((entry) => entry.args[0] === 'fetch');
+		expect(fetches).toHaveLength(2);
+		expect(fetches.every(carriesHeader)).toBe(true);
+		// …the plant was in place for both fetches, and no grandchild ran it.
+		expect(git(pool, 'config', 'remote.ew-planted.promisor')).toBe('true');
+		expect(at.didRun()).toBe(false);
+		expect(at.leaked()).toBe('');
+		// And the fetch did not fail for it: the base came from the real remote.
+		expect(handle.baseSha).toBe(originHead);
 	});
 });

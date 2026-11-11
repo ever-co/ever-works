@@ -178,12 +178,8 @@ describe('the allowlist — what the repository’s own config may carry', () =>
 		'transfer.fsckobjects',
 		'extensions.worktreeconfig',
 		'core.sparsecheckout',
-		// What Git writes itself after `fetch --filter` / `worktree add
-		// --relative-paths`.
-		'extensions.partialclone',
+		// What Git writes itself after `worktree add --relative-paths`.
 		'extensions.relativeworktrees',
-		'remote.origin.promisor',
-		'remote.origin.partialclonefilter',
 		// Programs and switches for a terminal user: an agent that runs `git
 		// config core.editor true` must not lose every later publish for it.
 		'core.editor',
@@ -281,6 +277,11 @@ describe('the allowlist — what the repository’s own config may carry', () =>
 		'includeif.gitdir:/x/.path',
 		'fetch.bundleuri',
 		'promisor.advertise',
+		// A partial clone: the provider never runs `fetch --filter`, so in a
+		// pool these are planted, and they start a lazy fetch of a PLAIN remote.
+		'extensions.partialclone',
+		'remote.origin.promisor',
+		'remote.origin.partialclonefilter',
 		'extensions.somethingnew',
 		// What a push could be talked into.
 		'push.pushoption',
