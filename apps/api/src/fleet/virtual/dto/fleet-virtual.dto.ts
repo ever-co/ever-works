@@ -12,6 +12,7 @@ import {
     MinLength,
 } from 'class-validator';
 import {
+    FLEET_MAX_NODE_NAME_LENGTH,
     FLEET_VIRTUAL_CPU_CHOICES,
     FLEET_VIRTUAL_DISK_GIB_CHOICES,
     FLEET_VIRTUAL_MEMORY_GIB_CHOICES,
@@ -133,12 +134,16 @@ export class FleetVirtualRevealDto {
 export class FleetVirtualDestroyDto {
     @ApiProperty({
         required: false,
-        maxLength: 64,
+        maxLength: FLEET_MAX_NODE_NAME_LENGTH,
         description: 'The virtual computer’s exact name (`confirm-destructive`).',
     })
     @IsOptional()
     @IsString()
-    @MaxLength(64)
+    // The name compared is the child's Fleet node name, which a rename may set
+    // to up to FLEET_MAX_NODE_NAME_LENGTH (200). Capped at 64, a virtual
+    // computer renamed past 64 characters could never be destroyed: the only
+    // accepted confirmation was refused by this DTO.
+    @MaxLength(FLEET_MAX_NODE_NAME_LENGTH)
     confirmName?: string;
 }
 
