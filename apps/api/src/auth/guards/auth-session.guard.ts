@@ -29,6 +29,7 @@ import {
     type EverIdDelegationVerifier,
     type EverIdSignedOutProbe,
 } from './ever-id-guard.tokens';
+import { isActiveApiKeyOwner } from './api-key-owner';
 
 const API_KEY_PREFIX = 'ew_live_';
 
@@ -180,7 +181,7 @@ export class AuthSessionGuard {
             }
 
             const user = await this.userRepository.findById(keyRecord.userId);
-            if (!user || !user.isActive) {
+            if (!isActiveApiKeyOwner(user)) {
                 throw new UnauthorizedException('User account is inactive');
             }
 
