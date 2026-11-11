@@ -1634,7 +1634,8 @@ export class WorkLifecycleService {
             return stored;
         }
 
-        if (await this.workRepositoriesExist(work, user)) {
+        const repositories = await this.workRepositoriesExist(work, user);
+        if (repositories === 'exist') {
             throw new BadRequestException({
                 status: 'error',
                 message:
@@ -1642,78 +1643,158 @@ export class WorkLifecycleService {
                     'they were created under the current owner.',
             });
         }
+        if (repositories === 'unknown') {
+            // Fail closed: a check that errored or timed out is not "no repository".
+            throw new ServiceUnavailableException({
+                status: 'error',
+                message:
+                    'Could not check whether this Work’s repositories already exist (the Git provider ' +
+                    'did not answer). Nothing was changed — try again in a moment.',
+            });
+        }
 
         const organization = organizationChanged
             ? (updateDto.organization as boolean)
             : stored.organization;
+        let owner: string | undefined;
         if (organization) {
-            return { owner: ownerChanged ? requestedOwner : stored.owner, organization };
+            owner = ownerChanged ? requestedOwner : stored.owner;
+        } else {
+            const isCreator = !work.userId || work.userId === user.id;
+            owner =
+                isCreator && ownerChanged && requestedOwner
+                    ? requestedOwner
+                    : await this.creatorGitLogin(work);
         }
-        const isCreator = !work.userId || work.userId === user.id;
-        if (isCreator && ownerChanged && requestedOwner) {
-            return { owner: requestedOwner, organization };
-        }
-        return { owner: await this.creatorGitLogin(work), organization };
+        await this.assertGenerateStatusUnchanged(work);
+        return { owner, organization };
     }
 
     /**
-     * Do the Work's repositories exist yet? True after a successful (or a
-     * running) generation and for an App Work (its repository comes from its
-     * source). After a failed or cancelled first generation, only when a
-     * repository was actually recorded or created under the CURRENT owner, so
-     * a Work whose generation failed because its owner was wrong stays fixable.
+     * The checks above made Git provider calls; a generation may have started
+     * (and created repositories under the old owner) meanwhile. Re-read the
+     * row just before the write and refuse if its generate state moved.
      */
-    private async workRepositoriesExist(work: Work, user: User): Promise<boolean> {
+    private async assertGenerateStatusUnchanged(work: Work): Promise<void> {
+        const current = await this.workRepository.findById(work.id);
+        const before = work.generateStatus?.status ?? null;
+        const now = current ? (current.generateStatus?.status ?? null) : before;
+        if (now !== before) {
+            throw new ConflictException({
+                status: 'error',
+                message:
+                    'This Work’s generation state changed while its owner was being saved. ' +
+                    'Nothing was changed — reload and try again.',
+            });
+        }
+    }
+
+    /** Upper bound for each Git provider call an ownership change makes. */
+    private ownershipCheckTimeoutMs = 10_000;
+
+    /**
+     * `call`, or a rejection after {@link ownershipCheckTimeoutMs}. The provider
+     * client has no request timeout and its rate-limit handling may wait and
+     * retry for a long time; an ownership save must answer instead.
+     */
+    private withOwnershipCheckTimeout<T>(call: Promise<T>, what: string): Promise<T> {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const timeout = new Promise<never>((_, reject) => {
+            timer = setTimeout(
+                () =>
+                    reject(
+                        new Error(
+                            `${what} did not answer within ${this.ownershipCheckTimeoutMs} ms`,
+                        ),
+                    ),
+                this.ownershipCheckTimeoutMs,
+            );
+        });
+        return Promise.race([call, timeout]).finally(() => clearTimeout(timer));
+    }
+
+    /**
+     * Do the Work's repositories exist yet? `'exist'` after a successful (or a
+     * running) generation and for an App Work (its repository comes from its
+     * source). After a failed or cancelled first generation, `'exist'` only
+     * when a repository was recorded, or is found under the CURRENT owner, so
+     * a Work whose generation failed because its owner was wrong stays
+     * fixable. A provider call that errored (other than "not found") or timed
+     * out, with no repository found, answers `'unknown'`: the caller fails
+     * closed rather than reading it as "no repository".
+     */
+    private async workRepositoriesExist(
+        work: Work,
+        user: User,
+    ): Promise<'exist' | 'none' | 'unknown'> {
         if (!workKindHasRepository(work.kind)) {
-            return false;
+            return 'none';
         }
         if (isAppWorkKind(work.kind)) {
-            return true;
+            return 'exist';
         }
         const status = work.generateStatus?.status;
         if (status === GenerateStatusType.GENERATED || status === GenerateStatusType.GENERATING) {
-            return true;
+            return 'exist';
         }
         if (!status) {
-            return false;
+            return 'none';
         }
-        if (await this.websiteRepositoryState.isInitialized(work, user)) {
-            return true;
+        // What `WorkWebsiteRepositoryStateService.isInitialized` reads as
+        // "the website repository was made": recorded on the row.
+        if (
+            work.website ||
+            work.deployProjectId ||
+            work.websiteTemplateLastCommit ||
+            work.websiteTemplateLastUpdatedAt ||
+            work.websiteTemplateLastCheckedAt
+        ) {
+            return 'exist';
         }
-        if (!getWorkCapabilities(work.kind).repos.data || typeof work.getDataRepo !== 'function') {
-            return false;
+        const targets: Array<{ owner: string; repo: string }> = [];
+        if (typeof work.getWebsiteRepo === 'function') {
+            targets.push({ owner: work.getRepoOwner('website'), repo: work.getWebsiteRepo() });
         }
+        if (getWorkCapabilities(work.kind).repos.data && typeof work.getDataRepo === 'function') {
+            targets.push({ owner: work.getRepoOwner('data'), repo: work.getDataRepo() });
+        }
+        let unsure = false;
         for (const userId of [...new Set([user.id, work.userId].filter(Boolean))]) {
             const authOptions = { userId, providerId: work.gitProvider, workId: work.id };
             try {
-                if (!(await this.gitFacade.hasValidCredentials(authOptions))) continue;
-                if (
-                    await this.gitFacade.repositoryExists(
-                        work.getRepoOwner('data'),
-                        work.getDataRepo(),
-                        authOptions,
-                    )
-                ) {
-                    return true;
+                const hasCredentials = await this.withOwnershipCheckTimeout(
+                    this.gitFacade.hasValidCredentials(authOptions),
+                    'The Git credential check',
+                );
+                if (!hasCredentials) continue;
+                for (const target of targets) {
+                    const exists = await this.withOwnershipCheckTimeout(
+                        this.gitFacade.repositoryExists(target.owner, target.repo, authOptions),
+                        `The ${target.owner}/${target.repo} lookup`,
+                    );
+                    if (exists) {
+                        return 'exist';
+                    }
                 }
             } catch (error) {
+                unsure = true;
                 this.logger.warn(
-                    `Could not check the data repository of work ${work.id}: ${
+                    `Could not check the repositories of work ${work.id}: ${
                         error instanceof Error ? error.message : String(error)
                     }`,
                 );
             }
         }
-        return false;
+        return unsure ? 'unknown' : 'none';
     }
 
     /** The Work creator's login on the Work's git provider (a personal Work's owner). */
     private async creatorGitLogin(work: Work): Promise<string> {
         try {
-            const gitUser = await this.gitFacade.getUser({
-                userId: work.userId,
-                providerId: work.gitProvider,
-            });
+            const gitUser = await this.withOwnershipCheckTimeout(
+                this.gitFacade.getUser({ userId: work.userId, providerId: work.gitProvider }),
+                'The creator’s Git account lookup',
+            );
             if (gitUser?.login) {
                 return gitUser.login;
             }
@@ -1728,7 +1809,8 @@ export class WorkLifecycleService {
             status: 'error',
             message:
                 'A personal Work’s repositories belong to its creator, and the creator’s Git account ' +
-                'could not be read. Ask the creator to choose the owner, or keep the organization.',
+                'could not be read. Nothing was changed — try again, ask the creator to choose the ' +
+                'owner, or keep the organization.',
         });
     }
 

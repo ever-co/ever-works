@@ -68,7 +68,7 @@ function buildWork(overrides: Partial<Work> = {}): Work {
 
 describe('WorkLifecycleService — externalRefs claim map', () => {
     let service: WorkLifecycleService;
-    let workRepository: { update: jest.Mock; findByUser: jest.Mock };
+    let workRepository: { update: jest.Mock; findByUser: jest.Mock; findById: jest.Mock };
     let work: Work;
 
     const user = { id: 'user-1', username: 'user-1' } as unknown as User;
@@ -77,6 +77,8 @@ describe('WorkLifecycleService — externalRefs claim map', () => {
         work = buildWork();
 
         workRepository = {
+            // The owner-change path re-reads the row before writing.
+            findById: jest.fn().mockImplementation(async () => work),
             update: jest
                 .fn()
                 .mockImplementation(async (_id: string, data: Record<string, unknown>) => ({

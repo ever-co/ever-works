@@ -642,22 +642,108 @@ describe('WorkLifecycleService', () => {
 
         it.each([
             [
-                'its website repository',
-                () => websiteRepositoryState.isInitialized.mockResolvedValue(true),
+                'its website repository (recorded on the row)',
+                () => undefined,
+                { website: 'https://test-work.ever.works' },
+            ],
+            [
+                'its website repository (found at the provider)',
+                () => {
+                    gitFacade.hasValidCredentials.mockResolvedValue(true);
+                    gitFacade.repositoryExists.mockImplementation(
+                        async (_owner: string, repo: string) => repo === 'test-work-website',
+                    );
+                },
+                {},
             ],
             [
                 'its data repository',
                 () => {
                     gitFacade.hasValidCredentials.mockResolvedValue(true);
-                    gitFacade.repositoryExists.mockResolvedValue(true);
+                    gitFacade.repositoryExists.mockImplementation(
+                        async (_owner: string, repo: string) => repo === 'test-work-data',
+                    );
                 },
+                {},
             ],
-        ])('refuses after a failed generation that created %s', async (_label, created) => {
-            arm(makeWork({ generateStatus: { status: GenerateStatusType.ERROR } }));
+        ])('refuses after a failed generation that created %s', async (_label, created, extra) => {
+            arm(makeWork({ generateStatus: { status: GenerateStatusType.ERROR }, ...extra }));
             created();
             await expect(
                 service.updateWork('dir-1', { owner: 'acme', organization: true } as any, member),
             ).rejects.toThrow(refused);
+        });
+
+        describe('fails closed when the provider cannot answer', () => {
+            const retry = 'Could not check whether this Work’s repositories already exist';
+
+            it('a 5xx / rate-limited lookup is not "no repository"', async () => {
+                arm(makeWork({ generateStatus: { status: GenerateStatusType.ERROR } }));
+                gitFacade.hasValidCredentials.mockResolvedValue(true);
+                gitFacade.repositoryExists.mockRejectedValue(
+                    Object.assign(new Error('Service Unavailable'), { status: 503 }),
+                );
+                await expect(
+                    service.updateWork(
+                        'dir-1',
+                        { owner: 'acme', organization: true } as any,
+                        member,
+                    ),
+                ).rejects.toThrow(retry);
+                expect(workRepository.update).not.toHaveBeenCalled();
+            });
+
+            it('a lookup that never answers times out instead of leaving the save pending', async () => {
+                (service as any).ownershipCheckTimeoutMs = 20;
+                arm(makeWork({ generateStatus: { status: GenerateStatusType.CANCELLED } }));
+                gitFacade.hasValidCredentials.mockResolvedValue(true);
+                gitFacade.repositoryExists.mockReturnValue(new Promise(() => undefined));
+                await expect(
+                    service.updateWork(
+                        'dir-1',
+                        { owner: 'acme', organization: true } as any,
+                        member,
+                    ),
+                ).rejects.toThrow(retry);
+                expect(workRepository.update).not.toHaveBeenCalled();
+            });
+
+            it('a creator-login lookup that never answers times out with a retry message', async () => {
+                (service as any).ownershipCheckTimeoutMs = 20;
+                arm(makeWork({ generateStatus: null, owner: 'acme', organization: true }));
+                gitFacade.getUser.mockReturnValue(new Promise(() => undefined));
+                await expect(
+                    service.updateWork('dir-1', { organization: false } as any, manager),
+                ).rejects.toThrow('try again');
+                expect(workRepository.update).not.toHaveBeenCalled();
+            });
+
+            it('a "not found" answer still lets the owner change', async () => {
+                arm(
+                    makeWork({
+                        owner: 'manager-login',
+                        getRepoOwner: jest.fn().mockReturnValue('manager-login'),
+                        generateStatus: { status: GenerateStatusType.ERROR },
+                    }),
+                );
+                gitFacade.hasValidCredentials.mockResolvedValue(true);
+                gitFacade.repositoryExists.mockResolvedValue(false);
+                await service.updateWork('dir-1', { owner: 'member-login' } as any, member);
+                expect(written()).toMatchObject({ owner: 'member-login' });
+            });
+        });
+
+        it('refuses when a generation started while the checks ran (re-read before the write)', async () => {
+            const work = makeWork({ generateStatus: { status: GenerateStatusType.ERROR } });
+            arm(work);
+            workRepository.findById.mockResolvedValue({
+                ...work,
+                generateStatus: { status: GenerateStatusType.GENERATING },
+            });
+            await expect(
+                service.updateWork('dir-1', { owner: 'acme', organization: true } as any, member),
+            ).rejects.toThrow('generation state changed');
+            expect(workRepository.update).not.toHaveBeenCalled();
         });
 
         it("before generation, a non-creator moving the Work to personal sets the CREATOR's login", async () => {
