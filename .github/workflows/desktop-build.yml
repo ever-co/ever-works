@@ -16,6 +16,12 @@ name: Desktop App Build
 # DESKTOP_LINUX_IN_CLUSTER is 'true'. GitHub then does not request the linux
 # cell: GitHub-hosted runners do not start for the org.
 #
+# Since 2026-11-11 (owner: GitHub Actions and its artifact storage are not
+# used in ever-co, permanently) the job runs on GitHub only in forks, or when
+# the repo variable RUN_ON_ACTIONS is 'true'. In ever-co that leaves the linux
+# cell, in-cluster; there is no Windows or macOS machine outside Actions, so
+# those two cells do not run.
+#
 # Code signing (A11): certificates are read from repository secrets and mapped
 # to env vars by the `Resolve code signing` step below. When those secrets are
 # absent — which is always the case for forks and for pull requests from forks,
@@ -75,6 +81,9 @@ env:
 jobs:
   build:
     name: ${{ matrix.label }}
+    # In ever-co this runs in-cluster only (vars.CI_IN_CLUSTER), unless repo
+    # variable RUN_ON_ACTIONS is 'true'. Forks run it on their own Actions.
+    if: vars.CI_IN_CLUSTER == 'true' || github.repository_owner != 'ever-co' || vars.RUN_ON_ACTIONS == 'true'
     # linux: ubuntu-latest (in-cluster: the build pod). windows: our own Windows
     # machines (ever-co org variable RUNNER_WINDOWS_X64, a JSON label list, owner
     # rule 2026-11-04); forks do not have the variable and keep the GitHub-hosted

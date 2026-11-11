@@ -34,6 +34,15 @@ name: Node Packaging (Windows)
 # installer leaves no EverWorksNode task behind, which needs a clean, ephemeral
 # machine. Our Windows runners are persistent and EVERDESK1/EVERDESK4 run a
 # real fleet node, so the check would fail there for the wrong reason.
+#
+# OFF IN EVER-CO since 2026-11-11 (owner: GitHub Actions and its artifact
+# storage are not used, permanently). The job runs only in forks, or when the
+# repo variable RUN_ON_ACTIONS is 'true'. It has no other home: the cluster is
+# Linux x64 only, and the suite needs Windows PowerShell 5.1 and the Windows
+# service APIs. The Linux side of these scripts' contract still runs in
+# ci.yml (`pnpm test`: windows-service-contract.internal.spec.ts). To run the
+# PowerShell suite by hand, use a clean Windows machine or VM, never a fleet
+# workstation (see above): the two .ps1 test steps below, in this folder.
 on:
   push:
     branches: [main, stage]
@@ -52,6 +61,8 @@ concurrency:
 
 jobs:
   verify:
+    # Off in ever-co (see the top of this file); forks run it.
+    if: github.repository_owner != 'ever-co' || vars.RUN_ON_ACTIONS == 'true'
     # Pinned for the same reason windows-job-launcher.yml pins it: an explicit
     # image rather than whatever `windows-latest` has migrated to.
     runs-on: windows-2022
