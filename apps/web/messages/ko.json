@@ -5416,6 +5416,7 @@
                 "editContentError": "An error occurred while updating item content.",
                 "orderLabel": "표시 순서 (선택)",
                 "orderHelp": "숫자가 낮을수록 추천/비추천 그룹 내에서 먼저 표시됩니다.",
+                "orderInvalid": "표시 순서는 0 이상의 정수여야 합니다.",
                 "deleteDialogTitle": "항목 삭제",
                 "deleteDialogDescription": "이것은 저장소에서 {name}을(를) 제거합니다.",
                 "createPRLabel": "풀 리퀘스트 생성",

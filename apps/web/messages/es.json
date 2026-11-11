@@ -5490,6 +5490,7 @@
                 "editContentError": "Ocurrió un error al actualizar el contenido del elemento.",
                 "orderLabel": "Orden de visualización (opcional)",
                 "orderHelp": "Números más bajos se muestran antes dentro de los grupos destacados/no destacados.",
+                "orderInvalid": "El orden de visualización debe ser un número entero igual o mayor que 0.",
                 "deleteDialogTitle": "Eliminar elemento",
                 "deleteDialogDescription": "Esto eliminará {name} del repositorio.",
                 "createPRLabel": "Crear solicitud de extracción",

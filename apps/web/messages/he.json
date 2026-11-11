@@ -5490,6 +5490,7 @@
                 "editContentError": "אירעה שגיאה בעת עדכון תוכן הפריט.",
                 "orderLabel": "סדר תצוגה (לא חובה)",
                 "orderHelp": "מספרים נמוכים יותר מופיעים מוקדם יותר בקבוצות מומלץ/לא מומלץ.",
+                "orderInvalid": "סדר התצוגה חייב להיות מספר שלם, 0 ומעלה.",
                 "deleteDialogTitle": "מחק פריט",
                 "deleteDialogDescription": "פעולה זו תסיר את {name} מהמאגר.",
                 "createPRLabel": "צור בקשת משיכה",

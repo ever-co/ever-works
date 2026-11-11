@@ -5416,6 +5416,7 @@
                 "editContentError": "An error occurred while updating item content.",
                 "orderLabel": "डिस्प्ले क्रम (वैकल्पिक)",
                 "orderHelp": "विशेष/गैर-विशेष समूहों में कम नंबर पहले दिखते हैं।",
+                "orderInvalid": "डिस्प्ले क्रम 0 या उससे बड़ी पूर्ण संख्या होना चाहिए।",
                 "deleteDialogTitle": "आइटम हटाएँ",
                 "deleteDialogDescription": "यह {name} को रिपॉजिटरी से हटा देगा।",
                 "createPRLabel": "पुल रिक्वेस्ट बनाएँ",

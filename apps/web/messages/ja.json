@@ -5416,6 +5416,7 @@
                 "editContentError": "An error occurred while updating item content.",
                 "orderLabel": "表示順序 (オプション)",
                 "orderHelp": "小さい数字ほど注目/非注目グループ内で先に表示されます。",
+                "orderInvalid": "表示順序は 0 以上の整数で指定してください。",
                 "deleteDialogTitle": "項目を削除",
                 "deleteDialogDescription": "これにより {name} がリポジトリから削除されます。",
                 "createPRLabel": "プルリクエストを作成",

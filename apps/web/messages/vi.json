@@ -5416,6 +5416,7 @@
                 "editContentError": "An error occurred while updating item content.",
                 "orderLabel": "Thứ Tự Hiển Thị (tùy chọn)",
                 "orderHelp": "Số nhỏ hơn sẽ hiển thị sớm hơn trong nhóm nổi bật/không nổi bật.",
+                "orderInvalid": "Thứ tự hiển thị phải là số nguyên từ 0 trở lên.",
                 "deleteDialogTitle": "Xóa mục",
                 "deleteDialogDescription": "Thao tác này sẽ xóa {name} khỏi kho lưu trữ.",
                 "createPRLabel": "Tạo Pull Request",

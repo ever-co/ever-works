@@ -5416,6 +5416,7 @@
                 "editContentError": "An error occurred while updating item content.",
                 "orderLabel": "显示顺序（可选）",
                 "orderHelp": "较低数字在精选/非精选组中显示更早。",
+                "orderInvalid": "显示顺序必须是大于或等于 0 的整数。",
                 "deleteDialogTitle": "删除项目",
                 "deleteDialogDescription": "这将从仓库中移除 {name}。",
                 "createPRLabel": "创建拉取请求",

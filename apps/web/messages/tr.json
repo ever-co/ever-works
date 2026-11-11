@@ -5416,6 +5416,7 @@
                 "editContentError": "An error occurred while updating item content.",
                 "orderLabel": "Görüntüleme sırası (isteğe bağlı)",
                 "orderHelp": "Düşük numaralar öne çıkan/öne çıkmayan gruplarda önce gösterilir.",
+                "orderInvalid": "Görüntüleme sırası 0 veya daha büyük bir tam sayı olmalıdır.",
                 "deleteDialogTitle": "Öğeyi Sil",
                 "deleteDialogDescription": "Bu, {name}'i depodan kaldıracak.",
                 "createPRLabel": "Pull Request Oluştur",

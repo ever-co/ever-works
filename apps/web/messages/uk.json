@@ -5416,6 +5416,7 @@
                 "editContentError": "An error occurred while updating item content.",
                 "orderLabel": "Порядок відображення (необов’язково)",
                 "orderHelp": "Менші номери відображаються раніше в групах рекомендованих/нерекомендованих.",
+                "orderInvalid": "Порядок відображення має бути цілим числом, не меншим за 0.",
                 "deleteDialogTitle": "Видалити елемент",
                 "deleteDialogDescription": "Це видалить {name} із репозиторію.",
                 "createPRLabel": "Створити Pull Request",

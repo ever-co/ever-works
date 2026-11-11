@@ -5416,6 +5416,7 @@
                 "editContentError": "An error occurred while updating item content.",
                 "orderLabel": "ลำดับการแสดงผล (ไม่บังคับ)",
                 "orderHelp": "ตัวเลขต่ำกว่าจะแสดงก่อนในกลุ่มเด่น/ไม่เด่น",
+                "orderInvalid": "ลำดับการแสดงผลต้องเป็นจำนวนเต็มตั้งแต่ 0 ขึ้นไป",
                 "deleteDialogTitle": "ลบรายการ",
                 "deleteDialogDescription": "การดำเนินการนี้จะลบ {name} ออกจากคลัง",
                 "createPRLabel": "สร้าง Pull Request",

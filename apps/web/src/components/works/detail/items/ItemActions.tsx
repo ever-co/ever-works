@@ -37,6 +37,7 @@ import {
     Link2,
     FileText,
 } from 'lucide-react';
+import { parseItemDisplayOrder } from '@/lib/works/item-display-order.shared';
 import { useItemsContext } from './ItemsContext';
 import { ScreenshotProviderDialog } from './ScreenshotProviderDialog';
 import { MarkdownBodyField } from './MarkdownBodyField';
@@ -340,17 +341,16 @@ const DisplayDialog = ({ open, onOpenChange, item, workId, onUpdate }: DisplayDi
     );
     const [createPr, setCreatePr] = useState<boolean>(false);
     const [isSubmitting, startTransition] = useTransition();
+    // The API takes a whole number of 0 or more (`@IsInt() @Min(0)`); say so
+    // here instead of sending -1 or 1.5 and showing its raw 400.
+    const orderInput = parseItemDisplayOrder(order);
+    const orderError = orderInput.ok ? undefined : t('orderInvalid');
 
     const handleSubmit = () => {
+        if (!orderInput.ok) return;
+        const parsedOrder = orderInput.value;
         startTransition(async () => {
             try {
-                const parsedOrder =
-                    order === ''
-                        ? undefined
-                        : Number.isNaN(Number(order))
-                          ? undefined
-                          : Number(order);
-
                 const result = await updateItem(workId, {
                     item_slug: item.slug!,
                     featured,
@@ -403,9 +403,12 @@ const DisplayDialog = ({ open, onOpenChange, item, workId, onUpdate }: DisplayDi
                         <Input
                             type="number"
                             min={0}
+                            step={1}
                             value={order}
                             onChange={(e) => setOrder(e.target.value)}
                             placeholder="0"
+                            error={orderError}
+                            aria-invalid={orderError ? true : undefined}
                         />
                         <p className="text-xs text-text-secondary dark:text-text-secondary-dark">
                             {t('orderHelp', {
@@ -434,7 +437,11 @@ const DisplayDialog = ({ open, onOpenChange, item, workId, onUpdate }: DisplayDi
                     >
                         {t('addModal.cancel')}
                     </Button>
-                    <Button onClick={handleSubmit} disabled={isSubmitting} loading={isSubmitting}>
+                    <Button
+                        onClick={handleSubmit}
+                        disabled={isSubmitting || !orderInput.ok}
+                        loading={isSubmitting}
+                    >
                         {t('updateItem', { defaultValue: 'Update item' })}
                     </Button>
                 </DialogFooter>

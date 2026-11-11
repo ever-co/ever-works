@@ -5416,6 +5416,7 @@
                 "editContentError": "An error occurred while updating item content.",
                 "orderLabel": "Weergavevolgorde (optioneel)",
                 "orderHelp": "Lagere nummers worden eerder weergegeven binnen uitgelichte/niet-uitgelichte groepen.",
+                "orderInvalid": "De weergavevolgorde moet een geheel getal van 0 of hoger zijn.",
                 "deleteDialogTitle": "Item verwijderen",
                 "deleteDialogDescription": "Hiermee verwijder je {name} uit de repository.",
                 "createPRLabel": "Pull request maken",

@@ -5416,6 +5416,7 @@
                 "editContentError": "An error occurred while updating item content.",
                 "orderLabel": "Urutan tampilan (opsional)",
                 "orderHelp": "Nomor lebih kecil ditampilkan lebih awal dalam grup unggulan/non-unggulan.",
+                "orderInvalid": "Urutan tampilan harus berupa bilangan bulat 0 atau lebih.",
                 "deleteDialogTitle": "Hapus item",
                 "deleteDialogDescription": "Ini akan menghapus {name} dari repositori.",
                 "createPRLabel": "Buat Pull Request",

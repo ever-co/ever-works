@@ -5416,6 +5416,7 @@
                 "editContentError": "An error occurred while updating item content.",
                 "orderLabel": "Kolejność wyświetlania (opcjonalnie)",
                 "orderHelp": "Niższe liczby wyświetlają się wcześniej w grupach polecanych/niepolecanych.",
+                "orderInvalid": "Kolejność wyświetlania musi być liczbą całkowitą równą 0 lub większą.",
                 "deleteDialogTitle": "Usuń element",
                 "deleteDialogDescription": "To usunie {name} z repozytorium.",
                 "createPRLabel": "Utwórz Pull Request",

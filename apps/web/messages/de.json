@@ -5490,6 +5490,7 @@
                 "editContentError": "Beim Aktualisieren des Elementinhalts ist ein Fehler aufgetreten.",
                 "orderLabel": "Anzeigereihenfolge (optional)",
                 "orderHelp": "Kleinere Zahlen werden früher innerhalb empfohlener/nicht empfohlener Gruppen angezeigt.",
+                "orderInvalid": "Die Anzeigereihenfolge muss eine ganze Zahl ab 0 sein.",
                 "deleteDialogTitle": "Eintrag löschen",
                 "deleteDialogDescription": "Dies entfernt {name} aus dem Repository.",
                 "createPRLabel": "Pull Request erstellen",

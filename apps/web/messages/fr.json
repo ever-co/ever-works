@@ -5490,6 +5490,7 @@
                 "editContentError": "Une erreur s'est produite lors de la mise à jour du contenu de l'élément.",
                 "orderLabel": "Ordre d’affichage (facultatif)",
                 "orderHelp": "Les nombres plus bas s’affichent en premier dans les groupes mis en avant/non mis en avant.",
+                "orderInvalid": "L’ordre d’affichage doit être un nombre entier supérieur ou égal à 0.",
                 "deleteDialogTitle": "Supprimer l’élément",
                 "deleteDialogDescription": "Cela supprimera {name} du dépôt.",
                 "createPRLabel": "Créer une demande de tirage",

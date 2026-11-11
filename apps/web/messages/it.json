@@ -5416,6 +5416,7 @@
                 "editContentError": "An error occurred while updating item content.",
                 "orderLabel": "Ordine di visualizzazione (opzionale)",
                 "orderHelp": "Numeri più bassi appaiono prima nei gruppi in evidenza/non in evidenza.",
+                "orderInvalid": "L’ordine di visualizzazione deve essere un numero intero maggiore o uguale a 0.",
                 "deleteDialogTitle": "Elimina elemento",
                 "deleteDialogDescription": "Questo rimuoverà {name} dal repository.",
                 "createPRLabel": "Crea Pull Request",
