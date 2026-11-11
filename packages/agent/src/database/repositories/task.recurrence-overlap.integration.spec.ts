@@ -475,7 +475,10 @@ describe('Recurring Tasks overlap limit (real SQLite)', () => {
             expect((await readRow(back.id)).prState).toBe(TASK_PR_NOT_FOUND_STATE);
             const missionCount = () =>
                 taskRows.count({
-                    where: missionOpenTasksWhere({ workId: WORK, missionId: MISSION }, { now: NOW }),
+                    where: missionOpenTasksWhere(
+                        { workId: WORK, missionId: MISSION },
+                        { now: NOW },
+                    ),
                 });
             expect(await missionCount()).toBe(1);
 

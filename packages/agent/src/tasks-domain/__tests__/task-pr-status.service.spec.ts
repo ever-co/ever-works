@@ -289,7 +289,12 @@ describe('TaskPrStatusService', () => {
 
     it('never offers a "not found" read to the CI fix loop, even with a stale failing cache', async () => {
         const failingChecks = [
-            { name: 'build', status: 'completed', conclusion: 'failure', appSlug: 'github-actions' },
+            {
+                name: 'build',
+                status: 'completed',
+                conclusion: 'failure',
+                appSlug: 'github-actions',
+            },
         ];
         const recently = new Date(Date.now() - 60_000);
         // Everything the re-offer needs (a red cache from an allow-listed app, a recorded head):
@@ -354,7 +359,11 @@ describe('TaskPrStatusService', () => {
         tasks.findDuePrStatusSync.mockResolvedValue([
             makeTask({ prState: 'not_found', ciState: null, ciCheckedAt: new Date(0) }),
         ]);
-        git.getPullRequestStatus.mockResolvedValue({ ...openStatus, state: 'merged', merged: true });
+        git.getPullRequestStatus.mockResolvedValue({
+            ...openStatus,
+            state: 'merged',
+            merged: true,
+        });
 
         const summary = await service.syncDuePrStatuses();
 
