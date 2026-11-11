@@ -211,6 +211,7 @@ describe('queued-too-long escalations close when their run ends', () => {
                 status: 'failed',
                 finishedAt,
                 attentionReason: 'queued-too-long',
+                queuedReason: null,
             });
             await listener.handleRunTerminal({
                 runId: 'r2',
@@ -218,6 +219,7 @@ describe('queued-too-long escalations close when their run ends', () => {
                 status: 'completed',
                 finishedAt,
                 attentionReason: null,
+                queuedReason: null,
             });
             await listener.handleRunTerminal({
                 runId: 'r3',
@@ -225,6 +227,17 @@ describe('queued-too-long escalations close when their run ends', () => {
                 status: 'completed',
                 finishedAt,
                 attentionReason: 'stale-parked',
+                queuedReason: null,
+            });
+
+            // Ended while still parked for capacity: "raise the limit?" stands.
+            await listener.handleRunTerminal({
+                runId: 'r4',
+                agentId: AGENT,
+                status: 'failed',
+                finishedAt,
+                attentionReason: 'queued-too-long',
+                queuedReason: 'concurrency-limit',
             });
 
             expect(escalations.closeQueuedTooLongForEndedRun).toHaveBeenCalledTimes(1);
@@ -243,6 +256,7 @@ describe('queued-too-long escalations close when their run ends', () => {
                     status: 'failed',
                     finishedAt: null,
                     attentionReason: 'queued-too-long',
+                    queuedReason: null,
                 }),
             ).resolves.toBeUndefined();
         });
@@ -277,13 +291,17 @@ describe('queued-too-long escalations close when their run ends', () => {
             await runRows.clear();
         });
 
-        async function run(status: AgentRun['status']): Promise<AgentRun> {
+        async function run(
+            status: AgentRun['status'],
+            queuedReason: string | null = null,
+        ): Promise<AgentRun> {
             return runRows.save(
                 runRows.create({
                     agentId: AGENT,
                     userId: USER,
                     triggerKind: 'task',
                     status,
+                    queuedReason,
                     finishedAt:
                         status === 'queued' || status === 'running'
                             ? null
@@ -315,14 +333,17 @@ describe('queued-too-long escalations close when their run ends', () => {
             expect(await repository.findOpenQueuedTooLongForRun(USER)).toBeNull();
         });
 
-        it('lists the stale cards: run ended or gone — never a still-queued run, never another reason', async () => {
+        it('lists the stale cards: run ended or gone — never a still-queued or capacity-starved run, never another reason', async () => {
             const failed = await run('failed');
             const stillQueued = await run('queued');
             const parkedRun = await run('completed');
+            // Reaped while still parked for capacity: its "raise the limit?" stands.
+            const starved = await run('failed', 'concurrency-limit');
             const gone = '99999999-9999-4999-8999-999999999999';
             const staleCard = await card('queued-too-long', failed.id);
             await card('queued-too-long', stillQueued.id);
             await card('run-parked', parkedRun.id);
+            await card('queued-too-long', starved.id);
             const goneCard = await card('queued-too-long', gone);
 
             const found = await repository.findOpenQueuedTooLongWithEndedRun(50);

@@ -18,6 +18,14 @@ import { ownershipSqlPredicate, type OwnershipScope } from '../ownership-scope';
 /** The one reason a run's end can answer by itself (see `AgentEscalationService`). */
 const QUEUED_TOO_LONG: AgentEscalationReasonCode = 'queued-too-long';
 
+/**
+ * `agent_runs.queuedReason` of a run parked for capacity
+ * (`QUEUED_REASON_CONCURRENCY` in `agents/run-admission-chain.ts`; repeated
+ * here because the database layer does not import the agents layer). A card
+ * whose run ended while still parked for it keeps asking "raise the limit?".
+ */
+const STARVED_BY_CONCURRENCY = 'concurrency-limit';
+
 /** Run statuses that mean "this run is over". */
 const ENDED_RUN_STATUSES: readonly AgentRunStatus[] = ['completed', 'failed', 'cancelled'];
 
@@ -273,6 +281,9 @@ export class AgentEscalationRepository {
      * failed / cancelled) or no longer exists — the cards that can close
      * themselves. A run row is only ever deleted by the retention pass, which
      * deletes terminal runs only, so a missing run also means "it ended".
+     * A run that ended while still parked for capacity
+     * (`queuedReason = 'concurrency-limit'`) is excluded: that card's question
+     * ("raise the limit?") stands, and a person answers it.
      *
      * Oldest first, bounded: the periodic sweep drains a backlog a batch per
      * tick. Returns the run's final status and finish time alongside, so the
@@ -292,9 +303,10 @@ export class AgentEscalationRepository {
             .where('esc.reasonCode = :reasonCode', { reasonCode: QUEUED_TOO_LONG })
             .andWhere('esc.status = :open', { open: 'open' })
             .andWhere('esc.runId IS NOT NULL')
-            .andWhere('(run.id IS NULL OR run.status IN (:...ended))', {
-                ended: [...ENDED_RUN_STATUSES],
-            })
+            .andWhere(
+                '(run.id IS NULL OR (run.status IN (:...ended) AND (run.queuedReason IS NULL OR run.queuedReason != :starved)))',
+                { ended: [...ENDED_RUN_STATUSES], starved: STARVED_BY_CONCURRENCY },
+            )
             .orderBy('esc.createdAt', 'ASC')
             .limit(Math.max(1, Math.min(500, limit)))
             .getMany();

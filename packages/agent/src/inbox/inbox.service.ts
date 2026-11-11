@@ -31,7 +31,11 @@ import { AgentApprovalsService } from '../agent-approvals/agent-approvals.servic
 import { AgentEscalationService } from '../agents/agent-escalation.service';
 import { NotificationService } from '../notifications/notification.service';
 import { ActivityLogService } from '../activity-log/activity-log.service';
-import { ActivityActionType, ActivityStatus } from '../entities/activity-log.types';
+import {
+    ActivityActionType,
+    ActivityStatus,
+    type ActivityActorKind,
+} from '../entities/activity-log.types';
 import {
     DomainEventPublisher,
     recordAfterWrite,
@@ -859,15 +863,20 @@ export class InboxService implements InboxProducer {
         await this.recordAnswered(row.id, row.unread);
         const fresh = await this.items.findOwned(row.id, row.userId);
         if (fresh) {
-            this.logAnswered(fresh, 'escalation-resolved', {
-                via: systemClosed
-                    ? 'escalation-system'
-                    : agentAuthored
-                      ? 'escalation-agent'
-                      : 'escalation',
-                restart: handOff.restart,
-                decidedByUserId: input.resolvedByUserId,
-            });
+            this.logAnswered(
+                fresh,
+                'escalation-resolved',
+                {
+                    via: systemClosed
+                        ? 'escalation-system'
+                        : agentAuthored
+                          ? 'escalation-agent'
+                          : 'escalation',
+                    restart: handOff.restart,
+                    decidedByUserId: input.resolvedByUserId,
+                },
+                systemClosed ? 'system' : undefined,
+            );
         }
     }
 
@@ -1285,11 +1294,19 @@ export class InboxService implements InboxProducer {
         row: InboxItem,
         routed: InboxReplyRouted,
         extra: Record<string, unknown> = {},
+        // `system` for an item the platform closed itself (a `queued-too-long`
+        // escalation whose run ended): the feed then shows the platform as
+        // the actor, not "You answered a decision". Omitted = today's
+        // derivation (`INBOX_ITEM_ANSWERED` is a person's action).
+        actorKind?: ActivityActorKind,
     ): void {
-        void this.tryLogActivity(row.userId, ActivityActionType.INBOX_ITEM_ANSWERED, row, {
-            ...extra,
-            routed,
-        });
+        void this.tryLogActivity(
+            row.userId,
+            ActivityActionType.INBOX_ITEM_ANSWERED,
+            row,
+            { ...extra, routed },
+            actorKind,
+        );
     }
 
     private async tryLogActivity(
@@ -1297,6 +1314,7 @@ export class InboxService implements InboxProducer {
         actionType: ActivityActionType,
         row: InboxItem,
         details: Record<string, unknown>,
+        actorKind?: ActivityActorKind,
     ): Promise<void> {
         if (!this.activityLog) return;
         try {
@@ -1306,6 +1324,7 @@ export class InboxService implements InboxProducer {
                 actionType,
                 status: ActivityStatus.COMPLETED,
                 summary: `Inbox ${row.kind}: ${row.title}`.slice(0, 500),
+                ...(actorKind ? { actorKind } : {}),
                 details: {
                     ...details,
                     inboxItemId: row.id,

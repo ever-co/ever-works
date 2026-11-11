@@ -6,6 +6,7 @@ import {
 } from '../database/agent-run-terminal.event';
 import { ATTENTION_REASON_QUEUED_TOO_LONG } from '../database/repositories/agent-run.repository';
 import { AgentEscalationService } from './agent-escalation.service';
+import { QUEUED_REASON_CONCURRENCY } from './run-admission-chain';
 
 /**
  * A `queued-too-long` escalation closes itself when its run ends.
@@ -18,7 +19,10 @@ import { AgentEscalationService } from './agent-escalation.service';
  * since failed.
  *
  * Only runs the sweeper flagged (`attentionReason = 'queued-too-long'`) are
- * looked at, so every other terminal run costs nothing here. The close itself
+ * looked at, so every other terminal run costs nothing here. A run that ended
+ * while still parked for CAPACITY (`queuedReason = 'concurrency-limit'`) is
+ * left alone too: its card's signal is "raise the limit", which the run
+ * ending (reaped, cancelled) does not answer — a person decides that one. The close itself
  * is the escalation service's system path: no user id, a fixed note, the
  * Inbox mirror closed, nothing resumed. Manual resolution keeps requiring a
  * signed-in person. `AgentEscalationService.closeEndedQueuedTooLong` (run by
@@ -37,6 +41,7 @@ export class AgentRunTerminalEscalationListener {
     async handleRunTerminal(event: AgentRunTerminalEvent): Promise<void> {
         if (!this.escalations) return;
         if (event?.attentionReason !== ATTENTION_REASON_QUEUED_TOO_LONG) return;
+        if (event.queuedReason === QUEUED_REASON_CONCURRENCY) return;
         await this.escalations.closeQueuedTooLongForEndedRun({
             runId: event.runId,
             status: event.status,

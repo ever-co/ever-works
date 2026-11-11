@@ -1,4 +1,5 @@
 import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
+import { resolveFeedActor, withDerivedActor } from '../../activity-log/feed-actor';
 import { composeFleetAnswerMessage, InboxService } from '../inbox.service';
 import type { InboxItem } from '../../entities/inbox-item.entity';
 import type { CreateInboxItemInput } from '../../database/repositories/inbox-item.repository';
@@ -1781,12 +1782,39 @@ describe('InboxService — My Decisions', () => {
             expect(steering.steer).not.toHaveBeenCalled();
             expect(store.stampFirstViewed).not.toHaveBeenCalled();
             await new Promise((resolve) => setImmediate(resolve));
-            const details = activityLog.log.mock.calls.at(-1)![0].details;
-            expect(details).toMatchObject({
+            const entry = activityLog.log.mock.calls.at(-1)![0];
+            expect(entry.details).toMatchObject({
                 via: 'escalation-system',
                 restart: 'none',
                 decidedByUserId: null,
             });
+            // The feed must show the PLATFORM closing it — `INBOX_ITEM_ANSWERED`
+            // is otherwise a person's action ("You answered a decision").
+            const stored = withDerivedActor(entry as never);
+            expect(stored.actorKind).toBe('system');
+            expect(resolveFeedActor(stored as never, new Map()).kind).toBe('system');
+        });
+
+        it('a PERSON closing the same mirror still reads as the person in the feed', async () => {
+            const store = makeStore([
+                makeRow({ id: 'i1', kind: 'escalation', escalationId: 'e1', agentRunId: 'run-1' }),
+            ]);
+            const activityLog = {
+                log: jest.fn(async (_entry: { details: Record<string, unknown> }) => undefined),
+            };
+            const { service } = build({ store, runs: parkedRun(), activityLog });
+
+            await service.escalationResolved({
+                escalationId: 'e1',
+                resolvedByUserId: 'u1',
+                note: 'Raised the limit',
+            });
+
+            await new Promise((resolve) => setImmediate(resolve));
+            const entry = activityLog.log.mock.calls.at(-1)![0];
+            expect(
+                resolveFeedActor(withDerivedActor(entry as never) as never, new Map()).kind,
+            ).toBe('user');
         });
 
         it('is a no-op when the Inbox reply already closed the item: one answer, one restart', async () => {
