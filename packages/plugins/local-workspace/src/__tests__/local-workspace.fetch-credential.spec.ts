@@ -231,7 +231,9 @@ describe('scoped fetch credential — how it reaches git (real git, every child 
 			expect(JSON.stringify(entry.env)).not.toContain(TOKEN);
 			expect(JSON.stringify(entry.env)).not.toContain(BASIC);
 			expect(carriesHeader(entry)).toBe(false);
-			expect(entry.env.GIT_ALLOW_PROTOCOL).toBeUndefined();
+			// The maintenance speaks NO transport (an empty list); every other
+			// uncredentialed command is left exactly as it was.
+			expect(entry.env.GIT_ALLOW_PROTOCOL).toBe(entry.args[0] === 'maintenance' ? '' : undefined);
 		}
 	});
 
@@ -287,6 +289,19 @@ describe('scoped fetch credential — how it reaches git (real git, every child 
 		]);
 		expect(carriesHeader(maintenance[0])).toBe(false);
 		expect(invocations.indexOf(maintenance[0])).toBeGreaterThan(invocations.indexOf(branch));
+		// It reads the same pool config as the fetches, so it is hardened the
+		// same way — minus the credential, and minus the "no gc" that is its
+		// whole job (the attack spec shows what each of these stops).
+		expect(maintenance[0].env.GIT_NO_LAZY_FETCH).toBe('1');
+		expect(maintenance[0].env.GIT_ALLOW_PROTOCOL).toBe('');
+		expect(valueOf(maintenance[0], 'core.hooksPath')).toBe(valueOf(base, 'core.hooksPath'));
+		expect(valueOf(maintenance[0], 'core.fsmonitor')).toBe('false');
+		expect(valueOf(maintenance[0], 'core.alternateRefsCommand')).toBe('');
+		expect(valueOf(maintenance[0], 'core.askpass')).toBe('');
+		expect(valueOf(maintenance[0], 'credential.helper')).toBe('');
+		expect(valueOf(maintenance[0], 'core.unsetenvvars')).toBe(valueOf(base, 'core.unsetenvvars'));
+		expect(valueOf(maintenance[0], 'maintenance.auto')).toBeUndefined();
+		expect(valueOf(maintenance[0], 'gc.auto')).toBeUndefined();
 	});
 
 	it('leaves the token in NO file, no Git config and no remote URL', async () => {

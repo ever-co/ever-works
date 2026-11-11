@@ -60,6 +60,13 @@ const HEADER = `Authorization: Basic ${BASIC}`;
  * planted redirect fails fast instead of reaching a network.
  */
 const HTTPS_REMOTE = 'https://127.0.0.1:1/ever-works/credentialed-command-fixture.git';
+/**
+ * The variable {@link recordingGit} adds to every command it starts, naming
+ * that command (`fetch:credentialed`, `maintenance`, …). Git hands it down to
+ * every grandchild, so a planted program can say which of the provider's
+ * children started it.
+ */
+const CHILD_MARKER = 'EW_ATTACK_CHILD';
 
 let root: string;
 let originDir: string;
@@ -77,8 +84,13 @@ function scene() {
 	const dir = mkdtempSync(join(root, `case-${caseCounter}-`));
 	const receipt = slash(join(dir, 'receipt.txt'));
 	const ran = slash(join(dir, 'ran.txt'));
-	/** Shell that records what it can see of the credential, then that it ran. */
-	const harvest = `env | grep -F Authorization >> '${receipt}'; echo ran >> '${ran}';`;
+	/**
+	 * Shell that records what it can see of the credential, then that it ran
+	 * and under which of the provider's children ({@link CHILD_MARKER}, set
+	 * by {@link recordingGit}). No double quotes: one vector writes it into a
+	 * quoted config-file value.
+	 */
+	const harvest = `env | grep -F Authorization >> '${receipt}'; echo ran under \${${CHILD_MARKER}:-unknown} >> '${ran}';`;
 	let programs = 0;
 	return {
 		dir,
@@ -102,13 +114,40 @@ function scene() {
 		/** Everything a planted program managed to read of the credential. */
 		leaked: (): string => (existsSync(receipt) ? readFileSync(receipt, 'utf8') : ''),
 		didRun: (): boolean => existsSync(ran),
+		/**
+		 * The provider's commands a {@link harvest} program ran under, one per
+		 * run — `fetch:credentialed`, `maintenance`, … — so a failure names
+		 * the child. `unknown` for a command the case started itself.
+		 */
+		ranUnder: (): string[] =>
+			(existsSync(ran) ? readFileSync(ran, 'utf8') : '')
+				.split(/\r?\n/)
+				.filter((line) => line.startsWith('ran under '))
+				.map((line) => line.slice('ran under '.length).trim()),
 		/** The tags of the programs that ran, one per line. */
 		ranBy: (): string => (existsSync(ran) ? readFileSync(ran, 'utf8') : '')
 	};
 }
 type Scene = ReturnType<typeof scene>;
 
-/** Real `execFile`, every invocation recorded; `afterConfigCheck` fires once the allowlist read has returned. */
+/**
+ * Real `execFile`, every invocation recorded exactly as the provider made it;
+ * `afterConfigCheck` fires once the allowlist read has returned.
+ *
+ * Two things differ in what is actually STARTED, and neither in what is
+ * recorded:
+ *
+ *  - every command carries {@link CHILD_MARKER}, so a planted program that
+ *    runs says under which child it did;
+ *  - the provider's pool maintenance runs with `--no-detach` instead of
+ *    `--detach`. Git detaches it on Linux and cannot on Windows, so as the
+ *    provider starts it, it would still be running in the background on one
+ *    platform when a case reads its receipt, and finished on the other. Run
+ *    to its end inside the provision, it is judged the same way everywhere.
+ *    (On stage CI — git 2.56, Linux — the program the promisor cases plant
+ *    ran in that maintenance: once before it detached, and again after,
+ *    when nothing waited for it.)
+ */
 function recordingGit(invocations: Invocation[], afterConfigCheck?: () => void): typeof execFile {
 	let fired = false;
 	return ((
@@ -117,7 +156,17 @@ function recordingGit(invocations: Invocation[], afterConfigCheck?: () => void):
 		options: { env?: NodeJS.ProcessEnv },
 		callback: (error: Error | null, stdout: string, stderr: string) => void
 	) => {
-		invocations.push({ args: [...args], env: { ...(options.env ?? {}) } });
+		const entry: Invocation = { args: [...args], env: { ...(options.env ?? {}) } };
+		invocations.push(entry);
+		const started = {
+			...options,
+			env: {
+				...(options.env ?? process.env),
+				[CHILD_MARKER]: `${args[0]}${carriesHeader(entry) ? ':credentialed' : ''}`
+			}
+		};
+		const startedArgs =
+			args[0] === 'maintenance' ? args.map((arg) => (arg === '--detach' ? '--no-detach' : arg)) : args;
 		const isConfigCheck = args.includes('--show-scope') && args.includes('--list');
 		const done =
 			isConfigCheck && afterConfigCheck && !fired
@@ -129,7 +178,7 @@ function recordingGit(invocations: Invocation[], afterConfigCheck?: () => void):
 						callback(error, stdout, stderr);
 					}
 				: callback;
-		return (execFile as unknown as (...rest: unknown[]) => unknown)(command, args, options, done) as never;
+		return (execFile as unknown as (...rest: unknown[]) => unknown)(command, startedArgs, started, done) as never;
 	}) as never;
 }
 
@@ -411,7 +460,11 @@ describe('scoped FETCH credential — a planted pool config cannot read it', () 
 			const fetches = invocations.filter((entry) => entry.args[0] === 'fetch');
 			expect(fetches.length).toBeGreaterThan(0);
 			expect(fetches.every(carriesHeader)).toBe(true);
-			// And the planted program did not run, let alone read it.
+			// And the planted program did not run, let alone read it — in no
+			// child: not the credentialed fetches, and not the uncredentialed
+			// maintenance that follows them (run to its end here, see
+			// `recordingGit`), which reads the same planted config.
+			expect(at.ranUnder()).toEqual([]);
 			expect(at.didRun()).toBe(false);
 			expect(at.leaked()).toBe('');
 			if (vector.raced === 'refused') {
@@ -1855,6 +1908,13 @@ describe('the lazy fetch of a promisor remote — a grandchild that names a PLAI
 	// Debian 13.7 / git 2.47.3). The allowlist refuses the partial-clone keys,
 	// but a concurrent job can write them after it looked: `GIT_NO_LAZY_FETCH=1`
 	// (Git 2.44+) in the credentialed child is what stops the grandchild then.
+	//
+	// The pool maintenance the provider runs after those fetches reads the
+	// same config. It never holds the credential, but on git 2.56 its `--auto`
+	// starts the same grandchild (stage CI, round 20: the planted `uploadpack`
+	// ran under `git maintenance run --auto --quiet --detach`, before and after
+	// it detached, with no token in its environment). So it gets the variable
+	// too, and no transport at all — the last case below.
 
 	/** A promisor remote with a harvester for its `uploadpack`, and a missing object to send Git there. */
 	function plantPromisor(pool: string, at: Scene): void {
@@ -1950,11 +2010,82 @@ describe('the lazy fetch of a promisor remote — a grandchild that names a PLAI
 		const fetches = invocations.filter((entry) => entry.args[0] === 'fetch');
 		expect(fetches).toHaveLength(2);
 		expect(fetches.every(carriesHeader)).toBe(true);
-		// …the plant was in place for both fetches, and no grandchild ran it.
+		// …the plant was in place for both fetches and for the maintenance after
+		// them, and no grandchild of any of them ran it.
 		expect(git(pool, 'config', 'remote.ew-planted.promisor')).toBe('true');
+		expect(invocations.some((entry) => entry.args[0] === 'maintenance')).toBe(true);
+		expect(at.ranUnder()).toEqual([]);
 		expect(at.didRun()).toBe(false);
 		expect(at.leaked()).toBe('');
 		// And the fetch did not fail for it: the base came from the real remote.
 		expect(handle.baseSha).toBe(originHead);
+	});
+
+	it('the maintenance after the fetches: no credential, no lazy fetch, no transport — and either wall alone holds', async () => {
+		const at = scene();
+		const pool = await seedPool(at.baseDir, originUrl);
+		const invocations: Invocation[] = [];
+		await new LocalWorkspacePlugin({ execFile: recordingGit(invocations) }).provision(
+			provisionSpec(at.baseDir, originUrl, 'lazy-maintenance', { fetchCredential: credential() })
+		);
+		expect(invocations.filter(carriesHeader).map((entry) => entry.args[0])).toEqual(['fetch', 'fetch']);
+		const maintenance = invocations.filter((entry) => entry.args[0] === 'maintenance');
+		expect(maintenance.map((entry) => entry.args)).toEqual([
+			['maintenance', 'run', '--auto', '--quiet', '--detach']
+		]);
+		const [{ env }] = maintenance;
+		// The child the provider started: nothing of the credential…
+		expect(carriesHeader(maintenance[0])).toBe(false);
+		expect(JSON.stringify(env)).not.toContain(TOKEN);
+		// …and the two exec-time walls of the credentialed fetch.
+		expect(env.GIT_NO_LAZY_FETCH).toBe('1');
+		expect(env.GIT_ALLOW_PROTOCOL).toBe('');
+
+		// Its environment, against a pool planted now — on tasks that walk
+		// every ref on any Git. (`--auto` alone has nothing to do in a pool this
+		// small on Git 2.52; on 2.56 it starts the grandchild itself.)
+		const tasks = ['maintenance', 'run', '--task=pack-refs', '--task=commit-graph', '--quiet'];
+		const without = (...names: string[]): NodeJS.ProcessEnv => {
+			const reduced = { ...env };
+			for (const name of names) delete reduced[name];
+			return reduced;
+		};
+		/** One maintenance run in `pool` with a fresh plant: did the planted program run? */
+		const runs = (variables: NodeJS.ProcessEnv, plant: (probe: Scene) => void): boolean => {
+			const probe = scene();
+			plant(probe);
+			try {
+				execFileSync('git', tasks, {
+					cwd: pool,
+					env: variables,
+					windowsHide: true,
+					stdio: ['ignore', 'pipe', 'pipe']
+				});
+			} catch {
+				// A task may fail on the missing object; whether the program RAN is the verdict.
+			}
+			// Never a credential in this child, whatever ran.
+			expect(probe.leaked()).toBe('');
+			return probe.didRun();
+		};
+		// The file transport, and its `uploadpack`…
+		const overFile = (probe: Scene): void => plantPromisor(pool, probe);
+		// …and ssh, with `core.sshCommand`.
+		const overSsh = (probe: Scene): void => {
+			plantPromisor(pool, probe);
+			git(pool, 'config', 'remote.ew-planted.url', 'ssh://nowhere.invalid/x/y');
+			git(pool, 'config', 'core.sshCommand', `${probe.harvest} false`);
+		};
+
+		for (const plant of [overFile, overSsh]) {
+			// CONTROL: the maintenance's own environment minus both — the plant
+			// is live on this Git, and the grandchild runs it.
+			expect(runs(without('GIT_NO_LAZY_FETCH', 'GIT_ALLOW_PROTOCOL'), plant)).toBe(true);
+			// Each wall on its own: no grandchild, or one that may speak nothing.
+			expect(runs(without('GIT_ALLOW_PROTOCOL'), plant)).toBe(false);
+			expect(runs(without('GIT_NO_LAZY_FETCH'), plant)).toBe(false);
+			// And as the provider starts it.
+			expect(runs(env, plant)).toBe(false);
+		}
 	});
 });
