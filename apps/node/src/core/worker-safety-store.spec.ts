@@ -209,9 +209,15 @@ describe('the worker-session marker is published atomically (2026-10-28)', () =>
 describe('a quarantine a reboot left behind (2026-11-12)', () => {
 	// A crash leaves the marker on purpose: the dead session's process tree may
 	// still run. A reboot ends every process of the previous boot, so a marker
-	// that provably belongs to an EARLIER boot may go, and nothing else may.
-	const BOOT_A: BootIdentity = { source: 'linux-boot-id', value: '4f3c0a52-8d1e-4b7a-9c2f-61d5e0b7a9c3' };
-	const BOOT_B: BootIdentity = { source: 'linux-boot-id', value: '9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d' };
+	// that provably belongs to an EARLIER boot of THIS machine may go, and
+	// nothing else may.
+	const BOOT_A: BootIdentity = {
+		source: 'linux-boot-id',
+		value: '4f3c0a52-8d1e-4b7a-9c2f-61d5e0b7a9c3',
+		hostname: 'everdesk4-vm',
+		machineId: '0123456789abcdef0123456789abcdef'
+	};
+	const BOOT_B: BootIdentity = { ...BOOT_A, value: '9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d' };
 	const ARMED = Date.parse('2026-11-11T20:00:00.000Z');
 	const RESTARTED = Date.parse('2026-11-12T03:30:00.000Z');
 
@@ -234,14 +240,40 @@ describe('a quarantine a reboot left behind (2026-11-12)', () => {
 		});
 	}
 
-	/** A memory disk holding the marker a session armed at ARMED in `boot`. */
-	async function armedIn(boot: BootIdentity | null) {
+	/** The memory disk plus the rename and hard link the clearance claims with. */
+	function claimingFs() {
 		const h = memoryFs();
+		const renames: Array<[string, string]> = [];
+		const missing = (path: string) => Object.assign(new Error(`ENOENT: ${path}`), { code: 'ENOENT' });
+		h.fs.rename = async (from, to) => {
+			renames.push([from, to]);
+			const content = h.files.get(from);
+			if (content === undefined) throw missing(from);
+			h.files.delete(from);
+			h.files.set(to, content);
+		};
+		h.fs.link = async (existing, newPath) => {
+			const content = h.files.get(existing);
+			if (content === undefined) throw missing(existing);
+			if (h.files.has(newPath)) throw Object.assign(new Error('already exists'), { code: 'EEXIST' });
+			h.files.set(newPath, content);
+		};
+		const claims = () => [...h.files.keys()].filter((path) => path.endsWith('.reboot-clear'));
+		return { ...h, renames, claims };
+	}
+
+	/** A disk holding the marker a session armed at ARMED in `boot`. */
+	async function armedIn(boot: BootIdentity | null) {
+		const h = claimingFs();
 		await bootGate(h.fs, probe(boot), ARMED, 'session-before-reboot').acquire();
 		return h;
 	}
 
-	it('records the boot in the marker, which an older reader still parses as before', async () => {
+	function markerWith(boot: unknown): string {
+		return JSON.stringify({ version: 1, sessionId: 'other', since: new Date(ARMED).toISOString(), boot });
+	}
+
+	it('records the boot and its machine in the marker, which an older reader still parses as before', async () => {
 		const h = await armedIn(BOOT_A);
 		const marker = JSON.parse(h.files.get(MARKER_PATH)!);
 		expect(marker).toEqual({
@@ -264,7 +296,7 @@ describe('a quarantine a reboot left behind (2026-11-12)', () => {
 		expect(JSON.parse(throwing.files.get(MARKER_PATH)!)).not.toHaveProperty('boot');
 	});
 
-	it('finds and clears a marker from an earlier boot, after which a new session acquires', async () => {
+	it('finds and clears a marker from an earlier boot of this machine, after which a new session acquires', async () => {
 		const h = await armedIn(BOOT_A);
 		const afterReboot = bootGate(h.fs, probe(BOOT_B, 120), RESTARTED, 'session-after-reboot');
 
@@ -277,7 +309,11 @@ describe('a quarantine a reboot left behind (2026-11-12)', () => {
 		});
 		await expect(afterReboot.clearPreviousBootSession(previous!)).resolves.toBe(true);
 		expect(h.files.has(MARKER_PATH)).toBe(false);
-		expect(h.removes).toEqual([MARKER_PATH]);
+		// Claimed with one rename, then the claim removed: never an unlink of the marker path.
+		expect(h.renames).toHaveLength(1);
+		expect(h.renames[0][0]).toBe(MARKER_PATH);
+		expect(h.removes).toEqual([h.renames[0][1]]);
+		expect(h.claims()).toEqual([]);
 
 		await expect(afterReboot.acquire()).resolves.toEqual({ kind: 'acquired', sessionId: 'session-after-reboot' });
 		expect(JSON.parse(h.files.get(MARKER_PATH)!).boot).toEqual(BOOT_B);
@@ -295,8 +331,38 @@ describe('a quarantine a reboot left behind (2026-11-12)', () => {
 		expect(h.removes).toEqual([]);
 	});
 
+	it("never clears ANOTHER machine's marker found in a shared config directory", async () => {
+		// A roaming profile or a volume that followed a pod: the other machine's
+		// session may still be running, whatever this machine's boot says.
+		const otherHost = await armedIn({ ...BOOT_A, hostname: 'everdesk3' });
+		await expect(bootGate(otherHost.fs, probe(BOOT_B), RESTARTED).findPreviousBootSession()).resolves.toBeNull();
+
+		const otherMachineId = await armedIn({ ...BOOT_A, machineId: 'f'.repeat(32) });
+		await expect(
+			bootGate(otherMachineId.fs, probe(BOOT_B), RESTARTED).findPreviousBootSession()
+		).resolves.toBeNull();
+
+		const lostMachineId = await armedIn({ source: BOOT_A.source, value: BOOT_A.value, hostname: BOOT_A.hostname });
+		await expect(
+			bootGate(lostMachineId.fs, probe(BOOT_B), RESTARTED).findPreviousBootSession()
+		).resolves.toBeNull();
+		for (const h of [otherHost, otherMachineId, lostMachineId]) expect(h.files.has(MARKER_PATH)).toBe(true);
+	});
+
+	it('reads a boot without its machine as no boot', async () => {
+		const h = claimingFs();
+		h.files.set(MARKER_PATH, markerWith({ source: BOOT_A.source, value: BOOT_A.value }));
+		const gate = bootGate(h.fs, probe(BOOT_B), RESTARTED);
+
+		await expect(gate.findPreviousBootSession()).resolves.toBeNull();
+		await expect(gate.acquire()).resolves.toMatchObject({
+			kind: 'blocked',
+			state: { reason: expect.stringMatching(/previous worker session/i) }
+		});
+	});
+
 	it('keeps the quarantine for a marker that records no boot (an older node)', async () => {
-		const h = memoryFs();
+		const h = claimingFs();
 		h.files.set(
 			MARKER_PATH,
 			JSON.stringify({ version: 1, sessionId: 'legacy', since: new Date(ARMED).toISOString() })
@@ -309,7 +375,7 @@ describe('a quarantine a reboot left behind (2026-11-12)', () => {
 	});
 
 	it('keeps the quarantine for a corrupt or unreadable marker', async () => {
-		const corrupt = memoryFs();
+		const corrupt = claimingFs();
 		corrupt.files.set(MARKER_PATH, '{"version":1,"sessionId":"torn","boot":{"source":"linux-boot-id"');
 		const gate = bootGate(corrupt.fs, probe(BOOT_B), RESTARTED);
 		await expect(gate.findPreviousBootSession()).resolves.toBeNull();
@@ -319,7 +385,7 @@ describe('a quarantine a reboot left behind (2026-11-12)', () => {
 		});
 		expect(corrupt.files.has(MARKER_PATH)).toBe(true);
 
-		const unreadable = memoryFs();
+		const unreadable = claimingFs();
 		unreadable.fs.readFile = async () => {
 			throw Object.assign(new Error('permission denied'), { code: 'EACCES' });
 		};
@@ -327,16 +393,8 @@ describe('a quarantine a reboot left behind (2026-11-12)', () => {
 	});
 
 	it('reads a malformed boot as no boot: the marker still blocks and never clears itself', async () => {
-		const h = memoryFs();
-		h.files.set(
-			MARKER_PATH,
-			JSON.stringify({
-				version: 1,
-				sessionId: 'odd-boot',
-				since: new Date(ARMED).toISOString(),
-				boot: { source: 'wall-clock', value: '2026-11-11T19:00:00Z' }
-			})
-		);
+		const h = claimingFs();
+		h.files.set(MARKER_PATH, markerWith({ source: 'wall-clock', value: '2026-11-11T19:00:00Z', hostname: 'x' }));
 		const gate = bootGate(h.fs, probe(BOOT_B), RESTARTED);
 
 		await expect(gate.findPreviousBootSession()).resolves.toBeNull();
@@ -353,7 +411,11 @@ describe('a quarantine a reboot left behind (2026-11-12)', () => {
 			bootGate(h.fs, probe(new Error('reg.exe timed out')), RESTARTED).findPreviousBootSession()
 		).resolves.toBeNull();
 		await expect(
-			bootGate(h.fs, probe({ source: 'windows-boot-id', value: '55' }), RESTARTED).findPreviousBootSession()
+			bootGate(
+				h.fs,
+				probe({ ...BOOT_A, source: 'windows-boot-id', value: '55' }),
+				RESTARTED
+			).findPreviousBootSession()
 		).resolves.toBeNull();
 		expect(h.files.has(MARKER_PATH)).toBe(true);
 	});
@@ -370,23 +432,79 @@ describe('a quarantine a reboot left behind (2026-11-12)', () => {
 		expect(h.files.has(MARKER_PATH)).toBe(true);
 	});
 
-	it('removes only the bytes it judged: a marker armed meanwhile stays', async () => {
+	it('two racing starts: the one that claims a freshly armed marker puts it back', async () => {
 		const h = await armedIn(BOOT_A);
+		const slow = bootGate(h.fs, probe(BOOT_B), RESTARTED);
+		const previous = await slow.findPreviousBootSession();
+		expect(previous).not.toBeNull();
+
+		// Meanwhile the other start cleared the judged marker and its worker armed its own.
+		const fast = bootGate(h.fs, probe(BOOT_B), RESTARTED, 'session-fast');
+		await expect(fast.clearPreviousBootSession((await fast.findPreviousBootSession())!)).resolves.toBe(true);
+		await expect(fast.acquire()).resolves.toMatchObject({ kind: 'acquired' });
+		const live = h.files.get(MARKER_PATH)!;
+
+		await expect(slow.clearPreviousBootSession(previous!)).resolves.toBe(false);
+		expect(h.files.get(MARKER_PATH)).toBe(live);
+		expect(h.claims()).toEqual([]);
+		// And the live session can still release what it armed.
+		await expect(fast.release('session-fast')).resolves.toBeUndefined();
+	});
+
+	it('a marker another start already claimed counts as cleared', async () => {
+		const h = await armedIn(BOOT_A);
+		const gate = bootGate(h.fs, probe(BOOT_B), RESTARTED);
+		const previous = await gate.findPreviousBootSession();
+		h.files.delete(MARKER_PATH);
+
+		await expect(gate.clearPreviousBootSession(previous!)).resolves.toBe(true);
+		expect(h.removes).toEqual([]);
+	});
+
+	it('puts a claimed live marker back by exclusive create where hard links are unsupported', async () => {
+		const h = await armedIn(BOOT_A);
+		const gate = bootGate(h.fs, probe(BOOT_B), RESTARTED);
+		const previous = await gate.findPreviousBootSession();
+		const live = markerWith(BOOT_B);
+		h.files.set(MARKER_PATH, live);
+		h.fs.link = async () => {
+			throw Object.assign(new Error('operation not supported'), { code: 'ENOTSUP' });
+		};
+
+		await expect(gate.clearPreviousBootSession(previous!)).resolves.toBe(false);
+		expect(h.files.get(MARKER_PATH)).toBe(live);
+		expect(h.claims()).toEqual([]);
+	});
+
+	it('keeps the claim, and says so, when a third marker appeared before the claimed one could go back', async () => {
+		const h = await armedIn(BOOT_A);
+		const gate = bootGate(h.fs, probe(BOOT_B), RESTARTED);
+		const previous = await gate.findPreviousBootSession();
+		const live = markerWith(BOOT_B);
+		h.files.set(MARKER_PATH, live);
+		const third = markerWith({ ...BOOT_B, value: 'third' });
+		const link = h.fs.link!;
+		h.fs.link = async (existing, newPath) => {
+			h.files.set(MARKER_PATH, third);
+			await link(existing, newPath);
+		};
+
+		await expect(gate.clearPreviousBootSession(previous!)).rejects.toThrow(
+			/claimed during reboot clearance is kept/
+		);
+		expect(h.files.get(MARKER_PATH)).toBe(third);
+		expect(h.claims().map((claim) => h.files.get(claim))).toEqual([live]);
+	});
+
+	it('leaves the marker where the filesystem cannot claim it atomically', async () => {
+		const h = memoryFs();
+		await bootGate(h.fs, probe(BOOT_A), ARMED).acquire();
 		const gate = bootGate(h.fs, probe(BOOT_B), RESTARTED);
 		const previous = await gate.findPreviousBootSession();
 		expect(previous).not.toBeNull();
 
-		// Another start cleared it and armed its own marker in this boot first.
-		const live = JSON.stringify({
-			version: 1,
-			sessionId: 'live',
-			since: new Date(RESTARTED).toISOString(),
-			boot: BOOT_B
-		});
-		h.files.set(MARKER_PATH, live);
-
 		await expect(gate.clearPreviousBootSession(previous!)).resolves.toBe(false);
-		expect(h.files.get(MARKER_PATH)).toBe(live);
+		expect(h.files.has(MARKER_PATH)).toBe(true);
 		expect(h.removes).toEqual([]);
 	});
 });

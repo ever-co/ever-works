@@ -765,8 +765,9 @@ export function createHealthProbeIo(runner: CommandRunner): HealthProbeIo {
 }
 
 /**
- * Which boot of this machine this is (`core/boot-identity.ts`): Linux reads
- * `/proc`, macOS asks `/usr/sbin/sysctl`, Windows asks `reg.exe` (System32).
+ * Which boot of which machine this is (`core/boot-identity.ts`): Linux reads
+ * `/proc` and `/etc/machine-id`, macOS asks `/usr/sbin/sysctl`, Windows asks
+ * `reg.exe` (System32); the host name comes from `os.hostname()`.
  */
 export function createSystemBootIdentityProbe(runner: CommandRunner): BootIdentityProbe {
 	return createBootIdentityProbe({
@@ -779,7 +780,19 @@ export function createSystemBootIdentityProbe(runner: CommandRunner): BootIdenti
 				throw error;
 			}
 		},
+		exists: async (filePath) => {
+			try {
+				await fsp.lstat(filePath);
+				return true;
+			} catch (error) {
+				const code = (error as NodeJS.ErrnoException).code;
+				if (code === 'ENOENT' || code === 'ENOTDIR') return false;
+				throw error;
+			}
+		},
+		env: process.env,
 		runner,
+		hostname: () => os.hostname(),
 		uptimeSec: () => os.uptime()
 	});
 }

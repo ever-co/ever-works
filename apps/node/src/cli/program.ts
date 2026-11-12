@@ -1459,10 +1459,16 @@ export async function runPause(deps: CliDeps, paused: boolean, options: PauseCom
  * the two leaves the marker and stays fail-closed.
  *
  * Anything short of that proof keeps the quarantine as it was: a marker that
- * records no boot (an older node's), the same boot (a crash or a restart), a
- * boot that cannot be read, or a marker that cannot be read or parsed. It
- * runs before the worker arms its own marker, and removes only the exact
- * bytes it judged, so it never touches a live session's marker.
+ * records no boot (an older node's), another machine's marker (a config
+ * directory shared through a roaming profile or a moved volume), the same
+ * boot (a crash or a restart), a boot that cannot be read (always so inside a
+ * container), or a marker that cannot be read or parsed. The auto-clear
+ * assumes a machine-local config directory.
+ *
+ * It runs before this process's worker arms its own marker, and it claims
+ * the judged marker with one atomic rename before removing it, putting back
+ * anything else it claimed, so a second `start` racing this one keeps its
+ * freshly armed marker.
  */
 async function clearQuarantineLeftByReboot(deps: CliDeps, config: NodeConfig): Promise<NodeConfig> {
 	if (!deps.bootIdentity) return config;

@@ -646,8 +646,13 @@ describe('ever-works-node start — a quarantine a reboot left behind (2026-11-1
 	// every process tree of the previous session, which is all that command asks
 	// the operator to verify.
 	const markerPath = workerSafetyMarkerPath(CONFIG_PATH);
-	const BOOT_BEFORE: BootIdentity = { source: 'linux-boot-id', value: '4f3c0a52-8d1e-4b7a-9c2f-61d5e0b7a9c3' };
-	const BOOT_NOW: BootIdentity = { source: 'linux-boot-id', value: '9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d' };
+	const BOOT_BEFORE: BootIdentity = {
+		source: 'linux-boot-id',
+		value: '4f3c0a52-8d1e-4b7a-9c2f-61d5e0b7a9c3',
+		hostname: 'everdesk4-vm',
+		machineId: '0123456789abcdef0123456789abcdef'
+	};
+	const BOOT_NOW: BootIdentity = { ...BOOT_BEFORE, value: '9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d' };
 	const ARMED = '2026-11-11T20:00:00.000Z';
 	const RESTARTED = Date.parse('2026-11-12T03:30:00.000Z');
 	const unsafe = { since: '2026-11-12T01:00:00.000Z', reason: 'unverified process tree' };
@@ -672,7 +677,8 @@ describe('ever-works-node start — a quarantine a reboot left behind (2026-11-1
 		h.deps.waitForShutdown = () => Promise.resolve();
 		h.deps.now = () => RESTARTED;
 		h.deps.bootIdentity = { identity: async () => current, uptimeSec: () => uptimeSec };
-		// Every write and removal, in order: the clearance must write the config before it removes the marker.
+		// Every write, rename and removal, in order: the clearance must write the
+		// config before it claims (renames away) the marker.
 		const ops: string[] = [];
 		const { writeFile, remove } = h.deps.fs;
 		h.deps.fs.writeFile = async (filePath, content) => {
@@ -683,7 +689,21 @@ describe('ever-works-node start — a quarantine a reboot left behind (2026-11-1
 			ops.push(`remove ${filePath}`);
 			await remove!(filePath);
 		};
-		return { ...h, ops };
+		h.deps.fs.rename = async (from, to) => {
+			ops.push(`rename ${from}`);
+			const content = h.files.get(from);
+			if (content === undefined) throw Object.assign(new Error('missing'), { code: 'ENOENT' });
+			h.files.delete(from);
+			h.files.set(to, content);
+		};
+		h.deps.fs.link = async (existing, newPath) => {
+			const content = h.files.get(existing);
+			if (content === undefined) throw Object.assign(new Error('missing'), { code: 'ENOENT' });
+			if (h.files.has(newPath)) throw Object.assign(new Error('exists'), { code: 'EEXIST' });
+			h.files.set(newPath, content);
+		};
+		const claims = () => [...h.files.keys()].filter((path) => path.endsWith('.reboot-clear'));
+		return { ...h, ops, claims };
 	}
 
 	it('clears it at start: the unsafe state in the config first, the marker last, and the worker is not quarantined', async () => {
@@ -694,9 +714,10 @@ describe('ever-works-node start — a quarantine a reboot left behind (2026-11-1
 
 		expect(parseConfig(h.files.get(CONFIG_PATH) ?? null)?.unsafe).toBeUndefined();
 		const configWrite = h.ops.indexOf(`write ${CONFIG_PATH}`);
-		const markerRemoval = h.ops.indexOf(`remove ${markerPath}`);
+		const markerClaim = h.ops.indexOf(`rename ${markerPath}`);
 		expect(configWrite).toBeGreaterThanOrEqual(0);
-		expect(markerRemoval).toBeGreaterThan(configWrite);
+		expect(markerClaim).toBeGreaterThan(configWrite);
+		expect(h.claims()).toEqual([]);
 		expect(h.output()).not.toContain('QUARANTINED');
 		expect(h.logged()).toContain(
 			`Previous worker session (marker armed ${ARMED}) ended with the reboot at ${new Date(RESTARTED - 90_000).toISOString()}; quarantine cleared automatically`
@@ -711,7 +732,7 @@ describe('ever-works-node start — a quarantine a reboot left behind (2026-11-1
 
 		expect(await runCli(['start', '--work'], h.deps)).toBe(EXIT_OK);
 
-		expect(h.ops[0]).toBe(`remove ${markerPath}`);
+		expect(h.ops[0]).toBe(`rename ${markerPath}`);
 		expect(h.files.get(CONFIG_PATH)).toBe(storedConfig);
 		expect(h.output()).not.toContain('QUARANTINED');
 		expect(h.logged()).toContain('quarantine cleared automatically');
@@ -738,6 +759,19 @@ describe('ever-works-node start — a quarantine a reboot left behind (2026-11-1
 
 		expect(h.output()).toContain('Worker host QUARANTINED');
 		expect(h.files.get(markerPath)).toBe(marker);
+	});
+
+	it("keeps ANOTHER machine's marker found in a shared config directory, even after this machine rebooted", async () => {
+		// A roaming profile, or a state volume that followed a pod: the other
+		// machine's session may still be running.
+		const marker = markerArmedIn({ ...BOOT_BEFORE, hostname: 'everdesk3' });
+		const h = startHarness({ [CONFIG_PATH]: storedConfig, [markerPath]: marker }, BOOT_NOW);
+
+		expect(await runCli(['start', '--work'], h.deps)).toBe(EXIT_OK);
+
+		expect(h.output()).toContain('Worker host QUARANTINED');
+		expect(h.files.get(markerPath)).toBe(marker);
+		expect(h.ops.some((op) => op.startsWith('rename'))).toBe(false);
 	});
 
 	it('keeps it for a corrupt marker', async () => {

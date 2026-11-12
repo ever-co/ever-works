@@ -1,6 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import { publishFileExclusively } from './atomic-state-file';
-import { BOOT_IDENTITY_SOURCES, type BootIdentity, type BootIdentityProbe } from './boot-identity';
+import {
+	BOOT_IDENTITY_SOURCES,
+	normalizeHostname,
+	sameMachine,
+	type BootIdentity,
+	type BootIdentityProbe
+} from './boot-identity';
 import { CONFIG_FILE_MODE, supportsAtomicWrites, type ConfigFileSystem } from './config-store';
 
 const MARKER_VERSION = 1;
@@ -53,18 +59,22 @@ export interface PreviousBootSession {
 /** The config-backed gate, plus the reboot clearance only `start` uses. */
 export interface ConfigWorkerSafetyGate extends WorkerSafetyGate {
 	/**
-	 * The unreleased marker when it PROVABLY belongs to an earlier boot, else
-	 * null. Proof needs both: the marker records a boot identity that differs
-	 * from this boot's (same source), and this boot began after the marker
-	 * was armed (now minus uptime is later than its `since`). No marker, a
-	 * corrupt or unreadable one, one without a boot (an older node), the same
-	 * boot (a crash or a restart), or a boot that cannot be read: null, and the
+	 * The unreleased marker when it PROVABLY belongs to an earlier boot of
+	 * THIS machine, else null. Proof needs both: the marker records a boot
+	 * of the same machine (host name, and machine id where there is one) and
+	 * of the same kind, whose value differs from this boot's; and this boot
+	 * began after the marker was armed (now minus uptime is later than its
+	 * `since`). No marker, a corrupt or unreadable one, one without a boot (an
+	 * older node), another machine's, the same boot (a crash or a restart), or
+	 * a boot that cannot be read (always so in a container): null, and the
 	 * quarantine stands. Never rejects.
 	 */
 	findPreviousBootSession(): Promise<PreviousBootSession | null>;
 	/**
-	 * Remove exactly the marker `findPreviousBootSession` judged. False (and
-	 * nothing removed) when the marker on disk is no longer those bytes.
+	 * Remove exactly the marker `findPreviousBootSession` judged: it is claimed
+	 * with one atomic rename and removed only if the claimed bytes are the
+	 * judged ones; anything else is put back. True when the judged marker is
+	 * gone; false when it was not the marker on disk (nothing removed).
 	 */
 	clearPreviousBootSession(session: PreviousBootSession): Promise<boolean>;
 }
@@ -110,6 +120,38 @@ export function createConfigWorkerSafetyGate(
 		} catch {
 			return null;
 		}
+	};
+
+	/**
+	 * Put a claimed marker back at the marker path; false when the claim is
+	 * gone (nothing to restore). Both ways refuse to replace a marker that
+	 * appeared there meanwhile; when neither works the claim is KEPT (the
+	 * caller does not remove it) and the failure is reported.
+	 */
+	const putBack = async (claim: string, content: string | null): Promise<boolean> => {
+		if (fs.link) {
+			try {
+				await fs.link(claim, markerPath);
+				return true;
+			} catch (error) {
+				if (errorCode(error) === 'ENOENT') return false;
+				if (errorCode(error) === 'EEXIST') {
+					throw prerequisite(`a worker safety marker claimed during reboot clearance is kept at ${claim}`);
+				}
+				// Hard links unsupported here: the exclusive create below.
+			}
+		}
+		if (content === null || !fs.createFileExclusive) {
+			throw prerequisite(`a worker safety marker claimed during reboot clearance is kept at ${claim}`);
+		}
+		try {
+			await fs.createFileExclusive(markerPath, content);
+		} catch (error) {
+			throw prerequisite(
+				`a worker safety marker claimed during reboot clearance is kept at ${claim}: ${detail(error)}`
+			);
+		}
+		return true;
 	};
 
 	const readRaw = async (): Promise<string | null> => {
@@ -210,7 +252,15 @@ export function createConfigWorkerSafetyGate(
 			const marker = raw === null ? null : parseMarker(raw);
 			if (raw === null || !marker?.boot) return null;
 			const current = await bootIdentity();
-			if (!current || current.source !== marker.boot.source || current.value === marker.boot.value) {
+			// A different boot proves a reboot only of the SAME machine: a config
+			// directory another machine also uses (a roaming profile, a moved
+			// volume) may hold that machine's live marker.
+			if (
+				!current ||
+				current.source !== marker.boot.source ||
+				!sameMachine(current, marker.boot) ||
+				current.value === marker.boot.value
+			) {
 				return null;
 			}
 			// Second, independent proof: this boot began AFTER the marker was
@@ -235,17 +285,35 @@ export function createConfigWorkerSafetyGate(
 		},
 
 		async clearPreviousBootSession(session: PreviousBootSession): Promise<boolean> {
-			// Re-read: only the bytes that were judged may go. A marker armed
-			// meanwhile (this boot's, by another start racing this one) stays.
-			const raw = await readRaw();
-			if (raw === null) return true;
-			if (raw !== session.raw) return false;
-			if (!fs.remove) throw prerequisite('filesystem cannot clear the durable safety marker');
-			await fs.remove(markerPath);
-			if ((await readRaw()) !== null) {
-				throw prerequisite('worker safety marker still exists after reboot clearance');
+			// CLAIM the marker with one atomic rename, then look at what was
+			// claimed. A read followed by an unlink is two steps, and a second
+			// `start` racing this one could arm its own marker in between; the
+			// unlink would then remove a LIVE marker. After the rename, the
+			// marker path is never written by this function except to put back
+			// a marker that turned out not to be the one judged.
+			const { rename, remove } = fs;
+			if (!rename || !remove) return false; // Cannot claim atomically: leave it (fail-closed).
+			const claim = `${markerPath}.${randomUUID()}.reboot-clear`;
+			try {
+				await rename(markerPath, claim);
+			} catch (error) {
+				if (errorCode(error) === 'ENOENT') return true; // Already gone: another start cleared it.
+				throw prerequisite(`could not claim the worker safety marker for reboot clearance: ${detail(error)}`);
 			}
-			return true;
+			let claimed: string | null;
+			try {
+				claimed = await fs.readFile(claim);
+			} catch {
+				claimed = null;
+			}
+			if (claimed === session.raw) {
+				await remove(claim);
+				return true;
+			}
+			// Not the marker that was judged (a racing start armed it after the
+			// judged one went): put it back, and only then drop the claim.
+			if (await putBack(claim, claimed)) await remove(claim);
+			return false;
 		}
 	};
 }
@@ -330,12 +398,20 @@ function parseMarker(raw: string): WorkerSessionMarker | null {
 	}
 }
 
+/** A boot without its machine proves nothing: it reads as no boot at all. */
 function parseBoot(candidate: unknown): BootIdentity | null {
 	if (!candidate || typeof candidate !== 'object') return null;
-	const { source, value } = candidate as Partial<BootIdentity>;
-	if (typeof source !== 'string' || !BOOT_IDENTITY_SOURCES.includes(source)) return null;
+	const { source, value, hostname, machineId } = candidate as Partial<Record<keyof BootIdentity, unknown>>;
+	if (typeof source !== 'string' || !BOOT_IDENTITY_SOURCES.includes(source as BootIdentity['source'])) return null;
 	if (typeof value !== 'string' || !value || value.length > 200) return null;
-	return { source, value };
+	const host = normalizeHostname(hostname);
+	if (!host || host !== hostname) return null;
+	const boot: BootIdentity = { source: source as BootIdentity['source'], value, hostname: host };
+	if (machineId !== undefined) {
+		if (typeof machineId !== 'string' || !machineId || machineId.length > 200) return null;
+		boot.machineId = machineId;
+	}
+	return boot;
 }
 
 function blockedState(raw: string, now: number): WorkerSafetyState {
