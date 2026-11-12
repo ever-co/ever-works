@@ -8,7 +8,7 @@ jest.mock('@ever-works/agent/services', () => ({
     KnowledgeLibraryService: class KnowledgeLibraryService {},
 }));
 
-import { ForbiddenException } from '@nestjs/common';
+import { ConflictException, ForbiddenException } from '@nestjs/common';
 import {
     DuplicateExternalRefError,
     ResourceNotFoundError,
@@ -221,6 +221,54 @@ describe('IntegrationKbController', () => {
             }),
             { withinCreate: undefined },
         );
+    });
+
+    it('⭐ answers a Work path under another document with 422 domain_rule path_nesting (§10: a refusal is 422)', async () => {
+        const { controller, knowledgeBase } = setup();
+        knowledgeBase.createDocument.mockRejectedValueOnce(
+            new ConflictException({
+                statusCode: 409,
+                error: 'Conflict',
+                code: 'KbPathNesting',
+                message:
+                    'brand/guide.md is a document, so no document can be stored under brand/guide.md/.',
+                path: 'brand/guide.md',
+            }),
+        );
+        await expect(
+            controller.createDocument(
+                user('user-7'),
+                createBody({ type: 'work', id: WORK }),
+                undefined,
+                req(),
+                res(),
+            ),
+        ).rejects.toMatchObject({
+            status: 422,
+            response: {
+                error: {
+                    code: 'domain_rule',
+                    message:
+                        'brand/guide.md is a document, so no document can be stored under brand/guide.md/.',
+                    details: { reason: 'path_nesting', path: 'brand/guide.md' },
+                },
+            },
+        });
+    });
+
+    it('leaves any other conflict as it was (the filter answers 409 conflict)', async () => {
+        const { controller, knowledgeBase } = setup();
+        const taken = new ConflictException({ statusCode: 409, code: 'KbPathTaken', message: 'x' });
+        knowledgeBase.createDocument.mockRejectedValueOnce(taken);
+        await expect(
+            controller.createDocument(
+                user('user-7'),
+                createBody({ type: 'work', id: WORK }),
+                undefined,
+                req(),
+                res(),
+            ),
+        ).rejects.toBe(taken);
     });
 
     it('refuses an organization document from a non-admin (422 domain_rule) and a foreign organization scope (400)', async () => {

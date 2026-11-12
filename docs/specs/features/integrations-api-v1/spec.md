@@ -557,7 +557,11 @@ organization overlay into Works, locks, revisions and the activity trail therefo
   document, no edit access to the Work) leaves the claimed version moved.
 - **Creates** check `folderId` before writing: a folder that is not one of the organization's library folders answers
   `404` and creates nothing. An organization document's `path` must stay relative: no `..` segment, `\`, NUL or drive
-  letter (`400`). A Work document's path follows the Work rule, which also requires a class folder first.
+  letter (`400`). A Work document's path follows the Work rule, which also requires a class folder first. A path
+  under another document of the Work (`brand/guide.md/voice.md` while `brand/guide.md` exists) answers
+  `422 domain_rule`, `details.reason: path_nesting`, `details.path` the document in the way; a path that other
+  documents are stored under is taken, like a path a document holds, and the create gets the next free `-2`, `-3`….
+  The git mirror writes every document as the file at its path, so the two cannot both exist.
 - **An archived document** changes `status` only through `/unarchive`: a `PATCH` with `status` answers `422`. Other
   edits are allowed.
 - **Review gate** (works-security lane 3a, 2026-10-18): a document the key writes **as itself** (no `X-Act-As-User`)
