@@ -5,6 +5,7 @@ import type { ModuleRef } from '@nestjs/core';
 import { UnknownElementException } from '@nestjs/core/errors/exceptions/unknown-element.exception';
 import type { Repository } from 'typeorm';
 import { MissionsService } from '../missions.service';
+import { isCustomMissionTemplateId } from '../mission-template.config';
 import { Mission, MissionOutcome, MissionStatus, MissionType } from '../../entities/mission.entity';
 import type { MissionWorkRelation } from '../../entities/mission-work.entity';
 import type { Work } from '../../entities/work.entity';
@@ -20,6 +21,13 @@ import { GoalsService } from '../../goals/goals.service';
 import type { GitFacadeService } from '../../facades/git.facade';
 import { MissionTemplateManifestService } from '../mission-template-manifest.service';
 import { MissionTemplateManifestReader } from '../mission-template-manifest.reader';
+import { TemplateCatalogService } from '../../template-catalog/template-catalog.service';
+import { TemplateRepository } from '../../database/repositories/template.repository';
+import type { TemplateCustomizationRepository } from '../../database/repositories/template-customization.repository';
+import { UserTemplatePreferenceRepository } from '../../database/repositories/user-template-preference.repository';
+import type { WorkRepository } from '../../database/repositories/work.repository';
+import type { Template } from '../../entities/template.entity';
+import type { UserTemplatePreference } from '../../entities/user-template-preference.entity';
 
 /** Hand-rolled in-memory Repository<Mission> mock. Enough surface
  *  for what Phase 3 PR H's MissionsService actually calls. */
@@ -1275,5 +1283,365 @@ describe('MissionsService — templateInputs (APW-08 T39)', () => {
         expect(repo._rows).toHaveLength(1);
         expect(missionWorks.attach).toHaveBeenCalledTimes(1);
         expect(dto.warnings).toEqual(['templateGoalsNotCreated']);
+    });
+});
+
+/**
+ * C3 — a person's own (custom) Mission template, `custom-<uuid>`, added by URL or forked into
+ * their account. It is resolved through the template catalog with the catalog's own visibility
+ * rule and applied from ITS repository exactly like a built-in; one the caller may not use is
+ * refused before anything is read or written. The catalog here is the real
+ * `TemplateCatalogService` over the real `TemplateRepository`, on an in-memory table.
+ */
+describe('MissionsService — a custom Mission template (C3)', () => {
+    const OWN_STARTER_FORK = 'custom-0b6d3a52-6a1e-4f3a-9d55-000000000001';
+    const OWN_APP_FORK = 'custom-0b6d3a52-6a1e-4f3a-9d55-000000000002';
+    const OTHER_PERSONS = 'custom-0b6d3a52-6a1e-4f3a-9d55-000000000003';
+    const OWN_ARCHIVED = 'custom-0b6d3a52-6a1e-4f3a-9d55-000000000004';
+    const OWN_WEBSITE = 'custom-0b6d3a52-6a1e-4f3a-9d55-000000000005';
+    const APP_WORK = { id: 'w-app', name: 'Cal.com', kind: 'app', userId: 'u1' };
+    const STARTER_MANIFEST = `
+defaults:
+  cadence: '0 9 * * 1'
+  autoBuildWorks: true
+  outstandingIdeasCap: 5
+  guardrails:
+    maxWorksPerRun: 2
+    requireApprovalBeforeCreate: false
+`;
+    const RUNTIME_MANIFEST = readFileSync(
+        resolve(
+            __dirname,
+            '../../../../../docs/specs/features/app-works/APW-08-evolve-loop/mission-template-draft/.works/mission.yml',
+        ),
+        'utf8',
+    );
+
+    const templateRow = (overrides: Partial<Template>): Template =>
+        ({
+            kind: 'mission',
+            sourceType: 'custom',
+            ownerUserId: 'u1',
+            name: 'My fork',
+            description: null,
+            framework: null,
+            previewImageUrl: null,
+            repositoryUrl: null,
+            repositoryOwner: 'alice',
+            repositoryName: 'starter-business-mission-template',
+            branch: 'trunk',
+            syncBranches: ['trunk'],
+            betaBranch: null,
+            isActive: true,
+            metadata: {},
+            ...overrides,
+        }) as Template;
+
+    const TEMPLATE_ROWS: Template[] = [
+        // A fork of the built-in Starter Business into the caller's account, on its own branch.
+        templateRow({
+            id: OWN_STARTER_FORK,
+            metadata: { forkedFromTemplateId: 'starter-business' },
+        }),
+        // A fork of the built-in Build on an open-source app (it takes an App Work).
+        templateRow({
+            id: OWN_APP_FORK,
+            repositoryName: 'build-on-open-source-app-mission-template',
+            branch: 'main',
+            syncBranches: ['main'],
+            metadata: { forkedFromTemplateId: 'build-on-open-source-app' },
+        }),
+        // Another person's private custom Mission template.
+        templateRow({
+            id: OTHER_PERSONS,
+            ownerUserId: 'u2',
+            repositoryOwner: 'bob',
+            repositoryName: 'secret-mission-template',
+            branch: 'main',
+        }),
+        templateRow({ id: OWN_ARCHIVED, repositoryName: 'archived-template', isActive: false }),
+        templateRow({ id: OWN_WEBSITE, kind: 'website', repositoryName: 'my-site-template' }),
+    ];
+
+    /** TypeORM's `findOne`: `where` is one AND-of-equals object, or an array of them (OR). */
+    function makeTable<T extends object>(rows: T[]) {
+        const matches = (row: T, where: Record<string, unknown>) =>
+            Object.entries(where).every(([key, value]) => row[key as keyof T] === value);
+        return {
+            findOne: jest.fn(
+                async ({ where }: { where: Record<string, unknown> | Record<string, unknown>[] }) =>
+                    rows.find((row) =>
+                        (Array.isArray(where) ? where : [where]).some((branch) =>
+                            matches(row, branch),
+                        ),
+                    ) ?? null,
+            ),
+        };
+    }
+
+    let repo: ReturnType<typeof makeRepoMock>;
+    let missionWorks: ReturnType<typeof makeMissionWorksMock>;
+    let worksRepo: { findOne: jest.Mock };
+    let git: { getFileContent: jest.Mock };
+    let goals: { create: jest.Mock; linkToMission: jest.Mock; delete: jest.Mock };
+    let catalog: TemplateCatalogService;
+    let catalogWired: boolean;
+
+    const moduleRef = {
+        get: jest.fn((token: unknown) => {
+            if (token === GoalsService) return goals;
+            if (token === TemplateCatalogService && catalogWired) return catalog;
+            throw new UnknownElementException(String(token));
+        }),
+    };
+
+    const build = () =>
+        new MissionsService(
+            repo as unknown as Repository<Mission>,
+            new TitlerService(),
+            undefined, // tickService
+            undefined, // missionAttachments
+            undefined, // uploadsRepo
+            missionWorks as unknown as MissionWorkRepository,
+            worksRepo as unknown as Repository<Work>,
+            undefined, // activityLog
+            undefined, // accessPolicy
+            undefined, // domainEvents
+            undefined, // recordVisibility
+            undefined, // agentsRepo
+            new MissionTemplateManifestReader(
+                new MissionTemplateManifestService(),
+                git as unknown as GitFacadeService,
+            ),
+            moduleRef as unknown as ModuleRef,
+        );
+
+    const create = (userId: string, missionTemplateRepo: string, extra = {}) =>
+        build().create(userId, {
+            title: 'From my template',
+            description: 'A Mission made from a template.',
+            type: MissionType.SCHEDULED,
+            missionTemplateRepo,
+            ...extra,
+        });
+
+    beforeEach(() => {
+        repo = makeRepoMock();
+        missionWorks = makeMissionWorksMock();
+        missionWorks.listForMissionWithWork.mockResolvedValue([
+            { relation: 'improves', workKind: 'app' } as unknown as MissionWorkWithWork,
+        ]);
+        worksRepo = {
+            findOne: jest.fn(async (opts: { where: { id: string; userId?: string } }) =>
+                opts.where.id === APP_WORK.id && opts.where.userId === APP_WORK.userId
+                    ? (APP_WORK as unknown as Work)
+                    : null,
+            ),
+        };
+        const manifests: Record<string, string> = {
+            'alice/starter-business-mission-template': STARTER_MANIFEST,
+            'alice/build-on-open-source-app-mission-template': RUNTIME_MANIFEST,
+            'bob/secret-mission-template': STARTER_MANIFEST,
+            'ever-works/starter-business-mission-template': STARTER_MANIFEST,
+        };
+        git = {
+            getFileContent: jest.fn(async (owner: string, name: string) => {
+                const content = manifests[`${owner}/${name}`];
+                return content === undefined ? null : { content, encoding: 'utf-8' };
+            }),
+        };
+        let goalId = 0;
+        goals = {
+            create: jest.fn(async (_userId: string, goal: { title: string }) => ({
+                id: `g${++goalId}`,
+                title: goal.title,
+            })),
+            linkToMission: jest.fn(async () => ({})),
+            delete: jest.fn(async () => ({ deleted: true })),
+        };
+        catalog = new TemplateCatalogService(
+            new TemplateRepository(makeTable(TEMPLATE_ROWS) as unknown as Repository<Template>),
+            {} as TemplateCustomizationRepository,
+            new UserTemplatePreferenceRepository(
+                makeTable<UserTemplatePreference>(
+                    [],
+                ) as unknown as Repository<UserTemplatePreference>,
+            ),
+            {} as WorkRepository,
+            {} as GitFacadeService,
+        );
+        jest.spyOn(catalog, 'getVisibleTemplateForUser');
+        catalogWired = true;
+    });
+
+    it('applies a custom template the caller owns, read from its own repository and branch', async () => {
+        const dto = await create('u1', OWN_STARTER_FORK);
+
+        expect(git.getFileContent).toHaveBeenCalledTimes(1);
+        expect(git.getFileContent).toHaveBeenCalledWith(
+            'alice',
+            'starter-business-mission-template',
+            '.works/mission.yml',
+            { userId: 'u1', providerId: 'github' },
+            'trunk',
+        );
+        expect(dto).toMatchObject({
+            missionTemplateRepo: OWN_STARTER_FORK,
+            schedule: '0 9 * * 1',
+            autoBuildWorks: true,
+            outstandingIdeasCap: 5,
+            guardrailsOverride: { maxWorksPerRun: 2, requireApprovalBeforeCreate: false },
+        });
+        expect(dto.warnings).toBeUndefined();
+    });
+
+    it('a fork of Build on an open-source app takes the App Work and creates its Goals', async () => {
+        const dto = await create('u1', OWN_APP_FORK, {
+            title: undefined,
+            templateInputs: { product: 'Booking', business: 'Yoga Loft', appWorkId: APP_WORK.id },
+        });
+
+        expect(dto.title).toBe('Build my own Booking for Yoga Loft on top of Cal.com');
+        expect(dto).toMatchObject({ outputMode: 'tasks', schedule: '0 8 * * 1' });
+        expect(missionWorks.attach).toHaveBeenCalledWith({
+            missionId: dto.id,
+            workId: APP_WORK.id,
+            userId: 'u1',
+            relation: 'improves',
+        });
+        expect(goals.create).toHaveBeenCalledTimes(2);
+        expect(goals.linkToMission).toHaveBeenCalledTimes(2);
+        expect(dto.warnings).toBeUndefined();
+    });
+
+    it.each([
+        ['another person’s private template', OTHER_PERSONS],
+        ['an archived template', OWN_ARCHIVED],
+        ['a custom template that is not a Mission template', OWN_WEBSITE],
+        ['an id no template has', 'custom-0b6d3a52-6a1e-4f3a-9d55-0000000000ff'],
+    ])(
+        'refuses %s with 404 templateNotFound before anything is read or written',
+        async (_case, templateId) => {
+            await expect(create('u1', templateId)).rejects.toMatchObject({
+                response: { code: 'templateNotFound' },
+            });
+            await expect(create('u1', templateId)).rejects.toBeInstanceOf(NotFoundException);
+            expect(repo._rows).toHaveLength(0);
+            expect(git.getFileContent).not.toHaveBeenCalled();
+        },
+    );
+
+    it('an update stores a custom template only when the editor may use it', async () => {
+        const created = await create('u1', 'someone/their-template', { schedule: '0 6 * * 2' });
+
+        await expect(
+            build().update('u1', created.id, { missionTemplateRepo: OTHER_PERSONS }),
+        ).rejects.toMatchObject({ response: { code: 'templateNotFound' } });
+        expect(repo._rows[0].missionTemplateRepo).toBe('someone/their-template');
+
+        const updated = await build().update('u1', created.id, {
+            missionTemplateRepo: OWN_STARTER_FORK,
+        });
+        expect(updated.missionTemplateRepo).toBe(OWN_STARTER_FORK);
+    });
+
+    it('the other person’s template applies for its owner', async () => {
+        const dto = await create('u2', OTHER_PERSONS);
+        expect(git.getFileContent).toHaveBeenCalledWith(
+            'bob',
+            'secret-mission-template',
+            '.works/mission.yml',
+            { userId: 'u2', providerId: 'github' },
+            'main',
+        );
+        expect(dto).toMatchObject({ schedule: '0 9 * * 1', autoBuildWorks: true });
+        expect(repo._rows[0].userId).toBe('u2');
+    });
+
+    it('the create form reads a custom template’s manifest for its owner only', async () => {
+        const view = await build().readTemplateManifest('u1', OWN_APP_FORK);
+        expect(view.templateId).toBe(OWN_APP_FORK);
+        expect(view.defaults).toMatchObject({ cadence: '0 8 * * 1', outputMode: 'tasks' });
+        expect(view.appWork).toMatchObject({ requiredRelation: 'improves' });
+        expect(view.suggestedGoals).toHaveLength(2);
+
+        await expect(build().readTemplateManifest('u2', OWN_APP_FORK)).rejects.toMatchObject({
+            response: { code: 'templateNotFound' },
+        });
+    });
+
+    it('a custom template whose built-in takes no App Work offers no App Work fields, and a create refuses them', async () => {
+        // The Starter Business fork's manifest declares `appWork`: the form must not offer what a
+        // create would refuse.
+        git.getFileContent.mockImplementation(async () => ({
+            content: RUNTIME_MANIFEST,
+            encoding: 'utf-8',
+        }));
+        const view = await build().readTemplateManifest('u1', OWN_STARTER_FORK);
+        expect(view.appWork).toBeNull();
+        expect(view.defaults).toMatchObject({ cadence: '0 8 * * 1' });
+
+        await expect(
+            create('u1', OWN_STARTER_FORK, {
+                templateInputs: {
+                    product: 'Booking',
+                    business: 'Yoga Loft',
+                    appWorkId: APP_WORK.id,
+                },
+            }),
+        ).rejects.toMatchObject({ response: { code: 'templateInputsNotAccepted' } });
+        expect(repo._rows).toHaveLength(0);
+    });
+
+    describe('built-in templates and other values are unchanged', () => {
+        it('a built-in id is read from the catalog config, never looked up in the template table', async () => {
+            const dto = await create('u1', 'starter-business');
+            expect(catalog.getVisibleTemplateForUser).not.toHaveBeenCalled();
+            expect(git.getFileContent.mock.calls[0].slice(0, 2)).toEqual([
+                'ever-works',
+                'starter-business-mission-template',
+            ]);
+            expect(dto).toMatchObject({ schedule: '0 9 * * 1', autoBuildWorks: true });
+        });
+
+        it.each([
+            'someone/their-template',
+            'not-a-catalog-id',
+            'https://github.com/a/b',
+            // An owner/repo that merely STARTS with `custom-` is a repository, not a catalog id
+            // (review of #3192: it was refused with 404 templateNotFound).
+            'custom-labs/mission-template',
+            'custom-not-a-uuid',
+        ])('%s is stored as before; nothing is looked up or read', async (value) => {
+            const dto = await create('u1', value, { schedule: '0 6 * * 2' });
+            expect(dto.missionTemplateRepo).toBe(value);
+            expect(catalog.getVisibleTemplateForUser).not.toHaveBeenCalled();
+            expect(git.getFileContent).not.toHaveBeenCalled();
+        });
+
+        it('without the template catalog in the graph a custom id is not applied (nor refused)', async () => {
+            catalogWired = false;
+            const dto = await create('u1', OWN_STARTER_FORK, { schedule: '0 6 * * 2' });
+            expect(dto).toMatchObject({ schedule: '0 6 * * 2', autoBuildWorks: false });
+            expect(git.getFileContent).not.toHaveBeenCalled();
+        });
+    });
+});
+
+describe('isCustomMissionTemplateId', () => {
+    it('matches exactly the catalog id shape custom-<uuid>', () => {
+        expect(isCustomMissionTemplateId('custom-0b6d3a52-6a1e-4f3a-9d55-000000000001')).toBe(true);
+        expect(isCustomMissionTemplateId('custom-0B6D3A52-6A1E-4F3A-9D55-000000000001')).toBe(true);
+    });
+
+    it.each([
+        'custom-labs/mission-template',
+        'custom-',
+        'custom-abc',
+        'CUSTOM-0b6d3a52-6a1e-4f3a-9d55-000000000001',
+        'starter-business',
+        null,
+    ])('does not match %s', (value) => {
+        expect(isCustomMissionTemplateId(value)).toBe(false);
     });
 });

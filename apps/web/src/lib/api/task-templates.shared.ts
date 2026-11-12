@@ -38,6 +38,14 @@ export interface TaskTemplateRow {
     updatedAt: string;
 }
 
+/**
+ * Longest description `POST /task-templates/:id/instantiate` takes
+ * (`InstantiateTaskTemplateDto.description`, `@MaxLength(8000)`). A blank
+ * Task's description has no such cap, so the New-Task form checks it only in
+ * template mode.
+ */
+export const TASK_TEMPLATE_DESCRIPTION_MAX_LENGTH = 8000;
+
 export interface InstantiateTemplateInput {
     title: string;
     description?: string | null;

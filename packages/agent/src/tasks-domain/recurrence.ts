@@ -253,6 +253,14 @@ export function computeNextOccurrence(ctx: NextOccurrenceContext): Date | null {
         // Anchor the series on `from` (the slot that just fired), not on the
         // moment this runs, so a rule's default time of day does not drift by
         // however late the dispatcher ran.
+        //
+        // KNOWN LIMIT: a rule with no BYHOUR (its time of day comes from this
+        // anchor) or with INTERVAL > 1 (its series is counted from it) whose
+        // slot falls in a spring-forward gap keeps the moved time from then on
+        // (02:30 → 03:30 for good): the fired instant cannot tell "02:30, moved"
+        // from "03:30". The Recurring form always sends BYHOUR for Daily /
+        // Weekly / Monthly, so only a hand-written Custom rule reaches this;
+        // closing it needs the original anchor stored on the template.
         if (!options.dtstart) {
             options.dtstart = new Date(Math.floor(anchor.getTime() / 60_000) * 60_000);
         }

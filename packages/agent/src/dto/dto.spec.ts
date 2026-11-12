@@ -25,6 +25,7 @@ import { WorkRepoDeclaredCommandsDto } from './repo-declared-commands.dto';
 import { TaskExtraRepoDto } from './task-extra-repo.dto';
 import { UpdateSourceValidationDto } from './update-source-validation.dto';
 import { UpdateWorkDto } from './update-work.dto';
+import { KbDocumentQueryDto } from './kb.dto';
 import { UpdateWorkAdvancedPromptsDto } from './work-advanced-prompts.dto';
 import { UpdateWorkScheduleDto } from './work-schedule.dto';
 import {
@@ -366,6 +367,77 @@ describe('agent/dto submodule', () => {
             });
             const errs = await expectValidationErrors(dto);
             expect(errs).toContain('isBoolean');
+        });
+    });
+
+    describe('KbDocumentQueryDto.locked (query string)', () => {
+        const locked = (value: unknown) =>
+            (plainToInstance(KbDocumentQueryDto, { locked: value }) as KbDocumentQueryDto).locked;
+
+        it("reads ?locked=false as false (Boolean('false') made it true)", async () => {
+            expect(locked('false')).toBe(false);
+            expect(locked('0')).toBe(false);
+            await expectValid(plainToInstance(KbDocumentQueryDto, { locked: 'false' }));
+        });
+
+        it('reads ?locked=true as true', () => {
+            expect(locked('true')).toBe(true);
+            expect(locked('1')).toBe(true);
+            expect(locked(true)).toBe(true);
+        });
+
+        it('refuses any other value instead of guessing', async () => {
+            const errs = await expectValidationErrors(
+                plainToInstance(KbDocumentQueryDto, { locked: 'yes' }),
+            );
+            expect(errs).toContain('isBoolean');
+        });
+
+        it('leaves it unset when absent', async () => {
+            expect(locked(undefined)).toBeUndefined();
+            await expectValid(plainToInstance(KbDocumentQueryDto, {}));
+        });
+    });
+
+    describe('KbDocumentQueryDto.statuses / tags (repeatable query keys)', () => {
+        const query = (plain: Record<string, unknown>) =>
+            plainToInstance(KbDocumentQueryDto, plain) as KbDocumentQueryDto;
+
+        it('reads a repeated key, a comma-joined value and a single value as a list', async () => {
+            expect(query({ statuses: ['draft', 'active'] }).statuses).toEqual(['draft', 'active']);
+            expect(query({ statuses: 'draft, active' }).statuses).toEqual(['draft', 'active']);
+            expect(query({ statuses: 'archived' }).statuses).toEqual(['archived']);
+            expect(query({ tags: ['gdpr', 'legal'] }).tags).toEqual(['gdpr', 'legal']);
+            expect(query({ tags: 'gdpr,legal' }).tags).toEqual(['gdpr', 'legal']);
+            expect(query({ tags: 'gdpr' }).tags).toEqual(['gdpr']);
+            await expectValid(query({ statuses: ['draft', 'active'], tags: 'gdpr,legal' }));
+        });
+
+        it('keeps the single status and tag unchanged', async () => {
+            const dto = query({ status: 'draft', tag: 'gdpr' });
+            expect(dto.status).toBe('draft');
+            expect(dto.tag).toBe('gdpr');
+            expect(dto.statuses).toBeUndefined();
+            expect(dto.tags).toBeUndefined();
+            await expectValid(dto);
+        });
+
+        it('refuses a status that is not one', async () => {
+            const errs = await expectValidationErrors(query({ statuses: ['draft', 'deleted'] }));
+            expect(errs).toContain('isIn');
+        });
+
+        it('refuses a tag longer than a tag may be', async () => {
+            const errs = await expectValidationErrors(query({ tags: ['ok', 'x'.repeat(65)] }));
+            expect(errs).toContain('maxLength');
+        });
+
+        it('takes at most 10 values per list', async () => {
+            const tags = Array.from({ length: 11 }, (_, i) => `t${i}`);
+            expect(await expectValidationErrors(query({ tags }))).toContain('arrayMaxSize');
+            await expectValid(query({ tags: tags.slice(0, 10) }));
+            const statuses = Array.from({ length: 11 }, () => 'draft');
+            expect(await expectValidationErrors(query({ statuses }))).toContain('arrayMaxSize');
         });
     });
 

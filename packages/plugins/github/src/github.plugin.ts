@@ -1,4 +1,5 @@
 import type {
+	GitProviderRequestOptions,
 	IPlugin,
 	IGitProviderPlugin,
 	IOAuthPlugin,
@@ -205,9 +206,9 @@ export class GitHubPlugin implements IPlugin, IGitProviderPlugin, IOAuthPlugin, 
 
 	// IGitProviderPlugin - User & Organization
 
-	async getUser(token: string): Promise<GitUser> {
+	async getUser(token: string, requestOptions?: GitProviderRequestOptions): Promise<GitUser> {
 		const settings = await this.getSettings();
-		return this.apiService.getUser(token, settings.apiBaseUrl);
+		return this.apiService.getUser(token, settings.apiBaseUrl, requestOptions);
 	}
 
 	async getOrganizations(token: string): Promise<GitOrganization[]> {
@@ -217,9 +218,14 @@ export class GitHubPlugin implements IPlugin, IGitProviderPlugin, IOAuthPlugin, 
 
 	// IGitProviderPlugin - Repository operations
 
-	async getRepository(owner: string, repo: string, token: string): Promise<GitRepositoryWithPermissions | null> {
+	async getRepository(
+		owner: string,
+		repo: string,
+		token: string,
+		requestOptions?: GitProviderRequestOptions
+	): Promise<GitRepositoryWithPermissions | null> {
 		const settings = await this.getSettings();
-		return this.apiService.getRepository(owner, repo, token, settings.apiBaseUrl);
+		return this.apiService.getRepository(owner, repo, token, settings.apiBaseUrl, requestOptions);
 	}
 
 	async listRepositories(
@@ -478,9 +484,14 @@ export class GitHubPlugin implements IPlugin, IGitProviderPlugin, IOAuthPlugin, 
 		);
 	}
 
-	async repositoryExists(owner: string, repo: string, token: string): Promise<boolean> {
+	async repositoryExists(
+		owner: string,
+		repo: string,
+		token: string,
+		requestOptions?: GitProviderRequestOptions
+	): Promise<boolean> {
 		const settings = await this.getSettings();
-		return this.apiService.repositoryExists(owner, repo, token, settings.apiBaseUrl);
+		return this.apiService.repositoryExists(owner, repo, token, settings.apiBaseUrl, requestOptions);
 	}
 
 	// IGitProviderPlugin - Branch operations

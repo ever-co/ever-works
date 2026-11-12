@@ -6,9 +6,16 @@ name: Publish Node
 # monorepo checkout. See `apps/node/build.js` for what the bundle contains.
 #
 # Triggers:
-#   - a `node-v*` tag (e.g. `node-v0.2.0`) publishes that version, and is the
-#     ONLY path that publishes;
-#   - manual dispatch is a dry run: build, smoke-test, `npm publish --dry-run`.
+#   - a `node-v*` tag push (e.g. `node-v0.2.0`) publishes that version, and is
+#     the ONLY path that publishes. The tagged commit must already be merged
+#     into main or develop, so an unmerged branch commit cannot be released:
+#     `build` checks that first and fails otherwise. This does not prove a
+#     review (admins can merge without one: enforce_admins is off on both); a
+#     real review gate needs enforce_admins on develop and main plus a tag
+#     ruleset for `node-v*` (owner decision);
+#   - manual dispatch is a dry run, also on a `node-v*` tag ref: build,
+#     smoke-test, `npm publish --dry-run`. The publishing steps below test
+#     `github.event_name == 'push'` as well as the ref.
 #
 # Where it runs: in our cluster, not on GitHub Actions (owner, 2026-11-11: the
 # org's Actions billing block is permanent). The ci-builds engine (Argo
@@ -18,24 +25,32 @@ name: Publish Node
 #   python scripts/ci-builds-run.py ever-co/ever-works <branch> publish-node.yml 4 --event workflow_dispatch --no-push
 # (homelab repo). npm provenance needs GitHub's OIDC token, which only a
 # GitHub-hosted runner has, so an in-cluster release publishes without it.
+# On GitHub the jobs run only in forks: `build` is gated like the jobs of
+# screen-helper.yml (#3174) and the other two need it. Back on GitHub in
+# ever-co takes both `stay` for this file in k8s-gitops
+# apps/ci-builds/tools/policy-overrides.json (else the Actions enforcer keeps
+# it disabled there) and repo variable RUN_ON_ACTIONS = 'true'; a tag would
+# then also run here, and the two runs would race to publish.
 #
 # Release flow: bump `apps/node/package.json` AND `apps/node/src/version.ts`
 # together in a PR (`src/version.spec.ts` pins them to each other), merge it,
 # then tag the merge commit `node-v<version>`. The tag must equal the
-# package version, so every published version maps to exactly one commit.
+# package version, so every published version maps to exactly one commit, and
+# that commit must already be on develop or main.
 #
 # The screen helper (FL-07, `apps/node/native/ever-works-screen`) ships with
-# every release, for linux-x64: `build` builds it reproducibly in a pinned
-# container (Docker; the same bytes on any machine) and bakes its SHA-256 and
-# download URL into the bundle (the manifest `ever-works-node helper install`
-# checks a download against), and `release-screen-helper` hosts it as an asset
-# of this tag's GitHub release
+# every release, for linux-x64 and win32-x64: `build` builds both reproducibly
+# in a pinned Linux container (Docker; the same bytes on any machine; Windows
+# cross-compiled with a pinned mingw-w64) and bakes their SHA-256 and download
+# URLs into the bundle (the manifest `ever-works-node helper install` checks a
+# download against), and `release-screen-helper` hosts them as assets of this
+# tag's GitHub release
 # (`https://github.com/<repo>/releases/download/node-v<version>/...`) BEFORE npm
 # publishes the package that points at them. Release assets of this public
 # repository: no Actions storage, uploaded with the build's own token. The
-# macOS and Windows helpers need macOS and Windows build machines, which the
-# in-cluster engine does not have: until one builds them, those platforms keep
-# building and admitting the helper themselves (PACKAGING.md).
+# macOS helpers need a macOS build machine, which the in-cluster engine does
+# not have: until one builds them, Macs keep building and admitting the helper
+# themselves (PACKAGING.md).
 
 on:
   push:
@@ -52,6 +67,10 @@ concurrency:
 
 jobs:
   build:
+    # In ever-co this runs in-cluster only (vars.CI_IN_CLUSTER), unless repo
+    # variable RUN_ON_ACTIONS is 'true'. Forks run it on their own Actions.
+    # release-screen-helper and publish need this job, so they skip with it.
+    if: vars.CI_IN_CLUSTER == 'true' || github.repository_owner != 'ever-co' || vars.RUN_ON_ACTIONS == 'true'
     runs-on: ${{ vars.RUNNER_LINUX_X64_4 || 'ubuntu-latest' }}
     timeout-minutes: 45
 
@@ -60,6 +79,30 @@ jobs:
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
+
+      # Only a merged commit is released: a `node-v*` tag on a commit not yet
+      # merged into main or develop (an unmerged branch, a tag pushed with a
+      # leaked token) fails here, before anything is built, hosted or
+      # published. Releases are tagged on develop's merge commit (node-v0.2.12)
+      # or on main. It does not prove the commit was reviewed: admins can merge
+      # without an approval (enforce_admins is off), so a real review gate
+      # needs enforce_admins on both branches plus a tag ruleset for `node-v*`.
+      - name: Check the tagged commit is on main or develop
+        if: startsWith(github.ref, 'refs/tags/node-v')
+        run: |
+          set -euo pipefail
+          commit="$(git rev-parse --verify 'HEAD^{commit}')"
+          git fetch --no-tags --quiet origin \
+            '+refs/heads/main:refs/remotes/origin/main' \
+            '+refs/heads/develop:refs/remotes/origin/develop'
+          for branch in main develop; do
+            if git merge-base --is-ancestor "$commit" "refs/remotes/origin/$branch"; then
+              echo "$GITHUB_REF_NAME ($commit) is on $branch"
+              exit 0
+            fi
+          done
+          echo "::error::$GITHUB_REF_NAME points at $commit, which is on neither main nor develop: only a merged commit is released. Delete the tag and tag the merge commit instead."
+          exit 1
 
       - name: Install pnpm
         uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v3
@@ -113,15 +156,24 @@ jobs:
       # by running the same script at this commit.
       - name: Reproducible release build of the screen helper (linux-x64, pinned container)
         working-directory: apps/node/native/ever-works-screen
-        run: bash ./build-release-linux.sh dist
+        run: bash ./build-release-linux.sh dist/linux-x64
 
-      # Bakes the helper build's SHA-256 and URL into cli.js and stages the
-      # binary under its release name in apps/node/dist-screen-helper/.
+      # The same container, plus the mingw-w64 cross toolchain at exact
+      # versions from snapshot.debian.org: x86_64-pc-windows-gnu, two clean
+      # builds compared, a PE without a link timestamp.
+      - name: Reproducible release build of the screen helper (win32-x64, cross-compiled in the pinned container)
+        working-directory: apps/node/native/ever-works-screen
+        env:
+          SCREEN_HELPER_TARGET: win32-x64
+        run: bash ./build-release-linux.sh dist/win32-x64
+
+      # Bakes each helper build's SHA-256 and URL into cli.js and stages the
+      # binaries under their release names in apps/node/dist-screen-helper/.
       - name: Stage the publishable bundle
         working-directory: apps/node
         env:
           SCREEN_HELPER_RELEASE_DIR: native/ever-works-screen/dist
-          SCREEN_HELPER_REQUIRED_TARGETS: linux-x64
+          SCREEN_HELPER_REQUIRED_TARGETS: linux-x64,win32-x64
         run: |
           version="$(node -p "require('./package.json').version")"
           export SCREEN_HELPER_URL_BASE="https://github.com/${GITHUB_REPOSITORY}/releases/download/node-v${version}"
@@ -149,6 +201,13 @@ jobs:
               exit 1
             }
           fi
+          # And the Windows helper, which this runner cannot start (proven on Windows, see PACKAGING.md).
+          node -e '
+            const { targets } = require("./helper-manifest.json");
+            for (const target of ["linux-x64", "win32-x64"]) {
+              if (!targets[target]) { console.error("the bundle does not publish the " + target + " screen helper"); process.exit(1); }
+            }
+            if (!targets["win32-x64"].url.endsWith("-win32-x64.exe")) { console.error("the win32-x64 helper URL does not name an .exe"); process.exit(1); }'
 
       - name: Upload bundle artifact
         uses: actions/upload-artifact@v7
@@ -169,10 +228,11 @@ jobs:
   # created as a draft and published only once every asset is there (an org
   # that turns on immutable releases cannot add assets to a published one).
   # Safe to re-run FAILED jobs: an asset already there is compared with the
-  # build, never replaced. "Re-run all jobs" rebuilds the macOS and Windows
-  # helpers, which may then differ in bytes and stop here (nothing wrong is
-  # published; delete the draft's assets by hand to start over). A dispatch
-  # (dry run) only checks and lists them.
+  # build, never replaced. "Re-run all jobs" rebuilds the helpers; both builds
+  # are reproducible, so the same commit gives the same bytes and passes. A
+  # build that differs (another image, toolchain or commit) stops here and
+  # nothing wrong is published (delete the draft's assets by hand to start
+  # over). A dispatch (dry run) only checks and lists them.
   release-screen-helper:
     needs: build
     runs-on: ubuntu-latest
@@ -205,8 +265,9 @@ jobs:
           done < screen-helper/SHA256SUMS
           cat screen-helper/helper-manifest.json
 
+      # A tag push only: a dispatch on a tag ref is a dry run like any other.
       - name: Host them on the GitHub release of this tag
-        if: startsWith(github.ref, 'refs/tags/node-v')
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/node-v')
         working-directory: screen-helper
         env:
           GH_TOKEN: ${{ github.token }}
@@ -256,7 +317,7 @@ jobs:
           fi
 
       - name: Dry run (dispatch)
-        if: ${{ !startsWith(github.ref, 'refs/tags/node-v') }}
+        if: ${{ !(github.event_name == 'push' && startsWith(github.ref, 'refs/tags/node-v')) }}
         working-directory: screen-helper
         run: |
           echo "A node-v* tag would host these on its GitHub release:"
@@ -293,7 +354,7 @@ jobs:
           path: dist-bundle/
 
       - name: Publish (dry run)
-        if: github.event_name == 'workflow_dispatch'
+        if: ${{ !(github.event_name == 'push' && startsWith(github.ref, 'refs/tags/node-v')) }}
         working-directory: dist-bundle
         run: npm publish --access public --dry-run
         env:
@@ -304,7 +365,7 @@ jobs:
       # fails (node-v0.2.11, 2026-11-10: `Provenance generation in GitHub
       # Actions requires "write" access to the "id-token" permission`).
       - name: Publish to npm (public)
-        if: startsWith(github.ref, 'refs/tags/node-v')
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/node-v')
         working-directory: dist-bundle
         run: |
           if [ -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then

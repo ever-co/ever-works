@@ -370,15 +370,30 @@ describe('provision (persistent pool + worktree)', () => {
 		expect(list).toContain('lw-par-b');
 	});
 
-	it('releases settled repository and worktree mutex entries after concurrent reuse stress', async () => {
+	it('releases settled repository and worktree mutex entries after concurrent reuse stress', async ({ signal }) => {
+		// The provisions of one repository run one after another by design, so
+		// this costs tasks × 2 real provisions back to back. Eight tasks took
+		// 18-19 s on an idle 8-thread machine, 14.4 s on stage CI round 21 and
+		// more than the 30 s budget on round 22, whose runner was 1.4-2x slower
+		// on spec files that had not changed. Four tasks still queue three
+		// waiters behind one tail, which is what the deletion rule is about.
+		//
+		// Its own pool, and the test's signal: a timed-out run left its
+		// provisions fetching the suite's pool while the next real-git test
+		// fetched it too ("shallow file has changed since we read it").
 		const stressPlugin = new LocalWorkspacePlugin();
-		const tasks = Array.from({ length: 8 }, (_, index) => ({
+		const stressSettings = { baseDir: join(root, 'lock-stress'), fetchDepth: 1 };
+		const tasks = Array.from({ length: 4 }, (_, index) => ({
 			bindingKey: `lw-lock-stress-${index}`,
 			branch: `task/lock-stress-${index}-abcdef12`
 		}));
-		const first = await Promise.all(
-			tasks.map((task) => stressPlugin.provision(spec(task.bindingKey, task.branch)))
-		);
+		const provisionAll = () =>
+			Promise.all(
+				tasks.map((task) =>
+					stressPlugin.provision({ ...spec(task.bindingKey, task.branch), settings: stressSettings, signal })
+				)
+			);
+		const first = await provisionAll();
 
 		await expect
 			.poll(() => (stressPlugin as unknown as { repoLocks: Map<string, Promise<void>> }).repoLocks.size, {
@@ -386,9 +401,7 @@ describe('provision (persistent pool + worktree)', () => {
 			})
 			.toBe(0);
 
-		const reused = await Promise.all(
-			tasks.map((task) => stressPlugin.provision(spec(task.bindingKey, task.branch)))
-		);
+		const reused = await provisionAll();
 		expect(reused.every((handle, index) => handle.reused && handle.path === first[index].path)).toBe(true);
 		await expect
 			.poll(() => (stressPlugin as unknown as { repoLocks: Map<string, Promise<void>> }).repoLocks.size, {
@@ -565,6 +578,143 @@ describe('simulateMerge', () => {
 		const sim = await plugin.simulateMerge(handle, 'main');
 		expect(sim.clean).toBe(false);
 		expect(sim.conflictPaths).toContain('README.md');
+	});
+});
+
+describe('one fetch into a pool at a time', () => {
+	// A provision holds its repository lock across its fetches. The merge
+	// simulation and the branch judge fetch into the SAME pool from a Task's
+	// worktree, and a depth-limited pool keeps one `shallow` file: Git rereads
+	// it before rewriting it and dies ("shallow file has changed since we read
+	// it", or on `shallow.lock`) when another fetch rewrote it meanwhile. Here a
+	// second provision's base fetch is HELD: its process has run and its result
+	// is not delivered yet, so the plugin is inside that fetch for as long as
+	// the test needs.
+	const poolFetchHarness = (name: string) => {
+		const baseDir = join(root, `pool-fetch-${name}`);
+		const worktreesDir = join(baseDir, 'worktrees');
+		let holdNext = false;
+		let heldOpen = false;
+		let release: (() => void) | null = null;
+		let failNextWorktreeDiff = false;
+		const fetchesWhileHeld: string[] = [];
+		const events: string[] = [];
+		const gatedExecFile = ((
+			command: string,
+			args: readonly string[],
+			options: Record<string, unknown>,
+			callback: (error: Error | null, stdout?: string | Buffer, stderr?: string | Buffer) => void
+		) => {
+			const where = String(options.cwd ?? '').startsWith(worktreesDir) ? 'worktree' : 'pool';
+			if (failNextWorktreeDiff && where === 'worktree' && args.includes('diff')) {
+				// A history too shallow for a merge base: the judge deepens the pool.
+				failNextWorktreeDiff = false;
+				queueMicrotask(() =>
+					callback(Object.assign(new Error('no merge base'), { code: 128 }), '', 'fatal: no merge base')
+				);
+				return { pid: 4646, kill: () => true };
+			}
+			const fetch = args[0] === 'fetch';
+			if (fetch) {
+				if (heldOpen) fetchesWhileHeld.push(`${where}: git ${args.join(' ')}`);
+				events.push(`${where} fetch started`);
+			}
+			const hold = fetch && where === 'pool' && args.includes('--depth') && holdNext;
+			if (hold) {
+				holdNext = false;
+				heldOpen = true;
+			}
+			return execFile(
+				command,
+				[...args],
+				options as never,
+				((error: Error | null, stdout: string | Buffer, stderr: string | Buffer) => {
+					const deliver = () => {
+						if (fetch) events.push(`${where} fetch ended`);
+						callback(error, stdout, stderr);
+					};
+					if (!hold) return deliver();
+					release = () => {
+						release = null;
+						heldOpen = false;
+						deliver();
+					};
+				}) as never
+			);
+		}) as unknown as typeof execFile;
+		const harnessPlugin = new LocalWorkspacePlugin({ execFile: gatedExecFile });
+		return {
+			plugin: harnessPlugin,
+			spec: (bindingKey: string, branch: string) => ({
+				...spec(bindingKey, branch),
+				settings: { baseDir, fetchDepth: 1 }
+			}),
+			holdNextPoolFetch: () => {
+				holdNext = true;
+			},
+			failNextWorktreeDiff: () => {
+				failNextWorktreeDiff = true;
+			},
+			parked: () => release !== null,
+			release: () => release?.(),
+			repoLockTail: () =>
+				[...(harnessPlugin as unknown as { repoLocks: Map<string, Promise<void>> }).repoLocks].find(([key]) =>
+					key.startsWith('repo:')
+				)?.[1],
+			fetchesWhileHeld,
+			events
+		};
+	};
+
+	/**
+	 * Park a provision of the same repository inside its base fetch, start
+	 * `fromWorktree`, and require it to fetch nothing until that provision is done.
+	 */
+	const whileAProvisionFetches = async <T>(
+		h: ReturnType<typeof poolFetchHarness>,
+		fromWorktree: () => Promise<T>
+	): Promise<T> => {
+		h.holdNextPoolFetch();
+		const provisioning = h.plugin.provision(h.spec('lw-pool-fetch-b', 'task/pool-fetch-b-2b3c4d5e'));
+		void provisioning.catch(() => undefined);
+		let work: Promise<T> | undefined;
+		try {
+			await expect.poll(h.parked, { timeout: 20_000 }).toBe(true);
+			const tail = h.repoLockTail();
+			work = fromWorktree();
+			void work.catch(() => undefined);
+			// Either it fetched into the pool right away (the race), or it queued
+			// on the pool's repository lock behind the provision.
+			await expect
+				.poll(() => h.fetchesWhileHeld.length > 0 || h.repoLockTail() !== tail, { timeout: 20_000 })
+				.toBe(true);
+			expect(h.fetchesWhileHeld).toEqual([]);
+		} finally {
+			h.release();
+		}
+		await provisioning;
+		const result = await work;
+		expect(h.events.indexOf('worktree fetch started')).toBeGreaterThan(h.events.lastIndexOf('pool fetch ended'));
+		return result;
+	};
+
+	it('a merge simulation fetches the pool only once a provision of the same repository is done', async () => {
+		const h = poolFetchHarness('merge');
+		const first = await h.plugin.provision(h.spec('lw-pool-fetch-a', 'task/pool-fetch-a-1a2b3c4d'));
+
+		const merge = await whileAProvisionFetches(h, () => h.plugin.simulateMerge(first, 'main'));
+		expect(merge).toEqual({ clean: true, conflictPaths: [] });
+	});
+
+	it('the branch judge deepens the pool only once a provision of the same repository is done', async () => {
+		const h = poolFetchHarness('judge');
+		const first = await h.plugin.provision(h.spec('lw-pool-fetch-a', 'task/pool-fetch-a-1a2b3c4d'));
+		const headSha = git(first.path, 'rev-parse', 'HEAD');
+
+		h.failNextWorktreeDiff();
+		const changes = await whileAProvisionFetches(h, () => h.plugin.branchChanges(first, { headSha }));
+		expect(changes).toEqual({ paths: [], contents: {} });
+		expect(h.events).toContain('worktree fetch ended');
 	});
 });
 

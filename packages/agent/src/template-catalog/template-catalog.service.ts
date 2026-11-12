@@ -204,7 +204,18 @@ export class TemplateCatalogService implements OnModuleInit {
     async listTemplatesForUser(
         kind: TemplateKind,
         userId: string,
-    ): Promise<{ defaultTemplateId: string | null; templates: TemplateCatalogItem[] }> {
+    ): Promise<{
+        defaultTemplateId: string | null;
+        /**
+         * The user's own saved default when a NEW Work would inherit it (it is
+         * not retired), else `null`. Without one, a website Work resolves to
+         * its KIND's default (`getWebsiteTemplateIdWithoutSavedDefault`) —
+         * `web` for website / landing-page / blog — not to `defaultTemplateId`,
+         * so the Create-Work picker needs to tell the two apart.
+         */
+        savedDefaultTemplateId: string | null;
+        templates: TemplateCatalogItem[];
+    }> {
         if (kind === 'website') {
             await this.syncDiscoveredWebsiteTemplatesIfStale(userId);
         }
@@ -222,10 +233,10 @@ export class TemplateCatalogService implements OnModuleInit {
         // retired saved default is never newly inherited, so it is reported as
         // if there were no saved default — never as an id missing from
         // `templates`.
+        const savedDefaultTemplateId =
+            savedDefault && !isRetiredTemplate(savedDefault) ? savedDefault.id : null;
         const defaultTemplateId =
-            savedDefault && !isRetiredTemplate(savedDefault)
-                ? savedDefault.id
-                : this.getDefaultTemplateIdWithoutSavedDefault(kind);
+            savedDefaultTemplateId ?? this.getDefaultTemplateIdWithoutSavedDefault(kind);
 
         const latestByTemplate = await this.customizationRepository.findLatestForTemplates(
             templates.map((t) => t.id),
@@ -234,6 +245,7 @@ export class TemplateCatalogService implements OnModuleInit {
 
         return {
             defaultTemplateId,
+            savedDefaultTemplateId,
             templates: templates.map((template) =>
                 this.toCatalogItem(template, defaultTemplateId, latestByTemplate.get(template.id)),
             ),

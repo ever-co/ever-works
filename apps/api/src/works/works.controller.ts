@@ -109,7 +109,10 @@ import {
     SwitchWebsiteTemplateResponseDto,
     UpdateWebsiteRepositoryResponseDto,
 } from '@ever-works/agent/generators';
-import { getDefaultWebsiteTemplateId } from '@ever-works/agent/generators';
+import {
+    getDefaultWebsiteTemplateId,
+    getWebsiteTemplateIdWithoutSavedDefault,
+} from '@ever-works/agent/generators';
 import { CommunityPrProcessorService } from '@ever-works/agent/community-pr';
 import { WorkRepository } from '@ever-works/agent/database';
 import { AuthService, CurrentUser, AuthSessionGuard } from '../auth';
@@ -126,7 +129,7 @@ import { fleetRunOrganizationPin } from '../auth/fleet-run-scope';
 import { ZeroFrictionFunnelService } from '@ever-works/agent/services';
 import { ZERO_FRICTION_FUNNEL_EVENTS } from '@ever-works/contracts/telemetry';
 // EW-P2-4 — validates the works-list `kind` filter.
-import { WORK_KINDS } from '@ever-works/contracts';
+import { getWorkCapabilities, WORK_KINDS } from '@ever-works/contracts';
 import { AuthenticatedUser } from '@src/auth/types/auth.types';
 import { GenerateWorkDetailDto } from './dto/generate-detail.dto';
 import { GenerateManualComparisonDto } from './dto/generate-manual-comparison.dto';
@@ -202,6 +205,16 @@ type DownloadResponse = {
     setHeader(name: string, value: string): void;
     send(body: string | Buffer): void;
 };
+
+/**
+ * Kinds whose website is generated from a website template (a data repository
+ * plus a website repository): the kinds the Create-Work template picker
+ * serves. `app` (code it did not generate) and the repo-less kinds are not.
+ */
+const GENERATED_SITE_WORK_KINDS = WORK_KINDS.filter((kind) => {
+    const { repos } = getWorkCapabilities(kind);
+    return repos.data && repos.website;
+});
 
 @ApiTags('Works')
 @ApiBearerAuth('JWT-auth')
@@ -325,6 +338,19 @@ export class WorksController {
             auth.userId,
         );
         const hasExplicitDefault = templateCatalog.templates.some((template) => template.isDefault);
+        // The template a NEW Work of each kind builds with when the form names
+        // none ("use my default"), as `WebsiteTemplateResolverService
+        // .resolveForWork` resolves it: the saved default for every kind, else
+        // the kind's own default — `web` for website / landing-page / blog,
+        // which is NOT the `isDefault` row (`classic`).
+        const savedDefaultTemplateId = templateCatalog.savedDefaultTemplateId ?? null;
+        const newWorkTemplateIdByKind = GENERATED_SITE_WORK_KINDS.map(
+            (kind) =>
+                [
+                    kind,
+                    savedDefaultTemplateId ?? getWebsiteTemplateIdWithoutSavedDefault(kind),
+                ] as const,
+        );
 
         return {
             status: 'success',
@@ -345,6 +371,11 @@ export class WorksController {
                 isDefault:
                     template.isDefault ||
                     (!hasExplicitDefault && template.id === getDefaultWebsiteTemplateId()),
+                // The kinds whose new Work builds with this template when the
+                // Create-Work picker is left alone; the picker highlights it.
+                defaultForWorkKinds: newWorkTemplateIdByKind
+                    .filter(([, templateId]) => templateId === template.id)
+                    .map(([kind]) => kind),
             })),
         };
     }
@@ -1172,6 +1203,16 @@ export class WorksController {
     ): Promise<ItemsGeneratorResponseDto> {
         const user = await this.authService.getUser(auth.userId);
 
+        // Recorded only once the run really started: a refused start (no
+        // provider set up, a run already in progress) used to leave a
+        // "Started item generation" entry for a run that never existed.
+        const started = await this.workGenerationService.generateItems(
+            id,
+            createItemsGeneratorDto,
+            user,
+            false,
+        );
+
         this.activityLogService
             .log({
                 userId: auth.userId,
@@ -1183,7 +1224,7 @@ export class WorksController {
             })
             .catch(() => {});
 
-        return this.workGenerationService.generateItems(id, createItemsGeneratorDto, user, false);
+        return started;
     }
 
     @Post('works/:id/update')

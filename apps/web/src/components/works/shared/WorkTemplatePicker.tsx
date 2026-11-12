@@ -36,9 +36,11 @@ import { buildTemplatePickerOptions, type PickerOption } from './work-template-p
  * and a blueprint submits the id of the catalog row built from its repository,
  * never its own slug (`work-template-picker-options.ts` has the rules).
  * The selector line renders only when the selected chip resolves to ≥1
- * pickable template. The manifest `default: true` blueprint (or the user's
- * default custom row) is highlighted when no explicit value is set — an empty
- * value keeps the existing "use my default template" semantics on submit.
+ * pickable template. When no explicit value is set, the template the API will
+ * build this kind of Work with is highlighted (its `defaultForWorkKinds`; with
+ * an older API, the manifest `default: true` blueprint or the user's default
+ * custom row) — an empty value keeps the existing "use my default template"
+ * semantics on submit.
  */
 
 /** Stable display order + the known `chipType` facet values. */
@@ -170,8 +172,9 @@ export function WorkTemplatePicker({
                 blueprints,
                 selectedChip,
                 currentChipType,
+                workKind,
             }),
-        [customTemplates, blueprints, selectedChip, currentChipType],
+        [customTemplates, blueprints, selectedChip, currentChipType, workKind],
     );
 
     const allOptions = useMemo<PickerOption[]>(
@@ -179,8 +182,9 @@ export function WorkTemplatePicker({
         [customOptions, blueprintOptions],
     );
 
-    // Preselected default (highlighted when no explicit value) — blueprint
-    // default:true → user default custom row → first option.
+    // Preselected default (highlighted when no explicit value) — the option
+    // marked default (the kind's default, see buildTemplatePickerOptions),
+    // blueprint first → custom row → first option.
     const defaultOption =
         blueprintOptions.find((o) => o.isDefault) ||
         customOptions.find((o) => o.isDefault) ||

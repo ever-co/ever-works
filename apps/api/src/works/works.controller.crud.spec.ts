@@ -16,6 +16,13 @@ jest.mock('@ever-works/agent/comparison-generator', () => ({}));
 jest.mock('@ever-works/agent/template-catalog', () => ({}));
 jest.mock('@ever-works/agent/generators', () => ({
     getDefaultWebsiteTemplateId: jest.fn(() => 'default-template'),
+    // The kind default of `website-template.config.ts`: `web` for the
+    // general-purpose kinds, the system default for every other kind.
+    getWebsiteTemplateIdWithoutSavedDefault: jest.fn((kind?: string | null) =>
+        kind === 'website' || kind === 'landing-page' || kind === 'blog'
+            ? 'web'
+            : 'default-template',
+    ),
 }));
 jest.mock('@ever-works/agent/community-pr', () => ({}));
 jest.mock('@ever-works/agent/database', () => ({}));
@@ -445,6 +452,7 @@ describe('WorksController — core CRUD endpoints', () => {
                         repositoryOwner: 'ever-works',
                         repositoryName: 'directory-web-template',
                         isDefault: true,
+                        defaultForWorkKinds: [],
                     },
                     {
                         id: 'b',
@@ -455,6 +463,7 @@ describe('WorksController — core CRUD endpoints', () => {
                         repositoryOwner: 'someone',
                         repositoryName: 'beta-template',
                         isDefault: false,
+                        defaultForWorkKinds: [],
                     },
                 ],
             });
@@ -489,6 +498,66 @@ describe('WorksController — core CRUD endpoints', () => {
 
             expect(result.templates[0].isDefault).toBe(true);
             expect(result.templates[1].isDefault).toBe(false);
+        });
+
+        // Review A6: with nothing picked the Create-Work picker highlighted the
+        // `isDefault` row (classic), while a website / landing-page / blog
+        // Work builds with its kind's default (web) when the user saved none.
+        describe('the kinds whose new Work builds with each template when nothing is picked', () => {
+            const catalog = (savedDefaultTemplateId: string | null) => ({
+                defaultTemplateId: savedDefaultTemplateId ?? 'default-template',
+                savedDefaultTemplateId,
+                templates: [
+                    { id: 'default-template', name: 'Classic', isDefault: true },
+                    { id: 'web', name: 'Website', isDefault: false },
+                    { id: 'custom-1', name: 'Mine', isDefault: false },
+                ],
+            });
+
+            it('gives each kind its own default when the user saved none', async () => {
+                s.templateCatalogService.listTemplatesForUser.mockResolvedValue(catalog(null));
+
+                const result = await controller.getWebsiteTemplates(auth);
+
+                expect(result.templates.map((t: any) => [t.id, t.defaultForWorkKinds])).toEqual([
+                    ['default-template', ['directory', 'awesome-repo', 'default']],
+                    ['web', ['website', 'landing-page', 'blog']],
+                    ['custom-1', []],
+                ]);
+                // `isDefault` is unchanged: it is still the listing's default.
+                expect(result.templates.map((t: any) => t.isDefault)).toEqual([true, false, false]);
+            });
+
+            it('gives every kind the saved default, even when it is the system default', async () => {
+                s.templateCatalogService.listTemplatesForUser.mockResolvedValue(
+                    catalog('default-template'),
+                );
+
+                const result = await controller.getWebsiteTemplates(auth);
+
+                expect(result.templates.map((t: any) => [t.id, t.defaultForWorkKinds])).toEqual([
+                    [
+                        'default-template',
+                        ['website', 'landing-page', 'blog', 'directory', 'awesome-repo', 'default'],
+                    ],
+                    ['web', []],
+                    ['custom-1', []],
+                ]);
+            });
+
+            it('never lists a kind with no generated website (repo, app, project)', async () => {
+                s.templateCatalogService.listTemplatesForUser.mockResolvedValue(
+                    catalog('custom-1'),
+                );
+
+                const result = await controller.getWebsiteTemplates(auth);
+
+                const kinds = result.templates.flatMap((t: any) => t.defaultForWorkKinds);
+                expect(kinds).toHaveLength(6);
+                expect(kinds).not.toContain('repo');
+                expect(kinds).not.toContain('app');
+                expect(kinds).not.toContain('project');
+            });
         });
 
         it('returns an empty list when the catalog is empty', async () => {

@@ -1,6 +1,6 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import type { Repository } from 'typeorm';
-import { Goal, GoalOutcome, GoalStatus } from '../../entities/goal.entity';
+import { Goal, GoalOutcome, GoalStatus, type GoalDoDCriterion } from '../../entities/goal.entity';
 import type { GoalEvent } from '../../entities/goal-event.entity';
 import type { AgentRun } from '../../entities/agent-run.entity';
 import { Task } from '../../entities/task.entity';
@@ -756,6 +756,154 @@ describe('GoalOrchestratorService — add / remove ONE criterion (review of #317
         await expect(service.removeDodCriterion('someone-else', 'g1', 'a')).rejects.toBeInstanceOf(
             NotFoundException,
         );
+    });
+});
+
+describe('GoalOrchestratorService — propose / approve / patch keep a concurrent DoD write', () => {
+    const locked = expect.objectContaining({ lock: { mode: 'pessimistic_write' } });
+    const goalUpdated = [
+        expect.anything(),
+        'goal',
+        'g1',
+        'goal.updated',
+        { changedFields: ['dodCriteria', 'progress'] },
+    ];
+
+    /**
+     * Like `buildRacing` above (a publisher whose transaction hands the write a
+     * row-locking manager over the fake repository), but the concurrent write
+     * lands as soon as the service's ownership read returns: before a write
+     * that runs in no transaction of its own, too. The fake repository's `save`
+     * replaces the row object, so the copy the service read first really is stale.
+     */
+    function buildRacingAfterRead(
+        goal: Partial<Goal>,
+        concurrent: (stored: GoalDoDCriterion[]) => GoalDoDCriterion[],
+    ) {
+        let goals: ReturnType<typeof makeRepo> | undefined;
+        const publisher = {
+            transaction: jest.fn(async (fn: (manager: unknown) => Promise<unknown>) =>
+                fn({
+                    getRepository: () => goals!,
+                    connection: { options: { type: 'postgres' } },
+                }),
+            ),
+            changed: jest.fn(async () => 1),
+        };
+        const built = build({ goal, domainEvents: publisher });
+        goals = built.goals;
+        const repo = goals;
+        const read = repo.findOne.getMockImplementation()!;
+        repo.findOne.mockImplementationOnce(async (opts: any) => {
+            const row = await read(opts);
+            const stored = (repo._rows[0].dodCriteria as GoalDoDCriterion[] | null) ?? [];
+            await repo.save({ id: 'g1', dodCriteria: concurrent([...stored]) });
+            return row;
+        });
+        return { ...built, publisher };
+    }
+
+    const stored = (goals: ReturnType<typeof makeRepo>) =>
+        goals._rows[0].dodCriteria as GoalDoDCriterion[];
+
+    it('proposing keeps a criterion another tab added after the read', async () => {
+        const { service, goals, publisher } = buildRacingAfterRead(
+            { dodCriteria: [{ id: 'a', text: 'Ship pricing', status: 'open' }] },
+            (current) => [
+                ...current,
+                { id: 'b', text: 'Write docs', status: 'open', source: 'operator' },
+            ],
+        );
+
+        const dto = await service.proposeDodCriteria('u1', 'g1', [
+            { id: 'p1', text: 'Also add a FAQ', status: 'open' },
+        ]);
+
+        expect(stored(goals).map((c) => c.id)).toEqual(['a', 'b', 'p1']);
+        expect(stored(goals)[2]).toMatchObject({ source: 'planner', proposed: true });
+        expect(dto.dodCriteria?.map((c) => c.id)).toEqual(['a', 'b', 'p1']);
+        // The write re-read the row inside its transaction, under a row lock.
+        expect(goals.findOne).toHaveBeenLastCalledWith(locked);
+        expect(publisher.changed).toHaveBeenCalledWith(...goalUpdated);
+    });
+
+    it('approving keeps a tick another tab made after the read', async () => {
+        const { service, goals, publisher } = buildRacingAfterRead(
+            {
+                dodCriteria: [
+                    { id: 'a', text: 'Ship pricing', status: 'open' },
+                    {
+                        id: 'p1',
+                        text: 'Also add a FAQ',
+                        status: 'open',
+                        source: 'planner',
+                        proposed: true,
+                    },
+                ],
+            },
+            (current) =>
+                current.map((c) =>
+                    c.id === 'a' ? { ...c, status: 'done' as const, evidence: 'PR #1' } : c,
+                ),
+        );
+
+        const dto = await service.approveDodCriteria('u1', 'g1');
+
+        expect(stored(goals)[0]).toMatchObject({ id: 'a', status: 'done', evidence: 'PR #1' });
+        expect(stored(goals)[1].id).toBe('p1');
+        expect(stored(goals)[1].proposed).toBeUndefined();
+        expect(dto.dodSummary).toMatchObject({ total: 2, done: 1, proposed: 0 });
+        expect(goals.findOne).toHaveBeenLastCalledWith(locked);
+        expect(publisher.changed).toHaveBeenCalledWith(...goalUpdated);
+    });
+
+    it('patching keeps a planner proposal that landed after the read', async () => {
+        const { service, goals, publisher } = buildRacingAfterRead(
+            {
+                dodCriteria: [
+                    { id: 'a', text: 'Ship pricing', status: 'open' },
+                    { id: 'b', text: 'Write docs', status: 'open' },
+                ],
+            },
+            (current) => [
+                ...current,
+                {
+                    id: 'p1',
+                    text: 'Also add a FAQ',
+                    status: 'open',
+                    source: 'planner',
+                    proposed: true,
+                },
+            ],
+        );
+
+        const dto = await service.patchDodCriterion('u1', 'g1', 'b', { status: 'done' });
+
+        expect(stored(goals).map((c) => [c.id, c.status])).toEqual([
+            ['a', 'open'],
+            ['b', 'done'],
+            ['p1', 'open'],
+        ]);
+        expect(stored(goals)[2].proposed).toBe(true);
+        expect(dto.dodCriteria?.map((c) => c.id)).toEqual(['a', 'b', 'p1']);
+        expect(goals.findOne).toHaveBeenLastCalledWith(locked);
+        expect(publisher.changed).toHaveBeenCalledWith(...goalUpdated);
+    });
+
+    it('replacing the whole list reads the row under the same lock', async () => {
+        const { service, goals, publisher } = buildRacingAfterRead(
+            { dodCriteria: [{ id: 'a', text: 'Ship pricing', status: 'open' }] },
+            (current) => current,
+        );
+
+        await service.setDodCriteria('u1', 'g1', [
+            { id: 'a', text: 'Ship pricing', status: 'done' },
+        ]);
+
+        expect(goals.findOne).toHaveBeenLastCalledWith(locked);
+        expect(stored(goals)).toEqual([expect.objectContaining({ id: 'a', status: 'done' })]);
+        expect(publisher.changed).toHaveBeenCalledTimes(1);
+        expect(publisher.changed).toHaveBeenCalledWith(...goalUpdated);
     });
 });
 

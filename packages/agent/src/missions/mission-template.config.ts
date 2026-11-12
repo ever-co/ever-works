@@ -56,6 +56,29 @@ export const MISSION_TEMPLATE_DEFAULT_GIT_PROVIDER = 'github';
 /** APW-08 T38 — the repository path of a Mission Template's manifest. */
 export const MISSION_TEMPLATE_MANIFEST_PATH = '.works/mission.yml';
 
+/**
+ * The id prefix of a person's OWN catalog template: `TemplateCatalogService` mints
+ * `custom-<uuid>` for a template added by URL (`addCustomTemplate`) or forked
+ * (`forkTemplateForUser`). A `missionTemplateRepo` with this prefix names a custom Mission
+ * template, which `MissionsService` resolves through the catalog for the caller — never from
+ * {@link MISSION_TEMPLATES}.
+ */
+export const CUSTOM_MISSION_TEMPLATE_ID_PREFIX = 'custom-';
+
+/**
+ * `custom-` + a UUID, exactly as `TemplateCatalogService` mints them (`randomUUID()`): the
+ * prefix lower-case, the UUID's hex in either case. Only this shape is a catalog id: an `owner/repo` slug that happens to
+ * start with `custom-` (`custom-labs/mission-template`) is a repository, and keeps the path it
+ * always had.
+ */
+const CUSTOM_MISSION_TEMPLATE_ID_PATTERN =
+    /^custom-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+
+/** Whether `templateId` is shaped like a custom catalog template's id (`custom-<uuid>`). */
+export function isCustomMissionTemplateId(templateId?: string | null): boolean {
+    return typeof templateId === 'string' && CUSTOM_MISSION_TEMPLATE_ID_PATTERN.test(templateId);
+}
+
 const STARTER_BUSINESS_MISSION_TEMPLATE: MissionTemplateConfig = {
     id: 'starter-business',
     name: 'Starter Business',

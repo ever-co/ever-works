@@ -581,13 +581,30 @@ export const createWorkWithAITool = tool({
             pluginConfig: config.pluginConfig,
             workKind,
         });
+        const url = result.work ? ROUTES.DASHBOARD_WORK(result.work.id) : undefined;
+        if (result.generationNotStarted && result.work) {
+            // The Work exists: creating it again would only fail on its slug.
+            return {
+                success: false,
+                workCreated: true,
+                generationNotStarted: true,
+                workId: result.work.id,
+                url,
+                error: result.error,
+                guidance:
+                    'The Work was created but its generation did not start. Do NOT call ' +
+                    'createWorkWithAI again for it (its slug is taken). Tell the user why, and ' +
+                    'that they can start generation from the Work page (Generator tab): ' +
+                    url,
+            };
+        }
         return {
             success: result.success,
             workId: result.work?.id,
             message: result.message,
             isGenerating: result.isGenerating,
             error: result.error,
-            url: result.work ? ROUTES.DASHBOARD_WORK(result.work.id) : undefined,
+            url,
         };
     },
 });

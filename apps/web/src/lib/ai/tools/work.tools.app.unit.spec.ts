@@ -21,11 +21,12 @@ const mocks = vi.hoisted(() => ({
         appSource: { relation: 'fork' },
     })),
     inspectAppSourceAction: vi.fn(),
+    createWorkWithAI: vi.fn(),
 }));
 
 vi.mock('@/app/actions/dashboard/works', () => ({
     createWork: mocks.createWork,
-    createWorkWithAI: vi.fn(),
+    createWorkWithAI: mocks.createWorkWithAI,
     deleteWork: vi.fn(),
     getWorkStats: vi.fn(),
     updateWork: vi.fn(),
@@ -36,7 +37,9 @@ vi.mock('@/app/actions/dashboard/works', () => ({
     inspectAppSourceAction: mocks.inspectAppSourceAction,
 }));
 vi.mock('@/lib/api/work', () => ({ workAPI: {} }));
-vi.mock('./utils', () => ({ resolveGenerationConfig: vi.fn() }));
+vi.mock('./utils', () => ({
+    resolveGenerationConfig: vi.fn(async () => ({ providers: {}, pluginConfig: {} })),
+}));
 
 import { createUserConfirmationCheck } from './generated/confirmation';
 import { createCreateWorkManualTool, createWorkWithAITool, inspectAppSource } from './work.tools';
@@ -326,5 +329,36 @@ describe('the AI creator (APW-01 T25)', () => {
         expect(schema.safeParse({ ...base, workKind: 'app' }).success).toBe(false);
         expect(schema.safeParse({ ...base, workKind: 'repo' }).success).toBe(false);
         expect(schema.safeParse({ ...base, workKind: 'blog' }).success).toBe(true);
+    });
+});
+
+describe('the AI creator when the Work is created but its generation does not start', () => {
+    it('says the Work exists (do not create it again) and where to retry', async () => {
+        mocks.createWorkWithAI.mockResolvedValueOnce({
+            success: false,
+            work: { id: 'w-9', slug: 'k8s-operators' },
+            generationNotStarted: true,
+            error: 'generationNotStarted: Provider not enabled',
+        });
+        const run = (
+            createWorkWithAITool as unknown as {
+                execute: (input: Record<string, unknown>, options: unknown) => Promise<unknown>;
+            }
+        ).execute;
+
+        const out = (await run(
+            { name: 'K8s operators', prompt: 'p', gitProvider: 'github' },
+            {},
+        )) as Record<string, unknown>;
+
+        expect(out).toMatchObject({
+            success: false,
+            workCreated: true,
+            generationNotStarted: true,
+            workId: 'w-9',
+        });
+        expect(String(out.url)).toContain('w-9');
+        expect(String(out.guidance)).toMatch(/Do NOT call createWorkWithAI again/);
+        expect(String(out.guidance)).toContain(String(out.url));
     });
 });
