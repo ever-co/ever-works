@@ -855,8 +855,11 @@ export class FleetAgentTaskPlannerService implements FleetAgentTaskPlanner {
                             primaryRepositoryId: workspace.repositoryId,
                             mounts: writableMounts,
                             agent,
-                            taskListsExtraRepos:
-                                Array.isArray(task.extraRepos) && task.extraRepos.length > 0,
+                            // Only an extra that can be pushed is a possible source of a
+                            // writable mount; a read-only extra never becomes a push target.
+                            taskListsWritableExtraRepos:
+                                Array.isArray(task.extraRepos) &&
+                                task.extraRepos.some((extra) => extra?.writable !== false),
                         }) +
                         ` A fleet node never pushes with the machine's own Git credential helper, so this run ` +
                         `is refused now rather than after the model has already done the work.`,
@@ -2506,56 +2509,99 @@ export function resolveMcpBridge(
 
 /**
  * Where the repositories of a refused push scope that are NOT the Task's
- * Work repository come from, and what an operator does about them.
+ * Work repository come from, and what an operator can do about them.
  *
  * Every writable mount is a push target, and a mount is either one of the
  * run Agent's attached repositories (`TaskWorkspaceService.resolveFleetMounts`)
- * or one of the Task's own extra repositories. An Agent's attachments are not
- * scoped to a Work: they are mounted, writable, in EVERY Task the Agent runs.
- * One shared tenant-scope Agent therefore carries one attachment into the
- * Tasks of every Work it serves, and when that repository sits under another
- * GitHub App installation than the Work's repository — another GitHub owner,
- * typically — no single installation covers the run and every one of those
- * Tasks is refused here (T-2314, 2026-11-11: `ever-works/directory-web-template`
- * attached to the shared docs Agent refused the `ever-co/ever-gauzy-docs` Task).
- * The bare refusal named the repository but not why the run writes to it,
- * which reads as the platform inventing a repository.
+ * or one of the Task's own extra repositories. An attachment is an edge
+ * between ONE member and the Agent (`listEnabledForAgentWithRepos` filters on
+ * the Task owner's user id), and it is not scoped to a Work: it is mounted in
+ * every Task that member runs with that Agent, on any Work, and pushed when
+ * the Agent may commit. So a shared tenant-scope Agent carries one member's
+ * attachment into that member's Tasks on every Work it serves. When the
+ * attached repository sits under another GitHub App installation than the
+ * Work's repository (another GitHub owner, typically), no single installation
+ * covers the run, and each of those Tasks is refused here (T-2314,
+ * 2026-11-11: `ever-works/directory-web-template` attached to the shared docs
+ * Agent refused an `ever-co/ever-gauzy-docs` Task). The bare refusal named the
+ * repository but not why the run writes to it, which read as the platform
+ * inventing a repository.
  *
- * Only for `push-scope-unresolved` with at least one writable mount: with no
- * GitHub App configured the mounts are not the problem, and with no mount the
- * Task's own repository is the only target. When the Task lists no extra
- * repositories every mount IS an Agent attachment, so the sentence says so;
- * otherwise it names both places a mount can come from. The Agent's NAME is
- * owner-chosen and this text lands on the run row, so it goes through the same
- * sanitizer as a commit identity (control characters and our delimiters out).
+ * CONDITIONAL on purpose: `push-scope-unresolved` covers more than that one
+ * cause (the App not installed on, or not re-synced for, the Task's own
+ * repository; an installation another member created; two installations
+ * covering the run), and the resolver deliberately does not say which. So
+ * the text says where the extra repositories come from — a fact — and
+ * only says "IF one sits under another installation". It never claims that
+ * the attachment is the cause.
+ *
+ * The "attached to Agent …" clause comes FIRST in the added text: the Task
+ * page clamps a run's error to two lines, and the leading sentence is already
+ * long. Only for `push-scope-unresolved` with at least one writable mount:
+ * with no GitHub App configured the mounts are not the problem, and with no
+ * writable mount the Task's own repository is the only target. When the Task
+ * lists no WRITABLE extra repository, every writable mount IS an attachment,
+ * so the text says so; otherwise it names both possible sources.
  */
 export function describeMountedPushTargets(input: {
     reason: string | null;
     primaryRepositoryId: string;
     mounts: readonly { readonly repositoryId: string }[];
     agent: Pick<Agent, 'id' | 'name'>;
-    taskListsExtraRepos: boolean;
+    taskListsWritableExtraRepos: boolean;
 }): string {
     if (input.reason !== FLEET_PUSH_CREDENTIAL_UNRESOLVED_REASON) return '';
     const names = input.mounts.map((mount) => mount.repositoryId);
     if (names.length === 0) return '';
     const plural = names.length > 1;
-    const agentName = sanitizeFleetPushIdentityText(input.agent.name, 64);
+    const agentName = agentNameForRefusal(input.agent.name);
     const agentLabel = agentName
         ? `Agent "${agentName}" (${input.agent.id})`
         : `Agent ${input.agent.id}`;
-    const origin = input.taskListsExtraRepos
-        ? `${plural ? 'they are' : 'it is'} attached to ${agentLabel} or listed in this Task's extra repositories`
-        : `${plural ? 'they are' : 'it is'} attached to ${agentLabel}`;
-    const remedy = input.taskListsExtraRepos
-        ? "detach the ones this Task must not write to from the Agent's repositories, or remove them from the Task's extra repositories"
-        : "detach the ones this Task must not write to from the Agent's repositories";
+    const origin = input.taskListsWritableExtraRepos
+        ? `attached to ${agentLabel} or listed in this Task's extra repositories`
+        : `attached to ${agentLabel}`;
+    const detach = plural
+        ? "detach the ones this Task must not write to from the Agent's repositories"
+        : "detach it from the Agent's repositories if this Task must not write to it";
+    const remedy = input.taskListsWritableExtraRepos
+        ? `${detach} (or remove ${plural ? 'them' : 'it'} from the Task's extra repositories)`
+        : detach;
     return (
-        ` ${names.join(', ')} ${plural ? 'are' : 'is'} not this Task's Work repository (${input.primaryRepositoryId}): ` +
-        `${origin}, and an Agent's attached repositories are mounted, writable, in every Task it runs, whatever ` +
-        `the Task's Work. One push credential comes from ONE GitHub App installation, so the Work's repository and ` +
-        `every writable mount must be covered by the same installation — ${remedy}.`
+        ` ${names.join(', ')} ${plural ? 'are' : 'is'} ${origin}, not the Task's Work repository ` +
+        `(${input.primaryRepositoryId}). An Agent's attached repositories are mounted in every Task you run ` +
+        `with that Agent (attachments are per member), and pushed when the Agent may commit. If ` +
+        `${plural ? 'one of them sits' : 'it sits'} under another GitHub App installation than ` +
+        `${input.primaryRepositoryId}, one push credential cannot cover this run: ${remedy}.`
     );
+}
+
+/** Longest Agent name, in code points, a push-scope refusal quotes. */
+const REFUSAL_AGENT_NAME_MAX_CODE_POINTS = 64;
+
+/**
+ * Bidi embedding / override / isolate controls (U+202A–U+202E, U+2066–U+2069),
+ * the Arabic letter mark (U+061C), zero-width and directional marks
+ * (U+200B–U+200F), invisible operators (U+2060–U+2064) and the BOM (U+FEFF).
+ * None of them is visible, and an override would reverse the rest of the
+ * message for every member who reads the run.
+ */
+const INVISIBLE_FORMAT_CONTROLS = /[؜​-‏‪-‮⁠-⁤⁦-⁩﻿]/g;
+
+/**
+ * The owner-chosen Agent name as a push-scope refusal quotes it.
+ *
+ * The shared commit-identity sanitizer already removes control characters and
+ * our delimiters and folds whitespace. Here, and only here (commit identities
+ * keep their behaviour), the name ALSO loses invisible format and bidi controls
+ * and the `"` the refusal wraps it in. It is cut by CODE POINT, so a surrogate
+ * pair is never split. Empty means "quote the id instead".
+ */
+function agentNameForRefusal(name: unknown): string {
+    if (typeof name !== 'string') return '';
+    const stripped = name.replace(INVISIBLE_FORMAT_CONTROLS, '').replace(/"/g, ' ');
+    const sanitized = sanitizeFleetPushIdentityText(stripped, Math.max(1, stripped.length));
+    return Array.from(sanitized).slice(0, REFUSAL_AGENT_NAME_MAX_CODE_POINTS).join('').trim();
 }
 
 /**
