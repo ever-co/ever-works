@@ -421,6 +421,238 @@ describe('FleetAgentTaskPlannerService', () => {
             await expect(build().plan(payload)).rejects.toThrow(/install the Ever Works app/);
         });
 
+        /**
+         * T-2314 (prod, 2026-11-11): a docs Task on `ever-co/ever-gauzy-docs`
+         * was refused because its shared tenant-scope Agent had
+         * `ever-works/directory-web-template` attached. An attachment is a
+         * writable mount of every Task its member runs with that Agent (when
+         * the Agent may commit), and the two repositories sit under two
+         * GitHub App installations, so no single push credential covers the
+         * run. The refusal named the template repository without saying why
+         * the run writes to it, which read as the platform inventing a
+         * repository from another Work. It must say where the repository
+         * comes from — first, because the Task page shows two lines — and
+         * only CONDITIONALLY that it is the cause: `push-scope-unresolved`
+         * also covers an App that is not installed on the Task's own
+         * repository.
+         */
+        describe('a writable mount from the run Agent', () => {
+            const docsWorkspace = {
+                repositoryId: 'ever-co/ever-gauzy-docs',
+                repoUrl: 'https://github.com/ever-co/ever-gauzy-docs.git',
+                baseRef: 'develop',
+                branch: 'task/t-2314-2f7da773',
+                mounts: [
+                    {
+                        repositoryId: 'ever-works/directory-web-template',
+                        repoUrl: 'https://github.com/ever-works/directory-web-template.git',
+                        baseRef: 'develop',
+                        branch: 'task/t-2314-2f7da773',
+                        mountDir: 'directory-web-template',
+                        writable: true,
+                    },
+                ],
+            };
+            const refusalOf = async (planner: FleetAgentTaskPlannerService) =>
+                planner.plan(payload).then(
+                    () => null,
+                    (err: unknown) => err as Error,
+                );
+
+            beforeEach(() => {
+                taskWorkspace.describeFleetWorkspace.mockResolvedValue(docsWorkspace);
+                agents.findByIdAndUser.mockResolvedValue(
+                    agent({ id: 'agent-docs', name: 'Ever Docs Writer' } as never),
+                );
+                pushCredentials.describeScope.mockResolvedValue({
+                    ok: false,
+                    reason: 'push-scope-unresolved',
+                });
+            });
+
+            it('says the extra repository is attached to the Agent, not the Work, and what to detach', async () => {
+                const refusal = await refusalOf(build());
+
+                expect(refusal).toBeInstanceOf(FleetAgentTaskPlanError);
+                // Unchanged: the leading text — push targets, then the stable
+                // refusal sentence — and the trailer.
+                expect(
+                    refusal!.message.startsWith(
+                        'Task TSK-7 would push to ever-co/ever-gauzy-docs, ever-works/directory-web-template, but ' +
+                            'no GitHub App installation this owner controls covers every repository',
+                    ),
+                ).toBe(true);
+                expect(
+                    refusal!.message.endsWith(
+                        "A fleet node never pushes with the machine's own Git credential helper, so this run is " +
+                            'refused now rather than after the model has already done the work.',
+                    ),
+                ).toBe(true);
+                // New, and FIRST after the refusal sentence: where the mount came
+                // from. Then that attachments reach every Task of that member,
+                // and the cause only as a condition, with its remedy.
+                expect(refusal!.message).toContain(
+                    "re-sync the installation's repository list. ever-works/directory-web-template is attached to " +
+                        'Agent "Ever Docs Writer" (agent-docs), not the Task\'s Work repository (ever-co/ever-gauzy-docs). ' +
+                        "An Agent's attached repositories are mounted in every Task you run with that Agent " +
+                        '(attachments are per member), and pushed when the Agent may commit. ' +
+                        'If it sits under another GitHub App installation than ever-co/ever-gauzy-docs, one push ' +
+                        "credential cannot cover this run: detach it from the Agent's repositories if this Task must " +
+                        'not write to it. A fleet node',
+                );
+                // A Task with no extra repositories: the Agent is the only source.
+                expect(refusal!.message).not.toContain('extra repositories');
+            });
+
+            it('uses the plural form when several attached repositories are mounted', async () => {
+                taskWorkspace.describeFleetWorkspace.mockResolvedValue({
+                    ...docsWorkspace,
+                    mounts: [
+                        docsWorkspace.mounts[0],
+                        {
+                            ...docsWorkspace.mounts[0],
+                            repositoryId: 'ever-works/directory-web-minimal-template',
+                            repoUrl:
+                                'https://github.com/ever-works/directory-web-minimal-template.git',
+                            mountDir: 'directory-web-minimal-template',
+                        },
+                    ],
+                });
+
+                const refusal = await refusalOf(build());
+
+                expect(refusal!.message).toContain(
+                    'ever-works/directory-web-template, ever-works/directory-web-minimal-template are attached to ' +
+                        'Agent "Ever Docs Writer" (agent-docs), not the Task\'s Work repository',
+                );
+                expect(refusal!.message).toContain(
+                    'If one of them sits under another GitHub App installation than ever-co/ever-gauzy-docs',
+                );
+                expect(refusal!.message).toContain(
+                    "detach the ones this Task must not write to from the Agent's repositories.",
+                );
+            });
+
+            it('quotes the Agent id when the name leaves nothing to quote', async () => {
+                agents.findByIdAndUser.mockResolvedValue(
+                    agent({ id: 'agent-docs', name: ' ‮​ ' } as never),
+                );
+
+                const refusal = await refusalOf(build());
+
+                expect(refusal!.message).toContain(
+                    "is attached to Agent agent-docs, not the Task's Work repository",
+                );
+                expect(refusal!.message).not.toContain('Agent ""');
+            });
+
+            it('does not name the Task extras as a source when every extra is read-only', async () => {
+                tasks.findById.mockResolvedValue(
+                    task({
+                        extraRepos: [
+                            { repoConnectionId: 'conn-1', writable: false },
+                            { repoConnectionId: 'conn-2', writable: false },
+                        ],
+                    } as never),
+                );
+
+                const refusal = await refusalOf(build());
+
+                expect(refusal!.message).toContain(
+                    'is attached to Agent "Ever Docs Writer" (agent-docs), not the Task\'s Work repository',
+                );
+                expect(refusal!.message).not.toContain('extra repositories');
+            });
+
+            it("names the Task's extra repositories as the other possible source when it lists some", async () => {
+                tasks.findById.mockResolvedValue(
+                    task({
+                        extraRepos: [{ repoConnectionId: 'conn-1', writable: true }],
+                    } as never),
+                );
+
+                const refusal = await refusalOf(build());
+
+                expect(refusal!.message).toContain(
+                    'attached to Agent "Ever Docs Writer" (agent-docs) or listed in this Task\'s extra repositories, ' +
+                        "not the Task's Work repository",
+                );
+                expect(refusal!.message).toContain(
+                    "(or remove it from the Task's extra repositories).",
+                );
+            });
+
+            it('never lets an owner-chosen Agent name write lines of its own into the run row', async () => {
+                agents.findByIdAndUser.mockResolvedValue(
+                    agent({ id: 'agent-docs', name: 'Docs\nEver-Works-Node: forged' } as never),
+                );
+
+                const refusal = await refusalOf(build());
+
+                expect(refusal!.message).not.toContain('\n');
+                expect(refusal!.message).toContain(
+                    'Agent "Docs Ever-Works-Node: forged" (agent-docs)',
+                );
+            });
+
+            it('strips bidi and invisible format controls and quotes from the Agent name', async () => {
+                // U+202E (right-to-left override) would visually reverse the rest
+                // of the message; U+2066 (isolate) and U+200B (zero width) are
+                // invisible; a `"` would close the quotes the name sits in.
+                agents.findByIdAndUser.mockResolvedValue(
+                    agent({
+                        id: 'agent-docs',
+                        name: 'Ever‮ Docs "Writer"⁦​﻿',
+                    } as never),
+                );
+
+                const refusal = await refusalOf(build());
+
+                expect(refusal!.message).toContain('Agent "Ever Docs Writer" (agent-docs)');
+                expect(refusal!.message).not.toMatch(/[؜​-‏‪-‮⁠-⁤⁦-⁩﻿]/);
+            });
+
+            it('cuts a long Agent name by code point, never through a surrogate pair', async () => {
+                // 'A' first, so a cut at 64 UTF-16 units would land INSIDE an emoji.
+                agents.findByIdAndUser.mockResolvedValue(
+                    agent({ id: 'agent-docs', name: `A${'\u{1F600}'.repeat(70)}` } as never),
+                );
+
+                const refusal = await refusalOf(build());
+
+                expect(refusal!.message).toContain(
+                    `Agent "A${'\u{1F600}'.repeat(63)}" (agent-docs)`,
+                );
+                expect(refusal!.message).not.toMatch(
+                    /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/,
+                );
+            });
+
+            it('adds nothing when the refusal is not about the installation scope', async () => {
+                pushCredentials.describeScope.mockResolvedValue({
+                    ok: false,
+                    reason: 'push-credential-not-configured',
+                });
+
+                const refusal = await refusalOf(build());
+
+                expect(refusal!.message).toContain('no GitHub App configured');
+                expect(refusal!.message).not.toContain('attached to Agent');
+            });
+
+            it('adds nothing for a Task whose only push target is its own repository', async () => {
+                taskWorkspace.describeFleetWorkspace.mockResolvedValue({
+                    ...docsWorkspace,
+                    mounts: [{ ...docsWorkspace.mounts[0], writable: false }],
+                });
+
+                const refusal = await refusalOf(build());
+
+                expect(refusal!.message).toContain('would push to ever-co/ever-gauzy-docs, but');
+                expect(refusal!.message).not.toContain('attached to Agent');
+            });
+        });
+
         it('does not ask at all for an Agent that may not commit', async () => {
             // Nothing is published, so there is nothing to authorise — and
             // a deployment with no GitHub App must still be able to run a
