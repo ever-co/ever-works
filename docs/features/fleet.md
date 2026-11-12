@@ -129,7 +129,7 @@ Every heartbeat now carries what the node's **worker** is doing, alongside the r
 | `idle`        | polling, ready to take work                                                               |
 | `working`     | at least one job in flight                                                                |
 | `paused`      | drained on purpose — an operator pause, or draining the last in-flight jobs before a stop |
-| `quarantined` | the fail-closed stop the node imposed on ITSELF; only clearable at that machine           |
+| `quarantined` | the fail-closed stop the node imposed on ITSELF; cleared at that machine, or by a Restart |
 | `throttled`   | over a resource ceiling (CPU / memory, disk floor): keeps its jobs, leases no more        |
 |               | — or idle while a model CLI is out of quota (see "Model usage limits" below)              |
 
@@ -376,9 +376,11 @@ Check subprocesses get an environment built **from scratch**, never the inherite
 | `ever-works-node unenroll`                                                                                                                            | Retires the machine: deletes the platform registration, then erases the local credential.                                           |
 | `ever-works-node status`                                                                                                                              | Prints the local enrollment — where the credential is stored, and whether the node is paused. The credential itself is never shown. |
 | `ever-works-node capabilities`                                                                                                                        | Prints the tags this machine would report, without enrolling.                                                                       |
-| `ever-works-node clear-quarantine`                                                                                                                    | Clears a persisted unsafe-worker state, after you have verified every prior process tree is stopped.                                |
+| `ever-works-node clear-quarantine`                                                                                                                    | Clears a persisted unsafe-worker state, after you have verified every prior process tree is stopped. A Restart does too (below).    |
 | `ever-works-node doctor [--json]`                                                                                                                     | Read-only check: daemon version vs the platform floor, each pinned model CLI's version and flag compatibility, disk vs the floor.   |
 | `ever-works-node policy [--allow-skip-permissions on\|off] [--allow-shell-commands on\|off] [--restricted-mode on\|off] [--allow-mcp-bridge on\|off]` | Shows or changes this machine's **local execution policy** (below). Local only — the platform has no way to change it.              |
+
+A quarantine that a **machine restart** left behind clears itself at the next `start`. A restart ends every process tree of the session that was running, which is all `clear-quarantine` asks you to verify, so the worker-safety marker records which boot of which machine it was armed in: the Linux `boot_id`, the macOS boot session UUID or the Windows boot counter, with the host name (and `/etc/machine-id` on Linux). Only a full boot counts. On Windows that is **Restart**: **Shut down** with Fast Startup (the default on client Windows) hibernates the kernel, so the next power-on is the same boot and the quarantine stays. Restarting a container is not a host reboot, and a node running in a container or under WSL (where `wsl --shutdown` starts a new boot without restarting the host) never clears itself. The auto-clear assumes a config directory local to the machine: a marker another machine armed (a roaming profile, a shared volume) is never cleared. A crash or restart of the node within one boot, a marker armed by a node older than this feature, or a boot that cannot be read still waits for `clear-quarantine`.
 
 `--work` is opt-in on purpose: **enrolling a machine and letting it run the owner's commands are two different consents.** A paused node keeps heartbeating, too — a drained machine that vanished from Fleet would be indistinguishable from a dead one.
 
