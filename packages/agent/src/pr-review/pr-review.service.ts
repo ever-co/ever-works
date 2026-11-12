@@ -1,6 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import { Injectable, Logger, Optional } from '@nestjs/common';
-import type { GitPullRequest, GitPullRequestFile } from '@ever-works/plugin';
+import type {
+    ChatCompletionChoice,
+    ChatCompletionOptions,
+    ChatCompletionResponse,
+    GitPullRequest,
+    GitPullRequestFile,
+} from '@ever-works/plugin';
 import type { IngestedEventEnvelope } from '@ever-works/contracts';
 import { GitFacadeService, type GitFacadeOptions } from '../facades/git.facade';
 import { AiFacadeService } from '../facades/ai.facade';
@@ -13,14 +19,17 @@ import type { Work } from '../entities/work.entity';
 import {
     PR_REVIEW_DIFF_MAX_BYTES,
     PR_REVIEW_INSTRUCTION_MAX_CHARS,
+    PR_REVIEW_MAX_ATTEMPTS,
     PR_REVIEW_MAX_COMMENTS,
+    PR_REVIEW_MAX_OUTPUT_TOKENS,
     PR_REVIEW_PR_BODY_MAX_CHARS,
+    PR_REVIEW_RETRY_WINDOW_MS,
     type PrReviewFileComment,
     type PrReviewRequest,
     type PrReviewResult,
     type PrStructuredReview,
 } from './pr-review.types';
-import { renderPrReviewComment } from './pr-review-comment';
+import { renderPrReviewComment, renderPrReviewFailureNote } from './pr-review-comment';
 
 // Repo→Work matching lives in ONE place (`works/work-repo-match.ts`) so
 // the ingest `workHint` resolver and this reviewer can never drift apart
@@ -29,6 +38,56 @@ import { matchWorkByRepo } from '../works/work-repo-match';
 
 /** Tag fence around the pull-request body in the review prompt. */
 export const PR_BODY_FENCE_TAG = 'pull_request_body';
+
+/**
+ * A provider refusing the review's output budget: the model's own output cap
+ * (or its context window, prompt included) is smaller than
+ * {@link PR_REVIEW_MAX_OUTPUT_TOKENS}. OpenAI says "max_tokens is too large",
+ * Groq "`max_tokens` must be less than or equal to", Gemini names
+ * `max_output_tokens`, and OpenRouter / OpenAI context refusals count the
+ * tokens "in the output" / "in the completion". Groq's 413 "Request too
+ * large for model … on tokens per minute (TPM): Limit 6000, Requested …"
+ * counts the budget into the request, so a smaller tier refuses it too.
+ */
+const OUTPUT_BUDGET_REFUSAL =
+    /max[_ ]?(?:completion[_ ]|output[_ ])?tokens|in the (?:output|completion)\b|request too large|tokens per minute|\bTPM\b/i;
+
+/** Reasoning a model wrote into its reply: `<think>`, `<thinking>`, `<reasoning>`. */
+const REASONING_BLOCK = /<(think|thinking|reasoning)\b[^>]*>[\s\S]*?<\/\1\s*>/gi;
+const REASONING_OPEN_AT_START = /^<(?:think|thinking|reasoning)\b[^>]*>/i;
+const REASONING_CLOSE = /<\/(?:think|thinking|reasoning)\s*>/gi;
+
+/**
+ * The reply without the reasoning some models write INTO it as a
+ * `<think>…</think>` block (DeepSeek R1, Qwen and others on several
+ * gateways), before the review is parsed or posted. That reasoning is the
+ * model thinking about the prompt, knowledge base and memory included, and
+ * the review is a public comment.
+ *
+ *  - every closed `<think>…</think>` (also `<thinking>`, `<reasoning>`) is
+ *    removed wherever it is;
+ *  - a reply that STARTS with an opening tag that never closes is all
+ *    reasoning (the answer was never reached): nothing is left;
+ *  - a closing tag with no opening one (some chat templates put the opening
+ *    tag in the prompt) ends the reasoning: what comes before it is dropped,
+ *    unless the reply starts as the review itself (`{` or a code fence).
+ */
+export function stripReasoningBlocks(content: string): string {
+    let text = content.replace(REASONING_BLOCK, '').trim();
+    if (REASONING_OPEN_AT_START.test(text)) {
+        return '';
+    }
+    if (!text.startsWith('{') && !text.startsWith('```')) {
+        let end = -1;
+        for (const match of text.matchAll(REASONING_CLOSE)) {
+            end = (match.index ?? 0) + match[0].length;
+        }
+        if (end >= 0) {
+            text = text.slice(end).trim();
+        }
+    }
+    return text;
+}
 
 /** Collapse a PR-supplied one-line field (title, login, branch) to one line. */
 function oneLine(value: string | null | undefined): string {
@@ -58,6 +117,15 @@ export function codeFenceFor(content: string): string {
     }
     return '`'.repeat(Math.max(3, longest + 1));
 }
+
+/**
+ * The review the model gave, or why it gave none worth posting. A literal
+ * `ok` tells them apart: this package builds without strictNullChecks, so a
+ * `review: null` member would not narrow.
+ */
+type ReviewAttemptOutcome =
+    | { ok: true; review: PrStructuredReview }
+    | { ok: false; reason: string };
 
 /**
  * True when the fetched pull request's head branch provably lives in a
@@ -93,9 +161,11 @@ function isForeignHead(pr: GitPullRequest, owner: string, repo: string): boolean
  *      repository) — the review is posted publicly — and the retrieval
  *      query never comes from an untrusted author's PR text (F2). The PR
  *      body and diff are fenced so their content cannot close the fence.
- *   4. One `AiFacadeService.createChatCompletion` call → structured
- *      review (summary + ≤{@link PR_REVIEW_MAX_COMMENTS} file notes,
- *      leniently parsed).
+ *   4. One `AiFacadeService.createChatCompletion` call (its own output
+ *      budget; asked once more when the reply holds no usable review) →
+ *      structured review (summary + ≤{@link PR_REVIEW_MAX_COMMENTS} file
+ *      notes, leniently parsed). No usable review → nothing is posted, and
+ *      the result says why.
  *   5. Post ONE summary comment on the PR (v1 posture — per-line review
  *      anchoring is a documented follow-up) and land an
  *      `IngestedEventEnvelope` (`github.pr.review`, `sourceUrl` = PR
@@ -200,37 +270,34 @@ export class PrReviewService {
         };
 
         // ── 3. Structured review via the AI facade ─────────────────────
-        let review: PrStructuredReview;
+        let outcome: ReviewAttemptOutcome;
         try {
-            const completion = await this.aiFacade.createChatCompletion(
-                {
-                    messages: [
-                        { role: 'system', content: this.buildSystemPrompt() },
-                        {
-                            role: 'user',
-                            content: this.buildUserPrompt({
-                                pr,
-                                owner,
-                                repo,
-                                prNumber,
-                                work,
-                                kbBlock,
-                                memoryBlock,
-                                diff,
-                                instruction: request.instruction,
-                                privateContextWithheld,
-                            }),
-                        },
-                    ],
-                    temperature: 0.2,
-                },
+            outcome = await this.requestReview(
+                [
+                    { role: 'system', content: this.buildSystemPrompt() },
+                    {
+                        role: 'user',
+                        content: this.buildUserPrompt({
+                            pr,
+                            owner,
+                            repo,
+                            prNumber,
+                            work,
+                            kbBlock,
+                            memoryBlock,
+                            diff,
+                            instruction: request.instruction,
+                            privateContextWithheld,
+                        }),
+                    },
+                ],
                 { userId, ...(work ? { workId: work.id } : {}) },
+                `${owner}/${repo}#${prNumber}`,
             );
-            const content = completion.choices?.[0]?.message?.content;
-            review = this.parseStructuredReview(typeof content === 'string' ? content : '');
         } catch (error) {
             const message = this.messageOf(error);
             this.logger.warn(`AI review failed for ${owner}/${repo}#${prNumber}: ${message}`);
+            await this.noteFailureOnPr(request, gitOptions);
             return {
                 ...base,
                 status: 'failed',
@@ -241,6 +308,25 @@ export class PrReviewService {
                 error: `AI review failed: ${message}`,
             };
         }
+        if (outcome.ok === false) {
+            // Nothing worth a public comment: say why in the log and the
+            // result, never "The reviewer produced no readable output." on
+            // the pull request.
+            this.logger.warn(
+                `AI review for ${owner}/${repo}#${prNumber} not posted: ${outcome.reason}`,
+            );
+            await this.noteFailureOnPr(request, gitOptions);
+            return {
+                ...base,
+                status: 'failed',
+                summary: '',
+                comments: [],
+                prUrl: pr.url,
+                context,
+                error: `AI review produced no usable answer: ${outcome.reason}`,
+            };
+        }
+        const review = outcome.review;
 
         // ── 4. Post the summary comment ────────────────────────────────
         let commentId: number | undefined;
@@ -521,13 +607,205 @@ export class PrReviewService {
     }
 
     /**
+     * When the request asks for it (`noteFailureOnPr`: somebody wrote
+     * `@ever-works` on the pull request and is waiting for an answer), post a
+     * fixed one-line note that no review came. The note carries no model or
+     * provider text, and the reviewer's marker so the bridge never answers
+     * it. Best-effort: a failed post is only logged.
+     */
+    private async noteFailureOnPr(
+        request: PrReviewRequest,
+        gitOptions: GitFacadeOptions,
+    ): Promise<void> {
+        if (!request.noteFailureOnPr) {
+            return;
+        }
+        const { owner, repo, prNumber } = request;
+        try {
+            await this.gitFacade.createPullRequestComment(
+                owner,
+                repo,
+                prNumber,
+                renderPrReviewFailureNote({ owner, repo, prNumber }),
+                gitOptions,
+            );
+        } catch (error) {
+            this.logger.warn(
+                `PR review failure note not posted on ${owner}/${repo}#${prNumber}: ${this.messageOf(error)}`,
+            );
+        }
+    }
+
+    /**
+     * The review call, with an output budget of its own
+     * ({@link PR_REVIEW_MAX_OUTPUT_TOKENS}) and at most
+     * {@link PR_REVIEW_MAX_ATTEMPTS} calls. It asks once more when the reply
+     * carries no usable review — no text, only reasoning, or text that did
+     * not finish normally (cut off at the output limit, stopped by a content
+     * filter, ended by a provider error) and does not parse — and, without
+     * the budget, when the provider refuses the budget as larger than the
+     * model or the account allows (the review then gets the provider's
+     * default, as it did before it had a budget).
+     *
+     * The retry after an unusable reply is bounded by
+     * {@link PR_REVIEW_RETRY_WINDOW_MS}: it is skipped when the first reply
+     * took longer than that, and given at most that long. The REST route and
+     * the chat tool wait for the review, so a slow model must not make them
+     * wait twice.
+     *
+     * Only the reply's `content` is the review, without any `<think>` block
+     * ({@link stripReasoningBlocks}). A reasoning model's reasoning is never
+     * used in its place: it is the model thinking about the prompt, knowledge
+     * base and memory included, and the review is posted publicly.
+     *
+     * Provider errors other than a budget refusal propagate to the caller.
+     */
+    private async requestReview(
+        messages: ChatCompletionOptions['messages'],
+        facadeOptions: { userId: string; workId?: string },
+        label: string,
+    ): Promise<ReviewAttemptOutcome> {
+        let maxTokens: number | undefined = PR_REVIEW_MAX_OUTPUT_TOKENS;
+        let refusedBudget: number | undefined;
+        let unusable: string | undefined;
+        for (let attempt = 1; attempt <= PR_REVIEW_MAX_ATTEMPTS; attempt++) {
+            const retry = attempt < PR_REVIEW_MAX_ATTEMPTS;
+            const startedAt = Date.now();
+            let completion: ChatCompletionResponse | null;
+            try {
+                completion = await this.withinWindow(
+                    this.aiFacade.createChatCompletion(
+                        { messages, temperature: 0.2, ...(maxTokens ? { maxTokens } : {}) },
+                        facadeOptions,
+                    ),
+                    // Only a retry after an unusable reply is bounded; the call
+                    // after a budget refusal is the review's real first call.
+                    unusable !== undefined,
+                );
+            } catch (error) {
+                const message = this.messageOf(error);
+                if (!maxTokens || !retry || !OUTPUT_BUDGET_REFUSAL.test(message)) {
+                    throw error;
+                }
+                this.logger.warn(
+                    `AI review for ${label}: the provider refused a ${maxTokens}-token output budget (${message}); retrying with its default`,
+                );
+                refusedBudget = maxTokens;
+                maxTokens = undefined;
+                continue;
+            }
+            if (!completion) {
+                unusable = `${unusable}; the retry gave no answer within ${PR_REVIEW_RETRY_WINDOW_MS / 1000} s`;
+                break;
+            }
+
+            const choice: ChatCompletionChoice | undefined = completion.choices?.[0];
+            const raw = typeof choice?.message?.content === 'string' ? choice.message.content : '';
+            const content = stripReasoningBlocks(raw);
+            // `stop` is the only normal finish. `null` is a provider error
+            // mid-answer (OpenRouter's `error`); a reply with no finish reason
+            // at all comes from outside the contract and is taken as finished,
+            // as it always was.
+            const finishReason = choice?.finishReason;
+            const finished = finishReason === 'stop' || finishReason === undefined;
+            const review = this.parseStructuredReview(content, !finished);
+            if (review) {
+                return { ok: true, review };
+            }
+            unusable = this.unusableReplyReason(
+                raw,
+                content,
+                finishReason,
+                completion.usage?.completionTokens,
+            );
+            if (!retry) {
+                break;
+            }
+            const tookMs = Date.now() - startedAt;
+            if (tookMs > PR_REVIEW_RETRY_WINDOW_MS) {
+                this.logger.warn(
+                    `AI review for ${label}: ${unusable}; not retrying, the reply took ${Math.round(tookMs / 1000)} s`,
+                );
+                break;
+            }
+            this.logger.warn(`AI review for ${label}: ${unusable}; retrying once`);
+        }
+        const reason = unusable ?? 'the model gave no usable answer';
+        return {
+            ok: false,
+            reason: refusedBudget
+                ? `${reason} (the provider had refused a ${refusedBudget}-token output budget)`
+                : reason,
+        };
+    }
+
+    /**
+     * `call`, or `null` once {@link PR_REVIEW_RETRY_WINDOW_MS} passes first
+     * when `bounded`. The abandoned call is left to finish on its own; its
+     * late answer or failure is ignored.
+     */
+    private async withinWindow<T>(call: Promise<T>, bounded: boolean): Promise<T | null> {
+        if (!bounded) {
+            return call;
+        }
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const expired = new Promise<null>((resolve) => {
+            timer = setTimeout(() => resolve(null), PR_REVIEW_RETRY_WINDOW_MS);
+            timer.unref?.();
+        });
+        try {
+            return await Promise.race([call, expired]);
+        } finally {
+            clearTimeout(timer);
+            call.catch(() => undefined);
+        }
+    }
+
+    /** Why a reply holds no usable review, in words fit for a log line. */
+    private unusableReplyReason(
+        raw: string,
+        content: string,
+        finishReason: ChatCompletionChoice['finishReason'],
+        completionTokens: number | undefined,
+    ): string {
+        const spent =
+            typeof completionTokens === 'number' ? `, ${completionTokens} output tokens` : '';
+        const finish = `finish_reason: ${finishReason ?? 'error or not reported'}${spent}`;
+        if (content.length === 0) {
+            if (raw.trim().length > 0) {
+                return `the model returned only its reasoning (a <think> block), no answer (${finish})`;
+            }
+            return finishReason === 'length'
+                ? `the model returned no text (${finish}): its output budget ran out before it began the answer`
+                : `the model returned no text (${finish})`;
+        }
+        switch (finishReason) {
+            case 'length':
+                return `the model's answer was cut off at its output limit (${finish}) and is not a complete review`;
+            case 'content_filter':
+                return `the provider's content filter stopped the answer (${finish}) and it is not a complete review`;
+            default:
+                return `the model's answer did not finish normally (${finish}) and is not a complete review`;
+        }
+    }
+
+    /**
      * Lenient structured-review parsing: strict JSON first, then the
      * outermost `{…}` slice, then a raw-text fallback (the whole
      * completion becomes the summary). Comments are shape-filtered and
      * capped at {@link PR_REVIEW_MAX_COMMENTS}.
+     *
+     * `content` is already free of `<think>` blocks
+     * ({@link stripReasoningBlocks}). `null` when there is no review to post:
+     * an empty reply, or a reply that did not finish normally (`cutOff`: the
+     * output limit, a content filter, a provider error) and does not parse
+     * (half a JSON object is not a summary).
      */
-    private parseStructuredReview(content: string): PrStructuredReview {
+    private parseStructuredReview(content: string, cutOff: boolean): PrStructuredReview | null {
         const trimmed = content.trim();
+        if (!trimmed) {
+            return null;
+        }
         const candidates: string[] = [trimmed];
         const first = trimmed.indexOf('{');
         const last = trimmed.lastIndexOf('}');
@@ -566,10 +844,10 @@ export class PrReviewService {
                 // fall through to the next candidate / raw fallback
             }
         }
-        return {
-            summary: trimmed.slice(0, 4000) || 'The reviewer produced no readable output.',
-            comments: [],
-        };
+        if (cutOff) {
+            return null;
+        }
+        return { summary: trimmed.slice(0, 4000), comments: [] };
     }
 
     /** Land the review as an ingest-spine envelope (best-effort). */

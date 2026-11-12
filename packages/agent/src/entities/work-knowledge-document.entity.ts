@@ -57,6 +57,10 @@ import type { KbConsolidationMarker } from '../services/memory-consolidation';
 // Integration API v1 keyset list of an organization's documents (EW-P3-2) —
 // migration 1795130200000.
 @Index('idx_wkd_org_updated', ['organizationId', 'updatedAt', 'id'])
+// One document per path in a Work (the git mirror writes each one as the file
+// at its path): a move or a create that checked the path while another took it
+// is refused by the database — migration 1798060000000.
+@Index('uq_wkd_work_path', ['workId', 'path'], { unique: true, where: '"workId" IS NOT NULL' })
 export class WorkKnowledgeDocument {
     @PrimaryGeneratedColumn('uuid')
     id: string;

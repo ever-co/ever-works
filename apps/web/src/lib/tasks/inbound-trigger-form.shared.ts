@@ -51,7 +51,10 @@ export function triggerVariablesProblem(
         return { reason: 'variablesDuplicateKey', keys: [...duplicates].join(', ') };
     }
     const longLabels = variables
-        .filter((variable) => (variable.label?.length ?? 0) > MAX_TRIGGER_VARIABLE_LABEL_LENGTH)
+        // Trimmed first, as the API measures it (`normalizeDefaultVariables`).
+        .filter(
+            (variable) => (variable.label?.trim().length ?? 0) > MAX_TRIGGER_VARIABLE_LABEL_LENGTH,
+        )
         .map((variable) => variable.key);
     if (longLabels.length > 0) {
         return {

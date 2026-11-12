@@ -137,12 +137,32 @@ export class AiOperations {
 							content,
 							...(hasToolCalls && { toolCalls })
 						},
-						finishReason: hasToolCalls ? ('tool_calls' as const) : ('stop' as const)
+						finishReason: hasToolCalls ? ('tool_calls' as const) : this.finishReasonOf(response)
 					}
 				],
 				usage: this.mapTokenUsage(tracker)
 			};
 		});
+	}
+
+	/**
+	 * The provider's own finish reason for a reply without tool calls.
+	 *
+	 * `length` matters most: a reasoning model spends its hidden reasoning from
+	 * the same `max_tokens` budget as its answer, and when the budget runs out
+	 * first the reply is `''` with `finish_reason: "length"`. Reporting `stop`
+	 * there told callers the model had simply answered nothing. OpenRouter's
+	 * `error` (the upstream failed mid-answer, so the text is partial) is
+	 * `null`: the reply did not finish normally, and this contract has no
+	 * `error` value. Anything else it has no value for stays `stop`, as it
+	 * always did.
+	 */
+	private finishReasonOf(response: AIMessageChunk): 'stop' | 'length' | 'content_filter' | null {
+		const raw = response.response_metadata?.finish_reason;
+		if (raw === 'length' || raw === 'max_tokens') return 'length';
+		if (raw === 'content_filter') return 'content_filter';
+		if (raw === 'error') return null;
+		return 'stop';
 	}
 
 	/** Structured JSON output. Falls back to raw invoke + jsonrepair on failure. */

@@ -10,6 +10,7 @@ import { WorkKnowledgeDocument } from '../entities/work-knowledge-document.entit
 import { Work } from '../entities/work.entity';
 import { isAppWork } from '../works/app-work-guard';
 import { User } from '../entities/user.entity';
+import { retiredPathsOf } from './kb-document-move';
 import {
     KbDecisionState,
     KbDecisionStatus,
@@ -214,6 +215,13 @@ export class KnowledgeBaseGitMirrorService {
      * commits + pushes in a single Git operation. Updates `lastCommitSha`
      * on the DB row when the commit returns a SHA.
      *
+     * A moved document (`KnowledgeBaseService.moveDocument`) carries the
+     * paths it left in `metadata.mirrorRetiredPaths` (`kb-document-move.ts`): the
+     * files still at those paths are removed in the SAME commit that writes
+     * the new ones, so the move is one commit and the document is never in
+     * the repository twice — whichever run gets there first (the move's own,
+     * a retry, or the document's next edit).
+     *
      * Idempotent — running twice with no DB change is a no-op commit
      * (Git returns `null` for an empty commit and the SHA stays put).
      */
@@ -225,13 +233,16 @@ export class KnowledgeBaseGitMirrorService {
 
         await this.runInRepo(workId, async ({ dir, work, committer }) => {
             await this.ensureSkeletonOnDisk(dir);
+            const movedFrom = await this.removeRetiredDocumentFiles(dir, workId, doc);
             await this.writeDocumentFiles(dir, doc);
             await this.writeIndex(dir, workId);
 
             const commitSha = await this.commitAndPush(
                 work,
                 dir,
-                `[kb] upsert ${doc.kbDocumentClass}/${doc.slug}`,
+                movedFrom.length > 0
+                    ? `[kb] move ${movedFrom.join(', ')} -> ${doc.path}`
+                    : `[kb] upsert ${doc.kbDocumentClass}/${doc.slug}`,
                 committer,
             );
 
@@ -322,6 +333,12 @@ export class KnowledgeBaseGitMirrorService {
      * Remove a single document's sidecar + body from the Work's data
      * repo. `path` is required because the DB row is hard-deleted before
      * the task runs.
+     *
+     * Not when another document of the Work holds the path by the time the
+     * run gets here (created at it, or moved to it, after the delete): those
+     * files are that document's now. A deleted document's former paths
+     * (moved away from before its mirror run removed the files) come through
+     * here too, one run each.
      */
     async removeDocument(
         workId: string,
@@ -330,7 +347,22 @@ export class KnowledgeBaseGitMirrorService {
         await this.runInRepo(workId, async ({ dir, work, committer }) => {
             await this.ensureSkeletonOnDisk(dir);
 
-            const removed = await this.removeDocumentFiles(dir, options.path);
+            const target = path.posix.normalize(options.path);
+            if (
+                (await this.documentRepository.pathExists(workId, target, options.documentId)) ||
+                (target !== options.path &&
+                    (await this.documentRepository.pathExists(
+                        workId,
+                        options.path,
+                        options.documentId,
+                    )))
+            ) {
+                this.logger.log(
+                    `KB mirror delete of ${options.path} (work=${workId}) skipped: another document holds the path now`,
+                );
+                return;
+            }
+            const removed = await this.removeDocumentFiles(dir, target);
             await this.writeIndex(dir, workId);
 
             const message = removed
@@ -688,6 +720,63 @@ export class KnowledgeBaseGitMirrorService {
             }
         }
         return removed;
+    }
+
+    /**
+     * Remove the files a moved document left behind: every retired path on
+     * its `metadata` that still has files here, unless it is the document's
+     * own path again or another document of the Work holds it now (that
+     * document's files are its own). Returns the paths removed.
+     *
+     * An entry that is not a valid KB path is skipped, never thrown on: the
+     * marker must not be able to wedge every later mirror of the document.
+     */
+    private async removeRetiredDocumentFiles(
+        repoDir: string,
+        workId: string,
+        doc: WorkKnowledgeDocument,
+    ): Promise<string[]> {
+        const removed: string[] = [];
+        const own = path.posix.normalize(doc.path);
+        for (const stored of retiredPathsOf(doc.metadata)) {
+            // Every check and the delete use the same, normalized path: the
+            // files live there (the clone resolves `brand/./x.md` to
+            // `brand/x.md`), so that is the path another document must not hold.
+            const retired = path.posix.normalize(stored);
+            if (retired === own) continue;
+            try {
+                KnowledgeBaseGitMirrorService.validateRelativeKbPath(retired);
+            } catch {
+                this.logger.warn(
+                    `Skipping invalid retired KB path on ${doc.id} (work=${workId}): ${stored}`,
+                );
+                continue;
+            }
+            if (!(await this.documentFilesExist(repoDir, retired))) continue;
+            if (await this.documentRepository.pathExists(workId, retired, doc.id)) continue;
+            if (
+                retired !== stored &&
+                (await this.documentRepository.pathExists(workId, stored, doc.id))
+            ) {
+                continue;
+            }
+            if (await this.removeDocumentFiles(repoDir, retired)) removed.push(retired);
+        }
+        return removed;
+    }
+
+    /** Whether the body or the sidecar of `relativePath` exists in the clone. */
+    private async documentFilesExist(repoDir: string, relativePath: string): Promise<boolean> {
+        const kbRoot = path.join(repoDir, KnowledgeBaseGitMirrorService.KB_ROOT);
+        for (const target of [relativePath, this.sidecarPath(relativePath)]) {
+            try {
+                await fs.access(this.resolveInsideKbRoot(kbRoot, target));
+                return true;
+            } catch {
+                // absent — try the other one
+            }
+        }
+        return false;
     }
 
     /**

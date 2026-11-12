@@ -608,7 +608,7 @@ Folder routes:
 | ---------------------------- | ------------------------------------------------------------------------------------------- |
 | `kb.document.created`        | A document is created.                                                                      |
 | `kb.document.updated`        | Content, lock or decision changes.                                                          |
-| `kb.document.moved`          | A document is filed or unfiled.                                                             |
+| `kb.document.moved`          | A document is filed or unfiled, or moved to another path (a rename).                        |
 | `kb.document.archived`       | A document is archived.                                                                     |
 | `kb.document.unarchived`     | A document is restored.                                                                     |
 | `kb.document.review_changed` | A document is accepted, or a decision is accepted.                                          |

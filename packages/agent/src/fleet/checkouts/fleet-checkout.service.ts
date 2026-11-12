@@ -134,6 +134,8 @@ interface NodeListState {
 const LIST_TIMEOUT_MS = 10_000;
 /** How long a sync request waits for the machine's first answer. */
 const SYNC_TIMEOUT_MS = 15_000;
+/** How many folders one create tries when concurrent creates on the same node take the one it picked. */
+const CREATE_PATH_ATTEMPTS = 5;
 /** Most nodes one reconcile pass asks for a list. */
 const RECONCILE_MAX_NODES = 100;
 
@@ -566,8 +568,10 @@ export class FleetCheckoutService {
      * request with the row in `creating` and the link operation; the row
      * settles to `ready` (or `missing` with the first line of the error) when
      * the machine finishes. The platform names the exact folder — under the
-     * node's checkouts root, never inside the parent (FR-18) — and the branch,
-     * by the branch rule when none is given (FR-19).
+     * node's checkouts root, never inside the parent (FR-18) — and, for a
+     * worktree, the branch, by the branch rule when none is given (FR-19). A
+     * clone without a branch stays on what it cloned (`baseRef`, else the
+     * repository's default branch; FR-16).
      */
     async create(
         actor: FleetCheckoutActor,
@@ -599,10 +603,11 @@ export class FleetCheckoutService {
                 );
             }
         }
-        if (request.branch !== undefined && !isFleetCheckoutBranchName(request.branch)) {
+        // null is the same as leaving the field out: MCP tools and generated clients send null for an unset field.
+        if (request.branch != null && !isFleetCheckoutBranchName(request.branch)) {
             throw fleetCheckoutError('invalid', 'branch', { field: 'branch' });
         }
-        if (request.baseRef !== undefined && !isFleetCheckoutBranchName(request.baseRef)) {
+        if (request.baseRef != null && !isFleetCheckoutBranchName(request.baseRef)) {
             throw fleetCheckoutError('invalid', 'baseRef', { field: 'baseRef' });
         }
         const { node } = await this.nodeFor(request.nodeId, actor, 'checkouts');
@@ -675,19 +680,25 @@ export class FleetCheckoutService {
         for (const row of await this.checkouts.findForUser(node.userId)) {
             if (row.branch && fleetRemotesMatch(row.remoteUrl, remoteUrl)) taken.add(row.branch);
         }
-        let remoteBranches: string[] = [];
         if (parent) {
-            remoteBranches = await this.remoteBranchesOf(node, actor, parent.path);
-            for (const name of remoteBranches) taken.add(name);
+            for (const name of await this.remoteBranchesOf(node, actor, parent.path))
+                taken.add(name);
         }
         let branch: string | null = request.branch ?? null;
+        // A fresh clone checks out a branch its remote already has (FL-15 FR-20: a pull request's head) —
+        // it is its own repository, so another checkout holding that name, on this computer or another, is
+        // no conflict; only a NEW name must be unique. The platform cannot see a fresh clone's remote, so a
+        // taken name goes to the node twice: `existingBranch`, checked out when the clone shows the remote
+        // has it, and `branch`, the unique new name made otherwise. A node that predates `existingBranch`
+        // ignores it and makes `branch` — the old outcome, never a reused name.
+        let existingBranch: string | null = null;
         if (source.kind === 'worktree') {
             const base =
                 request.branch ??
                 `ever-works/${fleetCheckoutFolderName(parent!.branch ?? repository.repo)}`;
             branch = proposeFleetCheckoutBranch(base, taken);
-        } else if (branch && taken.has(branch) && !remoteBranches.includes(branch)) {
-            // A clone may check out an existing remote branch; it is a NEW branch name that must be unique.
+        } else if (branch && taken.has(branch)) {
+            existingBranch = branch;
             branch = proposeFleetCheckoutBranch(branch, taken);
         }
         const baseRef =
@@ -696,12 +707,19 @@ export class FleetCheckoutService {
         const root = await this.checkoutsRootOf(node, actor);
         const separator = root.includes('\\') && !root.includes('/') ? '\\' : '/';
         const repoFolder = fleetCheckoutFolderName(`${repository.owner}-${repository.repo}`);
-        const leaf = fleetCheckoutFolderName(branch ?? repository.repo);
-        let path = [root.replace(/[\\/]+$/, ''), repoFolder, leaf].join(separator);
+        // Named for the branch asked for: the pull request's head, when a clone checks it out.
+        const leaf = fleetCheckoutFolderName(existingBranch ?? branch ?? repository.repo);
         const usedPaths = new Set(rows.map((row) => row.path));
-        for (let suffix = 2; usedPaths.has(path) && suffix < 1000; suffix += 1) {
-            path = [root.replace(/[\\/]+$/, ''), repoFolder, `${leaf}-${suffix}`].join(separator);
-        }
+        const freePath = (): string => {
+            let candidate = [root.replace(/[\\/]+$/, ''), repoFolder, leaf].join(separator);
+            for (let suffix = 2; usedPaths.has(candidate) && suffix < 1000; suffix += 1) {
+                candidate = [root.replace(/[\\/]+$/, ''), repoFolder, `${leaf}-${suffix}`].join(
+                    separator,
+                );
+            }
+            return candidate;
+        };
+        let path = freePath();
 
         const covered =
             source.kind === 'clone' && this.credentialScope
@@ -709,10 +727,9 @@ export class FleetCheckoutService {
                 : false;
         const at = new Date(this.now()).toISOString();
         const kind: FleetCheckoutKind = source.kind === 'clone' ? 'clone' : 'worktree';
-        const row = await this.checkouts.create({
+        const fields: Partial<FleetCheckout> = {
             nodeId: node.id,
             userId: node.userId,
-            path,
             kind,
             parentCheckoutId: parent?.id ?? null,
             remoteUrl,
@@ -728,7 +745,24 @@ export class FleetCheckoutService {
             sizeBytes: null,
             lastSeenAt: null,
             archivedAt: null,
-        });
+        };
+        let row: FleetCheckout;
+        for (let attempt = 1; ; attempt += 1) {
+            try {
+                row = await this.checkouts.create({ ...fields, path });
+                break;
+            } catch (error) {
+                // `(nodeId, path)` is unique, and a create in flight may have taken this folder since `rows` was read
+                // (two clones of one repository with no branch named share a folder name): take the next free one.
+                if (
+                    attempt >= CREATE_PATH_ATTEMPTS ||
+                    !(await this.checkouts.findByPath(node.id, path))
+                )
+                    throw error;
+                usedPaths.add(path);
+                path = freePath();
+            }
+        }
         let outcome: FleetCheckoutNodeOutcome;
         try {
             outcome = await this.askOrThrow(node, actor, {
@@ -741,6 +775,7 @@ export class FleetCheckoutService {
                             ? { kind: 'clone', repoUrl: remoteUrl, credential: covered }
                             : { kind: 'worktree', parentPath: parent!.path },
                     branch: branch ?? null,
+                    ...(existingBranch ? { existingBranch } : {}),
                     baseRef,
                     createdBy: actor.agentId ? 'agent' : 'user',
                     ...(container
@@ -767,6 +802,19 @@ export class FleetCheckoutService {
                 outcome: 'refused',
                 ...(typed ? { code: typed.code } : {}),
             });
+            // A node from before branchless clones refuses `branch: null` as an invalid branch: say what to do.
+            if (
+                source.kind === 'clone' &&
+                branch === null &&
+                typed?.code === 'invalid' &&
+                (typed.details as { field?: unknown } | undefined)?.field === 'branch'
+            ) {
+                throw fleetCheckoutError(
+                    'invalid',
+                    `${node.name} runs an older Ever Works node that needs a branch for a clone — name one, or update the node to clone the default branch`,
+                    { field: 'branch' },
+                );
+            }
             throw error;
         }
         if ('result' in outcome) await this.applyCreateResult(node, outcome.result);
@@ -780,14 +828,27 @@ export class FleetCheckoutService {
                 },
             });
         }
+        const fresh = (await this.checkouts.findById(row.id)) ?? row;
+        // `branch` is the branch the checkout is on: the node's own report when its result came with the
+        // answer; else the name it will be on — unknown (left out) while the node still has to choose
+        // between the asked branch and the fallback, or a clone with no branch named stays on what it cloned.
+        // The row keeps the fallback meanwhile: it reserves the new name against a concurrent create, and the
+        // node's result replaces it.
+        const reported = 'result' in outcome && fresh.state === 'ready';
+        const onBranch = reported
+            ? (fresh.branch ?? null)
+            : existingBranch || branch === null
+              ? undefined
+              : branch;
         await this.record('node.checkout.create', actor, node, path, {
             kind,
-            branch,
+            ...(onBranch !== undefined ? { branch: onBranch } : {}),
+            ...(request.branch ? { requestedBranch: request.branch } : {}),
+            ...(existingBranch ? { fallbackBranch: branch } : {}),
             confirmationClass: 'plain',
             outcome: 'operationId' in outcome ? 'started' : 'done',
             ...(parent ? { parent: parent.path } : {}),
         });
-        const fresh = (await this.checkouts.findById(row.id)) ?? row;
         return {
             checkout: await this.view(fresh, actor),
             operationId: 'operationId' in outcome ? outcome.operationId : null,

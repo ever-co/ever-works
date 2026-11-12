@@ -676,6 +676,58 @@ export class WorkKnowledgeDocumentRepository {
     }
 
     /**
+     * One page of a Work's documents in `id` order, after `afterId` (the
+     * last id of the previous page; `null` for the first). Every status,
+     * archived included. A stable key: a write to a document between two
+     * pages (a mirror run, an embed, a link rewrite) cannot move it across
+     * the boundary, as it can in the `updatedAt` order of {@link list}.
+     */
+    async listWorkPageById(
+        workId: string,
+        afterId: string | null,
+        limit: number,
+    ): Promise<WorkKnowledgeDocument[]> {
+        const qb = this.repository
+            .createQueryBuilder('doc')
+            .where('doc.workId = :workId', { workId })
+            .orderBy('doc.id', 'ASC')
+            .take(limit);
+        if (afterId) qb.andWhere('doc.id > :afterId', { afterId });
+        return qb.getMany();
+    }
+
+    /**
+     * A document of the Work, other than `excludeId`, that would clash with
+     * `path` as a file and a folder clash on disk: one AT a parent of it
+     * (`parents`, e.g. `brand/guide.md` for `brand/guide.md/voice.md`) or
+     * one NESTED under it (`path/…`). Its path, or `null`.
+     */
+    async findPathNestingClash(
+        workId: string,
+        path: string,
+        parents: string[],
+        excludeId?: string,
+    ): Promise<string | null> {
+        // `_` and `%` are LIKE wildcards and `_` is a legal path character.
+        const nested = `${path.replace(/[\\%_]/g, (c) => `\\${c}`)}/%`;
+        const qb = this.repository
+            .createQueryBuilder('doc')
+            .select(['doc.id', 'doc.path'])
+            .where('doc.workId = :workId', { workId })
+            .andWhere(
+                new Brackets((clash) => {
+                    clash.where("doc.path LIKE :nested ESCAPE '\\'", { nested });
+                    if (parents.length > 0) {
+                        clash.orWhere('doc.path IN (:...parents)', { parents });
+                    }
+                }),
+            );
+        if (excludeId) qb.andWhere('doc.id != :excludeId', { excludeId });
+        const row = await qb.getOne();
+        return row?.path ?? null;
+    }
+
+    /**
      * Path-collision check used to suffix on conflict (see service).
      */
     async pathExists(workId: string, path: string, excludeId?: string): Promise<boolean> {

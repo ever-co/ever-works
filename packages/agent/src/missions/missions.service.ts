@@ -1130,7 +1130,13 @@ export class MissionsService {
             const templateRepo = this.normalizeTemplateRepo(input.missionTemplateRepo);
             // A custom catalog template is stored only when the editor may use it — the same
             // check as create (another person's or an archived one → 404 templateNotFound).
-            if (templateRepo && isCustomMissionTemplateId(templateRepo)) {
+            // Re-sending the value already stored is no change: an API caller echoing back a
+            // template archived since must not get a 404 on an unrelated edit.
+            if (
+                templateRepo &&
+                templateRepo !== existing.missionTemplateRepo &&
+                isCustomMissionTemplateId(templateRepo)
+            ) {
                 await this.findTemplateConfig(userId, templateRepo);
             }
             existing.missionTemplateRepo = templateRepo;

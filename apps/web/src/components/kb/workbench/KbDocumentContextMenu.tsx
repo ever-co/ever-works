@@ -12,6 +12,7 @@ import {
     type ReactNode,
 } from 'react';
 import { useTranslations } from 'next-intl';
+import { toast } from 'sonner';
 import { useRouter } from '@/i18n/navigation';
 import {
     Archive,
@@ -29,6 +30,7 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils/cn';
 import { ROUTES } from '@/lib/constants';
+import { browserApiFetch } from '@/lib/api/browser-api';
 import { updateKbDocumentAction, deleteKbDocumentAction } from '@/app/actions/works/kb-document';
 import { lockKbDocumentAction, unlockKbDocumentAction } from '@/app/actions/works/kb-lock';
 import { unarchiveKbDocumentAction } from '@/app/actions/works/kb-review';
@@ -36,7 +38,12 @@ import { DocumentFilePicker } from '@/components/knowledge/DocumentFilePicker';
 import { knowledgeLibraryClient } from '@/components/knowledge/library-client';
 import { shelfBlockReason } from '@/components/knowledge/shelf-block-reason';
 import { useLibraryDocument } from '@/components/knowledge/use-library-document';
-import type { KbDocumentDto, KbLockMode, UpdateKbDocumentInput } from '@ever-works/contracts';
+import type {
+    KbDocumentDto,
+    KbDocumentMoveResult,
+    KbLockMode,
+    UpdateKbDocumentInput,
+} from '@ever-works/contracts';
 
 /**
  * EW-641 slice E — right-click context menu for KB tree rows.
@@ -44,7 +51,9 @@ import type { KbDocumentDto, KbLockMode, UpdateKbDocumentInput } from '@ever-wor
  * Wraps a tree row (typically `KbTreePanel`'s `<Link>`) and intercepts
  * `onContextMenu` to render an accessible floating menu. Items map to
  * the existing server actions:
- *   - Rename → inline rename + PATCH `{ path }`
+ *   - Rename → rename dialog + POST `…/documents/:docId/move { path }` (the
+ *     API moves the git-mirrored file and rewrites the links other
+ *     documents carry to the old path)
  *   - Duplicate → POST `{ sourceId, path }` via fetch shim (the agent
  *     accepts either form per the foundation map)
  *   - Lock submenu → PATCH `/lock { mode: 'full' | 'additions-only' }`
@@ -95,11 +104,9 @@ export interface KbDocumentContextMenuProps {
      */
     clipboardWrite?: (text: string) => Promise<void> | void;
     /**
-     * Show "Rename". Off by default: renaming PATCHes `{ path }`, and the
-     * API's `UpdateKbDocumentDto` has no `path` (moving a document also has to
-     * move its git-mirrored file and keep `kb:` citations and wikilinks
-     * resolving — not built yet), so every rename answered 400. Gated, not
-     * removed: switch it on once the API can move a document.
+     * Show "Rename". Off by default so a surface opts in: renaming POSTs
+     * `{ path }` to `…/documents/:docId/move`, which needs the surface to
+     * follow the document to its new path (`onRenamed`). The KB tree does.
      */
     renameEnabled?: boolean;
 }
@@ -289,18 +296,62 @@ export function KbDocumentContextMenu({
                 setRenameOpen(false);
                 return;
             }
-            // `path` is not yet on `UpdateKbDocumentInput` per the foundation
-            // map — cast through `unknown` so the contract stays the source
-            // of truth (the API-side shim will be added in slice E phase 2).
-            const body = { path: trimmed } as unknown as UpdateKbDocumentInput;
-            const r = await applyPatch(body);
-            if (r.ok) {
+            if (!KB_MOVE_PATH_PATTERN.test(trimmed)) {
+                setError(tMenu('renameInvalidPath'));
+                return;
+            }
+            // A path change is its own route (`POST …/move`), not a PATCH: it
+            // also moves the git-mirrored file and the links other documents
+            // carry to the old path.
+            setPending(true);
+            setError(null);
+            try {
+                const res = await browserApiFetch(
+                    `/api/works/${encodeURIComponent(workId)}/kb/documents/${encodeURIComponent(
+                        document.id,
+                    )}/move`,
+                    {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ path: trimmed }),
+                    },
+                );
+                if (!res.ok) {
+                    const payload = (await res.json().catch(() => null)) as {
+                        code?: unknown;
+                    } | null;
+                    setError(tMenu(renameErrorKey(res.status, payload?.code)));
+                    return;
+                }
+                const { linkRewrite, ...moved } = (await res.json()) as KbDocumentMoveResult;
                 setRenameOpen(false);
-                onRenamed?.(r.data);
+                onPatched?.(moved);
+                onRenamed?.(moved);
+                // The rename stands; say which documents still link to the old
+                // path (deleted, fully locked or too busy while it ran).
+                const skipped = linkRewrite?.skipped ?? [];
+                if (skipped.length > 0) {
+                    toast.warning(
+                        tMenu('renameLinksSkipped', {
+                            count: skipped.length,
+                            paths: skipped
+                                .slice(0, 3)
+                                .map((doc) => doc.path)
+                                .join(', '),
+                        }),
+                    );
+                }
+                router.refresh();
                 closeMenu();
+            } catch {
+                // A dropped connection never answers — say so rather than
+                // leaving the dialog pending with no explanation.
+                setError(tMenu('renameFailed'));
+            } finally {
+                setPending(false);
             }
         },
-        [applyPatch, document.path, closeMenu, onRenamed],
+        [workId, document.id, document.path, closeMenu, onPatched, onRenamed, router, tMenu],
     );
 
     const onDuplicate = useCallback(async () => {
@@ -466,6 +517,7 @@ export function KbDocumentContextMenu({
                     onRename={
                         renameEnabled
                             ? () => {
+                                  setError(null);
                                   setRenameOpen(true);
                                   closeMenu();
                               }
@@ -887,18 +939,35 @@ function InlineRenameDialog({
     const t = useTranslations('dashboard.workDetail.kb.workbench.contextMenu');
     const [value, setValue] = useState(initialPath);
     const inputRef = useRef<HTMLInputElement | null>(null);
+    const titleId = useId();
+    const descriptionId = useId();
+    const hintId = useId();
+    const errorId = useId();
 
     useEffect(() => {
-        inputRef.current?.focus();
-        inputRef.current?.select();
-    }, []);
+        const input = inputRef.current;
+        if (!input) return;
+        input.focus();
+        // Select the file name without `.md`: renaming usually keeps the
+        // folder and the extension.
+        const slash = initialPath.lastIndexOf('/') + 1;
+        const end = initialPath.toLowerCase().endsWith('.md')
+            ? initialPath.length - 3
+            : initialPath.length;
+        input.setSelectionRange(slash, Math.max(slash, end));
+    }, [initialPath]);
 
     return (
         <div
             role="dialog"
             aria-modal="true"
+            aria-labelledby={titleId}
+            aria-describedby={descriptionId}
             data-testid="kb-workbench-context-rename-dialog"
             className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+            onKeyDown={(e) => {
+                if (e.key === 'Escape' && !pending) onCancel();
+            }}
         >
             <form
                 onSubmit={(e) => {
@@ -911,9 +980,23 @@ function InlineRenameDialog({
                     'bg-card dark:bg-card-dark',
                 )}
             >
+                <header className="flex flex-col gap-1">
+                    <h2
+                        id={titleId}
+                        className="text-base font-semibold text-text dark:text-text-dark"
+                    >
+                        {t('renameTitle')}
+                    </h2>
+                    <p
+                        id={descriptionId}
+                        className="text-sm text-text-muted dark:text-text-muted-dark/70"
+                    >
+                        {t('renameDescription')}
+                    </p>
+                </header>
                 <label className="flex flex-col gap-1.5">
-                    <span className="text-sm font-medium text-text dark:text-text-dark">
-                        {t('rename')}
+                    <span className="text-xs uppercase tracking-wide text-text-muted dark:text-text-muted-dark/70">
+                        {t('renamePathLabel')}
                     </span>
                     <input
                         ref={inputRef}
@@ -922,15 +1005,26 @@ function InlineRenameDialog({
                         value={value}
                         onChange={(e) => setValue(e.target.value)}
                         disabled={pending}
+                        spellCheck={false}
+                        autoComplete="off"
+                        aria-invalid={error ? true : undefined}
+                        aria-describedby={error ? `${hintId} ${errorId}` : hintId}
                         className={cn(
                             'rounded-md border px-2 py-1.5 text-sm font-mono',
                             'border-border dark:border-border-dark',
                             'bg-card-secondary dark:bg-card-primary-dark/40',
                         )}
                     />
+                    <span
+                        id={hintId}
+                        className="text-[11px] text-text-muted dark:text-text-muted-dark/70"
+                    >
+                        {t('renamePathHint')}
+                    </span>
                 </label>
                 {error ? (
                     <p
+                        id={errorId}
                         data-testid="kb-workbench-context-rename-error"
                         role="alert"
                         className="text-xs text-red-600 dark:text-red-400"
@@ -951,7 +1045,9 @@ function InlineRenameDialog({
                     <button
                         type="submit"
                         data-testid="kb-workbench-context-rename-submit"
-                        disabled={pending || value.trim().length === 0}
+                        disabled={
+                            pending || value.trim().length === 0 || value.trim() === initialPath
+                        }
                         className={cn(
                             'rounded-md px-3 py-1.5 text-sm',
                             'bg-primary text-white hover:bg-primary/90',
@@ -1081,6 +1177,45 @@ function DeleteConfirmDialog({
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * Where a document may move — the API's `KB_MOVE_PATH_PATTERN`
+ * (`packages/agent/src/services/kb-document-move.ts`), checked here first so
+ * a typo is explained without a round trip: a class folder and a file name
+ * ending in `.md`, each segment starting with a letter or digit and using
+ * only letters, digits, `-`, `_` and `.` (the characters wikilinks and `kb:`
+ * citations recognise). The API also requires the first segment to be a
+ * known class folder.
+ */
+export const KB_MOVE_PATH_PATTERN =
+    /^[A-Za-z0-9][A-Za-z0-9_.-]*(?:\/[A-Za-z0-9][A-Za-z0-9_.-]*)*\.md$/;
+
+/**
+ * The `contextMenu` message that explains a refused move, from the API's
+ * `code` when it sent one (`KnowledgeBaseService.moveDocument`), else from the
+ * status. Never the API's own text: it is English and may name documents.
+ */
+export function renameErrorKey(
+    status: number,
+    code: unknown,
+):
+    | 'renamePathTaken'
+    | 'renameLinkedFromLocked'
+    | 'renameOrgDocumentPath'
+    | 'renamePathNesting'
+    | 'renameInvalidPath'
+    | 'renameForbidden'
+    | 'renameNotFound'
+    | 'renameFailed' {
+    if (code === 'KbPathTaken') return 'renamePathTaken';
+    if (code === 'KbPathNesting') return 'renamePathNesting';
+    if (code === 'KbLinkedFromLockedDocument') return 'renameLinkedFromLocked';
+    if (code === 'KbOrgDocumentPath') return 'renameOrgDocumentPath';
+    if (code === 'KbPathInvalid' || status === 400) return 'renameInvalidPath';
+    if (status === 403) return 'renameForbidden';
+    if (status === 404) return 'renameNotFound';
+    return 'renameFailed';
+}
 
 /**
  * Compute a sensible "copy" target path for the duplicate action.

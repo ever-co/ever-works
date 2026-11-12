@@ -43,6 +43,35 @@ function hasText(value: unknown): boolean {
     return typeof value === 'string' && value.trim().length > 0;
 }
 
+/** Page size when the caller sends none (or something unusable). */
+export const WORKS_LIST_DEFAULT_LIMIT = 20;
+/**
+ * Largest page the Works list serves. The dashboard's Work switcher asks for
+ * 1000 in one call, so the cap sits there rather than lower.
+ */
+export const WORKS_LIST_MAX_LIMIT = 1000;
+
+/**
+ * Bound the page window a request asked for. A negative, fractional or
+ * non-finite number used to reach the SQL `LIMIT` / `OFFSET` as is (a 500 for
+ * `?limit=-1`), and an enormous limit read every Work in one query.
+ * Valid in-range values come back unchanged.
+ */
+function normalizeWorksPage(
+    limit: number | undefined,
+    offset: number | undefined,
+): { limit: number; offset: number } {
+    const wholeLimit = Number.isFinite(limit) ? Math.floor(limit as number) : 0;
+    const wholeOffset = Number.isFinite(offset) ? Math.floor(offset as number) : 0;
+    return {
+        limit:
+            wholeLimit < 1 ? WORKS_LIST_DEFAULT_LIMIT : Math.min(wholeLimit, WORKS_LIST_MAX_LIMIT),
+        // Upper bound: an offset past the bigint range (1e19, 1e21) is written
+        // into the SQL as text and fails in the database.
+        offset: Math.min(Math.max(wholeOffset, 0), Number.MAX_SAFE_INTEGER),
+    };
+}
+
 // Extended work response type with userRole for API responses
 // Uses Omit to exclude class methods from Work, then adds userRole
 type WorkMethods =
@@ -124,7 +153,8 @@ export class WorkQueryService {
         } = {},
         user: User,
     ) {
-        const { limit = 20, offset = 0, search, kind, organizationId } = options;
+        const { search, kind, organizationId } = options;
+        const { limit, offset } = normalizeWorksPage(options.limit, options.offset);
         // Spread only when asked, so the default repository call shape stays
         // byte-identical for every caller that never pins an Organization.
         const organizationPin = organizationId !== undefined ? { organizationId } : {};
