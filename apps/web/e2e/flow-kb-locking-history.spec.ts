@@ -106,7 +106,8 @@ import { seedKbMarkdownDoc } from './helpers/kb-fixtures';
  *       mirror → 500. A `full` lock pre-empts the mirror call with a clean 403
  *       (assertNotLockedFull runs FIRST).
  *   · GET .../documents?locked=true|false → 200 `{items,total}` partitions the
- *       tree on the lock flag.
+ *       tree on the lock flag (true = both lock modes, false = the open docs);
+ *       any other `locked` value → 400.
  *   · UI (workbench): the per-doc route renders `KbDocumentHeader` +
  *       `TiptapEditor` (Tiptap contenteditable `kb-tiptap-editor-body` +
  *       autosave) and the `KbMetadataPanel`. A locked doc shows the header lock
@@ -874,10 +875,10 @@ test.describe('flow: KB doc locking + history + restore + autosave', () => {
         ).toBe(200);
 
         // `locked=true` → exactly the two locked docs (both modes count as
-        // locked). PROBED 2026-06-01: the DTO coerces `locked` via
-        // `@Type(() => Boolean)`, and `Boolean('false') === true`, so `locked=false`
-        // is parsed to `true` as well — it returns the SAME locked partition, NOT
-        // the open doc. Asserting REAL behaviour below, not the fictional inverse.
+        // locked). Until #3180 the DTO coerced `locked` with
+        // `@Type(() => Boolean)`, so `Boolean('false') === true` made
+        // `locked=false` return this same locked set; it now maps the two
+        // spellings explicitly and refuses anything else.
         const lockedList = await request.get(
             `${API_BASE}/api/works/${workId}/kb/documents?locked=true`,
             { headers: authedHeaders(owner.access_token) },
@@ -894,29 +895,26 @@ test.describe('flow: KB doc locking + history + restore + autosave', () => {
             'every locked-filter row is locked',
         ).toBe(true);
 
-        // `locked=false` → coerced to `true` by the Boolean DTO transform, so it
-        // returns the very same two locked docs (NOT the open doc). Pin that exact
-        // set so the dead-inverse coercion stays covered; the open doc is reachable
-        // only via the unfiltered list (asserted below).
+        // `locked=false` → exactly the open doc: the two filters partition the tree.
         const unlockedList = await request.get(
             `${API_BASE}/api/works/${workId}/kb/documents?locked=false`,
             { headers: authedHeaders(owner.access_token) },
         );
+        expect(unlockedList.status()).toBe(200);
         const unlockedJson = (await unlockedList.json()) as DocListResponse;
+        expect(unlockedJson.total, 'locked=false → only the open doc').toBe(1);
+        expect(unlockedJson.items.map((d) => d.id)).toEqual([open.documentId]);
         expect(
-            unlockedJson.total,
-            'locked=false coerces to true → both locked docs, never the open one',
-        ).toBe(2);
-        const unlockedIds = new Set(unlockedJson.items.map((d) => d.id));
-        expect(unlockedIds.has(full.documentId)).toBe(true);
-        expect(unlockedIds.has(additions.documentId)).toBe(true);
-        expect(unlockedIds.has(open.documentId), 'open doc not reachable via locked=false').toBe(
-            false,
-        );
-        expect(
-            unlockedJson.items.every((d) => d.locked === true),
-            'locked=false still yields only locked rows (Boolean coercion)',
+            unlockedJson.items.every((d) => d.locked === false),
+            'every unlocked-filter row is unlocked',
         ).toBe(true);
+
+        // Any other value is refused instead of being guessed.
+        const invalidLocked = await request.get(
+            `${API_BASE}/api/works/${workId}/kb/documents?locked=yes`,
+            { headers: authedHeaders(owner.access_token) },
+        );
+        expect(invalidLocked.status(), 'locked=yes → 400 (not a boolean)').toBe(400);
 
         // Sanity: the unfiltered total is all three.
         const allList = await request.get(`${API_BASE}/api/works/${workId}/kb/documents`, {

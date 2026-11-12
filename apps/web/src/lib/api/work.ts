@@ -91,6 +91,14 @@ export interface WebsiteTemplateOption {
      */
     repositoryOwner?: string | null;
     repositoryName?: string | null;
+    /**
+     * The Work kinds whose NEW Work builds with this template when the
+     * Create-Work form names none ("use my default"): the saved default for
+     * every kind, else the kind's own default — `web` for website /
+     * landing-page / blog, which is not the `isDefault` row. The picker
+     * highlights it. Optional: an API that predates the field sends none.
+     */
+    defaultForWorkKinds?: string[];
 }
 
 export interface CreateWorkDto {

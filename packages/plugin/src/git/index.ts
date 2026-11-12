@@ -34,6 +34,7 @@ export type {
 	MergeOptions,
 	MergeResult,
 	GitUser,
+	GitProviderRequestOptions,
 	GitOrganization,
 	GitPullRequest,
 	GitPullRequestAuthor,

@@ -296,6 +296,7 @@ describe('TemplateCatalogService', () => {
         expect(gitFacade.listPublicRepositories).not.toHaveBeenCalled();
         expect(result).toEqual({
             defaultTemplateId: 'classic',
+            savedDefaultTemplateId: null,
             templates: [],
         });
     });
@@ -312,6 +313,7 @@ describe('TemplateCatalogService', () => {
         expect(gitFacade.listPublicRepositories).toHaveBeenCalledTimes(1);
         expect(result).toEqual({
             defaultTemplateId: 'classic',
+            savedDefaultTemplateId: null,
             templates: [],
         });
     });
@@ -1323,6 +1325,8 @@ describe('TemplateCatalogService', () => {
                 const result = await service.listTemplatesForUser('website', 'user-7');
 
                 expect(result.defaultTemplateId).toBe('classic');
+                // A retired saved default is never newly inherited: no saved default.
+                expect(result.savedDefaultTemplateId).toBeNull();
                 expect(result.templates.map((template) => template.id)).toContain(
                     result.defaultTemplateId,
                 );
@@ -1341,11 +1345,27 @@ describe('TemplateCatalogService', () => {
                 const result = await service.listTemplatesForUser('website', 'user-7');
 
                 expect(result.defaultTemplateId).toBe('astro-blog-template');
+                expect(result.savedDefaultTemplateId).toBe('astro-blog-template');
                 expect(
                     result.templates
                         .filter((template) => template.isDefault)
                         .map((template) => template.id),
                 ).toEqual(['astro-blog-template']);
+            });
+
+            it('reports a saved default equal to the system default as saved', async () => {
+                // A saved `classic` and no saved default list the same
+                // `defaultTemplateId`, yet a website Work builds with
+                // `classic` in the first case and its kind's `web` in the
+                // second: the Create-Work picker tells them apart by this.
+                userTemplatePreferenceRepository.findByUserAndKind.mockResolvedValue({
+                    templateId: 'classic',
+                });
+
+                const result = await service.listTemplatesForUser('website', 'user-7');
+
+                expect(result.defaultTemplateId).toBe('classic');
+                expect(result.savedDefaultTemplateId).toBe('classic');
             });
 
             it('returns the retired saved default, marked, for callers refusing a Work newly inheriting it', async () => {

@@ -35,6 +35,8 @@ const KB_PATH_MAX = 512;
 const KB_DESCRIPTION_MAX = 2000;
 const KB_TAGS_MAX = 32;
 const KB_TAG_SLUG_MAX = 64;
+/** Most values one repeatable list-query filter (`statuses`, `tags`) takes. */
+const KB_QUERY_FACET_MAX = 10;
 /** The review state a request body may ask for (a downgrade only). */
 const KB_CLIENT_REVIEW_STATES = ['proposed'] as const;
 /** The source a request body may declare (the review-gated one only). */
@@ -215,14 +217,49 @@ export class KbDocumentQueryDto {
     @IsIn(KB_DOCUMENT_STATUSES as unknown as readonly string[])
     status?: KbDocumentStatus;
 
+    /**
+     * Repeatable status filter behind the command palette's Status chips
+     * (`?statuses=draft&statuses=active` or `?statuses=draft,active`): a
+     * document matches when it has ANY of them. Additive alongside the
+     * single-value `status` above (a caller passing both gets the
+     * intersection).
+     */
+    @IsOptional()
+    @Transform(({ value }) => toFacetArray(value))
+    @ArrayMaxSize(KB_QUERY_FACET_MAX)
+    @IsIn(KB_DOCUMENT_STATUSES as unknown as readonly string[], { each: true })
+    statuses?: KbDocumentStatus[];
+
     @IsOptional()
     @IsString()
     @MaxLength(KB_TAG_SLUG_MAX)
     tag?: string;
 
+    /**
+     * Repeatable tag filter behind the command palette's Tag input
+     * (`?tags=gdpr&tags=legal` or `?tags=gdpr,legal`): a document matches
+     * when it carries ALL of them. Additive alongside the single-value `tag`
+     * above (a caller passing both needs every one).
+     */
+    @IsOptional()
+    @Transform(({ value }) => toFacetArray(value))
+    @ArrayMaxSize(KB_QUERY_FACET_MAX)
+    @IsString({ each: true })
+    @MaxLength(KB_TAG_SLUG_MAX, { each: true })
+    tags?: string[];
+
     @IsOptional()
     @IsBoolean()
-    @Type(() => Boolean)
+    // A query string is text: `@Type(() => Boolean)` made `Boolean('false')`,
+    // so `?locked=false` filtered for LOCKED documents. Map the two spellings
+    // explicitly; anything else stays a string and `@IsBoolean` refuses it.
+    @Transform(({ value }) =>
+        value === true || value === 'true' || value === '1'
+            ? true
+            : value === false || value === 'false' || value === '0'
+              ? false
+              : value,
+    )
     locked?: boolean;
 
     @IsOptional()

@@ -62,6 +62,12 @@ import type {
     UpdateInboundTriggerInput,
 } from '@/lib/api/inbound-triggers';
 import { ActivityTimestamp } from '@/components/activity-log/ActivityTimestamp';
+import {
+    isValidTriggerReplayWindow,
+    MAX_TRIGGER_REPLAY_WINDOW_SEC,
+    MIN_TRIGGER_REPLAY_WINDOW_SEC,
+    triggerVariablesProblem,
+} from '@/lib/tasks/inbound-trigger-form.shared';
 
 export interface AgentOption {
     id: string;
@@ -257,8 +263,18 @@ export function TaskTriggersClient({
     // the API refuses the pair otherwise, so block the button instead.
     const templateNeedsSlug = form.mode === 'template' && !form.taskTemplateSlug.trim();
 
+    // The API refuses a variable key outside [A-Za-z0-9_-] and a replay window
+    // outside 10..86400 s with a raw 400 — say which field is wrong instead.
+    const variablesProblem = triggerVariablesProblem(parseVariables(form.variables));
+    const replayWindowInvalid = !isValidTriggerReplayWindow(form.replayWindowSec);
+
     const canSubmit =
-        form.name.trim().length > 0 && !eventNeedsMatcher && !templateNeedsSlug && !isSubmitting;
+        form.name.trim().length > 0 &&
+        !eventNeedsMatcher &&
+        !templateNeedsSlug &&
+        !variablesProblem &&
+        !replayWindowInvalid &&
+        !isSubmitting;
 
     const handleSubmit = async () => {
         if (!canSubmit) return;
@@ -860,11 +876,20 @@ export function TaskTriggersClient({
                                 onChange={(e) => patch({ variables: e.target.value })}
                                 rows={3}
                                 placeholder={t('form.variablesPlaceholder')}
+                                aria-invalid={variablesProblem ? true : undefined}
                                 data-testid="task-trigger-form-variables"
                             />
                             <p className="mt-1 text-xs text-text-muted dark:text-text-muted-dark">
                                 {t('form.variablesHint')}
                             </p>
+                            {variablesProblem ? (
+                                <p
+                                    className="mt-1 text-xs text-danger"
+                                    data-testid="task-trigger-form-variables-error"
+                                >
+                                    {t(`form.${variablesProblem.reason}`, { ...variablesProblem })}
+                                </p>
+                            ) : null}
                         </div>
                         <div className="grid gap-3 sm:grid-cols-2">
                             <div>
@@ -888,19 +913,32 @@ export function TaskTriggersClient({
                                 </label>
                                 <Input
                                     type="number"
-                                    min={10}
-                                    max={86400}
+                                    min={MIN_TRIGGER_REPLAY_WINDOW_SEC}
+                                    max={MAX_TRIGGER_REPLAY_WINDOW_SEC}
+                                    step={1}
                                     value={String(form.replayWindowSec)}
                                     onChange={(e) =>
                                         patch({
                                             replayWindowSec: Number(e.target.value) || 300,
                                         })
                                     }
+                                    aria-invalid={replayWindowInvalid ? true : undefined}
                                     data-testid="task-trigger-form-replay-window"
                                 />
                                 <p className="mt-1 text-xs text-text-muted dark:text-text-muted-dark">
                                     {t('form.replayWindowHint')}
                                 </p>
+                                {replayWindowInvalid ? (
+                                    <p
+                                        className="mt-1 text-xs text-danger"
+                                        data-testid="task-trigger-form-replay-window-error"
+                                    >
+                                        {t('form.replayWindowInvalid', {
+                                            min: MIN_TRIGGER_REPLAY_WINDOW_SEC,
+                                            max: MAX_TRIGGER_REPLAY_WINDOW_SEC,
+                                        })}
+                                    </p>
+                                ) : null}
                             </div>
                         </div>
                         <Switch

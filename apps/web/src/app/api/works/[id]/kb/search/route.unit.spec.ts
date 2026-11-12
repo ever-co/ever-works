@@ -98,23 +98,30 @@ describe('GET /api/works/:id/kb/search', () => {
         expect([...upstream.searchParams.keys()].sort()).toEqual(['limit', 'q']);
     });
 
-    it('applies a multi-status filter the API cannot take itself', async () => {
+    it('sends several statuses and tags upstream and answers the API’s page and total', async () => {
         fetchMock.mockResolvedValueOnce(
             json({
                 items: [
-                    { ...DOC, id: 'a', status: 'active' },
-                    { ...DOC, id: 'b', status: 'archived' },
-                    { ...DOC, id: 'c', status: 'draft' },
+                    { ...DOC, id: 'a', status: 'active', tags: ['tone', 'web'] },
+                    { ...DOC, id: 'c', status: 'draft', tags: ['web', 'tone'] },
                 ],
-                total: 3,
+                total: 64,
             }),
         );
-        const response = await GET(request('?q=voice&status=active&status=draft'), params(WORK));
+        const response = await GET(
+            request('?q=voice&limit=10&status=active&status=draft&tag=tone&tag=web'),
+            params(WORK),
+        );
         const upstream = new URL((fetchMock.mock.calls[0] as [string])[0]);
+        expect(upstream.searchParams.getAll('statuses')).toEqual(['active', 'draft']);
+        expect(upstream.searchParams.getAll('tags')).toEqual(['tone', 'web']);
         expect(upstream.searchParams.get('status')).toBeNull();
+        expect(upstream.searchParams.get('tag')).toBeNull();
+        expect(upstream.searchParams.get('limit')).toBe('10');
         const body = await response.json();
         expect(body.hits.map((h: { documentId: string }) => h.documentId)).toEqual(['a', 'c']);
-        expect(body.total).toBe(2);
+        expect(body.items.map((d: { id: string }) => d.id)).toEqual(['a', 'c']);
+        expect(body.total).toBe(64);
     });
 
     it('answers an empty query without calling the API', async () => {

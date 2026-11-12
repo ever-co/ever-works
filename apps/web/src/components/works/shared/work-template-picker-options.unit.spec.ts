@@ -252,3 +252,76 @@ describe('buildTemplatePickerOptions', () => {
         expect(blueprintOptions.map((o) => o.value)).toEqual(['classic', 'minimal']);
     });
 });
+
+/**
+ * Review A6 — with nothing picked the picker highlighted `classic` (the
+ * `isDefault` row), but a website / landing-page / blog Work with no saved
+ * default builds with its kind's default `web`. The API now names, per row,
+ * the kinds that build with it (`defaultForWorkKinds`).
+ */
+describe('buildTemplatePickerOptions — the default is what the API builds the kind with', () => {
+    const NO_SAVED_DEFAULT: WebsiteTemplateOption[] = CATALOG.map((template) => ({
+        ...template,
+        defaultForWorkKinds:
+            template.id === 'classic'
+                ? ['directory', 'awesome-repo', 'default']
+                : template.id === 'web'
+                  ? ['website', 'landing-page', 'blog']
+                  : [],
+    }));
+    const defaults = (options: ReturnType<typeof buildTemplatePickerOptions>) =>
+        [...options.customOptions, ...options.blueprintOptions]
+            .filter((o) => o.isDefault)
+            .map((o) => o.value);
+
+    it.each(['website', 'landing-page', 'blog'])(
+        'marks `web` for a %s Work, not classic',
+        (kind) => {
+            const options = buildTemplatePickerOptions({
+                customTemplates: NO_SAVED_DEFAULT,
+                blueprints: MANIFEST,
+                selectedChip: 'website',
+                currentChipType: 'website',
+                workKind: kind,
+            });
+
+            expect(defaults(options)).toEqual(['web']);
+        },
+    );
+
+    it('marks the blueprint that stands for the kind default (a directory Work → classic)', () => {
+        const options = buildTemplatePickerOptions({
+            customTemplates: NO_SAVED_DEFAULT,
+            blueprints: MANIFEST,
+            selectedChip: 'directory',
+            currentChipType: 'directory',
+            workKind: 'directory',
+        });
+
+        expect(defaults(options)).toEqual(['classic']);
+        expect(options.blueprintOptions.find((o) => o.isDefault)?.name).toBe('Directory');
+    });
+
+    it('reads a Work with no kind as the column default `default`', () => {
+        const options = buildTemplatePickerOptions({
+            customTemplates: NO_SAVED_DEFAULT,
+            blueprints: [],
+            selectedChip: 'website',
+            currentChipType: 'website',
+        });
+
+        expect(defaults(options)).toEqual(['classic']);
+    });
+
+    it('keeps the isDefault flags when the API names no row for the kind (an older API)', () => {
+        const options = buildTemplatePickerOptions({
+            customTemplates: CATALOG,
+            blueprints: [],
+            selectedChip: 'website',
+            currentChipType: 'website',
+            workKind: 'website',
+        });
+
+        expect(defaults(options)).toEqual(['classic']);
+    });
+});

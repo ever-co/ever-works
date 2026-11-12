@@ -313,20 +313,13 @@ describe('WorksController — generation + cancellation endpoints', () => {
             });
         });
 
-        it('logs the start event even when generateItems rejects (log fired before service call)', async () => {
-            // The controller fires `.catch(()=>{})` on the log then awaits the
-            // service. So if the service rejects, the log was still requested.
+        it('records no "Started item generation" when the start is refused', async () => {
+            // A refused start (no provider set up, a run in progress) used to
+            // leave a "started" entry for a run that never existed.
             s.workGenerationService.generateItems.mockRejectedValue(new Error('quota'));
 
             await expect(controller.generateItems(auth, 'w-1', {} as any)).rejects.toThrow('quota');
-            expect(s.activityLogService.log).toHaveBeenCalledTimes(1);
-            expect(s.activityLogService.log).toHaveBeenCalledWith(
-                expect.objectContaining({
-                    actionType: 'GENERATION',
-                    action: 'generation.started',
-                    status: 'IN_PROGRESS',
-                }),
-            );
+            expect(s.activityLogService.log).not.toHaveBeenCalled();
         });
     });
 

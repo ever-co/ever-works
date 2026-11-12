@@ -50,6 +50,7 @@ import {
     type MachinePrincipalRequest,
 } from '../auth/machine-principal';
 import { AuthenticatedUser } from '@src/auth/types/auth.types';
+import { KB_DOCUMENT_STATUSES } from '@ever-works/contracts';
 import { DuplicateKbDocumentDto } from './dto/duplicate-kb-document.dto';
 import type {
     KbDecisionStatus,
@@ -194,7 +195,23 @@ export class KbController {
     @ApiOperation({ summary: 'List KB documents for a Work' })
     @ApiQuery({ name: 'class', required: false })
     @ApiQuery({ name: 'status', required: false })
+    @ApiQuery({
+        name: 'statuses',
+        required: false,
+        isArray: true,
+        // The one status vocabulary (the DTO validates against the same list).
+        enum: [...KB_DOCUMENT_STATUSES],
+        description:
+            'Repeatable status filter (`?statuses=draft&statuses=active` or `?statuses=draft,active`, at most 10): a document matches ANY of them. With `status` as well, both apply.',
+    })
     @ApiQuery({ name: 'tag', required: false })
+    @ApiQuery({
+        name: 'tags',
+        required: false,
+        isArray: true,
+        description:
+            'Repeatable tag filter (`?tags=gdpr&tags=legal` or `?tags=gdpr,legal`, at most 10): a document must carry ALL of them, matched case-exactly. With `tag` as well, every one is required.',
+    })
     @ApiQuery({ name: 'locked', required: false })
     @ApiQuery({
         name: 'reviewState',
@@ -249,7 +266,10 @@ export class KbController {
             sources: query.sources as KbDocumentSource[] | undefined,
             searchBody: query.searchBody,
             status: query.status as KbDocumentStatus | undefined,
+            // The command palette's chips: any of `statuses`, all of `tags`.
+            statuses: query.statuses as KbDocumentStatus[] | undefined,
             tag: query.tag,
+            tags: query.tags,
             locked: query.locked,
             language: query.language,
             reviewState: query.reviewState as KbReviewState | undefined,

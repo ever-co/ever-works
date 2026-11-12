@@ -131,6 +131,25 @@ import {
  */
 const APP_WORK_KIND = 'app';
 
+/** One bounded, abortable ownership check (see `startOwnershipCheck`). */
+interface OwnershipCheck {
+    readonly signal: AbortSignal;
+    readonly deadlineAt: number;
+    /** Abort every provider call of the check (with an `AbortError` reason). */
+    abort(message: string): void;
+    dispose(): void;
+}
+
+/**
+ * The reason an ownership check aborts with. It MUST be named `AbortError`:
+ * `@octokit/request` rethrows only that name as is; any other reason (a plain
+ * `Error`) comes back as a `RequestError` 500, which `plugin-retry` retries
+ * three times (1 s / 4 s / 9 s) — the very lingering the abort is there to stop.
+ */
+function ownershipCheckAbortReason(message: string): DOMException {
+    return new DOMException(message, 'AbortError');
+}
+
 /** Is this Work an App Work (spec FR-19: App Works default to exposed)? */
 function isAppWorkKind(kind: string | null | undefined): boolean {
     return typeof kind === 'string' && kind.trim().toLowerCase() === APP_WORK_KIND;
@@ -1614,8 +1633,12 @@ export class WorkLifecycleService {
         work: Work,
         updateDto: UpdateWorkDto,
         user: User,
-    ): Promise<{ owner: string | undefined; organization: boolean }> {
-        const stored = { owner: work.owner ?? undefined, organization: Boolean(work.organization) };
+    ): Promise<{ owner: string | undefined; organization: boolean; changed: boolean }> {
+        const stored = {
+            owner: work.owner ?? undefined,
+            organization: Boolean(work.organization),
+            changed: false,
+        };
         const storedOwner = (work.owner ?? '').trim();
         const resolvedOwner =
             typeof work.getRepoOwner === 'function'
@@ -1634,7 +1657,33 @@ export class WorkLifecycleService {
             return stored;
         }
 
-        const repositories = await this.workRepositoriesExist(work, user);
+        const check = this.startOwnershipCheck();
+        try {
+            return await this.resolveOwnershipChange(work, updateDto, user, check, {
+                stored,
+                requestedOwner,
+                ownerChanged,
+                organizationChanged,
+            });
+        } finally {
+            check.dispose();
+        }
+    }
+
+    private async resolveOwnershipChange(
+        work: Work,
+        updateDto: UpdateWorkDto,
+        user: User,
+        check: OwnershipCheck,
+        request: {
+            stored: { owner: string | undefined; organization: boolean };
+            requestedOwner: string | undefined;
+            ownerChanged: boolean;
+            organizationChanged: boolean;
+        },
+    ): Promise<{ owner: string | undefined; organization: boolean; changed: boolean }> {
+        const { stored, requestedOwner, ownerChanged, organizationChanged } = request;
+        const repositories = await this.workRepositoriesExist(work, user, check);
         if (repositories === 'exist') {
             throw new BadRequestException({
                 status: 'error',
@@ -1664,10 +1713,11 @@ export class WorkLifecycleService {
             owner =
                 isCreator && ownerChanged && requestedOwner
                     ? requestedOwner
-                    : await this.creatorGitLogin(work);
+                    : await this.creatorGitLogin(work, check);
         }
-        await this.assertGenerateStatusUnchanged(work);
-        return { owner, organization };
+        // The generate state is re-read just before the WRITE (`updateWork`),
+        // after every other provider call this update makes.
+        return { owner, organization, changed: true };
     }
 
     /**
@@ -1693,24 +1743,67 @@ export class WorkLifecycleService {
     private ownershipCheckTimeoutMs = 10_000;
 
     /**
-     * `call`, or a rejection after {@link ownershipCheckTimeoutMs}. The provider
-     * client has no request timeout and its rate-limit handling may wait and
-     * retry for a long time; an ownership save must answer instead.
+     * Upper bound for ALL of them together (an ownership change can make
+     * several calls in a row), kept under the usual 60 s proxy timeout.
      */
-    private withOwnershipCheckTimeout<T>(call: Promise<T>, what: string): Promise<T> {
+    private ownershipCheckDeadlineMs = 25_000;
+
+    /**
+     * One ownership check: an `AbortSignal` handed to every provider call
+     * (the GitHub client cancels the request instead of leaving it to linger
+     * in its retry and rate-limit queue) and one deadline for the whole check.
+     */
+    private startOwnershipCheck(): OwnershipCheck {
+        const controller = new AbortController();
+        const deadlineAt = Date.now() + this.ownershipCheckDeadlineMs;
+        const deadline = setTimeout(
+            () =>
+                controller.abort(ownershipCheckAbortReason('The ownership check ran out of time')),
+            this.ownershipCheckDeadlineMs,
+        );
+        return {
+            signal: controller.signal,
+            deadlineAt,
+            abort: (message: string) => controller.abort(ownershipCheckAbortReason(message)),
+            dispose: () => clearTimeout(deadline),
+        };
+    }
+
+    /**
+     * `call`, or a rejection once {@link ownershipCheckTimeoutMs} or the
+     * check's overall deadline passes, whichever comes first — and then the
+     * check's signal is aborted so the provider call itself stops.
+     */
+    private withOwnershipCheckTimeout<T>(
+        check: OwnershipCheck,
+        call: () => Promise<T>,
+        what: string,
+    ): Promise<T> {
+        if (check.signal.aborted) {
+            return Promise.reject(new Error(`${what} was not attempted: the check was cancelled`));
+        }
+        const budget = Math.min(this.ownershipCheckTimeoutMs, check.deadlineAt - Date.now());
+        if (budget <= 0) {
+            check.abort('The ownership check ran out of time');
+            return Promise.reject(new Error(`${what} was not attempted: out of time`));
+        }
         let timer: ReturnType<typeof setTimeout> | undefined;
-        const timeout = new Promise<never>((_, reject) => {
-            timer = setTimeout(
-                () =>
-                    reject(
-                        new Error(
-                            `${what} did not answer within ${this.ownershipCheckTimeoutMs} ms`,
-                        ),
-                    ),
-                this.ownershipCheckTimeoutMs,
-            );
+        let onAbort: (() => void) | undefined;
+        const stop = new Promise<never>((_, reject) => {
+            timer = setTimeout(() => {
+                const message = `${what} did not answer within ${budget} ms`;
+                // Reject FIRST: aborting dispatches `abort` synchronously, and
+                // `onAbort` below would otherwise reject with the deadline message.
+                reject(new Error(message));
+                check.abort(message);
+            }, budget);
+            onAbort = () => reject(new Error(`${what} was cancelled: the check ran out of time`));
+            check.signal.addEventListener('abort', onAbort, { once: true });
         });
-        return Promise.race([call, timeout]).finally(() => clearTimeout(timer));
+        return Promise.race([call(), stop]).finally(() => {
+            clearTimeout(timer);
+            if (onAbort) check.signal.removeEventListener('abort', onAbort);
+        });
     }
 
     /**
@@ -1726,6 +1819,7 @@ export class WorkLifecycleService {
     private async workRepositoriesExist(
         work: Work,
         user: User,
+        check: OwnershipCheck,
     ): Promise<'exist' | 'none' | 'unknown'> {
         if (!workKindHasRepository(work.kind)) {
             return 'none';
@@ -1760,16 +1854,24 @@ export class WorkLifecycleService {
         }
         let unsure = false;
         for (const userId of [...new Set([user.id, work.userId].filter(Boolean))]) {
-            const authOptions = { userId, providerId: work.gitProvider, workId: work.id };
+            const authOptions = {
+                userId,
+                providerId: work.gitProvider,
+                workId: work.id,
+                signal: check.signal,
+            };
             try {
                 const hasCredentials = await this.withOwnershipCheckTimeout(
-                    this.gitFacade.hasValidCredentials(authOptions),
+                    check,
+                    () => this.gitFacade.hasValidCredentials(authOptions),
                     'The Git credential check',
                 );
                 if (!hasCredentials) continue;
                 for (const target of targets) {
                     const exists = await this.withOwnershipCheckTimeout(
-                        this.gitFacade.repositoryExists(target.owner, target.repo, authOptions),
+                        check,
+                        () =>
+                            this.gitFacade.repositoryExists(target.owner, target.repo, authOptions),
                         `The ${target.owner}/${target.repo} lookup`,
                     );
                     if (exists) {
@@ -1789,10 +1891,16 @@ export class WorkLifecycleService {
     }
 
     /** The Work creator's login on the Work's git provider (a personal Work's owner). */
-    private async creatorGitLogin(work: Work): Promise<string> {
+    private async creatorGitLogin(work: Work, check: OwnershipCheck): Promise<string> {
         try {
             const gitUser = await this.withOwnershipCheckTimeout(
-                this.gitFacade.getUser({ userId: work.userId, providerId: work.gitProvider }),
+                check,
+                () =>
+                    this.gitFacade.getUser({
+                        userId: work.userId,
+                        providerId: work.gitProvider,
+                        signal: check.signal,
+                    }),
                 'The creator’s Git account lookup',
             );
             if (gitUser?.login) {
@@ -2091,6 +2199,14 @@ export class WorkLifecycleService {
 
             if (exposureChange?.changed) {
                 updateData.appLauncherExposed = exposureChange.value;
+            }
+
+            // An owner change made Git provider calls, and so may the template
+            // switch above: re-read the generate state as the very last step
+            // before writing (a generation may have created repositories
+            // under the old owner meanwhile).
+            if (ownership.changed) {
+                await this.assertGenerateStatusUnchanged(work);
             }
 
             const updatedWork = await this.workRepository.update(id, updateData);

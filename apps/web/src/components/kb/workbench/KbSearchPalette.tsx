@@ -69,6 +69,18 @@ const DEFAULT_DEBOUNCE_MS = 200;
 /** Shortcut-registry scope owned by the Knowledge-Base workbench screens. */
 export const KB_WORKBENCH_SHORTCUT_SCOPE = 'kb-workbench';
 
+/**
+ * The API's own reason for a refused search (`{ message }`, a string or the
+ * validator's list), else the HTTP status — shown under the error line.
+ */
+async function searchErrorDetail(res: Response): Promise<string> {
+    const body = (await res.json().catch(() => null)) as { message?: unknown } | null;
+    const message = body?.message;
+    if (Array.isArray(message)) return message.map(String).join(' ');
+    if (typeof message === 'string' && message.trim()) return message;
+    return `HTTP ${res.status}`;
+}
+
 export function KbSearchPalette({
     workId,
     debounceMs = DEFAULT_DEBOUNCE_MS,
@@ -82,6 +94,9 @@ export function KbSearchPalette({
     const [filters, setFilters] = useState<PaletteFilters>(EMPTY_FILTERS);
     const [hits, setHits] = useState<KbSearchHit[]>([]);
     const [loading, setLoading] = useState(false);
+    // A refused search (an API 400: too many tags, a tag too long, an API
+    // older than the web during a deploy) is an error, not "no results".
+    const [searchError, setSearchError] = useState<string | null>(null);
 
     // Never open together with the dashboard palette: opening this one closes
     // it, and opening it (trigger, `/`) closes this one.
@@ -156,6 +171,7 @@ export function KbSearchPalette({
         const trimmed = query.trim();
         if (trimmed.length === 0) {
             setHits([]);
+            setSearchError(null);
             setLoading(false);
             return;
         }
@@ -165,16 +181,18 @@ export function KbSearchPalette({
         const timer = setTimeout(() => {
             fetch(buildUrl(trimmed, filters), { cache: 'no-store' })
                 .then(async (res) => {
-                    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                    if (!res.ok) throw new Error(await searchErrorDetail(res));
                     return (await res.json()) as KbSearchResult;
                 })
                 .then((data) => {
                     if (cancelled) return;
+                    setSearchError(null);
                     setHits(data.hits ?? []);
                 })
-                .catch(() => {
+                .catch((error: unknown) => {
                     if (cancelled) return;
                     setHits([]);
+                    setSearchError(error instanceof Error ? error.message : '');
                 })
                 .finally(() => {
                     if (cancelled) return;
@@ -318,6 +336,19 @@ export function KbSearchPalette({
                                 </div>
                             ) : loading ? (
                                 <LoadingShimmer label={t('search.searching')} />
+                            ) : searchError !== null ? (
+                                <div
+                                    role="alert"
+                                    data-testid="kb-workbench-search-palette-error"
+                                    className="px-3 py-6 text-center text-sm text-danger"
+                                >
+                                    <p>{t('search.failed')}</p>
+                                    {searchError ? (
+                                        <p className="mt-1 text-xs text-text-muted">
+                                            {searchError}
+                                        </p>
+                                    ) : null}
+                                </div>
                             ) : hits.length === 0 ? (
                                 <Command.Empty
                                     data-testid="kb-workbench-search-palette-noresults"
