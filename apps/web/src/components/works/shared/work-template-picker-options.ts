@@ -24,6 +24,14 @@ import type { WorkBlueprintEntry } from '@/lib/api/work-templates';
  *      listed twice under two names;
  *   3. no such row (a blueprint whose repository the platform has no template
  *      for yet): not listed, since submitting it can only fail.
+ *
+ * The default (badge + the highlight when nothing is picked) is the template
+ * the API builds the Work with when the form submits none: the catalog row
+ * whose `defaultForWorkKinds` names the Work's kind. A website / landing-page /
+ * blog Work with no saved default builds with `web`, not the `isDefault` row
+ * (`classic`), so highlighting `isDefault` showed one template and built
+ * another. Only when the API names no such row (an older API, or a row not
+ * listed) do the `isDefault` flags stand.
  */
 
 export interface PickerOption {
@@ -78,6 +86,7 @@ export function buildTemplatePickerOptions({
     blueprints,
     selectedChip,
     currentChipType,
+    workKind,
 }: {
     customTemplates: WebsiteTemplateOption[];
     blueprints: WorkBlueprintEntry[];
@@ -85,9 +94,18 @@ export function buildTemplatePickerOptions({
     selectedChip: string;
     /** The chip of the Work kind being created; custom rows are tagged with it. */
     currentChipType: string;
+    /** The Work kind being created; none is stored as the column default `default`. */
+    workKind?: string;
 }): TemplatePickerOptions {
     const catalogIds = new Set(customTemplates.map((template) => template.id));
     const catalogIdByRepository = indexCatalogByRepository(customTemplates);
+    // The row the API builds this kind of Work with when none is picked.
+    const kindKey = workKind || 'default';
+    const kindDefaultId = customTemplates.find((template) =>
+        template.defaultForWorkKinds?.includes(kindKey),
+    )?.id;
+    const isDefaultOption = (value: string, flag: boolean) =>
+        kindDefaultId ? value === kindDefaultId : flag;
 
     const blueprintOptions: PickerOption[] = [];
     const representedCatalogIds = new Set<string>();
@@ -114,7 +132,7 @@ export function buildTemplatePickerOptions({
             iconName: blueprint.iconName,
             chipType: blueprint.chipType,
             featured: blueprint.featured,
-            isDefault: blueprint.isDefault,
+            isDefault: isDefaultOption(catalogId, blueprint.isDefault),
             tags: blueprint.tags,
             category: blueprint.category,
         });
@@ -130,7 +148,7 @@ export function buildTemplatePickerOptions({
             description: template.description,
             group: 'yours',
             featured: false,
-            isDefault: template.isDefault,
+            isDefault: isDefaultOption(template.id, template.isDefault),
             chipType: currentChipType,
         }));
 

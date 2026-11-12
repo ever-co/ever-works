@@ -7,7 +7,13 @@ import { createWorkWithAI, checkWorkSlug } from '@/app/actions/dashboard';
 // `slugifyForWork` normalizes a typed slug; `workSlugFromName` derives one from
 // a Work name, including names with no Latin letters (the server action uses
 // the same helper, so both sides agree on the slug).
-import { slugifyForWork, workSlugFromName } from '@/lib/works/work-slug.shared';
+import {
+    TYPED_WORK_SLUG_MAX_LENGTH,
+    truncateWorkSlug,
+    isWorkSlugTooLong,
+    slugifyForWork,
+    workSlugFromName,
+} from '@/lib/works/work-slug.shared';
 
 /** Debounce window for the live slug-availability check (ms). */
 const SLUG_CHECK_DEBOUNCE_MS = 400;
@@ -121,7 +127,11 @@ export function WorkAICreator({
     // having to re-name the Work. We track whether the slug has been
     // manually edited so name changes don't overwrite a custom slug.
     const [slug, setSlug] = useState(
-        proposal?.slugSuggestion ?? workSlugFromName(proposal?.title ?? ''),
+        // An Idea's AI slug suggestion can run up to 80 characters: cut it to
+        // what a typed slug may be, so the form never opens with an error.
+        proposal?.slugSuggestion
+            ? truncateWorkSlug(proposal.slugSuggestion, TYPED_WORK_SLUG_MAX_LENGTH)
+            : workSlugFromName(proposal?.title ?? ''),
     );
     const [slugDirty, setSlugDirty] = useState(Boolean(proposal?.slugSuggestion));
     const [slugResult, setSlugResult] = useState<SlugCheckResult | null>(null);
@@ -192,9 +202,12 @@ export function WorkAICreator({
     // A monotonically-increasing version guards against out-of-order responses
     // overwriting a newer check.
     const slugCandidate = slugifyForWork(slug);
+    // A typed slug gets the cap a derived one has: the API takes any length,
+    // and an over-long slug failed only at repository creation.
+    const slugTooLong = isWorkSlugTooLong(slugCandidate);
     const slugCheckVersionRef = useRef(0);
     useEffect(() => {
-        if (!slugCandidate) return;
+        if (!slugCandidate || isWorkSlugTooLong(slugCandidate)) return;
         const version = ++slugCheckVersionRef.current;
         const timer = setTimeout(() => {
             void (async () => {
@@ -225,11 +238,12 @@ export function WorkAICreator({
     // Derived display status — `checking` whenever the latest resolved answer
     // doesn't (yet) match the current slug; `idle` when there's nothing to
     // check. No state/effect round-trip.
-    const slugStatus: SlugStatus = !slugCandidate
-        ? { kind: 'idle' }
-        : slugResult && slugResult.slug === slugCandidate
-          ? slugResult
-          : { kind: 'checking' };
+    const slugStatus: SlugStatus =
+        !slugCandidate || slugTooLong
+            ? { kind: 'idle' }
+            : slugResult && slugResult.slug === slugCandidate
+              ? slugResult
+              : { kind: 'checking' };
 
     // Single entry point for setting the slug. When the new value normalizes
     // to an empty candidate, drop any cached availability answer so a later
@@ -265,6 +279,11 @@ export function WorkAICreator({
         // disabling "Create repository" when the name is taken.
         if (slugStatus.kind === 'taken') {
             toast.error(t('errors.slugTaken'));
+            return;
+        }
+
+        if (slugTooLong) {
+            toast.error(t('errors.slugTooLong', { max: TYPED_WORK_SLUG_MAX_LENGTH }));
             return;
         }
 
@@ -391,8 +410,15 @@ export function WorkAICreator({
                             placeholder={t('slugPlaceholder')}
                             pattern="[a-z0-9-]+"
                             helperText={t('slugHelp')}
+                            error={
+                                slugTooLong
+                                    ? t('errors.slugTooLong', {
+                                          max: TYPED_WORK_SLUG_MAX_LENGTH,
+                                      })
+                                    : undefined
+                            }
                             variant="form"
-                            aria-invalid={slugStatus.kind === 'taken'}
+                            aria-invalid={slugStatus.kind === 'taken' || slugTooLong}
                             aria-describedby="work-slug-status"
                         />
                         <SlugAvailabilityHint
@@ -535,7 +561,9 @@ export function WorkAICreator({
             <div className="flex gap-3">
                 <Button
                     onClick={handleGenerate}
-                    disabled={isPending || !prompt.trim() || slugStatus.kind === 'taken'}
+                    disabled={
+                        isPending || !prompt.trim() || slugStatus.kind === 'taken' || slugTooLong
+                    }
                     loading={isPending}
                     variant="primary"
                     size="lg"
