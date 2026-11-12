@@ -258,7 +258,12 @@ describe('a quarantine a reboot left behind (2026-11-12)', () => {
 			if (h.files.has(newPath)) throw Object.assign(new Error('already exists'), { code: 'EEXIST' });
 			h.files.set(newPath, content);
 		};
-		const claims = () => [...h.files.keys()].filter((path) => path.endsWith('.reboot-clear'));
+		h.fs.readDirectory = async (dirPath) =>
+			[...h.files.keys()]
+				.filter((path) => h.fs.dirname(path) === dirPath)
+				.map((path) => path.slice(dirPath.length + 1));
+		const claims = () =>
+			[...h.files.keys()].filter((path) => /\.worker-session\.[^/]+\.reboot-clear$/.test(path)).sort();
 		return { ...h, renames, claims };
 	}
 
@@ -511,6 +516,10 @@ describe('a quarantine a reboot left behind (2026-11-12)', () => {
 		);
 		expect(h.files.get(MARKER_PATH)).toBe(third);
 		expect(h.claims().map((claim) => h.files.get(claim))).toEqual([live]);
+
+		// The third session releases its marker normally; the claimed one still blocks the next worker.
+		h.files.delete(MARKER_PATH);
+		await expectLeftoverClaimBlocks(h);
 	});
 
 	it('leaves the marker where the filesystem cannot claim it atomically', async () => {
@@ -523,5 +532,99 @@ describe('a quarantine a reboot left behind (2026-11-12)', () => {
 		await expect(gate.clearPreviousBootSession(previous!)).resolves.toBe(false);
 		expect(h.files.has(MARKER_PATH)).toBe(true);
 		expect(h.removes).toEqual([]);
+	});
+
+	/** A claim left beside an empty marker path quarantines the next worker, and only clear-quarantine lifts it. */
+	async function expectLeftoverClaimBlocks(h: ReturnType<typeof claimingFs>) {
+		expect(h.files.has(MARKER_PATH)).toBe(false);
+		expect(h.claims()).toHaveLength(1);
+		const next = bootGate(h.fs, probe(BOOT_B), RESTARTED + 60_000, 'session-next');
+		const quarantine = expect.objectContaining({
+			reason: expect.stringMatching(/interrupted reboot clearance left a worker safety marker at .*reboot-clear/)
+		});
+		await expect(next.acquire()).resolves.toEqual({ kind: 'blocked', state: quarantine });
+		await expect(next.inspect()).resolves.toEqual(quarantine);
+		// A claim holding THIS boot's (a racing session's) marker is not the reboot's to clear.
+		await expect(next.findPreviousBootSession()).resolves.toBeNull();
+		expect(h.files.has(MARKER_PATH)).toBe(false);
+
+		// clear-quarantine removes the leftover claim too, and the next worker acquires.
+		await next.clear();
+		expect(h.claims()).toEqual([]);
+		await expect(next.acquire()).resolves.toEqual({ kind: 'acquired', sessionId: 'session-next' });
+	}
+
+	it('a start killed between claiming a live marker and putting it back leaves a claim that blocks', async () => {
+		const h = await armedIn(BOOT_A);
+		const gate = bootGate(h.fs, probe(BOOT_B), RESTARTED);
+		const previous = await gate.findPreviousBootSession();
+		// A racing start armed its marker after the judgement...
+		h.files.set(MARKER_PATH, markerWith(BOOT_B));
+		// ...and this one dies right before the put-back.
+		h.fs.link = () => new Promise<void>(() => undefined);
+
+		void gate.clearPreviousBootSession(previous!);
+		await vi.waitFor(() => expect(h.claims()).toHaveLength(1), { timeout: 500 });
+
+		await expectLeftoverClaimBlocks(h);
+	});
+
+	it('with no hard links and an unreadable claim, the claim stays and blocks', async () => {
+		const h = await armedIn(BOOT_A);
+		const gate = bootGate(h.fs, probe(BOOT_B), RESTARTED);
+		const previous = await gate.findPreviousBootSession();
+		h.files.set(MARKER_PATH, markerWith(BOOT_B));
+		h.fs.link = undefined;
+		const { readFile } = h.fs;
+		h.fs.readFile = async (path) => {
+			if (path.endsWith('.reboot-clear')) throw Object.assign(new Error('sharing violation'), { code: 'EBUSY' });
+			return readFile(path);
+		};
+
+		await expect(gate.clearPreviousBootSession(previous!)).rejects.toThrow(
+			/claimed during reboot clearance is kept/
+		);
+		h.fs.readFile = readFile;
+
+		await expectLeftoverClaimBlocks(h);
+	});
+
+	it('a claim left by a clearance of an EARLIER boot is judged like the marker, and cleared', async () => {
+		// Killed after claiming the previous boot's own marker: the claim holds
+		// that marker, and the next start may finish the job.
+		const h = claimingFs();
+		const claim = `${MARKER_PATH}.0f0e0d0c-0b0a-4908-8706-050403020100.reboot-clear`;
+		h.files.set(claim, markerWith(BOOT_A));
+		const gate = bootGate(h.fs, probe(BOOT_B), RESTARTED, 'session-after-reboot');
+
+		const previous = await gate.findPreviousBootSession();
+		expect(previous?.files).toEqual([{ path: claim, raw: markerWith(BOOT_A) }]);
+		await expect(gate.clearPreviousBootSession(previous!)).resolves.toBe(true);
+		expect(h.claims()).toEqual([]);
+		await expect(gate.acquire()).resolves.toEqual({ kind: 'acquired', sessionId: 'session-after-reboot' });
+	});
+
+	it('clears nothing unless EVERY file is from an earlier boot of this machine', async () => {
+		const h = await armedIn(BOOT_A);
+		const claim = `${MARKER_PATH}.0f0e0d0c-0b0a-4908-8706-050403020100.reboot-clear`;
+		h.files.set(claim, markerWith(BOOT_B));
+		const gate = bootGate(h.fs, probe(BOOT_B), RESTARTED);
+
+		await expect(gate.findPreviousBootSession()).resolves.toBeNull();
+		await expect(gate.acquire()).resolves.toMatchObject({ kind: 'blocked' });
+		expect(h.files.has(MARKER_PATH)).toBe(true);
+		expect(h.claims()).toEqual([claim]);
+	});
+
+	it("only the marker's own claims count: temp files and other files beside it do not block", async () => {
+		const h = claimingFs();
+		h.files.set(`${MARKER_PATH}.1234.tmp`, 'staging');
+		h.files.set(`${CONFIG_PATH}.reboot-clear`, 'not a claim');
+		h.files.set(`${MARKER_PATH}.reboot-clear`, 'no uuid: not a claim');
+
+		await expect(bootGate(h.fs, probe(BOOT_B), RESTARTED, 'fresh').acquire()).resolves.toEqual({
+			kind: 'acquired',
+			sessionId: 'fresh'
+		});
 	});
 });

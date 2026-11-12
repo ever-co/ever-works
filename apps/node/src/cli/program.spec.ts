@@ -702,6 +702,10 @@ describe('ever-works-node start — a quarantine a reboot left behind (2026-11-1
 			if (h.files.has(newPath)) throw Object.assign(new Error('exists'), { code: 'EEXIST' });
 			h.files.set(newPath, content);
 		};
+		h.deps.fs.readDirectory = async (dirPath) =>
+			[...h.files.keys()]
+				.filter((path) => h.deps.fs.dirname(path) === dirPath)
+				.map((path) => path.slice(dirPath.length + 1));
 		const claims = () => [...h.files.keys()].filter((path) => path.endsWith('.reboot-clear'));
 		return { ...h, ops, claims };
 	}
@@ -799,6 +803,50 @@ describe('ever-works-node start — a quarantine a reboot left behind (2026-11-1
 		expect(h.files.get(CONFIG_PATH)).toBe(quarantined);
 		expect(h.output()).toContain('Worker host QUARANTINED');
 		expect(h.logged()).toContain('Could not clear the quarantine a reboot left behind');
+	});
+
+	it('stays quarantined for this start when the clearance fails after claiming the marker', async () => {
+		// The config is already cleared and the marker path is empty: only the
+		// claim and this start's own refusal stand between it and a lease.
+		const quarantined = JSON.stringify({ ...JSON.parse(storedConfig), unsafe });
+		const h = startHarness({ [CONFIG_PATH]: quarantined, [markerPath]: markerArmedIn(BOOT_BEFORE) }, BOOT_NOW);
+		const { remove } = h.deps.fs;
+		h.deps.fs.remove = async (filePath) => {
+			if (filePath.endsWith('.reboot-clear'))
+				throw Object.assign(new Error('locked by a scanner'), { code: 'EBUSY' });
+			await remove!(filePath);
+		};
+		let leaseCalls = 0;
+		const { fetchFn } = h.deps.io;
+		h.deps.io.fetchFn = async (url, init) => {
+			if (url.endsWith('/api/fleet/jobs/lease')) leaseCalls += 1;
+			return fetchFn(url, init);
+		};
+
+		expect(await runCli(['start', '--work'], h.deps)).toBe(EXIT_OK);
+
+		expect(parseConfig(h.files.get(CONFIG_PATH) ?? null)?.unsafe).toBeUndefined();
+		expect(h.files.has(markerPath)).toBe(false);
+		expect(h.claims()).toHaveLength(1);
+		expect(h.output()).toContain('Worker host QUARANTINED');
+		expect(h.logged()).toContain('this start stays quarantined');
+		expect(leaseCalls).toBe(0);
+	});
+
+	it('keeps the next start quarantined while a claim an interrupted clearance left stands', async () => {
+		// A start killed after claiming a racing session's marker (this boot's):
+		// the marker path is empty, and only the claim says a session may live.
+		const claim = `${markerPath}.0f0e0d0c-0b0a-4908-8706-050403020100.reboot-clear`;
+		const h = startHarness({ [CONFIG_PATH]: storedConfig, [claim]: markerArmedIn(BOOT_NOW) }, BOOT_NOW);
+
+		expect(await runCli(['start', '--work'], h.deps)).toBe(EXIT_OK);
+
+		expect(h.output()).toContain('Worker host QUARANTINED');
+		expect(h.files.has(markerPath)).toBe(false);
+		expect(h.files.has(claim)).toBe(true);
+
+		expect(await runCli(['clear-quarantine', '--confirm-process-tree-stopped'], h.deps)).toBe(EXIT_OK);
+		expect(h.claims()).toEqual([]);
 	});
 
 	it('leaves `clear-quarantine` as it was: it still needs the explicit confirmation', async () => {

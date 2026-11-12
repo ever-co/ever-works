@@ -29,6 +29,7 @@ function io(
 		existing?: string[] | Error;
 		env?: Record<string, string>;
 		hostname?: string;
+		osRelease?: () => string;
 		run?: Partial<RunResult> | Error;
 		uptimeSec?: () => number;
 	} = {}
@@ -57,6 +58,7 @@ function io(
 			}
 		},
 		hostname: () => overrides.hostname ?? 'Build-Box-01',
+		osRelease: overrides.osRelease ?? (() => '6.8.0-49-generic'),
 		uptimeSec: overrides.uptimeSec ?? (() => 120)
 	};
 	return { io: value, reads, runs };
@@ -112,6 +114,26 @@ describe('boot identity — Linux', () => {
 		// A check that cannot answer counts as a container.
 		await expect(
 			readBootIdentity(io('linux', { files: linuxFiles, existing: new Error('EACCES') }).io)
+		).resolves.toBeNull();
+	});
+
+	it('is null under WSL: `wsl --shutdown` is a new boot of the distro, not of the host', async () => {
+		for (const release of ['5.15.167.4-microsoft-standard-WSL2', '4.4.0-19041-Microsoft']) {
+			const h = io('linux', { files: linuxFiles, osRelease: () => release });
+			await expect(readBootIdentity(h.io)).resolves.toBeNull();
+			expect(h.reads).toEqual([]);
+		}
+		for (const env of [{ WSL_DISTRO_NAME: 'Ubuntu' }, { WSL_INTEROP: '/run/WSL/1_interop' }] as Record<
+			string,
+			string
+		>[]) {
+			await expect(readBootIdentity(io('linux', { files: linuxFiles, env }).io)).resolves.toBeNull();
+		}
+		const unreadable = () => {
+			throw new Error('uname failed');
+		};
+		await expect(
+			readBootIdentity(io('linux', { files: linuxFiles, osRelease: unreadable }).io)
 		).resolves.toBeNull();
 	});
 

@@ -1452,23 +1452,26 @@ export async function runPause(deps: CliDeps, paused: boolean, options: PauseCom
  * The worker-safety marker outlives a crashed session on purpose: that
  * session's process tree may still be running, so only an operator who has
  * verified it is gone may clear it (`clear-quarantine`). A reboot IS that
- * verification: it ends every process of the previous boot. So when the
- * marker provably belongs to an earlier boot of this machine (see
+ * verification: it ends every process of the previous boot. So when every
+ * worker-safety file provably belongs to an earlier boot of this machine (see
  * `findPreviousBootSession`), `start` clears it exactly as `clear-quarantine`
- * would: the config's `unsafe` first, the marker last, so a crash between
- * the two leaves the marker and stays fail-closed.
+ * would: the config's `unsafe` first, the files last, so a crash between the
+ * two leaves a file and stays fail-closed.
  *
  * Anything short of that proof keeps the quarantine as it was: a marker that
  * records no boot (an older node's), another machine's marker (a config
  * directory shared through a roaming profile or a moved volume), the same
  * boot (a crash or a restart), a boot that cannot be read (always so inside a
- * container), or a marker that cannot be read or parsed. The auto-clear
- * assumes a machine-local config directory.
+ * container or WSL), or a marker that cannot be read or parsed. The
+ * auto-clear assumes a machine-local config directory.
  *
- * It runs before this process's worker arms its own marker, and it claims
- * the judged marker with one atomic rename before removing it, putting back
- * anything else it claimed, so a second `start` racing this one keeps its
- * freshly armed marker.
+ * It runs before this process's worker arms its own marker. The judged marker
+ * is claimed with one atomic rename before it is removed, so a marker a racing
+ * `start` arms after the judgement is never unlinked; when the clearance
+ * cannot finish, the claim stays beside the marker and still blocks (see
+ * `clearPreviousBootSession`). And whenever it does not finish cleanly, THIS
+ * start stays quarantined too: the returned config carries an `unsafe` state
+ * (not written to disk), so the worker never arms in that run.
  */
 async function clearQuarantineLeftByReboot(deps: CliDeps, config: NodeConfig): Promise<NodeConfig> {
 	if (!deps.bootIdentity) return config;
@@ -1481,6 +1484,18 @@ async function clearQuarantineLeftByReboot(deps: CliDeps, config: NodeConfig): P
 	if (!previous) return config;
 
 	let current = config;
+	/** Fail closed for this run: the worker starts quarantined and arms nothing. */
+	const stayQuarantined = (why: string): NodeConfig => {
+		const reason = `${why}; verify every prior process tree and explicitly clear quarantine`;
+		deps.io.logger.warn(
+			`${reason} (\`ever-works-node clear-quarantine --confirm-process-tree-stopped\`); this start stays quarantined`
+		);
+		// A config `unsafe` that could not be cleared keeps its own reason.
+		return {
+			...current,
+			unsafe: current.unsafe ?? { since: new Date(deps.now?.() ?? Date.now()).toISOString(), reason }
+		};
+	};
 	try {
 		if (config.unsafe) {
 			const cleared = { ...config };
@@ -1493,16 +1508,12 @@ async function clearQuarantineLeftByReboot(deps: CliDeps, config: NodeConfig): P
 			current = cleared;
 		}
 		if (!(await safetyGate.clearPreviousBootSession(previous))) {
-			deps.io.logger.warn(
-				'The worker safety marker changed while the quarantine a reboot left behind was being cleared; it was left in place'
+			return stayQuarantined(
+				'The worker safety marker changed while the quarantine a reboot left behind was being cleared, and was left in place'
 			);
-			return current;
 		}
 	} catch (error) {
-		deps.io.logger.warn(
-			`Could not clear the quarantine a reboot left behind (${describeError(error)}); it stays until \`ever-works-node clear-quarantine --confirm-process-tree-stopped\``
-		);
-		return current;
+		return stayQuarantined(`Could not clear the quarantine a reboot left behind (${describeError(error)})`);
 	}
 	deps.io.logger.warn(
 		`Previous worker session (marker armed ${previous.since}) ended with the reboot at ${previous.bootedAt}; quarantine cleared automatically — a reboot stops every process tree of that session`

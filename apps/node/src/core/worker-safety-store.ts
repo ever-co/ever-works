@@ -42,39 +42,72 @@ export interface WorkerSafetyGate {
 }
 
 /**
- * An unreleased marker armed in an EARLIER boot of this machine: the reboot
- * since then ended every process tree that session started.
+ * What an interrupted reboot clearance leaves behind (2026-11-12).
+ *
+ * The clearance first MOVES the marker to `<marker>.<uuid>.reboot-clear` (one
+ * atomic rename) and only then looks at it, so a kill or a failure between
+ * that move and the end leaves the marker under that name. Nothing else ever
+ * writes such a name, and `acquire()`, `inspect()` and `clear()` treat it
+ * exactly like the marker itself: an interrupted clearance fails closed.
+ */
+const CLAIM_SUFFIX = '.reboot-clear';
+
+/** One file a reboot verdict covers: the marker, or a claim an interrupted clearance left. */
+export interface PreviousBootFile {
+	path: string;
+	/** The exact bytes judged; clearance removes nothing else. */
+	raw: string;
+}
+
+/**
+ * Every worker-safety file found (the marker, and any claim an interrupted
+ * clearance left) when EACH was armed in an EARLIER boot of this machine: the
+ * reboot since then ended every process tree those sessions started.
  */
 export interface PreviousBootSession {
-	/** When that session armed the marker. */
+	/** When the (first) judged session armed its marker. */
 	since: string;
 	/** When the current boot began (now minus uptime). */
 	bootedAt: string;
 	previousBoot: BootIdentity;
 	currentBoot: BootIdentity;
-	/** The exact marker bytes this verdict is about; clearance removes nothing else. */
-	raw: string;
+	/** The marker first, then any leftover claims. */
+	files: PreviousBootFile[];
 }
 
 /** The config-backed gate, plus the reboot clearance only `start` uses. */
 export interface ConfigWorkerSafetyGate extends WorkerSafetyGate {
 	/**
-	 * The unreleased marker when it PROVABLY belongs to an earlier boot of
-	 * THIS machine, else null. Proof needs both: the marker records a boot
-	 * of the same machine (host name, and machine id where there is one) and
-	 * of the same kind, whose value differs from this boot's; and this boot
-	 * began after the marker was armed (now minus uptime is later than its
-	 * `since`). No marker, a corrupt or unreadable one, one without a boot (an
-	 * older node), another machine's, the same boot (a crash or a restart), or
-	 * a boot that cannot be read (always so in a container): null, and the
-	 * quarantine stands. Never rejects.
+	 * The verdict when EVERY worker-safety file (the marker, and any claim an
+	 * interrupted clearance left) PROVABLY belongs to an earlier boot of THIS
+	 * machine, else null. Proof needs, for each file: a boot of the same
+	 * machine (host name, and machine id where there is one) and of the same
+	 * kind, whose value differs from this boot's; and this boot began after
+	 * that file's session armed it (now minus uptime is later than its
+	 * `since`). Nothing found, any file corrupt, unreadable, without a boot (an
+	 * older node), another machine's or from this boot (a crash, a restart, a
+	 * racing start), or a boot that cannot be read (always so in a container):
+	 * null, and the quarantine stands. Never rejects.
 	 */
 	findPreviousBootSession(): Promise<PreviousBootSession | null>;
 	/**
-	 * Remove exactly the marker `findPreviousBootSession` judged: it is claimed
-	 * with one atomic rename and removed only if the claimed bytes are the
-	 * judged ones; anything else is put back. True when the judged marker is
-	 * gone; false when it was not the marker on disk (nothing removed).
+	 * Remove the files `findPreviousBootSession` judged, and nothing else.
+	 *
+	 * The marker is first claimed with one atomic rename, so a marker a racing
+	 * start arms after the judgement is never unlinked; the claim is removed
+	 * only if it holds the judged bytes, and anything else is put back (hard
+	 * link, else exclusive create, never over a marker that appeared since).
+	 * When that cannot finish (this process is killed, or the put-back is
+	 * refused because yet another marker appeared) the claim stays beside the
+	 * marker path, where `acquire()` and `inspect()` see it as a quarantine: a
+	 * racing session's marker is never lost, though it may then take an
+	 * explicit `clear-quarantine`.
+	 *
+	 * True when every judged file is gone; false when the marker on disk was
+	 * not the judged one (nothing removed). Rejects on a filesystem failure,
+	 * which always leaves the marker or its claim in place. A filesystem that
+	 * cannot rename, remove and list (so could not find a claim again) clears
+	 * nothing: false.
 	 */
 	clearPreviousBootSession(session: PreviousBootSession): Promise<boolean>;
 }
@@ -112,6 +145,9 @@ export function createConfigWorkerSafetyGate(
 	options: ConfigWorkerSafetyGateOptions = {}
 ): ConfigWorkerSafetyGate {
 	const markerPath = workerSafetyMarkerPath(configPath);
+	const markerDir = fs.dirname(markerPath);
+	const markerName = markerPath.slice(markerDir.length).replace(/^[\\/]+/, '');
+	const separator = markerPath.charAt(markerDir.length) === '\\' ? '\\' : '/';
 	const now = options.now ?? (() => Date.now());
 	const createSessionId = options.createSessionId ?? randomUUID;
 	const bootIdentity = async (): Promise<BootIdentity | null> => {
@@ -126,7 +162,8 @@ export function createConfigWorkerSafetyGate(
 	 * Put a claimed marker back at the marker path; false when the claim is
 	 * gone (nothing to restore). Both ways refuse to replace a marker that
 	 * appeared there meanwhile; when neither works the claim is KEPT (the
-	 * caller does not remove it) and the failure is reported.
+	 * caller does not remove it, and it still blocks) and the failure is
+	 * reported.
 	 */
 	const putBack = async (claim: string, content: string | null): Promise<boolean> => {
 		if (fs.link) {
@@ -162,15 +199,73 @@ export function createConfigWorkerSafetyGate(
 		}
 	};
 
+	/** Claims an interrupted reboot clearance left beside the marker. */
+	const leftoverClaims = async (): Promise<string[]> => {
+		if (!fs.readDirectory) return [];
+		let names: string[];
+		try {
+			names = await fs.readDirectory(markerDir);
+		} catch (error) {
+			throw prerequisite(`cannot list the worker safety marker's directory: ${detail(error)}`);
+		}
+		return names
+			.filter(
+				(name) =>
+					name.startsWith(`${markerName}.`) &&
+					name.endsWith(CLAIM_SUFFIX) &&
+					name.length > markerName.length + 1 + CLAIM_SUFFIX.length
+			)
+			.sort()
+			.map((name) => `${markerDir}${separator}${name}`);
+	};
+
+	/** The quarantine a leftover claim imposes, or null when there is none. */
+	const leftoverClaimState = async (): Promise<WorkerSafetyState | null> => {
+		const [claim] = await leftoverClaims();
+		if (!claim) return null;
+		let raw: string | null;
+		try {
+			raw = await fs.readFile(claim);
+		} catch {
+			raw = null;
+		}
+		const marker = raw === null ? null : parseMarker(raw);
+		return {
+			since: marker?.since ?? new Date(now()).toISOString(),
+			reason: `An interrupted reboot clearance left a worker safety marker at ${claim}; verify every prior process tree and explicitly clear quarantine`
+		};
+	};
+
 	const inspect = async (): Promise<WorkerSafetyState | null> => {
 		const raw = await readRaw();
-		return raw === null ? null : blockedState(raw, now());
+		if (raw !== null) return blockedState(raw, now());
+		return leftoverClaimState();
 	};
+
+	/** Whether `marker` was armed in an earlier boot of this machine than `current` (booted at `bootedAtMs`). */
+	const fromEarlierBoot = (
+		marker: WorkerSessionMarker | null,
+		current: BootIdentity,
+		bootedAtMs: number
+	): marker is WorkerSessionMarker & { boot: BootIdentity } =>
+		!!marker?.boot &&
+		// A different boot proves a reboot only of the SAME machine: a config
+		// directory another machine also uses (a roaming profile, a moved
+		// volume) may hold that machine's live marker.
+		current.source === marker.boot.source &&
+		sameMachine(current, marker.boot) &&
+		current.value !== marker.boot.value &&
+		// Second, independent proof: this boot began AFTER the marker was
+		// armed. A boot identity that moved without a reboot (a counter
+		// touched on resume, say) cannot clear a quarantine on its own.
+		bootedAtMs > Date.parse(marker.since);
 
 	return {
 		async acquire(): Promise<WorkerSafetyAcquisition> {
 			const existing = await readRaw();
 			if (existing !== null) return { kind: 'blocked', state: blockedState(existing, now()) };
+			const leftover = await leftoverClaimState();
+			if (leftover) return { kind: 'blocked', state: leftover };
 			if (!fs.createFileExclusive) {
 				throw prerequisite('filesystem does not provide atomic exclusive marker creation');
 			}
@@ -234,38 +329,32 @@ export function createConfigWorkerSafetyGate(
 		inspect,
 
 		async clear(): Promise<void> {
-			if ((await readRaw()) === null) return;
+			// The marker, and any claim an interrupted reboot clearance left.
+			const claims = await leftoverClaims();
+			if ((await readRaw()) === null && claims.length === 0) return;
 			if (!fs.remove) throw prerequisite('filesystem cannot clear the durable safety marker');
 			await fs.remove(markerPath);
-			if ((await readRaw()) !== null) {
+			for (const claim of claims) await fs.remove(claim);
+			if ((await readRaw()) !== null || (await leftoverClaims()).length > 0) {
 				throw prerequisite('worker safety marker still exists after explicit clearance');
 			}
 		},
 
 		async findPreviousBootSession(): Promise<PreviousBootSession | null> {
-			let raw: string | null;
+			const files: PreviousBootFile[] = [];
 			try {
-				raw = await readRaw();
+				const raw = await readRaw();
+				if (raw !== null) files.push({ path: markerPath, raw });
+				for (const claim of await leftoverClaims()) {
+					const content = await fs.readFile(claim);
+					if (content !== null) files.push({ path: claim, raw: content });
+				}
 			} catch {
 				return null;
 			}
-			const marker = raw === null ? null : parseMarker(raw);
-			if (raw === null || !marker?.boot) return null;
+			if (files.length === 0) return null;
 			const current = await bootIdentity();
-			// A different boot proves a reboot only of the SAME machine: a config
-			// directory another machine also uses (a roaming profile, a moved
-			// volume) may hold that machine's live marker.
-			if (
-				!current ||
-				current.source !== marker.boot.source ||
-				!sameMachine(current, marker.boot) ||
-				current.value === marker.boot.value
-			) {
-				return null;
-			}
-			// Second, independent proof: this boot began AFTER the marker was
-			// armed. A boot identity that moved without a reboot (a counter
-			// touched on resume, say) cannot clear a quarantine on its own.
+			if (!current) return null;
 			let uptimeSec: number | null;
 			try {
 				uptimeSec = options.bootIdentity?.uptimeSec() ?? null;
@@ -274,46 +363,72 @@ export function createConfigWorkerSafetyGate(
 			}
 			if (uptimeSec === null || !Number.isFinite(uptimeSec) || uptimeSec < 0) return null;
 			const bootedAtMs = now() - uptimeSec * 1000;
-			if (!Number.isFinite(bootedAtMs) || !(bootedAtMs > Date.parse(marker.since))) return null;
+			if (!Number.isFinite(bootedAtMs)) return null;
+			const judged: Array<WorkerSessionMarker & { boot: BootIdentity }> = [];
+			for (const file of files) {
+				const marker = parseMarker(file.raw);
+				if (!fromEarlierBoot(marker, current, bootedAtMs)) return null;
+				judged.push(marker);
+			}
 			return {
-				since: marker.since,
+				since: judged[0].since,
 				bootedAt: new Date(bootedAtMs).toISOString(),
-				previousBoot: marker.boot,
+				previousBoot: judged[0].boot,
 				currentBoot: current,
-				raw
+				files
 			};
 		},
 
 		async clearPreviousBootSession(session: PreviousBootSession): Promise<boolean> {
-			// CLAIM the marker with one atomic rename, then look at what was
-			// claimed. A read followed by an unlink is two steps, and a second
-			// `start` racing this one could arm its own marker in between; the
-			// unlink would then remove a LIVE marker. After the rename, the
-			// marker path is never written by this function except to put back
-			// a marker that turned out not to be the one judged.
-			const { rename, remove } = fs;
-			if (!rename || !remove) return false; // Cannot claim atomically: leave it (fail-closed).
-			const claim = `${markerPath}.${randomUUID()}.reboot-clear`;
-			try {
-				await rename(markerPath, claim);
-			} catch (error) {
-				if (errorCode(error) === 'ENOENT') return true; // Already gone: another start cleared it.
-				throw prerequisite(`could not claim the worker safety marker for reboot clearance: ${detail(error)}`);
+			const { rename, remove, readDirectory } = fs;
+			if (!rename || !remove || !readDirectory) return false; // Leave everything (fail-closed).
+			let allGone = true;
+			for (const file of session.files) {
+				if (file.path !== markerPath) {
+					// A leftover claim. A claim name is never reused and nothing
+					// else writes one, so its bytes cannot change under us.
+					let content: string | null;
+					try {
+						content = await fs.readFile(file.path);
+					} catch (error) {
+						throw prerequisite(`cannot read ${file.path}: ${detail(error)}`);
+					}
+					if (content === null) continue; // Another start finished it.
+					if (content !== file.raw) {
+						allGone = false;
+						continue;
+					}
+					await remove(file.path);
+					continue;
+				}
+				// The marker: CLAIM it with one atomic rename, then look at what was
+				// claimed. A read followed by an unlink would let a racing start arm
+				// its own marker in between, and the unlink would remove it.
+				const claim = `${markerPath}.${randomUUID()}${CLAIM_SUFFIX}`;
+				try {
+					await rename(markerPath, claim);
+				} catch (error) {
+					if (errorCode(error) === 'ENOENT') continue; // Already gone: another start cleared it.
+					throw prerequisite(
+						`could not claim the worker safety marker for reboot clearance: ${detail(error)}`
+					);
+				}
+				let claimed: string | null;
+				try {
+					claimed = await fs.readFile(claim);
+				} catch {
+					claimed = null;
+				}
+				if (claimed === file.raw) {
+					await remove(claim);
+					continue;
+				}
+				// Not the marker that was judged (a racing start armed it after the
+				// judged one went): put it back, and only then drop the claim.
+				if (await putBack(claim, claimed)) await remove(claim);
+				allGone = false;
 			}
-			let claimed: string | null;
-			try {
-				claimed = await fs.readFile(claim);
-			} catch {
-				claimed = null;
-			}
-			if (claimed === session.raw) {
-				await remove(claim);
-				return true;
-			}
-			// Not the marker that was judged (a racing start armed it after the
-			// judged one went): put it back, and only then drop the claim.
-			if (await putBack(claim, claimed)) await remove(claim);
-			return false;
+			return allGone;
 		}
 	};
 }

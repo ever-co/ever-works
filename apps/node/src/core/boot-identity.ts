@@ -34,6 +34,10 @@ import type { CommandRunner } from './capabilities';
  * anywhere, and the state volume may move with it. The auto-clear assumes a
  * machine-local config directory; a container keeps today's quarantine.
  *
+ * WSL counts as a container here: `wsl --shutdown` gives the distro a new
+ * `boot_id` and a fresh uptime with no host reboot, while Windows processes a
+ * job started through interop may still be running.
+ *
  * Anything else, or any failure, is `null`, which keeps today's behaviour: the
  * marker carries no boot, and nothing clears itself.
  */
@@ -69,6 +73,8 @@ export interface BootIdentityIo {
 	runner: CommandRunner;
 	/** `os.hostname()`. */
 	hostname(): string;
+	/** `os.release()`: the kernel release (WSL's names Microsoft). */
+	osRelease(): string;
 	/** `os.uptime()`. */
 	uptimeSec(): number;
 }
@@ -93,8 +99,19 @@ export const LINUX_CONTAINER_MARKERS: readonly string[] = [
 	'/run/.containerenv',
 	'/run/systemd/container'
 ];
-/** Set in every Kubernetes pod, and by container managers for the container's processes. */
-export const CONTAINER_ENV_MARKERS: readonly string[] = ['KUBERNETES_SERVICE_HOST', 'container'];
+/**
+ * Set in every Kubernetes pod, by container managers for the container's
+ * processes, and by WSL for processes it starts (a systemd service in WSL may
+ * lack these, which is why the kernel release is checked too).
+ */
+export const CONTAINER_ENV_MARKERS: readonly string[] = [
+	'KUBERNETES_SERVICE_HOST',
+	'container',
+	'WSL_DISTRO_NAME',
+	'WSL_INTEROP'
+];
+/** A WSL kernel's release (`5.15.167.4-microsoft-standard-WSL2`, `4.4.0-19041-Microsoft`). */
+const WSL_KERNEL_RELEASE = /microsoft|wsl/i;
 
 const PROBE_TIMEOUT_MS = 10_000;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -156,10 +173,15 @@ export function sameMachine(a: BootIdentity, b: BootIdentity): boolean {
 	return a.hostname === b.hostname && (a.machineId ?? null) === (b.machineId ?? null);
 }
 
-/** A container, or a check that could not answer (counted as one: fail-closed). */
+/** A container or WSL, or a check that could not answer (counted as one: fail-closed). */
 async function inContainer(io: BootIdentityIo): Promise<boolean> {
 	if (CONTAINER_ENV_MARKERS.some((name) => (io.env[name] ?? '').trim() !== '')) return true;
 	if (io.platform !== 'linux') return false;
+	try {
+		if (WSL_KERNEL_RELEASE.test(io.osRelease())) return true;
+	} catch {
+		return true;
+	}
 	for (const marker of LINUX_CONTAINER_MARKERS) {
 		try {
 			if (await io.exists(marker)) return true;

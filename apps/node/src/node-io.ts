@@ -793,6 +793,7 @@ export function createSystemBootIdentityProbe(runner: CommandRunner): BootIdenti
 		env: process.env,
 		runner,
 		hostname: () => os.hostname(),
+		osRelease: () => os.release(),
 		uptimeSec: () => os.uptime()
 	});
 }
