@@ -318,6 +318,89 @@ describe('workbench KbSearchPalette', () => {
         expect(screen.queryByTestId('kb-workbench-search-palette-noresults')).toBeNull();
     });
 
+    it('joins several validator reasons with "; "', async () => {
+        (globalThis as { fetch: typeof fetch }).fetch = vi.fn(
+            async () =>
+                new Response(
+                    JSON.stringify({
+                        message: [
+                            'tags must contain no more than 10 elements',
+                            'each value in tags must be shorter than or equal to 64 characters',
+                        ],
+                    }),
+                    { status: 400, headers: { 'Content-Type': 'application/json' } },
+                ),
+        ) as unknown as typeof fetch;
+
+        render(<KbSearchPalette workId="work-1" defaultOpen debounceMs={10} />);
+        fireEvent.change(screen.getByTestId('kb-workbench-search-palette-input'), {
+            target: { value: 'asdf' },
+        });
+
+        const error = await screen.findByTestId('kb-workbench-search-palette-error', undefined, {
+            timeout: 3000,
+        });
+        expect(error.textContent).toContain(
+            'tags must contain no more than 10 elements; each value in tags must be shorter',
+        );
+    });
+
+    it('shows no raw text for a network failure or an unreadable reply', async () => {
+        (globalThis as { fetch: typeof fetch }).fetch = vi.fn(async () => {
+            throw new TypeError('Failed to fetch');
+        }) as unknown as typeof fetch;
+
+        render(<KbSearchPalette workId="work-1" defaultOpen debounceMs={10} />);
+        fireEvent.change(screen.getByTestId('kb-workbench-search-palette-input'), {
+            target: { value: 'asdf' },
+        });
+
+        const error = await screen.findByTestId('kb-workbench-search-palette-error', undefined, {
+            timeout: 3000,
+        });
+        expect(error.textContent).toBe('search.failed');
+    });
+
+    it('clears the error after a later successful search, and when the query is cleared', async () => {
+        let refuse = true;
+        (globalThis as { fetch: typeof fetch }).fetch = vi.fn(async () =>
+            refuse
+                ? new Response(JSON.stringify({ message: 'refused' }), {
+                      status: 400,
+                      headers: { 'Content-Type': 'application/json' },
+                  })
+                : new Response(JSON.stringify({ hits: [hit({ title: 'Back' })], total: 1 }), {
+                      status: 200,
+                      headers: { 'Content-Type': 'application/json' },
+                  }),
+        ) as unknown as typeof fetch;
+
+        render(<KbSearchPalette workId="work-1" defaultOpen debounceMs={10} />);
+        const input = screen.getByTestId('kb-workbench-search-palette-input');
+        fireEvent.change(input, { target: { value: 'first' } });
+        await screen.findByTestId('kb-workbench-search-palette-error', undefined, {
+            timeout: 3000,
+        });
+
+        refuse = false;
+        fireEvent.change(input, { target: { value: 'second' } });
+        await screen.findByTestId('kb-workbench-search-palette-result', undefined, {
+            timeout: 3000,
+        });
+        expect(screen.queryByTestId('kb-workbench-search-palette-error')).toBeNull();
+
+        refuse = true;
+        fireEvent.change(input, { target: { value: 'third' } });
+        await screen.findByTestId('kb-workbench-search-palette-error', undefined, {
+            timeout: 3000,
+        });
+        fireEvent.change(input, { target: { value: '' } });
+        await waitFor(() => {
+            expect(screen.queryByTestId('kb-workbench-search-palette-error')).toBeNull();
+        });
+        expect(screen.getByTestId('kb-workbench-search-palette-empty')).toBeTruthy();
+    });
+
     it('renders a loading shimmer while the search request is pending', async () => {
         // Mock fetch that never resolves so we observe the shimmer mid-flight.
         (globalThis as { fetch: typeof fetch }).fetch = vi.fn(

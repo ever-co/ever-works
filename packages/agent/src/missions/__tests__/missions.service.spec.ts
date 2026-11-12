@@ -1545,6 +1545,22 @@ defaults:
         expect(updated.missionTemplateRepo).toBe(OWN_STARTER_FORK);
     });
 
+    it('an update re-sending the stored custom template does not re-check it', async () => {
+        // Stored while usable; archived since. Echoing it back with an unrelated edit is
+        // no template change and must not answer 404.
+        const created = await create('u1', OWN_STARTER_FORK);
+        jest.mocked(catalog.getVisibleTemplateForUser).mockClear();
+        jest.mocked(catalog.getVisibleTemplateForUser).mockResolvedValue(null);
+
+        const updated = await build().update('u1', created.id, {
+            title: 'Renamed',
+            missionTemplateRepo: OWN_STARTER_FORK,
+        });
+
+        expect(updated).toMatchObject({ title: 'Renamed', missionTemplateRepo: OWN_STARTER_FORK });
+        expect(catalog.getVisibleTemplateForUser).not.toHaveBeenCalled();
+    });
+
     it('the other person’s template applies for its owner', async () => {
         const dto = await create('u2', OTHER_PERSONS);
         expect(git.getFileContent).toHaveBeenCalledWith(

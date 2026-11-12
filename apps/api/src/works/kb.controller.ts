@@ -50,7 +50,7 @@ import {
     type MachinePrincipalRequest,
 } from '../auth/machine-principal';
 import { AuthenticatedUser } from '@src/auth/types/auth.types';
-import { KB_DOCUMENT_STATUSES } from '@ever-works/contracts';
+import { KB_DOCUMENT_CLASSES, KB_DOCUMENT_STATUSES } from '@ever-works/contracts';
 import { DuplicateKbDocumentDto } from './dto/duplicate-kb-document.dto';
 import type {
     KbDecisionStatus,
@@ -193,7 +193,12 @@ export class KbController {
     @Get('works/:id/kb/documents')
     @HttpCode(HttpStatus.OK)
     @ApiOperation({ summary: 'List KB documents for a Work' })
-    @ApiQuery({ name: 'class', required: false })
+    @ApiQuery({
+        name: 'class',
+        required: false,
+        enum: [...KB_DOCUMENT_CLASSES],
+        description: 'One class. For several, use `classes`.',
+    })
     @ApiQuery({ name: 'status', required: false })
     @ApiQuery({
         name: 'statuses',
@@ -221,11 +226,14 @@ export class KbController {
             'Memory upgrades M8 — review-queue filter. `proposed` lists only agent-authored / synthesized documents awaiting human review (excluded from context injection until accepted); `accepted` lists the reviewed set including pre-M7 rows whose column is NULL. Omit to list everything.',
     })
     @ApiQuery({
-        name: 'class',
+        // `class` takes ONE value (`?class=a&class=b` is refused); the
+        // repeatable facet is `classes`, normalised like `sources` / `statuses`.
+        name: 'classes',
         required: false,
         isArray: true,
+        enum: [...KB_DOCUMENT_CLASSES],
         description:
-            'Memory facets — repeatable class filter behind the workbench type chips (`?class=decision&class=output`). A single value keeps the original single-class behaviour.',
+            'Memory facets — repeatable class filter behind the workbench type chips (`?classes=decision&classes=output` or `?classes=decision,output`): a document matches ANY of them. With `class` as well, only the classes in both apply (none in common → no documents).',
     })
     @ApiQuery({
         name: 'source',

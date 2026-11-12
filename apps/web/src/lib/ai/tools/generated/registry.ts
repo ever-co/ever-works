@@ -970,7 +970,7 @@ export const OPERATION_REGISTRY: OperationSpec[] = [
         kind: 'create',
         body: true,
         bodyHint:
-            'url, optional events[], workId, description. The platform generates the signing key itself.',
+            'url, optional events[], workId, description, organizationIds[] (Organization ids whose events it receives), excludeOriginTags[] (origin tags it skips). The platform generates the signing key itself.',
         // Works-security: a webhook ships event payloads to an outside URL.
         requiresConfirmation: true,
         confirmationKind: 'privileged',
@@ -985,7 +985,9 @@ export const OPERATION_REGISTRY: OperationSpec[] = [
         body: true,
         bodyHint:
             'Any of: status ("active" | "paused"), url, events[], description, organizationIds[] (Organization ids whose events it receives), excludeOriginTags[] (origin tags it skips).',
-        // Works-security: changing url / events re-points what goes out;
+        // Works-security: everything but a description change or a pause asks
+        // (`redirectsWebhook` is an allowlist): url / events / secret /
+        // organizationIds / excludeOriginTags change what goes out, and
         // `status: 'active'` resumes delivery.
         confirmWhen: redirectsWebhook,
         confirmationKind: 'privileged',

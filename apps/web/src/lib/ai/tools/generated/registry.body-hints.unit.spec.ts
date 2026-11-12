@@ -103,7 +103,7 @@ const CASES: Array<{
     {
         tool: 'create_webhook',
         dto: 'CreateWebhookSubscriptionDto',
-        names: ['url'],
+        names: ['url', 'organizationIds', 'excludeOriginTags'],
         notNamed: ['secret'],
     },
     {
