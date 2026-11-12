@@ -236,6 +236,52 @@ describe('checkouts module (FL-14 T-11)', () => {
 		);
 	});
 
+	it('clones a pull request’s head onto the remote branch the platform names in existingBranch (FL-15 FR-20)', async () => {
+		git = async (args) => {
+			calls.push([...args]);
+			if (args[0] === 'clone' || args[0] === 'switch') return { code: 0, stdout: '', stderr: '' };
+			if (args[0] === 'rev-parse' && args[1] === '--abbrev-ref') return { code: 0, stdout: 'main\n', stderr: '' };
+			if (args[0] === 'rev-parse' && args.includes('refs/remotes/origin/nina/fix-login')) {
+				return { code: 0, stdout: 'a'.repeat(40), stderr: '' };
+			}
+			return { code: 1, stdout: '', stderr: '' };
+		};
+		const create = build(MANAGE).machineVerbs!['checkouts.create'];
+		const params = {
+			checkoutId: '22222222-2222-2222-2222-222222222222',
+			path: join(pool, 'checkouts', 'acme-api', 'fix-login'),
+			source: { kind: 'clone', repoUrl: 'https://github.com/acme/api.git', credential: false },
+			branch: 'nina/fix-login-2',
+			existingBranch: 'nina/fix-login',
+			baseRef: null,
+			createdBy: 'user'
+		};
+		const result = (await create.run(context(params, MANAGE, 'checkouts.create'))) as { exitCode: number };
+		expect(result.exitCode).toBe(0);
+		expect(calls).toContainEqual(['switch', '--track', 'origin/nina/fix-login']);
+		expect(calls.some((argv) => argv.includes('nina/fix-login-2'))).toBe(false);
+
+		await expect(
+			create.run(
+				context(
+					{
+						...params,
+						checkoutId: '33333333-3333-3333-3333-333333333333',
+						path: join(pool, 'checkouts', 'acme-api', 'other'),
+						existingBranch: '--upload-pack=evil'
+					},
+					MANAGE,
+					'checkouts.create'
+				)
+			)
+		).rejects.toSatisfy(
+			(error: unknown) =>
+				error instanceof MachineVerbError &&
+				error.error.code === 'invalid' &&
+				(error.error.details as { field?: string } | undefined)?.field === 'existingBranch'
+		);
+	});
+
 	it('declares list read-only and sync state-changing (the kill switch refuses sync)', () => {
 		const module = build(MANAGE);
 		expect(module.machineVerbs!['checkouts.list'].stateChanging).toBe(false);
