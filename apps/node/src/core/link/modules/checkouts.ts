@@ -81,11 +81,13 @@ import { MachineVerbError, type MachineVerbContext, type NodeModule } from './re
  *    asked. `refresh` recomputes git lines; nothing in a list contacts a
  *    remote (FR-10) except `remoteHeads` (FL-06's flag, FR-26b), and only on
  *    request.
- *  - `checkouts.create { checkoutId, path, source, branch, baseRef, createdBy }`
- *    (P2) — a fresh clone or a worktree, at the exact path the platform
- *    named, which must sit under this node's checkouts root and not exist
- *    yet. A clone authenticates only with the operation-scoped credential the
- *    platform mints for it (FR-17); a partial folder is removed on failure.
+ *  - `checkouts.create { checkoutId, path, source, branch, existingBranch?,
+ *    baseRef, createdBy }` (P2) — a fresh clone or a worktree, at the exact
+ *    path the platform named, which must sit under this node's checkouts root
+ *    and not exist yet. A clone authenticates only with the operation-scoped
+ *    credential the platform mints for it (FR-17); a partial folder is removed
+ *    on failure. A clone given `existingBranch` checks it out when the remote
+ *    has it (a pull request's head), else makes `branch`.
  *  - `checkouts.sync { path, op }` — fetch, pull (fast-forward only, refused on
  *    a dirty tree, U7) and push. On a `discovered` checkout these run with the
  *    machine's own git configuration and login (FR-23); on one Ever Works
@@ -583,6 +585,13 @@ export function createCheckoutsModule(options: CheckoutsModuleOptions): Checkout
 		}
 		const branch = params.branch;
 		if (!isFleetCheckoutBranchName(branch)) refuse('invalid', 'branch', { field: 'branch' });
+		// A clone of a branch the remote may already have (a pull request's head, FL-15 FR-20); worktrees ignore it.
+		const existingBranch =
+			params.existingBranch === null || params.existingBranch === undefined
+				? null
+				: isFleetCheckoutBranchName(params.existingBranch)
+					? params.existingBranch
+					: refuse('invalid', 'existingBranch', { field: 'existingBranch' });
 		const baseRef =
 			params.baseRef === null || params.baseRef === undefined
 				? null
@@ -633,7 +642,10 @@ export function createCheckoutsModule(options: CheckoutsModuleOptions): Checkout
 					};
 					const clone = (operation: CheckoutOperationOptions) => {
 						context.progress({ percent: 20, message: 'clone' });
-						return cloneCheckout({ path: target, repoUrl, branch: branch as string, baseRef }, operation);
+						return cloneCheckout(
+							{ path: target, repoUrl, branch: branch as string, baseRef, existingBranch },
+							operation
+						);
 					};
 					if (scoped) {
 						if (!options.credentials) {
