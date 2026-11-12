@@ -85,6 +85,13 @@ describe('NewTaskForm — template mode keeps the description within 8000 charac
         expect(instantiateTaskTemplateAction).not.toHaveBeenCalled();
     });
 
+    it('counts code points like the API: 4001 emoji (8002 UTF-16 units) still fit', async () => {
+        await renderInTemplateMode();
+        fireEvent.change(descriptionField(), { target: { value: '😀'.repeat(4001) } });
+
+        expect(screen.queryByTestId('new-task-description-too-long')).toBeNull();
+    });
+
     it('leaves a blank Task’s description alone (that endpoint has no cap)', () => {
         render(<NewTaskForm createTask={vi.fn()} />);
         fireEvent.change(descriptionField(), {

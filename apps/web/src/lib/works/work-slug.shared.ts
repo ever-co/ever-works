@@ -26,6 +26,14 @@ export const WORK_SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
  */
 export const GENERATED_WORK_SLUG_MAX_LENGTH = 60;
 
+/**
+ * Longest slug a person may TYPE: GitHub's 100-character repository-name limit
+ * minus the longest suffix the platform appends, `-website` (8). The API has no
+ * length rule of its own; this is the length past which repository creation
+ * fails. Derived slugs keep the tighter {@link GENERATED_WORK_SLUG_MAX_LENGTH}.
+ */
+export const TYPED_WORK_SLUG_MAX_LENGTH = 92;
+
 // Cyrillic (Russian, Ukrainian, Bulgarian, Serbian…) and Greek, lowercase.
 const TRANSLITERATION: Record<string, string> = {
     а: 'a',
@@ -172,15 +180,15 @@ export function quickCreateSlugFromPrompt(
 }
 
 /**
- * Is a slug the user TYPED longer than a derived one may be? The API's slug
+ * Is a slug the user TYPED too long to become a repository? The API's slug
  * rule has no length cap, so an over-long slug was accepted and the create
  * failed late, at repository creation (`<slug>-website` past GitHub's
- * 100-character name limit). The Create-Work form holds a typed slug to
- * {@link GENERATED_WORK_SLUG_MAX_LENGTH}, the cap a derived slug already gets,
- * so both follow one rule.
+ * 100-character name limit). The real limit is
+ * {@link TYPED_WORK_SLUG_MAX_LENGTH} (92); slugs of 61-92 characters work and
+ * stay allowed.
  */
 export function isWorkSlugTooLong(slug: string): boolean {
-    return slug.length > GENERATED_WORK_SLUG_MAX_LENGTH;
+    return slug.length > TYPED_WORK_SLUG_MAX_LENGTH;
 }
 
 /** Does `slug` satisfy the API's slug contract? */

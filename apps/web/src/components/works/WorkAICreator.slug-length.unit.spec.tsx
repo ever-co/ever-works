@@ -44,9 +44,9 @@ vi.mock('./shared/WorkTemplatePicker', () => ({ WorkTemplatePicker: () => null }
 vi.mock('./detail/shared', () => ({ CollapsibleSection: () => null }));
 
 import { WorkAICreator } from './WorkAICreator';
-import { GENERATED_WORK_SLUG_MAX_LENGTH } from '@/lib/works/work-slug.shared';
+import { TYPED_WORK_SLUG_MAX_LENGTH } from '@/lib/works/work-slug.shared';
 
-const TOO_LONG = `errors.slugTooLong:${JSON.stringify({ max: GENERATED_WORK_SLUG_MAX_LENGTH })}`;
+const TOO_LONG = `errors.slugTooLong:${JSON.stringify({ max: TYPED_WORK_SLUG_MAX_LENGTH })}`;
 
 function renderForm() {
     render(
@@ -79,7 +79,7 @@ describe('WorkAICreator — a typed slug longer than a derived one may be', () =
     it('takes a slug of exactly the cap', () => {
         renderForm();
         fireEvent.change(slugField(), {
-            target: { value: 'a'.repeat(GENERATED_WORK_SLUG_MAX_LENGTH) },
+            target: { value: 'a'.repeat(TYPED_WORK_SLUG_MAX_LENGTH) },
         });
 
         expect(screen.queryByText(TOO_LONG)).toBeNull();
@@ -89,7 +89,7 @@ describe('WorkAICreator — a typed slug longer than a derived one may be', () =
     it('says why a longer one is refused, and does not create the Work', () => {
         renderForm();
         fireEvent.change(slugField(), {
-            target: { value: 'a'.repeat(GENERATED_WORK_SLUG_MAX_LENGTH + 1) },
+            target: { value: 'a'.repeat(TYPED_WORK_SLUG_MAX_LENGTH + 1) },
         });
 
         expect(screen.getByText(TOO_LONG)).toBeTruthy();
@@ -98,5 +98,41 @@ describe('WorkAICreator — a typed slug longer than a derived one may be', () =
 
         fireEvent.click(generateButton());
         expect(createWorkWithAI).not.toHaveBeenCalled();
+    });
+});
+
+describe("WorkAICreator — an Idea's slug suggestion", () => {
+    beforeEach(() => {
+        createWorkWithAI.mockReset();
+        checkWorkSlug.mockReset();
+        checkWorkSlug.mockImplementation(async (slug: string) => ({ available: true, slug }));
+    });
+
+    it('a 61-92 character slug is taken (it works today)', () => {
+        renderForm();
+        fireEvent.change(slugField(), { target: { value: 'a'.repeat(80) } });
+
+        expect(screen.queryByText(TOO_LONG)).toBeNull();
+        expect(generateButton().disabled).toBe(false);
+    });
+
+    it('opens with an over-long suggestion cut to fit, never with an error', () => {
+        render(
+            <WorkAICreator
+                websiteTemplates={[]}
+                initialPrompt="A directory of tools for remote teams"
+                proposal={
+                    {
+                        id: 'p-1',
+                        title: 'Remote tools',
+                        slugSuggestion: `${'remote-tools-'.repeat(9)}x`,
+                    } as never
+                }
+            />,
+        );
+
+        expect(slugField().value.length).toBeLessThanOrEqual(TYPED_WORK_SLUG_MAX_LENGTH);
+        expect(slugField().value.endsWith('-')).toBe(false);
+        expect(screen.queryByText(TOO_LONG)).toBeNull();
     });
 });

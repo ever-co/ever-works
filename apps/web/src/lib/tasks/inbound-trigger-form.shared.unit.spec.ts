@@ -14,6 +14,17 @@ describe('triggerVariablesProblem — TriggerVariableDto / defaultVariables rule
         expect(triggerVariablesProblem([])).toBeNull();
     });
 
+    it('names a key given twice (after trimming, case-sensitively), as the API refuses it', () => {
+        expect(
+            triggerVariablesProblem([
+                { key: 'repo' },
+                { key: 'branch' },
+                { key: ' repo ' },
+                { key: 'Branch' },
+            ]),
+        ).toEqual({ reason: 'variablesDuplicateKey', keys: 'repo' });
+    });
+
     it('names every key with a dot, a space or past 64 characters', () => {
         expect(
             triggerVariablesProblem([

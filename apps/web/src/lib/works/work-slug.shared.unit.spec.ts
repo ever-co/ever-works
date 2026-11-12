@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { PLACEHOLDERS_BY_CHIP } from '@/components/new/new-prompt.shared';
 import {
     GENERATED_WORK_SLUG_MAX_LENGTH,
+    TYPED_WORK_SLUG_MAX_LENGTH,
     isValidWorkSlug,
     isWorkSlugTooLong,
     quickCreateSlugFromPrompt,
@@ -114,10 +115,16 @@ describe('quickCreateSlugFromPrompt', () => {
     );
 });
 
-describe('isWorkSlugTooLong — a typed slug gets the cap a derived one has', () => {
-    it('allows up to GENERATED_WORK_SLUG_MAX_LENGTH characters', () => {
-        expect(isWorkSlugTooLong('a'.repeat(GENERATED_WORK_SLUG_MAX_LENGTH))).toBe(false);
-        expect(isWorkSlugTooLong('a'.repeat(GENERATED_WORK_SLUG_MAX_LENGTH + 1))).toBe(true);
+describe('isWorkSlugTooLong — a typed slug may be as long as a repository name allows', () => {
+    it('allows up to 92 characters (GitHub 100 minus "-website")', () => {
+        expect(TYPED_WORK_SLUG_MAX_LENGTH).toBe(92);
+        expect(isWorkSlugTooLong('a'.repeat(92))).toBe(false);
+        expect(isWorkSlugTooLong('a'.repeat(93))).toBe(true);
+    });
+
+    it('keeps the 61-92 character slugs that work today', () => {
+        expect(isWorkSlugTooLong('a'.repeat(GENERATED_WORK_SLUG_MAX_LENGTH + 1))).toBe(false);
+        expect(isWorkSlugTooLong('a'.repeat(80))).toBe(false);
     });
 
     it('never flags a slug derived from a name', () => {

@@ -20,6 +20,7 @@ export const MAX_TRIGGER_REPLAY_WINDOW_SEC = 24 * 60 * 60;
 
 export type TriggerVariablesProblem =
     | { reason: 'variablesInvalidKey'; keys: string }
+    | { reason: 'variablesDuplicateKey'; keys: string }
     | { reason: 'variablesLabelTooLong'; keys: string; max: number }
     | { reason: 'variablesTooMany'; max: number };
 
@@ -31,10 +32,23 @@ export function triggerVariablesProblem(
     variables: ReadonlyArray<{ key: string; label?: string }>,
 ): TriggerVariablesProblem | null {
     const badKeys = variables
-        .map((variable) => variable.key)
+        // Trimmed first, as `normalizeDefaultVariables` does.
+        .map((variable) => variable.key.trim())
         .filter((key) => !TRIGGER_VARIABLE_KEY_PATTERN.test(key));
     if (badKeys.length > 0) {
         return { reason: 'variablesInvalidKey', keys: badKeys.join(', ') };
+    }
+    // `normalizeDefaultVariables` (packages/agent/src/triggers/trigger-variables.ts)
+    // refuses a key seen twice after trimming, case-sensitively.
+    const seen = new Set<string>();
+    const duplicates = new Set<string>();
+    for (const variable of variables) {
+        const key = variable.key.trim();
+        if (seen.has(key)) duplicates.add(key);
+        seen.add(key);
+    }
+    if (duplicates.size > 0) {
+        return { reason: 'variablesDuplicateKey', keys: [...duplicates].join(', ') };
     }
     const longLabels = variables
         .filter((variable) => (variable.label?.length ?? 0) > MAX_TRIGGER_VARIABLE_LABEL_LENGTH)

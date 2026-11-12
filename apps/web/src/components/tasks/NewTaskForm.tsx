@@ -311,7 +311,9 @@ export function NewTaskForm({ createTask }: { createTask: CreateTaskFn }) {
     // Template mode posts to `/task-templates/:id/instantiate`, whose
     // description is capped at 8000 characters (a blank Task's is not): say so
     // here rather than show the API's 400.
-    const descriptionLength = description.trim().length;
+    // Code points, as the API's `@MaxLength(8000)` counts them (an emoji is one,
+    // not two UTF-16 units).
+    const descriptionLength = [...description.trim()].length;
     const descriptionTooLong =
         mode === 'template' && descriptionLength > TASK_TEMPLATE_DESCRIPTION_MAX_LENGTH;
 

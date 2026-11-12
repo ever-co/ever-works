@@ -8,7 +8,8 @@ import { createWorkWithAI, checkWorkSlug } from '@/app/actions/dashboard';
 // a Work name, including names with no Latin letters (the server action uses
 // the same helper, so both sides agree on the slug).
 import {
-    GENERATED_WORK_SLUG_MAX_LENGTH,
+    TYPED_WORK_SLUG_MAX_LENGTH,
+    truncateWorkSlug,
     isWorkSlugTooLong,
     slugifyForWork,
     workSlugFromName,
@@ -126,7 +127,11 @@ export function WorkAICreator({
     // having to re-name the Work. We track whether the slug has been
     // manually edited so name changes don't overwrite a custom slug.
     const [slug, setSlug] = useState(
-        proposal?.slugSuggestion ?? workSlugFromName(proposal?.title ?? ''),
+        // An Idea's AI slug suggestion can run up to 80 characters: cut it to
+        // what a typed slug may be, so the form never opens with an error.
+        proposal?.slugSuggestion
+            ? truncateWorkSlug(proposal.slugSuggestion, TYPED_WORK_SLUG_MAX_LENGTH)
+            : workSlugFromName(proposal?.title ?? ''),
     );
     const [slugDirty, setSlugDirty] = useState(Boolean(proposal?.slugSuggestion));
     const [slugResult, setSlugResult] = useState<SlugCheckResult | null>(null);
@@ -278,7 +283,7 @@ export function WorkAICreator({
         }
 
         if (slugTooLong) {
-            toast.error(t('errors.slugTooLong', { max: GENERATED_WORK_SLUG_MAX_LENGTH }));
+            toast.error(t('errors.slugTooLong', { max: TYPED_WORK_SLUG_MAX_LENGTH }));
             return;
         }
 
@@ -402,7 +407,7 @@ export function WorkAICreator({
                             error={
                                 slugTooLong
                                     ? t('errors.slugTooLong', {
-                                          max: GENERATED_WORK_SLUG_MAX_LENGTH,
+                                          max: TYPED_WORK_SLUG_MAX_LENGTH,
                                       })
                                     : undefined
                             }
