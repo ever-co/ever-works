@@ -193,6 +193,10 @@ export class MissionCloneService {
                     outstandingIdeasCap: source.outstandingIdeasCap ?? null,
                     // Security: strip unknown keys before propagating to the clone.
                     guardrailsOverride: this.sanitizeGuardrailsOverride(source.guardrailsOverride),
+                    // Copied as a reference only. A `custom-<uuid>` here names a catalog template the
+                    // SOURCE's owner could use; nothing applies it after create, and anything that
+                    // ever reads it must re-check it for the acting user
+                    // (`TemplateCatalogService.getVisibleTemplateForUser`), as create and update do.
                     missionTemplateRepo: source.missionTemplateRepo ?? null,
                     // APW-08 T34 (review of #3061) — the clone files what the source files, with
                     // the same Task-output bounds and Agent (same owner, same scope), read
