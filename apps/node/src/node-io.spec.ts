@@ -46,9 +46,11 @@ describe('planProbeSpawn — Windows', () => {
 		}
 	);
 
-	it('resolves where / icacls to System32 too', () => {
+	it('resolves where / icacls / reg to System32 too', () => {
 		expect(planProbeSpawn('where', win())?.file).toBe('C:\\Windows\\System32\\where.exe');
 		expect(planProbeSpawn('icacls', win())?.file).toBe('C:\\Windows\\System32\\icacls.exe');
+		// The boot counter the worker-safety marker records: never a `reg` found on PATH, never via cmd.exe.
+		expect(planProbeSpawn('reg', win())).toMatchObject({ file: 'C:\\Windows\\System32\\reg.exe', shell: false });
 	});
 
 	it('finds nvidia-smi only at the driver install locations, and never searches for it', () => {

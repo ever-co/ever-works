@@ -156,9 +156,15 @@ export class AiOperations {
 	 * `null`: the reply did not finish normally, and this contract has no
 	 * `error` value. Anything else it has no value for stays `stop`, as it
 	 * always did.
+	 *
+	 * The metadata is read through a cast: `@ever-works/agent`'s Jest compiles
+	 * this source under its own tsconfig (`strictNullChecks: false`), where
+	 * `response_metadata` infers as `Partial<unknown>` and has no
+	 * `finish_reason`, so a direct property read fails every suite that loads it.
 	 */
 	private finishReasonOf(response: AIMessageChunk): 'stop' | 'length' | 'content_filter' | null {
-		const raw = response.response_metadata?.finish_reason;
+		const metadata = response.response_metadata as { finish_reason?: unknown } | undefined;
+		const raw = metadata?.finish_reason;
 		if (raw === 'length' || raw === 'max_tokens') return 'length';
 		if (raw === 'content_filter') return 'content_filter';
 		if (raw === 'error') return null;

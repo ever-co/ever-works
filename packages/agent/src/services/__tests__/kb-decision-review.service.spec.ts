@@ -108,6 +108,8 @@ describe('KnowledgeBaseService — decision docs + review states (Wave 5 M4-M7)'
             findByWorkOrPath: jest.fn(),
             list: jest.fn().mockResolvedValue({ items: [], total: 0 }),
             pathExists: jest.fn().mockResolvedValue(false),
+            findPathNestingClash: jest.fn().mockResolvedValue(null),
+            findExistingPath: jest.fn().mockResolvedValue(null),
             create: jest.fn(),
             update: jest.fn(),
             delete: jest.fn().mockResolvedValue(true),

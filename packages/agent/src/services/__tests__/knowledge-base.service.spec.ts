@@ -96,6 +96,8 @@ describe('KnowledgeBaseService', () => {
             listInheritableForOrg: jest.fn(),
             listWorkOverridesForClasses: jest.fn(),
             pathExists: jest.fn().mockResolvedValue(false),
+            findPathNestingClash: jest.fn().mockResolvedValue(null),
+            findExistingPath: jest.fn().mockResolvedValue(null),
             create: jest.fn(),
             update: jest.fn(),
             delete: jest.fn().mockResolvedValue(true),
