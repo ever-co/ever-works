@@ -70,15 +70,26 @@ const DEFAULT_DEBOUNCE_MS = 200;
 export const KB_WORKBENCH_SHORTCUT_SCOPE = 'kb-workbench';
 
 /**
- * The API's own reason for a refused search (`{ message }`, a string or the
- * validator's list), else the HTTP status — shown under the error line.
+ * A search the API answered with a refusal. `detail` is the API's own reason
+ * (`{ message }`: a string, or the validator's list joined with `; `) when the
+ * reply carried a JSON body with one, else empty. Only this detail is ever shown
+ * under the error line — never a network error's or a parser's raw text.
  */
-async function searchErrorDetail(res: Response): Promise<string> {
+class SearchRefused extends Error {
+    constructor(readonly detail: string) {
+        super(detail || 'search refused');
+    }
+}
+
+async function searchRefusal(res: Response): Promise<SearchRefused> {
     const body = (await res.json().catch(() => null)) as { message?: unknown } | null;
     const message = body?.message;
-    if (Array.isArray(message)) return message.map(String).join(' ');
-    if (typeof message === 'string' && message.trim()) return message;
-    return `HTTP ${res.status}`;
+    if (Array.isArray(message)) {
+        const parts = message.map(String).filter((part) => part.trim());
+        return new SearchRefused(parts.join('; '));
+    }
+    if (typeof message === 'string' && message.trim()) return new SearchRefused(message);
+    return new SearchRefused('');
 }
 
 export function KbSearchPalette({
@@ -181,7 +192,7 @@ export function KbSearchPalette({
         const timer = setTimeout(() => {
             fetch(buildUrl(trimmed, filters), { cache: 'no-store' })
                 .then(async (res) => {
-                    if (!res.ok) throw new Error(await searchErrorDetail(res));
+                    if (!res.ok) throw await searchRefusal(res);
                     return (await res.json()) as KbSearchResult;
                 })
                 .then((data) => {
@@ -192,7 +203,9 @@ export function KbSearchPalette({
                 .catch((error: unknown) => {
                     if (cancelled) return;
                     setHits([]);
-                    setSearchError(error instanceof Error ? error.message : '');
+                    // The API's reason when it gave one; a network failure or an
+                    // unreadable reply shows the error line alone.
+                    setSearchError(error instanceof SearchRefused ? error.detail : '');
                 })
                 .finally(() => {
                     if (cancelled) return;

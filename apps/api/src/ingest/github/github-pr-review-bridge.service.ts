@@ -1432,6 +1432,11 @@ export class GitHubPrReviewBridgeService {
         autoReview: boolean;
         /** F2 — the pull request AUTHOR's trust, handed to the reviewer. */
         prAuthorTrust: 'trusted' | 'untrusted';
+        /**
+         * Somebody asked with an `@ever-works` mention and is waiting for an
+         * answer: a review that cannot be produced leaves a note saying so.
+         */
+        requestedByMention: boolean;
     } | null {
         const fullName = body.repository?.full_name ?? '';
         const [owner, repo] = fullName.split('/');
@@ -1498,6 +1503,7 @@ export class GitHubPrReviewBridgeService {
                 repo,
                 prNumber,
                 autoReview: prAuthorTrust === 'trusted',
+                requestedByMention: false,
                 prAuthorTrust,
             };
         }
@@ -1603,6 +1609,7 @@ export class GitHubPrReviewBridgeService {
                 // on the owner's private context (F2).
                 autoReview: true,
                 prAuthorTrust: mentionPrAuthorTrust(eventName, body, this.reviewBotPolicy()),
+                requestedByMention: true,
             };
         }
 
@@ -1623,6 +1630,7 @@ export class GitHubPrReviewBridgeService {
             prNumber: number;
             instruction?: string;
             prAuthorTrust: 'trusted' | 'untrusted';
+            requestedByMention: boolean;
         },
     ): Promise<void> {
         try {
@@ -1633,6 +1641,10 @@ export class GitHubPrReviewBridgeService {
                 prNumber: input.prNumber,
                 ...(input.instruction ? { instruction: input.instruction } : {}),
                 prAuthorTrust: input.prAuthorTrust,
+                // A failed review used to leave a trace only in this pod's
+                // log: whoever wrote `@ever-works` got no answer at all. A
+                // pull request opened or updated gets no note: nobody asked.
+                ...(input.requestedByMention ? { noteFailureOnPr: true } : {}),
             });
             if (result.status === 'posted') {
                 this.logger.log(

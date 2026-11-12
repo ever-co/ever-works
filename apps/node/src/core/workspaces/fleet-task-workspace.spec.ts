@@ -5,7 +5,7 @@ import { promises as fs } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, parse, relative } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
 	FLEET_TASK_WORKSPACE_EXCLUDE_RULES,
 	FleetTaskWorkspaceError,
@@ -50,7 +50,6 @@ describe('FleetTaskWorkspaceProvisioner — real Git worktrees', { timeout: 20_0
 		ownedRoot = temporaryRoot('ew-fleet-task-workspace-');
 		seedDir = join(ownedRoot, 'seed');
 		originDir = join(ownedRoot, 'origin.git');
-		workspaceRoot = join(ownedRoot, 'fleet-root');
 		mkdirSync(seedDir, { recursive: true });
 		mkdirSync(originDir, { recursive: true });
 		git(originDir, 'init', '--bare', '--initial-branch', 'main');
@@ -68,6 +67,16 @@ describe('FleetTaskWorkspaceProvisioner — real Git worktrees', { timeout: 20_0
 		process.env.GIT_CONFIG_COUNT = String(gitConfigIndex + 1);
 		process.env[`GIT_CONFIG_KEY_${gitConfigIndex}`] = `url.${pathToFileURL(originDir).toString()}.insteadOf`;
 		process.env[`GIT_CONFIG_VALUE_${gitConfigIndex}`] = remoteUrl;
+	});
+
+	// A workspace root — so a repository pool — of its own per test. The
+	// provider's pool lock is shared by every instance in the process, and
+	// vitest does not stop a test that timed out: on one shared pool, its
+	// provision would hold the lock while the next test's provision waits, and
+	// one slow test would fail every test after it.
+	let rootCounter = 0;
+	beforeEach(() => {
+		workspaceRoot = join(ownedRoot, `fleet-root-${(rootCounter += 1)}`);
 	});
 
 	afterAll(async () => {

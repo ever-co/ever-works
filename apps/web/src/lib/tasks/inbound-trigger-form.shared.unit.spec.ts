@@ -25,6 +25,16 @@ describe('triggerVariablesProblem — TriggerVariableDto / defaultVariables rule
         ).toEqual({ reason: 'variablesDuplicateKey', keys: 'repo' });
     });
 
+    it('measures a label trimmed, as the API does', () => {
+        const padded = `  ${'l'.repeat(MAX_TRIGGER_VARIABLE_LABEL_LENGTH)}  `;
+        expect(triggerVariablesProblem([{ key: 'repo', label: padded }])).toBeNull();
+        expect(
+            triggerVariablesProblem([
+                { key: 'repo', label: ` ${'l'.repeat(MAX_TRIGGER_VARIABLE_LABEL_LENGTH + 1)} ` },
+            ]),
+        ).toMatchObject({ reason: 'variablesLabelTooLong', keys: 'repo' });
+    });
+
     it('names every key with a dot, a space or past 64 characters', () => {
         expect(
             triggerVariablesProblem([

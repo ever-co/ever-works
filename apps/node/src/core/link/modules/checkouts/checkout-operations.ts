@@ -57,9 +57,18 @@ export class CheckoutPathTakenError extends Error {
 	}
 }
 
-/** Clone `repoUrl` into `path` and check out `branch` (new from `baseRef` when the remote has no such branch). */
+/**
+ * Clone `repoUrl` into `path` and check out `branch` (new from `baseRef` when the remote has no such branch).
+ *
+ * `existingBranch` (FL-15 FR-20) is the branch the person asked for when another checkout already holds
+ * that name — typically a pull request's head. The platform cannot see a fresh clone's remote, so the
+ * choice is made here: the remote has `existingBranch` → it is checked out, tracking the remote; it has
+ * not → `branch`, the unique new name the platform proposed (FR-19). The clone itself is the remote
+ * check: it fetched every remote head with this operation's credential (environment only), so the check
+ * is a local ref read — no second network command, and the credential reaches nothing new.
+ */
 export async function cloneCheckout(
-	input: { path: string; repoUrl: string; branch: string; baseRef: string | null },
+	input: { path: string; repoUrl: string; branch: string; baseRef: string | null; existingBranch?: string | null },
 	options: CheckoutOperationOptions
 ): Promise<CheckoutGitResult> {
 	if (await exists(input.path)) throw new CheckoutPathTakenError(input.path);
@@ -69,7 +78,11 @@ export async function cloneCheckout(
 	args.push('--', input.repoUrl, input.path);
 	let result = await options.git(args, network(options, dirname(input.path)));
 	if (result.code === 0) {
-		result = await switchToBranch(input.path, input.branch, input.baseRef, options);
+		const branch =
+			input.existingBranch && (await hasRemoteBranch(input.path, input.existingBranch, options))
+				? input.existingBranch
+				: input.branch;
+		result = await switchToBranch(input.path, branch, input.baseRef, options);
 	}
 	if (result.code !== 0) await removePartial(input.path);
 	return result;
@@ -166,11 +179,19 @@ async function switchToBranch(
 ): Promise<CheckoutGitResult> {
 	const current = await options.git(['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: path });
 	if (current.code === 0 && current.stdout.trim() === branch) return current;
-	const remote = await options.git(['rev-parse', '--verify', '--quiet', `refs/remotes/origin/${branch}`], {
-		cwd: path
-	});
-	if (remote.code === 0) return options.git(['switch', '--track', `origin/${branch}`], { cwd: path });
+	if (await hasRemoteBranch(path, branch, options)) {
+		return options.git(['switch', '--track', `origin/${branch}`], { cwd: path });
+	}
 	return options.git(['switch', '-c', branch, ...(baseRef ? [`origin/${baseRef}`] : [])], { cwd: path });
+}
+
+/** The clone's remote-tracking ref for `branch` exists — a local read, never the network. */
+async function hasRemoteBranch(path: string, branch: string, options: CheckoutOperationOptions): Promise<boolean> {
+	const remote = await options.git(['rev-parse', '--verify', '--quiet', `refs/remotes/origin/${branch}`], {
+		cwd: path,
+		...(options.signal ? { signal: options.signal } : {})
+	});
+	return remote.code === 0;
 }
 
 async function removePartial(path: string): Promise<void> {

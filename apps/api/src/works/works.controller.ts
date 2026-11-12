@@ -264,7 +264,7 @@ export class WorksController {
         summary: 'List works',
         description: 'Get all works accessible to the authenticated user',
     })
-    @ApiQuery({ name: 'limit', required: false, description: 'Maximum number of results' })
+    @ApiQuery({ name: 'limit', required: false, description: '1 to 1000, default 20' })
     @ApiQuery({ name: 'offset', required: false, description: 'Number of results to skip' })
     @ApiQuery({ name: 'search', required: false, description: 'Search term to filter works' })
     @ApiQuery({

@@ -117,8 +117,11 @@ export function KbTreePanel({ workId, currentDocPath, refreshKey }: KbTreePanelP
 
     const filterQuery = useMemo(() => {
         const params = new URLSearchParams();
-        for (const cls of classFilter) params.append('class', cls);
-        for (const source of sourceFilter) params.append('source', source);
+        // The repeatable facets are `classes` / `sources` (`KbDocumentQueryDto`);
+        // `class` takes ONE value and `source` is not a query field, so
+        // `?class=a&class=b` or any `?source=` answered 400 instead of a tree.
+        for (const cls of classFilter) params.append('classes', cls);
+        for (const source of sourceFilter) params.append('sources', source);
         if (debouncedSearch.length > 0) {
             params.set('q', debouncedSearch);
             // Search titles AND content — a memory you can only find by
