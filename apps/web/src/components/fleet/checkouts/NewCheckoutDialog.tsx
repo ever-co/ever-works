@@ -188,11 +188,13 @@ export function NewCheckoutDialog({
                     className="rounded border border-border bg-transparent px-2 py-1 font-mono text-xs dark:border-border-dark"
                     value={branch}
                     onChange={(event) => setBranch(event.target.value)}
-                    placeholder={t('branchPlaceholder')}
+                    placeholder={
+                        how === 'clone' ? t('branchPlaceholderClone') : t('branchPlaceholder')
+                    }
                     data-testid="fleet-new-checkout-branch"
                 />
                 <span className="text-xs text-text-muted dark:text-text-muted-dark">
-                    {t('branchNote')}
+                    {how === 'clone' ? t('branchNoteClone') : t('branchNote')}
                 </span>
             </label>
             {how === 'worktree' ? (

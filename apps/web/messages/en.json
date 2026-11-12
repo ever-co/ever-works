@@ -14573,6 +14573,8 @@
                 "branch": "Branch",
                 "branchPlaceholder": "proposed for you",
                 "branchNote": "A name already on the remote or on another checkout gets -2, -3, …",
+                "branchPlaceholderClone": "the repository's default branch",
+                "branchNoteClone": "Leave it empty to stay on the repository's default branch.",
                 "container": "Run sessions in a container (the folder mounted at /workspace)",
                 "containerWindows": "Not available on Windows computers",
                 "containerNoDocker": "Needs Docker on {name}",

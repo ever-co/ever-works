@@ -583,8 +583,16 @@ export function createCheckoutsModule(options: CheckoutsModuleOptions): Checkout
 		if (!isStrictDescendant(checkoutsRoot!, target)) {
 			refuse('invalid', `new checkouts go under ${checkoutsRoot}${sep}`, { field: 'path' });
 		}
-		const branch = params.branch;
-		if (!isFleetCheckoutBranchName(branch)) refuse('invalid', 'branch', { field: 'branch' });
+		// A clone may come without a branch (the New checkout dialog's default, the CLI without --branch): it stays
+		// on the branch it cloned — `baseRef`, else the repository's default branch. A worktree always names one.
+		const branch =
+			params.branch === null || params.branch === undefined
+				? (params.source as { kind?: unknown } | undefined)?.kind === 'clone'
+					? null
+					: refuse('invalid', 'branch', { field: 'branch' })
+				: isFleetCheckoutBranchName(params.branch)
+					? params.branch
+					: refuse('invalid', 'branch', { field: 'branch' });
 		// A clone of a branch the remote may already have (a pull request's head, FL-15 FR-20); worktrees ignore it.
 		const existingBranch =
 			params.existingBranch === null || params.existingBranch === undefined
@@ -642,10 +650,7 @@ export function createCheckoutsModule(options: CheckoutsModuleOptions): Checkout
 					};
 					const clone = (operation: CheckoutOperationOptions) => {
 						context.progress({ percent: 20, message: 'clone' });
-						return cloneCheckout(
-							{ path: target, repoUrl, branch: branch as string, baseRef, existingBranch },
-							operation
-						);
+						return cloneCheckout({ path: target, repoUrl, branch, baseRef, existingBranch }, operation);
 					};
 					if (scoped) {
 						if (!options.credentials) {

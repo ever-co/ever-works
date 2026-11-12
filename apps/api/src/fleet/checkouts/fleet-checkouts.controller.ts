@@ -184,8 +184,9 @@ export class FleetCheckoutsController {
         return this.checkouts.create(actorOf(auth), {
             nodeId: body.nodeId,
             source,
-            ...(body.branch !== undefined ? { branch: body.branch } : {}),
-            ...(body.baseRef !== undefined ? { baseRef: body.baseRef } : {}),
+            // null is the same as absent (MCP tools and generated clients send null for an unset field).
+            ...(body.branch != null ? { branch: body.branch } : {}),
+            ...(body.baseRef != null ? { baseRef: body.baseRef } : {}),
             ...(body.isolation !== undefined ? { isolation: body.isolation } : {}),
             ...(body.sharedFolders !== undefined ? { sharedFolders: body.sharedFolders } : {}),
         });

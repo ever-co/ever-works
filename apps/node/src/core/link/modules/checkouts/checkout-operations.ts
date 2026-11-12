@@ -59,6 +59,9 @@ export class CheckoutPathTakenError extends Error {
 
 /**
  * Clone `repoUrl` into `path` and check out `branch` (new from `baseRef` when the remote has no such branch).
+ * Without a `branch` the clone stays on what it checked out: `baseRef`, else the repository's default branch —
+ * and that must be a branch (FR-16): `--branch <tag>` clones fine but leaves HEAD detached, a checkout that
+ * could never be pushed, so it is refused and the folder removed, as it was before a branch became optional.
  *
  * `existingBranch` (FL-15 FR-20) is the branch the person asked for when another checkout already holds
  * that name — typically a pull request's head. The platform cannot see a fresh clone's remote, so the
@@ -68,7 +71,13 @@ export class CheckoutPathTakenError extends Error {
  * is a local ref read — no second network command, and the credential reaches nothing new.
  */
 export async function cloneCheckout(
-	input: { path: string; repoUrl: string; branch: string; baseRef: string | null; existingBranch?: string | null },
+	input: {
+		path: string;
+		repoUrl: string;
+		branch: string | null;
+		baseRef: string | null;
+		existingBranch?: string | null;
+	},
 	options: CheckoutOperationOptions
 ): Promise<CheckoutGitResult> {
 	if (await exists(input.path)) throw new CheckoutPathTakenError(input.path);
@@ -82,7 +91,9 @@ export async function cloneCheckout(
 			input.existingBranch && (await hasRemoteBranch(input.path, input.existingBranch, options))
 				? input.existingBranch
 				: input.branch;
-		result = await switchToBranch(input.path, branch, input.baseRef, options);
+		result = branch
+			? await switchToBranch(input.path, branch, input.baseRef, options)
+			: await requireBranch(input.path, input.baseRef, options);
 	}
 	if (result.code !== 0) await removePartial(input.path);
 	return result;
@@ -183,6 +194,27 @@ async function switchToBranch(
 		return options.git(['switch', '--track', `origin/${branch}`], { cwd: path });
 	}
 	return options.git(['switch', '-c', branch, ...(baseRef ? [`origin/${baseRef}`] : [])], { cwd: path });
+}
+
+/**
+ * A clone with no branch named ends on a branch (FR-16) — a local read. `symbolic-ref --quiet` exits 1, silently,
+ * for a detached HEAD: what `clone --branch <tag>` leaves. Any other failure is answered as git gave it.
+ */
+async function requireBranch(
+	path: string,
+	baseRef: string | null,
+	options: CheckoutOperationOptions
+): Promise<CheckoutGitResult> {
+	const head = await options.git(['symbolic-ref', '--quiet', 'HEAD'], {
+		cwd: path,
+		...(options.signal ? { signal: options.signal } : {})
+	});
+	if (head.code !== 1) return head;
+	return {
+		code: 1,
+		stdout: '',
+		stderr: `${baseRef ?? "the repository's HEAD"} is not a branch: a clone with no branch named stays on its base ref, so that must be a branch, not a tag — name a branch, or a branch as the base ref`
+	};
 }
 
 /** The clone's remote-tracking ref for `branch` exists — a local read, never the network. */

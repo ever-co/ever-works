@@ -250,6 +250,19 @@ left out while the node still has to choose. Every clone caller gets it — the 
 `fleet checkout --branch`, `fleet_checkouts_create`, `POST /api/fleet/checkouts` and Fix on computer; worktrees are
 unchanged.
 
+**Revision 28 (2026-11-12)** — FL-14 FR-16 (a clone without a branch): `checkouts.create`'s `branch` is
+`string | null`; null is allowed for a `clone` source only and means the clone stays on what it checked out —
+`baseRef` when given, else the repository's default branch (a worktree still always names one; the platform proposes
+it, FR-18/FR-19). What it stays on must be a branch: a `baseRef` naming a tag clones onto a detached HEAD, which the
+node refuses after the clone (non-zero exit, the partial folder removed, the row `missing` with the reason) — a
+checkout on no branch could never be pushed. The platform already sent `branch: null` for a branchless clone; a node
+that predates this refuses it `invalid` with `details.field: 'branch'`, which the platform answers with a hint to name
+a branch or update the node. `FleetCheckoutCreateRequest` and `POST /api/fleet/checkouts` take `branch: null` and
+`baseRef: null` as absent (MCP tools and generated clients send null for an unset field). The `node.checkout.create`
+audit row leaves `branch` out while a branchless clone still runs, as Revision 27 does while the node chooses. A
+branchless clone's folder is named for the repository, so two at once on one computer pick the same one: the create
+whose folder a concurrent create took first (`uq_fleet_checkouts_node_path`) takes the next free suffix (`-2`, …).
+
 ## 0. Resolutions (R-1 … R-41)
 
 Rulings that settle questions more than one epic would otherwise answer differently.
