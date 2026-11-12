@@ -154,4 +154,30 @@ describe('kbAPI', () => {
             });
         });
     });
+
+    /** #3204 review — the editor's base body fingerprint rides a header an older API ignores. */
+    describe('updateDocument', () => {
+        it('⭐ sends the base body fingerprint as X-Kb-Base-Content-Hash, never in the body', async () => {
+            serverMutationMock.mockResolvedValueOnce({ id: 'doc-1' });
+            await kbAPI.updateDocument(
+                'work-1',
+                'doc-1',
+                { body: 'x' },
+                { baseContentHash: 'f'.repeat(64) },
+            );
+            expect(serverMutationMock).toHaveBeenCalledWith({
+                endpoint: '/works/work-1/kb/documents/doc-1',
+                data: { body: 'x' },
+                method: 'PATCH',
+                wrapInData: false,
+                headers: { 'x-kb-base-content-hash': 'f'.repeat(64) },
+            });
+        });
+
+        it('sends no header without a base fingerprint', async () => {
+            serverMutationMock.mockResolvedValueOnce({ id: 'doc-1' });
+            await kbAPI.updateDocument('work-1', 'doc-1', { title: 'T' });
+            expect(serverMutationMock.mock.calls[0][0]).not.toHaveProperty('headers');
+        });
+    });
 });

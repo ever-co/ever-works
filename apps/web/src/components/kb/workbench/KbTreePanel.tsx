@@ -1,8 +1,8 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslations } from 'next-intl';
-import { Link } from '@/i18n/navigation';
+import { Link, useRouter } from '@/i18n/navigation';
 import { ROUTES } from '@/lib/constants';
 import { cn } from '@/lib/utils/cn';
 import {
@@ -164,6 +164,23 @@ export function KbTreePanel({ workId, currentDocPath, refreshKey }: KbTreePanelP
     const filtersActive =
         classFilter.length > 0 || sourceFilter.length > 0 || debouncedSearch.length > 0;
 
+    // A renamed document moves in place: the tree is fetched here, not by the
+    // server component `router.refresh()` re-renders, so the row is updated
+    // from the API's answer. Renaming the open document follows it to its new
+    // URL (the old path no longer resolves).
+    const router = useRouter();
+    const onDocumentRenamed = useCallback(
+        (previousPath: string, next: KbDocumentDto) => {
+            setDocuments((prev) =>
+                prev.map((doc) => (doc.id === next.id ? { ...doc, ...next } : doc)),
+            );
+            if (currentDocPath && currentDocPath === previousPath) {
+                router.replace(`${ROUTES.DASHBOARD_WORK_KB(workId)}/${next.path}`);
+            }
+        },
+        [currentDocPath, router, workId],
+    );
+
     const grouped = useMemo(() => groupByClass(documents), [documents]);
     // Memory upgrades M8 — how many documents are waiting for review.
     // Derived from the list this panel already fetched (the KB list is
@@ -289,6 +306,7 @@ export function KbTreePanel({ workId, currentDocPath, refreshKey }: KbTreePanelP
                         emptyLabel={filtersActive ? t('facets.noMatches') : t('panes.tree.empty')}
                         currentDocPath={currentDocPath ?? null}
                         activeClass={activeClass}
+                        onDocumentRenamed={onDocumentRenamed}
                         labels={{
                             empty: t('panes.tree.empty'),
                             classLabel: (cls: KbDocumentClass) => t(`classes.${cls}`),
@@ -319,6 +337,8 @@ interface KbTabProps {
     emptyLabel: string;
     currentDocPath: string | null;
     activeClass: KbDocumentClass | null;
+    /** A document of the tree was renamed (moved to `next.path`). */
+    onDocumentRenamed: (previousPath: string, next: KbDocumentDto) => void;
     labels: {
         empty: string;
         classLabel: (cls: KbDocumentClass) => string;
@@ -335,6 +355,7 @@ function KbTab({
     emptyLabel,
     currentDocPath,
     activeClass,
+    onDocumentRenamed,
     labels,
 }: KbTabProps) {
     if (loading) {
@@ -384,6 +405,7 @@ function KbTab({
                         currentDocPath={currentDocPath}
                         statusLabel={labels.statusLabel}
                         lockedLabel={labels.lockedLabel}
+                        onDocumentRenamed={onDocumentRenamed}
                     />
                 );
             })}
@@ -400,6 +422,7 @@ interface KbTreeGroupProps {
     currentDocPath: string | null;
     statusLabel: (status: KbDocumentStatus) => string;
     lockedLabel: string;
+    onDocumentRenamed: (previousPath: string, next: KbDocumentDto) => void;
 }
 
 function KbTreeGroup({
@@ -411,6 +434,7 @@ function KbTreeGroup({
     currentDocPath,
     statusLabel,
     lockedLabel,
+    onDocumentRenamed,
 }: KbTreeGroupProps) {
     const [open, setOpen] = useState(defaultOpen);
     const Icon = CLASS_ICONS[cls] ?? FileText;
@@ -444,7 +468,12 @@ function KbTreeGroup({
                         const isActive = currentDocPath === doc.path;
                         return (
                             <li key={doc.id}>
-                                <KbDocumentContextMenu workId={workId} document={doc}>
+                                <KbDocumentContextMenu
+                                    workId={workId}
+                                    document={doc}
+                                    renameEnabled
+                                    onRenamed={(next) => onDocumentRenamed(doc.path, next)}
+                                >
                                     <Link
                                         href={`${ROUTES.DASHBOARD_WORK_KB(workId)}/${doc.path}`}
                                         data-testid={`kb-workbench-row-${doc.id}`}

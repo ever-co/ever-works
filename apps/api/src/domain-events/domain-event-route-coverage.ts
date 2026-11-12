@@ -206,6 +206,11 @@ export const DOMAIN_EVENT_ROUTE_COVERAGE: Readonly<Record<string, RouteCoverage>
     'DELETE /api/works/:id/kb/documents/:docId': { events: ['kb.document.deleted'] },
     // The KB tree's Duplicate: the copy is created through the same create path.
     'POST /api/works/:id/kb/documents/:docId/duplicate': { events: ['kb.document.created'] },
+    // A rename / move: `kb.document.moved` (changedFields `path`, `slug`) for the
+    // document + `kb.document.updated` for each document whose links to it were rewritten.
+    'POST /api/works/:id/kb/documents/:docId/move': {
+        events: ['kb.document.moved', 'kb.document.updated'],
+    },
     'POST /api/works/:id/kb/documents/:docId/lock': { events: ['kb.document.updated'] },
     'POST /api/works/:id/kb/documents/:docId/unlock': { events: ['kb.document.updated'] },
     'POST /api/works/:id/kb/documents/:docId/restore': { events: ['kb.document.updated'] },

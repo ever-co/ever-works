@@ -75,6 +75,22 @@ export interface KbDocumentDto {
 	 * injection. Absent / `null` is treated as `'accepted'`.
 	 */
 	reviewState?: KbReviewState | null;
+	/**
+	 * The document's content revision: it moves on every substantive edit
+	 * (title, tags, class, body) and on a move, never on a bookkeeping write.
+	 * Optional so pre-existing DTO producers stay valid.
+	 */
+	revision?: number;
+	/**
+	 * A fingerprint of the body (SHA-256 of its whitespace-normalized text).
+	 * An editor sends the one its text is based on as
+	 * {@link KB_BASE_CONTENT_HASH_HEADER} on `PATCH`, so a save made on a body
+	 * that has changed since (another edit, a rename that rewrote its links) is
+	 * refused (409 `KbContentConflict`) instead of writing the old text back.
+	 * A title or tag edit does not change it, so it never makes a body save
+	 * conflict. Optional so pre-existing DTO producers stay valid.
+	 */
+	contentHash?: string;
 }
 
 /**
@@ -84,6 +100,30 @@ export interface KbDocumentBodyDto extends KbDocumentDto {
 	body: string;
 	assets: KbAssetSummary[];
 }
+
+/** A document a move could not rewrite the links of, and why (`POST …/move`). */
+export interface KbDocumentMoveSkipped {
+	documentId: string;
+	path: string;
+	reason: string;
+}
+
+/**
+ * The answer of `POST /api/works/:id/kb/documents/:docId/move`: the moved
+ * document, and what became of the links other documents carried to its old
+ * path.
+ */
+export interface KbDocumentMoveResult extends KbDocumentBodyDto {
+	linkRewrite: {
+		/** The documents whose links now point at the new path. */
+		documentIds: string[];
+		/** The documents still linking to the old path (deleted, fully locked or too contended meanwhile). */
+		skipped: KbDocumentMoveSkipped[];
+	};
+}
+
+/** The request header carrying the body fingerprint an edit was made on (see {@link KbDocumentDto.contentHash}). */
+export const KB_BASE_CONTENT_HASH_HEADER = 'x-kb-base-content-hash';
 
 export interface KbAssetSummary {
 	path: string;

@@ -11,6 +11,7 @@ import type {
     KbUploadDto,
     UpdateKbDocumentInput,
 } from '@ever-works/contracts';
+import { KB_BASE_CONTENT_HASH_HEADER } from '@ever-works/contracts';
 
 /**
  * EW-641 Phase 1B/d row 3 — server-only fetch helpers for the Knowledge
@@ -159,12 +160,24 @@ export const kbAPI = {
         workId: string,
         docId: string,
         input: UpdateKbDocumentInput,
+        options: {
+            /**
+             * The body fingerprint (`contentHash`) the edit was made on: the
+             * API refuses the save (409 `KbContentConflict`) when the stored
+             * body has changed since. Sent as a header, which an older API
+             * ignores.
+             */
+            baseContentHash?: string;
+        } = {},
     ): Promise<KbDocumentBodyDto> => {
         return serverMutation<KbDocumentBodyDto>({
             endpoint: `/works/${workId}/kb/documents/${encodeURIComponent(docId)}`,
             data: input,
             method: 'PATCH',
             wrapInData: false,
+            ...(options.baseContentHash
+                ? { headers: { [KB_BASE_CONTENT_HASH_HEADER]: options.baseContentHash } }
+                : {}),
         });
     },
 

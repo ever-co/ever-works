@@ -53,6 +53,7 @@ export * from './kb-rrf';
 export * from './kb-prompt-formatter';
 export * from './kb-context-bundle';
 export * from './kb-mention-parser';
+export * from './kb-document-move';
 export * from './kb-mention-resolver.service';
 export * from './kb-content-hash';
 export * from './kb-markdown-export';
