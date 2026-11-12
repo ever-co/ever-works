@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { posix, win32 } from 'node:path';
 import { publishFileExclusively } from './atomic-state-file';
 import {
 	BOOT_IDENTITY_SOURCES,
@@ -146,8 +147,13 @@ export function createConfigWorkerSafetyGate(
 ): ConfigWorkerSafetyGate {
 	const markerPath = workerSafetyMarkerPath(configPath);
 	const markerDir = fs.dirname(markerPath);
-	const markerName = markerPath.slice(markerDir.length).replace(/^[\\/]+/, '');
-	const separator = markerPath.charAt(markerDir.length) === '\\' ? '\\' : '/';
+	// The file name itself: what follows the last separator (`\` too on
+	// Windows), never `markerDir`'s length, which for a bare file name is `.`.
+	const markerName = (options.platform === 'win32' ? win32 : posix).basename(markerPath);
+	// Windows and macOS file systems ignore case: a claim the clearance made
+	// under a differently-cased config path is the same file there.
+	const ignoreCase = options.platform === 'win32' || options.platform === 'darwin';
+	const fold = (name: string): string => (ignoreCase ? name.toLowerCase() : name);
 	const now = options.now ?? (() => Date.now());
 	const createSessionId = options.createSessionId ?? randomUUID;
 	const bootIdentity = async (): Promise<BootIdentity | null> => {
@@ -208,15 +214,20 @@ export function createConfigWorkerSafetyGate(
 		} catch (error) {
 			throw prerequisite(`cannot list the worker safety marker's directory: ${detail(error)}`);
 		}
-		return names
-			.filter(
-				(name) =>
-					name.startsWith(`${markerName}.`) &&
-					name.endsWith(CLAIM_SUFFIX) &&
-					name.length > markerName.length + 1 + CLAIM_SUFFIX.length
-			)
-			.sort()
-			.map((name) => `${markerDir}${separator}${name}`);
+		const prefix = fold(`${markerName}.`);
+		return (
+			names
+				.filter(
+					(name) =>
+						fold(name).startsWith(prefix) &&
+						fold(name).endsWith(CLAIM_SUFFIX) &&
+						name.length > prefix.length + CLAIM_SUFFIX.length
+				)
+				.sort()
+				// The marker path plus the claim's own tail: the same form the
+				// clearance's rename creates, whatever `markerDir` looks like.
+				.map((name) => `${markerPath}${name.slice(markerName.length)}`)
+		);
 	};
 
 	/** The quarantine a leftover claim imposes, or null when there is none. */

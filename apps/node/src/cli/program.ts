@@ -1470,8 +1470,12 @@ export async function runPause(deps: CliDeps, paused: boolean, options: PauseCom
  * `start` arms after the judgement is never unlinked; when the clearance
  * cannot finish, the claim stays beside the marker and still blocks (see
  * `clearPreviousBootSession`). And whenever it does not finish cleanly, THIS
- * start stays quarantined too: the returned config carries an `unsafe` state
- * (not written to disk), so the worker never arms in that run.
+ * start stays quarantined too: the returned config carries an `unsafe` state,
+ * so the worker never arms in that run. This function does not write that
+ * state, but `runStart` persists the config it returns when `--workspace-root`,
+ * `--code-folder` or a reaper flag changed, so it can reach disk; that is the
+ * fail-closed direction (the next start is quarantined until a later reboot
+ * clearance or `clear-quarantine` lifts it).
  */
 async function clearQuarantineLeftByReboot(deps: CliDeps, config: NodeConfig): Promise<NodeConfig> {
 	if (!deps.bootIdentity) return config;
