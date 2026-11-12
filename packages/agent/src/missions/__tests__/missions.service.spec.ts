@@ -1561,6 +1561,15 @@ defaults:
         expect(catalog.getVisibleTemplateForUser).not.toHaveBeenCalled();
     });
 
+    it('an update from one stored custom template to another person’s still answers 404, and keeps the stored one', async () => {
+        const created = await create('u1', OWN_STARTER_FORK);
+
+        await expect(
+            build().update('u1', created.id, { missionTemplateRepo: OTHER_PERSONS }),
+        ).rejects.toMatchObject({ response: { code: 'templateNotFound' } });
+        expect(repo._rows[0].missionTemplateRepo).toBe(OWN_STARTER_FORK);
+    });
+
     it('the other person’s template applies for its owner', async () => {
         const dto = await create('u2', OTHER_PERSONS);
         expect(git.getFileContent).toHaveBeenCalledWith(

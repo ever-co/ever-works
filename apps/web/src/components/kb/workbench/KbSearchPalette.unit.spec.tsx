@@ -361,6 +361,26 @@ describe('workbench KbSearchPalette', () => {
         expect(error.textContent).toBe('search.failed');
     });
 
+    it('shows no raw text for an unreadable reply (a 502 HTML page from a proxy)', async () => {
+        (globalThis as { fetch: typeof fetch }).fetch = vi.fn(
+            async () =>
+                new Response('<html><body><h1>502 Bad Gateway</h1></body></html>', {
+                    status: 502,
+                    headers: { 'Content-Type': 'text/html' },
+                }),
+        ) as unknown as typeof fetch;
+
+        render(<KbSearchPalette workId="work-1" defaultOpen debounceMs={10} />);
+        fireEvent.change(screen.getByTestId('kb-workbench-search-palette-input'), {
+            target: { value: 'asdf' },
+        });
+
+        const error = await screen.findByTestId('kb-workbench-search-palette-error', undefined, {
+            timeout: 3000,
+        });
+        expect(error.textContent).toBe('search.failed');
+    });
+
     it('clears the error after a later successful search, and when the query is cleared', async () => {
         let refuse = true;
         (globalThis as { fetch: typeof fetch }).fetch = vi.fn(async () =>

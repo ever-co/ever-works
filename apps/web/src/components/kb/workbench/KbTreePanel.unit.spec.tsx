@@ -76,6 +76,35 @@ describe('workbench KbTreePanel', () => {
         vi.restoreAllMocks();
     });
 
+    it('sends the Type and Source chips as `classes` / `sources`, the keys the API takes', async () => {
+        // `?class=a&class=b` and any `?source=` are refused with 400 by
+        // `KbDocumentQueryDto`; the repeatable facets are `classes` / `sources`.
+        const urls: string[] = [];
+        (globalThis as { fetch: typeof fetch }).fetch = vi.fn(async (input: RequestInfo | URL) => {
+            urls.push(typeof input === 'string' ? input : input.toString());
+            return new Response(JSON.stringify({ items: [], total: 0 }), {
+                status: 200,
+                headers: { 'Content-Type': 'application/json' },
+            });
+        }) as unknown as typeof fetch;
+
+        render(<KbTreePanel workId="work-1" />);
+        await waitFor(() => expect(urls.length).toBeGreaterThan(0));
+
+        fireEvent.click(screen.getByTestId('kb-workbench-facet-type-brand'));
+        fireEvent.click(screen.getByTestId('kb-workbench-facet-type-legal'));
+        fireEvent.click(screen.getByTestId('kb-workbench-facet-source-agent'));
+
+        await waitFor(() => {
+            const last = new URL(urls[urls.length - 1], 'http://localhost');
+            expect(last.searchParams.getAll('classes')).toEqual(['brand', 'legal']);
+            expect(last.searchParams.getAll('sources')).toEqual(['agent']);
+        });
+        const last = new URL(urls[urls.length - 1], 'http://localhost');
+        expect(last.searchParams.has('class')).toBe(false);
+        expect(last.searchParams.has('source')).toBe(false);
+    });
+
     it('renders grouped rows once the fetch resolves and the group is expanded', async () => {
         mockFetchOnce([
             doc({ id: 'd1', class: 'brand', title: 'Voice', path: 'brand/voice.md' }),
