@@ -6,6 +6,8 @@ vi.mock('next-intl', () => ({
     useTranslations: () => (key: string) => key,
 }));
 
+const routerReplaceMock = vi.fn();
+
 // Pass-through stub for the locale-aware Link — same shape as the
 // existing KbTreePanel.unit.spec.tsx in works/detail/kb.
 vi.mock('@/i18n/navigation', () => ({
@@ -15,7 +17,7 @@ vi.mock('@/i18n/navigation', () => ({
         push: vi.fn(),
         refresh: vi.fn(),
         back: vi.fn(),
-        replace: vi.fn(),
+        replace: routerReplaceMock,
         forward: vi.fn(),
         prefetch: vi.fn(),
     }),
@@ -71,9 +73,39 @@ function mockFetchOnce(items: KbDocumentDto[]) {
 describe('workbench KbTreePanel', () => {
     beforeEach(() => {
         vi.restoreAllMocks();
+        routerReplaceMock.mockReset();
     });
     afterEach(() => {
         vi.restoreAllMocks();
+    });
+
+    it('sends the Type and Source chips as `classes` / `sources`, the keys the API takes', async () => {
+        // `?class=a&class=b` and any `?source=` are refused with 400 by
+        // `KbDocumentQueryDto`; the repeatable facets are `classes` / `sources`.
+        const urls: string[] = [];
+        (globalThis as { fetch: typeof fetch }).fetch = vi.fn(async (input: RequestInfo | URL) => {
+            urls.push(typeof input === 'string' ? input : input.toString());
+            return new Response(JSON.stringify({ items: [], total: 0 }), {
+                status: 200,
+                headers: { 'Content-Type': 'application/json' },
+            });
+        }) as unknown as typeof fetch;
+
+        render(<KbTreePanel workId="work-1" />);
+        await waitFor(() => expect(urls.length).toBeGreaterThan(0));
+
+        fireEvent.click(screen.getByTestId('kb-workbench-facet-type-brand'));
+        fireEvent.click(screen.getByTestId('kb-workbench-facet-type-legal'));
+        fireEvent.click(screen.getByTestId('kb-workbench-facet-source-agent'));
+
+        await waitFor(() => {
+            const last = new URL(urls[urls.length - 1], 'http://localhost');
+            expect(last.searchParams.getAll('classes')).toEqual(['brand', 'legal']);
+            expect(last.searchParams.getAll('sources')).toEqual(['agent']);
+        });
+        const last = new URL(urls[urls.length - 1], 'http://localhost');
+        expect(last.searchParams.has('class')).toBe(false);
+        expect(last.searchParams.has('source')).toBe(false);
     });
 
     it('renders grouped rows once the fetch resolves and the group is expanded', async () => {
@@ -265,5 +297,89 @@ describe('workbench KbTreePanel', () => {
             expect(screen.getByTestId('kb-workbench-review-link')).toBeTruthy();
         });
         expect(screen.queryByTestId('kb-workbench-review-badge')).toBeNull();
+    });
+
+    // ─── Rename (POST …/move) ─────────────────────────────────────────
+
+    describe('Rename from the tree', () => {
+        function mockTreeAndMove(moved: KbDocumentDto) {
+            const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+                const url = String(input);
+                const json = (body: unknown, status = 200) =>
+                    new Response(JSON.stringify(body), {
+                        status,
+                        headers: { 'Content-Type': 'application/json' },
+                    });
+                if (url.endsWith('/move')) return json(moved);
+                if (url.includes('/kb/documents')) {
+                    return json({
+                        items: [
+                            doc({ id: 'd1', title: 'Voice', path: 'brand/voice.md' }),
+                            doc({ id: 'd2', title: 'Colors', path: 'brand/colors.md' }),
+                        ],
+                        total: 2,
+                    });
+                }
+                // The library row the menu reads when it opens.
+                return json({ message: 'not found' }, 404);
+            });
+            (globalThis as { fetch: typeof fetch }).fetch = fetchMock as unknown as typeof fetch;
+            return fetchMock;
+        }
+
+        async function renameRow(rowId: string, path: string) {
+            const row = await screen.findByTestId(`kb-workbench-row-${rowId}`);
+            fireEvent.contextMenu(row, { clientX: 5, clientY: 5 });
+            fireEvent.click(await screen.findByTestId('kb-workbench-context-rename'));
+            fireEvent.change(screen.getByTestId('kb-workbench-context-rename-input'), {
+                target: { value: path },
+            });
+            fireEvent.click(screen.getByTestId('kb-workbench-context-rename-submit'));
+        }
+
+        it('offers Rename on a tree row (the tree opts in)', async () => {
+            mockTreeAndMove(doc({ id: 'd1' }));
+            render(<KbTreePanel workId="work-1" currentDocPath="brand/voice.md" />);
+            fireEvent.contextMenu(await screen.findByTestId('kb-workbench-row-d1'), {
+                clientX: 5,
+                clientY: 5,
+            });
+            expect(await screen.findByTestId('kb-workbench-context-rename')).toBeTruthy();
+        });
+
+        it('moves the row in place and follows the OPEN document to its new URL', async () => {
+            const fetchMock = mockTreeAndMove(
+                doc({ id: 'd1', title: 'Voice', path: 'brand/tone.md', slug: 'tone' }),
+            );
+            render(<KbTreePanel workId="work-1" currentDocPath="brand/voice.md" />);
+
+            await renameRow('d1', 'brand/tone.md');
+
+            await waitFor(() => {
+                expect(screen.getByTestId('kb-workbench-row-d1').getAttribute('href')).toBe(
+                    '/works/work-1/kb/brand/tone.md',
+                );
+            });
+            expect(routerReplaceMock).toHaveBeenCalledWith('/works/work-1/kb/brand/tone.md');
+            expect(
+                fetchMock.mock.calls.some(([url]) =>
+                    String(url).endsWith('/api/works/work-1/kb/documents/d1/move'),
+                ),
+            ).toBe(true);
+        });
+
+        it('renaming another document leaves the current page where it is', async () => {
+            mockTreeAndMove(doc({ id: 'd2', title: 'Colors', path: 'brand/palette.md' }));
+            render(<KbTreePanel workId="work-1" currentDocPath="brand/voice.md" />);
+
+            await renameRow('d2', 'brand/palette.md');
+
+            await waitFor(() => {
+                expect(
+                    screen.getByTestId('kb-workbench-row-d2').getAttribute('data-doc-path'),
+                ).toBe('brand/palette.md');
+            });
+            expect(routerReplaceMock).not.toHaveBeenCalled();
+        });
     });
 });

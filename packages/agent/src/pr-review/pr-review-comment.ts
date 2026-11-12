@@ -21,6 +21,24 @@ export function isPrReviewComment(text: string): boolean {
 }
 
 /**
+ * The note posted instead of a review when somebody asked for one with an
+ * `@ever-works` mention and the AI step gave none. Fixed text: nothing from
+ * the model or the provider, whose errors can carry internal detail. It
+ * carries {@link PR_REVIEW_COMMENT_MARKER}, so the bridge never answers it,
+ * and no `@ever-works` handle.
+ */
+export function renderPrReviewFailureNote(input: {
+    owner: string;
+    repo: string;
+    prNumber: number;
+}): string {
+    return [
+        PR_REVIEW_COMMENT_MARKER,
+        `**Ever Works AI review — \`${input.owner}/${input.repo}#${input.prNumber}\`:** no review this time. The AI model did not return a usable answer; ask again later, or choose another model for this Work.`,
+    ].join('\n');
+}
+
+/**
  * The single summary comment the reviewer posts on a pull request (v1).
  *
  * A pure function in a file of its own, so the receiving side (the GitHub

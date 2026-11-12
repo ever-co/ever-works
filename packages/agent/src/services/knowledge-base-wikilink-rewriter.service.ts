@@ -13,7 +13,15 @@ import { KbDocumentStatus } from '../entities/kb-types';
  * `[[oldPath]]` wikilink syntax must be rewritten in-place to
  * `[[newPath]]` so cross-doc references don't go stale.
  *
- * Integration point — NOT wired here:
+ * Superseded for the rename itself: `KnowledgeBaseService.moveDocument`
+ * (`POST /api/works/:id/kb/documents/:docId/move`) does its own sweep with
+ * `rewriteKbDocumentLinks` (`kb-document-move.ts`), which also rewrites
+ * `[[Label|path]]` and the workbench's Markdown links, skips code, refuses a
+ * move that would break a fully locked document's links, and writes each
+ * document as a revisioned edit with its event and mirror run. This service
+ * is not provided by any module.
+ *
+ * Integration point (original plan) — NOT wired here:
  *   The call-site lives in
  *   `KnowledgeBaseService.updateDocument(workId, docId, userId, input)`.
  *   That method does not currently accept a `path` field on its

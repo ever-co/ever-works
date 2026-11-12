@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import {
     ArrayMaxSize,
     IsArray,
@@ -40,6 +40,9 @@ const TRIGGER_AUTO_STARTS = ['always', 'manual'] as const;
 /** One declared payload variable — `{key, label?, required}`. */
 export class TriggerVariableDto {
     @ApiProperty({ description: 'Top-level payload key', maxLength: 64 })
+    // Trimmed BEFORE validation, as `normalizeDefaultVariables` stores it, so
+    // the DTO, the service and the web form all judge the same text.
+    @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
     @IsString()
     @Matches(/^[A-Za-z0-9_-]{1,64}$/, {
         message: 'defaultVariables key must be 1-64 chars of [A-Za-z0-9_-]',
@@ -47,6 +50,8 @@ export class TriggerVariableDto {
     key: string;
 
     @ApiPropertyOptional({ description: 'Display label; defaults to the key' })
+    // Trimmed before the length check, as the service stores it (see `key`).
+    @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
     @IsOptional()
     @IsString()
     @MaxLength(MAX_VARIABLE_LABEL_LENGTH)

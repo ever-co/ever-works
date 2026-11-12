@@ -761,10 +761,17 @@ export type FleetCheckoutCreateSource =
 export interface FleetCheckoutCreateRequest {
 	nodeId: string;
 	source: FleetCheckoutCreateSource;
-	/** The branch to check out (a worktree's new branch); proposed by the branch rule when absent (FR-18, FR-19). */
-	branch?: string;
-	/** What a new branch starts from; the parent's branch (worktree) or the remote default (clone) when absent. */
-	baseRef?: string;
+	/**
+	 * The branch to check out. A worktree's new branch is proposed by the branch rule when absent
+	 * (FR-18, FR-19); a clone without one stays on what it cloned — `baseRef`, else the repository's
+	 * default branch. null is the same as absent.
+	 */
+	branch?: string | null;
+	/**
+	 * What a new branch starts from, and the branch a clone with no `branch` stays on; the parent's branch
+	 * (worktree) or the remote default (clone) when absent. null is the same as absent.
+	 */
+	baseRef?: string | null;
 	isolation?: FleetCheckoutIsolation;
 	/**
 	 * P3 (spec FR-32): folders of the parent checkout, ignored by git, that are
@@ -797,7 +804,16 @@ export interface FleetCheckoutsCreateParams {
 	 * public repository, cloned anonymously with every credential source off.
 	 */
 	source: { kind: 'clone'; repoUrl: string; credential?: boolean } | { kind: 'worktree'; parentPath: string };
-	branch: string;
+	/** Always set for a worktree; null for a clone that stays on what it cloned (`baseRef`, else the default branch). */
+	branch: string | null;
+	/**
+	 * A fresh clone only (FL-15 FR-20): the branch the person asked for when another checkout of
+	 * this remote already holds that name. The platform cannot see a fresh clone's remote, so the
+	 * node decides after cloning: the remote has this branch → it is checked out, tracking the
+	 * remote (a pull request's head); it has not → `branch`, the unique NEW name the branch rule
+	 * proposed (FR-19). Absent when the name is free; a node that predates it makes `branch`.
+	 */
+	existingBranch?: string;
 	baseRef: string | null;
 	/** `task` for a checkout a Task run asked for (`--work` suffices); else a person or an Agent (`--manage`). */
 	createdBy: FleetCheckoutCreatedBy;

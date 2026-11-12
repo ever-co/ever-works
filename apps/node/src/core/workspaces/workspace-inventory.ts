@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { promises as fs, type Dirent } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { FLEET_AGENT_TASK_META_DIR } from '@ever-works/contracts';
-import { execFileWithVerifiedCancellation } from '@ever-works/local-workspace-plugin';
+import { execFileWithVerifiedCancellation, withPoolLock } from '@ever-works/local-workspace-plugin';
 import {
 	defaultIsProcessAlive,
 	FLEET_TASK_WORKSPACE_MOUNTS_DIR,
@@ -568,31 +568,47 @@ async function refreshPoolRemote(
 	}
 
 	const refspecs: string[] = [];
+	const goneTrackingRefs: string[] = [];
 	if (defaultBranch) refspecs.push(`+refs/heads/${defaultBranch}:refs/remotes/origin/${defaultBranch}`);
 	for (const branch of localBranches) {
 		if (branch === defaultBranch) continue;
 		if (heads.has(branch)) {
 			refspecs.push(`+refs/heads/${branch}:refs/remotes/origin/${branch}`);
 		} else {
-			await git(['update-ref', '-d', `refs/remotes/origin/${branch}`], pool.path, context);
+			goneTrackingRefs.push(`refs/remotes/origin/${branch}`);
 		}
 	}
 	for (const tree of worktrees) {
 		if (!tree.owned || !tree.branch) continue;
 		tree.remoteBranch = heads.has(tree.branch) ? 'present' : 'absent';
 	}
-	if (refspecs.length > 0) {
-		const fetched = await git(['fetch', '--quiet', pool.remoteUrl, ...new Set(refspecs)], pool.path, context, {
-			timeoutMs: context.remoteTimeoutMs
-		});
-		if (fetched.code !== 0) {
-			// The refs are now of unknown freshness: NOTHING in this pool is
-			// judged on them — not even a branch `ls-remote` said was gone,
-			// because its "pushed" count would be computed against stale refs.
-			pool.defaultBranch = null;
-			for (const tree of worktrees) tree.remoteBranch = 'unknown';
-			return;
-		}
+	// Both write the pool's remote-tracking refs — `refs/remotes/origin/<base>`
+	// is exactly what a provision's base fetch writes — so they run in the
+	// provider's queue for this pool (`withPoolLock`, the lock its provision,
+	// teardown and pool fetches take), never beside a provision's fetch:
+	// "incorrect old value provided", or `Unable to create '…/shallow.lock'`.
+	// The worker can claim a job while this scan runs: the reaper checks
+	// whether it is busy only when a cycle starts. The fetch keeps its own
+	// bound (`remoteTimeoutMs`), so the scan never holds the lock for long.
+	const remoteUrl = pool.remoteUrl;
+	const fetched = await withPoolLock(
+		pool.path,
+		async () => {
+			for (const ref of goneTrackingRefs) await git(['update-ref', '-d', ref], pool.path, context);
+			if (refspecs.length === 0) return null;
+			return git(['fetch', '--quiet', remoteUrl, ...new Set(refspecs)], pool.path, context, {
+				timeoutMs: context.remoteTimeoutMs
+			});
+		},
+		context.signal
+	);
+	if (fetched && fetched.code !== 0) {
+		// The refs are now of unknown freshness: NOTHING in this pool is
+		// judged on them — not even a branch `ls-remote` said was gone,
+		// because its "pushed" count would be computed against stale refs.
+		pool.defaultBranch = null;
+		for (const tree of worktrees) tree.remoteBranch = 'unknown';
+		return;
 	}
 	pool.remoteRefreshed = true;
 }

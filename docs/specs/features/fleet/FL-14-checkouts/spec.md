@@ -298,16 +298,23 @@ tab says when the reaper would remove one.
 ### 4.2 P2 — Create, pull, push, delete, roots, tools
 
 - **FR-16** A person MUST be able to create a checkout as a fresh clone, as a worktree of an
-  existing checkout on the same Node, or (P3) as a container-isolated folder, naming the Node.
+  existing checkout on the same Node, or (P3) as a container-isolated folder, naming the Node. A
+  fresh clone with no branch named MUST stay on the branch it cloned — the base ref when one is
+  given, else the repository's default branch; a base ref that is not a branch (a tag) is refused,
+  since the clone would be on no branch (CONTRACTS Revision 28).
 - **FR-17** A fresh clone MUST authenticate only with a credential the platform mints for that
   operation — repository-scoped, time-limited, revoked when the operation ends — and MUST NOT use
   the machine's own credential helper.
 - **FR-18** A worktree MUST be created with the branch name the caller gives or the program's
   branch rule proposes (FL-06), MUST be placed under the node's checkouts root, never inside the
   parent checkout, and MUST record its parent.
-- **FR-19** A branch name MUST never be reused for the same remote: a proposed name that exists
-  on the remote or on any checkout row for that remote (archived included) MUST get a numeric
-  suffix.
+- **FR-19** A NEW branch name MUST never be reused for the same remote: a name for a new branch
+  that exists on the remote or on any checkout row for that remote (archived included) MUST get a
+  numeric suffix. A worktree always makes a new branch. A fresh clone that asks for a branch the
+  remote already has MUST check that branch out as it is, tracking the remote (FL-15 FR-20: a pull
+  request's head), even when another checkout holds the name — a clone is its own repository; the
+  node decides from its clone's remote branches, and only when the remote lacks the branch does the
+  suffixed new name apply (CONTRACTS Revision 27).
 - **FR-20** Create MUST return within 500 ms with the row in `creating` and MUST report progress
   until `ready`; a failed create MUST remove any partial folder and MUST report the first line of
   the error.
@@ -478,7 +485,7 @@ Settings → Fleet (P3); no per-Work override.]`
 - [ ] **ACC-FL14-08** (FR-12, FR-21, FR-22) Fetch needs no dialog; pull and push need one; pull refuses on a dirty tree.
 - [ ] **ACC-FL14-09** (FR-16–FR-18, FR-20) Worktree create returns `creating` in ≤ 500 ms, lands under the checkouts root, records the parent.
 - [ ] **ACC-FL14-10** (FR-17) A fresh clone of a private repository succeeds with no credential in the folder, the row or the audit, and the token is revoked at the end.
-- [ ] **ACC-FL14-11** (FR-19) A proposed branch that exists on the remote gets `-2`.
+- [ ] **ACC-FL14-11** (FR-19) A new worktree's proposed branch that exists on the remote gets `-2`; a fresh clone of a branch the remote has checks it out, tracking the remote, even when another checkout holds the name, and gets `-2` only when the remote lacks it and a checkout holds it.
 - [ ] **ACC-FL14-12** (FR-24–FR-26) Delete of a dirty worktree demands the typed name and states counts; the branch survives; the bin shows "folder removed".
 - [ ] **ACC-FL14-13** (FR-13) Archive leaves the folder; Restore works only while the folder exists.
 - [ ] **ACC-FL14-14** (FR-27) FL-11's root list equals the `ready` checkout paths plus the node root.
@@ -497,6 +504,7 @@ Settings → Fleet (P3); no per-Work override.]`
 - [ ] **ACC-FL14-27** (FR-23) Fetch, pull and push on a discovered checkout run with the machine's own git configuration and never request a platform credential.
 - [ ] **ACC-FL14-28** (FR-32) A Work's shared folders are linked, not copied, into a new worktree of that repository.
 - [ ] **ACC-FL14-29** (FR-33) The bin purge removes only rows older than 30 days whose folder is gone, on its schedule, never on read.
+- [ ] **ACC-FL14-30** (FR-16) A fresh clone with no branch named (the New checkout dialog's default, the CLI without `--branch`, the Agent tool, the API) ends `ready` on the repository's default branch, or on the base ref when one is given; with a tag as the base ref it is refused and no folder is left.
 
 ---
 

@@ -18,11 +18,17 @@ jest.mock('../auth', () => ({
 }));
 
 import 'reflect-metadata';
-import { ForbiddenException, HttpStatus, RequestMethod } from '@nestjs/common';
+import {
+    BadRequestException,
+    ConflictException,
+    ForbiddenException,
+    HttpStatus,
+    RequestMethod,
+} from '@nestjs/common';
 import { HTTP_CODE_METADATA, METHOD_METADATA, PATH_METADATA } from '@nestjs/common/constants';
 import type { KnowledgeBaseService } from '@ever-works/agent/services';
 import type { AuthenticatedUser } from '@src/auth/types/auth.types';
-import { KbController } from './kb.controller';
+import { KbController, parseKbBaseContentHash } from './kb.controller';
 
 const WORK_ID = '00000000-0000-0000-0000-000000000001';
 const DOC_ID = '00000000-0000-0000-0000-000000000010';
@@ -173,6 +179,8 @@ describe('KbController — machine-written documents are review-gated', () => {
             DOC_ID,
             'u-1',
             expect.objectContaining({ body: 'new', reviewState: 'proposed' }),
+            // No editor base fingerprint: nothing to check.
+            {},
         );
         await controller.updateDocument(auth, WORK_ID, DOC_ID, { tags: ['a'] } as never, runToken);
         expect(kb.updateDocument.mock.calls[1][3].reviewState).toBeUndefined();
@@ -202,6 +210,8 @@ describe('KbController — machine-written documents are review-gated', () => {
             DOC_ID,
             'u-1',
             expect.objectContaining({ status: 'archived' }),
+            // No editor base fingerprint: nothing to check.
+            {},
         );
     });
 
@@ -475,6 +485,82 @@ describe('KbController — duplicate (the KB tree menu called a route that did n
 });
 
 /**
+ * The KB tree's "Rename" PATCHed `{ path }`, which `UpdateKbDocumentDto`
+ * refuses (400), so it was switched off (#3167). A path change is its own
+ * route: it also moves the mirrored file and the links other documents carry.
+ */
+describe('KbController — move (rename) a document', () => {
+    const session = { userId: 'u-1', authMethod: 'session' } as AuthenticatedUser;
+    const personalKey = { userId: 'u-1', authMethod: 'api-key' } as AuthenticatedUser;
+    const integration = {
+        userId: 'u-1',
+        authMethod: 'integration',
+        integration: { keyId: 'k-1', actAsUserId: null },
+    } as unknown as AuthenticatedUser;
+    const runToken = {
+        fleetRunCredential: { jobId: 'job-1', runId: 'run-9', organizationId: null },
+    };
+    let kb: Record<string, jest.Mock>;
+    let controller: KbController;
+
+    beforeEach(() => {
+        kb = {
+            moveDocument: jest.fn().mockResolvedValue({ id: DOC_ID, path: 'brand/tone.md' }),
+            updateDocument: jest.fn(),
+        };
+        controller = new KbController(kb as unknown as KnowledgeBaseService);
+    });
+
+    it('is a POST on works/:id/kb/documents/:docId/move answering 200', () => {
+        const handler = KbController.prototype.moveDocument;
+        expect(Reflect.getMetadata(PATH_METADATA, handler)).toBe(
+            'works/:id/kb/documents/:docId/move',
+        );
+        expect(Reflect.getMetadata(METHOD_METADATA, handler)).toBe(RequestMethod.POST);
+        expect(Reflect.getMetadata(HTTP_CODE_METADATA, handler)).toBe(HttpStatus.OK);
+    });
+
+    it('moves through the service with the path alone, never through PATCH', async () => {
+        const result = await controller.moveDocument(
+            session,
+            WORK_ID,
+            DOC_ID,
+            { path: 'brand/tone.md' },
+            {},
+        );
+        expect(kb.moveDocument).toHaveBeenCalledWith(WORK_ID, DOC_ID, 'u-1', {
+            path: 'brand/tone.md',
+        });
+        expect(kb.updateDocument).not.toHaveBeenCalled();
+        expect(result).toEqual({ id: DOC_ID, path: 'brand/tone.md' });
+    });
+
+    it('a person with a personal key may move a document', async () => {
+        await controller.moveDocument(personalKey, WORK_ID, DOC_ID, { path: 'brand/tone.md' }, {});
+        expect(kb.moveDocument).toHaveBeenCalledTimes(1);
+    });
+
+    it('refuses a fleet run and an integration key: a move rewrites other documents’ links', async () => {
+        await expect(
+            controller.moveDocument(personalKey, WORK_ID, DOC_ID, { path: 'brand/x.md' }, runToken),
+        ).rejects.toBeInstanceOf(ForbiddenException);
+        await expect(
+            controller.moveDocument(integration, WORK_ID, DOC_ID, { path: 'brand/x.md' }),
+        ).rejects.toMatchObject({ status: 422 });
+        expect(kb.moveDocument).not.toHaveBeenCalled();
+    });
+
+    it('lets the service’s refusals through (409 path taken)', async () => {
+        kb.moveDocument.mockRejectedValue(
+            new ConflictException({ code: 'KbPathTaken', message: 'taken' }),
+        );
+        await expect(
+            controller.moveDocument(session, WORK_ID, DOC_ID, { path: 'brand/x.md' }, {}),
+        ).rejects.toBeInstanceOf(ConflictException);
+    });
+});
+
+/**
  * `GET works/:id/kb/documents` — the command palette's several Status chips
  * (any of them) and several tags (all of them) reach the service, next to the
  * single `status` / `tag` every other caller sends.
@@ -518,5 +604,69 @@ describe('KbController — list filters', () => {
                 tags: undefined,
             }),
         );
+    });
+});
+
+/**
+ * #3204 review: the workbench editor autosaves the FULL body, so a save made on
+ * an older body (a rename rewrote this document's links meanwhile) wrote the
+ * old links back. The editor now sends the fingerprint of the body it is based
+ * on as a header; the API hands it to the service, which refuses a stale one
+ * (409). A body fingerprint, not the revision: a title or tag edit moves the
+ * revision and must not make the next body save conflict.
+ */
+describe('KbController — PATCH carries the editor’s base body fingerprint', () => {
+    const session = { userId: 'u-1', authMethod: 'session' } as AuthenticatedUser;
+    const HASH = 'a'.repeat(64);
+    let kb: Record<string, jest.Mock>;
+    let controller: KbController;
+
+    beforeEach(() => {
+        kb = { updateDocument: jest.fn().mockResolvedValue({ id: DOC_ID }) };
+        controller = new KbController(kb as unknown as KnowledgeBaseService);
+    });
+
+    it('⭐ passes the X-Kb-Base-Content-Hash header to the service', async () => {
+        await controller.updateDocument(
+            session,
+            WORK_ID,
+            DOC_ID,
+            { body: 'x' } as never,
+            {},
+            HASH.toUpperCase(),
+        );
+        expect(kb.updateDocument).toHaveBeenCalledWith(
+            WORK_ID,
+            DOC_ID,
+            'u-1',
+            expect.objectContaining({ body: 'x' }),
+            { baseContentHash: HASH },
+        );
+    });
+
+    it('checks nothing without the header (every other caller, an older web)', async () => {
+        await controller.updateDocument(session, WORK_ID, DOC_ID, { body: 'x' } as never, {});
+        expect(kb.updateDocument.mock.calls[0][4]).toEqual({});
+    });
+
+    it.each(['abc', '7', 'g'.repeat(64), 'a'.repeat(63), 'a'.repeat(65)])(
+        'refuses a malformed header (%s) with 400 KbBaseContentHashInvalid',
+        (value) => {
+            expect(() => parseKbBaseContentHash(value)).toThrow(BadRequestException);
+            try {
+                parseKbBaseContentHash(value);
+            } catch (error) {
+                expect((error as BadRequestException).getResponse()).toMatchObject({
+                    code: 'KbBaseContentHashInvalid',
+                });
+            }
+        },
+    );
+
+    it('reads a digest, and treats an empty header as absent', () => {
+        expect(parseKbBaseContentHash(` ${HASH} `)).toBe(HASH);
+        expect(parseKbBaseContentHash([HASH, 'b'.repeat(64)])).toBe(HASH);
+        expect(parseKbBaseContentHash('')).toBeUndefined();
+        expect(parseKbBaseContentHash(undefined)).toBeUndefined();
     });
 });

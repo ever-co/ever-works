@@ -12,6 +12,11 @@ vi.mock('next-intl', () => ({
     },
 }));
 
+const toastWarningMock = vi.fn();
+vi.mock('sonner', () => ({
+    toast: { warning: (...args: unknown[]) => toastWarningMock(...args) },
+}));
+
 const routerPushMock = vi.fn();
 const routerRefreshMock = vi.fn();
 const routerReplaceMock = vi.fn();
@@ -44,7 +49,13 @@ vi.mock('@/app/actions/works/kb-lock', () => ({
     unlockKbDocumentAction: (...args: unknown[]) => unlockActionMock(...args),
 }));
 
-import { KbDocumentContextMenu, makeDuplicatePath } from './KbDocumentContextMenu';
+import {
+    KB_MOVE_PATH_PATTERN,
+    KbDocumentContextMenu,
+    makeDuplicatePath,
+    renameErrorKey,
+} from './KbDocumentContextMenu';
+import { BROWSER_WORKSPACE_SCOPE_HEADER } from '@/lib/workspace-scope';
 import type { KbDocumentDto } from '@ever-works/contracts';
 
 function doc(overrides: Partial<KbDocumentDto> = {}): KbDocumentDto {
@@ -107,9 +118,9 @@ describe('KbDocumentContextMenu', () => {
         expect(screen.queryByTestId('kb-workbench-context-menu-doc-1')).toBeNull();
     });
 
-    it('hides Rename unless renameEnabled — the API cannot move a document yet', () => {
-        // Renaming PATCHes `{ path }`, which `UpdateKbDocumentDto` does not
-        // accept: every rename answered 400. The tree panel does not opt in.
+    it('hides Rename unless the surface opts in with renameEnabled', () => {
+        // A rename moves the document to a new URL; only a surface that follows
+        // it there (`onRenamed`, as the KB tree does) offers it.
         render(
             <KbDocumentContextMenu workId="work-1" document={doc()}>
                 <a data-testid="row">row</a>
@@ -305,32 +316,175 @@ describe('KbDocumentContextMenu', () => {
         expect(rename.disabled).toBe(false);
     });
 
-    it('opens rename dialog and PATCHes with the new path', async () => {
-        updateActionMock.mockResolvedValueOnce({
-            success: true,
-            data: doc({ path: 'brand/voice-v2.md' }),
+    describe('Rename', () => {
+        // Rename used to PATCH `{ path }` through `updateKbDocumentAction`; the
+        // API refuses `path` there (400). A path change is `POST …/move`.
+        function renderRename(
+            props: Partial<React.ComponentProps<typeof KbDocumentContextMenu>> = {},
+        ) {
+            render(
+                <KbDocumentContextMenu renameEnabled workId="work-1" document={doc()} {...props}>
+                    <a data-testid="row">row</a>
+                </KbDocumentContextMenu>,
+            );
+            openMenu();
+            fireEvent.click(screen.getByTestId('kb-workbench-context-rename'));
+            return screen.getByTestId('kb-workbench-context-rename-input') as HTMLInputElement;
+        }
+
+        function submit(input: HTMLInputElement, value: string) {
+            fireEvent.change(input, { target: { value } });
+            fireEvent.click(screen.getByTestId('kb-workbench-context-rename-submit'));
+        }
+
+        function answer(status: number, body: unknown) {
+            return vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+                new Response(JSON.stringify(body), {
+                    status,
+                    headers: { 'Content-Type': 'application/json' },
+                }),
+            );
+        }
+
+        it('opens a titled dialog with the file name (not the folder or .md) selected', () => {
+            const input = renderRename();
+            const dialog = screen.getByTestId('kb-workbench-context-rename-dialog');
+            expect(dialog.getAttribute('aria-labelledby')).toBeTruthy();
+            expect(dialog.textContent).toContain('renameTitle');
+            expect(dialog.textContent).toContain('renamePathHint');
+            expect(input.value).toBe('brand/voice.md');
+            expect([input.selectionStart, input.selectionEnd]).toEqual([6, 11]);
         });
 
-        render(
-            <KbDocumentContextMenu renameEnabled workId="work-1" document={doc()}>
-                <a data-testid="row">row</a>
-            </KbDocumentContextMenu>,
+        it('POSTs the new path to the move route (with the workspace scope), never the PATCH action', async () => {
+            const moved = doc({ path: 'brand/tone.md', slug: 'tone' });
+            const fetchSpy = answer(200, moved);
+            const onRenamed = vi.fn();
+            const onPatched = vi.fn();
+            const input = renderRename({ onRenamed, onPatched });
+
+            submit(input, '  brand/tone.md ');
+
+            await waitFor(() => expect(onRenamed).toHaveBeenCalledWith(moved));
+            const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+            expect(url).toBe('/api/works/work-1/kb/documents/doc-1/move');
+            expect(init.method).toBe('POST');
+            expect(JSON.parse(init.body as string)).toEqual({ path: 'brand/tone.md' });
+            expect(new Headers(init.headers).get(BROWSER_WORKSPACE_SCOPE_HEADER)).toBeTruthy();
+            expect(updateActionMock).not.toHaveBeenCalled();
+            expect(onPatched).toHaveBeenCalledWith(moved);
+            expect(routerRefreshMock).toHaveBeenCalled();
+            expect(screen.queryByTestId('kb-workbench-context-rename-dialog')).toBeNull();
+        });
+
+        it.each([
+            [
+                409,
+                { code: 'KbPathTaken', message: 'Another document … brand/colors.md' },
+                'renamePathTaken',
+            ],
+            [409, { code: 'KbPathNesting', message: 'x' }, 'renamePathNesting'],
+            [409, { code: 'KbLinkedFromLockedDocument', message: 'x' }, 'renameLinkedFromLocked'],
+            [409, { code: 'KbOrgDocumentPath', message: 'x' }, 'renameOrgDocumentPath'],
+            [400, { code: 'KbPathInvalid', message: 'x' }, 'renameInvalidPath'],
+            [403, { message: 'KB document is locked' }, 'renameForbidden'],
+            [404, { message: 'not found' }, 'renameNotFound'],
+            [500, { message: 'boom' }, 'renameFailed'],
+        ])(
+            'says why a %s refusal happened (%o), keeps the dialog open, never shows the API text',
+            async (status, body, key) => {
+                answer(status, body);
+                const onRenamed = vi.fn();
+                const input = renderRename({ onRenamed });
+
+                submit(input, 'brand/colors.md');
+
+                const error = await screen.findByTestId('kb-workbench-context-rename-error');
+                expect(error.textContent).toBe(key);
+                expect(onRenamed).not.toHaveBeenCalled();
+                expect(input.getAttribute('aria-invalid')).toBe('true');
+                expect(
+                    (screen.getByTestId('kb-workbench-context-rename-input') as HTMLInputElement)
+                        .disabled,
+                ).toBe(false);
+            },
         );
-        openMenu();
-        fireEvent.click(screen.getByTestId('kb-workbench-context-rename'));
 
-        const input = (await screen.findByTestId(
-            'kb-workbench-context-rename-input',
-        )) as HTMLInputElement;
-        fireEvent.change(input, { target: { value: 'brand/voice-v2.md' } });
-        fireEvent.click(screen.getByTestId('kb-workbench-context-rename-submit'));
-
-        await waitFor(() => {
-            expect(updateActionMock).toHaveBeenCalledWith({
-                workId: 'work-1',
-                docId: 'doc-1',
-                body: { path: 'brand/voice-v2.md' },
+        it('⭐ says which documents still link to the old path when the move could not rewrite them', async () => {
+            toastWarningMock.mockReset();
+            const moved = doc({ path: 'brand/tone.md', slug: 'tone' });
+            answer(200, {
+                ...moved,
+                linkRewrite: {
+                    documentIds: ['doc-2'],
+                    skipped: [
+                        {
+                            documentId: 'doc-3',
+                            path: 'brand/guide.md',
+                            reason: 'The document is fully locked.',
+                        },
+                        {
+                            documentId: 'doc-4',
+                            path: 'output/post.md',
+                            reason: 'The document was deleted.',
+                        },
+                    ],
+                },
             });
+            const onRenamed = vi.fn();
+            const input = renderRename({ onRenamed });
+
+            submit(input, 'brand/tone.md');
+
+            // The rename stands; the surface gets the document, not the report.
+            await waitFor(() => expect(onRenamed).toHaveBeenCalledWith(moved));
+            expect(toastWarningMock).toHaveBeenCalledWith('renameLinksSkipped');
+            expect(screen.queryByTestId('kb-workbench-context-rename-dialog')).toBeNull();
+        });
+
+        it('shows no warning when every link was rewritten', async () => {
+            toastWarningMock.mockReset();
+            const moved = doc({ path: 'brand/tone.md', slug: 'tone' });
+            answer(200, { ...moved, linkRewrite: { documentIds: ['doc-2'], skipped: [] } });
+            const onRenamed = vi.fn();
+            submit(renderRename({ onRenamed }), 'brand/tone.md');
+            await waitFor(() => expect(onRenamed).toHaveBeenCalledWith(moved));
+            expect(toastWarningMock).not.toHaveBeenCalled();
+        });
+
+        it('explains a path the API would refuse without a round trip', async () => {
+            const fetchSpy = vi.spyOn(globalThis, 'fetch');
+            const input = renderRename();
+
+            submit(input, 'brand/my voice');
+
+            expect(
+                (await screen.findByTestId('kb-workbench-context-rename-error')).textContent,
+            ).toBe('renameInvalidPath');
+            expect(fetchSpy).not.toHaveBeenCalled();
+        });
+
+        it('reports a dropped connection and leaves the dialog usable', async () => {
+            vi.spyOn(globalThis, 'fetch').mockRejectedValueOnce(new TypeError('Failed to fetch'));
+            const input = renderRename();
+
+            submit(input, 'brand/tone.md');
+
+            expect(
+                (await screen.findByTestId('kb-workbench-context-rename-error')).textContent,
+            ).toBe('renameFailed');
+            expect(
+                (screen.getByTestId('kb-workbench-context-rename-submit') as HTMLButtonElement)
+                    .disabled,
+            ).toBe(false);
+        });
+
+        it('cannot submit the path the document already has', () => {
+            renderRename();
+            expect(
+                (screen.getByTestId('kb-workbench-context-rename-submit') as HTMLButtonElement)
+                    .disabled,
+            ).toBe(true);
         });
     });
 
@@ -518,5 +672,32 @@ describe('makeDuplicatePath', () => {
     it('bumps the counter on already-copied paths', () => {
         expect(makeDuplicatePath('brand/voice-copy.md')).toBe('brand/voice-copy-2.md');
         expect(makeDuplicatePath('brand/voice-copy-3.md')).toBe('brand/voice-copy-4.md');
+    });
+});
+
+describe('KB_MOVE_PATH_PATTERN (the API move rule, checked before the round trip)', () => {
+    it.each(['brand/tone.md', 'research/2026/q3_v2.md'])('accepts %s', (path) => {
+        expect(KB_MOVE_PATH_PATTERN.test(path)).toBe(true);
+    });
+    it.each(['brand/tone', 'brand/my tone.md', '/brand/tone.md', 'brand/../tone.md', 'brand/.md'])(
+        'refuses %s',
+        (path) => {
+            expect(KB_MOVE_PATH_PATTERN.test(path)).toBe(false);
+        },
+    );
+});
+
+describe('renameErrorKey', () => {
+    it('prefers the API code, then the status', () => {
+        expect(renameErrorKey(409, 'KbPathTaken')).toBe('renamePathTaken');
+        expect(renameErrorKey(409, 'KbLinkedFromLockedDocument')).toBe('renameLinkedFromLocked');
+        expect(renameErrorKey(409, 'KbOrgDocumentPath')).toBe('renameOrgDocumentPath');
+        expect(renameErrorKey(409, 'KbPathNesting')).toBe('renamePathNesting');
+        expect(renameErrorKey(422, 'KbPathInvalid')).toBe('renameInvalidPath');
+        expect(renameErrorKey(400, undefined)).toBe('renameInvalidPath');
+        expect(renameErrorKey(403, undefined)).toBe('renameForbidden');
+        expect(renameErrorKey(404, undefined)).toBe('renameNotFound');
+        expect(renameErrorKey(409, 'SomethingElse')).toBe('renameFailed');
+        expect(renameErrorKey(502, undefined)).toBe('renameFailed');
     });
 });

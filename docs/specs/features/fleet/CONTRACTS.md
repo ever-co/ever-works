@@ -236,6 +236,33 @@ before every start, never by its hash (macOS: the Developer ID code requirement 
 `PATCH /api/fleet/nodes/:id` accepts `recordWatchSessions` (boolean) and `recordingRetentionDays` (integer 1–90),
 owner only, audited `node.policy.change` with `{ family: desktop, setting, from, to }`.
 
+**Revision 27 (2026-11-12)** — FL-14 × FL-15 FR-20 (a fresh clone keeps an existing branch): `checkouts.create`
+gains an optional `existingBranch` (validated as `branch` is), for a `clone` source only, and sent only when the
+branch asked for is already held by a checkout row of that remote. The platform cannot see a fresh clone's remote,
+so the node decides after cloning, from the clone's own remote-tracking refs (no second network command): the
+remote has `existingBranch` → it is checked out, tracking the remote; it has not → `branch`, the unique NEW name the
+branch rule proposed (FL-14 FR-19). A node that predates the field ignores it and makes `branch`; a platform that
+predates it never sends it. The row holds `branch` (the fallback) while `creating` — it reserves the new name
+against a concurrent create — and the node's result replaces it with the branch the clone is on; the folder is named
+for the branch asked for. The `node.checkout.create` audit row records `requestedBranch`, `fallbackBranch` (only
+when `existingBranch` was sent) and `branch`: the branch the node reported when its result came with the answer,
+left out while the node still has to choose. Every clone caller gets it — the New checkout dialog,
+`fleet checkout --branch`, `fleet_checkouts_create`, `POST /api/fleet/checkouts` and Fix on computer; worktrees are
+unchanged.
+
+**Revision 28 (2026-11-12)** — FL-14 FR-16 (a clone without a branch): `checkouts.create`'s `branch` is
+`string | null`; null is allowed for a `clone` source only and means the clone stays on what it checked out —
+`baseRef` when given, else the repository's default branch (a worktree still always names one; the platform proposes
+it, FR-18/FR-19). What it stays on must be a branch: a `baseRef` naming a tag clones onto a detached HEAD, which the
+node refuses after the clone (non-zero exit, the partial folder removed, the row `missing` with the reason) — a
+checkout on no branch could never be pushed. The platform already sent `branch: null` for a branchless clone; a node
+that predates this refuses it `invalid` with `details.field: 'branch'`, which the platform answers with a hint to name
+a branch or update the node. `FleetCheckoutCreateRequest` and `POST /api/fleet/checkouts` take `branch: null` and
+`baseRef: null` as absent (MCP tools and generated clients send null for an unset field). The `node.checkout.create`
+audit row leaves `branch` out while a branchless clone still runs, as Revision 27 does while the node chooses. A
+branchless clone's folder is named for the repository, so two at once on one computer pick the same one: the create
+whose folder a concurrent create took first (`uq_fleet_checkouts_node_path`) takes the next free suffix (`-2`, …).
+
 ## 0. Resolutions (R-1 … R-41)
 
 Rulings that settle questions more than one epic would otherwise answer differently.

@@ -22,18 +22,13 @@
  *    lazy-plugin calling rule ("materialise the method before calling it") the
  *    JSDoc on every member states.
  *
- * NOTE ON HOW THESE BIND: `packages/plugin/tsconfig.json` includes `src/**` but
- * excludes spec files (`*.spec.ts` at any depth), so
- * `pnpm --filter @ever-works/plugin type-check` (`tsc --noEmit`) does not
- * compile this file, and `pnpm test` runs it through esbuild, which erases
- * types. The type-level pins therefore bind when this file is type-checked
- * directly, e.g.
- *
- *     packages/plugin/node_modules/.bin/tsc --noEmit --strict --module ESNext \
- *       --moduleResolution bundler --target ES2021 --skipLibCheck \
- *       --esModuleInterop src/contracts/__tests__/git-provider-app-forks.spec.ts
- *
- * The runtime assertions in every block bind under `pnpm test` as well.
+ * NOTE ON HOW THESE BIND: `pnpm test` runs this file through esbuild, which
+ * erases types, so the type-level pins bind under
+ * `pnpm --filter @ever-works/plugin type-check`, whose second half
+ * (`tsc -p tsconfig.specs.json --noEmit`) compiles every spec file; CI's
+ * `lint-and-test` job runs it. Changing a pinned signature therefore means
+ * updating its pin here in the same change. The runtime assertions in every
+ * block bind under `pnpm test` as well.
  */
 
 import { describe, expect, expectTypeOf, it } from 'vitest';
@@ -53,6 +48,7 @@ import { GitProviderRequestError } from '../capabilities/git-provider.app-forks.
 import type {
 	ForkRepositoryOptions,
 	GitBranch,
+	GitProviderRequestOptions,
 	GitRepository,
 	GitRepositoryWithPermissions
 } from '../capabilities/git-provider.interface.js';
@@ -143,9 +139,19 @@ describe('APW-02 T9/T10 — additive-only: pre-APW-02 plugins still satisfy the 
 	});
 
 	it('the pre-existing members keep their exact signatures (additive, never narrowed)', () => {
+		// `requestOptions` (#3186) is a trailing OPTIONAL parameter: every existing call still
+		// compiles, and a provider written against the three-argument signature still fits.
 		expectTypeOf<IGitProviderPlugin['getRepository']>().toEqualTypeOf<
-			(owner: string, repo: string, token: string) => Promise<GitRepositoryWithPermissions | null>
+			(
+				owner: string,
+				repo: string,
+				token: string,
+				requestOptions?: GitProviderRequestOptions
+			) => Promise<GitRepositoryWithPermissions | null>
 		>();
+		expectTypeOf<
+			(owner: string, repo: string, token: string) => Promise<GitRepositoryWithPermissions | null>
+		>().toExtend<IGitProviderPlugin['getRepository']>();
 		expectTypeOf<IGitProviderPlugin['createBranch']>().toEqualTypeOf<
 			| ((owner: string, repo: string, name: string, fromRef: string, token: string) => Promise<GitBranch>)
 			| undefined

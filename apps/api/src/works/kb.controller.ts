@@ -5,6 +5,7 @@ import {
     Delete,
     Get,
     Header,
+    Headers,
     HttpCode,
     HttpStatus,
     Param,
@@ -50,8 +51,14 @@ import {
     type MachinePrincipalRequest,
 } from '../auth/machine-principal';
 import { AuthenticatedUser } from '@src/auth/types/auth.types';
-import { KB_DOCUMENT_STATUSES } from '@ever-works/contracts';
+import {
+    KB_BASE_CONTENT_HASH_HEADER,
+    KB_DOCUMENT_CLASSES,
+    KB_DOCUMENT_SOURCES,
+    KB_DOCUMENT_STATUSES,
+} from '@ever-works/contracts';
 import { DuplicateKbDocumentDto } from './dto/duplicate-kb-document.dto';
+import { MoveKbDocumentDto } from './dto/move-kb-document.dto';
 import type {
     KbDecisionStatus,
     KbDocumentClass,
@@ -101,6 +108,23 @@ function machineAuthoredKbFields(
  */
 export function kbNonSessionWritesProposed(env: NodeJS.ProcessEnv = process.env): boolean {
     return env.KB_NON_SESSION_WRITES_PROPOSED?.trim().toLowerCase() !== 'false';
+}
+
+/**
+ * The `KB_BASE_CONTENT_HASH_HEADER` value: `undefined` when the header is
+ * absent or empty (no check), 400 `KbBaseContentHashInvalid` when it is not a
+ * SHA-256 hex digest (what `KbDocumentDto.contentHash` carries).
+ */
+export function parseKbBaseContentHash(raw: string | string[] | undefined): string | undefined {
+    const value = (Array.isArray(raw) ? raw[0] : raw)?.trim();
+    if (!value) return undefined;
+    if (/^[0-9a-f]{64}$/i.test(value)) return value.toLowerCase();
+    throw new BadRequestException({
+        statusCode: 400,
+        error: 'Bad Request',
+        code: 'KbBaseContentHashInvalid',
+        message: `${KB_BASE_CONTENT_HASH_HEADER} must be a SHA-256 hex digest: ${value.slice(0, 80)}`,
+    });
 }
 
 /**
@@ -193,7 +217,12 @@ export class KbController {
     @Get('works/:id/kb/documents')
     @HttpCode(HttpStatus.OK)
     @ApiOperation({ summary: 'List KB documents for a Work' })
-    @ApiQuery({ name: 'class', required: false })
+    @ApiQuery({
+        name: 'class',
+        required: false,
+        enum: [...KB_DOCUMENT_CLASSES],
+        description: 'One class. For several, use `classes`.',
+    })
     @ApiQuery({ name: 'status', required: false })
     @ApiQuery({
         name: 'statuses',
@@ -221,19 +250,23 @@ export class KbController {
             'Memory upgrades M8 — review-queue filter. `proposed` lists only agent-authored / synthesized documents awaiting human review (excluded from context injection until accepted); `accepted` lists the reviewed set including pre-M7 rows whose column is NULL. Omit to list everything.',
     })
     @ApiQuery({
-        name: 'class',
+        // `class` takes ONE value (`?class=a&class=b` is refused); the
+        // repeatable facet is `classes`, normalised like `sources` / `statuses`.
+        name: 'classes',
         required: false,
         isArray: true,
+        enum: [...KB_DOCUMENT_CLASSES],
         description:
-            'Memory facets — repeatable class filter behind the workbench type chips (`?class=decision&class=output`). A single value keeps the original single-class behaviour.',
+            'Memory facets — repeatable class filter behind the workbench type chips (`?classes=decision&classes=output` or `?classes=decision,output`): a document matches ANY of them. With `class` as well, only the classes in both apply (none in common → no documents).',
     })
     @ApiQuery({
-        name: 'source',
+        // The DTO field is `sources`; `?source=` is not a query field (400).
+        name: 'sources',
         required: false,
         isArray: true,
-        enum: ['user', 'agent', 'imported', 'seeded'],
+        enum: [...KB_DOCUMENT_SOURCES],
         description:
-            'Memory facets — repeatable provenance filter. The rendered badge (human / agent / synthesized / connector) is DERIVED from this plus the ingest provenance; the filter itself stays on the stored column.',
+            'Memory facets — repeatable provenance filter (`?sources=agent&sources=imported` or `?sources=agent,imported`): a document matches ANY of them. The rendered badge (human / agent / synthesized / connector) is DERIVED from this plus the ingest provenance; the filter itself stays on the stored column.',
     })
     @ApiQuery({
         name: 'searchBody',
@@ -259,9 +292,10 @@ export class KbController {
     ) {
         return this.kb.listDocuments(workId, auth.userId, {
             class: query.class as KbDocumentClass | undefined,
-            // Memory facets — repeatable `?class=` / `?source=` chips.
-            // Express folds a repeated key into an array, which the DTO
-            // normalizes; a single `?class=x` still lands on `class`.
+            // Memory facets — the repeatable `?classes=` / `?sources=` chips
+            // (a repeated key or one comma-joined value; the DTO normalizes
+            // both). `class` takes a single value; with `classes` as well only
+            // the classes in both apply.
             classes: query.classes as KbDocumentClass[] | undefined,
             sources: query.sources as KbDocumentSource[] | undefined,
             searchBody: query.searchBody,
@@ -383,7 +417,16 @@ export class KbController {
         @Body() body: UpdateKbDocumentDto,
         // Appended LAST so positional callers (specs) keep their meaning.
         @Req() req?: MachinePrincipalRequest,
+        /**
+         * The body fingerprint the edit was made on
+         * (`KB_BASE_CONTENT_HASH_HEADER`, sent by the workbench editor): a
+         * document whose body has changed since is not written (409
+         * `KbContentConflict`). A header, not a body field, so an API that
+         * predates it ignores it instead of refusing the save.
+         */
+        @Headers(KB_BASE_CONTENT_HASH_HEADER) baseContentHashHeader?: string,
     ) {
+        const baseContentHash = parseKbBaseContentHash(baseContentHashHeader);
         // Works-security (run-token scope) — `status` archives / un-archives
         // (or re-drafts) a document: archiving hides it from every later run
         // and from the owner's working set, un-archiving brings a retired one
@@ -409,12 +452,67 @@ export class KbController {
             (changesKbContent(patch) &&
                 (machinePrincipalKind(auth, req) !== null ||
                     (!isHumanSession(auth) && kbNonSessionWritesProposed())));
-        return this.kb.updateDocument(workId, docId, auth.userId, {
-            ...patch,
-            status: patch.status as KbDocumentStatus | undefined,
-            class: patch.class as KbDocumentClass | undefined,
-            ...(reenterReview ? { reviewState: 'proposed' as KbReviewState } : {}),
-        });
+        return this.kb.updateDocument(
+            workId,
+            docId,
+            auth.userId,
+            {
+                ...patch,
+                status: patch.status as KbDocumentStatus | undefined,
+                class: patch.class as KbDocumentClass | undefined,
+                ...(reenterReview ? { reviewState: 'proposed' as KbReviewState } : {}),
+            },
+            baseContentHash === undefined ? {} : { baseContentHash },
+        );
+    }
+
+    /**
+     * Rename or move a KB document — the KB tree's "Rename". The document
+     * keeps its id; its path (and slug) change, its git-mirrored file moves
+     * in one commit, and the links other documents of the Work carry to the
+     * old path are rewritten (`KnowledgeBaseService.moveDocument`).
+     *
+     * 400 `KbPathInvalid`, 403 when the document is fully locked (or the
+     * caller cannot edit the Work), 409 `KbPathTaken` / `KbPathNesting` /
+     * `KbLinkedFromLockedDocument` / `KbOrgDocumentPath`. The answer is the
+     * moved document plus `linkRewrite`: the documents whose links now point
+     * at the new path, and those skipped (deleted, fully locked or too
+     * contended meanwhile) with why.
+     */
+    @Post('works/:id/kb/documents/:docId/move')
+    @HttpCode(HttpStatus.OK)
+    @ApiOperation({ summary: 'Rename or move a KB document to another path' })
+    @ApiResponse({
+        status: 200,
+        description:
+            'The moved KB document, with `linkRewrite.documentIds` (links rewritten) and `linkRewrite.skipped` (not rewritten, with why)',
+    })
+    @ApiResponse({ status: 400, description: 'The path is not a valid KB document path' })
+    @ApiResponse({ status: 403, description: 'The document is fully locked' })
+    @ApiResponse({
+        status: 409,
+        description:
+            'The path is taken, it clashes with another document as a file and a folder, a fully locked document links to this one, or the move would start or stop overriding an organization document',
+    })
+    async moveDocument(
+        @CurrentUser() auth: AuthenticatedUser,
+        @Param('id', new ParseUUIDPipe()) workId: string,
+        @Param('docId', new ParseUUIDPipe()) docId: string,
+        @Body() body: MoveKbDocumentDto,
+        // Appended LAST so positional callers (specs) keep their meaning.
+        @Req() req?: MachinePrincipalRequest,
+    ) {
+        // Works-security (run-token scope) — a move rewrites the links in
+        // OTHER documents of the Work and changes the path every citation and
+        // mention uses: not something a fleet run or an integration key does
+        // on its own. Content edits stay open to them through PATCH.
+        refuseMachinePrincipalAction(
+            auth,
+            req,
+            'move a Knowledge Base document',
+            'a move rewrites the links other documents carry; a person renames documents in the app.',
+        );
+        return this.kb.moveDocument(workId, docId, auth.userId, { path: body.path });
     }
 
     @Delete('works/:id/kb/documents/:docId')
