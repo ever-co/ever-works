@@ -630,6 +630,7 @@ describe('one fetch into a pool at a time', () => {
 		const baseDir = join(root, `pool-fetch-${name}`);
 		const worktreesDir = join(baseDir, 'worktrees');
 		let holdNext = false;
+		let stallNextPoolDepthFetch = false;
 		let heldOpen = false;
 		let release: (() => void) | null = null;
 		let failWorktreeDiffs = 0;
@@ -695,6 +696,15 @@ describe('one fetch into a pool at a time', () => {
 				});
 				return { pid: 4949, kill: () => true };
 			}
+			if (fetch && where === 'pool' && args.includes('--depth') && stallNextPoolDepthFetch) {
+				// A provision's deepen that has taken the pool's `shallow.lock`
+				// and stalls there, until the provision is cancelled.
+				stallNextPoolDepthFetch = false;
+				writeFileSync(join(poolDirOf(), 'shallow.lock'), '');
+				const child = { pid: 5050, kill: () => true };
+				stalled.push(child);
+				return child;
+			}
 			const hold = fetch && where === 'pool' && args.includes('--depth') && holdNext;
 			if (hold) {
 				holdNext = false;
@@ -733,6 +743,9 @@ describe('one fetch into a pool at a time', () => {
 				settings: { baseDir, fetchDepth: 1 }
 			}),
 			poolDir: poolDirOf,
+			stallNextPoolDepthFetch: () => {
+				stallNextPoolDepthFetch = true;
+			},
 			holdNextPoolFetch: () => {
 				holdNext = true;
 			},
@@ -1078,6 +1091,43 @@ describe('one fetch into a pool at a time', () => {
 		expect(warnings).toEqual([expect.stringMatching(/^Removed a stale 'shallow\.lock'/)]);
 	});
 
+	it('a provision whose --depth fetch is cancelled removes the shallow.lock it took, so the next one works', async () => {
+		const warnings: string[] = [];
+		const h = poolFetchHarness('cancelled-depth', {
+			terminateProcessTree: async () => undefined,
+			logger: { warn: (message) => warnings.push(message) }
+		});
+		await h.plugin.provision(h.spec('lw-pool-fetch-a', 'task/pool-fetch-a-1a2b3c4d'));
+		const lock = join(h.poolDir(), 'shallow.lock');
+		const controller = new AbortController();
+		h.stallNextPoolDepthFetch();
+		const cancelled = h.plugin.provision({
+			...h.spec('lw-pool-fetch-b', 'task/pool-fetch-b-2b3c4d5e'),
+			signal: controller.signal
+		});
+		void cancelled.catch(() => undefined);
+		try {
+			await expect.poll(() => h.stalled.length, { timeout: 20_000 }).toBe(1);
+			expect(existsSync(lock)).toBe(true);
+		} finally {
+			controller.abort();
+		}
+		await expect(cancelled).rejects.toMatchObject({ name: 'AbortError' });
+		// Fresh, so the age rule would keep it for 15 minutes: only the proven
+		// cancel of the fetch that took it can remove it now.
+		expect(existsSync(lock)).toBe(false);
+		expect(warnings).toEqual([
+			expect.stringMatching(
+				/^Removed the 'shallow\.lock' a cancelled fetch of base ref 'main' left in repository pool /
+			)
+		]);
+		await expect(
+			h.plugin.provision(h.spec('lw-pool-fetch-b', 'task/pool-fetch-b-2b3c4d5e'))
+		).resolves.toMatchObject({
+			bindingKey: 'lw-pool-fetch-b'
+		});
+	});
+
 	it("the branch judge passes on Git's reason when deepening the history fails", async () => {
 		const h = poolFetchHarness('judge-deepen-fails');
 		const first = await h.plugin.provision(h.spec('lw-pool-fetch-a', 'task/pool-fetch-a-1a2b3c4d'));
@@ -1160,7 +1210,7 @@ describe('a shallow.lock a stopped Git left in a pool', () => {
 	// that dies then (a cancelled provision, a killed pod) never removes it:
 	// every later `--depth` or `--unshallow` fetch into the pool failed on it.
 
-	it('is removed before a provision fetches once it is older than any bounded fetch, and logged; a fresh one stays', async () => {
+	it('is removed before a provision fetches once it is older than any bounded fetch, with a stale tracking-ref lock, and logged; a younger one stays', async () => {
 		const warnings: string[] = [];
 		const lockedBase = join(root, 'stale-shallow-lock');
 		const lockedPlugin = new LocalWorkspacePlugin({ logger: { warn: (message) => warnings.push(message) } });
@@ -1181,16 +1231,33 @@ describe('a shallow.lock a stopped Git left in a pool', () => {
 		expect(existsSync(lock)).toBe(true);
 		expect(warnings).toEqual([]);
 
-		// The same lock 20 minutes old — past the 10-minute fetch bound plus
-		// its 5-minute slack — is a stopped Git's: removed, and the fetch works.
+		// 14 minutes old is still inside the bound — the 10-minute fetch limit
+		// plus its 5-minute slack — so it may still be a live Git's: it stays.
+		const fourteenMinutesAgo = new Date(Date.now() - 14 * 60_000);
+		utimesSync(lock, fourteenMinutesAgo, fourteenMinutesAgo);
+		await expect(
+			lockedPlugin.provision(lockedSpec('lw-stale-lock-b', 'task/stale-lock-b-2b2b2b2b'))
+		).rejects.toThrow(/shallow\.lock/);
+		expect(existsSync(lock)).toBe(true);
+		expect(warnings).toEqual([]);
+
+		// 20 minutes old is past it: a stopped Git's. Removed, with the stale
+		// lock of the tracking ref the base fetch writes, and the fetch works.
 		const twentyMinutesAgo = new Date(Date.now() - 20 * 60_000);
 		utimesSync(lock, twentyMinutesAgo, twentyMinutesAgo);
+		const refLock = join(lockedBase, 'repos', pool, 'refs', 'remotes', 'origin', 'main.lock');
+		writeFileSync(refLock, '');
+		utimesSync(refLock, twentyMinutesAgo, twentyMinutesAgo);
 		await expect(
 			lockedPlugin.provision(lockedSpec('lw-stale-lock-b', 'task/stale-lock-b-2b2b2b2b'))
 		).resolves.toMatchObject({ bindingKey: 'lw-stale-lock-b' });
 		expect(existsSync(lock)).toBe(false);
+		expect(existsSync(refLock)).toBe(false);
 		expect(warnings).toEqual([
-			expect.stringMatching(/^Removed a stale 'shallow\.lock' \(\d+s old\) from repository pool /)
+			expect.stringMatching(/^Removed a stale 'shallow\.lock' \(\d+s old\) from repository pool /),
+			expect.stringMatching(
+				/^Removed a stale 'refs\/remotes\/origin\/main\.lock' \(\d+s old\) from repository pool /
+			)
 		]);
 	});
 });
