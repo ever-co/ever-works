@@ -1050,8 +1050,8 @@ describe('KnowledgeBaseService.moveDocument — rename a Work document', () => {
         });
 
         it.each([
-            ['directly under it', 'brand/guide.md/voice.md'],
-            ['deeper under it', 'brand/guide.md/2026/voice.md'],
+            ['directly under', 'brand/guide.md/voice.md'],
+            ['deeper under', 'brand/guide.md/2026/voice.md'],
         ])(
             '⭐ refuses a path %s a document (409 KbPathNesting), nothing inserted',
             async (_l, path) => {
