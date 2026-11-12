@@ -1082,4 +1082,84 @@ describe('KnowledgeBaseService.moveDocument — rename a Work document', () => {
             expect(doc.path).toBe('brand/notes.md');
         });
     });
+
+    /** #3209 review: paths that slipped past the checks, and the suffix. */
+    describe('create: path forms and the suffix', () => {
+        const create = (path: string, options: { exactPath?: boolean } = {}) =>
+            build().createDocument(
+                {
+                    workId: WORK_ID,
+                    userId: USER_ID,
+                    path,
+                    title: 'New',
+                    class: KbDocumentClass.BRAND,
+                    body: 'x',
+                },
+                options,
+            );
+        let inserts: jest.Mock;
+
+        beforeEach(() => {
+            inserts = jest.fn(async (data: Partial<WorkKnowledgeDocument>) => {
+                const row = buildDocument({
+                    ...data,
+                    id: `new-${inserts.mock.calls.length}`,
+                } as Partial<WorkKnowledgeDocument>);
+                docs.add(row);
+                return row;
+            });
+            (docs as unknown as { create: jest.Mock }).create = inserts;
+        });
+
+        it.each([
+            ['a "." segment', 'brand/./guide.md/voice.md'],
+            ['an empty segment', 'brand//guide.md/voice.md'],
+            ['a trailing slash', 'brand/notes.md/'],
+        ])(
+            '⭐ refuses %s (400 KbPathInvalid): the mirror would store it elsewhere',
+            async (_l, path) => {
+                const error = await create(path).catch((e: unknown) => e);
+                expect(error).toBeInstanceOf(BadRequestException);
+                expect((error as BadRequestException).getResponse()).toMatchObject({
+                    code: 'KbPathInvalid',
+                });
+                expect(inserts).not.toHaveBeenCalled();
+            },
+        );
+
+        it('⭐ the suffix stays in the same folder (a dot in a folder name is not the extension)', async () => {
+            docs.add(buildDocument({ id: 'taken', path: 'brand/v1.0/notes', slug: 'notes' }));
+            const doc = await create('brand/v1.0/notes');
+            expect(doc.path).toBe('brand/v1.0/notes-2');
+        });
+
+        it('the suffix goes before the last segment’s extension', async () => {
+            docs.add(buildDocument({ id: 'taken', path: 'brand/v1.0/notes.md', slug: 'notes' }));
+            const doc = await create('brand/v1.0/notes.md');
+            expect(doc.path).toBe('brand/v1.0/notes-2.md');
+        });
+
+        it('⭐ exactPath: a path other documents are stored under is a 409, never a -2 copy', async () => {
+            docs.add(buildDocument({ id: 'nested', path: 'brand/notes.md/a.md', slug: 'a' }));
+            const error = await create('brand/notes.md', { exactPath: true }).catch(
+                (e: unknown) => e,
+            );
+            expect(error).toBeInstanceOf(ConflictException);
+            expect((error as ConflictException).getResponse()).toMatchObject({
+                code: 'KbPathNesting',
+                path: 'brand/notes.md/a.md',
+            });
+            expect(inserts).not.toHaveBeenCalled();
+        });
+
+        it('exactPath: a taken path is a 409 KbPathTaken', async () => {
+            const error = await create('brand/voice.md', { exactPath: true }).catch(
+                (e: unknown) => e,
+            );
+            expect((error as ConflictException).getResponse()).toMatchObject({
+                code: 'KbPathTaken',
+            });
+            expect(inserts).not.toHaveBeenCalled();
+        });
+    });
 });
