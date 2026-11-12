@@ -1843,6 +1843,8 @@ export class KnowledgeBaseService {
         }
 
         const classChanged = moved.kbDocumentClass !== existing.kbDocumentClass;
+        const decisionChanged =
+            JSON.stringify(moved.decision ?? null) !== JSON.stringify(existing.decision ?? null);
         await this.recordKbDocument(
             'kb.document.moved',
             moved.id,
@@ -1850,12 +1852,14 @@ export class KnowledgeBaseService {
                 'path',
                 'slug',
                 ...(classChanged ? ['kbDocumentClass'] : []),
+                ...(decisionChanged ? ['decision'] : []),
                 ...(self.rewrote ? ['body'] : []),
             ],
             {
                 path: oldPath,
                 slug: existing.slug,
                 ...(classChanged ? { kbDocumentClass: existing.kbDocumentClass } : {}),
+                ...(decisionChanged ? { decision: existing.decision ?? null } : {}),
             },
         );
         for (const doc of rewritten) {
@@ -1871,6 +1875,7 @@ export class KnowledgeBaseService {
                     'path',
                     'slug',
                     ...(classChanged ? ['kbDocumentClass'] : []),
+                    ...(decisionChanged ? ['decision'] : []),
                     ...(self.rewrote ? ['body'] : []),
                 ],
                 previousPath: oldPath,

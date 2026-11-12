@@ -461,6 +461,136 @@ describe('workbench TiptapEditor', () => {
             });
         });
 
+        it('⭐ text typed while a save was in flight is kept when a newer re-read lands before it saves', async () => {
+            // The autosave status reads "saved" once the first save answers,
+            // although more was typed while it ran (its own save is still
+            // waiting on the 800 ms debounce). A re-read then must not take
+            // that for "nothing typed" and show the server's body over it.
+            vi.useFakeTimers();
+            let answer: (value: unknown) => void = () => undefined;
+            updateActionMock.mockImplementationOnce(
+                () => new Promise((resolve) => (answer = resolve)),
+            );
+            const { rerender } = render(
+                <TiptapEditor
+                    workId="work-1"
+                    document={doc({
+                        body: 'See [[a.md]]',
+                        contentHash:
+                            'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                        revision: 1,
+                    })}
+                    initialBody="See [[a.md]]"
+                    autosaveDebounceMs={800}
+                />,
+            );
+            act(() => {
+                fireEditorUpdate('See [[a.md]]\nx');
+            });
+            await act(async () => {
+                await vi.advanceTimersByTimeAsync(800);
+            });
+            expect(updateActionMock).toHaveBeenCalledTimes(1); // in flight
+            act(() => {
+                fireEditorUpdate('See [[a.md]]\nxy');
+            });
+            await act(async () => {
+                answer({
+                    success: true,
+                    data: doc({
+                        body: 'See [[a.md]]\nx',
+                        contentHash:
+                            'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+                        revision: 2,
+                    }),
+                });
+                await Promise.resolve();
+            });
+            expect(screen.getByTestId('kb-workbench-editor').getAttribute('data-status')).toBe(
+                'saved',
+            );
+            // Within the debounce: a rename rewrote the link on the server.
+            rerender(
+                <TiptapEditor
+                    workId="work-1"
+                    document={doc({
+                        body: 'See [[b.md]]\nx',
+                        contentHash:
+                            'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
+                        revision: 3,
+                    })}
+                    initialBody={'See [[b.md]]\nx'}
+                    autosaveDebounceMs={800}
+                />,
+            );
+            expect(lastSetContent?.content).toBe('See [[b.md]]\nxy');
+        });
+
+        it('⭐ a "Keep my version" click does not outlive a re-read that merges', async () => {
+            vi.useFakeTimers();
+            updateActionMock
+                .mockResolvedValueOnce({
+                    success: false,
+                    error: 'HTTP 409: Edit conflict: the text of this document changed since it was opened.',
+                })
+                .mockImplementationOnce(() => new Promise(() => undefined))
+                .mockResolvedValue({
+                    success: true,
+                    data: doc({
+                        body: 'merged',
+                        contentHash:
+                            'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
+                        revision: 4,
+                    }),
+                });
+            const { rerender } = render(
+                <TiptapEditor
+                    workId="work-1"
+                    document={doc({
+                        body: 'See [[a.md]]\nnotes',
+                        contentHash:
+                            'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                        revision: 1,
+                    })}
+                    initialBody={'See [[a.md]]\nnotes'}
+                    autosaveDebounceMs={100_000}
+                />,
+            );
+            act(() => {
+                fireEditorUpdate('See [[a.md]]\nnotes typed');
+            });
+            await act(async () => {
+                await vi.advanceTimersByTimeAsync(100_001);
+            });
+            expect(screen.getByTestId('kb-workbench-conflict-banner')).toBeTruthy();
+            // The click arms "keep mine"; its save waits on the debounce.
+            act(() => {
+                fireEvent.click(screen.getByTestId('kb-workbench-conflict-banner-secondary'));
+            });
+            // Before it saves, the page re-reads a newer body that merges.
+            rerender(
+                <TiptapEditor
+                    workId="work-1"
+                    document={doc({
+                        body: 'See [[b.md]]\nnotes',
+                        contentHash:
+                            'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
+                        revision: 3,
+                    })}
+                    initialBody={'See [[b.md]]\nnotes'}
+                    autosaveDebounceMs={100_000}
+                />,
+            );
+            await act(async () => {
+                await vi.advanceTimersByTimeAsync(100_001);
+            });
+            const last = updateActionMock.mock.calls[updateActionMock.mock.calls.length - 1][0];
+            expect(last).toMatchObject({
+                body: { body: 'See [[b.md]]\nnotes typed' },
+                baseContentHash: 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
+            });
+        });
+
         it('⭐ a keystroke not yet in React state is never overwritten by a re-read', async () => {
             vi.useFakeTimers();
             const { rerender } = render(

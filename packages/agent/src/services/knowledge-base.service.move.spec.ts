@@ -986,6 +986,23 @@ describe('KnowledgeBaseService.moveDocument — rename a Work document', () => {
             });
             expect(out.class).toBe(KbDocumentClass.BRAND);
             expect(out.decision).toBeNull();
+
+            // kb.document.moved names the decision state each time it changed.
+            const moves = domainEvents.changed.mock.calls
+                .map(([, , id, type, change]) => ({ id, type, change }))
+                .filter((e) => e.id === DOC_ID && e.type === 'kb.document.moved');
+            expect(moves).toHaveLength(2);
+            for (const move of moves) {
+                expect(JSON.stringify(move.change)).toContain('decision');
+            }
+        });
+
+        it('kb.document.moved leaves the decision out when it did not change', async () => {
+            await move('brand/tone.md');
+            const [moved] = domainEvents.changed.mock.calls
+                .map(([, , id, type, change]) => ({ id, type, change }))
+                .filter((e) => e.id === DOC_ID && e.type === 'kb.document.moved');
+            expect(JSON.stringify(moved.change)).not.toContain('decision');
         });
 
         it('a decision that already carries a state keeps it when it moves into decision/', async () => {

@@ -46,3 +46,20 @@ describe('mergeLineChanges', () => {
         expect(mergeLineChanges(base, `${theirs}\nextra`, `${base}\ntyped`)).toBeNull();
     });
 });
+
+/** #3204 closure check 2 (N1): changes were applied one after another. */
+describe('mergeLineChanges — changes are located in the original text first', () => {
+    it('⭐ never mistakes one change’s new text for a later change’s old text', () => {
+        // Server: A→B and B→C (line count kept). The editor edited the B line.
+        expect(mergeLineChanges('A\nB', 'B\nC', 'A\nB edited')).toBeNull();
+    });
+
+    it('applies a chained pair correctly when both lines are intact', () => {
+        expect(mergeLineChanges('A\nB', 'B\nC', 'A\nB\ntyped')).toBe('B\nC\ntyped');
+    });
+
+    it('refuses two changes that land on one line', () => {
+        // Two identical base lines both changed; the editor removed one of them.
+        expect(mergeLineChanges('A\nA\nz', 'B\nC\nz', 'A\nz typed')).toBeNull();
+    });
+});

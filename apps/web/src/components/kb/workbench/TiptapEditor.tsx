@@ -232,6 +232,9 @@ export function TiptapEditor({
                     ? mergeLineChanges(baseBodyRef.current, serverBody, ours)
                     : serverBody;
             if (merged === null) return;
+            // The body changed under a pending "Keep my version": the choice
+            // was made about the old one, so the merged text saves with the check.
+            keepMineRef.current = false;
             baseHashRef.current = serverHash;
             baseBodyRef.current = serverBody;
             autosave.reset(serverBody);
@@ -247,6 +250,7 @@ export function TiptapEditor({
         propHashRef.current = document.contentHash;
         baseBodyRef.current = next;
         unsavedRef.current = null;
+        keepMineRef.current = false;
         autosave.reset(next);
         if (editor) {
             // `emitUpdate: false` so the document swap doesn't fire the
