@@ -267,20 +267,21 @@ test.describe('GET /api/works — limit semantics', () => {
         expect(body.works.length).toBe(SEED_COUNT); // 12 < 20 ⇒ all
     });
 
-    test('limit far above total is NOT clamped (echoes 100000, returns all rows)', async ({
+    test('limit above the 1000 cap is clamped (echoes 1000, returns all rows)', async ({
         request,
     }) => {
+        // #3195: the Works list serves at most 1000 per page and echoes the page it applied.
         const { body } = await listJson(request, reader.access_token, '?limit=100000');
-        expect(body.limit).toBe(100000);
+        expect(body.limit).toBe(1000);
         expect(body.works.length).toBe(SEED_COUNT);
         expect(body.total).toBe(SEED_COUNT);
     });
 
-    test('negative limit disables the cap and echoes the raw value', async ({ request }) => {
+    test('negative limit falls back to the default 20', async ({ request }) => {
+        // #3195: a limit below 1 used to reach SQL as-is (no LIMIT in sqlite ⇒ every row).
         const { body } = await listJson(request, reader.access_token, '?limit=-5');
-        expect(body.limit).toBe(-5);
-        // take(-5) = no LIMIT in sqlite ⇒ all rows come back.
-        expect(body.works.length).toBe(SEED_COUNT);
+        expect(body.limit).toBe(20);
+        expect(body.works.length).toBe(SEED_COUNT); // 12 < 20 ⇒ all
     });
 
     test('non-numeric limit falls back to the default 20', async ({ request }) => {
@@ -295,13 +296,11 @@ test.describe('GET /api/works — limit semantics', () => {
         expect(body.works.length).toBe(3);
     });
 
-    test('non-integer limit (2.9) is a normalized 400, never a 5xx', async ({ request }) => {
-        const res = await listWorks(request, reader.access_token, '?limit=2.9');
-        expect([400, 422]).toContain(res.status());
-        expect(res.status()).toBeLessThan(500);
-        const body = await res.json();
-        expect(body.status).toBe('error');
-        expect(String(body.message)).toContain('datatype mismatch');
+    test('non-integer limit (2.9) is floored to 2', async ({ request }) => {
+        // #3195: used to reach SQL and answer a 400 'datatype mismatch'; now a whole page size.
+        const { body } = await listJson(request, reader.access_token, '?limit=2.9');
+        expect(body.limit).toBe(2);
+        expect(body.works.length).toBe(2);
     });
 });
 
