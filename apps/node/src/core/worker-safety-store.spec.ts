@@ -432,20 +432,37 @@ describe('a quarantine a reboot left behind (2026-11-12)', () => {
 		expect(h.files.has(MARKER_PATH)).toBe(true);
 	});
 
-	it('two racing starts: the one that claims a freshly armed marker puts it back', async () => {
+	it('two racing starts: a marker armed between the judgement and the removal survives', async () => {
 		const h = await armedIn(BOOT_A);
 		const slow = bootGate(h.fs, probe(BOOT_B), RESTARTED);
+		const fast = bootGate(h.fs, probe(BOOT_B), RESTARTED, 'session-fast');
 		const previous = await slow.findPreviousBootSession();
 		expect(previous).not.toBeNull();
 
-		// Meanwhile the other start cleared the judged marker and its worker armed its own.
-		const fast = bootGate(h.fs, probe(BOOT_B), RESTARTED, 'session-fast');
-		await expect(fast.clearPreviousBootSession((await fast.findPreviousBootSession())!)).resolves.toBe(true);
-		await expect(fast.acquire()).resolves.toMatchObject({ kind: 'acquired' });
-		const live = h.files.get(MARKER_PATH)!;
+		// The other start clears the judged marker and its worker arms its own
+		// right after the slow one's first touch of the marker in its clearance
+		// (its look at the marker, or its claim): the worst moment for it.
+		let raced = false;
+		const race = async () => {
+			raced = true;
+			await fast.clearPreviousBootSession((await fast.findPreviousBootSession())!);
+			await fast.acquire();
+		};
+		const { readFile, rename } = h.fs;
+		h.fs.readFile = async (path) => {
+			const content = await readFile(path);
+			if (path === MARKER_PATH && !raced) await race();
+			return content;
+		};
+		h.fs.rename = async (from, to) => {
+			if (from === MARKER_PATH && !raced) await race();
+			await rename!(from, to);
+		};
 
-		await expect(slow.clearPreviousBootSession(previous!)).resolves.toBe(false);
-		expect(h.files.get(MARKER_PATH)).toBe(live);
+		await slow.clearPreviousBootSession(previous!);
+
+		expect(raced).toBe(true);
+		expect(JSON.parse(h.files.get(MARKER_PATH)!).sessionId).toBe('session-fast');
 		expect(h.claims()).toEqual([]);
 		// And the live session can still release what it armed.
 		await expect(fast.release('session-fast')).resolves.toBeUndefined();
