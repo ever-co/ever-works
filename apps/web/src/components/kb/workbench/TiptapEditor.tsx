@@ -98,18 +98,31 @@ export function TiptapEditor({
     const propHashRef = useRef<string | undefined>(document.contentHash);
     // "Keep my version": the next save goes without the fingerprint check.
     const keepMineRef = useRef(false);
+    // Read synchronously when the page re-reads the document, never from React
+    // state (a render can lag a keystroke): the text typed and not yet
+    // confirmed saved (`null`: none), and whether a save is in flight.
+    const unsavedRef = useRef<string | null>(null);
+    const inFlightRef = useRef(false);
 
     const save = useCallback(
         async ({ candidate }: { candidate: string }) => {
             const baseContentHash = keepMineRef.current ? undefined : baseHashRef.current;
             keepMineRef.current = false;
-            const result = await updateKbDocumentAction({
-                workId,
-                docId: document.id,
-                body: { body: candidate },
-                ...(baseContentHash ? { baseContentHash } : {}),
-            });
+            inFlightRef.current = true;
+            let result: Awaited<ReturnType<typeof updateKbDocumentAction>>;
+            try {
+                result = await updateKbDocumentAction({
+                    workId,
+                    docId: document.id,
+                    body: { body: candidate },
+                    ...(baseContentHash ? { baseContentHash } : {}),
+                });
+            } finally {
+                inFlightRef.current = false;
+            }
             if (result.success) {
+                // Typed nothing more while it saved: nothing is unsaved now.
+                if (unsavedRef.current === candidate) unsavedRef.current = null;
                 const confirmedBody = result.data?.body ?? candidate;
                 baseHashRef.current = result.data?.contentHash ?? baseHashRef.current;
                 baseRevisionRef.current = result.data?.revision ?? baseRevisionRef.current;
@@ -197,7 +210,7 @@ export function TiptapEditor({
             if (!serverHash || serverBody === undefined || typeof serverRevision !== 'number')
                 return;
             if (serverHash === propHashRef.current) return; // the same read as before
-            if (autosave.status === 'saving') return; // decided once the save answers
+            if (inFlightRef.current) return; // decided once the save answers (the effect runs again)
             propHashRef.current = serverHash;
             if (
                 typeof baseRevisionRef.current === 'number' &&
@@ -210,8 +223,10 @@ export function TiptapEditor({
                 baseHashRef.current = serverHash; // a title or tag edit: the body is the same
                 return;
             }
-            const typed = autosave.status === 'dirty' || autosave.status === 'error';
-            const ours = typed && editor ? readMarkdown(editor) : undefined;
+            const ours =
+                unsavedRef.current === null
+                    ? undefined
+                    : ((editor ? readMarkdown(editor) : undefined) ?? unsavedRef.current);
             const merged =
                 typeof ours === 'string'
                     ? mergeLineChanges(baseBodyRef.current, serverBody, ours)
@@ -221,6 +236,7 @@ export function TiptapEditor({
             baseBodyRef.current = serverBody;
             autosave.reset(serverBody);
             editor?.commands.setContent(merged, { emitUpdate: false });
+            unsavedRef.current = merged === serverBody ? null : merged;
             if (merged !== serverBody) autosave.schedule(merged);
             return;
         }
@@ -230,6 +246,7 @@ export function TiptapEditor({
         baseRevisionRef.current = document.revision;
         propHashRef.current = document.contentHash;
         baseBodyRef.current = next;
+        unsavedRef.current = null;
         autosave.reset(next);
         if (editor) {
             // `emitUpdate: false` so the document swap doesn't fire the
@@ -245,6 +262,7 @@ export function TiptapEditor({
         const onUpdate = () => {
             const md = readMarkdown(editor);
             if (typeof md !== 'string') return;
+            unsavedRef.current = md;
             autosave.schedule(md);
         };
         editor.on('update', onUpdate);

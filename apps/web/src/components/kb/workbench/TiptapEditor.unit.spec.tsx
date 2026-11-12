@@ -461,6 +461,34 @@ describe('workbench TiptapEditor', () => {
             });
         });
 
+        it('⭐ a keystroke not yet in React state is never overwritten by a re-read', async () => {
+            vi.useFakeTimers();
+            const { rerender } = render(
+                <TiptapEditor
+                    workId="work-1"
+                    document={doc({ body: 'See [[a.md]]', contentHash: H1, revision: 1 })}
+                    initialBody="See [[a.md]]"
+                    autosaveDebounceMs={100_000}
+                />,
+            );
+            lastSetContent = null;
+            // The keystroke and the page re-read land in the same batch: the
+            // re-render that carries the new document has not seen "dirty" yet.
+            act(() => {
+                fireEditorUpdate('See [[a.md]] typed');
+                rerender(
+                    <TiptapEditor
+                        workId="work-1"
+                        document={doc({ body: 'See [[b.md]]', contentHash: H2, revision: 2 })}
+                        initialBody="See [[b.md]]"
+                        autosaveDebounceMs={100_000}
+                    />,
+                );
+            });
+            // Same line touched on both sides: the typed text stays.
+            expect(lastSetContent).toBeNull();
+        });
+
         it('keeps the typed text when the two changes touch the same line (the save will conflict)', async () => {
             vi.useFakeTimers();
             const { rerender } = render(
