@@ -5,6 +5,7 @@ import type { ModuleRef } from '@nestjs/core';
 import { UnknownElementException } from '@nestjs/core/errors/exceptions/unknown-element.exception';
 import type { Repository } from 'typeorm';
 import { MissionsService } from '../missions.service';
+import { isCustomMissionTemplateId } from '../mission-template.config';
 import { Mission, MissionOutcome, MissionStatus, MissionType } from '../../entities/mission.entity';
 import type { MissionWorkRelation } from '../../entities/mission-work.entity';
 import type { Work } from '../../entities/work.entity';
@@ -1530,6 +1531,20 @@ defaults:
         },
     );
 
+    it('an update stores a custom template only when the editor may use it', async () => {
+        const created = await create('u1', 'someone/their-template', { schedule: '0 6 * * 2' });
+
+        await expect(
+            build().update('u1', created.id, { missionTemplateRepo: OTHER_PERSONS }),
+        ).rejects.toMatchObject({ response: { code: 'templateNotFound' } });
+        expect(repo._rows[0].missionTemplateRepo).toBe('someone/their-template');
+
+        const updated = await build().update('u1', created.id, {
+            missionTemplateRepo: OWN_STARTER_FORK,
+        });
+        expect(updated.missionTemplateRepo).toBe(OWN_STARTER_FORK);
+    });
+
     it('the other person’s template applies for its owner', async () => {
         const dto = await create('u2', OTHER_PERSONS);
         expect(git.getFileContent).toHaveBeenCalledWith(
@@ -1589,15 +1604,20 @@ defaults:
             expect(dto).toMatchObject({ schedule: '0 9 * * 1', autoBuildWorks: true });
         });
 
-        it.each(['someone/their-template', 'not-a-catalog-id', 'https://github.com/a/b'])(
-            '%s is stored as before; nothing is looked up or read',
-            async (value) => {
-                const dto = await create('u1', value, { schedule: '0 6 * * 2' });
-                expect(dto.missionTemplateRepo).toBe(value);
-                expect(catalog.getVisibleTemplateForUser).not.toHaveBeenCalled();
-                expect(git.getFileContent).not.toHaveBeenCalled();
-            },
-        );
+        it.each([
+            'someone/their-template',
+            'not-a-catalog-id',
+            'https://github.com/a/b',
+            // An owner/repo that merely STARTS with `custom-` is a repository, not a catalog id
+            // (review of #3192: it was refused with 404 templateNotFound).
+            'custom-labs/mission-template',
+            'custom-not-a-uuid',
+        ])('%s is stored as before; nothing is looked up or read', async (value) => {
+            const dto = await create('u1', value, { schedule: '0 6 * * 2' });
+            expect(dto.missionTemplateRepo).toBe(value);
+            expect(catalog.getVisibleTemplateForUser).not.toHaveBeenCalled();
+            expect(git.getFileContent).not.toHaveBeenCalled();
+        });
 
         it('without the template catalog in the graph a custom id is not applied (nor refused)', async () => {
             catalogWired = false;
@@ -1605,5 +1625,23 @@ defaults:
             expect(dto).toMatchObject({ schedule: '0 6 * * 2', autoBuildWorks: false });
             expect(git.getFileContent).not.toHaveBeenCalled();
         });
+    });
+});
+
+describe('isCustomMissionTemplateId', () => {
+    it('matches exactly the catalog id shape custom-<uuid>', () => {
+        expect(isCustomMissionTemplateId('custom-0b6d3a52-6a1e-4f3a-9d55-000000000001')).toBe(true);
+        expect(isCustomMissionTemplateId('custom-0B6D3A52-6A1E-4F3A-9D55-000000000001')).toBe(true);
+    });
+
+    it.each([
+        'custom-labs/mission-template',
+        'custom-',
+        'custom-abc',
+        'CUSTOM-0b6d3a52-6a1e-4f3a-9d55-000000000001',
+        'starter-business',
+        null,
+    ])('does not match %s', (value) => {
+        expect(isCustomMissionTemplateId(value)).toBe(false);
     });
 });

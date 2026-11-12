@@ -1125,9 +1125,16 @@ export class MissionsService {
             existing.outstandingIdeasCap = input.outstandingIdeasCap;
         if (input.guardrailsOverride !== undefined)
             existing.guardrailsOverride = input.guardrailsOverride;
-        if (input.missionTemplateRepo !== undefined)
+        if (input.missionTemplateRepo !== undefined) {
             // Security: validate/normalize before persisting (SSRF defense-in-depth).
-            existing.missionTemplateRepo = this.normalizeTemplateRepo(input.missionTemplateRepo);
+            const templateRepo = this.normalizeTemplateRepo(input.missionTemplateRepo);
+            // A custom catalog template is stored only when the editor may use it — the same
+            // check as create (another person's or an archived one → 404 templateNotFound).
+            if (templateRepo && isCustomMissionTemplateId(templateRepo)) {
+                await this.findTemplateConfig(userId, templateRepo);
+            }
+            existing.missionTemplateRepo = templateRepo;
+        }
         // APW-08 T34 (FR-51) — validated, never stored raw.
         if (input.outputMode !== undefined) {
             existing.outputMode = this.assertOutputMode(input.outputMode);

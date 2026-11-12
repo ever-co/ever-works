@@ -65,13 +65,18 @@ export const MISSION_TEMPLATE_MANIFEST_PATH = '.works/mission.yml';
  */
 export const CUSTOM_MISSION_TEMPLATE_ID_PREFIX = 'custom-';
 
+/**
+ * `custom-` + a UUID, exactly as `TemplateCatalogService` mints them (`randomUUID()`): the
+ * prefix lower-case, the UUID's hex in either case. Only this shape is a catalog id: an `owner/repo` slug that happens to
+ * start with `custom-` (`custom-labs/mission-template`) is a repository, and keeps the path it
+ * always had.
+ */
+const CUSTOM_MISSION_TEMPLATE_ID_PATTERN =
+    /^custom-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+
 /** Whether `templateId` is shaped like a custom catalog template's id (`custom-<uuid>`). */
 export function isCustomMissionTemplateId(templateId?: string | null): boolean {
-    return (
-        typeof templateId === 'string' &&
-        templateId.length > CUSTOM_MISSION_TEMPLATE_ID_PREFIX.length &&
-        templateId.startsWith(CUSTOM_MISSION_TEMPLATE_ID_PREFIX)
-    );
+    return typeof templateId === 'string' && CUSTOM_MISSION_TEMPLATE_ID_PATTERN.test(templateId);
 }
 
 const STARTER_BUSINESS_MISSION_TEMPLATE: MissionTemplateConfig = {
