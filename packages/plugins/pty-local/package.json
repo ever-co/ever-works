@@ -35,7 +35,7 @@
 		"@ever-works/plugin": "workspace:*"
 	},
 	"optionalDependencies": {
-		"@homebridge/node-pty-prebuilt-multiarch": "^0.13.1"
+		"@homebridge/node-pty-prebuilt-multiarch": "^0.15.0"
 	},
 	"devDependencies": {
 		"@ever-works/contracts": "workspace:*",

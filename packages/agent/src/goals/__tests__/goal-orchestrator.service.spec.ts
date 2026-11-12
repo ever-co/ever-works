@@ -124,7 +124,7 @@ function goalRow(overrides: Partial<Goal> = {}): AnyRow {
     } as AnyRow;
 }
 
-function build(overrides: { goal?: Partial<Goal>; works?: unknown } = {}) {
+function build(overrides: { goal?: Partial<Goal>; works?: unknown; domainEvents?: unknown } = {}) {
     const goals = makeRepo('g');
     const events = makeRepo('e');
     const tasks = makeRepo('t');
@@ -234,8 +234,9 @@ function build(overrides: { goal?: Partial<Goal>; works?: unknown } = {}) {
         notifications as never,
         runCanceller as never,
         dispatchGate as never,
-        // APW-08 T32 — domainEvents stays unbound; the Work repository is the 15th.
-        undefined,
+        // APW-08 T32 — domainEvents unbound unless a test passes one; the Work
+        // repository is the 15th.
+        overrides.domainEvents as never,
         overrides.works as never,
     );
 
@@ -620,6 +621,140 @@ describe('GoalOrchestratorService — Definition of Done', () => {
         });
         await expect(service.approveDodCriteria('u1', 'g1')).rejects.toBeInstanceOf(
             BadRequestException,
+        );
+    });
+});
+
+describe('GoalOrchestratorService — add / remove ONE criterion (review of #3172)', () => {
+    const proposal = {
+        id: 'p1',
+        text: 'Also add a FAQ',
+        status: 'open' as const,
+        source: 'planner' as const,
+        proposed: true,
+    };
+
+    /**
+     * A service whose publisher's transaction first lets a planner proposal
+     * land — after the service's ownership read, before its write — and then
+     * runs the write. The fake repository's `save` replaces the row object, so
+     * the copy the service read first really is stale.
+     */
+    function buildRacing(goal: Partial<Goal>) {
+        let goals: ReturnType<typeof makeRepo> | undefined;
+        const publisher = {
+            transaction: jest.fn(async (fn: (manager: unknown) => Promise<unknown>) => {
+                const repo = goals!;
+                await repo.save({
+                    id: 'g1',
+                    dodCriteria: [...((repo._rows[0].dodCriteria as unknown[]) ?? []), proposal],
+                });
+                return fn({
+                    getRepository: () => repo,
+                    connection: { options: { type: 'postgres' } },
+                });
+            }),
+            changed: jest.fn(async () => 1),
+        };
+        const built = build({ goal, domainEvents: publisher });
+        goals = built.goals;
+        return { ...built, publisher };
+    }
+
+    it('adds an approved, open operator criterion with a unique slug id', async () => {
+        const { service, goals, events, activityLog } = build({
+            goal: { dodCriteria: [{ id: 'ship-it', text: 'Ship it', status: 'open' }] },
+        });
+        const dto = await service.addDodCriterion('u1', 'g1', '  Ship it!  ');
+        expect(dto.dodCriteria?.map((c) => c.id)).toEqual(['ship-it', 'ship-it-2']);
+        expect(goals._rows[0].dodCriteria).toEqual([
+            expect.objectContaining({ id: 'ship-it' }),
+            expect.objectContaining({
+                id: 'ship-it-2',
+                text: 'Ship it!',
+                status: 'open',
+                source: 'operator',
+            }),
+        ]);
+        expect((goals._rows[0].dodCriteria as Array<{ proposed?: boolean }>)[1].proposed).toBe(
+            undefined,
+        );
+        expect(eventMessages(events).at(-1)).toContain('Criterion "Ship it!" added');
+        expect(activityLog.log).toHaveBeenCalledWith(
+            expect.objectContaining({ action: 'dod-add' }),
+        );
+    });
+
+    it('keeps a proposal that landed between the read and the write when adding', async () => {
+        const { service, goals, publisher } = buildRacing({
+            dodCriteria: [{ id: 'a', text: 'Ship pricing', status: 'open' }],
+        });
+
+        const dto = await service.addDodCriterion('u1', 'g1', 'Write docs');
+        // The write re-read the row inside its transaction, under a row lock.
+        expect(goals.findOne).toHaveBeenLastCalledWith(
+            expect.objectContaining({ lock: { mode: 'pessimistic_write' } }),
+        );
+        expect(dto.dodCriteria?.map((c) => c.id)).toEqual(['a', 'p1', 'write-docs']);
+        // The planner's proposal is kept AND still awaits approval.
+        expect(dto.dodCriteria?.[1]).toMatchObject({ id: 'p1', proposed: true });
+        expect(publisher.changed).toHaveBeenCalledWith(
+            expect.anything(),
+            'goal',
+            'g1',
+            'goal.updated',
+            { changedFields: ['dodCriteria', 'progress'] },
+        );
+    });
+
+    it('removes one criterion from the stored list, keeping a proposal that landed meanwhile', async () => {
+        const { service } = buildRacing({
+            dodCriteria: [
+                { id: 'a', text: 'Ship pricing', status: 'open' },
+                { id: 'b', text: 'Write docs', status: 'open' },
+            ],
+        });
+        const dto = await service.removeDodCriterion('u1', 'g1', 'a');
+        expect(dto.dodCriteria?.map((c) => c.id)).toEqual(['b', 'p1']);
+    });
+
+    it('404s an unknown criterion and leaves the list alone', async () => {
+        const { service, goals } = build({
+            goal: { dodCriteria: [{ id: 'a', text: 'Ship pricing', status: 'open' }] },
+        });
+        await expect(service.removeDodCriterion('u1', 'g1', 'nope')).rejects.toBeInstanceOf(
+            NotFoundException,
+        );
+        expect(goals._rows[0].dodCriteria).toHaveLength(1);
+    });
+
+    it('applies the same rules as replacing the list', async () => {
+        const { service, goals } = build({
+            goal: {
+                goalKind: 'delivery',
+                dodCriteria: [{ id: 'a', text: 'Ship pricing', status: 'open' }],
+            },
+        });
+        // Empty text, too long a text, a delivery Goal's last approved criterion.
+        await expect(service.addDodCriterion('u1', 'g1', '   ')).rejects.toBeInstanceOf(
+            BadRequestException,
+        );
+        await expect(service.addDodCriterion('u1', 'g1', 'x'.repeat(501))).rejects.toBeInstanceOf(
+            BadRequestException,
+        );
+        await expect(service.removeDodCriterion('u1', 'g1', 'a')).rejects.toBeInstanceOf(
+            BadRequestException,
+        );
+        expect(goals._rows[0].dodCriteria).toHaveLength(1);
+    });
+
+    it('is owner-only, like every Definition-of-Done write', async () => {
+        const { service } = build();
+        await expect(service.addDodCriterion('someone-else', 'g1', 'x')).rejects.toBeInstanceOf(
+            NotFoundException,
+        );
+        await expect(service.removeDodCriterion('someone-else', 'g1', 'a')).rejects.toBeInstanceOf(
+            NotFoundException,
         );
     });
 });

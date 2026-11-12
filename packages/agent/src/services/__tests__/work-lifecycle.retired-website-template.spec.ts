@@ -96,7 +96,7 @@ function makeService(work?: Record<string, unknown>) {
         websiteGenerator as never,
         websiteUpdateService as never,
         ownership as never,
-        {} as never,
+        { isHiddenProvider: () => false } as never, // deployFacade
         templateCatalog as never,
         websiteRepositoryState as never,
         { assertWithinQuota: jest.fn().mockResolvedValue(undefined) } as never,
@@ -366,7 +366,7 @@ describe('WorkLifecycleService — a retired saved default is never newly inheri
             websiteGenerator as never,
             websiteUpdateService as never,
             { ensureCanEdit: jest.fn().mockResolvedValue({ work }) } as never,
-            {} as never,
+            { isHiddenProvider: () => false } as never, // deployFacade
             catalog as never,
             {
                 isInitialized: jest.fn().mockResolvedValue(options.websiteRepoInitialized ?? false),

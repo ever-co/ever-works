@@ -203,11 +203,13 @@ describe('Recurring Tasks overlap limit (real SQLite)', () => {
     });
 
     /**
-     * Record a "not found" the way production does: the last successful read was more than the
-     * confirm window ago, and the sweep's next read answers "not found".
+     * Record a "not found" the way production does: the provider FIRST answered "not found" more
+     * than the confirm window ago (`prNotFoundSince`; the last successful read was just before),
+     * and the sweep's next read still answers "not found".
      */
     async function goNotFound(taskId: string) {
-        await sweepRead(taskId, { ciCheckedAt: ago(TASK_PR_NOT_FOUND_CONFIRM_MS + 60_000) });
+        const firstAnswer = ago(TASK_PR_NOT_FOUND_CONFIRM_MS + 60_000);
+        await sweepRead(taskId, { ciCheckedAt: firstAnswer, prNotFoundSince: firstAnswer });
         return sweepWithProvider(null);
     }
 
@@ -399,11 +401,19 @@ describe('Recurring Tasks overlap limit (real SQLite)', () => {
             const untouched = await readRow(blip.id);
             expect(untouched).toMatchObject({ prState: 'open', ciState: 'passing' });
             expect(untouched.ciCheckedAt!.getTime()).toBe(lastRead.getTime());
+            // Only the first answer and when to ask again are remembered.
+            expect(untouched.prNotFoundSince).toBeInstanceOf(Date);
+            expect(untouched.prReadRetryAt).toBeInstanceOf(Date);
             expect(await openIds(parent)).toEqual([blip.id]);
 
-            // Access is back on the next tick.
+            // Access is back by the next read (its retry instant, here moved into the past).
+            await repository.updatePrStatusCache(blip.id, { prReadRetryAt: ago(1_000) });
             await sweepWithProvider(providerSays(34));
-            expect((await readRow(blip.id)).prState).toBe('open');
+            expect(await readRow(blip.id)).toMatchObject({
+                prState: 'open',
+                prNotFoundSince: null,
+                prReadRetryAt: null,
+            });
             expect(await openIds(parent, new Date(NOW.getTime() + 2 * DAY))).toEqual([blip.id]);
         });
 
@@ -422,6 +432,7 @@ describe('Recurring Tasks overlap limit (real SQLite)', () => {
             );
             await sweepRead(idle.id, {
                 ciCheckedAt: ago(TASK_PR_NOT_FOUND_CONFIRM_MS + 60_000),
+                prNotFoundSince: ago(TASK_PR_NOT_FOUND_CONFIRM_MS + 60_000),
                 ciState: 'failing',
                 prChecks: [{ name: 'build', status: 'completed', conclusion: 'failure' }],
             });

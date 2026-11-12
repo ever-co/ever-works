@@ -30,6 +30,35 @@ describe('cron-matcher', () => {
         it('rejects inverted ranges', () => {
             expect(() => parseCron('10-5 * * * *')).toThrow(/start > end/);
         });
+
+        it('rejects a leading "-" instead of reading the missing bound as 0', () => {
+            // `Number('')` is 0, so `-5` used to be accepted as `0-5`.
+            expect(() => parseCron('-5 * * * *')).toThrow(/Invalid cron value/);
+        });
+
+        it('rejects a range with more than two bounds instead of dropping the extra', () => {
+            expect(() => parseCron('1-5-9 * * * *')).toThrow(/expected "start-end"/);
+        });
+
+        it('rejects more than one step instead of dropping the extra', () => {
+            expect(() => parseCron('*/5/2 * * * *')).toThrow(/only one "\/" step/);
+        });
+
+        it('rejects numbers that are not plain decimal digits', () => {
+            expect(() => parseCron('1e1 * * * *')).toThrow(/Invalid cron value/);
+            expect(() => parseCron('0x10 * * * *')).toThrow(/Invalid cron value/);
+            expect(() => parseCron('1.0 * * * *')).toThrow(/Invalid cron value/);
+            expect(() => parseCron('*/1e1 * * * *')).toThrow(/positive integer/);
+        });
+
+        it('rejects a step with no range in front of it', () => {
+            expect(() => parseCron('/5 * * * *')).toThrow(/Invalid cron value/);
+        });
+
+        it('still accepts the standard forms', () => {
+            expect(() => parseCron('*/5 9-17/2 1,15 JAN-MAR MON-FRI')).not.toThrow();
+            expect(() => parseCron('5/10 * * * 7')).not.toThrow();
+        });
     });
 
     describe('matchesCron — common patterns', () => {

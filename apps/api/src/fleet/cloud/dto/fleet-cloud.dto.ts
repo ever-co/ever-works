@@ -20,6 +20,7 @@ import {
     FLEET_CLOUD_IDLE_MIN_HOURS,
     FLEET_CLOUD_IDLE_POLICY_MODES,
     FLEET_CLOUD_NAME_PATTERN,
+    FLEET_MAX_NODE_NAME_LENGTH,
     FLEET_CLOUD_SOFTWARE_IDS,
     type FleetActionConfirmFields,
     type FleetCloudIdlePolicyMode,
@@ -127,7 +128,11 @@ export class FleetCloudDestroyDto {
     })
     @IsOptional()
     @IsString()
-    @MaxLength(39)
+    // The name compared is the Fleet node's, which a rename may set to up to
+    // FLEET_MAX_NODE_NAME_LENGTH (200). Capped at 39 (the CREATE name rule),
+    // a renamed computer with a longer name could never be destroyed: the
+    // only accepted confirmation was refused by this DTO.
+    @MaxLength(FLEET_MAX_NODE_NAME_LENGTH)
     confirmName?: string;
 }
 

@@ -164,7 +164,7 @@ function makeService(options: { withInstallationRepositories?: boolean } = {}): 
         {} as never,
         {} as never,
         {} as never,
-        {} as never,
+        { isHiddenProvider: () => false } as never, // deployFacade
         templateCatalog as never,
         {} as never,
         quota as never,

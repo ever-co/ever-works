@@ -37,8 +37,14 @@ interface GoalLimitsDialogProps {
     open: boolean;
     onOpenChange: (open: boolean) => void;
     onGoalChange: (goal: Goal) => void;
-    /** Agents the operator may pin routing to. Empty = no pin control. */
+    /** Agents the operator may pin routing to. Empty = no pin control (unless a pin is stored). */
     agents?: GoalAgentOption[];
+    /**
+     * The pinned Agent id when the API answered 404 for it (deleted, or no
+     * longer the viewer's). Shown as a deleted Agent with a warning: with no
+     * history such a Goal routes to no Agent until the owner unpins it.
+     */
+    missingAgentId?: string | null;
 }
 
 /**
@@ -75,8 +81,18 @@ export function GoalLimitsDialog({
     onOpenChange,
     onGoalChange,
     agents = [],
+    missingAgentId = null,
 }: GoalLimitsDialogProps) {
     const t = useTranslations('dashboard.goalDetail.limits');
+    // A stored pin the options do not hold (review of #3172): it used to match
+    // no option, so the select read "No pin" while the pin was still stored.
+    // It gets its own option — "Deleted Agent" when the API answered 404, else
+    // its id (unknown) — and the control shows even with no Agents to offer,
+    // so the owner can always unpin.
+    const storedPin = goal.assignedAgentId ?? null;
+    const unlistedPin =
+        storedPin && !agents.some((agent) => agent.id === storedPin) ? storedPin : null;
+    const pinDeleted = unlistedPin !== null && unlistedPin === missingAgentId;
     const [pending, startTransition] = useTransition();
 
     const [spendCapUsd, setSpendCapUsd] = useState(
@@ -129,11 +145,16 @@ export function GoalLimitsDialog({
                 executionTarget === '' ? null : (executionTarget as GoalExecutionTarget),
             plannerModelHint: toNullableText(plannerModel),
             workerModelHint: toNullableText(workerModel),
-            // `null` unpins and restores round-robin over the Goal's history,
-            // which is why this is sent even when empty: omitting it would
-            // make the pin one-way.
-            assignedAgentId: assignedAgent === '' ? null : assignedAgent,
         };
+        // Sent only when the pin CHANGED: `null` unpins and restores
+        // round-robin over the Goal's history, so an unpin is still sent. An
+        // unchanged pin is left out (the API keeps it): re-sending it on every
+        // save meant that once the pinned Agent was deleted, every limits save
+        // answered 404 — even with no Agents left to pick another one.
+        const nextAgent = assignedAgent === '' ? null : assignedAgent;
+        if (nextAgent !== (goal.assignedAgentId ?? null)) {
+            input.assignedAgentId = nextAgent;
+        }
 
         startTransition(async () => {
             try {
@@ -155,7 +176,7 @@ export function GoalLimitsDialog({
                 </DialogHeader>
 
                 <div className="grid gap-4 @lg/main:grid-cols-2">
-                    {agents.length > 0 ? (
+                    {agents.length > 0 || unlistedPin ? (
                         <div className="@lg/main:col-span-2">
                             <label className="mb-1 block text-xs font-medium text-text dark:text-text-dark">
                                 {t('fields.assignedAgent')}
@@ -166,12 +187,28 @@ export function GoalLimitsDialog({
                                 placeholder={t('fields.assignedAgentNone')}
                             >
                                 <option value="">{t('fields.assignedAgentNone')}</option>
+                                {unlistedPin ? (
+                                    <option value={unlistedPin}>
+                                        {pinDeleted
+                                            ? t('fields.assignedAgentDeleted')
+                                            : unlistedPin}
+                                    </option>
+                                ) : null}
                                 {agents.map((agent) => (
                                     <option key={agent.id} value={agent.id}>
                                         {agent.name}
                                     </option>
                                 ))}
                             </Select>
+                            {pinDeleted && assignedAgent === unlistedPin ? (
+                                <p
+                                    className="mt-1 text-[11px] text-warning"
+                                    role="alert"
+                                    data-testid="goal-limits-pin-deleted"
+                                >
+                                    {t('fields.assignedAgentDeletedHelp')}
+                                </p>
+                            ) : null}
                             <p className="mt-1 text-[11px] text-text-muted dark:text-text-muted-dark">
                                 {t('fields.assignedAgentHelp')}
                             </p>

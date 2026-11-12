@@ -11,6 +11,7 @@ import { useRouter } from '@/i18n/navigation';
 import { toast } from 'sonner';
 import { formatWorksConfigProviders } from '../../shared/works-config';
 import type { RepositoryTarget } from '@/lib/api/types-only';
+import { workSupportsSourceSync } from '@/lib/works/work-settings-update.shared';
 
 export function SourceSettings() {
     const t = useTranslations('dashboard.workDetail.settings');
@@ -28,7 +29,7 @@ export function SourceSettings() {
     const relatedWebsiteRepository = sourceRepository.relatedRepositories?.website;
 
     const sourceTypeLabel = getSourceTypeLabel(sourceRepository.type, t);
-    const supportsSourceSync = sourceRepository.type !== 'link_existing';
+    const supportsSourceSync = workSupportsSourceSync(work, sourceRepository.type);
     const fallbackOwner = work.owner || sourceRepository.owner;
 
     const websiteTarget = getConfiguredWebsiteTarget(

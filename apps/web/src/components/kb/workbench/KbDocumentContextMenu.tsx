@@ -94,6 +94,14 @@ export interface KbDocumentContextMenuProps {
      * spec doesn't need a JSDOM polyfill.
      */
     clipboardWrite?: (text: string) => Promise<void> | void;
+    /**
+     * Show "Rename". Off by default: renaming PATCHes `{ path }`, and the
+     * API's `UpdateKbDocumentDto` has no `path` (moving a document also has to
+     * move its git-mirrored file and keep `kb:` citations and wikilinks
+     * resolving — not built yet), so every rename answered 400. Gated, not
+     * removed: switch it on once the API can move a document.
+     */
+    renameEnabled?: boolean;
 }
 
 interface MenuPosition {
@@ -108,6 +116,7 @@ export function KbDocumentContextMenu({
     onPatched,
     onRenamed,
     clipboardWrite,
+    renameEnabled = false,
 }: KbDocumentContextMenuProps) {
     const tMenu = useTranslations('dashboard.workDetail.kb.workbench.contextMenu');
     const tLibrary = useTranslations('dashboard.memoryPage.library');
@@ -454,10 +463,14 @@ export function KbDocumentContextMenu({
                         lockedTooltip: tMenu('lockedDisabledTooltip'),
                     }}
                     onClose={closeMenu}
-                    onRename={() => {
-                        setRenameOpen(true);
-                        closeMenu();
-                    }}
+                    onRename={
+                        renameEnabled
+                            ? () => {
+                                  setRenameOpen(true);
+                                  closeMenu();
+                              }
+                            : undefined
+                    }
                     onDuplicate={onDuplicate}
                     onLock={onLock}
                     onUnlock={onUnlock}
@@ -551,7 +564,8 @@ interface ContextMenuPanelProps {
         lockedTooltip: string;
     };
     onClose: () => void;
-    onRename: () => void;
+    /** Omitted when renaming is not available (see `renameEnabled`): the item is not shown. */
+    onRename?: () => void;
     onDuplicate: () => void;
     onLock: (mode: KbLockMode) => void;
     onUnlock: () => void;
@@ -615,14 +629,16 @@ const ContextMenuPanel = function ContextMenuPanel({
                 'p-1 text-sm',
             )}
         >
-            <MenuItem
-                testId="kb-workbench-context-rename"
-                icon={FileEdit}
-                label={labels.rename}
-                disabled={fullyLocked || pending}
-                disabledTitle={fullyLocked ? labels.lockedTooltip : undefined}
-                onClick={onRename}
-            />
+            {onRename ? (
+                <MenuItem
+                    testId="kb-workbench-context-rename"
+                    icon={FileEdit}
+                    label={labels.rename}
+                    disabled={fullyLocked || pending}
+                    disabledTitle={fullyLocked ? labels.lockedTooltip : undefined}
+                    onClick={onRename}
+                />
+            ) : null}
             <MenuItem
                 testId="kb-workbench-context-duplicate"
                 icon={Copy}

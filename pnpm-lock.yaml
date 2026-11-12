@@ -859,8 +859,8 @@ importers:
         version: 5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@5.0.5)(happy-dom@21.0.4)(jsdom@29.1.1(@noble/hashes@2.2.0))(msw@2.12.10(@types/node@26.6.4)(typescript@5.9.3))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.1)(jiti@2.6.1)(terser@5.46.1)(yaml@2.9.1))
     optionalDependencies:
       '@homebridge/node-pty-prebuilt-multiarch':
-        specifier: ^0.13.1
-        version: 0.13.1
+        specifier: ^0.15.0
+        version: 0.15.0
 
   apps/web:
     dependencies:
@@ -3475,8 +3475,8 @@ importers:
         version: 5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@5.0.5)(happy-dom@21.0.4)(jsdom@29.1.1(@noble/hashes@2.2.0))(msw@2.12.10(@types/node@26.6.4)(typescript@5.9.3))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.1)(jiti@2.6.1)(terser@5.46.1)(yaml@2.9.1))
     optionalDependencies:
       '@homebridge/node-pty-prebuilt-multiarch':
-        specifier: ^0.13.1
-        version: 0.13.1
+        specifier: ^0.15.0
+        version: 0.15.0
 
   packages/plugins/qdrant:
     dependencies:
@@ -6868,9 +6868,9 @@ packages:
       react: ^18 || ^19 || ^19.0.0-rc
       react-dom: ^18 || ^19 || ^19.0.0-rc
 
-  '@homebridge/node-pty-prebuilt-multiarch@0.13.1':
-    resolution: {integrity: sha512-ccQ60nMcbEGrQh0U9E6x0ajW9qJNeazpcM/9CH6J8leyNtJgb+gu24WTBAfBUVeO486ZhscnaxLEITI2HXwhow==}
-    engines: {node: '>=18.0.0 <25.0.0'}
+  '@homebridge/node-pty-prebuilt-multiarch@0.15.0':
+    resolution: {integrity: sha512-kzcNCO8Ak4ozf3CV5Hynu3hnDdgRTYCZUYINs6uODH//a3AwSW9uMc/TVuGtpz+39sh9gPKIQdnKNX+t20fRtg==}
+    engines: {node: '>=20.0.0'}
 
   '@hono/node-server@2.1.5':
     resolution: {integrity: sha512-MgP/I06GdvsilDspMk/qmRzpk8LOUStP6jFAbSRi40W09DhoyUn+Mj7eyKICPqeYKybOjVFLVIAQzvu1bfIa7Q==}
@@ -18871,6 +18871,10 @@ packages:
     resolution: {integrity: sha512-/bRZty2mXUIFY/xU5HLvveNHlswNJej+RnxBjOMkidWfwZzgTbPG1E3K5TOxRLOR+5hX7bSofy8yf1hZevMS8A==}
     engines: {node: ^18 || ^20 || >= 21}
 
+  node-addon-api@8.9.2:
+    resolution: {integrity: sha512-VijLXbi3UACN69I0JVXJsX4tjACjNoQDgv2gTF6sx2wWEi8tkSg2eX8p5gSIFi8z2+DL3oHmY6OyKce38SDolg==}
+    engines: {node: ^18 || ^20 || >= 21}
+
   node-api-version@0.2.1:
     resolution: {integrity: sha512-2xP/IGGMmmSQpI1+O/k72jF/ykvZ89JeuKX3TLJAYPDVLUalrshrLHkeVcCCZqG/eEa635cr8IBYzgnDvM2O8Q==}
 
@@ -27005,10 +27009,9 @@ snapshots:
       react-dom: 19.2.5(react@19.2.5)
       use-sync-external-store: 1.6.0(react@19.2.5)
 
-  '@homebridge/node-pty-prebuilt-multiarch@0.13.1':
+  '@homebridge/node-pty-prebuilt-multiarch@0.15.0':
     dependencies:
-      node-addon-api: 7.1.1
-      prebuild-install: 7.1.3
+      node-addon-api: 8.9.2
     optional: true
 
   '@hono/node-server@2.1.5(hono@4.13.14)':
@@ -41112,6 +41115,9 @@ snapshots:
   node-addon-api@7.1.1: {}
 
   node-addon-api@8.5.0: {}
+
+  node-addon-api@8.9.2:
+    optional: true
 
   node-api-version@0.2.1:
     dependencies:

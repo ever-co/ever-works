@@ -8,7 +8,7 @@ import {
     Optional,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { type FindOptionsWhere, In, IsNull, Not, Repository } from 'typeorm';
+import { type EntityManager, type FindOptionsWhere, In, IsNull, Not, Repository } from 'typeorm';
 import {
     GOAL_EXECUTION_TARGETS,
     Goal,
@@ -51,6 +51,7 @@ import { addInsertionOrderTieBreak, isSqliteFamilyDriver } from '../database/ins
 import {
     dodProgressSignature,
     hasDefinitionOfDone,
+    nextDodCriterionId,
     normalizeDoDCriteria,
     summarizeDoD,
     validateDoDCriteria,
@@ -427,6 +428,139 @@ export class GoalOrchestratorService {
             ...(options.provenance ? { provenance: options.provenance } : {}),
         });
         return toGoalDto(saved);
+    }
+
+    /**
+     * Add ONE operator criterion (approved, open) to the checklist as it is
+     * stored at the write, not to a copy the caller read earlier.
+     *
+     * Review of #3172: the DoD tab read the Goal and then replaced the whole
+     * list (`setDodCriteria`), so a planner proposal or another tab's edit that
+     * landed between the read and the write was overwritten. Here the list is
+     * re-read inside the write's transaction (`FOR UPDATE` where the driver has
+     * row locks) and only this one change is applied to it.
+     */
+    async addDodCriterion(userId: string, goalId: string, text: string): Promise<GoalDto> {
+        const wording = typeof text === 'string' ? text.trim() : '';
+        return this.editDodCriteria(userId, goalId, 'added', (current) => {
+            const taken = new Set(current.map((entry) => entry.id));
+            const criterion: GoalDoDCriterion = {
+                id: nextDodCriterionId(wording, taken),
+                text: wording,
+                status: 'open',
+                source: 'operator',
+            };
+            return { next: [...current, criterion], criterion };
+        });
+    }
+
+    /** Remove ONE criterion from the checklist as stored at the write (see {@link addDodCriterion}). */
+    async removeDodCriterion(
+        userId: string,
+        goalId: string,
+        criterionId: string,
+    ): Promise<GoalDto> {
+        return this.editDodCriteria(userId, goalId, 'removed', (current) => {
+            const criterion = current.find((entry) => entry.id === criterionId);
+            if (!criterion) {
+                throw new NotFoundException(`Criterion not found`);
+            }
+            return { next: current.filter((entry) => entry.id !== criterionId), criterion };
+        });
+    }
+
+    /**
+     * One add / remove applied to the row as stored at the write. Same rules as
+     * {@link setDodCriteria} (shape, size, a delivery Goal keeps an approved
+     * criterion), and the same `goal.updated` in the write's transaction.
+     *
+     * What remains: `proposeDodCriteria`, `approveDodCriteria` and
+     * `patchDodCriterion` still read the row without a lock, so one of them
+     * that read BEFORE this write commits and saves AFTER it can still drop
+     * this change. That window is two statements inside the API, not a page's
+     * lifetime or a web round trip.
+     */
+    private async editDodCriteria(
+        userId: string,
+        goalId: string,
+        verb: 'added' | 'removed',
+        edit: (current: GoalDoDCriterion[]) => {
+            next: GoalDoDCriterion[];
+            criterion: GoalDoDCriterion;
+        },
+    ): Promise<GoalDto> {
+        // Ownership: the same owner-only lookup every Definition-of-Done write makes.
+        const owned = await this.findOrThrow(userId, goalId);
+        const apply = async (
+            repository: Repository<Goal>,
+            goal: Goal,
+        ): Promise<{ saved: Goal; criterion: GoalDoDCriterion }> => {
+            const current = Array.isArray(goal.dodCriteria) ? goal.dodCriteria : [];
+            const { next, criterion } = edit(current);
+            this.assertDod(next);
+            if (isDeliveryGoal(goal) && !hasDefinitionOfDone({ dodCriteria: next })) {
+                throw new BadRequestException(
+                    'A delivery Goal must keep at least one approved Definition-of-Done criterion.',
+                );
+            }
+            const beforeSignature = dodProgressSignature(goal.dodCriteria);
+            goal.dodCriteria = normalizeDoDCriteria(next);
+            this.markProgressIfChanged(goal, beforeSignature);
+            return { saved: await saveGoalColumns(repository, goal, DOD_COLUMNS), criterion };
+        };
+
+        const publisher = this.domainEvents;
+        const manager = this.goals.manager as EntityManager | undefined;
+        const { saved, criterion } = publisher
+            ? await publisher.transaction(async (tx) => {
+                  const goal = await this.reloadGoalForUpdate(tx, owned.id);
+                  const result = await apply(tx.getRepository(Goal), goal);
+                  await publisher.changed(tx, 'goal', result.saved.id, 'goal.updated', {
+                      changedFields: ['dodCriteria', 'progress'],
+                  });
+                  return result;
+              })
+            : manager
+              ? await manager.transaction(async (tx) =>
+                    apply(tx.getRepository(Goal), await this.reloadGoalForUpdate(tx, owned.id)),
+                )
+              : // A repository without a manager (a unit-test double): the row read above.
+                await apply(this.goals, owned);
+
+        const summary = summarizeDoD(saved.dodCriteria);
+        await this.recordEvent(saved, {
+            kind: 'dod',
+            message:
+                `Criterion "${criterion.text}" ${verb} — ${summary.done} done, ` +
+                `${summary.waived} waived, ${summary.open} open` +
+                `${summary.proposed > 0 ? `, ${summary.proposed} awaiting approval` : ''}.`,
+            metadata: { criterionId: criterion.id, summary },
+        });
+        await this.recordActivity(
+            saved,
+            ActivityActionType.GOAL_DOD_UPDATED,
+            verb === 'added' ? 'dod-add' : 'dod-remove',
+            { criterionId: criterion.id, summary },
+        );
+        return toGoalDto(saved);
+    }
+
+    /**
+     * The Goal's current row inside `manager`'s transaction — `FOR UPDATE` on
+     * Postgres and MySQL; SQLite has no row locks and serializes its writers on
+     * one connection (the same rule as `GoalsService`).
+     */
+    private async reloadGoalForUpdate(manager: EntityManager, goalId: string): Promise<Goal> {
+        const type = manager.connection?.options?.type;
+        const locks = type === 'postgres' || type === 'mysql' || type === 'mariadb';
+        const row = await manager.getRepository(Goal).findOne({
+            where: { id: goalId },
+            ...(locks ? { lock: { mode: 'pessimistic_write' as const } } : {}),
+        });
+        if (!row) {
+            throw new NotFoundException(`Goal not found`);
+        }
+        return row;
     }
 
     /**

@@ -272,6 +272,29 @@ describe('FleetCloudService P3 (FL-17)', () => {
             expect(noJoin?.code).toBe('invalid');
             expect(machines.create).not.toHaveBeenCalled();
         });
+
+        it('tells the dialog whether a key can be used — no join command, no key field', async () => {
+            // The dialog showed the key field whenever the client was offered;
+            // a key typed there was then refused by create.
+            const { service } = harness();
+            const withJoin = await service.options(caller, PLUGIN, true);
+            expect(withJoin.software.find((entry) => entry.id === 'overlay-vpn')).toEqual({
+                id: 'overlay-vpn',
+                default: false,
+                acceptsAuthKey: true,
+            });
+
+            delete process.env.FLEET_CLOUD_OVERLAY_VPN_JOIN_COMMAND;
+            const withoutJoin = await service.options(caller, PLUGIN, true);
+            expect(
+                withoutJoin.software.find((entry) => entry.id === 'overlay-vpn')?.acceptsAuthKey,
+            ).toBe(false);
+            // Other software carries no flag.
+            expect(withoutJoin.software.find((entry) => entry.id === 'docker')).toEqual({
+                id: 'docker',
+                default: true,
+            });
+        });
     });
 
     it('tags every new machine with this deployment’s site', async () => {

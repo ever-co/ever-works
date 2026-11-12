@@ -93,6 +93,33 @@ export function taskBranchName(task: { id: string; slug?: string | null }): stri
 }
 
 /**
+ * Why `branch` is not a name `git check-ref-format --branch` accepts, or null
+ * when it is. Same rules as `usableBranch` in `app-work-isolation.service.ts`:
+ * no whitespace, control characters or `~ ^ : ? * [ \`; not `@`, `HEAD` or a
+ * leading `-`; no `@{`, `..` or `//`; no leading or trailing `/`, no trailing
+ * `.`; no path component starting with `.` or ending in `.lock`.
+ *
+ * A Task template stored a branch name after only the protected-branch check,
+ * so "my feature" was accepted and every run of the template failed later at
+ * `git worktree add -B`.
+ */
+export function invalidGitBranchNameReason(branch: string): string | null {
+    // eslint-disable-next-line no-control-regex
+    if (/[\s\u0000-\u001f\u007f]/.test(branch)) return 'it contains a space or a control character';
+    if (/[~^:?*[\\]/.test(branch)) return 'it contains one of ~ ^ : ? * [ \\';
+    if (branch === '@' || branch === 'HEAD') return `'${branch}' is reserved by git`;
+    if (branch.startsWith('-')) return 'it starts with -';
+    if (branch.includes('@{')) return 'it contains @{';
+    if (branch.includes('..') || branch.includes('//')) return 'it contains .. or //';
+    if (branch.startsWith('/') || branch.endsWith('/')) return 'it starts or ends with /';
+    if (branch.endsWith('.')) return 'it ends with .';
+    if (branch.split('/').some((part) => part.startsWith('.') || part.endsWith('.lock'))) {
+        return 'a part of it starts with . or ends with .lock';
+    }
+    return null;
+}
+
+/**
  * Prompt-injection hardening — the branches a Task's isolated branch may NEVER
  * be: the platform's protected release/integration branches
  * (`PLATFORM_DEFAULT_MERGE_POLICY.protectedBranches`: main, master, develop,

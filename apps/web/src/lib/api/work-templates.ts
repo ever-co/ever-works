@@ -14,7 +14,12 @@
 export type WorkBlueprintStatus = 'production' | 'beta' | 'placeholder';
 
 export interface WorkBlueprintEntry {
-    /** Stable id; becomes `CreateWorkDto.websiteTemplateId`. */
+    /**
+     * Stable id. NOT a `CreateWorkDto.websiteTemplateId`: the API accepts only
+     * Website Template catalog ids, so the Create-Work picker submits the id
+     * of the catalog row built from `templateRepoOwner/templateRepoName`
+     * (`work-template-picker-options.ts`).
+     */
     slug: string;
     /** Short selector label. */
     name: string;

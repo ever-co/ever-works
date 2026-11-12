@@ -13,6 +13,7 @@ import {
     IsPositive,
     IsString,
     IsUUID,
+    Max,
     MaxLength,
     Min,
     MinLength,
@@ -383,6 +384,9 @@ export class CreateGoalDto {
     @IsOptional()
     @IsInt()
     @Min(1)
+    // One year (`MAX_CHECK_FREQUENCY_MINUTES`): the column is an int, and
+    // 3e9 used to pass here and overflow it.
+    @Max(525_600)
     checkFrequencyMinutes?: number;
 
     @ApiProperty({
@@ -527,6 +531,9 @@ export class UpdateGoalDto {
     @IsOptional()
     @IsInt()
     @Min(1)
+    // One year (`MAX_CHECK_FREQUENCY_MINUTES`): the column is an int, and
+    // 3e9 used to pass here and overflow it.
+    @Max(525_600)
     checkFrequencyMinutes?: number;
 
     @ApiProperty({

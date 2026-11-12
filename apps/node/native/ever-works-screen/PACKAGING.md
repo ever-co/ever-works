@@ -69,15 +69,59 @@ release signing below.
 
 `build-release.sh` (Linux, macOS) and `build-release.ps1` (Windows) build `--release --locked` twice in clean
 target directories and compare the SHA-256 of both outputs; a mismatch fails the build. They write
-`unsigned-release-metadata.json` with `productionEligible: false` — an unsigned helper is never a production
-artifact — and the fingerprint the node package's `helper-manifest.json` (`helper-manifest.schema.json`) must carry
-for that version and target. Publishing a helper and baking its fingerprints into a node release are separate,
-owner-approved steps; nothing here uploads anything.
+`unsigned-release-metadata.json` with `productionEligible: false` (an unsigned build never counts as a signed one) and
+the fingerprint the node package's `helper-manifest.json` (`helper-manifest.schema.json`) carries for that version and
+target. `SCREEN_HELPER_TARGET=darwin-x64 bash build-release.sh <dir>` builds the Intel Mac helper on an Apple silicon
+Mac. The build scripts upload nothing.
 
-The fingerprint is reproducible on the machine that built it: two builds there are byte-identical. A build on another
-machine matches only with the same linker and system libraries (the CI runners' fingerprints differ from a
-workstation's), so a release takes its fingerprint from the one release machine, and anyone checking it rebuilds
-with that machine's toolchain.
+`build-release-linux.sh` runs `build-release.sh` on this folder as committed (`git archive` of `HEAD`, so neither the
+checkout's line endings nor uncommitted files reach the build) in a Rust image pinned by digest
+(`rust:1.88.0-slim-bookworm`, Debian 12; the helper needs glibc 2.34 or newer: Debian 12, Ubuntu 22.04 and newer). The
+linux-x64 fingerprint therefore depends on the commit and the image, not on the machine: a CI runner and a workstation
+with Docker produce the same bytes, and anyone can check a released fingerprint by running `bash build-release-linux.sh`
+at the release's commit. The sources go into the container and the outputs come back as tar streams, so any Docker
+daemon works (local, remote, Docker-in-Docker). The macOS and Windows builds
+are reproducible on the machine that built them (two builds there are byte-identical), but another machine matches
+only with the same linker and system libraries, so for those targets a release takes the fingerprint of its own build.
+
+### How a node release publishes the helper
+
+`.github/workflows/publish-node.yml`, on the owner's `node-v<version>` tag. It runs in our cluster, not on GitHub
+Actions (owner, 2026-11-11): the ci-builds engine (Argo Workflows + act, `ever-co/k8s-gitops` `apps/ci-builds`) runs the
+file for every `node-v*` tag.
+
+1. `build` builds the linux-x64 helper with `build-release-linux.sh` (pinned container, two builds compared, from the
+   committed tree), then stages the node bundle with it (`apps/node/build.js`, `SCREEN_HELPER_RELEASE_DIR`,
+   `SCREEN_HELPER_REQUIRED_TARGETS=linux-x64`). `apps/node/screen-helper-release.js` checks the binary against its
+   metadata and bakes its SHA-256 and the URL
+   `https://github.com/ever-co/ever-works/releases/download/node-v<version>/ever-works-screen-<helper version>-linux-x64`
+   into `cli.js`, which also ships the manifest as `helper-manifest.json`. A required target that was not built fails
+   the release;
+2. `release-screen-helper` checks the assets against the bundle npm will publish (the same `helper-manifest.json`,
+   every SHA-256 in `cli.js`), uploads the binary, `SHA256SUMS` and `helper-manifest.json` to a draft GitHub release of
+   that tag and publishes the release once every asset is there (release assets of this public repository, uploaded
+   with the build's token; not marked Latest). A re-run compares an asset already there with the build and never
+   replaces it;
+3. only then `publish` publishes the npm package that points at them (with npm provenance only where GitHub's OIDC
+   token exists, so not in the cluster).
+
+On a machine, `ever-works-node helper install` downloads its target's build and keeps it only when it hashes to the
+baked fingerprint; `helper admit` shows both fingerprints and records a **published** hash-pinned admission (no
+`--allow-unpublished`). A dispatch of the workflow is a dry run: it builds and bakes, uploads nothing and runs
+`npm publish --dry-run`. In the cluster, by hand from the homelab repo:
+`python scripts/ci-builds-run.py ever-co/ever-works <branch> publish-node.yml 4 --event workflow_dispatch --no-push`.
+
+**Windows and macOS are not published yet.** Their helpers need a Windows and a macOS build machine, and the in-cluster
+engine runs Linux only. Until one builds them, those machines build and admit the helper themselves (below and
+[`README.md`](README.md)). `screen-helper-release.js` already takes any number of targets: a release that drops a
+Windows or macOS build (binary + `unsigned-release-metadata.json`, from `build-release.ps1` / `build-release.sh`,
+`SCREEN_HELPER_TARGET=darwin-x64` for the Intel build on Apple silicon) into `SCREEN_HELPER_RELEASE_DIR` and lists the
+target in `SCREEN_HELPER_REQUIRED_TARGETS` publishes it too. Build Windows releases on a machine that runs no
+pull-request jobs: the `RUNNER_WINDOWS_X64` desktops run pull requests' cargo builds as SYSTEM with a persistent
+toolchain, and whatever a release builds is baked in as the published helper.
+
+The published builds are unsigned (hash-pinned, "Reduced trust"). Once the owner holds the signing identities, a
+release adds the signed builds below and the manifest's `signedSha256` and `signer`.
 
 ## Release signing
 

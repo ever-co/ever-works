@@ -947,12 +947,14 @@ export class TasksService {
         ownerId: string,
         raw: TaskExtraRepo[] | null | undefined,
         editorId: string = ownerId,
+        current: readonly TaskExtraRepo[] | null = null,
     ): Promise<TaskExtraRepo[] | null> {
         return normalizeTaskExtraRepos(
             { repoConnections: this.repoConnections },
             ownerId,
             raw,
             editorId,
+            current,
         );
     }
 
@@ -1198,6 +1200,7 @@ export class TasksService {
                 task.userId,
                 input.extraRepos,
                 userId,
+                task.extraRepos ?? null,
             );
         }
         if (input.requireAllApprovers !== undefined)
@@ -1502,6 +1505,7 @@ export class TasksService {
             rule: input.recurrenceRule ?? null,
             cron: input.recurrenceCron ?? null,
             from: new Date(),
+            timezone: input.recurrenceTimezone ?? null,
             recurrenceEndsAt: input.recurrenceEndsAt ?? null,
             recurrenceMaxOccurrences: input.recurrenceMaxOccurrences ?? null,
             recurrenceOccurredCount: 0,
@@ -1528,6 +1532,15 @@ export class TasksService {
         }
         if (maxOpenInstances === null && current.recurrenceSkippedAt) {
             patch.recurrenceSkippedAt = null;
+        }
+        // A Task runs either once at a time or on a cadence — the Schedule
+        // section offers the two as exclusive modes. Turning recurrence on used
+        // to leave the one-time `scheduledAt` in place, and
+        // `findDueScheduledTasks` does not skip templates, so at that time the
+        // TEMPLATE itself was dispatched on top of its recurring copies.
+        if (current.scheduledAt) {
+            patch.scheduledAt = null;
+            patch.scheduleClaimedAt = null;
         }
         await this.updateTaskRow(id, patch);
         return this.getOne(userId, id, ownershipScope);
@@ -1583,6 +1596,15 @@ export class TasksService {
         }
         if (current?.recurrenceSkippedAt) {
             patch.recurrenceSkippedAt = null;
+        }
+        // A template cannot hold a one-time schedule (`setRecurring` clears
+        // it), but rows made recurring before that rule still carry one, and
+        // the one-time scheduler skips them only while they are recurring.
+        // Stopping the recurrence must not hand that stale, overdue time back
+        // to the scheduler, which would start a paid run on the next tick.
+        if (current?.isRecurring && (current.scheduledAt || current.scheduleClaimedAt)) {
+            patch.scheduledAt = null;
+            patch.scheduleClaimedAt = null;
         }
         await this.updateTaskRow(id, patch);
         return this.getOne(userId, id, ownershipScope);
@@ -1646,6 +1668,7 @@ export class TasksService {
                     rule: task.recurrenceRule ?? null,
                     cron: task.recurrenceCron ?? null,
                     from: now,
+                    timezone: task.recurrenceTimezone ?? null,
                     recurrenceEndsAt: task.recurrenceEndsAt ?? null,
                     recurrenceMaxOccurrences: task.recurrenceMaxOccurrences ?? null,
                     recurrenceOccurredCount: task.recurrenceOccurredCount ?? 0,

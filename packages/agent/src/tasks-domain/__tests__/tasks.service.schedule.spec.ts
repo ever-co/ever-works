@@ -204,6 +204,31 @@ describe('TasksService.setRecurring — cron XOR RRULE matrix', () => {
         );
     });
 
+    it('clears a pending one-time schedule — otherwise the template itself ran at that time', async () => {
+        const { service, repos } = makeService();
+        repos.tasks.findByIdAndUser.mockResolvedValue(
+            makeTask({ scheduledAt: new Date(Date.now() + 3_600_000) }),
+        );
+        repos.tasks.findById.mockResolvedValue(makeTask({ isRecurring: true }));
+
+        await service.setRecurring('user-1', 'task-1', { recurrenceRule: 'FREQ=DAILY' });
+
+        expect(repos.tasks.updateById).toHaveBeenCalledWith(
+            'task-1',
+            expect.objectContaining({
+                isRecurring: true,
+                scheduledAt: null,
+                scheduleClaimedAt: null,
+            }),
+        );
+    });
+
+    it('leaves the schedule columns alone when there was no one-time schedule', async () => {
+        const { service, repos } = arm();
+        await service.setRecurring('user-1', 'task-1', { recurrenceRule: 'FREQ=DAILY' });
+        expect(repos.tasks.updateById.mock.calls[0][1]).not.toHaveProperty('scheduledAt');
+    });
+
     it('accepts a cron expression alone', async () => {
         const { service, repos } = arm();
         await service.setRecurring('user-1', 'task-1', { recurrenceCron: '0 9 * * *' });
@@ -261,5 +286,43 @@ describe('TasksService.setRecurring — cron XOR RRULE matrix', () => {
             recurrenceEndsAt: null,
             recurrenceMaxOccurrences: null,
         });
+    });
+
+    it('clearRecurring drops a stale one-time schedule a legacy template still carries', async () => {
+        // Made recurring before setRecurring cleared the schedule; its time
+        // passed while the one-time scheduler skipped it as a template.
+        const { service, repos } = makeService();
+        repos.tasks.findByIdAndUser.mockResolvedValue(
+            makeTask({
+                isRecurring: true,
+                recurrenceRule: 'FREQ=DAILY',
+                scheduledAt: new Date(Date.now() - 3_600_000),
+                scheduleClaimedAt: null,
+            }),
+        );
+        repos.tasks.findById.mockResolvedValue(makeTask());
+
+        await service.clearRecurring('user-1', 'task-1');
+
+        expect(repos.tasks.updateById).toHaveBeenCalledWith(
+            'task-1',
+            expect.objectContaining({
+                isRecurring: false,
+                scheduledAt: null,
+                scheduleClaimedAt: null,
+            }),
+        );
+    });
+
+    it('clearRecurring leaves a one-time schedule alone on a Task that is not recurring', async () => {
+        const { service, repos } = makeService();
+        repos.tasks.findByIdAndUser.mockResolvedValue(
+            makeTask({ isRecurring: false, scheduledAt: new Date(Date.now() + 3_600_000) }),
+        );
+        repos.tasks.findById.mockResolvedValue(makeTask());
+
+        await service.clearRecurring('user-1', 'task-1');
+
+        expect(repos.tasks.updateById.mock.calls[0][1]).not.toHaveProperty('scheduledAt');
     });
 });

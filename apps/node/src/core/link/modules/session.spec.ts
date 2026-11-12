@@ -244,6 +244,57 @@ describe('the session module and its daemon', () => {
 		expect(spawns).toBe(0);
 	});
 
+	it('retires a daemon that started before the terminal addon was installed, then runs a fresh one', async () => {
+		// A daemon from before the install (0.2.10 never retries the load) outlives node restarts.
+		ptyAvailable = false;
+		await ensureDaemonToken({ tokenFile: paths.tokenFile });
+		await startDaemon();
+		const stale = server!;
+		supervisor = new SessionDaemonSupervisor({
+			paths,
+			nodeVersion: '0.2.12',
+			ensureToken: () => ensureDaemonToken({ tokenFile: paths.tokenFile }),
+			spawnDaemon: () => {
+				spawns += 1;
+				void startDaemon();
+			},
+			healthIntervalMs: 200,
+			spawnWaitMs: 5_000,
+			terminalAvailableHere: () => true,
+			staleDaemonWaitMs: 400
+		});
+		supervisor.start();
+		await eventually(() => /restarting the session daemon/.test(supervisor.report().reason ?? ''));
+		expect(supervisor.healthy).toBe(false);
+		// With no node and no session the daemon's own idle rule ends it.
+		await stale.close();
+		ptyAvailable = true;
+		await eventually(() => supervisor.healthy);
+		expect(spawns).toBe(1);
+		expect(supervisor.report()).toEqual({ state: 'running', sessions: 0, storage: 'ok' });
+	});
+
+	it('keeps a daemon without a terminal when this computer cannot load the addon either', async () => {
+		ptyAvailable = false;
+		await ensureDaemonToken({ tokenFile: paths.tokenFile });
+		await startDaemon();
+		supervisor = new SessionDaemonSupervisor({
+			paths,
+			nodeVersion: '0.2.12',
+			ensureToken: () => ensureDaemonToken({ tokenFile: paths.tokenFile }),
+			spawnDaemon: () => {
+				spawns += 1;
+			},
+			healthIntervalMs: 200,
+			terminalAvailableHere: () => false,
+			staleDaemonWaitMs: 400
+		});
+		supervisor.start();
+		await eventually(() => supervisor.report().state === 'failed');
+		expect(supervisor.report()).toMatchObject({ reason: 'terminal support is missing on this computer' });
+		expect(spawns).toBe(0);
+	});
+
 	it('withdraws `sessions` with the reason when the daemon cannot host a terminal (U3)', async () => {
 		ptyAvailable = false;
 		supervisor.start();

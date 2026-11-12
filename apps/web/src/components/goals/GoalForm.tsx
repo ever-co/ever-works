@@ -12,6 +12,7 @@ import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils/cn';
 import {
     MIN_CHECK_FREQUENCY_MINUTES,
+    MAX_CHECK_FREQUENCY_MINUTES,
     DEFAULT_CHECK_FREQUENCY_MINUTES,
     GOAL_KINDS,
     type GoalComparator,
@@ -150,9 +151,16 @@ export function GoalForm() {
             deadlineIso = new Date(ms).toISOString();
         }
 
+        // Within what the API accepts: 0.4 rounded to 0 (`@Min(1)` → 400) and
+        // 3e9 overflowed the column. The service clamps to the 15-minute floor.
         const freq = Number(checkFrequencyMinutes);
         const checkFreq =
-            Number.isFinite(freq) && freq > 0 ? Math.round(freq) : DEFAULT_CHECK_FREQUENCY_MINUTES;
+            Number.isFinite(freq) && freq > 0
+                ? Math.min(
+                      MAX_CHECK_FREQUENCY_MINUTES,
+                      Math.max(MIN_CHECK_FREQUENCY_MINUTES, Math.round(freq)),
+                  )
+                : DEFAULT_CHECK_FREQUENCY_MINUTES;
 
         const payload = buildCreateGoalPayload(kind, {
             ...fields,
@@ -244,6 +252,8 @@ export function GoalForm() {
                         onValueChange={setWorkId}
                         noneLabel={t('work.none')}
                         testId="goal-work-select"
+                        // The API files a Task / Goal only on a Work the caller owns.
+                        ownedOnly
                     />
                     <p className={fieldHint}>{t('work.hint')}</p>
                 </div>
@@ -368,6 +378,7 @@ export function GoalForm() {
                         label={t('fields.checkFrequency')}
                         value={checkFrequencyMinutes}
                         min={MIN_CHECK_FREQUENCY_MINUTES}
+                        max={MAX_CHECK_FREQUENCY_MINUTES}
                         step={1}
                         onChange={(e) => setCheckFrequencyMinutes(e.target.value)}
                         helperText={t('fields.checkFrequencyHint', {

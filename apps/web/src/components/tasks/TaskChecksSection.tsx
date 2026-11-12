@@ -12,6 +12,10 @@ import type { AgentRunSession } from '@/lib/api/agents.shared';
 import { updateTaskAction } from '@/app/actions/tasks';
 import { GateChip } from './GateChip';
 import { ChecksEditor } from './ChecksEditor';
+import {
+    acceptanceChecksForSave,
+    acceptanceChecksSaveProblem,
+} from '@/lib/tasks/acceptance-checks-for-save.shared';
 
 /**
  * Quality gates (Wave 3 M6) — the Task-detail "Checks" section.
@@ -159,6 +163,7 @@ export function TaskChecksSection({
     initialGateRun: AgentRunSession | null;
 }) {
     const t = useTranslations('dashboard.tasksPage.checks');
+    const tEditor = useTranslations('dashboard.tasksPage.checksEditor');
     const [editing, setEditing] = useState(false);
     const [declaredChecks, setDeclaredChecks] = useState<TaskAcceptanceCheck[] | null>(
         task.acceptanceChecks ?? null,
@@ -186,13 +191,22 @@ export function TaskChecksSection({
 
     const save = () => {
         setError(null);
+        // Rows the API would refuse (no command, blank name, a too-long id,
+        // timeout 0) are fixed or dropped here; too many checks or a too-long
+        // command are the user's to fix, so say which instead of a generic 400.
+        const rows = acceptanceChecksForSave(draftChecks);
+        const problem = acceptanceChecksSaveProblem(rows);
+        if (problem) {
+            setError(tEditor(problem.reason, { ...problem }));
+            return;
+        }
         startTransition(() => {
             void (async () => {
                 try {
                     const nextMax =
                         draftMaxAttempts === 'inherit' ? null : parseInt(draftMaxAttempts, 10);
                     const updated = await updateTaskAction(task.id, {
-                        acceptanceChecks: draftChecks.length > 0 ? draftChecks : null,
+                        acceptanceChecks: rows.length > 0 ? rows : null,
                         maxGateAttempts: nextMax,
                     });
                     setDeclaredChecks(updated.acceptanceChecks ?? null);

@@ -9,6 +9,12 @@ import { normalizeWorkKind, WORK_KINDS, WORK_KIND_PRESENTATION } from '@/lib/wor
 
 /** Matches the bulk Work read the Teams page already does. */
 const WORK_PICKER_LIMIT = 100;
+/**
+ * `ownedOnly` filters on the client (the list API has no role filter), so a
+ * first page full of Works shared with the caller could hide their own. Such a
+ * picker reads on, page by page, up to this many Works.
+ */
+const OWNED_PICKER_MAX_WORKS = 1000;
 
 interface WorkOption {
     id: string;
@@ -78,23 +84,45 @@ export function WorkSelect({
             try {
                 // One kind asked for: the API filters, so the first page holds only that kind
                 // (an account with many Works of other kinds still sees its App Works).
-                const res = await getWorks({
-                    limit: WORK_PICKER_LIMIT,
-                    ...(kinds && kinds.length === 1 ? { kind: kinds[0] } : {}),
-                });
+                const kindQuery = kinds && kinds.length === 1 ? { kind: kinds[0] } : {};
+                const res = await getWorks({ limit: WORK_PICKER_LIMIT, ...kindQuery });
                 if (cancelled) return;
                 if (res.success) {
-                    const loaded = res.works
+                    // Keyed by id: a Work updated between two page reads moves
+                    // up the `updatedAt` order and could otherwise appear twice.
+                    const byId = new Map(res.works.map((w) => [w.id, w]));
+                    let page: Awaited<ReturnType<typeof getWorks>> = res;
+                    let offset = res.works.length;
+                    while (
+                        ownedOnly &&
+                        page.works.length === WORK_PICKER_LIMIT &&
+                        offset < res.total &&
+                        offset < OWNED_PICKER_MAX_WORKS
+                    ) {
+                        page = await getWorks({ limit: WORK_PICKER_LIMIT, offset, ...kindQuery });
+                        if (cancelled) return;
+                        if (!page.success) {
+                            // Keep the Works already read; say the list may be short.
+                            setLoadError(page.error ?? 'Failed to load Works.');
+                            break;
+                        }
+                        offset += page.works.length;
+                        for (const w of page.works) byId.set(w.id, w);
+                    }
+                    const loaded = [...byId.values()]
                         .map((w) => ({
                             id: w.id,
                             name: w.name,
                             kind: w.kind ?? null,
                             userRole: w.userRole,
                         }))
-                        .filter((w) => !kinds || (w.kind !== null && kinds.includes(w.kind)))
-                        .filter((w) => !ownedOnly || w.userRole === 'owner');
+                        .filter((w) => !kinds || (w.kind !== null && kinds.includes(w.kind)));
                     setWorks(loaded);
-                    onLoaded?.(loaded.length);
+                    onLoaded?.(
+                        ownedOnly
+                            ? loaded.filter((w) => w.userRole === 'owner').length
+                            : loaded.length,
+                    );
                 } else {
                     setLoadError(res.error ?? 'Failed to load Works.');
                 }
@@ -114,9 +142,15 @@ export function WorkSelect({
     }, []);
 
     const options = useMemo(() => {
-        if (!value || works.some((w) => w.id === value)) return works;
-        return [{ id: value, name: `${value.slice(0, 8)}…`, kind: null }, ...works];
-    }, [works, value]);
+        // `ownedOnly`: offer only the caller's own Works (the Task / Goal APIs
+        // accept no other), but keep the CURRENT selection with its name even
+        // when it is a shared Work, so an existing value still reads right.
+        const offered = ownedOnly
+            ? works.filter((w) => w.userRole === 'owner' || w.id === value)
+            : works;
+        if (!value || offered.some((w) => w.id === value)) return offered;
+        return [{ id: value, name: `${value.slice(0, 8)}…`, kind: null }, ...offered];
+    }, [works, value, ownedOnly]);
 
     return (
         <div className="space-y-1">

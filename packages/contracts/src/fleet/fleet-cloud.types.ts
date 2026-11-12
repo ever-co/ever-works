@@ -581,7 +581,13 @@ export interface FleetCloudOptionsView {
 	providerName: string;
 	regions: FleetCloudRegionView[];
 	sizes: FleetCloudSizeView[];
-	software: Array<{ id: FleetCloudSoftwareId; default: boolean }>;
+	/**
+	 * `acceptsAuthKey` (overlay-VPN only): whether this deployment can use an
+	 * auth key — false when it installs the client but has no join command
+	 * (`FLEET_CLOUD_OVERLAY_VPN_JOIN_COMMAND`), in which case create refuses a
+	 * key. Absent from older APIs.
+	 */
+	software: Array<{ id: FleetCloudSoftwareId; default: boolean; acceptsAuthKey?: boolean }>;
 	billsWhileOff: boolean;
 	currency: string;
 	account: { label: string };

@@ -13,6 +13,7 @@ import {
     Max,
     MaxLength,
     ArrayMaxSize,
+    ValidateIf,
 } from 'class-validator';
 
 /**
@@ -157,6 +158,14 @@ export class UpdateWebsiteSettingsDto {
     // as an <a href> link in the Work Overview tab and the generated site.
     // Require a well-formed http(s) URL so stored `javascript:`/`data:` and
     // other dangerous schemes can never reach an href. Real company URLs pass.
+    //
+    // `''` is "no site URL" — what `GET /works/:id/website-settings` returns
+    // when none is set, and what the Website settings form sends back when the
+    // field is left (or made) empty; `updateConfig` stores it, clearing the
+    // link. `@IsOptional` skips only null/undefined, so without this every save
+    // of a Work with no site URL answered `400 company_website must be a URL
+    // address`. An empty string reaches no href, so the guard above is intact.
+    @ValidateIf((_dto, value) => value !== '')
     @IsOptional()
     @IsString()
     @IsUrl({ protocols: ['http', 'https'], require_protocol: true })

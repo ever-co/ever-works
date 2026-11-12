@@ -375,6 +375,17 @@ describe('agent/dto submodule', () => {
             await expectValid(dto);
         });
 
+        it('requires organization to be a boolean, as CreateWorkDto does', async () => {
+            // "true" used to reach the service as a string; the Postgres driver
+            // then stored `false` (the flag decides where repositories go).
+            const errs = await expectValidationErrors(
+                plainToInstance(UpdateWorkDto, { organization: 'true' }),
+            );
+            expect(errs).toContain('isBoolean');
+            await expectValid(plainToInstance(UpdateWorkDto, { organization: true }));
+            await expectValid(plainToInstance(UpdateWorkDto, { organization: false }));
+        });
+
         it('rejects an invalid committerEmail', async () => {
             const dto = plainToInstance(UpdateWorkDto, {
                 committerEmail: 'not-an-email',

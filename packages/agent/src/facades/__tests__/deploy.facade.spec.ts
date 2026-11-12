@@ -637,6 +637,56 @@ describe('DeployFacadeService', () => {
         expect(service.getProviderName('ever-works')).toBe('Kubernetes');
     });
 
+    describe('hidden deploy providers (k8s-apps-tier: App Works only)', () => {
+        const withHiddenAppsTier = () => {
+            const built = createService({ deployProvider: 'k8s', settings: {} });
+            const appsTier = {
+                plugin: {
+                    id: 'k8s-apps-tier',
+                    name: 'Ever Works Apps (managed)',
+                    capabilities: ['deployment'],
+                },
+                manifest: {
+                    id: 'k8s-apps-tier',
+                    name: 'Ever Works Apps (managed)',
+                    category: 'deployment',
+                    capabilities: ['deployment'],
+                    visibility: 'hidden',
+                },
+                state: 'loaded',
+            };
+            const visible = built.registry.getByCapability();
+            built.registry.getByCapability.mockReturnValue([...visible, appsTier] as never);
+            const get = built.registry.get.getMockImplementation()!;
+            built.registry.get.mockImplementation(((id: string) =>
+                id === 'k8s-apps-tier' ? appsTier : get(id)) as never);
+            return built;
+        };
+
+        it('leaves a hidden provider out of the selectable list (Create-Work / Deploy selectors)', async () => {
+            const { service } = withHiddenAppsTier();
+            const providers = await service.getSelectableProvidersForUser('user-1');
+            expect(providers.map((p) => p.id)).toEqual(['k8s']);
+        });
+
+        it('keeps it in the internal lists — the App source inspector filters apps-tier by the per-user one', async () => {
+            const { service } = withHiddenAppsTier();
+            expect(service.getAvailableProviders().map((p) => p.id)).toEqual([
+                'k8s',
+                'k8s-apps-tier',
+            ]);
+            const forUser = await service.getAvailableProvidersForUser('user-1');
+            expect(forUser.map((p) => p.id)).toEqual(['k8s', 'k8s-apps-tier']);
+        });
+
+        it('reports which providers are hidden', () => {
+            const { service } = withHiddenAppsTier();
+            expect(service.isHiddenProvider('k8s-apps-tier')).toBe(true);
+            expect(service.isHiddenProvider('k8s')).toBe(false);
+            expect(service.isHiddenProvider('not-installed')).toBe(false);
+        });
+    });
+
     it('does not report an unconfigured loaded provider as configured', async () => {
         const { service } = createService({
             deployProvider: 'k8s',

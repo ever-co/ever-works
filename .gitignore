@@ -17,6 +17,8 @@
 dist
 # apps/node publishable bundle staged by apps/node/build.js
 dist-bundle
+# the screen helper release assets apps/node/build.js stages beside it
+dist-screen-helper
 tmp
 /out-tsc
 /out

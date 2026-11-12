@@ -4,20 +4,10 @@ import { useState, useTransition, useEffect, useCallback, useRef } from 'react';
 import { cn } from '@/lib/utils/cn';
 import { toast } from 'sonner';
 import { createWorkWithAI, checkWorkSlug } from '@/app/actions/dashboard';
-
-/**
- * Browser-side slug helper. Mirrors `slugify` from `@ever-works/plugin`
- * but lives here so this client component doesn't pull in the
- * server-only plugin package. Lowercase letters + digits, hyphen-
- * joined, leading/trailing hyphens stripped.
- */
-function slugifyForWork(value: string): string {
-    return value
-        .trim()
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, '-')
-        .replace(/^-+|-+$/g, '');
-}
+// `slugifyForWork` normalizes a typed slug; `workSlugFromName` derives one from
+// a Work name, including names with no Latin letters (the server action uses
+// the same helper, so both sides agree on the slug).
+import { slugifyForWork, workSlugFromName } from '@/lib/works/work-slug.shared';
 
 /** Debounce window for the live slug-availability check (ms). */
 const SLUG_CHECK_DEBOUNCE_MS = 400;
@@ -131,7 +121,7 @@ export function WorkAICreator({
     // having to re-name the Work. We track whether the slug has been
     // manually edited so name changes don't overwrite a custom slug.
     const [slug, setSlug] = useState(
-        proposal?.slugSuggestion ?? slugifyForWork(proposal?.title ?? ''),
+        proposal?.slugSuggestion ?? workSlugFromName(proposal?.title ?? ''),
     );
     const [slugDirty, setSlugDirty] = useState(Boolean(proposal?.slugSuggestion));
     const [slugResult, setSlugResult] = useState<SlugCheckResult | null>(null);
@@ -369,7 +359,7 @@ export function WorkAICreator({
                             // legacy WorkManualForm behaviour so a quick
                             // rename keeps the slug aligned for free.
                             if (!slugDirty) {
-                                setSlugValue(slugifyForWork(nextName));
+                                setSlugValue(workSlugFromName(nextName));
                             }
                         }}
                         placeholder={t('workNamePlaceholder')}
@@ -426,6 +416,8 @@ export function WorkAICreator({
                     <Textarea
                         label={`${t('promptLabel')} *`}
                         name="prompt"
+                        // The server action's limit (AI_WORK_PROMPT_MAX_LENGTH).
+                        maxLength={4000}
                         value={prompt}
                         onChange={(e) => setPrompt(e.target.value)}
                         placeholder={t('promptPlaceholder')}
@@ -445,7 +437,7 @@ export function WorkAICreator({
                             // edited or filled from a "-2" suggestion — keeping
                             // name and slug in sync. Clearing the dirty flag
                             // lets later name edits keep updating the slug.
-                            setSlugValue(slugifyForWork(selectedName));
+                            setSlugValue(workSlugFromName(selectedName));
                             setSlugDirty(false);
 
                             document

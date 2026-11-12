@@ -15,6 +15,7 @@ import {
     ValidateBy,
     type ValidationOptions,
 } from 'class-validator';
+import { IsIanaTimeZone } from '../../common/is-iana-time-zone';
 import {
     isRunLedgerCalendarDate,
     RUN_LEDGER_GRANULARITIES,
@@ -29,19 +30,6 @@ import {
     type RunLedgerStatus,
     type RunLedgerTriggerKind,
 } from '@ever-works/contracts';
-
-/**
- * Valid IANA timezones, computed once. `Intl.supportedValuesOf` omits the
- * universally valid `UTC` / `GMT` aliases, so they are added explicitly —
- * the same allowance the notification quiet-hours DTO makes.
- */
-const VALID_TIMEZONES = new Set<string>([
-    ...(Intl as typeof Intl & { supportedValuesOf(key: string): string[] }).supportedValuesOf(
-        'timeZone',
-    ),
-    'UTC',
-    'GMT',
-]);
 
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const MONTH_PATTERN = /^\d{4}-(0[1-9]|1[0-2])$/;
@@ -112,7 +100,7 @@ export class RunLedgerFilterQueryDto {
     @ApiProperty({ required: false, description: 'IANA timezone; UTC when omitted.' })
     @IsOptional()
     @IsString()
-    @IsIn([...VALID_TIMEZONES], { message: 'timezone must be a valid IANA timezone identifier' })
+    @IsIanaTimeZone()
     timezone?: string;
 
     @ApiProperty({ required: false, type: [String], format: 'uuid' })

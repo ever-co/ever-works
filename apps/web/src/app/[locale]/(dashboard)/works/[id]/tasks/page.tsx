@@ -92,6 +92,9 @@ export default async function WorkTasksTabPage({
                 scopeLabel="Work"
                 scopeId={id}
                 runsSummary={runsSummary}
+                // Only the owner may file Tasks on a Work (a member of a shared
+                // Work gets 400 from the API); an unknown role keeps the buttons.
+                canFileTasks={!work?.userRole || work.userRole === 'owner'}
             />
         </div>
     );

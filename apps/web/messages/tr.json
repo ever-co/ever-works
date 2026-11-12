@@ -1540,6 +1540,7 @@
                 "priority": "Öncelik",
                 "labels": "Etiketler",
                 "labelsPlaceholder": "virgülle ayrılmış",
+                "labelsTooLong": "{max} karakterden uzun etiketler ilk {max} karaktere kısaltılır.",
                 "labelsHint": "Birden fazla etiketi virgülle ayırın.",
                 "labelsAutoHint": "Siz düzenleyene kadar başlıktan türetilir. Birden fazla etiketi virgülle ayırın.",
                 "organize": "Düzenle",
@@ -1814,6 +1815,8 @@
                 "required": "Required",
                 "remove": "Remove",
                 "addCheck": "Add check",
+                "tooManyChecks": "A Task can have at most {max} checks; this one has {count}. Remove some, then save.",
+                "commandTooLong": "The command of the check “{name}” is {length} characters long; a check command can be at most {max} characters.",
                 "kinds": {
                     "build": "Build",
                     "test": "Test",
@@ -3503,7 +3506,8 @@
                     "notManageable": "Seats are adjusted on a paid plan once card payments are enabled.",
                     "save": "Save",
                     "saved": "Seats updated",
-                    "saveError": "Failed to update seats"
+                    "saveError": "Failed to update seats",
+                    "tooMany": "En fazla {max} koltuk ayarlayabilirsiniz."
                 },
                 "payg": {
                     "title": "Pay-as-you-go",
@@ -9212,6 +9216,7 @@
                 "targetInvalid": "Target value must be a number.",
                 "unitRequired": "Unit is required.",
                 "dodRequired": "A delivery Goal needs at least one Definition-of-Done criterion.",
+                "dodTooLong": "En fazla 50 kriter, her biri en fazla 500 karakter.",
                 "deadlineInvalid": "Deadline is not a valid date.",
                 "createFailed": "Couldn't create the Goal. Please try again."
             },
@@ -9420,7 +9425,9 @@
                     "workerModelHelp": "Free text; passed through to iteration runs.",
                     "assignedAgent": "Pinned agent",
                     "assignedAgentNone": "No pin (round-robin)",
-                    "assignedAgentHelp": "Routing always picks this agent. Without a pin the router round-robins over the agents that have already worked this Goal — and, for a brand-new Goal, over the eligible agents in its scope — so the loop can start without one."
+                    "assignedAgentHelp": "Routing always picks this agent. Without a pin the router round-robins over the agents that have already worked this Goal — and, for a brand-new Goal, over the eligible agents in its scope — so the loop can start without one.",
+                    "assignedAgentDeleted": "Silinmiş ajan",
+                    "assignedAgentDeletedHelp": "Sabitlenen ajan silinmiş ya da artık kullanılamıyor, bu yüzden bu işi hiçbir ajan üstlenmiyor. Başka bir ajan seçin ya da sabitlemeyi kaldırın."
                 },
                 "executionTargets": {
                     "cloud": "Cloud",
@@ -10946,7 +10953,7 @@
             },
             "prompt": {
                 "minLength": "Prompt en az 10 karakter olmalı",
-                "maxLength": "Prompt 1000 karakterden az olmalı"
+                "maxLength": "Prompt 4000 karakterden az olmalı"
             },
             "oauthRequired": "OAuth bağlantısı gerekli. Lütfen önce {provider} hesabınızı bağlayın.",
             "githubRequired": "GitHub bağlantısı gerekli. Lütfen önce GitHub hesabınızı bağlayın.",

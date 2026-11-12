@@ -48,6 +48,7 @@ vi.mock('@/components/tasks/WorkSelect', () => ({
         noneLabel,
         testId,
         id,
+        ownedOnly,
     }: {
         value: string;
         onValueChange: (v: string) => void;
@@ -55,9 +56,11 @@ vi.mock('@/components/tasks/WorkSelect', () => ({
         noneLabel: string;
         testId?: string;
         id?: string;
+        ownedOnly?: boolean;
     }) => (
         <select
             data-testid={testId}
+            data-owned-only={String(Boolean(ownedOnly))}
             id={id}
             value={value}
             disabled={disabled}
@@ -124,6 +127,15 @@ describe('GoalWorkSection (APW-08 T33)', () => {
             expect.objectContaining({ workId: null, workName: null }),
         );
         expect(toastSuccess).toHaveBeenCalledWith('work.saved');
+    });
+
+    // Review of #3164 — the Goals API moves a Goal only onto a Work the caller owns.
+    it('offers only the Works the caller owns', () => {
+        render(<GoalWorkSection goal={goal()} onGoalChange={vi.fn()} />);
+        expect(screen.getByTestId('goal-detail-work-select')).toHaveAttribute(
+            'data-owned-only',
+            'true',
+        );
     });
 
     it('is locked while the loop runs, and says to pause it', () => {
