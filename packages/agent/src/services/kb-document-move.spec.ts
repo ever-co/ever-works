@@ -265,7 +265,7 @@ describe('kb-document-move', () => {
             [';', 'See /works/W/kb/brand/voice.md; then'],
             [':', 'See /works/W/kb/brand/voice.md: the'],
             ['!', 'See /works/W/kb/brand/voice.md!'],
-            ['| (a table cell)', '| /works/W/kb/brand/voice.md | x |'],
+            ['| (a table cell)', '| /works/W/kb/brand/voice.md| x |'],
         ])('⭐ rewrites a bare URL followed by %s', (_label, template) => {
             const body = template.replace('W', WORK_ID);
             const out = rewriteKbDocumentLinks(body, move);

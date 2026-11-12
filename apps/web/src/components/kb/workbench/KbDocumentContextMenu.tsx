@@ -1202,6 +1202,7 @@ export function renameErrorKey(
     | 'renamePathTaken'
     | 'renameLinkedFromLocked'
     | 'renameOrgDocumentPath'
+    | 'renamePathNesting'
     | 'renameInvalidPath'
     | 'renameForbidden'
     | 'renameNotFound'
