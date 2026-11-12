@@ -1,6 +1,7 @@
 import { posix } from 'node:path';
 import {
     Body,
+    ConflictException,
     Controller,
     Delete,
     ForbiddenException,
@@ -1052,6 +1053,27 @@ async function asDomainRule<T>(fn: () => Promise<T>): Promise<T> {
                     ? String((body as { message: unknown }).message)
                     : error.message;
             throw new IntegrationHttpException(422, 'domain_rule', message);
+        }
+        // §10: a refusal answers `422 domain_rule`. A path that clashes with
+        // another document of the Work as a file and a folder (the git mirror
+        // writes each document as the file at its path) is one.
+        if (error instanceof ConflictException) {
+            const body = error.getResponse() as {
+                code?: unknown;
+                message?: unknown;
+                path?: unknown;
+            };
+            if (body && typeof body === 'object' && body.code === 'KbPathNesting') {
+                throw new IntegrationHttpException(
+                    422,
+                    'domain_rule',
+                    typeof body.message === 'string' ? body.message : error.message,
+                    {
+                        reason: 'path_nesting',
+                        ...(typeof body.path === 'string' ? { path: body.path } : {}),
+                    },
+                );
+            }
         }
         throw error;
     }

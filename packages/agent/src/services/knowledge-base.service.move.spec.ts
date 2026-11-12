@@ -136,6 +136,12 @@ class FakeDocuments {
             .map((doc) => ({ ...doc })),
     );
 
+    findExistingPath = jest.fn(
+        async (workId: string, paths: string[]) =>
+            [...this.rows.values()].find((doc) => doc.workId === workId && paths.includes(doc.path))
+                ?.path ?? null,
+    );
+
     findPathNestingClash = jest.fn(
         async (workId: string, path: string, parents: string[], excludeId?: string) =>
             [...this.rows.values()].find(
@@ -1015,6 +1021,145 @@ describe('KnowledgeBaseService.moveDocument — rename a Work document', () => {
             );
             const into = await move('decision/voice.md');
             expect(into.decision).toEqual({ status: KbDecisionStatus.ACCEPTED });
+        });
+    });
+
+    /**
+     * Create had no file/folder check (#3204 closure check, informational):
+     * the git mirror writes every document as the file at its path, so a
+     * document under another one's path, or at a path other documents are
+     * stored under, made every later mirror run of the Work fail. A move
+     * refuses both (KbPathNesting); create now does too.
+     */
+    describe('create: file/folder clashes', () => {
+        const create = (path: string) =>
+            build().createDocument({
+                workId: WORK_ID,
+                userId: USER_ID,
+                path,
+                title: 'New',
+                class: KbDocumentClass.BRAND,
+                body: 'x',
+            });
+        let inserts: jest.Mock;
+
+        beforeEach(() => {
+            inserts = jest.fn(async (data: Partial<WorkKnowledgeDocument>) => {
+                const row = buildDocument({
+                    ...data,
+                    id: 'new-doc',
+                } as Partial<WorkKnowledgeDocument>);
+                docs.add(row);
+                return row;
+            });
+            (docs as unknown as { create: jest.Mock }).create = inserts;
+        });
+
+        it.each([
+            ['directly under', 'brand/guide.md/voice.md'],
+            ['deeper under', 'brand/guide.md/2026/voice.md'],
+        ])(
+            '⭐ refuses a path %s a document (409 KbPathNesting), nothing inserted',
+            async (_l, path) => {
+                const error = await create(path).catch((e: unknown) => e);
+                expect(error).toBeInstanceOf(ConflictException);
+                expect((error as ConflictException).getResponse()).toMatchObject({
+                    code: 'KbPathNesting',
+                    path: 'brand/guide.md',
+                });
+                expect(inserts).not.toHaveBeenCalled();
+            },
+        );
+
+        it('⭐ a path other documents are stored under is taken: the create gets the next free one', async () => {
+            docs.add(buildDocument({ id: 'nested', path: 'brand/notes.md/a.md', slug: 'a' }));
+            const doc = await create('brand/notes.md');
+            expect(doc.path).toBe('brand/notes-2.md');
+        });
+
+        it('a free path is used as asked', async () => {
+            const doc = await create('brand/notes.md');
+            expect(doc.path).toBe('brand/notes.md');
+        });
+    });
+
+    /** #3209 review: paths that slipped past the checks, and the suffix. */
+    describe('create: path forms and the suffix', () => {
+        const create = (path: string, options: { exactPath?: boolean } = {}) =>
+            build().createDocument(
+                {
+                    workId: WORK_ID,
+                    userId: USER_ID,
+                    path,
+                    title: 'New',
+                    class: KbDocumentClass.BRAND,
+                    body: 'x',
+                },
+                options,
+            );
+        let inserts: jest.Mock;
+
+        beforeEach(() => {
+            inserts = jest.fn(async (data: Partial<WorkKnowledgeDocument>) => {
+                const row = buildDocument({
+                    ...data,
+                    id: `new-${inserts.mock.calls.length}`,
+                } as Partial<WorkKnowledgeDocument>);
+                docs.add(row);
+                return row;
+            });
+            (docs as unknown as { create: jest.Mock }).create = inserts;
+        });
+
+        it.each([
+            ['a "." segment', 'brand/./guide.md/voice.md'],
+            ['an empty segment', 'brand//guide.md/voice.md'],
+            ['a trailing slash', 'brand/notes.md/'],
+        ])(
+            '⭐ refuses %s (400 KbPathInvalid): the mirror would store it elsewhere',
+            async (_l, path) => {
+                const error = await create(path).catch((e: unknown) => e);
+                expect(error).toBeInstanceOf(BadRequestException);
+                expect((error as BadRequestException).getResponse()).toMatchObject({
+                    code: 'KbPathInvalid',
+                });
+                expect(inserts).not.toHaveBeenCalled();
+            },
+        );
+
+        it('⭐ the suffix stays in the same folder (a dot in a folder name is not the extension)', async () => {
+            docs.add(buildDocument({ id: 'taken', path: 'brand/v1.0/notes', slug: 'notes' }));
+            const doc = await create('brand/v1.0/notes');
+            expect(doc.path).toBe('brand/v1.0/notes-2');
+        });
+
+        it('the suffix goes before the last segment’s extension', async () => {
+            docs.add(buildDocument({ id: 'taken', path: 'brand/v1.0/notes.md', slug: 'notes' }));
+            const doc = await create('brand/v1.0/notes.md');
+            expect(doc.path).toBe('brand/v1.0/notes-2.md');
+        });
+
+        it('⭐ exactPath: a path other documents are stored under is a 409, never a -2 copy', async () => {
+            docs.add(buildDocument({ id: 'nested', path: 'brand/notes.md/a.md', slug: 'a' }));
+            const error = await create('brand/notes.md', { exactPath: true }).catch(
+                (e: unknown) => e,
+            );
+            expect(error).toBeInstanceOf(ConflictException);
+            expect((error as ConflictException).getResponse()).toMatchObject({
+                code: 'KbPathNesting',
+                path: 'brand/notes.md/a.md',
+            });
+            expect(inserts).not.toHaveBeenCalled();
+        });
+
+        it('exactPath: a taken path is a 409 KbPathTaken', async () => {
+            const error = await create('brand/voice.md', { exactPath: true }).catch(
+                (e: unknown) => e,
+            );
+            expect((error as ConflictException).getResponse()).toMatchObject({
+                code: 'KbPathTaken',
+            });
+            expect(inserts).not.toHaveBeenCalled();
         });
     });
 });
