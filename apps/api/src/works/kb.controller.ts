@@ -50,6 +50,7 @@ import {
     type MachinePrincipalRequest,
 } from '../auth/machine-principal';
 import { AuthenticatedUser } from '@src/auth/types/auth.types';
+import { KB_DOCUMENT_STATUSES } from '@ever-works/contracts';
 import { DuplicateKbDocumentDto } from './dto/duplicate-kb-document.dto';
 import type {
     KbDecisionStatus,
@@ -198,7 +199,8 @@ export class KbController {
         name: 'statuses',
         required: false,
         isArray: true,
-        enum: ['draft', 'active', 'archived'],
+        // The one status vocabulary (the DTO validates against the same list).
+        enum: [...KB_DOCUMENT_STATUSES],
         description:
             'Repeatable status filter (`?statuses=draft&statuses=active` or `?statuses=draft,active`, at most 10): a document matches ANY of them. With `status` as well, both apply.',
     })

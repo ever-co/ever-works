@@ -983,7 +983,8 @@ export const OPERATION_REGISTRY: OperationSpec[] = [
         kind: 'update',
         params: [id('Webhook id')],
         body: true,
-        bodyHint: 'Any of: status ("active" | "paused"), url, events[], description.',
+        bodyHint:
+            'Any of: status ("active" | "paused"), url, events[], description, organizationIds[] (Organization ids whose events it receives), excludeOriginTags[] (origin tags it skips).',
         // Works-security: changing url / events re-points what goes out;
         // `status: 'active'` resumes delivery.
         confirmWhen: redirectsWebhook,

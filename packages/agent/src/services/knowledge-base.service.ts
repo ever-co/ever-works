@@ -795,10 +795,14 @@ export class KnowledgeBaseService {
 
         const trimmedQ = opts.q?.trim() ?? '';
 
-        // `status` and `statuses` both given with nothing in common: no
-        // document can match (an empty `IN` list would mean "no filter").
+        // `status` + `statuses`, or `class` + `classes`, given with nothing in
+        // common: no document can match (an empty `IN` list would mean "no
+        // filter", so answer empty without asking the repository).
         const statusFilter = mergeStatusFilters(opts);
-        if (statusFilter?.length === 0) return { items: [], total: 0 };
+        const classFilter = mergeClassFilters(opts);
+        if (statusFilter?.length === 0 || classFilter?.length === 0) {
+            return { items: [], total: 0 };
+        }
         const tagFilter = mergeTagFilters(opts);
 
         // No query → pure list (existing behavior). The KB tree panel
@@ -807,7 +811,7 @@ export class KnowledgeBaseService {
         if (trimmedQ.length === 0) {
             const { items, total } = await this.documentRepository.list({
                 workId,
-                classes: mergeClassFilters(opts),
+                classes: classFilter,
                 statuses: statusFilter,
                 sources: opts.sources,
                 tag: opts.tag,
@@ -833,7 +837,7 @@ export class KnowledgeBaseService {
         const [lexicalRes, semanticChunks] = await Promise.all([
             this.documentRepository.list({
                 workId,
-                classes: mergeClassFilters(opts),
+                classes: classFilter,
                 statuses: statusFilter,
                 sources: opts.sources,
                 tag: opts.tag,
@@ -906,7 +910,6 @@ export class KnowledgeBaseService {
         // re-asserted here. Without this, searching with a `decision`
         // chip active would surface non-decision documents through the
         // semantic leg.
-        const classFilter = mergeClassFilters(opts);
         const filtered = materialized.filter((d) => {
             if (opts.reviewState && !this.matchesReviewState(d, opts.reviewState)) return false;
             if (classFilter && !classFilter.includes(d.kbDocumentClass)) return false;
@@ -4625,19 +4628,18 @@ export class KnowledgeBaseService {
  * `classes` filters into one list for the repository.
  *
  * When BOTH are supplied the intersection wins (the narrower answer is
- * always the safe one for a filter). Returns `undefined` — not `[]` —
- * when no class filter was requested, because an empty array would make
- * the repository emit `IN ()` and match nothing.
+ * always the safe one for a filter) — an EMPTY array when they share none,
+ * which the caller reads as "nothing matches", exactly as for `status` +
+ * `statuses` (it used to fall back to `class` alone, so the two facets
+ * answered the same contradiction differently). Returns `undefined` — not
+ * `[]` — when no class filter was requested.
  */
 function mergeClassFilters(opts: {
     class?: KbDocumentClass;
     classes?: KbDocumentClass[];
 }): KbDocumentClass[] | undefined {
     const multi = opts.classes && opts.classes.length > 0 ? opts.classes : undefined;
-    if (opts.class && multi) {
-        const intersection = multi.filter((cls) => cls === opts.class);
-        return intersection.length > 0 ? intersection : [opts.class];
-    }
+    if (opts.class && multi) return multi.filter((cls) => cls === opts.class);
     if (opts.class) return [opts.class];
     return multi;
 }

@@ -286,6 +286,38 @@ describe('workbench KbSearchPalette', () => {
         );
     });
 
+    it('shows an error, not "no results", when the API refuses the search', async () => {
+        // e.g. more than 10 tags, a tag over 64 characters, or an API older
+        // than the web during a deploy.
+        (globalThis as { fetch: typeof fetch }).fetch = vi.fn(
+            async () =>
+                new Response(
+                    JSON.stringify({
+                        statusCode: 400,
+                        message: ['tags must contain no more than 10 elements'],
+                    }),
+                    { status: 400, headers: { 'Content-Type': 'application/json' } },
+                ),
+        ) as unknown as typeof fetch;
+
+        render(<KbSearchPalette workId="work-1" defaultOpen debounceMs={10} />);
+        fireEvent.change(screen.getByTestId('kb-workbench-search-palette-input'), {
+            target: { value: 'asdf' },
+        });
+
+        await waitFor(
+            () => {
+                expect(screen.getByTestId('kb-workbench-search-palette-error')).toBeTruthy();
+            },
+            { timeout: 3000 },
+        );
+        const error = screen.getByTestId('kb-workbench-search-palette-error');
+        expect(error.getAttribute('role')).toBe('alert');
+        expect(error.textContent).toContain('search.failed');
+        expect(error.textContent).toContain('tags must contain no more than 10 elements');
+        expect(screen.queryByTestId('kb-workbench-search-palette-noresults')).toBeNull();
+    });
+
     it('renders a loading shimmer while the search request is pending', async () => {
         // Mock fetch that never resolves so we observe the shimmer mid-flight.
         (globalThis as { fetch: typeof fetch }).fetch = vi.fn(

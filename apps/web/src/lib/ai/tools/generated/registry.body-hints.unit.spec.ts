@@ -109,7 +109,7 @@ const CASES: Array<{
     {
         tool: 'update_webhook',
         dto: 'UpdateWebhookSubscriptionDto',
-        names: ['status'],
+        names: ['status', 'organizationIds', 'excludeOriginTags'],
         notNamed: ['enabled'],
     },
     {
