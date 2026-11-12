@@ -9412,6 +9412,7 @@
                         "placeholder": "Search Knowledge Base documents…",
                         "empty": "Type to search KB documents.",
                         "noResults": "No documents matched your search.",
+                        "failed": "The search could not run.",
                         "searching": "Searching…",
                         "filter": {
                             "class": "Class",

@@ -176,6 +176,18 @@ describe('KnowledgeBaseService — memory facets + retrieval log', () => {
         );
     });
 
+    it('answers nothing when class and classes share no value (strict, like status + statuses)', async () => {
+        // It used to fall back to `class` alone, while `status` + `statuses`
+        // answered the same contradiction with nothing.
+        const result = await service.listDocuments(WORK_ID, USER_ID, {
+            class: KbDocumentClass.LEGAL,
+            classes: [KbDocumentClass.DECISION, KbDocumentClass.OUTPUT],
+        });
+
+        expect(result).toEqual({ items: [], total: 0 });
+        expect(docRepo.list).not.toHaveBeenCalled();
+    });
+
     it('sends no class filter at all (never an empty IN list) when none was requested', async () => {
         await service.listDocuments(WORK_ID, USER_ID, { classes: [] });
 
