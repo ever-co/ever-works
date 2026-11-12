@@ -9,13 +9,14 @@ import {
 } from '../kb-memory-facets.js';
 
 /**
- * The kb barrel is eleven `export *` lines and nothing of its own. Eight of
+ * The kb barrel is eleven `export *` lines and nothing of its own. Seven of
  * the eleven sources are 100% type-only, so this list IS the entire runtime
  * surface of `@ever-works/contracts` kb — a dropped, renamed or reordered
  * `export *` line silently breaks every downstream `import { KB_… }` and
  * nothing else in the package would notice.
  */
 const EXPECTED_RUNTIME_EXPORTS = [
+	'KB_BASE_CONTENT_HASH_HEADER',
 	'KB_CITATION_CONSUMER_TYPES',
 	'KB_DECISION_STATUSES',
 	'KB_DOCUMENT_CLASSES',
@@ -61,29 +62,32 @@ const EXPECTED_RUNTIME_EXPORTS = [
 ];
 
 describe('kb barrel', () => {
-	it('re-exports exactly the forty-two runtime names', () => {
+	it('re-exports exactly the forty-three runtime names', () => {
 		expect(Object.keys(kb).sort()).toEqual([...EXPECTED_RUNTIME_EXPORTS].sort());
 	});
 
-	it('exposes forty-two runtime keys — tripwire for a silent addition', () => {
+	it('exposes forty-three runtime keys — tripwire for a silent addition', () => {
 		// Asserted separately from the name list so an accidental new
 		// export shows up as a count change even if someone updates the
 		// list above without thinking about it.
-		expect(Object.keys(kb)).toHaveLength(42);
+		expect(Object.keys(kb)).toHaveLength(43);
 	});
 
-	it('contributes no runtime keys from the eight type-only modules', () => {
-		// kb-document.types / kb-citation.types / kb-context-bundle.types /
-		// kb-search.types / kb-tag.types / kb-tree.types / kb-upload.types /
+	it('contributes no runtime keys from the seven type-only modules', () => {
+		// kb-citation.types / kb-context-bundle.types / kb-search.types /
+		// kb-tag.types / kb-tree.types / kb-upload.types /
 		// decision-conflict.types are interfaces and type aliases only. If a
 		// const ever lands in one of them this count moves and the author is
 		// forced to add a spec for it.
 		const fromDocumentClass = 9;
 		const fromMemoryFacets = 10;
-		// kb-library.types is the one mixed module: 18 numeric limits, four
-		// vocabularies and the Unfiled folder literal, plus type-only DTOs.
+		// kb-library.types is mixed: 18 numeric limits, four vocabularies and
+		// the Unfiled folder literal, plus type-only DTOs.
 		const fromLibrary = 23;
-		expect(Object.keys(kb)).toHaveLength(fromDocumentClass + fromMemoryFacets + fromLibrary);
+		// kb-document.types is mixed too since #3204: its DTOs plus the one
+		// header name a body edit sends its base content hash in.
+		const fromDocumentTypes = 1;
+		expect(Object.keys(kb)).toHaveLength(fromDocumentClass + fromMemoryFacets + fromLibrary + fromDocumentTypes);
 	});
 
 	it('has no default export', () => {
@@ -131,9 +135,12 @@ describe('kb barrel', () => {
 		}
 	});
 
-	it('carries the two string literals and the one record through unchanged', () => {
+	it('carries the three string literals and the one record through unchanged', () => {
 		expect(kb.KB_SYNTHESIS_PATH_PREFIX).toBe('memory/synthesis-');
 		expect(kb.KB_SYNTHESIS_TAG).toBe('synthesis');
+		// The web editor sends and the API reads the base content hash under
+		// this one name; a renamed header would silently drop the 409 check.
+		expect(kb.KB_BASE_CONTENT_HASH_HEADER).toBe('x-kb-base-content-hash');
 		expect(kb.KB_MEMORY_CONSOLIDATION_INTERVAL_DAYS).toEqual({ daily: 1, weekly: 7, monthly: 30 });
 	});
 });
