@@ -4,6 +4,7 @@ import {
     ForbiddenException,
     NotFoundException,
 } from '@nestjs/common';
+import { QueryFailedError } from 'typeorm';
 import { KnowledgeBaseService } from './knowledge-base.service';
 import { hashNormalizedBody } from './kb-content-hash';
 import { KB_MIRROR_RETIRED_PATHS_KEY } from './kb-document-move';
@@ -11,6 +12,7 @@ import { ActivityActionType } from '../entities/activity-log.types';
 import { WorkKnowledgeDocument } from '../entities/work-knowledge-document.entity';
 import {
     KbCitationConsumerType,
+    KbDecisionStatus,
     KbDocumentClass,
     KbDocumentSource,
     KbDocumentStatus,
@@ -25,6 +27,20 @@ const DOC_ID = '00000000-0000-0000-0000-000000000010';
 const LINKING_ID = '00000000-0000-0000-0000-000000000011';
 const MD_LINKING_ID = '00000000-0000-0000-0000-000000000012';
 const UNRELATED_ID = '00000000-0000-0000-0000-000000000013';
+
+/** What TypeORM throws when the unique (workId, path) index refuses a write (Postgres). */
+function uniqueViolation(): QueryFailedError {
+    return new QueryFailedError(
+        'UPDATE "work_knowledge_documents"',
+        [],
+        Object.assign(
+            new Error('duplicate key value violates unique constraint "uq_wkd_work_path"'),
+            {
+                code: '23505',
+            },
+        ),
+    );
+}
 
 let seq = 0;
 function buildDocument(overrides: Partial<WorkKnowledgeDocument> = {}): WorkKnowledgeDocument {
@@ -146,10 +162,7 @@ class FakeDocuments {
                     (doc) => doc.id !== id && doc.workId === row.workId && doc.path === patch.path,
                 )
             ) {
-                throw Object.assign(
-                    new Error('duplicate key value violates unique constraint "uq_wkd_work_path"'),
-                    { code: '23505' },
-                );
+                throw uniqueViolation();
             }
             if (opts.expectedRevision !== undefined && row.revision !== opts.expectedRevision) {
                 return null;
@@ -794,11 +807,11 @@ describe('KnowledgeBaseService.moveDocument — rename a Work document', () => {
             ]);
         });
 
-        it('⭐ an edit made on an older revision is refused (409 KbRevisionConflict), nothing written', async () => {
-            // The guide's links were rewritten (revision 3 → 4) while an editor
-            // still had revision 3 open.
+        it('⭐ an edit made on an older body is refused (409 KbContentConflict), nothing written', async () => {
+            // The guide's links were rewritten by the move while an editor still
+            // had the body from before it open.
+            const before = (await build().getDocument(WORK_ID, LINKING_ID, USER_ID)).contentHash!;
             await build().moveDocument(WORK_ID, DOC_ID, USER_ID, { path: 'brand/tone.md' });
-            expect(docs.rows.get(LINKING_ID)!.revision).toBe(4);
             const writes = docs.updates.length;
 
             const error = await build()
@@ -807,20 +820,47 @@ describe('KnowledgeBaseService.moveDocument — rename a Work document', () => {
                     LINKING_ID,
                     USER_ID,
                     { body: 'Write like [[brand/voice.md]] and more' },
-                    { baseRevision: 3 },
+                    { baseContentHash: before },
                 )
                 .catch((e: unknown) => e);
 
             expect(error).toBeInstanceOf(ConflictException);
             expect((error as ConflictException).getResponse()).toMatchObject({
-                code: 'KbRevisionConflict',
-                revision: 4,
+                code: 'KbContentConflict',
+                contentHash: hashNormalizedBody(
+                    'Write like [[brand/tone.md]], see [[Voice|brand/tone.md]].',
+                ),
             });
             expect(String((error as ConflictException).message)).toMatch(/conflict/i);
             expect(docs.updates).toHaveLength(writes);
             expect((docs.rows.get(LINKING_ID)!.metadata as { body: string }).body).toContain(
                 '[[brand/tone.md]]',
             );
+        });
+
+        it('⭐ a title or tag edit never makes the next body save conflict (the fingerprint is the body)', async () => {
+            const service = build();
+            (service as unknown as { recordDocumentUpdated: jest.Mock }).recordDocumentUpdated =
+                jest.fn(async () => undefined);
+            const loaded = await service.getDocument(WORK_ID, LINKING_ID, USER_ID);
+            // Another surface (the header) renames the title: the revision moves.
+            const titled = await service.updateDocument(WORK_ID, LINKING_ID, USER_ID, {
+                title: 'Guide v2',
+                tags: ['style'],
+            });
+            expect(titled.revision).toBe(4);
+            expect(titled.contentHash).toBe(loaded.contentHash);
+            // The editor's body save, based on what it loaded, still lands.
+            const saved = await service.updateDocument(
+                WORK_ID,
+                LINKING_ID,
+                USER_ID,
+                { body: 'v2' },
+                { baseContentHash: loaded.contentHash },
+            );
+            expect(saved.body).toBe('v2');
+            expect(saved.title).toBe('Guide v2');
+            expect(saved.contentHash).toBe(hashNormalizedBody('v2'));
         });
 
         it('⭐ a create whose free path is taken before its insert lands takes the next free path', async () => {
@@ -836,12 +876,7 @@ describe('KnowledgeBaseService.moveDocument — rename a Work document', () => {
                         docs.add(
                             buildDocument({ id: 'taker', path: 'brand/tone.md', slug: 'tone' }),
                         );
-                        throw Object.assign(
-                            new Error(
-                                'duplicate key value violates unique constraint "uq_wkd_work_path"',
-                            ),
-                            { code: '23505' },
-                        );
+                        throw uniqueViolation();
                     }
                     const row = buildDocument({
                         ...data,
@@ -864,23 +899,105 @@ describe('KnowledgeBaseService.moveDocument — rename a Work document', () => {
             expect((docs as unknown as { create: jest.Mock }).create).toHaveBeenCalledTimes(2);
         });
 
-        it('an edit made on the current revision saves, and an edit with no base revision is unchecked', async () => {
+        it('an edit with no base fingerprint is unchecked (every other caller)', async () => {
             const service = build();
             (service as unknown as { recordDocumentUpdated: jest.Mock }).recordDocumentUpdated =
                 jest.fn(async () => undefined);
-            const saved = await service.updateDocument(
-                WORK_ID,
-                LINKING_ID,
-                USER_ID,
-                { body: 'v2' },
-                { baseRevision: 3 },
-            );
-            expect(saved.body).toBe('v2');
-            expect(saved.revision).toBe(4);
-            const again = await service.updateDocument(WORK_ID, LINKING_ID, USER_ID, {
+            await service.moveDocument(WORK_ID, DOC_ID, USER_ID, { path: 'brand/tone.md' });
+            const saved = await service.updateDocument(WORK_ID, LINKING_ID, USER_ID, {
                 body: 'v3',
             });
-            expect(again.revision).toBe(5);
+            expect(saved.body).toBe('v3');
+        });
+
+        it('⭐ a create that loses the race on every try is a 409, not a 500', async () => {
+            (docs as unknown as { create: jest.Mock }).create = jest.fn(async () => {
+                throw uniqueViolation();
+            });
+            const error = await build()
+                .createDocument({
+                    workId: WORK_ID,
+                    userId: USER_ID,
+                    path: 'brand/tone.md',
+                    title: 'Tone',
+                    class: KbDocumentClass.BRAND,
+                    body: 'x',
+                })
+                .catch((e: unknown) => e);
+            expect(error).toBeInstanceOf(ConflictException);
+            expect((error as ConflictException).getResponse()).toMatchObject({
+                code: 'KbPathTaken',
+            });
+            expect((docs as unknown as { create: jest.Mock }).create).toHaveBeenCalledTimes(3);
+        });
+    });
+
+    /** Closure check of #3204 at b8304cd251. */
+    describe('closure fixes', () => {
+        const move = (path: string) => build().moveDocument(WORK_ID, DOC_ID, USER_ID, { path });
+
+        it('⭐ a moved document fully locked during the scan is not moved (403), nothing written', async () => {
+            const page = docs.listWorkPageById.getMockImplementation()!;
+            docs.listWorkPageById.mockImplementation(async (workId, afterId, limit) => {
+                const rows = await page(workId, afterId, limit);
+                const self = docs.rows.get(DOC_ID)!;
+                docs.rows.set(DOC_ID, { ...self, locked: true, lockMode: KbLockMode.FULL });
+                return rows;
+            });
+            docs.add(buildDocument({ metadata: { body: 'Self: [[brand/voice.md]]' } }));
+            await expect(move('brand/tone.md')).rejects.toBeInstanceOf(ForbiddenException);
+            expect(docs.updates).toHaveLength(0);
+            expect(docs.rows.get(DOC_ID)!.path).toBe('brand/voice.md');
+        });
+
+        it('⭐ a document moved by someone else during the scan → 409 KbMoveConflict, nothing written', async () => {
+            const page = docs.listWorkPageById.getMockImplementation()!;
+            docs.listWorkPageById.mockImplementation(async (workId, afterId, limit) => {
+                const rows = await page(workId, afterId, limit);
+                const self = docs.rows.get(DOC_ID)!;
+                docs.rows.set(DOC_ID, { ...self, path: 'brand/other.md', revision: 4 });
+                return rows;
+            });
+            const error = await move('brand/tone.md').catch((e: unknown) => e);
+            expect(error).toBeInstanceOf(ConflictException);
+            expect((error as ConflictException).getResponse()).toMatchObject({
+                code: 'KbMoveConflict',
+            });
+            expect(docs.updates).toHaveLength(0);
+        });
+
+        it('⭐ a rename inside its folder keeps the class (a brand/ document of class legal stays legal)', async () => {
+            docs.add(buildDocument({ kbDocumentClass: KbDocumentClass.LEGAL }));
+            const moved = await move('brand/tone.md');
+            expect(moved.class).toBe(KbDocumentClass.LEGAL);
+            expect(docs.updates.find((u) => u.id === DOC_ID)!.patch.decision).toBeUndefined();
+        });
+
+        it('⭐ moving into decision/ makes it a proposed decision; moving out clears the state', async () => {
+            const service = build();
+            const into = await service.moveDocument(WORK_ID, DOC_ID, USER_ID, {
+                path: 'decision/voice.md',
+            });
+            expect(into.class).toBe(KbDocumentClass.DECISION);
+            expect(into.decision).toEqual({ status: KbDecisionStatus.PROPOSED });
+
+            const out = await service.moveDocument(WORK_ID, DOC_ID, USER_ID, {
+                path: 'brand/voice.md',
+            });
+            expect(out.class).toBe(KbDocumentClass.BRAND);
+            expect(out.decision).toBeNull();
+        });
+
+        it('a decision that already carries a state keeps it when it moves into decision/', async () => {
+            docs.add(
+                buildDocument({
+                    decision: {
+                        status: KbDecisionStatus.ACCEPTED,
+                    } as WorkKnowledgeDocument['decision'],
+                }),
+            );
+            const into = await move('decision/voice.md');
+            expect(into.decision).toEqual({ status: KbDecisionStatus.ACCEPTED });
         });
     });
 });

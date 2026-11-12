@@ -52,7 +52,7 @@ import {
 } from '../auth/machine-principal';
 import { AuthenticatedUser } from '@src/auth/types/auth.types';
 import {
-    KB_BASE_REVISION_HEADER,
+    KB_BASE_CONTENT_HASH_HEADER,
     KB_DOCUMENT_CLASSES,
     KB_DOCUMENT_SOURCES,
     KB_DOCUMENT_STATUSES,
@@ -106,25 +106,25 @@ function machineAuthoredKbFields(
  * content. `false` restores the previous behaviour (accepted on write).
  * Read per request so an operator can flip it without a rebuild.
  */
+export function kbNonSessionWritesProposed(env: NodeJS.ProcessEnv = process.env): boolean {
+    return env.KB_NON_SESSION_WRITES_PROPOSED?.trim().toLowerCase() !== 'false';
+}
+
 /**
- * The `KB_BASE_REVISION_HEADER` value as a revision: `undefined` when the
- * header is absent or empty (no check), 400 `KbBaseRevisionInvalid` when it is
- * not a positive whole number.
+ * The `KB_BASE_CONTENT_HASH_HEADER` value: `undefined` when the header is
+ * absent or empty (no check), 400 `KbBaseContentHashInvalid` when it is not a
+ * SHA-256 hex digest (what `KbDocumentDto.contentHash` carries).
  */
-export function parseKbBaseRevision(raw: string | string[] | undefined): number | undefined {
+export function parseKbBaseContentHash(raw: string | string[] | undefined): string | undefined {
     const value = (Array.isArray(raw) ? raw[0] : raw)?.trim();
     if (!value) return undefined;
-    if (/^[1-9]\d{0,8}$/.test(value)) return Number(value);
+    if (/^[0-9a-f]{64}$/i.test(value)) return value.toLowerCase();
     throw new BadRequestException({
         statusCode: 400,
         error: 'Bad Request',
-        code: 'KbBaseRevisionInvalid',
-        message: `${KB_BASE_REVISION_HEADER} must be a positive whole number: ${value.slice(0, 40)}`,
+        code: 'KbBaseContentHashInvalid',
+        message: `${KB_BASE_CONTENT_HASH_HEADER} must be a SHA-256 hex digest: ${value.slice(0, 80)}`,
     });
-}
-
-export function kbNonSessionWritesProposed(env: NodeJS.ProcessEnv = process.env): boolean {
-    return env.KB_NON_SESSION_WRITES_PROPOSED?.trim().toLowerCase() !== 'false';
 }
 
 /**
@@ -418,14 +418,15 @@ export class KbController {
         // Appended LAST so positional callers (specs) keep their meaning.
         @Req() req?: MachinePrincipalRequest,
         /**
-         * The revision the edit was made on (`KB_BASE_REVISION_HEADER`, sent by
-         * the workbench editor): a document that has moved past it is not
-         * written (409 `KbRevisionConflict`). A header, not a body field, so an
-         * API that predates it ignores it instead of refusing the save.
+         * The body fingerprint the edit was made on
+         * (`KB_BASE_CONTENT_HASH_HEADER`, sent by the workbench editor): a
+         * document whose body has changed since is not written (409
+         * `KbContentConflict`). A header, not a body field, so an API that
+         * predates it ignores it instead of refusing the save.
          */
-        @Headers(KB_BASE_REVISION_HEADER) baseRevisionHeader?: string,
+        @Headers(KB_BASE_CONTENT_HASH_HEADER) baseContentHashHeader?: string,
     ) {
-        const baseRevision = parseKbBaseRevision(baseRevisionHeader);
+        const baseContentHash = parseKbBaseContentHash(baseContentHashHeader);
         // Works-security (run-token scope) — `status` archives / un-archives
         // (or re-drafts) a document: archiving hides it from every later run
         // and from the owner's working set, un-archiving brings a retired one
@@ -461,7 +462,7 @@ export class KbController {
                 class: patch.class as KbDocumentClass | undefined,
                 ...(reenterReview ? { reviewState: 'proposed' as KbReviewState } : {}),
             },
-            baseRevision === undefined ? {} : { baseRevision },
+            baseContentHash === undefined ? {} : { baseContentHash },
         );
     }
 

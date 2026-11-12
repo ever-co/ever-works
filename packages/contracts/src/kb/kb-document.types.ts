@@ -77,13 +77,20 @@ export interface KbDocumentDto {
 	reviewState?: KbReviewState | null;
 	/**
 	 * The document's content revision: it moves on every substantive edit
-	 * (and a move), never on a bookkeeping write. An editor sends the one it
-	 * loaded as `X-Kb-Base-Revision` on `PATCH`, so a save made on an older
-	 * revision is refused (409 `KbRevisionConflict`) instead of writing back
-	 * what the newer one changed. Optional so pre-existing DTO producers stay
-	 * valid.
+	 * (title, tags, class, body) and on a move, never on a bookkeeping write.
+	 * Optional so pre-existing DTO producers stay valid.
 	 */
 	revision?: number;
+	/**
+	 * A fingerprint of the body (SHA-256 of its whitespace-normalized text).
+	 * An editor sends the one its text is based on as
+	 * {@link KB_BASE_CONTENT_HASH_HEADER} on `PATCH`, so a save made on a body
+	 * that has changed since (another edit, a rename that rewrote its links) is
+	 * refused (409 `KbContentConflict`) instead of writing the old text back.
+	 * A title or tag edit does not change it, so it never makes a body save
+	 * conflict. Optional so pre-existing DTO producers stay valid.
+	 */
+	contentHash?: string;
 }
 
 /**
@@ -115,8 +122,8 @@ export interface KbDocumentMoveResult extends KbDocumentBodyDto {
 	};
 }
 
-/** The request header carrying the revision an edit was made on (see {@link KbDocumentDto.revision}). */
-export const KB_BASE_REVISION_HEADER = 'x-kb-base-revision';
+/** The request header carrying the body fingerprint an edit was made on (see {@link KbDocumentDto.contentHash}). */
+export const KB_BASE_CONTENT_HASH_HEADER = 'x-kb-base-content-hash';
 
 export interface KbAssetSummary {
 	path: string;

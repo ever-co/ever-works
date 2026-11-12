@@ -11,6 +11,7 @@ import { Markdown } from 'tiptap-markdown';
 import { cn } from '@/lib/utils/cn';
 import { updateKbDocumentAction } from '@/app/actions/works/kb-document';
 import { useAutosaveStatus, type SaveStatus } from '@/lib/kb/use-autosave-status';
+import { mergeLineChanges } from '@/lib/kb/merge-line-changes';
 import {
     WorkbenchWikilinkExtension,
     type WikilinkSuggestionItem,
@@ -82,26 +83,35 @@ export function TiptapEditor({
     const t = useTranslations('dashboard.workDetail.kb');
     const startBody = initialBody ?? (isBodyDto(document) ? document.body : '');
     const docIdRef = useRef(document.id);
-    // The revision the editor's content is based on, and the body that
-    // revision holds: every save sends the first, so a save made on a body
-    // the server has since changed (another edit, or a rename that rewrote
-    // this document's links) is refused (409 → the conflict banner) instead
-    // of writing the old text back over it.
-    const baseRevisionRef = useRef<number | undefined>(document.revision);
+    // The body the editor's text is based on (the server's, as loaded or last
+    // saved) and its fingerprint: every save sends the fingerprint, so a save
+    // made on a body the server has since changed (another edit, or a rename
+    // that rewrote this document's links) is refused (409 → the conflict
+    // banner) instead of writing the old text back over it. A title or tag
+    // edit leaves the fingerprint alone, so it never makes a save conflict.
+    const baseHashRef = useRef<string | undefined>(document.contentHash);
     const baseBodyRef = useRef(startBody);
+    // The revision of that base: a re-read document is newer only when its
+    // revision is higher (a page read from before the last save is not).
+    const baseRevisionRef = useRef<number | undefined>(document.revision);
+    // The page's document fingerprint the editor has already dealt with.
+    const propHashRef = useRef<string | undefined>(document.contentHash);
+    // "Keep my version": the next save goes without the fingerprint check.
+    const keepMineRef = useRef(false);
 
     const save = useCallback(
         async ({ candidate }: { candidate: string }) => {
+            const baseContentHash = keepMineRef.current ? undefined : baseHashRef.current;
+            keepMineRef.current = false;
             const result = await updateKbDocumentAction({
                 workId,
                 docId: document.id,
                 body: { body: candidate },
-                ...(typeof baseRevisionRef.current === 'number'
-                    ? { baseRevision: baseRevisionRef.current }
-                    : {}),
+                ...(baseContentHash ? { baseContentHash } : {}),
             });
             if (result.success) {
                 const confirmedBody = result.data?.body ?? candidate;
+                baseHashRef.current = result.data?.contentHash ?? baseHashRef.current;
                 baseRevisionRef.current = result.data?.revision ?? baseRevisionRef.current;
                 baseBodyRef.current = confirmedBody;
                 if (result.data) onSaved?.(result.data);
@@ -173,25 +183,52 @@ export function TiptapEditor({
     // swaps to a different document.
     useEffect(() => {
         if (docIdRef.current === document.id) {
-            // The same document at a newer revision whose body is the one
-            // the editor is based on (a rename of the open document: its path
-            // moved, its text did not): adopt it, or the next save would be
-            // refused for a change that changed nothing here. A newer body is
-            // never adopted silently; its save conflicts and the banner says so.
-            const next = initialBody ?? (isBodyDto(document) ? document.body : undefined);
+            // The same document, re-read by the page (a rename of it or of a
+            // document it links to refreshes the page). When the server's body
+            // is not the one the editor's text is based on, take it in:
+            //  - nothing typed since the last save → show the server's body;
+            //  - text typed → carry the server's change over to it when the
+            //    two touched different lines (a link rewrite does);
+            //  - otherwise keep the typed text: its save conflicts, and the
+            //    banner offers to reload or to keep this version.
+            const serverHash = document.contentHash;
+            const serverRevision = document.revision;
+            const serverBody = initialBody ?? (isBodyDto(document) ? document.body : undefined);
+            if (!serverHash || serverBody === undefined || typeof serverRevision !== 'number')
+                return;
+            if (serverHash === propHashRef.current) return; // the same read as before
+            if (autosave.status === 'saving') return; // decided once the save answers
+            propHashRef.current = serverHash;
             if (
-                typeof document.revision === 'number' &&
-                (baseRevisionRef.current === undefined ||
-                    document.revision > baseRevisionRef.current) &&
-                next === baseBodyRef.current
+                typeof baseRevisionRef.current === 'number' &&
+                serverRevision <= baseRevisionRef.current
             ) {
-                baseRevisionRef.current = document.revision;
+                return; // not newer than what the editor has (read before its last save)
             }
+            baseRevisionRef.current = serverRevision;
+            if (serverHash === baseHashRef.current || serverBody === baseBodyRef.current) {
+                baseHashRef.current = serverHash; // a title or tag edit: the body is the same
+                return;
+            }
+            const typed = autosave.status === 'dirty' || autosave.status === 'error';
+            const ours = typed && editor ? readMarkdown(editor) : undefined;
+            const merged =
+                typeof ours === 'string'
+                    ? mergeLineChanges(baseBodyRef.current, serverBody, ours)
+                    : serverBody;
+            if (merged === null) return;
+            baseHashRef.current = serverHash;
+            baseBodyRef.current = serverBody;
+            autosave.reset(serverBody);
+            editor?.commands.setContent(merged, { emitUpdate: false });
+            if (merged !== serverBody) autosave.schedule(merged);
             return;
         }
         docIdRef.current = document.id;
         const next = initialBody ?? (isBodyDto(document) ? document.body : '');
+        baseHashRef.current = document.contentHash;
         baseRevisionRef.current = document.revision;
+        propHashRef.current = document.contentHash;
         baseBodyRef.current = next;
         autosave.reset(next);
         if (editor) {
@@ -215,6 +252,16 @@ export function TiptapEditor({
             editor.off('update', onUpdate);
         };
     }, [editor, autosave]);
+
+    // Save the text as it is over the newer body (whose change — say, a
+    // renamed document's links — is then lost in this document).
+    const keepMine = () => {
+        if (!editor) return;
+        const md = readMarkdown(editor);
+        if (typeof md !== 'string') return;
+        keepMineRef.current = true;
+        autosave.schedule(md);
+    };
 
     const reload = () => {
         if (onReload) {
@@ -251,6 +298,8 @@ export function TiptapEditor({
                     message={t('workbench.conflict')}
                     actionLabel={t('workbench.reload')}
                     onAction={reload}
+                    secondaryActionLabel={t('workbench.keepMine')}
+                    onSecondaryAction={keepMine}
                 />
             ) : null}
 
@@ -346,9 +395,20 @@ interface BannerProps {
     message: string;
     actionLabel?: string;
     onAction?: () => void;
+    /** A second choice beside the action (the conflict banner's "Keep my version"). */
+    secondaryActionLabel?: string;
+    onSecondaryAction?: () => void;
 }
 
-function Banner({ testId, tone: _tone, message, actionLabel, onAction }: BannerProps) {
+function Banner({
+    testId,
+    tone: _tone,
+    message,
+    actionLabel,
+    onAction,
+    secondaryActionLabel,
+    onSecondaryAction,
+}: BannerProps) {
     return (
         <div
             data-testid={testId}
@@ -371,6 +431,20 @@ function Banner({ testId, tone: _tone, message, actionLabel, onAction }: BannerP
                     )}
                 >
                     {actionLabel}
+                </button>
+            ) : null}
+            {secondaryActionLabel && onSecondaryAction ? (
+                <button
+                    type="button"
+                    onClick={onSecondaryAction}
+                    data-testid={`${testId}-secondary`}
+                    className={cn(
+                        'rounded-md border border-amber-500/40 px-2 py-1',
+                        'text-amber-900 hover:bg-white/60',
+                        'dark:text-amber-100 dark:hover:bg-amber-500/20',
+                    )}
+                >
+                    {secondaryActionLabel}
                 </button>
             ) : null}
         </div>

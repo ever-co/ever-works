@@ -9331,6 +9331,7 @@
                     },
                     "conflict": "This document was edited elsewhere. Reload to see the latest.",
                     "reload": "Reload",
+                    "keepMine": "Keep my version",
                     "locked": "This document is locked.",
                     "upload": {
                         "dropPrompt": "Drop files here to upload",

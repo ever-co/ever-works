@@ -1,6 +1,5 @@
 import {
     classFolderOfKbPath,
-    isKbUniqueViolation,
     KB_MIRROR_RETIRED_PATHS_KEY,
     KB_MIRROR_RETIRED_PATHS_MAX,
     KB_MOVE_PATH_PATTERN,
@@ -240,18 +239,12 @@ describe('kb-document-move', () => {
                 'a fence never closed (code to the end, as CommonMark has it)',
                 ['```', '[[brand/voice.md]]'],
             ],
-            ['an HTML comment', ['<!-- [[brand/voice.md]] -->']],
-            [
-                'an HTML comment never closed',
-                ['<!-- draft', `[x](/works/${WORK_ID}/kb/brand/voice.md)`],
-            ],
         ])('⭐ leaves a link inside %s alone, as the renderer does', (_label, lines) => {
             const body = [...lines, '', 'Outside: [[brand/voice.md]]'].join('\n');
             const out = rewriteKbDocumentLinks(body, move);
-            const comment = lines[0].startsWith('<!--') && !lines.join('\n').includes('-->');
             const fenceOpen = lines.length === 2 && lines[0] === '```';
-            if (comment || fenceOpen) {
-                // Everything after the opener is code / comment.
+            if (fenceOpen) {
+                // Everything after the opener is code.
                 expect(out).toEqual({ body, rewritten: 0 });
             } else {
                 expect(out.rewritten).toBe(1);
@@ -282,17 +275,36 @@ describe('kb-document-move', () => {
             expect(rewriteKbDocumentLinks(body, move)).toEqual({ body, rewritten: 0 });
         });
 
-        it('helpers: the class folder, the parent paths, a unique violation', () => {
+        it('helpers: the class folder and the parent paths', () => {
             expect(classFolderOfKbPath('legal/2026/terms.md')).toBe('legal');
             expect(kbPathParents('brand/guide.md/voice.md')).toEqual(['brand', 'brand/guide.md']);
             expect(kbPathParents('brand/voice.md')).toEqual(['brand']);
-            expect(isKbUniqueViolation({ code: '23505' })).toBe(true);
-            expect(isKbUniqueViolation({ driverError: { code: 'SQLITE_CONSTRAINT_UNIQUE' } })).toBe(
-                true,
-            );
-            expect(isKbUniqueViolation(new Error('UNIQUE constraint failed: x.path'))).toBe(true);
-            expect(isKbUniqueViolation(new Error('connection reset'))).toBe(false);
-            expect(isKbUniqueViolation(undefined)).toBe(false);
+        });
+
+        /**
+         * Closure check of #3204: a `<!--` that is not a real comment (in
+         * inline code or a code block, or mid-line and never closed) hid every
+         * link after it, and those documents were not listed as skipped. The
+         * workbench renders Markdown with HTML off, so a comment is text whose
+         * links work: links in comments are rewritten like any other.
+         */
+        it.each([
+            ['in inline code', 'Type `<!--` to start a comment. See [[brand/voice.md]].'],
+            ['in a code block', '```html\n<!--\n```\nSee [[brand/voice.md]].'],
+            ['mid-line, never closed', 'a <!-- b\nSee [[brand/voice.md]].'],
+            ['at a line start, never closed', '<!-- draft\nSee [[brand/voice.md]].'],
+        ])('⭐ a stray "<!--" (%s) never hides the links after it', (_label, body) => {
+            const out = rewriteKbDocumentLinks(body, move);
+            expect(out.rewritten).toBe(1);
+            expect(out.body).toBe(body.replace('[[brand/voice.md]]', '[[brand/tone.md]]'));
+        });
+
+        it('rewrites a link inside an HTML comment (shown as text; it keeps pointing at the document)', () => {
+            const body = '<!-- old: [[brand/voice.md]] -->';
+            expect(rewriteKbDocumentLinks(body, move)).toEqual({
+                body: '<!-- old: [[brand/tone.md]] -->',
+                rewritten: 1,
+            });
         });
     });
 });

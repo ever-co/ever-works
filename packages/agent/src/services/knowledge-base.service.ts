@@ -34,9 +34,9 @@ import {
 } from '../facades/vector-store.facade';
 import { rrfBlend } from './kb-rrf';
 import { hashNormalizedBody } from './kb-content-hash';
+import { isUniqueConstraintError } from '../utils/db-error.utils';
 import {
     classFolderOfKbPath,
-    isKbUniqueViolation,
     KB_MIRROR_RETIRED_PATHS_KEY,
     KB_MOVE_PATH_PATTERN,
     kbPathParents,
@@ -1527,7 +1527,15 @@ export class KnowledgeBaseService {
                 doc = await this.insertDocument(options.withinCreate, { ...row, path });
                 break;
             } catch (error) {
-                if (attempt >= KB_CREATE_PATH_ATTEMPTS || !isKbUniqueViolation(error)) throw error;
+                if (!isUniqueConstraintError(error)) throw error;
+                if (attempt >= KB_CREATE_PATH_ATTEMPTS) {
+                    throw new ConflictException({
+                        statusCode: 409,
+                        error: 'Conflict',
+                        code: 'KbPathTaken',
+                        message: `Other documents kept taking the free path near ${input.path}; try again.`,
+                    });
+                }
                 path = await this.resolvePathCollision(input.workId, input.path);
             }
         }
@@ -1551,15 +1559,16 @@ export class KnowledgeBaseService {
         input: UpdateDocumentInput,
         options: {
             /**
-             * The revision the caller's edit was made on (the workbench
-             * editor sends the one it loaded or last saved). When the
-             * document has moved past it — another edit, or a move that
-             * rewrote its links — nothing is written: 409
-             * `KbRevisionConflict`, so a full-body autosave cannot put back
-             * what the newer revision changed. Absent: no check (every other
-             * caller, as before).
+             * The body fingerprint the caller's text is based on (the
+             * workbench editor sends `contentHash` of the body it loaded or
+             * last saved). When the stored body has changed since — another
+             * edit, or a rename that rewrote its links — nothing is written:
+             * 409 `KbContentConflict`, so a full-body autosave cannot put back
+             * what the newer body changed. A title, tag or class edit does not
+             * change the fingerprint, so it never makes a body save conflict.
+             * Absent: no check (every other caller, as before).
              */
-            readonly baseRevision?: number;
+            readonly baseContentHash?: string;
         } = {},
     ): Promise<KbDocumentBodyDto> {
         await this.ownershipService.ensureCanEdit(workId, userId);
@@ -1573,9 +1582,9 @@ export class KnowledgeBaseService {
         // Content, fingerprint and revision land in one compare-and-set on
         // the revision the patch is computed from; a lost race recomputes the
         // patch against the row as it now is (see `writeAtRevision`), and
-        // checks the base revision against that row again.
+        // checks the base fingerprint against that row again.
         const updated = await this.writeAtRevision(workId, docId, existing, (row) => {
-            this.assertBaseRevision(row, options.baseRevision);
+            this.assertBaseContent(row, options.baseContentHash);
             return this.contentPatch(row, userId, input);
         });
 
@@ -1603,17 +1612,27 @@ export class KnowledgeBaseService {
         return this.toBodyDto(updated);
     }
 
-    /** 409 `KbRevisionConflict` when `row` has moved past the revision an edit was made on. */
-    private assertBaseRevision(row: WorkKnowledgeDocument, baseRevision: number | undefined): void {
-        if (baseRevision === undefined) return;
-        const current = row.revision ?? 1;
-        if (current === baseRevision) return;
+    /** The body fingerprint of `row`: the stored one, else computed (a row written before it existed). */
+    private contentHashOf(row: WorkKnowledgeDocument): string {
+        return row.normalizedContentHash || hashNormalizedBody(this.bodyOf(row));
+    }
+
+    /** 409 `KbContentConflict` when `row`'s body is no longer the one an edit was made on. */
+    private assertBaseContent(
+        row: WorkKnowledgeDocument,
+        baseContentHash: string | undefined,
+    ): void {
+        if (baseContentHash === undefined) return;
+        const current = this.contentHashOf(row);
+        if (current === baseContentHash) return;
         throw new ConflictException({
             statusCode: 409,
             error: 'Conflict',
-            code: 'KbRevisionConflict',
-            message: `Edit conflict: this document changed since it was opened (revision ${baseRevision}, now ${current}). Reload it to see the new version.`,
-            revision: current,
+            code: 'KbContentConflict',
+            message:
+                'Edit conflict: the text of this document changed since it was opened (another edit, or a rename that updated its links).',
+            contentHash: current,
+            revision: row.revision ?? 1,
         });
     }
 
@@ -1628,8 +1647,9 @@ export class KnowledgeBaseService {
      * refused), the path rules of create (a known class folder, no traversal)
      * plus {@link KB_MOVE_PATH_PATTERN}, and a taken path is refused (409
      * `KbPathTaken`) rather than suffixed: a rename must land where it was
-     * asked to. The class follows the folder: a document moved from `brand/`
-     * to `legal/` is a `legal` document.
+     * asked to. The class follows the folder when the folder changes: a
+     * document moved from `brand/` to `legal/` is a `legal` document; one
+     * renamed inside `brand/` keeps its class.
      *
      * Order — the database first, the git mirror last:
      *  1. Every check, before anything is written: the path, a collision, a
@@ -1640,11 +1660,14 @@ export class KnowledgeBaseService {
      *     and a FULLY locked document linking to the old path (409
      *     `KbLinkedFromLockedDocument`: its links cannot be rewritten, so the
      *     move would break them).
-     *  2. The document row: `path`, `slug`, its class, its own links to the
-     *     old path, the next revision and the retired-path marker
-     *     ({@link KB_MIRROR_RETIRED_PATHS_KEY}) in ONE compare-and-set write.
-     *     The collision checks run again right before it (the link scan of a
-     *     large Work takes a while), and the unique (workId, path) index
+     *  2. The document row, read again right before (a lock taken during the
+     *     scan is honoured; a move by someone else meanwhile is 409
+     *     `KbMoveConflict`): `path`, `slug`, its class when the folder
+     *     changes (with the decision state a class change brings), its own
+     *     links to the old path, the next revision and the retired-path
+     *     marker ({@link KB_MIRROR_RETIRED_PATHS_KEY}) in ONE compare-and-set
+     *     write. The collision checks run again right before it (the link
+     *     scan of a large Work takes a while), and the unique (workId, path) index
      *     refuses it if another document took the path in between: two
      *     concurrent moves can never both land on one path.
      *  3. Every other document of the Work whose body links to the old path
@@ -1714,13 +1737,37 @@ export class KnowledgeBaseService {
         // index refuses the write if another document took it in between.
         await this.assertMovePathFree(workId, docId, newPath);
 
+        // The moved document itself is read again too: the scan can be
+        // minutes old, and a lock taken since does not move the revision the
+        // write compares.
+        const current = await this.documentRepository.findById(workId, docId);
+        if (!current) {
+            throw new NotFoundException(`KB document not found: ${docId}`);
+        }
+
         const newSlug = slugOfKbPath(newPath);
-        const newClass = classFolderOfKbPath(newPath) as KbDocumentClass;
+        // The class follows the folder only when the folder changes: a
+        // rename inside `brand/` keeps a document's class, whatever it is.
+        const folderChanged = classFolderOfKbPath(newPath) !== classFolderOfKbPath(oldPath);
         // Whether the round that ended the write rewrote the document's own links.
         const self = { rewrote: false };
         let moved: WorkKnowledgeDocument;
         try {
-            moved = await this.writeAtRevision(workId, docId, existing, (row) => {
+            moved = await this.writeAtRevision(workId, docId, current, (row) => {
+                this.assertNotLockedFull(row);
+                if (row.path !== oldPath) {
+                    // Moved by someone else since this move read it: its links
+                    // and retired paths were computed for the old path.
+                    throw new ConflictException({
+                        statusCode: 409,
+                        error: 'Conflict',
+                        code: 'KbMoveConflict',
+                        message: `This document was moved to ${row.path} meanwhile. Reload and rename it again.`,
+                    });
+                }
+                const newClass = folderChanged
+                    ? (classFolderOfKbPath(newPath) as KbDocumentClass)
+                    : row.kbDocumentClass;
                 // The document's own links to its old path move with it.
                 const before = this.bodyOf(row);
                 const { body } = rewriteKbDocumentLinks(before, { workId, oldPath, newPath });
@@ -1737,13 +1784,14 @@ export class KnowledgeBaseService {
                     path: newPath,
                     slug: newSlug,
                     kbDocumentClass: newClass,
+                    ...this.decisionStateForClass(row, newClass),
                     updatedById: userId,
                     metadata: {
                         ...(row.metadata ?? {}),
                         ...(self.rewrote ? { body } : {}),
                         [KB_MIRROR_RETIRED_PATHS_KEY]: nextRetiredPaths(
                             row.metadata,
-                            row.path === newPath ? oldPath : row.path,
+                            oldPath,
                             newPath,
                         ),
                     } as Record<string, unknown>,
@@ -1755,7 +1803,7 @@ export class KnowledgeBaseService {
                 return { patch, bump: true };
             });
         } catch (error) {
-            if (isKbUniqueViolation(error)) throw this.pathTakenError(newPath);
+            if (isUniqueConstraintError(error)) throw this.pathTakenError(newPath);
             throw error;
         }
 
@@ -1794,7 +1842,7 @@ export class KnowledgeBaseService {
             }
         }
 
-        const classChanged = newClass !== existing.kbDocumentClass;
+        const classChanged = moved.kbDocumentClass !== existing.kbDocumentClass;
         await this.recordKbDocument(
             'kb.document.moved',
             moved.id,
@@ -1863,6 +1911,23 @@ export class KnowledgeBaseService {
             ...this.toBodyDto(moved),
             linkRewrite: { documentIds: rewritten.map((doc) => doc.id), skipped },
         };
+    }
+
+    /**
+     * The decision state that goes with a class change, as create sets it: a
+     * document that becomes a `decision` starts `proposed` (unless it already
+     * carries a state); one that stops being a decision carries none (the DTO
+     * contract: non-null only for decisions). Nothing when the class stays.
+     */
+    private decisionStateForClass(
+        row: WorkKnowledgeDocument,
+        nextClass: KbDocumentClass,
+    ): Partial<WorkKnowledgeDocument> {
+        if (nextClass === row.kbDocumentClass) return {};
+        if (nextClass === KbDocumentClass.DECISION) {
+            return { decision: row.decision ?? { status: KbDecisionStatus.PROPOSED } };
+        }
+        return row.kbDocumentClass === KbDocumentClass.DECISION ? { decision: null } : {};
     }
 
     /** 409 `KbPathTaken`: another document of the Work is at `path`. */
@@ -5103,6 +5168,7 @@ export class KnowledgeBaseService {
             decision: doc.decision ?? null,
             reviewState: doc.reviewState ?? null,
             revision: doc.revision ?? 1,
+            contentHash: this.contentHashOf(doc),
         };
     }
 

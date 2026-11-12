@@ -28,7 +28,7 @@ import {
 import { HTTP_CODE_METADATA, METHOD_METADATA, PATH_METADATA } from '@nestjs/common/constants';
 import type { KnowledgeBaseService } from '@ever-works/agent/services';
 import type { AuthenticatedUser } from '@src/auth/types/auth.types';
-import { KbController, parseKbBaseRevision } from './kb.controller';
+import { KbController, parseKbBaseContentHash } from './kb.controller';
 
 const WORK_ID = '00000000-0000-0000-0000-000000000001';
 const DOC_ID = '00000000-0000-0000-0000-000000000010';
@@ -179,7 +179,7 @@ describe('KbController — machine-written documents are review-gated', () => {
             DOC_ID,
             'u-1',
             expect.objectContaining({ body: 'new', reviewState: 'proposed' }),
-            // No editor base revision: nothing to check.
+            // No editor base fingerprint: nothing to check.
             {},
         );
         await controller.updateDocument(auth, WORK_ID, DOC_ID, { tags: ['a'] } as never, runToken);
@@ -210,7 +210,7 @@ describe('KbController — machine-written documents are review-gated', () => {
             DOC_ID,
             'u-1',
             expect.objectContaining({ status: 'archived' }),
-            // No editor base revision: nothing to check.
+            // No editor base fingerprint: nothing to check.
             {},
         );
     });
@@ -609,12 +609,15 @@ describe('KbController — list filters', () => {
 
 /**
  * #3204 review: the workbench editor autosaves the FULL body, so a save made on
- * an older revision (a rename rewrote this document's links meanwhile) wrote
- * the old links back. The editor now sends the revision it is based on as a
- * header; the API hands it to the service, which refuses a stale one (409).
+ * an older body (a rename rewrote this document's links meanwhile) wrote the
+ * old links back. The editor now sends the fingerprint of the body it is based
+ * on as a header; the API hands it to the service, which refuses a stale one
+ * (409). A body fingerprint, not the revision: a title or tag edit moves the
+ * revision and must not make the next body save conflict.
  */
-describe('KbController — PATCH carries the editor’s base revision', () => {
+describe('KbController — PATCH carries the editor’s base body fingerprint', () => {
     const session = { userId: 'u-1', authMethod: 'session' } as AuthenticatedUser;
+    const HASH = 'a'.repeat(64);
     let kb: Record<string, jest.Mock>;
     let controller: KbController;
 
@@ -623,14 +626,21 @@ describe('KbController — PATCH carries the editor’s base revision', () => {
         controller = new KbController(kb as unknown as KnowledgeBaseService);
     });
 
-    it('⭐ passes the X-Kb-Base-Revision header to the service as the base revision', async () => {
-        await controller.updateDocument(session, WORK_ID, DOC_ID, { body: 'x' } as never, {}, '7');
+    it('⭐ passes the X-Kb-Base-Content-Hash header to the service', async () => {
+        await controller.updateDocument(
+            session,
+            WORK_ID,
+            DOC_ID,
+            { body: 'x' } as never,
+            {},
+            HASH.toUpperCase(),
+        );
         expect(kb.updateDocument).toHaveBeenCalledWith(
             WORK_ID,
             DOC_ID,
             'u-1',
             expect.objectContaining({ body: 'x' }),
-            { baseRevision: 7 },
+            { baseContentHash: HASH },
         );
     });
 
@@ -639,24 +649,24 @@ describe('KbController — PATCH carries the editor’s base revision', () => {
         expect(kb.updateDocument.mock.calls[0][4]).toEqual({});
     });
 
-    it.each(['abc', '0', '-1', '1.5', '9999999999'])(
-        'refuses a malformed header (%s) with 400 KbBaseRevisionInvalid',
+    it.each(['abc', '7', 'g'.repeat(64), 'a'.repeat(63), 'a'.repeat(65)])(
+        'refuses a malformed header (%s) with 400 KbBaseContentHashInvalid',
         (value) => {
-            expect(() => parseKbBaseRevision(value)).toThrow(BadRequestException);
+            expect(() => parseKbBaseContentHash(value)).toThrow(BadRequestException);
             try {
-                parseKbBaseRevision(value);
+                parseKbBaseContentHash(value);
             } catch (error) {
                 expect((error as BadRequestException).getResponse()).toMatchObject({
-                    code: 'KbBaseRevisionInvalid',
+                    code: 'KbBaseContentHashInvalid',
                 });
             }
         },
     );
 
-    it('reads a plain revision, and treats an empty header as absent', () => {
-        expect(parseKbBaseRevision(' 12 ')).toBe(12);
-        expect(parseKbBaseRevision(['4', '5'])).toBe(4);
-        expect(parseKbBaseRevision('')).toBeUndefined();
-        expect(parseKbBaseRevision(undefined)).toBeUndefined();
+    it('reads a digest, and treats an empty header as absent', () => {
+        expect(parseKbBaseContentHash(` ${HASH} `)).toBe(HASH);
+        expect(parseKbBaseContentHash([HASH, 'b'.repeat(64)])).toBe(HASH);
+        expect(parseKbBaseContentHash('')).toBeUndefined();
+        expect(parseKbBaseContentHash(undefined)).toBeUndefined();
     });
 });

@@ -7063,6 +7063,7 @@
                     },
                     "conflict": "This document was edited elsewhere. Reload to see the latest.",
                     "reload": "Reload",
+                    "keepMine": "내 버전 유지",
                     "locked": "This document is locked.",
                     "upload": {
                         "dropPrompt": "Drop files here to upload",

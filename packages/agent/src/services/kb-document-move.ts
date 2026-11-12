@@ -103,12 +103,15 @@ function escapeRegExp(value: string): string {
 type Range = readonly [start: number, end: number];
 
 /**
- * Fenced code blocks (``` or ~~~, closed by a fence of the same character at
- * least as long, or by the end of the body as CommonMark has it) and HTML
- * comments (`<!-- … -->`, or to the end when never closed): the parts of a
- * body the renderer never turns into links. One pass over the lines, and one
- * `indexOf` per comment, so a body full of openers costs no more than its
- * length.
+ * Fenced code blocks: ``` or ~~~, closed by a fence of the same character at
+ * least as long, or running to the end of the body when never closed (as
+ * CommonMark and the editors' markdown-it have it). One pass over the lines,
+ * so a body full of openers costs no more than its length.
+ *
+ * HTML comments are NOT code: the workbench editor renders Markdown with
+ * HTML off, so a `<!-- … -->` is shown as text and the links in it work. A
+ * link in one is rewritten like any other (it keeps pointing at the
+ * document), and a stray `<!--` can never hide the links after it.
  */
 function blockRanges(source: string): Range[] {
     const ranges: Range[] = [];
@@ -139,17 +142,6 @@ function blockRanges(source: string): Range[] {
         offset = newline + 1;
     }
     if (fence) ranges.push([fence.start, source.length]);
-
-    let from = 0;
-    for (;;) {
-        const open = source.indexOf('<!--', from);
-        if (open === -1) break;
-        const close = source.indexOf('-->', open + 4);
-        const end = close === -1 ? source.length : close + 3;
-        ranges.push([open, end]);
-        if (close === -1) break;
-        from = end;
-    }
     return ranges;
 }
 
@@ -183,9 +175,9 @@ function inRanges(ranges: readonly Range[], index: number): boolean {
 }
 
 /**
- * Every part of `source` whose links are sample syntax or hidden, never
- * rewritten: fenced code blocks, HTML comments, and inline code spans
- * outside them. Disjoint and sorted, for {@link inRanges}.
+ * Every part of `source` whose links are sample syntax, never rewritten:
+ * fenced code blocks, and inline code spans outside them. Disjoint and
+ * sorted, for {@link inRanges}.
  */
 function codeRanges(source: string): Range[] {
     const blocks = mergeRanges(blockRanges(source));
@@ -226,9 +218,10 @@ const URL_PATH_END = String.raw`(?=$|[)\s#?"'<>\]|]|[.,;:!](?:$|[)\s"'<>\]|]))`;
  *
  * Left as they were, as the renderer leaves them: a link to a longer path
  * (`oldPath.bak`, `oldPath/x`), and anything inside a fenced code block
- * (``` or ~~~), an inline code span or an HTML comment. An indented code
- * block is NOT recognised (telling one from a list item's continuation needs
- * the whole Markdown parse); the editors write fences. `@kb:` mentions and
+ * (``` or ~~~, also one never closed) or an inline code span. An indented
+ * code block is NOT recognised (telling one from a list item's continuation
+ * needs the whole Markdown parse); the editors write fences. A link inside
+ * an HTML comment IS rewritten (see {@link blockRanges}). `@kb:` mentions and
  * `kb:` citations are not links a body carries (they are chat and
  * agent-output formats) and are not touched.
  *
@@ -305,32 +298,4 @@ export function kbPathParents(path: string): string[] {
         parents.push(segments.slice(0, i).join('/'));
     }
     return parents;
-}
-
-/**
- * Whether `error` is the database refusing a duplicate key (Postgres
- * `23505`, SQLite `SQLITE_CONSTRAINT_UNIQUE`, MySQL `ER_DUP_ENTRY`).
- */
-export function isKbUniqueViolation(error: unknown): boolean {
-    const carried = (error ?? {}) as {
-        code?: unknown;
-        message?: unknown;
-        driverError?: { code?: unknown; message?: unknown };
-    };
-    const text = [
-        carried.code,
-        carried.message,
-        carried.driverError?.code,
-        carried.driverError?.message,
-    ]
-        .filter((part) => typeof part === 'string')
-        .join(' ')
-        .toLowerCase();
-    return (
-        text.includes('23505') ||
-        text.includes('duplicate key') ||
-        text.includes('unique constraint') ||
-        text.includes('sqlite_constraint_unique') ||
-        text.includes('er_dup_entry')
-    );
 }
