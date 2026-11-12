@@ -238,6 +238,57 @@ describe('Knowledge Base recording points', () => {
         });
     });
 
+    it('a move records kb.document.moved (path, slug) and kb.document.updated for each document whose links followed', async () => {
+        const doc = await createWorkDoc();
+        const guide = await kb.createDocument({
+            workId: WORK,
+            userId: OWNER,
+            path: 'style/guide.md',
+            title: 'Guide',
+            class: KbDocumentClass.STYLE,
+            body: 'Write like [[brand/voice.md]].',
+        });
+        activity.length = 0;
+
+        const moved = await kb.moveDocument(WORK, doc.id, OWNER, { path: 'brand/tone.md' });
+
+        expect(moved).toMatchObject({ id: doc.id, path: 'brand/tone.md', slug: 'tone' });
+        const rows = dataSource.getRepository(WorkKnowledgeDocument);
+        expect(await rows.findOneByOrFail({ id: doc.id })).toMatchObject({
+            path: 'brand/tone.md',
+            slug: 'tone',
+            revision: 2,
+        });
+        const linked = await rows.findOneByOrFail({ id: guide.id });
+        expect((linked.metadata as { body: string }).body).toBe('Write like [[brand/tone.md]].');
+        expect(linked.revision).toBe(2);
+        // The path resolves the moved document; the old one nothing.
+        expect((await kb.getDocument(WORK, 'brand/tone.md', OWNER)).id).toBe(doc.id);
+        await expect(kb.getDocument(WORK, 'brand/voice.md', OWNER)).rejects.toThrow();
+
+        const recorded = (await events()).slice(2);
+        expect(recorded).toHaveLength(2);
+        expect(recorded[0]).toMatchObject({
+            type: 'kb.document.moved',
+            aggregateId: doc.id,
+            aggregateVersion: 2,
+            changedFields: ['path', 'slug'],
+            previous: { path: 'brand/voice.md', slug: 'voice' },
+        });
+        expect(recorded[0].data).toMatchObject({ path: 'brand/tone.md', revision: 2 });
+        expect(recorded[1]).toMatchObject({
+            type: 'kb.document.updated',
+            aggregateId: guide.id,
+            changedFields: ['body'],
+        });
+        expect(recorded[1].data).toMatchObject({ body: 'Write like [[brand/tone.md]].' });
+        for (const event of recorded) expectValid(event);
+        expect(activity.map((row) => row.actionType)).toEqual([
+            ActivityActionType.KB_DOCUMENT_UPDATED,
+            ActivityActionType.KB_WIKILINK_REWRITTEN,
+        ]);
+    });
+
     it('accept, archive and restore record review_changed, archived and unarchived', async () => {
         const doc = await kb.createDocument({
             workId: WORK,

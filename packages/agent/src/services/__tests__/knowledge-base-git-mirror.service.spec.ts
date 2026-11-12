@@ -102,6 +102,7 @@ describe('KnowledgeBaseGitMirrorService', () => {
             findById: jest.fn().mockResolvedValue(buildDoc()),
             list: jest.fn().mockResolvedValue({ items: [buildDoc()], total: 1 }),
             update: jest.fn().mockResolvedValue(buildDoc()),
+            pathExists: jest.fn().mockResolvedValue(false),
         };
 
         service = new KnowledgeBaseGitMirrorService(gitFacade, workRepository, documentRepository);
@@ -249,6 +250,131 @@ describe('KnowledgeBaseGitMirrorService', () => {
             // The Git side must not have been touched — no clone, no commit.
             expect(gitFacade.commit).not.toHaveBeenCalled();
             expect(gitFacade.push).not.toHaveBeenCalled();
+        });
+    });
+
+    /**
+     * A moved document (`KnowledgeBaseService.moveDocument`) carries the
+     * paths it left in `metadata.mirrorRetiredPaths`. Its mirror run moves
+     * the file: the old pair goes and the new pair arrives in ONE commit, so
+     * the repository never holds the document twice.
+     */
+    describe('materializeDocument after a move', () => {
+        const kb = (rel: string) => path.join(tempDir, '.content/kb', rel);
+        const exists = (rel: string) =>
+            fs.access(kb(rel)).then(
+                () => true,
+                () => false,
+            );
+
+        async function seedOldFiles(rel = 'brand/voice') {
+            await fs.mkdir(path.dirname(kb(rel)), { recursive: true });
+            await fs.writeFile(kb(`${rel}.md`), '# Brand voice (old)', 'utf-8');
+            await fs.writeFile(kb(`${rel}.yml`), 'id: old\n', 'utf-8');
+        }
+
+        function movedDoc(retired: unknown) {
+            return buildDoc({
+                path: 'brand/tone.md',
+                slug: 'tone',
+                metadata: { body: '# Brand voice', mirrorRetiredPaths: retired },
+            });
+        }
+
+        it('removes the old pair and writes the new one in a single commit + push', async () => {
+            await seedOldFiles();
+            documentRepository.findById.mockResolvedValueOnce(movedDoc(['brand/voice.md']));
+
+            await service.materializeDocument(WORK_ID, DOC_ID);
+
+            expect(await exists('brand/voice.md')).toBe(false);
+            expect(await exists('brand/voice.yml')).toBe(false);
+            expect(await fs.readFile(kb('brand/tone.md'), 'utf-8')).toBe('# Brand voice');
+            expect(yaml.parse(await fs.readFile(kb('brand/tone.yml'), 'utf-8')).slug).toBe('tone');
+
+            expect(gitFacade.commit).toHaveBeenCalledTimes(1);
+            expect(gitFacade.commit).toHaveBeenCalledWith(
+                'github',
+                tempDir,
+                '[kb] move brand/voice.md -> brand/tone.md',
+                expect.any(Object),
+            );
+            expect(gitFacade.push).toHaveBeenCalledTimes(1);
+            expect(documentRepository.update).toHaveBeenCalledWith(DOC_ID, {
+                lastCommitSha: COMMIT_SHA,
+            });
+        });
+
+        it('leaves the old path alone when another document of the Work holds it now', async () => {
+            await seedOldFiles();
+            documentRepository.findById.mockResolvedValueOnce(movedDoc(['brand/voice.md']));
+            documentRepository.pathExists.mockResolvedValueOnce(true);
+
+            await service.materializeDocument(WORK_ID, DOC_ID);
+
+            expect(documentRepository.pathExists).toHaveBeenCalledWith(
+                WORK_ID,
+                'brand/voice.md',
+                DOC_ID,
+            );
+            expect(await exists('brand/voice.md')).toBe(true);
+            expect(await exists('brand/tone.md')).toBe(true);
+            expect(gitFacade.commit).toHaveBeenCalledWith(
+                'github',
+                tempDir,
+                '[kb] upsert brand/tone',
+                expect.any(Object),
+            );
+        });
+
+        it('is a plain upsert once the old files are gone (a rerun, or a later edit)', async () => {
+            documentRepository.findById.mockResolvedValueOnce(movedDoc(['brand/voice.md']));
+
+            await service.materializeDocument(WORK_ID, DOC_ID);
+
+            expect(gitFacade.commit).toHaveBeenCalledWith(
+                'github',
+                tempDir,
+                '[kb] upsert brand/tone',
+                expect.any(Object),
+            );
+            // No file to remove: the database is not even asked.
+            expect(documentRepository.pathExists).not.toHaveBeenCalled();
+        });
+
+        it('a later edit still removes files a lost move run left behind', async () => {
+            // The move's own run never happened (queue outage); the document
+            // was edited since. Its next run carries the marker all the same.
+            await seedOldFiles();
+            documentRepository.findById.mockResolvedValueOnce(
+                buildDoc({
+                    path: 'brand/tone.md',
+                    slug: 'tone',
+                    title: 'Tone (edited)',
+                    metadata: { body: '# Edited', mirrorRetiredPaths: ['brand/voice.md'] },
+                }),
+            );
+
+            await service.materializeDocument(WORK_ID, DOC_ID);
+
+            expect(await exists('brand/voice.md')).toBe(false);
+            expect(await fs.readFile(kb('brand/tone.md'), 'utf-8')).toBe('# Edited');
+        });
+
+        it('skips a retired entry that is not a valid KB path instead of failing every mirror run', async () => {
+            await seedOldFiles();
+            await fs.mkdir(path.join(tempDir, '.git'), { recursive: true });
+            await fs.writeFile(path.join(tempDir, '.git/config'), '[core]\n', 'utf-8');
+            documentRepository.findById.mockResolvedValueOnce(
+                movedDoc(['../../.git/config', 42, 'brand/tone.md', 'brand/voice.md']),
+            );
+
+            await expect(service.materializeDocument(WORK_ID, DOC_ID)).resolves.toBeUndefined();
+
+            expect(await exists('brand/voice.md')).toBe(false);
+            // Its own current path is never removed, nor anything outside .content/kb/.
+            expect(await exists('brand/tone.md')).toBe(true);
+            await expect(fs.access(path.join(tempDir, '.git/config'))).resolves.toBeUndefined();
         });
     });
 

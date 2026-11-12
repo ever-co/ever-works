@@ -52,6 +52,7 @@ import {
 import { AuthenticatedUser } from '@src/auth/types/auth.types';
 import { KB_DOCUMENT_STATUSES } from '@ever-works/contracts';
 import { DuplicateKbDocumentDto } from './dto/duplicate-kb-document.dto';
+import { MoveKbDocumentDto } from './dto/move-kb-document.dto';
 import type {
     KbDecisionStatus,
     KbDocumentClass,
@@ -415,6 +416,48 @@ export class KbController {
             class: patch.class as KbDocumentClass | undefined,
             ...(reenterReview ? { reviewState: 'proposed' as KbReviewState } : {}),
         });
+    }
+
+    /**
+     * Rename or move a KB document — the KB tree's "Rename". The document
+     * keeps its id; its path (and slug) change, its git-mirrored file moves
+     * in one commit, and the links other documents of the Work carry to the
+     * old path are rewritten (`KnowledgeBaseService.moveDocument`).
+     *
+     * 400 `KbPathInvalid`, 403 when the document is fully locked (or the
+     * caller cannot edit the Work), 409 `KbPathTaken` /
+     * `KbLinkedFromLockedDocument` / `KbOrgDocumentPath`.
+     */
+    @Post('works/:id/kb/documents/:docId/move')
+    @HttpCode(HttpStatus.OK)
+    @ApiOperation({ summary: 'Rename or move a KB document to another path' })
+    @ApiResponse({ status: 200, description: 'The moved KB document' })
+    @ApiResponse({ status: 400, description: 'The path is not a valid KB document path' })
+    @ApiResponse({ status: 403, description: 'The document is fully locked' })
+    @ApiResponse({
+        status: 409,
+        description:
+            'The path is taken, a fully locked document links to this one, or the move would start or stop overriding an organization document',
+    })
+    async moveDocument(
+        @CurrentUser() auth: AuthenticatedUser,
+        @Param('id', new ParseUUIDPipe()) workId: string,
+        @Param('docId', new ParseUUIDPipe()) docId: string,
+        @Body() body: MoveKbDocumentDto,
+        // Appended LAST so positional callers (specs) keep their meaning.
+        @Req() req?: MachinePrincipalRequest,
+    ) {
+        // Works-security (run-token scope) — a move rewrites the links in
+        // OTHER documents of the Work and changes the path every citation and
+        // mention uses: not something a fleet run or an integration key does
+        // on its own. Content edits stay open to them through PATCH.
+        refuseMachinePrincipalAction(
+            auth,
+            req,
+            'move a Knowledge Base document',
+            'a move rewrites the links other documents carry; a person renames documents in the app.',
+        );
+        return this.kb.moveDocument(workId, docId, auth.userId, { path: body.path });
     }
 
     @Delete('works/:id/kb/documents/:docId')

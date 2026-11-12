@@ -18,7 +18,7 @@ jest.mock('../auth', () => ({
 }));
 
 import 'reflect-metadata';
-import { ForbiddenException, HttpStatus, RequestMethod } from '@nestjs/common';
+import { ConflictException, ForbiddenException, HttpStatus, RequestMethod } from '@nestjs/common';
 import { HTTP_CODE_METADATA, METHOD_METADATA, PATH_METADATA } from '@nestjs/common/constants';
 import type { KnowledgeBaseService } from '@ever-works/agent/services';
 import type { AuthenticatedUser } from '@src/auth/types/auth.types';
@@ -471,6 +471,82 @@ describe('KbController — duplicate (the KB tree menu called a route that did n
         expect(input.reviewState).toBeUndefined();
         expect(input.source).toBeUndefined();
         expect(input.status).toBe('active');
+    });
+});
+
+/**
+ * The KB tree's "Rename" PATCHed `{ path }`, which `UpdateKbDocumentDto`
+ * refuses (400), so it was switched off (#3167). A path change is its own
+ * route: it also moves the mirrored file and the links other documents carry.
+ */
+describe('KbController — move (rename) a document', () => {
+    const session = { userId: 'u-1', authMethod: 'session' } as AuthenticatedUser;
+    const personalKey = { userId: 'u-1', authMethod: 'api-key' } as AuthenticatedUser;
+    const integration = {
+        userId: 'u-1',
+        authMethod: 'integration',
+        integration: { keyId: 'k-1', actAsUserId: null },
+    } as unknown as AuthenticatedUser;
+    const runToken = {
+        fleetRunCredential: { jobId: 'job-1', runId: 'run-9', organizationId: null },
+    };
+    let kb: Record<string, jest.Mock>;
+    let controller: KbController;
+
+    beforeEach(() => {
+        kb = {
+            moveDocument: jest.fn().mockResolvedValue({ id: DOC_ID, path: 'brand/tone.md' }),
+            updateDocument: jest.fn(),
+        };
+        controller = new KbController(kb as unknown as KnowledgeBaseService);
+    });
+
+    it('is a POST on works/:id/kb/documents/:docId/move answering 200', () => {
+        const handler = KbController.prototype.moveDocument;
+        expect(Reflect.getMetadata(PATH_METADATA, handler)).toBe(
+            'works/:id/kb/documents/:docId/move',
+        );
+        expect(Reflect.getMetadata(METHOD_METADATA, handler)).toBe(RequestMethod.POST);
+        expect(Reflect.getMetadata(HTTP_CODE_METADATA, handler)).toBe(HttpStatus.OK);
+    });
+
+    it('moves through the service with the path alone, never through PATCH', async () => {
+        const result = await controller.moveDocument(
+            session,
+            WORK_ID,
+            DOC_ID,
+            { path: 'brand/tone.md' },
+            {},
+        );
+        expect(kb.moveDocument).toHaveBeenCalledWith(WORK_ID, DOC_ID, 'u-1', {
+            path: 'brand/tone.md',
+        });
+        expect(kb.updateDocument).not.toHaveBeenCalled();
+        expect(result).toEqual({ id: DOC_ID, path: 'brand/tone.md' });
+    });
+
+    it('a person with a personal key may move a document', async () => {
+        await controller.moveDocument(personalKey, WORK_ID, DOC_ID, { path: 'brand/tone.md' }, {});
+        expect(kb.moveDocument).toHaveBeenCalledTimes(1);
+    });
+
+    it('refuses a fleet run and an integration key: a move rewrites other documents’ links', async () => {
+        await expect(
+            controller.moveDocument(personalKey, WORK_ID, DOC_ID, { path: 'brand/x.md' }, runToken),
+        ).rejects.toBeInstanceOf(ForbiddenException);
+        await expect(
+            controller.moveDocument(integration, WORK_ID, DOC_ID, { path: 'brand/x.md' }),
+        ).rejects.toMatchObject({ status: 422 });
+        expect(kb.moveDocument).not.toHaveBeenCalled();
+    });
+
+    it('lets the service’s refusals through (409 path taken)', async () => {
+        kb.moveDocument.mockRejectedValue(
+            new ConflictException({ code: 'KbPathTaken', message: 'taken' }),
+        );
+        await expect(
+            controller.moveDocument(session, WORK_ID, DOC_ID, { path: 'brand/x.md' }, {}),
+        ).rejects.toBeInstanceOf(ConflictException);
     });
 });
 
