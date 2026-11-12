@@ -1060,17 +1060,20 @@ describe('Recurring Tasks overlap limit (real SQLite)', () => {
         });
 
         /**
-         * The race the claim exists for: a backlogged template (two slots already due) and two
-         * dispatchers. A reads, counts 0 and claims slot 1, then stalls before inserting; B reads
-         * the template at slot 2 meanwhile. With the SHARED claim, B is refused and leaves slot
-         * 2 due; with separate per-process claims (no shared lock) B counts 0 too and both spawn,
+         * The race the claim exists for. A reads the template, counts 0, claims the due slot and
+         * stalls before inserting its instance. Missed slots coalesce (#3166), so A's claim moves
+         * `nextOccurrenceAt` to the first slot after A's `now`; B ticks once THAT slot is due too
+         * (A's stall spans a slot boundary: a fast cadence, a slow insert, replicas whose clocks
+         * differ) and reads the template A just advanced. With the SHARED claim, B is refused
+         * (`busy`) and leaves that slot due; with separate per-process claims (no shared lock) B
+         * counts 0 too, because A's instance is not there yet, claims the slot and both spawn,
          * which is what an unguarded count would do.
+         *
+         * Deterministic: A is parked on a promise, never a timer, and B's `now` is derived from
+         * the slot A's claim wrote, so neither the wall clock nor a slow runner moves it.
          */
         async function race(shared: boolean): Promise<number> {
-            const parent = await template({
-                nextOccurrenceAt: new Date(NOW.getTime() - 2 * DAY),
-                recurrenceCron: '0 0 * * *',
-            });
+            const parent = await template();
             let releaseA!: () => void;
             const aMayInsert = new Promise<void>((resolve) => (releaseA = resolve));
             let aIsInserting!: () => void;
@@ -1086,14 +1089,30 @@ describe('Recurring Tasks overlap limit (real SQLite)', () => {
             const b = dispatcher({ fireLock: shared ? lock : undefined });
             const aDone = a.service.dispatchDue(50, NOW);
             await aReachedInsert;
-            const bSummary = await b.service.dispatchDue(50, NOW);
+
+            // A holds its claim and has advanced the template past its own `now`, uninserted.
+            const advanced = (await reload(parent)).nextOccurrenceAt!;
+            expect(advanced.getTime()).toBeGreaterThan(NOW.getTime());
+            expect(await instancesOf(parent)).toHaveLength(0);
+            const bSummary = await b.service.dispatchDue(50, new Date(advanced.getTime() + 60_000));
+
             releaseA();
             const aSummary = await aDone;
             expect(aSummary.spawned).toBe(1);
+            // B saw the slot A moved the template to: the race really happened.
+            expect(bSummary.dueCount).toBe(1);
             if (shared) {
                 expect(bSummary.entries[0]).toEqual(
-                    expect.objectContaining({ outcome: 'skipped', skipReason: 'busy' }),
+                    expect.objectContaining({
+                        outcome: 'skipped',
+                        skipReason: 'busy',
+                        scheduledFor: advanced.toISOString(),
+                    }),
                 );
+                // Refused, B claimed nothing: that slot is still due for the next tick.
+                expect((await reload(parent)).nextOccurrenceAt).toEqual(advanced);
+            } else {
+                expect(bSummary.spawned).toBe(1);
             }
             return (await instancesOf(parent)).length;
         }
