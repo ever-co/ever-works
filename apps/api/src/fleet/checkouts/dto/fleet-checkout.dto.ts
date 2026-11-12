@@ -167,19 +167,25 @@ export class CreateFleetCheckoutDto {
 
     @ApiProperty({
         required: false,
+        nullable: true,
         description:
-            'A worktree: proposed (and made unique) when absent. A clone: stays on `baseRef`, else the repository’s default branch, when absent.',
+            'A worktree: proposed (and made unique) when absent. A clone: stays on `baseRef`, else the repository’s default branch, when absent. null is the same as absent.',
     })
     @IsOptional()
     @IsString()
     @MaxLength(FLEET_CHECKOUT_REF_MAX_LENGTH)
-    branch?: string;
+    branch?: string | null;
 
-    @ApiProperty({ required: false })
+    @ApiProperty({
+        required: false,
+        nullable: true,
+        description:
+            'What a new branch starts from (a worktree: the parent’s branch when absent). A clone with no `branch` stays on it, so it must be a branch, not a tag; absent, the repository’s default branch. null is the same as absent.',
+    })
     @IsOptional()
     @IsString()
     @MaxLength(FLEET_CHECKOUT_REF_MAX_LENGTH)
-    baseRef?: string;
+    baseRef?: string | null;
 
     @ApiProperty({ required: false, enum: FLEET_CHECKOUT_ISOLATIONS })
     @IsOptional()

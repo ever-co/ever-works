@@ -764,11 +764,14 @@ export interface FleetCheckoutCreateRequest {
 	/**
 	 * The branch to check out. A worktree's new branch is proposed by the branch rule when absent
 	 * (FR-18, FR-19); a clone without one stays on what it cloned — `baseRef`, else the repository's
-	 * default branch.
+	 * default branch. null is the same as absent.
 	 */
-	branch?: string;
-	/** What a new branch starts from; the parent's branch (worktree) or the remote default (clone) when absent. */
-	baseRef?: string;
+	branch?: string | null;
+	/**
+	 * What a new branch starts from, and the branch a clone with no `branch` stays on; the parent's branch
+	 * (worktree) or the remote default (clone) when absent. null is the same as absent.
+	 */
+	baseRef?: string | null;
 	isolation?: FleetCheckoutIsolation;
 	/**
 	 * P3 (spec FR-32): folders of the parent checkout, ignored by git, that are
