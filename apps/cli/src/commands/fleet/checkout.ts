@@ -139,7 +139,10 @@ const create = new Command('create')
         '--branch <name>',
         'Branch name (a worktree: proposed and made unique when absent; a clone: the default branch when absent)',
     )
-    .option('--base <ref>', 'What a new branch starts from')
+    .option(
+        '--base <ref>',
+        'What a new branch starts from; a clone with no --branch stays on it (a branch, not a tag)',
+    )
     .option('--json', 'Machine-readable output')
     .action(
         async (options: {

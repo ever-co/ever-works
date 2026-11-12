@@ -151,7 +151,11 @@ export function buildFleetCheckoutTools(args: {
                         description:
                             'Branch name. A worktree: proposed (and made unique) when absent. A clone: stays on baseRef, else the repository’s default branch, when absent.',
                     },
-                    baseRef: { type: 'string', description: 'What a new branch starts from.' },
+                    baseRef: {
+                        type: 'string',
+                        description:
+                            'What a new branch starts from. A clone with no branch stays on it, so it must be a branch, not a tag.',
+                    },
                     isolation: {
                         type: 'string',
                         description:
