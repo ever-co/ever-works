@@ -66,7 +66,9 @@ function normalizeWorksPage(
     return {
         limit:
             wholeLimit < 1 ? WORKS_LIST_DEFAULT_LIMIT : Math.min(wholeLimit, WORKS_LIST_MAX_LIMIT),
-        offset: Math.max(wholeOffset, 0),
+        // Upper bound: an offset past the bigint range (1e19, 1e21) is written
+        // into the SQL as text and fails in the database.
+        offset: Math.min(Math.max(wholeOffset, 0), Number.MAX_SAFE_INTEGER),
     };
 }
 

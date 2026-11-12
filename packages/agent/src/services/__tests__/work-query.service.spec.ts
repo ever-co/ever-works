@@ -367,6 +367,8 @@ describe('WorkQueryService', () => {
             [Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY, 20, 0],
             [2.7, 3.9, 2, 3],
             [999_999_999, 40, 1000, 40],
+            [20, 1e21, 20, Number.MAX_SAFE_INTEGER],
+            [20, 1e19, 20, Number.MAX_SAFE_INTEGER],
         ])('limit %p / offset %p -> %p / %p', async (limit, offset, wantLimit, wantOffset) => {
             expect(await pageFor(limit, offset)).toEqual({
                 limit: wantLimit,
