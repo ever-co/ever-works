@@ -69,6 +69,8 @@ import {
     RUN_PULL_REQUEST_TITLE_MAX_LENGTH,
     summarizeRunChangeInOneLine,
     describeFleetPushCredentialRefusal,
+    FLEET_PUSH_CREDENTIAL_UNRESOLVED_REASON,
+    sanitizeFleetPushIdentityText,
     fleetAgentExecutionProviderSupportsMountGrants,
     fleetAgentExecutionProviderSupportsSessionResume,
     isFleetAgentExecutionEffort,
@@ -847,9 +849,17 @@ export class FleetAgentTaskPlannerService implements FleetAgentTaskPlanner {
                     `Task ${task.slug ?? task.id} would push to ${pushTargets
                         .map((target) => target.repositoryId)
                         .join(', ')}, but ` +
-                        `${describeFleetPushCredentialRefusal(scope.reason)}. A fleet node never pushes with the ` +
-                        `machine's own Git credential helper, so this run is refused now rather than after the ` +
-                        `model has already done the work.`,
+                        `${describeFleetPushCredentialRefusal(scope.reason)}.` +
+                        describeMountedPushTargets({
+                            reason: scope.reason,
+                            primaryRepositoryId: workspace.repositoryId,
+                            mounts: writableMounts,
+                            agent,
+                            taskListsExtraRepos:
+                                Array.isArray(task.extraRepos) && task.extraRepos.length > 0,
+                        }) +
+                        ` A fleet node never pushes with the machine's own Git credential helper, so this run ` +
+                        `is refused now rather than after the model has already done the work.`,
                 );
             }
         }
@@ -2492,6 +2502,60 @@ export function resolveMcpBridge(
         serverName: FLEET_RUN_MCP_SERVER_NAME,
         toolFamilies: [...FLEET_RUN_MCP_TOOL_FAMILIES],
     };
+}
+
+/**
+ * Where the repositories of a refused push scope that are NOT the Task's
+ * Work repository come from, and what an operator does about them.
+ *
+ * Every writable mount is a push target, and a mount is either one of the
+ * run Agent's attached repositories (`TaskWorkspaceService.resolveFleetMounts`)
+ * or one of the Task's own extra repositories. An Agent's attachments are not
+ * scoped to a Work: they are mounted, writable, in EVERY Task the Agent runs.
+ * One shared tenant-scope Agent therefore carries one attachment into the
+ * Tasks of every Work it serves, and when that repository sits under another
+ * GitHub App installation than the Work's repository — another GitHub owner,
+ * typically — no single installation covers the run and every one of those
+ * Tasks is refused here (T-2314, 2026-11-11: `ever-works/directory-web-template`
+ * attached to the shared docs Agent refused the `ever-co/ever-gauzy-docs` Task).
+ * The bare refusal named the repository but not why the run writes to it,
+ * which reads as the platform inventing a repository.
+ *
+ * Only for `push-scope-unresolved` with at least one writable mount: with no
+ * GitHub App configured the mounts are not the problem, and with no mount the
+ * Task's own repository is the only target. When the Task lists no extra
+ * repositories every mount IS an Agent attachment, so the sentence says so;
+ * otherwise it names both places a mount can come from. The Agent's NAME is
+ * owner-chosen and this text lands on the run row, so it goes through the same
+ * sanitizer as a commit identity (control characters and our delimiters out).
+ */
+export function describeMountedPushTargets(input: {
+    reason: string | null;
+    primaryRepositoryId: string;
+    mounts: readonly { readonly repositoryId: string }[];
+    agent: Pick<Agent, 'id' | 'name'>;
+    taskListsExtraRepos: boolean;
+}): string {
+    if (input.reason !== FLEET_PUSH_CREDENTIAL_UNRESOLVED_REASON) return '';
+    const names = input.mounts.map((mount) => mount.repositoryId);
+    if (names.length === 0) return '';
+    const plural = names.length > 1;
+    const agentName = sanitizeFleetPushIdentityText(input.agent.name, 64);
+    const agentLabel = agentName
+        ? `Agent "${agentName}" (${input.agent.id})`
+        : `Agent ${input.agent.id}`;
+    const origin = input.taskListsExtraRepos
+        ? `${plural ? 'they are' : 'it is'} attached to ${agentLabel} or listed in this Task's extra repositories`
+        : `${plural ? 'they are' : 'it is'} attached to ${agentLabel}`;
+    const remedy = input.taskListsExtraRepos
+        ? "detach the ones this Task must not write to from the Agent's repositories, or remove them from the Task's extra repositories"
+        : "detach the ones this Task must not write to from the Agent's repositories";
+    return (
+        ` ${names.join(', ')} ${plural ? 'are' : 'is'} not this Task's Work repository (${input.primaryRepositoryId}): ` +
+        `${origin}, and an Agent's attached repositories are mounted, writable, in every Task it runs, whatever ` +
+        `the Task's Work. One push credential comes from ONE GitHub App installation, so the Work's repository and ` +
+        `every writable mount must be covered by the same installation — ${remedy}.`
+    );
 }
 
 /**

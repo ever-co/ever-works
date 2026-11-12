@@ -722,6 +722,15 @@ directory is excluded from the primary repository's Git, so nothing about the la
 A repository the platform cannot describe (a URL that is not `owner/repository`, a default branch it
 cannot read) fails the plan naming the attachment rather than silently running without it.
 
+An Agent's attachments are **not scoped to a Work**: they are mounted, writable, in every Task the
+Agent runs, whatever the Task's Work. A shared (tenant- or organization-scope) Agent that serves several
+Works therefore carries each of its attachments into all of them. And because the push credential below
+is minted from **one** GitHub App installation, every writable mount must sit under the same installation
+as the Task's own repository — attach a repository from another GitHub owner to a shared Agent and every
+fleet Task that Agent runs is refused at dispatch (`push-scope-unresolved`). The refusal names each
+repository that is not the Task's Work repository and the Agent it is attached to; detach it from that
+Agent (or give the Task a different Agent) if those Tasks should not write to it.
+
 ### Giving a repository its environment
 
 Most real work needs configuration the repository does not carry: a database URL for the API suite, a
