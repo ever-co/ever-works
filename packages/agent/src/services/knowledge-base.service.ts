@@ -235,7 +235,17 @@ interface ListOptions {
      */
     searchBody?: boolean;
     status?: KbDocumentStatus;
+    /**
+     * Multi-value status filter (the command palette's Status chips): a
+     * document matches ANY of them. With `status` as well, both apply.
+     */
+    statuses?: KbDocumentStatus[];
     tag?: string;
+    /**
+     * Multi-value tag filter (the command palette's Tag input): a document
+     * must carry ALL of them. With `tag` as well, every one is required.
+     */
+    tags?: string[];
     locked?: boolean;
     language?: string;
     /**
@@ -785,6 +795,12 @@ export class KnowledgeBaseService {
 
         const trimmedQ = opts.q?.trim() ?? '';
 
+        // `status` and `statuses` both given with nothing in common: no
+        // document can match (an empty `IN` list would mean "no filter").
+        const statusFilter = mergeStatusFilters(opts);
+        if (statusFilter?.length === 0) return { items: [], total: 0 };
+        const tagFilter = mergeTagFilters(opts);
+
         // No query → pure list (existing behavior). The KB tree panel
         // (row 14), the inheritable-docs API, and any non-search caller
         // hits this branch unchanged.
@@ -792,9 +808,10 @@ export class KnowledgeBaseService {
             const { items, total } = await this.documentRepository.list({
                 workId,
                 classes: mergeClassFilters(opts),
-                statuses: opts.status ? [opts.status] : undefined,
+                statuses: statusFilter,
                 sources: opts.sources,
                 tag: opts.tag,
+                tags: opts.tags,
                 locked: opts.locked,
                 language: opts.language,
                 reviewState: opts.reviewState,
@@ -817,9 +834,10 @@ export class KnowledgeBaseService {
             this.documentRepository.list({
                 workId,
                 classes: mergeClassFilters(opts),
-                statuses: opts.status ? [opts.status] : undefined,
+                statuses: statusFilter,
                 sources: opts.sources,
                 tag: opts.tag,
+                tags: opts.tags,
                 locked: opts.locked,
                 language: opts.language,
                 reviewState: opts.reviewState,
@@ -898,8 +916,14 @@ export class KnowledgeBaseService {
             // The Status / Tag / Locked / Language chips leaked the same way:
             // a draft or archived document, or one without the tag, came back
             // through the semantic leg whenever the Work had embeddings.
-            if (opts.status && d.status !== opts.status) return false;
-            if (opts.tag && !(Array.isArray(d.tags) && d.tags.includes(opts.tag))) return false;
+            // Several statuses: any of them; several tags: all of them.
+            if (statusFilter && !statusFilter.includes(d.status)) return false;
+            if (
+                tagFilter &&
+                !tagFilter.every((tag) => Array.isArray(d.tags) && d.tags.includes(tag))
+            ) {
+                return false;
+            }
             if (opts.locked !== undefined && Boolean(d.locked) !== opts.locked) return false;
             if (opts.language && d.language !== opts.language) return false;
             return true;
@@ -4616,6 +4640,34 @@ function mergeClassFilters(opts: {
     }
     if (opts.class) return [opts.class];
     return multi;
+}
+
+/**
+ * The status filter of a list call: `undefined` when none was asked for,
+ * else the statuses a document may have (any of them). `status` and
+ * `statuses` together narrow to the statuses in both — an EMPTY array when
+ * they share none, which the caller must read as "nothing matches".
+ */
+function mergeStatusFilters(opts: {
+    status?: KbDocumentStatus;
+    statuses?: KbDocumentStatus[];
+}): KbDocumentStatus[] | undefined {
+    const multi =
+        opts.statuses && opts.statuses.length > 0 ? [...new Set(opts.statuses)] : undefined;
+    if (opts.status && multi) return multi.filter((status) => status === opts.status);
+    if (opts.status) return [opts.status];
+    return multi;
+}
+
+/**
+ * The tags a document must ALL carry: the single `tag` plus every `tags`
+ * entry, de-duplicated; `undefined` when none was asked for.
+ */
+function mergeTagFilters(opts: { tag?: string; tags?: string[] }): string[] | undefined {
+    const all = [
+        ...new Set([opts.tag, ...(opts.tags ?? [])].filter((tag): tag is string => !!tag)),
+    ];
+    return all.length > 0 ? all : undefined;
 }
 
 /** Tag lists compare as sets: reordering tags is not a change. */

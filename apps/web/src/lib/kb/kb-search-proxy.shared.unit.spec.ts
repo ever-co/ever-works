@@ -47,10 +47,30 @@ describe('KB search proxy — what goes upstream', () => {
         expect(upstreamKbSearchParams(request('q=x&language=e')).has('language')).toBe(false);
     });
 
-    it('fetches the maximum when it must filter several statuses or tags itself', () => {
-        const upstream = upstreamKbSearchParams(request('q=x&status=draft&status=active&limit=5'));
+    it('sends several statuses and tags upstream for the API to filter, at the requested limit', () => {
+        const upstream = upstreamKbSearchParams(
+            request('q=x&status=draft&status=active&tag=tone&tag=web,legal&limit=5'),
+        );
+        expect(upstream.getAll('statuses')).toEqual(['draft', 'active']);
+        expect(upstream.getAll('tags')).toEqual(['tone', 'web', 'legal']);
         expect(upstream.has('status')).toBe(false);
-        expect(upstream.get('limit')).toBe(String(KB_SEARCH_MAX_LIMIT));
+        expect(upstream.has('tag')).toBe(false);
+        // It used to fetch KB_SEARCH_MAX_LIMIT and filter that page itself.
+        expect(upstream.get('limit')).toBe('5');
+    });
+
+    it('keeps one status or tag on the original single key', () => {
+        const upstream = upstreamKbSearchParams(request('q=x&status=draft&tag=tone'));
+        expect(upstream.get('status')).toBe('draft');
+        expect(upstream.get('tag')).toBe('tone');
+        expect(upstream.has('statuses')).toBe(false);
+        expect(upstream.has('tags')).toBe(false);
+    });
+
+    it('caps the limit it forwards at the proxy maximum', () => {
+        expect(upstreamKbSearchParams(request('q=x&limit=500')).get('limit')).toBe(
+            String(KB_SEARCH_MAX_LIMIT),
+        );
     });
 });
 
@@ -75,20 +95,20 @@ describe('KB search proxy — what comes back', () => {
         expect(result.items.map((d) => d.id)).toEqual(['d1']);
     });
 
-    it('applies several statuses (any) and several tags (all) itself', () => {
+    it('leaves several statuses and tags to the API: its page and its total, as they come', () => {
+        // The API already filtered; the proxy no longer re-filters one page
+        // and no longer replaces `total` with the size of that page.
         const items = [
             doc({ id: 'a', status: 'draft', tags: ['tone', 'web'] }),
-            doc({ id: 'b', status: 'active', tags: ['tone'] }),
-            doc({ id: 'c', status: 'archived', tags: ['tone', 'web'] }),
+            doc({ id: 'b', status: 'active', tags: ['web', 'tone'] }),
         ];
-        const byStatus = toKbSearchResult(request('q=x&status=draft&status=active'), {
-            items,
-            total: 3,
-        });
-        expect(byStatus.hits.map((h) => h.documentId)).toEqual(['a', 'b']);
-        const byTags = toKbSearchResult(request('q=x&tag=tone&tag=web'), { items, total: 3 });
-        expect(byTags.hits.map((h) => h.documentId)).toEqual(['a', 'c']);
-        expect(byTags.total).toBe(2);
+        const result = toKbSearchResult(
+            request('q=x&status=draft&status=active&tag=tone&tag=web'),
+            { items, total: 73 },
+        );
+        expect(result.hits.map((h) => h.documentId)).toEqual(['a', 'b']);
+        expect(result.items.map((d) => d.id)).toEqual(['a', 'b']);
+        expect(result.total).toBe(73);
     });
 
     it('survives an empty or unreadable upstream answer', () => {

@@ -21,6 +21,7 @@ describe('WorkKnowledgeDocumentRepository.list — tag filter (integration)', ()
     let repository: WorkKnowledgeDocumentRepository;
     let workId: string;
     let otherWorkId: string;
+    let multiWorkId: string;
 
     beforeAll(async () => {
         dataSource = new DataSource({
@@ -56,8 +57,14 @@ describe('WorkKnowledgeDocumentRepository.list — tag filter (integration)', ()
             ).id;
         workId = await makeWork('tag-work');
         otherWorkId = await makeWork('other-tag-work');
+        multiWorkId = await makeWork('multi-filter-work');
 
-        const seed = (path: string, tags: string[] | null, owner: string = workId) =>
+        const seed = (
+            path: string,
+            tags: string[] | null,
+            owner: string = workId,
+            status: KbDocumentStatus = KbDocumentStatus.ACTIVE,
+        ) =>
             kbDocs.save(
                 kbDocs.create({
                     workId: owner,
@@ -65,7 +72,7 @@ describe('WorkKnowledgeDocumentRepository.list — tag filter (integration)', ()
                     slug: path.replace(/\W+/g, '-'),
                     title: path,
                     kbDocumentClass: KbDocumentClass.FREEFORM,
-                    status: KbDocumentStatus.ACTIVE,
+                    status,
                     tags,
                 } as Partial<WorkKnowledgeDocument>),
             );
@@ -80,6 +87,14 @@ describe('WorkKnowledgeDocumentRepository.list — tag filter (integration)', ()
         await seed('quote-inside.md', ['x"b']);
         await seed('upper.md', ['GDPR']);
         await seed('other-work-gdpr.md', ['gdpr'], otherWorkId);
+
+        // The command palette's several Status chips / several tags.
+        await seed('draft-both.md', ['gdpr', 'legal'], multiWorkId, KbDocumentStatus.DRAFT);
+        await seed('active-gdpr.md', ['gdpr'], multiWorkId);
+        await seed('active-both-reversed.md', ['legal', 'gdpr'], multiWorkId);
+        await seed('archived-both.md', ['gdpr', 'legal'], multiWorkId, KbDocumentStatus.ARCHIVED);
+        await seed('active-legal-ish.md', ['legal-eu', 'GDPR'], multiWorkId);
+        await seed('active-untagged.md', null, multiWorkId);
     });
 
     afterAll(async () => {
@@ -125,10 +140,87 @@ describe('WorkKnowledgeDocumentRepository.list — tag filter (integration)', ()
         const items = (await repository.list({ workId: otherWorkId, tag: 'gdpr' })).items;
         expect(items.map((d) => d.path)).toEqual(['other-work-gdpr.md']);
     });
+
+    describe('several statuses (any) and several tags (all)', () => {
+        const multi = async (opts: {
+            statuses?: KbDocumentStatus[];
+            tag?: string;
+            tags?: string[];
+        }) => {
+            const { items, total } = await repository.list({ workId: multiWorkId, ...opts });
+            return { paths: items.map((d) => d.path).sort(), total };
+        };
+
+        it('statuses: a document with ANY of them', async () => {
+            expect(
+                (await multi({ statuses: [KbDocumentStatus.DRAFT, KbDocumentStatus.ARCHIVED] }))
+                    .paths,
+            ).toEqual(['archived-both.md', 'draft-both.md']);
+        });
+
+        it('tags: only the documents carrying ALL of them, in any order (before: every document)', async () => {
+            expect((await multi({ tags: ['gdpr', 'legal'] })).paths).toEqual([
+                'active-both-reversed.md',
+                'archived-both.md',
+                'draft-both.md',
+            ]);
+        });
+
+        it('tags: each one is a whole, case-exact tag, as the single tag is', async () => {
+            // `active-legal-ish.md` holds `legal-eu` and `GDPR`, neither of which is
+            // `legal` or `gdpr`.
+            expect((await multi({ tags: ['legal'] })).paths).toEqual([
+                'active-both-reversed.md',
+                'archived-both.md',
+                'draft-both.md',
+            ]);
+            expect((await multi({ tags: ['GDPR', 'legal-eu'] })).paths).toEqual([
+                'active-legal-ish.md',
+            ]);
+        });
+
+        it('tags: one tag nobody carries empties the result', async () => {
+            expect((await multi({ tags: ['gdpr', 'nope'] })).paths).toEqual([]);
+        });
+
+        it('tags: a repeated tag is the same filter as once', async () => {
+            expect((await multi({ tags: ['gdpr', 'gdpr'] })).paths).toEqual(
+                (await multi({ tags: ['gdpr'] })).paths,
+            );
+        });
+
+        it('tag and tags together: every one is required', async () => {
+            expect((await multi({ tag: 'gdpr', tags: ['legal'] })).paths).toEqual([
+                'active-both-reversed.md',
+                'archived-both.md',
+                'draft-both.md',
+            ]);
+            expect((await multi({ tag: 'gdpr', tags: ['gdpr'] })).paths).toEqual([
+                'active-both-reversed.md',
+                'active-gdpr.md',
+                'archived-both.md',
+                'draft-both.md',
+            ]);
+        });
+
+        it('statuses and tags together, and total counts every match', async () => {
+            const result = await multi({
+                statuses: [KbDocumentStatus.ACTIVE, KbDocumentStatus.DRAFT],
+                tags: ['gdpr', 'legal'],
+            });
+            expect(result.paths).toEqual(['active-both-reversed.md', 'draft-both.md']);
+            expect(result.total).toBe(2);
+        });
+
+        it('empty lists filter nothing', async () => {
+            expect((await multi({ statuses: [], tags: [] })).paths).toHaveLength(6);
+        });
+    });
 });
 
 describe('WorkKnowledgeDocumentRepository.list — tag filter on postgres', () => {
-    it('uses a case-exact strpos at an element start (no LIKE, so no ILIKE-style folding)', async () => {
+    /** Run `list` against a query-builder double and collect every `andWhere`. */
+    const pgClauses = async (opts: { tag?: string; tags?: string[] }) => {
         const clauses: Array<{ clause: string; params?: Record<string, unknown> }> = [];
         const qb: Record<string, jest.Mock> = new Proxy({} as Record<string, jest.Mock>, {
             get(target, prop: string) {
@@ -157,12 +249,38 @@ describe('WorkKnowledgeDocumentRepository.list — tag filter on postgres', () =
 
         await new WorkKnowledgeDocumentRepository(fake).list({
             workId: '44444444-4444-4444-8444-444444444444',
-            tag: 'gdpr',
+            ...opts,
         });
+        return clauses.filter((c) => c.clause.includes('doc.tags'));
+    };
 
+    it('uses a case-exact strpos at an element start (no LIKE, so no ILIKE-style folding)', async () => {
+        const clauses = await pgClauses({ tag: 'gdpr' });
         const tagClause = clauses.find((c) => c.clause.includes(':tagFirst'));
         expect(tagClause?.clause).toContain('strpos(doc.tags, :tagFirst) > 0');
         expect(tagClause?.clause).not.toMatch(/LIKE/i);
         expect(tagClause?.params).toEqual({ tagFirst: '["gdpr"', tagNext: ',"gdpr"' });
+    });
+
+    it('several tags: one ANDed strpos clause per tag, each with its own parameters', async () => {
+        const clauses = await pgClauses({ tags: ['gdpr', 'legal'] });
+        expect(clauses).toEqual([
+            {
+                clause: '(strpos(doc.tags, :tagsFirst0) > 0 OR strpos(doc.tags, :tagsNext0) > 0)',
+                params: { tagsFirst0: '["gdpr"', tagsNext0: ',"gdpr"' },
+            },
+            {
+                clause: '(strpos(doc.tags, :tagsFirst1) > 0 OR strpos(doc.tags, :tagsNext1) > 0)',
+                params: { tagsFirst1: '["legal"', tagsNext1: ',"legal"' },
+            },
+        ]);
+    });
+
+    it('tag and tags: the single tag keeps its clause, a repeat of it adds none', async () => {
+        const clauses = await pgClauses({ tag: 'gdpr', tags: ['gdpr', 'legal'] });
+        expect(clauses.map((c) => c.params)).toEqual([
+            { tagFirst: '["gdpr"', tagNext: ',"gdpr"' },
+            { tagsFirst0: '["legal"', tagsNext0: ',"legal"' },
+        ]);
     });
 });

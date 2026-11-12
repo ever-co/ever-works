@@ -473,3 +473,50 @@ describe('KbController — duplicate (the KB tree menu called a route that did n
         expect(input.status).toBe('active');
     });
 });
+
+/**
+ * `GET works/:id/kb/documents` — the command palette's several Status chips
+ * (any of them) and several tags (all of them) reach the service, next to the
+ * single `status` / `tag` every other caller sends.
+ */
+describe('KbController — list filters', () => {
+    const auth = { userId: 'u-1' } as AuthenticatedUser;
+    let kb: Record<string, jest.Mock>;
+    let controller: KbController;
+
+    beforeEach(() => {
+        kb = { listDocuments: jest.fn().mockResolvedValue({ items: [], total: 0 }) };
+        controller = new KbController(kb as unknown as KnowledgeBaseService);
+    });
+
+    it('passes statuses and tags through to the service', async () => {
+        await controller.listDocuments(auth, WORK_ID, {
+            q: 'voice',
+            statuses: ['draft', 'active'],
+            tags: ['gdpr', 'legal'],
+        } as never);
+        expect(kb.listDocuments).toHaveBeenCalledWith(
+            WORK_ID,
+            'u-1',
+            expect.objectContaining({
+                q: 'voice',
+                statuses: ['draft', 'active'],
+                tags: ['gdpr', 'legal'],
+            }),
+        );
+    });
+
+    it('keeps the single status and tag as they were', async () => {
+        await controller.listDocuments(auth, WORK_ID, { status: 'draft', tag: 'gdpr' } as never);
+        expect(kb.listDocuments).toHaveBeenCalledWith(
+            WORK_ID,
+            'u-1',
+            expect.objectContaining({
+                status: 'draft',
+                statuses: undefined,
+                tag: 'gdpr',
+                tags: undefined,
+            }),
+        );
+    });
+});

@@ -39,6 +39,11 @@ export interface KbDocumentListOptions {
     classes?: KbDocumentClass[];
     statuses?: KbDocumentStatus[];
     tag?: string;
+    /**
+     * Multi-value tag filter: a document must carry ALL of these (each one
+     * matched like `tag`). Applied in addition to the single `tag` above.
+     */
+    tags?: string[];
     locked?: boolean;
     language?: string;
     source?: KbDocumentSource;
@@ -335,14 +340,15 @@ export class WorkKnowledgeDocumentRepository {
         // whose LIKE folds ASCII case; `strpos` on PostgreSQL), like the
         // in-memory re-filter in `KnowledgeBaseService.listDocuments`.
         if (opts.tag) {
-            const tagJson = JSON.stringify(opts.tag);
-            const position =
-                this.repository.manager.connection.options.type === 'postgres' ? 'strpos' : 'instr';
-            qb.andWhere(
-                `(${position}(doc.tags, :tagFirst) > 0 OR ${position}(doc.tags, :tagNext) > 0)`,
-                { tagFirst: `[${tagJson}`, tagNext: `,${tagJson}` },
-            );
+            this.andWhereCarriesTag(qb, opts.tag, 'tagFirst', 'tagNext');
         }
+
+        // Several tags: ALL of them — one such predicate per tag, ANDed, each
+        // with its own parameter names.
+        const allTags = [...new Set(opts.tags ?? [])].filter((tag) => tag && tag !== opts.tag);
+        allTags.forEach((tag, i) => {
+            this.andWhereCarriesTag(qb, tag, `tagsFirst${i}`, `tagsNext${i}`);
+        });
 
         if (opts.source) {
             qb.andWhere('doc.source = :source', { source: opts.source });
@@ -415,6 +421,27 @@ export class WorkKnowledgeDocumentRepository {
         const items = await qb.getMany();
 
         return { items, total };
+    }
+
+    /**
+     * Keep the documents whose `tags` carry `tag`: its exact JSON string right
+     * after `[` or `,` of the `simple-json` text, case-exactly (see `list`).
+     * `firstParam` / `nextParam` name the two bound values, so several calls
+     * on one query never overwrite each other's.
+     */
+    private andWhereCarriesTag(
+        qb: SelectQueryBuilder<WorkKnowledgeDocument>,
+        tag: string,
+        firstParam: string,
+        nextParam: string,
+    ): void {
+        const tagJson = JSON.stringify(tag);
+        const position =
+            this.repository.manager.connection.options.type === 'postgres' ? 'strpos' : 'instr';
+        qb.andWhere(
+            `(${position}(doc.tags, :${firstParam}) > 0 OR ${position}(doc.tags, :${nextParam}) > 0)`,
+            { [firstParam]: `[${tagJson}`, [nextParam]: `,${tagJson}` },
+        );
     }
 
     /**
