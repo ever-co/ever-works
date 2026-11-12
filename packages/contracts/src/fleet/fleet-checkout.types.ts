@@ -761,7 +761,11 @@ export type FleetCheckoutCreateSource =
 export interface FleetCheckoutCreateRequest {
 	nodeId: string;
 	source: FleetCheckoutCreateSource;
-	/** The branch to check out (a worktree's new branch); proposed by the branch rule when absent (FR-18, FR-19). */
+	/**
+	 * The branch to check out. A worktree's new branch is proposed by the branch rule when absent
+	 * (FR-18, FR-19); a clone without one stays on what it cloned — `baseRef`, else the repository's
+	 * default branch.
+	 */
 	branch?: string;
 	/** What a new branch starts from; the parent's branch (worktree) or the remote default (clone) when absent. */
 	baseRef?: string;
@@ -797,7 +801,8 @@ export interface FleetCheckoutsCreateParams {
 	 * public repository, cloned anonymously with every credential source off.
 	 */
 	source: { kind: 'clone'; repoUrl: string; credential?: boolean } | { kind: 'worktree'; parentPath: string };
-	branch: string;
+	/** Always set for a worktree; null for a clone that stays on what it cloned (`baseRef`, else the default branch). */
+	branch: string | null;
 	baseRef: string | null;
 	/** `task` for a checkout a Task run asked for (`--work` suffices); else a person or an Agent (`--manage`). */
 	createdBy: FleetCheckoutCreatedBy;

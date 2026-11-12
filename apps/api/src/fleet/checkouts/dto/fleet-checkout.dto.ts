@@ -165,7 +165,11 @@ export class CreateFleetCheckoutDto {
     @Type(() => FleetCheckoutCreateSourceDto)
     source!: FleetCheckoutCreateSourceDto;
 
-    @ApiProperty({ required: false, description: 'Proposed (and made unique) when absent.' })
+    @ApiProperty({
+        required: false,
+        description:
+            'A worktree: proposed (and made unique) when absent. A clone: stays on `baseRef`, else the repository’s default branch, when absent.',
+    })
     @IsOptional()
     @IsString()
     @MaxLength(FLEET_CHECKOUT_REF_MAX_LENGTH)

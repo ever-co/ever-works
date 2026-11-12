@@ -88,6 +88,13 @@ parentPath }, branch, baseRef, createdBy }` with the platform naming the exact p
 `containerImage` (the deployment default `FLEET_CHECKOUT_CONTAINER_IMAGE`) and `sharedFolders` (worktrees only, linked
 when git ignores them); the bin purge is the daily scheduled task `fleet-checkout-bin-purge` (`23 3 * * *`).
 
+**Revision 28 (2026-11-12)** — FL-14 FR-16 (a clone without a branch): `checkouts.create`'s `branch` is
+`string | null`; null is allowed for a `clone` source only and means the clone stays on what it checked out —
+`baseRef` when given, else the repository's default branch (a worktree still always names one; the platform proposes
+it, FR-18/FR-19). The platform already sent `branch: null` for a branchless clone; a node that predates this refuses
+it `invalid` with `details.field: 'branch'`, which the platform answers with a hint to name a branch or update the
+node.
+
 **Revision 14 (2026-10-21)** — FL-05 P1 (session status): `session.status { sessionId, seq, state, outcome,
 stateChangedAt, lastEvidence, hooks?, boundaryUntil }` and `session.attention { sessionId, seq, attention | null,
 finished? }` on channel 0 (§3.3 "Session status"), applied newer-`seq`-only; `lastEvidence.detail` carries `{ event, seq,

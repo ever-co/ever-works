@@ -157,6 +157,57 @@ describe('checkouts module (FL-14 T-11)', () => {
 		expect(forgotten.removed).toBe(false);
 	});
 
+	it('clones with no branch named onto what it cloned; a worktree still needs one (FL-14 FR-16)', async () => {
+		git = async (args) => {
+			calls.push([...args]);
+			return args[0] === 'clone' ? { code: 0, stdout: '', stderr: '' } : { code: 1, stdout: '', stderr: '' };
+		};
+		const create = build(MANAGE).machineVerbs!['checkouts.create'];
+		const clone = (checkoutId: string, leaf: string, branch: null | undefined) =>
+			context(
+				{
+					checkoutId,
+					path: join(pool, 'checkouts', 'acme-api', leaf),
+					source: { kind: 'clone', repoUrl: 'https://github.com/acme/api.git', credential: false },
+					...(branch === null ? { branch: null } : {}),
+					baseRef: null,
+					createdBy: 'user'
+				},
+				MANAGE,
+				'checkouts.create'
+			);
+		for (const [checkoutId, leaf, branch] of [
+			['22222222-2222-2222-2222-222222222222', 'api', null],
+			['33333333-3333-3333-3333-333333333333', 'api-2', undefined]
+		] as const) {
+			calls = [];
+			const result = (await create.run(clone(checkoutId, leaf, branch))) as { exitCode: number };
+			expect(result.exitCode).toBe(0);
+			expect(calls.map((argv) => argv[0])).toEqual(['clone']);
+		}
+		await expect(
+			create.run(
+				context(
+					{
+						checkoutId: '44444444-4444-4444-4444-444444444444',
+						path: join(pool, 'checkouts', 'acme-api', 'wt'),
+						source: { kind: 'worktree', parentPath: join(code, 'api') },
+						branch: null,
+						baseRef: null,
+						createdBy: 'user'
+					},
+					MANAGE,
+					'checkouts.create'
+				)
+			)
+		).rejects.toSatisfy(
+			(error: unknown) =>
+				error instanceof MachineVerbError &&
+				error.error.code === 'invalid' &&
+				(error.error.details as { field?: string } | undefined)?.field === 'branch'
+		);
+	});
+
 	it('refuses a create outside the checkouts root and a person’s create without --manage', async () => {
 		const module = build(MANAGE);
 		const create = module.machineVerbs!['checkouts.create'];

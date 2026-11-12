@@ -148,7 +148,8 @@ export function buildFleetCheckoutTools(args: {
                     },
                     branch: {
                         type: 'string',
-                        description: 'Branch name; proposed (and made unique) when absent.',
+                        description:
+                            'Branch name. A worktree: proposed (and made unique) when absent. A clone: stays on baseRef, else the repository’s default branch, when absent.',
                     },
                     baseRef: { type: 'string', description: 'What a new branch starts from.' },
                     isolation: {

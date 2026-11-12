@@ -57,9 +57,12 @@ export class CheckoutPathTakenError extends Error {
 	}
 }
 
-/** Clone `repoUrl` into `path` and check out `branch` (new from `baseRef` when the remote has no such branch). */
+/**
+ * Clone `repoUrl` into `path` and check out `branch` (new from `baseRef` when the remote has no such branch).
+ * Without a `branch` the clone stays on what it checked out: `baseRef`, else the repository's default branch.
+ */
 export async function cloneCheckout(
-	input: { path: string; repoUrl: string; branch: string; baseRef: string | null },
+	input: { path: string; repoUrl: string; branch: string | null; baseRef: string | null },
 	options: CheckoutOperationOptions
 ): Promise<CheckoutGitResult> {
 	if (await exists(input.path)) throw new CheckoutPathTakenError(input.path);
@@ -68,7 +71,7 @@ export async function cloneCheckout(
 	if (input.baseRef) args.push('--branch', input.baseRef);
 	args.push('--', input.repoUrl, input.path);
 	let result = await options.git(args, network(options, dirname(input.path)));
-	if (result.code === 0) {
+	if (result.code === 0 && input.branch) {
 		result = await switchToBranch(input.path, input.branch, input.baseRef, options);
 	}
 	if (result.code !== 0) await removePartial(input.path);

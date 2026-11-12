@@ -566,8 +566,10 @@ export class FleetCheckoutService {
      * request with the row in `creating` and the link operation; the row
      * settles to `ready` (or `missing` with the first line of the error) when
      * the machine finishes. The platform names the exact folder — under the
-     * node's checkouts root, never inside the parent (FR-18) — and the branch,
-     * by the branch rule when none is given (FR-19).
+     * node's checkouts root, never inside the parent (FR-18) — and, for a
+     * worktree, the branch, by the branch rule when none is given (FR-19). A
+     * clone without a branch stays on what it cloned (`baseRef`, else the
+     * repository's default branch; FR-16).
      */
     async create(
         actor: FleetCheckoutActor,
@@ -767,6 +769,19 @@ export class FleetCheckoutService {
                 outcome: 'refused',
                 ...(typed ? { code: typed.code } : {}),
             });
+            // A node from before branchless clones refuses `branch: null` as an invalid branch: say what to do.
+            if (
+                source.kind === 'clone' &&
+                branch === null &&
+                typed?.code === 'invalid' &&
+                (typed.details as { field?: unknown } | undefined)?.field === 'branch'
+            ) {
+                throw fleetCheckoutError(
+                    'invalid',
+                    `${node.name} runs an older Ever Works node that needs a branch for a clone — name one, or update the node to clone the default branch`,
+                    { field: 'branch' },
+                );
+            }
             throw error;
         }
         if ('result' in outcome) await this.applyCreateResult(node, outcome.result);

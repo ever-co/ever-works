@@ -298,7 +298,9 @@ tab says when the reaper would remove one.
 ### 4.2 P2 — Create, pull, push, delete, roots, tools
 
 - **FR-16** A person MUST be able to create a checkout as a fresh clone, as a worktree of an
-  existing checkout on the same Node, or (P3) as a container-isolated folder, naming the Node.
+  existing checkout on the same Node, or (P3) as a container-isolated folder, naming the Node. A
+  fresh clone with no branch named MUST stay on the branch it cloned — the base ref when one is
+  given, else the repository's default branch (CONTRACTS Revision 28).
 - **FR-17** A fresh clone MUST authenticate only with a credential the platform mints for that
   operation — repository-scoped, time-limited, revoked when the operation ends — and MUST NOT use
   the machine's own credential helper.
@@ -497,6 +499,7 @@ Settings → Fleet (P3); no per-Work override.]`
 - [ ] **ACC-FL14-27** (FR-23) Fetch, pull and push on a discovered checkout run with the machine's own git configuration and never request a platform credential.
 - [ ] **ACC-FL14-28** (FR-32) A Work's shared folders are linked, not copied, into a new worktree of that repository.
 - [ ] **ACC-FL14-29** (FR-33) The bin purge removes only rows older than 30 days whose folder is gone, on its schedule, never on read.
+- [ ] **ACC-FL14-30** (FR-16) A fresh clone with no branch named (the New checkout dialog's default, the CLI without `--branch`, the Agent tool, the API) ends `ready` on the repository's default branch, or on the base ref when one is given.
 
 ---
 

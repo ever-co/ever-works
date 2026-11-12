@@ -135,7 +135,10 @@ const create = new Command('create')
     .requiredOption('--node <id>', 'The computer')
     .option('--repo <url>', 'Repository URL to clone (no credential in it)')
     .option('--worktree-of <checkoutId>', 'A checkout on the same computer to branch off')
-    .option('--branch <name>', 'Branch name (proposed and made unique when absent)')
+    .option(
+        '--branch <name>',
+        'Branch name (a worktree: proposed and made unique when absent; a clone: the default branch when absent)',
+    )
     .option('--base <ref>', 'What a new branch starts from')
     .option('--json', 'Machine-readable output')
     .action(
