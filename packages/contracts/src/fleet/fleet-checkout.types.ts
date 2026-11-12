@@ -798,6 +798,14 @@ export interface FleetCheckoutsCreateParams {
 	 */
 	source: { kind: 'clone'; repoUrl: string; credential?: boolean } | { kind: 'worktree'; parentPath: string };
 	branch: string;
+	/**
+	 * A fresh clone only (FL-15 FR-20): the branch the person asked for when another checkout of
+	 * this remote already holds that name. The platform cannot see a fresh clone's remote, so the
+	 * node decides after cloning: the remote has this branch → it is checked out, tracking the
+	 * remote (a pull request's head); it has not → `branch`, the unique NEW name the branch rule
+	 * proposed (FR-19). Absent when the name is free; a node that predates it makes `branch`.
+	 */
+	existingBranch?: string;
 	baseRef: string | null;
 	/** `task` for a checkout a Task run asked for (`--work` suffices); else a person or an Agent (`--manage`). */
 	createdBy: FleetCheckoutCreatedBy;

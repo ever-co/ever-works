@@ -675,19 +675,25 @@ export class FleetCheckoutService {
         for (const row of await this.checkouts.findForUser(node.userId)) {
             if (row.branch && fleetRemotesMatch(row.remoteUrl, remoteUrl)) taken.add(row.branch);
         }
-        let remoteBranches: string[] = [];
         if (parent) {
-            remoteBranches = await this.remoteBranchesOf(node, actor, parent.path);
-            for (const name of remoteBranches) taken.add(name);
+            for (const name of await this.remoteBranchesOf(node, actor, parent.path))
+                taken.add(name);
         }
         let branch: string | null = request.branch ?? null;
+        // A fresh clone checks out a branch its remote already has (FL-15 FR-20: a pull request's head) —
+        // it is its own repository, so another checkout holding that name, on this computer or another, is
+        // no conflict; only a NEW name must be unique. The platform cannot see a fresh clone's remote, so a
+        // taken name goes to the node twice: `existingBranch`, checked out when the clone shows the remote
+        // has it, and `branch`, the unique new name made otherwise. A node that predates `existingBranch`
+        // ignores it and makes `branch` — the old outcome, never a reused name.
+        let existingBranch: string | null = null;
         if (source.kind === 'worktree') {
             const base =
                 request.branch ??
                 `ever-works/${fleetCheckoutFolderName(parent!.branch ?? repository.repo)}`;
             branch = proposeFleetCheckoutBranch(base, taken);
-        } else if (branch && taken.has(branch) && !remoteBranches.includes(branch)) {
-            // A clone may check out an existing remote branch; it is a NEW branch name that must be unique.
+        } else if (branch && taken.has(branch)) {
+            existingBranch = branch;
             branch = proposeFleetCheckoutBranch(branch, taken);
         }
         const baseRef =
@@ -696,7 +702,8 @@ export class FleetCheckoutService {
         const root = await this.checkoutsRootOf(node, actor);
         const separator = root.includes('\\') && !root.includes('/') ? '\\' : '/';
         const repoFolder = fleetCheckoutFolderName(`${repository.owner}-${repository.repo}`);
-        const leaf = fleetCheckoutFolderName(branch ?? repository.repo);
+        // Named for the branch asked for: the pull request's head, when a clone checks it out.
+        const leaf = fleetCheckoutFolderName(existingBranch ?? branch ?? repository.repo);
         let path = [root.replace(/[\\/]+$/, ''), repoFolder, leaf].join(separator);
         const usedPaths = new Set(rows.map((row) => row.path));
         for (let suffix = 2; usedPaths.has(path) && suffix < 1000; suffix += 1) {
@@ -741,6 +748,7 @@ export class FleetCheckoutService {
                             ? { kind: 'clone', repoUrl: remoteUrl, credential: covered }
                             : { kind: 'worktree', parentPath: parent!.path },
                     branch: branch ?? null,
+                    ...(existingBranch ? { existingBranch } : {}),
                     baseRef,
                     createdBy: actor.agentId ? 'agent' : 'user',
                     ...(container
@@ -783,6 +791,7 @@ export class FleetCheckoutService {
         await this.record('node.checkout.create', actor, node, path, {
             kind,
             branch,
+            ...(existingBranch ? { existingBranch } : {}),
             confirmationClass: 'plain',
             outcome: 'operationId' in outcome ? 'started' : 'done',
             ...(parent ? { parent: parent.path } : {}),
