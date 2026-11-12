@@ -4738,11 +4738,8 @@ export class KnowledgeBaseService {
      * mirror run of the Work fail.
      */
     private async resolvePathCollision(workId: string, path: string): Promise<string> {
-        for (const parent of kbPathParents(path)) {
-            if (await this.documentRepository.pathExists(workId, parent)) {
-                throw this.pathNestingError(path, parent);
-            }
-        }
+        const parent = await this.documentRepository.findExistingPath(workId, kbPathParents(path));
+        if (parent) throw this.pathNestingError(path, parent);
         const taken = async (candidate: string): Promise<boolean> =>
             (await this.documentRepository.pathExists(workId, candidate)) ||
             (await this.documentRepository.findPathNestingClash(workId, candidate, [])) !== null;

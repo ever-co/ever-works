@@ -69,6 +69,8 @@ describe('KnowledgeBaseService — knowledge library revisions and archive', () 
         create: jest.Mock;
         update: jest.Mock;
         pathExists: jest.Mock;
+        findPathNestingClash: jest.Mock;
+        findExistingPath: jest.Mock;
         list: jest.Mock;
         setLock: jest.Mock;
         bumpRevision: jest.Mock;
@@ -88,6 +90,8 @@ describe('KnowledgeBaseService — knowledge library revisions and archive', () 
             create: jest.fn(async (data) => buildDocument(data)),
             update: jest.fn(async (_id, patch) => buildDocument(patch)),
             pathExists: jest.fn(async () => false),
+            findPathNestingClash: jest.fn(async () => null),
+            findExistingPath: jest.fn(async () => null),
             list: jest.fn(async () => ({ items: [], total: 0 })),
             setLock: jest.fn(async () => buildDocument({ locked: true })),
             bumpRevision: jest.fn(async () => ({

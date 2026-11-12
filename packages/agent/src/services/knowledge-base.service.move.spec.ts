@@ -136,6 +136,12 @@ class FakeDocuments {
             .map((doc) => ({ ...doc })),
     );
 
+    findExistingPath = jest.fn(
+        async (workId: string, paths: string[]) =>
+            [...this.rows.values()].find((doc) => doc.workId === workId && paths.includes(doc.path))
+                ?.path ?? null,
+    );
+
     findPathNestingClash = jest.fn(
         async (workId: string, path: string, parents: string[], excludeId?: string) =>
             [...this.rows.values()].find(
