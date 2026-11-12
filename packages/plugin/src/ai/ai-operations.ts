@@ -151,13 +151,17 @@ export class AiOperations {
 	 * `length` matters most: a reasoning model spends its hidden reasoning from
 	 * the same `max_tokens` budget as its answer, and when the budget runs out
 	 * first the reply is `''` with `finish_reason: "length"`. Reporting `stop`
-	 * there told callers the model had simply answered nothing. Anything this
-	 * contract has no value for stays `stop`, as it always did.
+	 * there told callers the model had simply answered nothing. OpenRouter's
+	 * `error` (the upstream failed mid-answer, so the text is partial) is
+	 * `null`: the reply did not finish normally, and this contract has no
+	 * `error` value. Anything else it has no value for stays `stop`, as it
+	 * always did.
 	 */
-	private finishReasonOf(response: AIMessageChunk): 'stop' | 'length' | 'content_filter' {
+	private finishReasonOf(response: AIMessageChunk): 'stop' | 'length' | 'content_filter' | null {
 		const raw = response.response_metadata?.finish_reason;
 		if (raw === 'length' || raw === 'max_tokens') return 'length';
 		if (raw === 'content_filter') return 'content_filter';
+		if (raw === 'error') return null;
 		return 'stop';
 	}
 

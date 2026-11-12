@@ -35,6 +35,14 @@ export const PR_REVIEW_MAX_OUTPUT_TOKENS = 16_384;
  */
 export const PR_REVIEW_MAX_ATTEMPTS = 2;
 
+/**
+ * Bound on the retry after an unusable reply: it is skipped when the first
+ * reply took longer than this, and abandoned when it has not answered within
+ * this long. The REST route and the chat tool wait for the review, so a slow
+ * model must not make them wait for two full 16k-token answers.
+ */
+export const PR_REVIEW_RETRY_WINDOW_MS = 180_000;
+
 /** One review request — from the webhook bridge, chat tool, or API. */
 export interface PrReviewRequest {
     /** Platform user the review runs AS (facade auth + ingest owner). */
@@ -73,6 +81,14 @@ export interface PrReviewRequest {
      *    built from the Work and the instruction, never from PR text.
      */
     prAuthorTrust?: 'trusted' | 'untrusted';
+    /**
+     * Post a fixed one-line note on the pull request when the AI step gives
+     * no review (a provider error, or no usable answer), so the person who
+     * asked sees the request was heard. The webhook bridge sets it for an
+     * `@ever-works` mention; the REST route and the chat tool read the
+     * result instead. The note carries no model or provider text.
+     */
+    noteFailureOnPr?: boolean;
 }
 
 /** One structured per-file review note. */

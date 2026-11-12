@@ -804,6 +804,10 @@ describe('GitHubPrReviewBridgeService', () => {
                 // The issue carries no PR-author association here, so the
                 // reviewer is told to withhold the owner's private context.
                 prAuthorTrust: 'untrusted',
+                // Somebody asked: a review that cannot be produced leaves a
+                // note instead of silence (#3202 review). A pull request
+                // opened or updated gets no such note (exact match above).
+                noteFailureOnPr: true,
             });
         });
 

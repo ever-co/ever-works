@@ -116,6 +116,8 @@ describe('AiOperations — Chat Completions for every model', () => {
 		['stop', 'stop'],
 		['content_filter', 'content_filter'],
 		['max_tokens', 'length'],
+		// OpenRouter: the upstream failed mid-answer, so the text is partial.
+		['error', null],
 		['something_new', 'stop']
 	])('maps finish_reason "%s" to "%s"', async (raw, expected) => {
 		stubChatCompletions({ role: 'assistant', content: 'OK' }, { finishReason: raw });

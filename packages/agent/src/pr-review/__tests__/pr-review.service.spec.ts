@@ -12,11 +12,13 @@ jest.mock('../../database/repositories/work.repository', () => ({ WorkRepository
 jest.mock('../../ingest/event-ingest.service', () => ({ EventIngestService: class {} }));
 jest.mock('../../services/knowledge-base.service', () => ({ KnowledgeBaseService: class {} }));
 
-import { PrReviewService, codeFenceFor } from '../pr-review.service';
+import { PrReviewService, codeFenceFor, stripReasoningBlocks } from '../pr-review.service';
+import { PR_REVIEW_COMMENT_MARKER, isPrReviewComment } from '../pr-review-comment';
 import {
     PR_REVIEW_DIFF_MAX_BYTES,
     PR_REVIEW_MAX_COMMENTS,
     PR_REVIEW_MAX_OUTPUT_TOKENS,
+    PR_REVIEW_RETRY_WINDOW_MS,
 } from '../pr-review.types';
 import { AGENT_MEMORY_FENCE_TAG } from '../../services/memory-recall';
 
@@ -394,7 +396,7 @@ describe('PrReviewService', () => {
     describe('a reply with no usable review', () => {
         const completion = (
             content: string,
-            finishReason: 'stop' | 'length' | null,
+            finishReason: 'stop' | 'length' | 'content_filter' | null,
             completionTokens = 4096,
         ) => ({
             id: 'c1',
@@ -495,6 +497,239 @@ describe('PrReviewService', () => {
             const result = await review();
             expect(aiFacade.createChatCompletion).toHaveBeenCalledTimes(1);
             expect(result.error).toBe('AI review failed: 429 rate limited');
+        });
+
+        it('treats Groq’s 413 tokens-per-minute refusal as a budget refusal', async () => {
+            aiFacade.createChatCompletion
+                .mockRejectedValueOnce(
+                    new Error(
+                        '413 Request too large for model `llama-3.3-70b-versatile` in organization `org_x` service tier `on_demand` on tokens per minute (TPM): Limit 12000, Requested 29058, please reduce your message size and try again.',
+                    ),
+                )
+                .mockResolvedValueOnce(completion(reviewJson(), 'stop', 900));
+            const result = await review();
+            expect(result.status).toBe('posted');
+            expect(aiFacade.createChatCompletion.mock.calls[1][0].maxTokens).toBeUndefined();
+        });
+
+        it('names the refused budget when the call without it gave nothing usable either', async () => {
+            aiFacade.createChatCompletion
+                .mockRejectedValueOnce(new Error('400 max_tokens is too large: 16384'))
+                .mockResolvedValueOnce(completion('', 'length'));
+            const result = await review();
+            expect(aiFacade.createChatCompletion).toHaveBeenCalledTimes(2);
+            expect(result.error).toBe(
+                'AI review produced no usable answer: the model returned no text (finish_reason: length, 4096 output tokens): its output budget ran out before it began the answer (the provider had refused a 16384-token output budget)',
+            );
+        });
+
+        /**
+         * #3202 review: only `length` counted as cut off, so partial text
+         * that ended any other abnormal way was still posted as raw half-JSON.
+         */
+        it.each([
+            [
+                'a content filter',
+                'content_filter' as const,
+                "the provider's content filter stopped the answer (finish_reason: content_filter, 4096 output tokens)",
+            ],
+            [
+                'a provider error (OpenRouter `error`, reported as null)',
+                null,
+                "the model's answer did not finish normally (finish_reason: error or not reported, 4096 output tokens)",
+            ],
+        ])('⭐ never posts a partial reply ended by %s', async (_label, finishReason, why) => {
+            const cut = '{"summary":"Verdict: Safe to merge. Risk flags: touches the critical';
+            aiFacade.createChatCompletion.mockResolvedValue(completion(cut, finishReason));
+            const result = await review();
+            expect(aiFacade.createChatCompletion).toHaveBeenCalledTimes(2);
+            expect(gitFacade.createPullRequestComment).not.toHaveBeenCalled();
+            expect(result.status).toBe('failed');
+            expect(result.error).toContain(why);
+        });
+
+        it('a prose review that finished normally is still posted as the summary', async () => {
+            aiFacade.createChatCompletion.mockResolvedValue(
+                completion('Looks fine overall; no risk flags.', 'stop', 40),
+            );
+            const result = await review();
+            expect(result.status).toBe('posted');
+            expect(result.summary).toBe('Looks fine overall; no risk flags.');
+        });
+
+        /**
+         * #3202 review: a model that writes its reasoning INTO the reply as a
+         * `<think>` block had it posted publicly through the raw-text
+         * fallback — the reasoning quotes the prompt, knowledge base and
+         * memory included.
+         */
+        describe('reasoning written into the reply', () => {
+            const SECRET = 'KB excerpt: internal pricing is 42 per seat';
+
+            it('⭐ a <think> block before a JSON review is dropped and the review posted', async () => {
+                aiFacade.createChatCompletion.mockResolvedValue(
+                    completion(
+                        `<think>The prompt says ${SECRET}. {draft}</think>\n${reviewJson(1)}`,
+                        'stop',
+                        900,
+                    ),
+                );
+                const result = await review();
+                expect(aiFacade.createChatCompletion).toHaveBeenCalledTimes(1);
+                expect(result.status).toBe('posted');
+                const body = gitFacade.createPullRequestComment.mock.calls[0][3] as string;
+                expect(body).toContain('Verdict: looks solid.');
+                expect(body).not.toContain(SECRET);
+                expect(body).not.toContain('<think>');
+            });
+
+            it('⭐ never posts the reasoning through the raw-text fallback', async () => {
+                aiFacade.createChatCompletion.mockResolvedValue(
+                    completion(`<think>${SECRET}</think>\nLooks fine overall.`, 'stop', 900),
+                );
+                const result = await review();
+                expect(result.status).toBe('posted');
+                const body = gitFacade.createPullRequestComment.mock.calls[0][3] as string;
+                expect(result.summary).toBe('Looks fine overall.');
+                expect(body).not.toContain(SECRET);
+            });
+
+            it('⭐ a reply that is only reasoning, never closed, posts nothing and says why', async () => {
+                aiFacade.createChatCompletion.mockResolvedValue(
+                    completion(`<think>${SECRET} and then I would`, 'length'),
+                );
+                const result = await review();
+                expect(aiFacade.createChatCompletion).toHaveBeenCalledTimes(2);
+                expect(gitFacade.createPullRequestComment).not.toHaveBeenCalled();
+                expect(result.error).toBe(
+                    'AI review produced no usable answer: the model returned only its reasoning (a <think> block), no answer (finish_reason: length, 4096 output tokens)',
+                );
+                expect(result.error).not.toContain(SECRET);
+            });
+
+            it('reasoning closed by a tag the reply never opened is dropped too', async () => {
+                aiFacade.createChatCompletion.mockResolvedValue(
+                    completion(`${SECRET}\n</think>\n\nLooks fine overall.`, 'stop', 900),
+                );
+                const result = await review();
+                expect(result.summary).toBe('Looks fine overall.');
+                const body = gitFacade.createPullRequestComment.mock.calls[0][3] as string;
+                expect(body).not.toContain(SECRET);
+            });
+        });
+
+        /**
+         * #3202 review: the retry resent a 16k-token request with no deadline,
+         * and the REST route and the chat tool wait for the whole review.
+         */
+        describe('the retry is bounded', () => {
+            afterEach(() => {
+                jest.useRealTimers();
+                jest.restoreAllMocks();
+            });
+
+            it('is skipped when the first reply took longer than the window', async () => {
+                let now = 1_000_000;
+                jest.spyOn(Date, 'now').mockImplementation(() => now);
+                aiFacade.createChatCompletion.mockImplementation(async () => {
+                    now += PR_REVIEW_RETRY_WINDOW_MS + 1;
+                    return completion('', 'length');
+                });
+                const result = await review();
+                expect(aiFacade.createChatCompletion).toHaveBeenCalledTimes(1);
+                expect(result.status).toBe('failed');
+                expect(gitFacade.createPullRequestComment).not.toHaveBeenCalled();
+            });
+
+            it('is abandoned when it has not answered within the window', async () => {
+                jest.useFakeTimers();
+                aiFacade.createChatCompletion
+                    .mockResolvedValueOnce(completion('', 'length'))
+                    .mockReturnValueOnce(new Promise(() => undefined));
+                const pending = review();
+                await jest.advanceTimersByTimeAsync(PR_REVIEW_RETRY_WINDOW_MS + 1);
+                const result = await pending;
+                expect(aiFacade.createChatCompletion).toHaveBeenCalledTimes(2);
+                expect(result.status).toBe('failed');
+                expect(result.error).toBe(
+                    `AI review produced no usable answer: the model returned no text (finish_reason: length, 4096 output tokens): its output budget ran out before it began the answer; the retry gave no answer within ${PR_REVIEW_RETRY_WINDOW_MS / 1000} s`,
+                );
+                expect(gitFacade.createPullRequestComment).not.toHaveBeenCalled();
+            });
+
+            it('the call after a budget refusal is not bounded (it is the real first call)', async () => {
+                jest.useFakeTimers();
+                let answer: (value: unknown) => void = () => undefined;
+                aiFacade.createChatCompletion
+                    .mockRejectedValueOnce(new Error('400 max_tokens is too large: 16384'))
+                    .mockReturnValueOnce(new Promise((resolve) => (answer = resolve)));
+                const pending = review();
+                await jest.advanceTimersByTimeAsync(PR_REVIEW_RETRY_WINDOW_MS + 1);
+                answer(completion(reviewJson(), 'stop', 900));
+                const result = await pending;
+                expect(result.status).toBe('posted');
+            });
+        });
+
+        /**
+         * #3202 review: a failed review on a webhook left a trace only in the
+         * API pod's log, so whoever wrote `@ever-works review` got nothing.
+         */
+        describe('a note on the pull request when asked for one', () => {
+            const reviewNoting = () =>
+                build().reviewPullRequest({
+                    userId: 'user-1',
+                    owner: 'octo',
+                    repo: 'site',
+                    prNumber: 7,
+                    instruction: 'review please',
+                    noteFailureOnPr: true,
+                });
+
+            it('⭐ posts a fixed note, with no model text, when the model gave no usable answer', async () => {
+                aiFacade.createChatCompletion.mockResolvedValue(
+                    completion('<think>KB excerpt: secret</think>{"summary":"half', 'length'),
+                );
+                const result = await reviewNoting();
+                expect(result.status).toBe('failed');
+                expect(gitFacade.createPullRequestComment).toHaveBeenCalledTimes(1);
+                const [owner, repo, prNumber, body] =
+                    gitFacade.createPullRequestComment.mock.calls[0];
+                expect([owner, repo, prNumber]).toEqual(['octo', 'site', 7]);
+                expect(body).toBe(
+                    `${PR_REVIEW_COMMENT_MARKER}\n**Ever Works AI review — \`octo/site#7\`:** no review this time. The AI model did not return a usable answer; ask again later, or choose another model for this Work.`,
+                );
+                // The bridge recognises it as its own and never answers it.
+                expect(isPrReviewComment(body)).toBe(true);
+                expect(body).not.toMatch(/@ever-works/i);
+                expect(eventIngest.ingest).not.toHaveBeenCalled();
+            });
+
+            it('posts the same note when the provider failed, without the provider’s error', async () => {
+                aiFacade.createChatCompletion.mockRejectedValue(
+                    new Error('401 invalid key sk-or-v1-internal at https://internal.example'),
+                );
+                const result = await reviewNoting();
+                expect(result.error).toContain('AI review failed');
+                const body = gitFacade.createPullRequestComment.mock.calls[0][3] as string;
+                expect(body).toContain('no review this time');
+                expect(body).not.toContain('401');
+                expect(body).not.toContain('internal');
+            });
+
+            it('a failed note post is only logged', async () => {
+                aiFacade.createChatCompletion.mockResolvedValue(completion('', 'length'));
+                gitFacade.createPullRequestComment.mockRejectedValue(new Error('403'));
+                const result = await reviewNoting();
+                expect(result.status).toBe('failed');
+                expect(result.error).toContain('no usable answer');
+            });
+
+            it('posts nothing when the caller did not ask (REST route, chat tool, PR opened)', async () => {
+                aiFacade.createChatCompletion.mockResolvedValue(completion('', 'length'));
+                await review();
+                expect(gitFacade.createPullRequestComment).not.toHaveBeenCalled();
+            });
         });
     });
 
@@ -648,5 +883,31 @@ describe('PrReviewService', () => {
             // Fullwidth grave accents (U+FF40) count as backticks.
             expect(codeFenceFor('\uFF40'.repeat(5))).toBe('`'.repeat(6));
         });
+    });
+});
+
+describe('stripReasoningBlocks', () => {
+    it.each([
+        [
+            'a closed block before the answer',
+            '<think>a</think>\n{"summary":"x"}',
+            '{"summary":"x"}',
+        ],
+        [
+            '<thinking> and <reasoning> blocks',
+            '<thinking>a</thinking><reasoning b="1">b</reasoning>ok',
+            'ok',
+        ],
+        ['several blocks, any case', '<THINK>a</THINK>one <think>b</think>two', 'one two'],
+        ['an opening tag at the start that never closes', '<think>all reasoning', ''],
+        ['a closing tag the reply never opened', 'reasoning here\n</think>\nanswer', 'answer'],
+        ['no reasoning at all', '  plain review  ', 'plain review'],
+    ])('%s', (_label, input, expected) => {
+        expect(stripReasoningBlocks(input)).toBe(expected);
+    });
+
+    it('keeps a JSON review that merely mentions a closing tag in its text', () => {
+        const review = '{"summary":"Strips a stray </think> from replies."}';
+        expect(stripReasoningBlocks(review)).toBe(review);
     });
 });
