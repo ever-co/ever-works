@@ -2,15 +2,19 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { execFile, execFileSync } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import { mkdtempSync, writeFileSync, mkdirSync, existsSync, readdirSync, rmSync, utimesSync } from 'node:fs';
+import { createServer } from 'node:http';
+import type { AddressInfo, Socket } from 'node:net';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { pathToFileURL } from 'node:url';
 import {
 	LocalWorkspacePlugin,
 	assertRemoteCloneUrl,
+	POOL_FETCH_STALL_ENV,
 	type LocalWorkspacePluginOptions
 } from '../local-workspace.plugin.js';
 import { withPoolLock } from '../pool-lock.js';
+import { execFileWithVerifiedCancellation } from '../verified-exec.js';
 
 /**
  * Hermetic loopback suite: a real local BARE repo plays "origin"
@@ -64,8 +68,8 @@ const gitSubcommand = (args: readonly string[]): string | undefined => {
 /** What a scripted fetch does instead of running Git. */
 type ScriptedFetch = 'stall' | 'stall-locked' | 'succeed' | 'fail' | 'run';
 
-/** The stall bound the merge simulation's and the branch judge's fetches carry. */
-const STALL_ARGS = ['-c', 'http.lowSpeedLimit=1000', '-c', 'http.lowSpeedTime=60'];
+/** The stall bound the merge simulation's and the branch judge's fetches carry, in their environment. */
+const STALL_ENV = { GIT_HTTP_LOW_SPEED_LIMIT: '1000', GIT_HTTP_LOW_SPEED_TIME: '60' };
 
 /** The pool must hold exactly ONE base clone for the loopback origin. */
 const poolRepoDir = (): string => {
@@ -626,6 +630,7 @@ describe('one fetch into a pool at a time', () => {
 		const baseDir = join(root, `pool-fetch-${name}`);
 		const worktreesDir = join(baseDir, 'worktrees');
 		let holdNext = false;
+		let stallNextPoolDepthFetch = false;
 		let heldOpen = false;
 		let release: (() => void) | null = null;
 		let failWorktreeDiffs = 0;
@@ -633,7 +638,7 @@ describe('one fetch into a pool at a time', () => {
 		let releaseMergeTree: (() => void) | null = null;
 		let worktreeFetchScript: ((args: readonly string[]) => ScriptedFetch) | null = null;
 		const stalled: unknown[] = [];
-		const scriptedFetches: string[][] = [];
+		const scriptedFetches: Array<{ args: string[]; env: Record<string, string | undefined> }> = [];
 		const fetchesWhileHeld: string[] = [];
 		const events: string[] = [];
 		const gatedExecFile = ((
@@ -667,7 +672,12 @@ describe('one fetch into a pool at a time', () => {
 				events.push(`${where} fetch started`);
 			}
 			const scripted = fetch && where === 'worktree' ? worktreeFetchScript?.(args) : undefined;
-			if (scripted && scripted !== 'run') scriptedFetches.push([...args]);
+			if (scripted && scripted !== 'run') {
+				scriptedFetches.push({
+					args: [...args],
+					env: { ...(options.env as Record<string, string | undefined>) }
+				});
+			}
 			if (scripted === 'stall' || scripted === 'stall-locked') {
 				// A transfer that stalls: no process, no result, ever. Only the
 				// plugin's deadline (through `terminateProcessTree`) ends it.
@@ -685,6 +695,15 @@ describe('one fetch into a pool at a time', () => {
 					else callback(Object.assign(new Error('refused'), { code: 128 }), '', 'fatal: the remote refused');
 				});
 				return { pid: 4949, kill: () => true };
+			}
+			if (fetch && where === 'pool' && args.includes('--depth') && stallNextPoolDepthFetch) {
+				// A provision's deepen that has taken the pool's `shallow.lock`
+				// and stalls there, until the provision is cancelled.
+				stallNextPoolDepthFetch = false;
+				writeFileSync(join(poolDirOf(), 'shallow.lock'), '');
+				const child = { pid: 5050, kill: () => true };
+				stalled.push(child);
+				return child;
 			}
 			const hold = fetch && where === 'pool' && args.includes('--depth') && holdNext;
 			if (hold) {
@@ -724,6 +743,9 @@ describe('one fetch into a pool at a time', () => {
 				settings: { baseDir, fetchDepth: 1 }
 			}),
 			poolDir: poolDirOf,
+			stallNextPoolDepthFetch: () => {
+				stallNextPoolDepthFetch = true;
+			},
 			holdNextPoolFetch: () => {
 				holdNext = true;
 			},
@@ -932,9 +954,12 @@ describe('one fetch into a pool at a time', () => {
 			await expect(next).resolves.toBe(terminated.length);
 			// Git's own stall bound rides on every one of these fetches.
 			expect(h.scriptedFetches.length).toBeGreaterThan(0);
-			for (const args of h.scriptedFetches) {
-				expect(args.slice(0, STALL_ARGS.length)).toEqual(STALL_ARGS);
-				expect(gitSubcommand(args)).toBe('fetch');
+			for (const { args, env } of h.scriptedFetches) {
+				expect(env).toMatchObject(STALL_ENV);
+				// In the environment, where a URL-specific `http.<url>.lowSpeed*`
+				// key in the pool's config cannot outrank it — never as `-c`.
+				expect(args[0]).toBe('fetch');
+				expect(args.join(' ')).not.toContain('lowSpeed');
 			}
 			return { h, error, terminated, shallowLock: join(h.poolDir(), 'shallow.lock') };
 		};
@@ -946,8 +971,10 @@ describe('one fetch into a pool at a time', () => {
 				(h) => {
 					foreignLock = join(h.poolDir(), 'shallow.lock');
 					writeFileSync(foreignLock, '');
-					const anHourAgo = new Date(Date.now() - 60 * 60_000);
-					utimesSync(foreignLock, anHourAgo, anHourAgo);
+					// Older than the fetch, but younger than a stale lock (`recoverStaleShallowLock`
+					// would take one an hour old): a live Git's, for all this process knows.
+					const aMinuteAgo = new Date(Date.now() - 60_000);
+					utimesSync(foreignLock, aMinuteAgo, aMinuteAgo);
 					h.scriptWorktreeFetches(() => 'stall');
 				},
 				(h, first) => h.plugin.simulateMerge(first, 'main')
@@ -1042,6 +1069,65 @@ describe('one fetch into a pool at a time', () => {
 		});
 	});
 
+	it('a shallow.lock a stopped Git left is removed before the branch judge deepens the pool, once it is old enough', async () => {
+		const warnings: string[] = [];
+		const h = poolFetchHarness('stale-lock-judge', { logger: { warn: (message) => warnings.push(message) } });
+		const first = await h.plugin.provision(h.spec('lw-pool-fetch-a', 'task/pool-fetch-a-1a2b3c4d'));
+		const lock = join(h.poolDir(), 'shallow.lock');
+		writeFileSync(lock, '');
+		const twentyMinutesAgo = new Date(Date.now() - 20 * 60_000);
+		utimesSync(lock, twentyMinutesAgo, twentyMinutesAgo);
+
+		// A missing merge base makes the judge deepen the pool, with real Git.
+		h.failNextWorktreeDiff();
+		await expect(h.plugin.branchChanges(first, { headSha: git(first.path, 'rev-parse', 'HEAD') })).resolves.toEqual(
+			{
+				paths: [],
+				contents: {}
+			}
+		);
+		expect(h.events).toContain('worktree fetch ended');
+		expect(existsSync(lock)).toBe(false);
+		expect(warnings).toEqual([expect.stringMatching(/^Removed a stale 'shallow\.lock'/)]);
+	});
+
+	it('a provision whose --depth fetch is cancelled removes the shallow.lock it took, so the next one works', async () => {
+		const warnings: string[] = [];
+		const h = poolFetchHarness('cancelled-depth', {
+			terminateProcessTree: async () => undefined,
+			logger: { warn: (message) => warnings.push(message) }
+		});
+		await h.plugin.provision(h.spec('lw-pool-fetch-a', 'task/pool-fetch-a-1a2b3c4d'));
+		const lock = join(h.poolDir(), 'shallow.lock');
+		const controller = new AbortController();
+		h.stallNextPoolDepthFetch();
+		const cancelled = h.plugin.provision({
+			...h.spec('lw-pool-fetch-b', 'task/pool-fetch-b-2b3c4d5e'),
+			signal: controller.signal
+		});
+		void cancelled.catch(() => undefined);
+		try {
+			await expect.poll(() => h.stalled.length, { timeout: 20_000 }).toBe(1);
+			expect(existsSync(lock)).toBe(true);
+		} finally {
+			controller.abort();
+		}
+		await expect(cancelled).rejects.toMatchObject({ name: 'AbortError' });
+		// Fresh, so the age rule would keep it for 15 minutes: only the proven
+		// cancel of the fetch that took it can remove it now.
+		expect(existsSync(lock)).toBe(false);
+		expect(warnings).toEqual([
+			expect.stringMatching(
+				/^Removed the 'shallow\.lock' a cancelled fetch of base ref 'main' left in repository pool /
+			)
+		]);
+		await expect(
+			h.plugin.provision(h.spec('lw-pool-fetch-b', 'task/pool-fetch-b-2b3c4d5e'))
+		).resolves.toMatchObject({
+			bindingKey: 'lw-pool-fetch-b'
+		});
+	});
+
 	it("the branch judge passes on Git's reason when deepening the history fails", async () => {
 		const h = poolFetchHarness('judge-deepen-fails');
 		const first = await h.plugin.provision(h.spec('lw-pool-fetch-a', 'task/pool-fetch-a-1a2b3c4d'));
@@ -1050,6 +1136,129 @@ describe('one fetch into a pool at a time', () => {
 		await expect(h.plugin.branchChanges(first, { headSha: git(first.path, 'rev-parse', 'HEAD') })).rejects.toThrow(
 			"the branch's changes could not be read: fatal: no merge base; deepening the history first failed: fatal: the remote refused"
 		);
+	});
+});
+
+describe("Git's stall bound against the pool's own config", () => {
+	// A Task's run can write the shared pool config, and a URL-specific
+	// `http.<url>.lowSpeedTime=0` there outranks a command-scope `-c`. So the
+	// bound rides in the environment, which Git reads after every config file.
+	// Real Git, against a local server that answers and then sends nothing.
+	it('ends a stalled HTTP fetch when the pool config switches the bound off for that URL; `-c` would not', async () => {
+		const sockets = new Set<Socket>();
+		const server = createServer((_request, response) => {
+			response.writeHead(200, { 'Content-Type': 'application/x-git-upload-pack-advertisement' });
+			response.flushHeaders();
+			// …and nothing more, ever.
+		});
+		server.on('connection', (socket) => {
+			sockets.add(socket);
+			socket.on('close', () => sockets.delete(socket));
+		});
+		await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+		const { port } = server.address() as AddressInfo;
+		const origin = `http://127.0.0.1:${port}/`;
+		const pool = mkdtempSync(join(root, 'stall-bound-'));
+		git(pool, 'init', '--bare', '--quiet');
+		git(pool, 'config', `http.${origin}.lowSpeedTime`, '0');
+
+		const fetchStalled = async (args: string[], extraEnv: Record<string, string>, stopAfterMs: number) => {
+			const env: NodeJS.ProcessEnv = {
+				...process.env,
+				GIT_TERMINAL_PROMPT: '0',
+				NO_PROXY: '127.0.0.1',
+				no_proxy: '127.0.0.1'
+			};
+			delete env.GIT_HTTP_LOW_SPEED_LIMIT;
+			delete env.GIT_HTTP_LOW_SPEED_TIME;
+			return execFileWithVerifiedCancellation(
+				'git',
+				[...args, 'fetch', `${origin}stalled.git`, '+refs/heads/main:refs/remotes/origin/main'],
+				{ cwd: pool, env: { ...env, ...extraEnv }, windowsHide: true, signal: AbortSignal.timeout(stopAfterMs) }
+			).then(
+				({ error, stderr }) => ({
+					outcome: error ? 'git exited with an error' : 'git exited 0',
+					stderr: String(stderr)
+				}),
+				(error: unknown) => ({ outcome: `stopped (${(error as Error).name})`, stderr: '' })
+			);
+		};
+
+		try {
+			// The provider's variables, with the time cut to 1 s so this is quick.
+			const bounded = await fetchStalled([], { ...POOL_FETCH_STALL_ENV, GIT_HTTP_LOW_SPEED_TIME: '1' }, 20_000);
+			expect(bounded.outcome).toBe('git exited with an error');
+			expect(bounded.stderr).toMatch(/too slow/i);
+
+			// CONTROL: the same bound as `-c` loses to the pool's URL key — Git
+			// waits on the stalled server until it is stopped from outside.
+			const viaConfig = await fetchStalled(
+				['-c', 'http.lowSpeedLimit=1000', '-c', 'http.lowSpeedTime=1'],
+				{},
+				6_000
+			);
+			expect(viaConfig.outcome).toMatch(/^stopped/);
+		} finally {
+			for (const socket of sockets) socket.destroy();
+			await new Promise((resolve) => server.close(resolve));
+		}
+	});
+});
+
+describe('a shallow.lock a stopped Git left in a pool', () => {
+	// A deepen holds `<pool>/shallow.lock` while its pack arrives, and a Git
+	// that dies then (a cancelled provision, a killed pod) never removes it:
+	// every later `--depth` or `--unshallow` fetch into the pool failed on it.
+
+	it('is removed before a provision fetches once it is older than any bounded fetch, with a stale tracking-ref lock, and logged; a younger one stays', async () => {
+		const warnings: string[] = [];
+		const lockedBase = join(root, 'stale-shallow-lock');
+		const lockedPlugin = new LocalWorkspacePlugin({ logger: { warn: (message) => warnings.push(message) } });
+		const lockedSpec = (bindingKey: string, branch: string) => ({
+			...spec(bindingKey, branch),
+			settings: { baseDir: lockedBase, fetchDepth: 1 }
+		});
+		await lockedPlugin.provision(lockedSpec('lw-stale-lock-a', 'task/stale-lock-a-1a1a1a1a'));
+		const [pool] = readdirSync(join(lockedBase, 'repos'));
+		const lock = join(lockedBase, 'repos', pool, 'shallow.lock');
+
+		// A FRESH lock may be a live Git's: it stays, and the fetch fails on it
+		// exactly as Git always made it fail.
+		writeFileSync(lock, '');
+		await expect(
+			lockedPlugin.provision(lockedSpec('lw-stale-lock-b', 'task/stale-lock-b-2b2b2b2b'))
+		).rejects.toThrow(/shallow\.lock/);
+		expect(existsSync(lock)).toBe(true);
+		expect(warnings).toEqual([]);
+
+		// 14 minutes old is still inside the bound — the 10-minute fetch limit
+		// plus its 5-minute slack — so it may still be a live Git's: it stays.
+		const fourteenMinutesAgo = new Date(Date.now() - 14 * 60_000);
+		utimesSync(lock, fourteenMinutesAgo, fourteenMinutesAgo);
+		await expect(
+			lockedPlugin.provision(lockedSpec('lw-stale-lock-b', 'task/stale-lock-b-2b2b2b2b'))
+		).rejects.toThrow(/shallow\.lock/);
+		expect(existsSync(lock)).toBe(true);
+		expect(warnings).toEqual([]);
+
+		// 20 minutes old is past it: a stopped Git's. Removed, with the stale
+		// lock of the tracking ref the base fetch writes, and the fetch works.
+		const twentyMinutesAgo = new Date(Date.now() - 20 * 60_000);
+		utimesSync(lock, twentyMinutesAgo, twentyMinutesAgo);
+		const refLock = join(lockedBase, 'repos', pool, 'refs', 'remotes', 'origin', 'main.lock');
+		writeFileSync(refLock, '');
+		utimesSync(refLock, twentyMinutesAgo, twentyMinutesAgo);
+		await expect(
+			lockedPlugin.provision(lockedSpec('lw-stale-lock-b', 'task/stale-lock-b-2b2b2b2b'))
+		).resolves.toMatchObject({ bindingKey: 'lw-stale-lock-b' });
+		expect(existsSync(lock)).toBe(false);
+		expect(existsSync(refLock)).toBe(false);
+		expect(warnings).toEqual([
+			expect.stringMatching(/^Removed a stale 'shallow\.lock' \(\d+s old\) from repository pool /),
+			expect.stringMatching(
+				/^Removed a stale 'refs\/remotes\/origin\/main\.lock' \(\d+s old\) from repository pool /
+			)
+		]);
 	});
 });
 

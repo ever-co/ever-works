@@ -5,6 +5,7 @@ import type {
 	PluginCategory,
 	PluginHealthCheck,
 	JsonSchema,
+	PluginLogger,
 	WorkspaceProvisionSpec,
 	WorkspaceHandle,
 	WorkspaceBranchChanges,
@@ -67,14 +68,33 @@ const DEEPEN_FETCH = "deepening the pool's history (fetch --unshallow)";
 /**
  * Git's own stall bound, for the fetches the merge simulation and the branch
  * judge run into a pool: an HTTP(S) transfer that moves fewer than 1000
- * bytes a second for 60 seconds is ended by Git itself (`http.lowSpeedLimit`,
- * `http.lowSpeedTime`), which then removes its own lock files — a stall no
- * longer has to wait for {@link POOL_FETCH_TIMEOUT_MS}, whose stop is a kill.
- * A slow transfer that is still moving keeps going until that backstop. Other
- * transports ignore both keys. Plain numbers: nothing here names a program,
- * a path or a host, and the command-scope `-c` outranks any repository config.
+ * bytes a second for 60 seconds is ended by Git itself, which then removes
+ * its own lock files — a stall no longer has to wait for
+ * {@link POOL_FETCH_TIMEOUT_MS}, whose stop is a kill. A slow transfer that is
+ * still moving keeps going until that backstop. Other transports ignore it.
+ *
+ * The ENVIRONMENT, not `-c http.lowSpeedLimit=… -c http.lowSpeedTime=…`: Git
+ * reads `GIT_HTTP_LOW_SPEED_LIMIT` / `GIT_HTTP_LOW_SPEED_TIME` after every
+ * config file and they replace the configured values, while a URL-specific
+ * key wins over a command-scope `-c`. Measured (Git 2.52): with
+ * `http.https://github.com/.lowSpeedTime=0` in the pool's config — which is
+ * shared, and which a Task's run can write — `-c http.lowSpeedTime=60` was
+ * ignored and a stalled transfer went on with no bound; the variables still
+ * ended it. Plain numbers: nothing here names a program, a path or a host.
+ *
+ * @internal Exported for the spec that pins Git's precedence.
  */
-const POOL_FETCH_STALL_ARGS = ['-c', 'http.lowSpeedLimit=1000', '-c', 'http.lowSpeedTime=60'] as const;
+export const POOL_FETCH_STALL_ENV: Readonly<Record<string, string>> = Object.freeze({
+	GIT_HTTP_LOW_SPEED_LIMIT: '1000',
+	GIT_HTTP_LOW_SPEED_TIME: '60'
+});
+
+/**
+ * How long past {@link POOL_FETCH_TIMEOUT_MS} a pool's `shallow.lock` must be
+ * before {@link LocalWorkspacePlugin.recoverStaleFetchLocks} takes it for one
+ * a stopped Git left behind.
+ */
+const STALE_SHALLOW_LOCK_SLACK_MS = 5 * 60_000;
 
 /**
  * Slack for comparing a lock file's mtime with the moment a fetch started:
@@ -250,6 +270,12 @@ export interface LocalWorkspacePluginOptions {
 	 * {@link POOL_FETCH_TIMEOUT_MS}.
 	 */
 	readonly poolFetchTimeoutMs?: number;
+	/**
+	 * Where the provider reports a repair it made on its own (a stale
+	 * `shallow.lock` it removed from a pool). Defaults to the logger the
+	 * platform hands `onLoad`, then to `console`.
+	 */
+	readonly logger?: Pick<PluginLogger, 'warn'>;
 }
 
 /**
@@ -278,7 +304,7 @@ export const POOL_MAINTENANCE_TIMEOUT_MS = 120_000;
  * next waiter, and the caller gets an error that names the fetch. Generous
  * enough to deepen an ordinary repository's whole history.
  *
- * A stall is usually ended sooner, by Git itself ({@link POOL_FETCH_STALL_ARGS});
+ * A stall is usually ended sooner, by Git itself ({@link POOL_FETCH_STALL_ENV});
  * this bound is the backstop for whatever that does not catch.
  *
  * What the stop leaves, measured (Git for Windows 2.52, `taskkill /T /F` as
@@ -377,6 +403,7 @@ export class LocalWorkspacePlugin implements IPlugin, IWorkspacePlugin {
 	private readonly now: () => number;
 	private readonly poolMaintenanceTimeoutMs: number;
 	private readonly poolFetchTimeoutMs: number;
+	private logger: Pick<PluginLogger, 'warn'> | undefined;
 
 	/**
 	 * The per-repo promise-chain mutex — see class doc. The PROCESS-WIDE map
@@ -402,12 +429,14 @@ export class LocalWorkspacePlugin implements IPlugin, IWorkspacePlugin {
 			options.poolFetchTimeoutMs !== undefined && options.poolFetchTimeoutMs > 0
 				? options.poolFetchTimeoutMs
 				: POOL_FETCH_TIMEOUT_MS;
+		this.logger = options.logger;
 	}
 
-	async onLoad(_context: PluginContext): Promise<void> {
+	async onLoad(context: PluginContext): Promise<void> {
 		// Availability is probed lazily on first use — onLoad must stay
 		// cheap and never fail registration (the API process loads every
 		// plugin; only local runtimes actually run git).
+		this.logger ??= context?.logger;
 	}
 
 	async onUnload(): Promise<void> {
@@ -661,23 +690,42 @@ export class LocalWorkspacePlugin implements IPlugin, IWorkspacePlugin {
 		const fetchTarget = fetchCredential ? fetchCredential.remoteName : authedUrl;
 		const fetchFlags = fetchCredential ? ['--no-recurse-submodules'] : [];
 
+		// A lock a stopped Git left in the pool fails these fetches, and every
+		// one after them, until it is gone.
+		await this.recoverStaleFetchLocks(poolDir, [spec.baseRef, spec.branch]);
+
 		// Fetch-first, ALWAYS: the base is branched from origin/<baseRef>
 		// as of NOW, never a cached ref.
-		await this.gitOrThrow(
-			[
-				'fetch',
-				...fetchFlags,
-				'--depth',
-				String(depth),
-				fetchTarget,
-				`+refs/heads/${spec.baseRef}:refs/remotes/origin/${spec.baseRef}`
-			],
-			poolDir,
-			spec.auth,
-			`fetch of base ref '${spec.baseRef}' failed`,
-			spec.signal,
-			fetchCredential
-		);
+		const baseFetchStartedAt = Date.now();
+		try {
+			await this.gitOrThrow(
+				[
+					'fetch',
+					...fetchFlags,
+					'--depth',
+					String(depth),
+					fetchTarget,
+					`+refs/heads/${spec.baseRef}:refs/remotes/origin/${spec.baseRef}`
+				],
+				poolDir,
+				spec.auth,
+				`fetch of base ref '${spec.baseRef}' failed`,
+				spec.signal,
+				fetchCredential
+			);
+		} catch (error) {
+			// A cancelled deepen leaves the `shallow.lock` it took, and every
+			// provision of this repository failed on it. A cancel is reported only
+			// once the fetch's whole process tree is gone, and this provision holds
+			// the pool's lock: a lock taken since the fetch started is its own (the
+			// same proof as `withFetchDeadline`). An unproven stop removes nothing.
+			if (isAbortError(error) && (await removeShallowLockLeftSince(poolDir, baseFetchStartedAt))) {
+				this.warn(
+					`Removed the 'shallow.lock' a cancelled fetch of base ref '${spec.baseRef}' left in repository pool ${poolDir}`
+				);
+			}
+			throw error;
+		}
 
 		// A previously pushed task branch is the durable identity — reuse
 		// it when it exists (re-run / conflict-fix loop).
@@ -1134,10 +1182,12 @@ export class LocalWorkspacePlugin implements IPlugin, IWorkspacePlugin {
 			).stdout.trim();
 			const deepened = await this.withPoolFetchLock(dir, DEEPEN_FETCH, (signal) =>
 				this.git(
-					[...POOL_FETCH_STALL_ARGS, 'fetch', this.authedUrl(repoUrl, undefined), '--unshallow'],
+					['fetch', this.authedUrl(repoUrl, undefined), '--unshallow'],
 					dir,
 					undefined,
-					signal
+					signal,
+					null,
+					POOL_FETCH_STALL_ENV
 				)
 			);
 			diff = await this.gitLiteral(diffArgs, dir, undefined);
@@ -1291,19 +1341,24 @@ export class LocalWorkspacePlugin implements IPlugin, IWorkspacePlugin {
 		// Merge against the target AS OF NOW — a stale target is how you
 		// end up shipping a PR with a red merge banner.
 		const targetFetch = `fetch of merge target '${targetRef}'`;
-		await this.withPoolFetchLock(dir, targetFetch, (signal) =>
-			this.gitOrThrow(
-				[
-					...POOL_FETCH_STALL_ARGS,
-					'fetch',
-					this.authedUrl(repoUrl, auth),
-					`+refs/heads/${targetRef}:refs/remotes/origin/${targetRef}`
-				],
-				dir,
-				auth,
-				`${targetFetch} failed`,
-				signal
-			)
+		await this.withPoolFetchLock(
+			dir,
+			targetFetch,
+			(signal) =>
+				this.gitOrThrow(
+					[
+						'fetch',
+						this.authedUrl(repoUrl, auth),
+						`+refs/heads/${targetRef}:refs/remotes/origin/${targetRef}`
+					],
+					dir,
+					auth,
+					`${targetFetch} failed`,
+					signal,
+					null,
+					POOL_FETCH_STALL_ENV
+				),
+			[targetRef]
 		);
 
 		let result = await this.git(
@@ -1316,10 +1371,12 @@ export class LocalWorkspacePlugin implements IPlugin, IWorkspacePlugin {
 		if (result.code > 1) {
 			await this.withPoolFetchLock(dir, DEEPEN_FETCH, (signal) =>
 				this.git(
-					[...POOL_FETCH_STALL_ARGS, 'fetch', this.authedUrl(repoUrl, auth), '--unshallow'],
+					['fetch', this.authedUrl(repoUrl, auth), '--unshallow'],
 					dir,
 					auth,
-					signal
+					signal,
+					null,
+					POOL_FETCH_STALL_ENV
 				)
 			);
 			result = await this.git(
@@ -1462,16 +1519,21 @@ export class LocalWorkspacePlugin implements IPlugin, IWorkspacePlugin {
 	 * Bounded ({@link POOL_FETCH_TIMEOUT_MS}, from the moment the lock is
 	 * held): `fetch` gets the signal that stops it at the deadline, so a
 	 * stalled transfer cannot keep the lock — and every provision of the
-	 * repository behind it — for good. `what` names the fetch in that error.
+	 * repository behind it — for good. `what` names the fetch in that error;
+	 * `refs` are the tracking refs it writes (see {@link recoverStaleFetchLocks}).
 	 */
 	private async withPoolFetchLock<T>(
 		worktreePath: string,
 		what: string,
-		fetch: (signal: AbortSignal) => Promise<T>
+		fetch: (signal: AbortSignal) => Promise<T>,
+		refs: readonly string[] = []
 	): Promise<T> {
 		const pool = await this.poolLockOf(worktreePath);
 		if (!pool) return this.withFetchDeadline(what, fetch, null);
-		return this.withRepoLock(pool.key, () => this.withFetchDeadline(what, fetch, pool.poolDir));
+		return this.withRepoLock(pool.key, async () => {
+			await this.recoverStaleFetchLocks(pool.poolDir, refs);
+			return this.withFetchDeadline(what, fetch, pool.poolDir);
+		});
 	}
 
 	/**
@@ -1526,6 +1588,80 @@ export class LocalWorkspacePlugin implements IPlugin, IWorkspacePlugin {
 			throw error;
 		} finally {
 			clearTimeout(timer);
+		}
+	}
+
+	/**
+	 * Remove the lock files a stopped Git left in the pool, once they are too
+	 * old for any fetch this provider bounds to still own them. Called under the
+	 * pool's lock, right before a fetch into the pool, for:
+	 *
+	 *  - `shallow.lock`, which a deepen holds while its pack arrives. Every
+	 *    later `--depth` or `--unshallow` fetch into the pool fails on it
+	 *    ("Unable to create '…/shallow.lock': File exists");
+	 *  - `refs/remotes/origin/<ref>.lock` for each ref that fetch writes
+	 *    (`refs`). Git holds one only for the milliseconds it updates that ref,
+	 *    but a kill in that window leaves it, and every fetch of that ref then
+	 *    fails (measured). For a provision's branch fetch the failure would
+	 *    read as "no remote branch", and the Task would be re-cut from the base.
+	 *
+	 * Left there by a Git that died: a pod or node killed mid-fetch, or a stop
+	 * that could not be proven. A provision's, merge simulation's or branch
+	 * judge's fetch that is stopped and PROVEN stopped clears its own
+	 * `shallow.lock` at once (see `provisionLocked` and `withFetchDeadline`).
+	 * The rest stays, across restarts, until somebody deletes it.
+	 *
+	 * Within this process the pool's lock already rules out a live owner:
+	 * every fetch into a pool runs under it. The AGE is for what that lock does
+	 * not cover — a Git whose stop could not be proven, Git's own detached
+	 * maintenance, and another PROCESS writing the same pool (a hand-run
+	 * `ever-works-node gc`, a second node process on the same base directory).
+	 * Past `poolFetchTimeoutMs` plus {@link STALE_SHALLOW_LOCK_SLACK_MS}, no fetch
+	 * this provider bounds can still own one. A younger lock is kept: the fetch
+	 * fails on it as Git always did, and a later one clears it once it is old.
+	 *
+	 * Not covered, measured: a stale `packed-refs.lock` does not block a fetch
+	 * (it fails the node scan's `update-ref -d`, whose result is ignored), and
+	 * a stale `config.lock` blocks only the config writes of a new pool.
+	 */
+	private async recoverStaleFetchLocks(poolDir: string, refs: readonly string[]): Promise<void> {
+		const trackingDir = join(poolDir, 'refs', 'remotes', 'origin');
+		const locks = new Map<string, string>([['shallow.lock', join(poolDir, 'shallow.lock')]]);
+		for (const ref of refs) {
+			const path = join(trackingDir, ...`${ref}.lock`.split('/'));
+			// A ref name is the caller's: never a path out of the tracking refs.
+			if (isStrictDescendant(trackingDir, path)) locks.set(`refs/remotes/origin/${ref}.lock`, path);
+		}
+		for (const [name, path] of locks) await this.removeStaleLock(poolDir, name, path);
+	}
+
+	/** {@link recoverStaleFetchLocks} for one lock file. */
+	private async removeStaleLock(poolDir: string, name: string, path: string): Promise<void> {
+		const stat = await fs.lstat(path).catch(() => null);
+		if (!stat?.isFile()) return;
+		const ageMs = Date.now() - stat.mtimeMs;
+		if (ageMs <= this.poolFetchTimeoutMs + STALE_SHALLOW_LOCK_SLACK_MS) return;
+		try {
+			await fs.unlink(path);
+		} catch (error) {
+			this.warn(
+				`A stale '${name}' (${formatSeconds(ageMs)} old) in repository pool ${poolDir} could not be removed: ${
+					error instanceof Error ? error.message : String(error)
+				}`
+			);
+			return;
+		}
+		this.warn(
+			`Removed a stale '${name}' (${formatSeconds(ageMs)} old) from repository pool ${poolDir}: a Git stopped during a fetch left it, and every fetch it blocks failed on it`
+		);
+	}
+
+	/** Report a repair; reporting never fails the operation. */
+	private warn(message: string): void {
+		try {
+			(this.logger ?? console).warn(message);
+		} catch {
+			// A broken logger is not the provision's failure.
 		}
 	}
 
@@ -2894,7 +3030,6 @@ function samePath(left: string, right: string): boolean {
 	return normalizedPath(left) === normalizedPath(right);
 }
 
-/** Two spellings of one directory: the same path, or the same file identity. */
 /**
  * Remove `<poolDir>/shallow.lock` when it is a plain file whose mtime is not
  * older than `since` (less {@link LOCK_MTIME_SLACK_MS}): the lock a fetch
@@ -2913,6 +3048,7 @@ async function removeShallowLockLeftSince(poolDir: string, since: number): Promi
 	}
 }
 
+/** Two spellings of one directory: the same path, or the same file identity. */
 async function sameDirectory(left: string, right: string): Promise<boolean> {
 	if (samePath(left, right)) return true;
 	const [a, b] = await Promise.all([
