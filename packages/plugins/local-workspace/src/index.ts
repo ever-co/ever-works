@@ -5,6 +5,7 @@ export {
 	terminateVerifiedProcessTree,
 	ProcessTreeTerminationError
 } from './verified-exec.js';
+export { withPoolLock } from './pool-lock.js';
 export {
 	checkoutHardeningEntries,
 	checkoutHardeningEnv,

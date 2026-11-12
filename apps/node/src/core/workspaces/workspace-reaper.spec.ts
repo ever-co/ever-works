@@ -2,10 +2,10 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
 import { promises as fs } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { LocalWorkspacePlugin } from '@ever-works/local-workspace-plugin';
+import { LocalWorkspacePlugin, withPoolLock } from '@ever-works/local-workspace-plugin';
 import type { Scheduler } from '../heartbeat';
 import { FleetTaskWorkspaceProvisioner, readWorkspaceLease } from './fleet-task-workspace';
 import {
@@ -785,5 +785,139 @@ describe('workspace reaper — real Git worktrees and a real remote', { timeout:
 		expect(plan.keep.find((verdict) => verdict.record.path === foreign)?.reason).toContain('ownership unproven');
 		await runWorkspaceReap(plan, { now: () => NOW });
 		expect(existsSync(join(foreign, 'keep.txt'))).toBe(true);
+	});
+
+	describe("in the provider's queue for the pool", () => {
+		// The worker can claim a job while a cycle runs (the reaper checks
+		// `isBusy` only when a cycle starts), and that job's provision writes the
+		// same pool: its base fetch writes `refs/remotes/origin/<base>`, which
+		// the scan's refresh fetches too. Every write here waits its turn in the
+		// provider's process-wide lock for the pool, as the provision does.
+
+		/** The tail of the provider's lock queue for one pool; any instance shows it. */
+		const poolLockTail = (poolPath: string): Promise<void> | undefined => {
+			const locks = (new LocalWorkspacePlugin() as unknown as { repoLocks: Map<string, Promise<void>> })
+				.repoLocks;
+			const normalized = resolve(poolPath);
+			return locks.get(`repo:${process.platform === 'win32' ? normalized.toLowerCase() : normalized}`);
+		};
+
+		/** Hold the pool's lock, as a provision inside its fetch would, until `release()`. */
+		const holdPool = (poolPath: string) => {
+			let release!: () => void;
+			const holding = new Promise<void>((resolveHolding) => {
+				release = resolveHolding;
+			});
+			const held = withPoolLock(poolPath, () => holding);
+			return { held, tail: poolLockTail(poolPath), release };
+		};
+
+		it("refreshes the pool's remote-tracking refs only once the provision holding the pool is done", async () => {
+			const rootPath = freshRoot();
+			await provisionAt(rootPath, 'task-lock', 'ever/repo-lock', 'task/lock', OLD);
+			const { scanned: offline } = await scanAndPlan(rootPath, false);
+			const poolPath = offline.repositories[0].pools[0].path;
+			// A tracking ref for a branch the remote does not have: the refresh
+			// deletes it (`update-ref -d`), then fetches the default branch.
+			const gone = 'refs/remotes/origin/task/lock';
+			git(poolPath, 'update-ref', gone, git(poolPath, 'rev-parse', 'refs/remotes/origin/main'));
+
+			const pool = holdPool(poolPath);
+			const scanning = scanWorkspaceRoot(rootPath, { refreshRemote: true, now: () => NOW });
+			void scanning.catch(() => undefined);
+			try {
+				await expect.poll(() => poolLockTail(poolPath) !== pool.tail, { timeout: 20_000 }).toBe(true);
+				expect(git(poolPath, 'for-each-ref', gone)).not.toBe('');
+			} finally {
+				pool.release();
+			}
+			await pool.held;
+			const scanned = await scanning;
+			expect(scanned.repositories[0].pools[0].remoteRefreshed).toBe(true);
+			expect(git(poolPath, 'for-each-ref', gone)).toBe('');
+			await expect.poll(() => poolLockTail(poolPath), { timeout: 1_000 }).toBeUndefined();
+		});
+
+		it('removes the pool it emptied only once the provision holding the pool is done', async () => {
+			const rootPath = freshRoot();
+			await provisionAt(rootPath, 'task-pool-lock', 'ever/repo-pool-lock', 'task/pool-lock', OLD);
+			const { scanned, plan } = await scanAndPlan(rootPath);
+			expect(plan.remove).toHaveLength(1);
+			const poolPath = scanned.repositories[0].pools[0].path;
+
+			// The worktree goes first (teardown, which takes the same lock); a
+			// provision of the repository then takes the pool before the reaper
+			// gets to it.
+			const provider = new LocalWorkspacePlugin();
+			let pool: ReturnType<typeof holdPool> | undefined;
+			const reaping = runWorkspaceReap(plan, {
+				now: () => NOW,
+				plugin: {
+					teardown: async (handle) => {
+						await provider.teardown(handle);
+						pool = holdPool(poolPath);
+					}
+				}
+			});
+			void reaping.catch(() => undefined);
+			try {
+				await expect
+					.poll(() => pool !== undefined && poolLockTail(poolPath) !== pool.tail, { timeout: 20_000 })
+					.toBe(true);
+				expect(existsSync(join(poolPath, 'HEAD'))).toBe(true);
+			} finally {
+				pool?.release();
+			}
+			await pool?.held;
+			const result = await reaping;
+			expect(result.errors).toEqual([]);
+			expect(result.removedPools).toHaveLength(1);
+			expect(existsSync(poolPath)).toBe(false);
+			expect(existsSync(scanned.repositories[0].repositoryRoot)).toBe(false);
+		});
+
+		it('leaves the queue for the pool when the reaper is stopped, and keeps the pool', async () => {
+			const rootPath = freshRoot();
+			await provisionAt(rootPath, 'task-pool-stop', 'ever/repo-pool-stop', 'task/pool-stop', OLD);
+			const { scanned, plan } = await scanAndPlan(rootPath);
+			expect(plan.remove).toHaveLength(1);
+			const poolPath = scanned.repositories[0].pools[0].path;
+
+			const provider = new LocalWorkspacePlugin();
+			const controller = new AbortController();
+			let pool: ReturnType<typeof holdPool> | undefined;
+			const reaping = runWorkspaceReap(plan, {
+				now: () => NOW,
+				signal: controller.signal,
+				plugin: {
+					teardown: async (handle) => {
+						await provider.teardown(handle);
+						pool = holdPool(poolPath);
+					}
+				}
+			});
+			let settled = false;
+			const markSettled = (): void => {
+				settled = true;
+			};
+			void reaping.then(markSettled, markSettled);
+			try {
+				await expect
+					.poll(() => pool !== undefined && poolLockTail(poolPath) !== pool.tail, { timeout: 20_000 })
+					.toBe(true);
+				// A provision's own fetch has no deadline: the reaper must not wait
+				// for it once it is told to stop.
+				controller.abort();
+				await expect.poll(() => settled, { timeout: 5_000 }).toBe(true);
+			} finally {
+				pool?.release();
+			}
+			await pool?.held;
+			const result = await reaping;
+			expect(result.removedPools).toEqual([]);
+			expect(result.keptPools.map((verdict) => verdict.reason)).toContain('reaper stopped before this pool');
+			expect(existsSync(join(poolPath, 'HEAD'))).toBe(true);
+			expect(existsSync(scanned.repositories[0].repositoryRoot)).toBe(true);
+		});
 	});
 });
