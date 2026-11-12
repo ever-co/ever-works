@@ -75,6 +75,15 @@ export interface KbDocumentDto {
 	 * injection. Absent / `null` is treated as `'accepted'`.
 	 */
 	reviewState?: KbReviewState | null;
+	/**
+	 * The document's content revision: it moves on every substantive edit
+	 * (and a move), never on a bookkeeping write. An editor sends the one it
+	 * loaded as `X-Kb-Base-Revision` on `PATCH`, so a save made on an older
+	 * revision is refused (409 `KbRevisionConflict`) instead of writing back
+	 * what the newer one changed. Optional so pre-existing DTO producers stay
+	 * valid.
+	 */
+	revision?: number;
 }
 
 /**
@@ -84,6 +93,30 @@ export interface KbDocumentBodyDto extends KbDocumentDto {
 	body: string;
 	assets: KbAssetSummary[];
 }
+
+/** A document a move could not rewrite the links of, and why (`POST …/move`). */
+export interface KbDocumentMoveSkipped {
+	documentId: string;
+	path: string;
+	reason: string;
+}
+
+/**
+ * The answer of `POST /api/works/:id/kb/documents/:docId/move`: the moved
+ * document, and what became of the links other documents carried to its old
+ * path.
+ */
+export interface KbDocumentMoveResult extends KbDocumentBodyDto {
+	linkRewrite: {
+		/** The documents whose links now point at the new path. */
+		documentIds: string[];
+		/** The documents still linking to the old path (deleted, fully locked or too contended meanwhile). */
+		skipped: KbDocumentMoveSkipped[];
+	};
+}
+
+/** The request header carrying the revision an edit was made on (see {@link KbDocumentDto.revision}). */
+export const KB_BASE_REVISION_HEADER = 'x-kb-base-revision';
 
 export interface KbAssetSummary {
 	path: string;

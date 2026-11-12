@@ -12,6 +12,11 @@ vi.mock('next-intl', () => ({
     },
 }));
 
+const toastWarningMock = vi.fn();
+vi.mock('sonner', () => ({
+    toast: { warning: (...args: unknown[]) => toastWarningMock(...args) },
+}));
+
 const routerPushMock = vi.fn();
 const routerRefreshMock = vi.fn();
 const routerReplaceMock = vi.fn();
@@ -378,6 +383,7 @@ describe('KbDocumentContextMenu', () => {
                 { code: 'KbPathTaken', message: 'Another document … brand/colors.md' },
                 'renamePathTaken',
             ],
+            [409, { code: 'KbPathNesting', message: 'x' }, 'renamePathNesting'],
             [409, { code: 'KbLinkedFromLockedDocument', message: 'x' }, 'renameLinkedFromLocked'],
             [409, { code: 'KbOrgDocumentPath', message: 'x' }, 'renameOrgDocumentPath'],
             [400, { code: 'KbPathInvalid', message: 'x' }, 'renameInvalidPath'],
@@ -403,6 +409,48 @@ describe('KbDocumentContextMenu', () => {
                 ).toBe(false);
             },
         );
+
+        it('⭐ says which documents still link to the old path when the move could not rewrite them', async () => {
+            toastWarningMock.mockReset();
+            const moved = doc({ path: 'brand/tone.md', slug: 'tone' });
+            answer(200, {
+                ...moved,
+                linkRewrite: {
+                    documentIds: ['doc-2'],
+                    skipped: [
+                        {
+                            documentId: 'doc-3',
+                            path: 'brand/guide.md',
+                            reason: 'The document is fully locked.',
+                        },
+                        {
+                            documentId: 'doc-4',
+                            path: 'output/post.md',
+                            reason: 'The document was deleted.',
+                        },
+                    ],
+                },
+            });
+            const onRenamed = vi.fn();
+            const input = renderRename({ onRenamed });
+
+            submit(input, 'brand/tone.md');
+
+            // The rename stands; the surface gets the document, not the report.
+            await waitFor(() => expect(onRenamed).toHaveBeenCalledWith(moved));
+            expect(toastWarningMock).toHaveBeenCalledWith('renameLinksSkipped');
+            expect(screen.queryByTestId('kb-workbench-context-rename-dialog')).toBeNull();
+        });
+
+        it('shows no warning when every link was rewritten', async () => {
+            toastWarningMock.mockReset();
+            const moved = doc({ path: 'brand/tone.md', slug: 'tone' });
+            answer(200, { ...moved, linkRewrite: { documentIds: ['doc-2'], skipped: [] } });
+            const onRenamed = vi.fn();
+            submit(renderRename({ onRenamed }), 'brand/tone.md');
+            await waitFor(() => expect(onRenamed).toHaveBeenCalledWith(moved));
+            expect(toastWarningMock).not.toHaveBeenCalled();
+        });
 
         it('explains a path the API would refuse without a round trip', async () => {
             const fetchSpy = vi.spyOn(globalThis, 'fetch');
@@ -644,6 +692,7 @@ describe('renameErrorKey', () => {
         expect(renameErrorKey(409, 'KbPathTaken')).toBe('renamePathTaken');
         expect(renameErrorKey(409, 'KbLinkedFromLockedDocument')).toBe('renameLinkedFromLocked');
         expect(renameErrorKey(409, 'KbOrgDocumentPath')).toBe('renameOrgDocumentPath');
+        expect(renameErrorKey(409, 'KbPathNesting')).toBe('renamePathNesting');
         expect(renameErrorKey(422, 'KbPathInvalid')).toBe('renameInvalidPath');
         expect(renameErrorKey(400, undefined)).toBe('renameInvalidPath');
         expect(renameErrorKey(403, undefined)).toBe('renameForbidden');

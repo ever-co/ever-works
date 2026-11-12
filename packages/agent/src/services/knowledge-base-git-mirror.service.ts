@@ -333,6 +333,12 @@ export class KnowledgeBaseGitMirrorService {
      * Remove a single document's sidecar + body from the Work's data
      * repo. `path` is required because the DB row is hard-deleted before
      * the task runs.
+     *
+     * Not when another document of the Work holds the path by the time the
+     * run gets here (created at it, or moved to it, after the delete): those
+     * files are that document's now. A deleted document's former paths
+     * (moved away from before its mirror run removed the files) come through
+     * here too, one run each.
      */
     async removeDocument(
         workId: string,
@@ -341,7 +347,22 @@ export class KnowledgeBaseGitMirrorService {
         await this.runInRepo(workId, async ({ dir, work, committer }) => {
             await this.ensureSkeletonOnDisk(dir);
 
-            const removed = await this.removeDocumentFiles(dir, options.path);
+            const target = path.posix.normalize(options.path);
+            if (
+                (await this.documentRepository.pathExists(workId, target, options.documentId)) ||
+                (target !== options.path &&
+                    (await this.documentRepository.pathExists(
+                        workId,
+                        options.path,
+                        options.documentId,
+                    )))
+            ) {
+                this.logger.log(
+                    `KB mirror delete of ${options.path} (work=${workId}) skipped: another document holds the path now`,
+                );
+                return;
+            }
+            const removed = await this.removeDocumentFiles(dir, target);
             await this.writeIndex(dir, workId);
 
             const message = removed
@@ -716,18 +737,29 @@ export class KnowledgeBaseGitMirrorService {
         doc: WorkKnowledgeDocument,
     ): Promise<string[]> {
         const removed: string[] = [];
-        for (const retired of retiredPathsOf(doc.metadata)) {
-            if (retired === doc.path) continue;
+        const own = path.posix.normalize(doc.path);
+        for (const stored of retiredPathsOf(doc.metadata)) {
+            // Every check and the delete use the same, normalized path: the
+            // files live there (the clone resolves `brand/./x.md` to
+            // `brand/x.md`), so that is the path another document must not hold.
+            const retired = path.posix.normalize(stored);
+            if (retired === own) continue;
             try {
                 KnowledgeBaseGitMirrorService.validateRelativeKbPath(retired);
             } catch {
                 this.logger.warn(
-                    `Skipping invalid retired KB path on ${doc.id} (work=${workId}): ${retired}`,
+                    `Skipping invalid retired KB path on ${doc.id} (work=${workId}): ${stored}`,
                 );
                 continue;
             }
             if (!(await this.documentFilesExist(repoDir, retired))) continue;
             if (await this.documentRepository.pathExists(workId, retired, doc.id)) continue;
+            if (
+                retired !== stored &&
+                (await this.documentRepository.pathExists(workId, stored, doc.id))
+            ) {
+                continue;
+            }
             if (await this.removeDocumentFiles(repoDir, retired)) removed.push(retired);
         }
         return removed;

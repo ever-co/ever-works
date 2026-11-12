@@ -83,30 +83,121 @@ export interface KbLinkRewriteResult {
     readonly rewritten: number;
 }
 
-const FENCE_RE = /```[\s\S]*?```/g;
+/**
+ * The renderer's wikilink grammar (`apps/web/.../kb/wikilink-md.ts`): `[[path]]` or `[[Label|path]]`.
+ *
+ * `[` is excluded from both parts as well as `]`: without it a line of
+ * thousands of `[` made every one of them start a scan to the end of the
+ * line (a quadratic match, seconds per body), and a move scans every
+ * document of the Work. No path can hold `[` ({@link KB_MOVE_PATH_PATTERN}).
+ */
+const WIKILINK_RE = /\[\[([^[\]\n|]+?)(?:\|([^[\]\n]+?))?\]\]/g;
 const INLINE_CODE_RE = /`[^`\n]*`/g;
-/** The renderer's wikilink grammar (`apps/web/.../kb/wikilink-md.ts`): `[[path]]` or `[[Label|path]]`. */
-const WIKILINK_RE = /\[\[([^\]\n|]+?)(?:\|([^\]\n]+?))?\]\]/g;
+/** A fence opener: up to three spaces, then three or more backticks or tildes. */
+const FENCE_OPEN_RE = /^ {0,3}(`{3,}|~{3,})/;
 
 function escapeRegExp(value: string): string {
     return value.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
 }
 
-/** Code fences and inline code spans: links inside them are sample syntax, never rewritten. */
-function codeRanges(source: string): Array<[number, number]> {
-    const ranges: Array<[number, number]> = [];
-    for (const re of [FENCE_RE, INLINE_CODE_RE]) {
-        re.lastIndex = 0;
-        let match: RegExpExecArray | null;
-        while ((match = re.exec(source)) !== null) {
-            ranges.push([match.index, match.index + match[0].length]);
+type Range = readonly [start: number, end: number];
+
+/**
+ * Fenced code blocks (``` or ~~~, closed by a fence of the same character at
+ * least as long, or by the end of the body as CommonMark has it) and HTML
+ * comments (`<!-- … -->`, or to the end when never closed): the parts of a
+ * body the renderer never turns into links. One pass over the lines, and one
+ * `indexOf` per comment, so a body full of openers costs no more than its
+ * length.
+ */
+function blockRanges(source: string): Range[] {
+    const ranges: Range[] = [];
+    let offset = 0;
+    let fence: { char: string; length: number; start: number } | null = null;
+    while (offset <= source.length) {
+        const newline = source.indexOf('\n', offset);
+        const end = newline === -1 ? source.length : newline;
+        const line = source.slice(offset, end);
+        const opener = FENCE_OPEN_RE.exec(line);
+        if (fence) {
+            if (
+                opener &&
+                opener[1][0] === fence.char &&
+                opener[1].length >= fence.length &&
+                line.slice(opener[0].length).trim() === ''
+            ) {
+                ranges.push([fence.start, end]);
+                fence = null;
+            }
+        } else if (
+            opener &&
+            !(opener[1][0] === '`' && line.slice(opener[0].length).includes('`'))
+        ) {
+            fence = { char: opener[1][0], length: opener[1].length, start: offset };
         }
+        if (newline === -1) break;
+        offset = newline + 1;
+    }
+    if (fence) ranges.push([fence.start, source.length]);
+
+    let from = 0;
+    for (;;) {
+        const open = source.indexOf('<!--', from);
+        if (open === -1) break;
+        const close = source.indexOf('-->', open + 4);
+        const end = close === -1 ? source.length : close + 3;
+        ranges.push([open, end]);
+        if (close === -1) break;
+        from = end;
     }
     return ranges;
 }
 
-function inCode(ranges: Array<[number, number]>, index: number): boolean {
-    return ranges.some(([start, end]) => index >= start && index < end);
+/** Sort and merge `ranges` into disjoint ones, so a binary search answers "inside one?". */
+function mergeRanges(ranges: Range[]): Range[] {
+    const sorted = [...ranges].sort((a, b) => a[0] - b[0]);
+    const merged: Array<[number, number]> = [];
+    for (const [start, end] of sorted) {
+        const last = merged[merged.length - 1];
+        if (last && start <= last[1]) {
+            last[1] = Math.max(last[1], end);
+        } else {
+            merged.push([start, end]);
+        }
+    }
+    return merged;
+}
+
+/** Whether `index` falls inside one of the disjoint, sorted `ranges` (binary search). */
+function inRanges(ranges: readonly Range[], index: number): boolean {
+    let low = 0;
+    let high = ranges.length - 1;
+    while (low <= high) {
+        const mid = (low + high) >> 1;
+        const [start, end] = ranges[mid];
+        if (index < start) high = mid - 1;
+        else if (index >= end) low = mid + 1;
+        else return true;
+    }
+    return false;
+}
+
+/**
+ * Every part of `source` whose links are sample syntax or hidden, never
+ * rewritten: fenced code blocks, HTML comments, and inline code spans
+ * outside them. Disjoint and sorted, for {@link inRanges}.
+ */
+function codeRanges(source: string): Range[] {
+    const blocks = mergeRanges(blockRanges(source));
+    const ranges: Range[] = [...blocks];
+    INLINE_CODE_RE.lastIndex = 0;
+    let match: RegExpExecArray | null;
+    while ((match = INLINE_CODE_RE.exec(source)) !== null) {
+        if (!inRanges(blocks, match.index)) {
+            ranges.push([match.index, match.index + match[0].length]);
+        }
+    }
+    return mergeRanges(ranges);
 }
 
 /** The path as the workbench editor writes it into an href: each segment URI-encoded. */
@@ -115,18 +206,36 @@ function encodedPath(path: string): string {
 }
 
 /**
+ * Where a link's path ends: the end of the body, whitespace, `)`, `]`, `|`
+ * (a table cell), a fragment or query, a quote or `>` — or sentence
+ * punctuation (`.`, `,`, `;`, `:`, `!`) followed by one of those. So
+ * `brand/voice.md.` at the end of a sentence is a link to `brand/voice.md`,
+ * while `brand/voice.md.bak` is not.
+ */
+const URL_PATH_END = String.raw`(?=$|[)\s#?"'<>\]|]|[.,;:!](?:$|[)\s"'<>\]|]))`;
+
+/**
  * Rewrite, in one document body, every link that points at `oldPath` in
  * `workId` so it points at `newPath`. The three forms the editors write:
  *
  *  - `[[oldPath]]` — the KB editor and the tree's "Copy wikilink",
  *  - `[[Label|oldPath]]` — the KB editor's labelled wikilink (the label is kept),
  *  - `/works/<workId>/kb/<oldPath>` — the workbench editor's Markdown link
- *    (`[Title](/works/…/kb/…)`), also inside an absolute URL.
+ *    (`[Title](/works/…/kb/…)`), also inside an absolute URL, and a bare URL
+ *    ending a sentence or a table cell.
  *
- * A link to a longer path (`oldPath.bak`, `oldPath/x`) and anything inside a
- * code fence or an inline code span is left as it was, as the renderer
- * leaves it. `@kb:` mentions and `kb:` citations are not links a body
- * carries (they are chat and agent-output formats) and are not touched.
+ * Left as they were, as the renderer leaves them: a link to a longer path
+ * (`oldPath.bak`, `oldPath/x`), and anything inside a fenced code block
+ * (``` or ~~~), an inline code span or an HTML comment. An indented code
+ * block is NOT recognised (telling one from a list item's continuation needs
+ * the whole Markdown parse); the editors write fences. `@kb:` mentions and
+ * `kb:` citations are not links a body carries (they are chat and
+ * agent-output formats) and are not touched.
+ *
+ * Linear in the body's length: a body that does not contain the old path at
+ * all is returned untouched without a scan, and no pattern can backtrack
+ * across a line (a move scans every document of the Work, so one planted
+ * body must not be able to stall it).
  */
 export function rewriteKbDocumentLinks(
     body: string,
@@ -134,6 +243,8 @@ export function rewriteKbDocumentLinks(
 ): KbLinkRewriteResult {
     const { workId, oldPath, newPath } = input;
     if (!body || !oldPath || oldPath === newPath) return { body, rewritten: 0 };
+    const encodedOld = encodedPath(oldPath);
+    if (!body.includes(oldPath) && !body.includes(encodedOld)) return { body, rewritten: 0 };
 
     let rewritten = 0;
 
@@ -143,7 +254,7 @@ export function rewriteKbDocumentLinks(
     const afterWikilinks = body.replace(
         WIKILINK_RE,
         (full: string, first: string, second: string | undefined, offset: number) => {
-            if (inCode(wikiCode, offset)) return full;
+            if (inRanges(wikiCode, offset)) return full;
             if (second === undefined) {
                 if (first.trim() !== oldPath) return full;
                 rewritten += 1;
@@ -156,21 +267,70 @@ export function rewriteKbDocumentLinks(
     );
 
     // Pass 2 — Markdown / URL links into this Work's KB route. The path must
-    // end where the URL does (`)`, whitespace, a fragment or query, a quote,
-    // `>` or `]`), so `brand/voice.md` never matches `brand/voice.md.bak`.
+    // end where the URL does ({@link URL_PATH_END}), so `brand/voice.md`
+    // never matches `brand/voice.md.bak`.
     const prefix = `/works/${encodeURIComponent(workId)}/kb/`;
-    const variants = [...new Set([oldPath, encodedPath(oldPath)])].map(escapeRegExp);
+    const variants = [...new Set([oldPath, encodedOld])].map(escapeRegExp);
     const urlRe = new RegExp(
-        `${escapeRegExp(prefix)}(?:${variants.join('|')})(?=$|[)\\s#?"'<>\\]])`,
+        `${escapeRegExp(prefix)}(?:${variants.join('|')})${URL_PATH_END}`,
         'g',
     );
     const urlCode = codeRanges(afterWikilinks);
     const replacement = `${prefix}${encodedPath(newPath)}`;
     const afterUrls = afterWikilinks.replace(urlRe, (full: string, offset: number) => {
-        if (inCode(urlCode, offset)) return full;
+        if (inRanges(urlCode, offset)) return full;
         rewritten += 1;
         return replacement;
     });
 
     return { body: afterUrls, rewritten };
+}
+
+/** The class folder a document path starts with (`brand/voice.md` → `brand`): its class. */
+export function classFolderOfKbPath(path: string): string {
+    return path.split('/')[0] ?? '';
+}
+
+/**
+ * The paths that would clash with a document at `path` as files and folders
+ * do on disk (the git mirror writes each document as a file under its
+ * path): every parent of it as a document (`brand/guide.md` for
+ * `brand/guide.md/voice.md`). Documents NESTED under `path` are the other
+ * half (`path` + `/`), matched by prefix in the repository.
+ */
+export function kbPathParents(path: string): string[] {
+    const segments = path.split('/');
+    const parents: string[] = [];
+    for (let i = 1; i < segments.length; i += 1) {
+        parents.push(segments.slice(0, i).join('/'));
+    }
+    return parents;
+}
+
+/**
+ * Whether `error` is the database refusing a duplicate key (Postgres
+ * `23505`, SQLite `SQLITE_CONSTRAINT_UNIQUE`, MySQL `ER_DUP_ENTRY`).
+ */
+export function isKbUniqueViolation(error: unknown): boolean {
+    const carried = (error ?? {}) as {
+        code?: unknown;
+        message?: unknown;
+        driverError?: { code?: unknown; message?: unknown };
+    };
+    const text = [
+        carried.code,
+        carried.message,
+        carried.driverError?.code,
+        carried.driverError?.message,
+    ]
+        .filter((part) => typeof part === 'string')
+        .join(' ')
+        .toLowerCase();
+    return (
+        text.includes('23505') ||
+        text.includes('duplicate key') ||
+        text.includes('unique constraint') ||
+        text.includes('sqlite_constraint_unique') ||
+        text.includes('er_dup_entry')
+    );
 }

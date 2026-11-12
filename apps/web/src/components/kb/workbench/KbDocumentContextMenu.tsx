@@ -12,6 +12,7 @@ import {
     type ReactNode,
 } from 'react';
 import { useTranslations } from 'next-intl';
+import { toast } from 'sonner';
 import { useRouter } from '@/i18n/navigation';
 import {
     Archive,
@@ -37,7 +38,12 @@ import { DocumentFilePicker } from '@/components/knowledge/DocumentFilePicker';
 import { knowledgeLibraryClient } from '@/components/knowledge/library-client';
 import { shelfBlockReason } from '@/components/knowledge/shelf-block-reason';
 import { useLibraryDocument } from '@/components/knowledge/use-library-document';
-import type { KbDocumentDto, KbLockMode, UpdateKbDocumentInput } from '@ever-works/contracts';
+import type {
+    KbDocumentDto,
+    KbDocumentMoveResult,
+    KbLockMode,
+    UpdateKbDocumentInput,
+} from '@ever-works/contracts';
 
 /**
  * EW-641 slice E — right-click context menu for KB tree rows.
@@ -317,10 +323,24 @@ export function KbDocumentContextMenu({
                     setError(tMenu(renameErrorKey(res.status, payload?.code)));
                     return;
                 }
-                const moved = (await res.json()) as KbDocumentDto;
+                const { linkRewrite, ...moved } = (await res.json()) as KbDocumentMoveResult;
                 setRenameOpen(false);
                 onPatched?.(moved);
                 onRenamed?.(moved);
+                // The rename stands; say which documents still link to the old
+                // path (deleted, fully locked or too busy while it ran).
+                const skipped = linkRewrite?.skipped ?? [];
+                if (skipped.length > 0) {
+                    toast.warning(
+                        tMenu('renameLinksSkipped', {
+                            count: skipped.length,
+                            paths: skipped
+                                .slice(0, 3)
+                                .map((doc) => doc.path)
+                                .join(', '),
+                        }),
+                    );
+                }
                 router.refresh();
                 closeMenu();
             } catch {
@@ -1187,6 +1207,7 @@ export function renameErrorKey(
     | 'renameNotFound'
     | 'renameFailed' {
     if (code === 'KbPathTaken') return 'renamePathTaken';
+    if (code === 'KbPathNesting') return 'renamePathNesting';
     if (code === 'KbLinkedFromLockedDocument') return 'renameLinkedFromLocked';
     if (code === 'KbOrgDocumentPath') return 'renameOrgDocumentPath';
     if (code === 'KbPathInvalid' || status === 400) return 'renameInvalidPath';

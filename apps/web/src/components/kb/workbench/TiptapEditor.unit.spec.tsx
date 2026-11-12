@@ -325,4 +325,118 @@ describe('workbench TiptapEditor', () => {
         });
         expect(screen.queryByTestId('kb-workbench-locked-banner-action')).toBeNull();
     });
+
+    /**
+     * #3204 review: the editor autosaved the FULL body with no revision, so
+     * a save made after a rename rewrote this document's links put the old
+     * links back. It now sends the revision it is based on.
+     */
+    describe('the base revision', () => {
+        const typeAndSave = async (text: string) => {
+            act(() => {
+                fireEditorUpdate(text);
+            });
+            // Past the 10ms debounce; the "Saved Ns ago" pill keeps an
+            // interval running, so never run ALL timers.
+            await act(async () => {
+                await vi.advanceTimersByTimeAsync(50);
+            });
+        };
+
+        it('⭐ sends the revision it loaded, then the one each save returns', async () => {
+            vi.useFakeTimers();
+            updateActionMock
+                .mockResolvedValueOnce({ success: true, data: doc({ body: 'a', revision: 8 }) })
+                .mockResolvedValueOnce({ success: true, data: doc({ body: 'ab', revision: 9 }) });
+            render(
+                <TiptapEditor
+                    workId="work-1"
+                    document={doc({ revision: 7 })}
+                    autosaveDebounceMs={10}
+                />,
+            );
+
+            await typeAndSave('a');
+            await typeAndSave('ab');
+
+            expect(updateActionMock.mock.calls.map(([args]) => args.baseRevision)).toEqual([7, 8]);
+        });
+
+        it('⭐ a refused stale save (409) shows the conflict banner instead of overwriting', async () => {
+            vi.useFakeTimers();
+            updateActionMock.mockResolvedValueOnce({
+                success: false,
+                error: 'HTTP 409: Edit conflict: this document changed since it was opened (revision 7, now 8).',
+            });
+            render(
+                <TiptapEditor
+                    workId="work-1"
+                    document={doc({ revision: 7 })}
+                    autosaveDebounceMs={10}
+                />,
+            );
+            await typeAndSave('stale edit');
+            vi.useRealTimers();
+            await waitFor(() => {
+                expect(screen.getByTestId('kb-workbench-conflict-banner')).toBeTruthy();
+            });
+        });
+
+        it('⭐ adopts a newer revision of the same document whose body it already has (a rename)', async () => {
+            vi.useFakeTimers();
+            updateActionMock.mockResolvedValue({
+                success: true,
+                data: doc({ body: 'x', revision: 9 }),
+            });
+            const { rerender } = render(
+                <TiptapEditor
+                    workId="work-1"
+                    document={doc({ revision: 7 })}
+                    autosaveDebounceMs={10}
+                />,
+            );
+            // The page re-renders at the new path: same id, same body, revision 8.
+            rerender(
+                <TiptapEditor
+                    workId="work-1"
+                    document={doc({ path: 'brand/tone.md', revision: 8 })}
+                    autosaveDebounceMs={10}
+                />,
+            );
+            await typeAndSave('x');
+            expect(updateActionMock.mock.calls[0][0].baseRevision).toBe(8);
+        });
+
+        it('⭐ never adopts a newer revision whose body differs (the save must conflict)', async () => {
+            vi.useFakeTimers();
+            updateActionMock.mockResolvedValue({
+                success: true,
+                data: doc({ body: 'x', revision: 9 }),
+            });
+            const { rerender } = render(
+                <TiptapEditor
+                    workId="work-1"
+                    document={doc({ revision: 7 })}
+                    autosaveDebounceMs={10}
+                />,
+            );
+            rerender(
+                <TiptapEditor
+                    workId="work-1"
+                    document={doc({ body: '# Voice, links rewritten', revision: 8 })}
+                    autosaveDebounceMs={10}
+                />,
+            );
+            await typeAndSave('x');
+            expect(updateActionMock.mock.calls[0][0].baseRevision).toBe(7);
+        });
+
+        it('sends no base revision for a document whose DTO has none (an older API)', async () => {
+            vi.useFakeTimers();
+            updateActionMock.mockResolvedValue({ success: true, data: doc({ body: 'x' }) });
+            render(<TiptapEditor workId="work-1" document={doc()} autosaveDebounceMs={10} />);
+            await typeAndSave('x');
+            expect(updateActionMock.mock.calls[0][0]).not.toHaveProperty('baseRevision');
+        });
+    });
 });

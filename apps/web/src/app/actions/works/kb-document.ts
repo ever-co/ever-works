@@ -32,10 +32,17 @@ export async function updateKbDocumentAction(args: {
     workId: string;
     docId: string;
     body: UpdateKbDocumentInput;
+    /** The revision the edit was made on (the workbench editor's autosave); see `kbAPI.updateDocument`. */
+    baseRevision?: number;
 }): Promise<ActionResult<KbDocumentBodyDto>> {
-    const { workId, docId, body } = args;
+    const { workId, docId, body, baseRevision } = args;
     try {
-        const doc = await kbAPI.updateDocument(workId, docId, body);
+        const doc = await kbAPI.updateDocument(
+            workId,
+            docId,
+            body,
+            typeof baseRevision === 'number' ? { baseRevision } : {},
+        );
         revalidatePath(`/works/${workId}/kb`);
         revalidatePath(`/works/${workId}/kb/${doc.path}`);
         return { success: true, data: doc };

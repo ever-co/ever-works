@@ -112,6 +112,24 @@ class FakeDocuments {
         return { items: items.map((doc) => ({ ...doc })), total: all.length };
     });
 
+    listWorkPageById = jest.fn(async (workId: string, afterId: string | null, limit: number) =>
+        [...this.rows.values()]
+            .filter((doc) => doc.workId === workId && (afterId === null || doc.id > afterId))
+            .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+            .slice(0, limit)
+            .map((doc) => ({ ...doc })),
+    );
+
+    findPathNestingClash = jest.fn(
+        async (workId: string, path: string, parents: string[], excludeId?: string) =>
+            [...this.rows.values()].find(
+                (doc) =>
+                    doc.workId === workId &&
+                    doc.id !== excludeId &&
+                    (parents.includes(doc.path) || doc.path.startsWith(`${path}/`)),
+            )?.path ?? null,
+    );
+
     update = jest.fn(
         async (
             id: string,
@@ -121,6 +139,18 @@ class FakeDocuments {
             this.updates.push({ id, patch, expectedRevision: opts.expectedRevision });
             const row = this.rows.get(id);
             if (!row) return null;
+            // The unique (workId, path) index (migration 1798060000000).
+            if (
+                patch.path !== undefined &&
+                [...this.rows.values()].some(
+                    (doc) => doc.id !== id && doc.workId === row.workId && doc.path === patch.path,
+                )
+            ) {
+                throw Object.assign(
+                    new Error('duplicate key value violates unique constraint "uq_wkd_work_path"'),
+                    { code: '23505' },
+                );
+            }
             if (opts.expectedRevision !== undefined && row.revision !== opts.expectedRevision) {
                 return null;
             }
@@ -576,5 +606,281 @@ describe('KnowledgeBaseService.moveDocument — rename a Work document', () => {
         expect((docs.rows.get(LINKING_ID)!.metadata as { body: string }).body).toBe(
             'Write like [[brand/voice.md]], see [[Voice|brand/voice.md]].',
         );
+    });
+
+    /**
+     * Independent review of #3204 (f42b0f5804): each case below failed, or
+     * was not covered, before the fix.
+     */
+    describe('review fixes', () => {
+        const TAKER_ID = '00000000-0000-0000-0000-000000000099';
+        const move = (path: string) => build().moveDocument(WORK_ID, DOC_ID, USER_ID, { path });
+        const codeOf = (error: unknown) =>
+            (error as ConflictException).getResponse() as { code?: string; message?: string };
+
+        it('⭐ re-checks the path after the link scan: a document that took it meanwhile → 409, nothing written', async () => {
+            const page = docs.listWorkPageById.getMockImplementation()!;
+            docs.listWorkPageById.mockImplementationOnce(async (workId, afterId, limit) => {
+                docs.add(buildDocument({ id: TAKER_ID, path: 'brand/tone.md', slug: 'tone' }));
+                return page(workId, afterId, limit);
+            });
+            const error = await move('brand/tone.md').catch((e: unknown) => e);
+            expect(error).toBeInstanceOf(ConflictException);
+            expect(codeOf(error).code).toBe('KbPathTaken');
+            expect(docs.updates).toHaveLength(0);
+        });
+
+        it('⭐ two moves to one path: the database refuses the second write (unique index) → 409, links untouched', async () => {
+            // Both checks pass (the other move lands between the re-check and
+            // the write); the unique (workId, path) index is what refuses it.
+            docs.add(buildDocument({ id: TAKER_ID, path: 'brand/tone.md', slug: 'tone' }));
+            docs.pathExists.mockResolvedValue(false);
+            const error = await move('brand/tone.md').catch((e: unknown) => e);
+            expect(error).toBeInstanceOf(ConflictException);
+            expect(codeOf(error).code).toBe('KbPathTaken');
+            expect(docs.rows.get(DOC_ID)!.path).toBe('brand/voice.md');
+            expect((docs.rows.get(LINKING_ID)!.metadata as { body: string }).body).toContain(
+                '[[brand/voice.md]]',
+            );
+            expect(mirrorDispatcher.dispatchKbMirrorDocument).not.toHaveBeenCalled();
+        });
+
+        it.each([
+            ['under an existing document', 'brand/guide.md/voice.md', 'brand/guide.md'],
+            ['onto a folder that holds documents', 'brand/notes.md', 'brand/notes.md/a.md'],
+        ])(
+            '⭐ refuses a path that clashes as a file and a folder (%s) → 409 KbPathNesting',
+            async (_l, target, clash) => {
+                docs.add(buildDocument({ id: TAKER_ID, path: 'brand/notes.md/a.md', slug: 'a' }));
+                const error = await move(target).catch((e: unknown) => e);
+                expect(error).toBeInstanceOf(ConflictException);
+                expect(codeOf(error)).toMatchObject({ code: 'KbPathNesting', path: clash });
+                expect(docs.updates).toHaveLength(0);
+            },
+        );
+
+        it('⭐ the class follows the folder (tree, sidecar and context injection read it)', async () => {
+            const moved = await move('legal/voice.md');
+            expect(moved.class).toBe(KbDocumentClass.LEGAL);
+            expect(docs.rows.get(DOC_ID)!.kbDocumentClass).toBe(KbDocumentClass.LEGAL);
+            expect(events().find((e) => e.id === DOC_ID)).toBeDefined();
+            const mirror = mirrorDispatcher.dispatchKbMirrorDocument.mock.calls[0][0];
+            expect(mirror).toMatchObject({ path: 'legal/voice.md', class: KbDocumentClass.LEGAL });
+            // A class change re-embeds the document.
+            expect(embedDispatcher.dispatchKbEmbedDocument).toHaveBeenCalledWith(
+                expect.objectContaining({ documentId: DOC_ID }),
+            );
+        });
+
+        it('⭐ the document’s own links to its old path move with it, in the same write', async () => {
+            docs.add(
+                buildDocument({
+                    metadata: {
+                        body: 'See [[brand/voice.md]] (this page) and [[brand/colors.md]].',
+                    },
+                }),
+            );
+            const moved = await move('brand/tone.md');
+            expect(moved.body).toBe('See [[brand/tone.md]] (this page) and [[brand/colors.md]].');
+            expect(docs.updates.filter((u) => u.id === DOC_ID)).toHaveLength(1);
+            expect(docs.rows.get(DOC_ID)!.normalizedContentHash).toBe(
+                hashNormalizedBody('See [[brand/tone.md]] (this page) and [[brand/colors.md]].'),
+            );
+        });
+
+        it('⭐ a lock taken after the scan is honoured: the document is skipped, named, and not written', async () => {
+            const page = docs.listWorkPageById.getMockImplementation()!;
+            docs.listWorkPageById.mockImplementation(async (workId, afterId, limit) => {
+                const rows = await page(workId, afterId, limit);
+                // Locked once the scan has read it; a lock does not move the revision.
+                const guide = docs.rows.get(LINKING_ID)!;
+                docs.rows.set(LINKING_ID, { ...guide, locked: true, lockMode: KbLockMode.FULL });
+                return rows;
+            });
+            const moved = await move('brand/tone.md');
+            expect((docs.rows.get(LINKING_ID)!.metadata as { body: string }).body).toContain(
+                '[[brand/voice.md]]',
+            );
+            expect(docs.updates.some((u) => u.id === LINKING_ID)).toBe(false);
+            expect(moved.linkRewrite).toEqual({
+                documentIds: [MD_LINKING_ID],
+                skipped: [
+                    {
+                        documentId: LINKING_ID,
+                        path: 'brand/guide.md',
+                        reason: 'The document is fully locked.',
+                    },
+                ],
+            });
+        });
+
+        it('⭐ says which documents it could not rewrite, and why, in the response', async () => {
+            const page = docs.listWorkPageById.getMockImplementation()!;
+            docs.listWorkPageById.mockImplementation(async (workId, afterId, limit) => {
+                const rows = await page(workId, afterId, limit);
+                docs.rows.delete(MD_LINKING_ID);
+                return rows;
+            });
+            const moved = await move('brand/tone.md');
+            expect(moved.linkRewrite.documentIds).toEqual([LINKING_ID]);
+            expect(moved.linkRewrite.skipped).toEqual([
+                {
+                    documentId: MD_LINKING_ID,
+                    path: 'output/post.md',
+                    reason: 'The document was deleted.',
+                },
+            ]);
+        });
+
+        it('⭐ the link scan pages by id, so a write during the scan cannot hide a document', async () => {
+            // 450 documents: three pages of 200. Before, the scan paged an
+            // `updatedAt` order that the rewrites and mirror writes move.
+            for (let i = 0; i < 450; i += 1) {
+                const id = `00000000-0000-0000-0001-${String(i).padStart(12, '0')}`;
+                docs.add(
+                    buildDocument({
+                        id,
+                        path: `brand/n${i}.md`,
+                        slug: `n${i}`,
+                        metadata: { body: i % 150 === 0 ? 'see [[brand/voice.md]]' : 'nothing' },
+                    }),
+                );
+            }
+            const moved = await move('brand/tone.md');
+            expect(docs.list).not.toHaveBeenCalled();
+            expect(docs.listWorkPageById.mock.calls.map(([, afterId]) => afterId === null)).toEqual(
+                [true, false, false],
+            );
+            // guide, post, and n0 / n150 / n300.
+            expect(moved.linkRewrite.documentIds).toHaveLength(5);
+            expect(moved.linkRewrite.skipped).toEqual([]);
+        });
+    });
+
+    describe('review fixes outside the move', () => {
+        it('⭐ deleting a moved document also removes the files at its former paths (one mirror run each)', async () => {
+            docs.add(
+                buildDocument({
+                    path: 'brand/tone.md',
+                    metadata: {
+                        body: '# Voice',
+                        [KB_MIRROR_RETIRED_PATHS_KEY]: ['brand/voice.md', 'legal/voice.md'],
+                    },
+                }),
+            );
+            (docs as unknown as { delete: jest.Mock }).delete = jest.fn(async (id: string) =>
+                docs.rows.delete(id),
+            );
+            const service = build();
+            (service as unknown as { deleteChunksByDocument: jest.Mock }).deleteChunksByDocument =
+                jest.fn(async () => undefined);
+            (service as unknown as { kbDocumentTombstone: jest.Mock }).kbDocumentTombstone =
+                jest.fn(async () => null);
+            (service as unknown as { recordKbDocumentDeleted: jest.Mock }).recordKbDocumentDeleted =
+                jest.fn(async () => undefined);
+
+            await service.deleteDocument(WORK_ID, DOC_ID, USER_ID);
+
+            expect(
+                mirrorDispatcher.dispatchKbMirrorDocument.mock.calls.map(([p]) => [
+                    p.operation,
+                    p.path,
+                    p.class,
+                ]),
+            ).toEqual([
+                ['delete', 'brand/tone.md', KbDocumentClass.BRAND],
+                ['delete', 'brand/voice.md', 'brand'],
+                ['delete', 'legal/voice.md', 'legal'],
+            ]);
+        });
+
+        it('⭐ an edit made on an older revision is refused (409 KbRevisionConflict), nothing written', async () => {
+            // The guide's links were rewritten (revision 3 → 4) while an editor
+            // still had revision 3 open.
+            await build().moveDocument(WORK_ID, DOC_ID, USER_ID, { path: 'brand/tone.md' });
+            expect(docs.rows.get(LINKING_ID)!.revision).toBe(4);
+            const writes = docs.updates.length;
+
+            const error = await build()
+                .updateDocument(
+                    WORK_ID,
+                    LINKING_ID,
+                    USER_ID,
+                    { body: 'Write like [[brand/voice.md]] and more' },
+                    { baseRevision: 3 },
+                )
+                .catch((e: unknown) => e);
+
+            expect(error).toBeInstanceOf(ConflictException);
+            expect((error as ConflictException).getResponse()).toMatchObject({
+                code: 'KbRevisionConflict',
+                revision: 4,
+            });
+            expect(String((error as ConflictException).message)).toMatch(/conflict/i);
+            expect(docs.updates).toHaveLength(writes);
+            expect((docs.rows.get(LINKING_ID)!.metadata as { body: string }).body).toContain(
+                '[[brand/tone.md]]',
+            );
+        });
+
+        it('⭐ a create whose free path is taken before its insert lands takes the next free path', async () => {
+            const created: WorkKnowledgeDocument[] = [];
+            (docs as unknown as { create: jest.Mock }).create = jest.fn(
+                async (data: Partial<WorkKnowledgeDocument>) => {
+                    if (
+                        created.length === 0 &&
+                        data.path === 'brand/tone.md' &&
+                        !docs.rows.has('taker')
+                    ) {
+                        // Another write takes the path between the check and the insert.
+                        docs.add(
+                            buildDocument({ id: 'taker', path: 'brand/tone.md', slug: 'tone' }),
+                        );
+                        throw Object.assign(
+                            new Error(
+                                'duplicate key value violates unique constraint "uq_wkd_work_path"',
+                            ),
+                            { code: '23505' },
+                        );
+                    }
+                    const row = buildDocument({
+                        ...data,
+                        id: 'new-doc',
+                    } as Partial<WorkKnowledgeDocument>);
+                    created.push(row);
+                    docs.add(row);
+                    return row;
+                },
+            );
+            const doc = await build().createDocument({
+                workId: WORK_ID,
+                userId: USER_ID,
+                path: 'brand/tone.md',
+                title: 'Tone',
+                class: KbDocumentClass.BRAND,
+                body: 'x',
+            });
+            expect(doc.path).toBe('brand/tone-2.md');
+            expect((docs as unknown as { create: jest.Mock }).create).toHaveBeenCalledTimes(2);
+        });
+
+        it('an edit made on the current revision saves, and an edit with no base revision is unchecked', async () => {
+            const service = build();
+            (service as unknown as { recordDocumentUpdated: jest.Mock }).recordDocumentUpdated =
+                jest.fn(async () => undefined);
+            const saved = await service.updateDocument(
+                WORK_ID,
+                LINKING_ID,
+                USER_ID,
+                { body: 'v2' },
+                { baseRevision: 3 },
+            );
+            expect(saved.body).toBe('v2');
+            expect(saved.revision).toBe(4);
+            const again = await service.updateDocument(WORK_ID, LINKING_ID, USER_ID, {
+                body: 'v3',
+            });
+            expect(again.revision).toBe(5);
+        });
     });
 });

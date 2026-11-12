@@ -82,6 +82,13 @@ export function TiptapEditor({
     const t = useTranslations('dashboard.workDetail.kb');
     const startBody = initialBody ?? (isBodyDto(document) ? document.body : '');
     const docIdRef = useRef(document.id);
+    // The revision the editor's content is based on, and the body that
+    // revision holds: every save sends the first, so a save made on a body
+    // the server has since changed (another edit, or a rename that rewrote
+    // this document's links) is refused (409 → the conflict banner) instead
+    // of writing the old text back over it.
+    const baseRevisionRef = useRef<number | undefined>(document.revision);
+    const baseBodyRef = useRef(startBody);
 
     const save = useCallback(
         async ({ candidate }: { candidate: string }) => {
@@ -89,9 +96,14 @@ export function TiptapEditor({
                 workId,
                 docId: document.id,
                 body: { body: candidate },
+                ...(typeof baseRevisionRef.current === 'number'
+                    ? { baseRevision: baseRevisionRef.current }
+                    : {}),
             });
             if (result.success) {
                 const confirmedBody = result.data?.body ?? candidate;
+                baseRevisionRef.current = result.data?.revision ?? baseRevisionRef.current;
+                baseBodyRef.current = confirmedBody;
                 if (result.data) onSaved?.(result.data);
                 return { success: true, confirmedBody };
             }
@@ -160,9 +172,27 @@ export function TiptapEditor({
     // Reset the autosave machine + editor content whenever the parent
     // swaps to a different document.
     useEffect(() => {
-        if (docIdRef.current === document.id) return;
+        if (docIdRef.current === document.id) {
+            // The same document at a newer revision whose body is the one
+            // the editor is based on (a rename of the open document: its path
+            // moved, its text did not): adopt it, or the next save would be
+            // refused for a change that changed nothing here. A newer body is
+            // never adopted silently; its save conflicts and the banner says so.
+            const next = initialBody ?? (isBodyDto(document) ? document.body : undefined);
+            if (
+                typeof document.revision === 'number' &&
+                (baseRevisionRef.current === undefined ||
+                    document.revision > baseRevisionRef.current) &&
+                next === baseBodyRef.current
+            ) {
+                baseRevisionRef.current = document.revision;
+            }
+            return;
+        }
         docIdRef.current = document.id;
         const next = initialBody ?? (isBodyDto(document) ? document.body : '');
+        baseRevisionRef.current = document.revision;
+        baseBodyRef.current = next;
         autosave.reset(next);
         if (editor) {
             // `emitUpdate: false` so the document swap doesn't fire the

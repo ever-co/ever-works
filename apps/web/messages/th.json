@@ -7134,6 +7134,8 @@
                         "renamePathTaken": "Another document is already at that path.",
                         "renameLinkedFromLocked": "Locked documents link to this one. Unlock them first so their links can be updated.",
                         "renameOrgDocumentPath": "That path belongs to a document this Work inherits from its organization. Renaming to or from it is not supported.",
+                        "renamePathNesting": "ไม่สามารถเก็บเอกสารไว้ภายในพาธของเอกสารอื่นได้ (และไม่สามารถมีเอกสารอื่นอยู่ใต้พาธของตัวเองได้)",
+                        "renameLinksSkipped": "เปลี่ยนชื่อแล้ว {count, plural, other {เอกสาร # รายการ}}ยังคงลิงก์ไปยังพาธเดิม: {paths}",
                         "renameForbidden": "You can't rename this document: it is locked, or you can't edit this Work.",
                         "renameNotFound": "This document no longer exists. Reload the page.",
                         "renameFailed": "Couldn't rename the document — try again.",

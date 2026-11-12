@@ -154,4 +154,25 @@ describe('kbAPI', () => {
             });
         });
     });
+
+    /** #3204 review — the editor's base revision rides a header an older API ignores. */
+    describe('updateDocument', () => {
+        it('⭐ sends the base revision as X-Kb-Base-Revision, never in the body', async () => {
+            serverMutationMock.mockResolvedValueOnce({ id: 'doc-1' });
+            await kbAPI.updateDocument('work-1', 'doc-1', { body: 'x' }, { baseRevision: 7 });
+            expect(serverMutationMock).toHaveBeenCalledWith({
+                endpoint: '/works/work-1/kb/documents/doc-1',
+                data: { body: 'x' },
+                method: 'PATCH',
+                wrapInData: false,
+                headers: { 'x-kb-base-revision': '7' },
+            });
+        });
+
+        it('sends no header without a base revision', async () => {
+            serverMutationMock.mockResolvedValueOnce({ id: 'doc-1' });
+            await kbAPI.updateDocument('work-1', 'doc-1', { title: 'T' });
+            expect(serverMutationMock.mock.calls[0][0]).not.toHaveProperty('headers');
+        });
+    });
 });

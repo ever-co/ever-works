@@ -7134,6 +7134,8 @@
                         "renamePathTaken": "Another document is already at that path.",
                         "renameLinkedFromLocked": "Locked documents link to this one. Unlock them first so their links can be updated.",
                         "renameOrgDocumentPath": "That path belongs to a document this Work inherits from its organization. Renaming to or from it is not supported.",
+                        "renamePathNesting": "文档不能存放在另一个文档的路径之内（也不能在自己的路径下存放其他文档）。",
+                        "renameLinksSkipped": "已重命名。仍有 {count, plural, other {# 个文档}}链接到旧路径：{paths}",
                         "renameForbidden": "You can't rename this document: it is locked, or you can't edit this Work.",
                         "renameNotFound": "This document no longer exists. Reload the page.",
                         "renameFailed": "Couldn't rename the document — try again.",

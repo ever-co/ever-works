@@ -254,6 +254,54 @@ describe('KnowledgeBaseGitMirrorService', () => {
     });
 
     /**
+     * `removeDocument` runs after the row is gone (a delete), also once per
+     * former path of a moved document. Files at a path another document of
+     * the Work holds by then are that document's.
+     */
+    describe('removeDocument', () => {
+        const kb = (rel: string) => path.join(tempDir, '.content/kb', rel);
+        const exists = (rel: string) =>
+            fs.access(kb(rel)).then(
+                () => true,
+                () => false,
+            );
+        async function seed(rel: string) {
+            await fs.mkdir(path.dirname(kb(rel)), { recursive: true });
+            await fs.writeFile(kb(`${rel}.md`), '# x', 'utf-8');
+            await fs.writeFile(kb(`${rel}.yml`), 'id: x\n', 'utf-8');
+        }
+
+        it('removes the pair and commits', async () => {
+            await seed('brand/voice');
+            await service.removeDocument(WORK_ID, {
+                documentId: DOC_ID,
+                path: 'brand/voice.md',
+                class: 'brand',
+            });
+            expect(await exists('brand/voice.md')).toBe(false);
+            expect(await exists('brand/voice.yml')).toBe(false);
+            expect(gitFacade.commit).toHaveBeenCalledTimes(1);
+        });
+
+        it('⭐ leaves the files alone when another document holds the path by the time it runs', async () => {
+            await seed('brand/voice');
+            documentRepository.pathExists.mockResolvedValue(true);
+            await service.removeDocument(WORK_ID, {
+                documentId: DOC_ID,
+                path: 'brand/voice.md',
+                class: 'brand',
+            });
+            expect(documentRepository.pathExists).toHaveBeenCalledWith(
+                WORK_ID,
+                'brand/voice.md',
+                DOC_ID,
+            );
+            expect(await exists('brand/voice.md')).toBe(true);
+            expect(gitFacade.commit).not.toHaveBeenCalled();
+        });
+    });
+
+    /**
      * A moved document (`KnowledgeBaseService.moveDocument`) carries the
      * paths it left in `metadata.mirrorRetiredPaths`. Its mirror run moves
      * the file: the old pair goes and the new pair arrives in ONE commit, so
@@ -359,6 +407,24 @@ describe('KnowledgeBaseGitMirrorService', () => {
 
             expect(await exists('brand/voice.md')).toBe(false);
             expect(await fs.readFile(kb('brand/tone.md'), 'utf-8')).toBe('# Edited');
+        });
+
+        it('⭐ checks and removes the SAME normalized path (a stored `brand/./voice.md` is `brand/voice.md`)', async () => {
+            await seedOldFiles();
+            documentRepository.findById.mockResolvedValueOnce(movedDoc(['brand/./voice.md']));
+            // Another document holds the normalized path: its files stay.
+            documentRepository.pathExists.mockImplementation(
+                async (_workId: string, p: string) => p === 'brand/voice.md',
+            );
+
+            await service.materializeDocument(WORK_ID, DOC_ID);
+
+            expect(documentRepository.pathExists).toHaveBeenCalledWith(
+                WORK_ID,
+                'brand/voice.md',
+                DOC_ID,
+            );
+            expect(await exists('brand/voice.md')).toBe(true);
         });
 
         it('skips a retired entry that is not a valid KB path instead of failing every mirror run', async () => {

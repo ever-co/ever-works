@@ -1,7 +1,10 @@
 import {
+    classFolderOfKbPath,
+    isKbUniqueViolation,
     KB_MIRROR_RETIRED_PATHS_KEY,
     KB_MIRROR_RETIRED_PATHS_MAX,
     KB_MOVE_PATH_PATTERN,
+    kbPathParents,
     nextRetiredPaths,
     retiredPathsOf,
     rewriteKbDocumentLinks,
@@ -192,6 +195,104 @@ describe('kb-document-move', () => {
             expect(
                 rewriteKbDocumentLinks('[[brand/voice.md]]', { ...move, newPath: move.oldPath }),
             ).toEqual({ body: '[[brand/voice.md]]', rewritten: 0 });
+        });
+    });
+
+    /**
+     * Independent review of #3204 (f42b0f5804): each case below failed
+     * before the fix.
+     */
+    describe('review fixes', () => {
+        /** Wall-clock milliseconds of one rewrite. */
+        const timed = (body: string, input = move) => {
+            const started = process.hrtime.bigint();
+            const out = rewriteKbDocumentLinks(body, input);
+            return { out, ms: Number(process.hrtime.bigint() - started) / 1e6 };
+        };
+
+        it.each([
+            ['a line of 80k "["', `[[brand/voice.md]] ${'['.repeat(80_000)}`],
+            ['80k "[[" pairs', `[[brand/voice.md]] ${'[[x'.repeat(80_000)}`],
+            ['40k inline code spans and 40k links', `${'`a` [[brand/voice.md]] '.repeat(40_000)}`],
+            [
+                '40k unclosed fences',
+                `[[brand/voice.md]]\n${'```\n'.repeat(1)}${'~~~x\n'.repeat(40_000)}`,
+            ],
+            ['40k unclosed comments', `[[brand/voice.md]] ${'<!-- '.repeat(40_000)}`],
+        ])('⭐ stays linear on a pathological body: %s (was seconds)', (_label, body) => {
+            const { out, ms } = timed(body);
+            expect(out.rewritten).toBeGreaterThan(0);
+            // Before: 6.4 s for one line of 80k "[" (a quadratic scan).
+            expect(ms).toBeLessThan(1500);
+        });
+
+        it('returns a body that does not mention the old path untouched, without a scan', () => {
+            const body = '['.repeat(200_000);
+            const { out, ms } = timed(body);
+            expect(out).toEqual({ body, rewritten: 0 });
+            expect(ms).toBeLessThan(200);
+        });
+
+        it.each([
+            ['a ~~~ fence', ['~~~md', '[[brand/voice.md]]', '~~~']],
+            ['a longer ``` fence holding ```', ['````', '```', '[[brand/voice.md]]', '````']],
+            [
+                'a fence never closed (code to the end, as CommonMark has it)',
+                ['```', '[[brand/voice.md]]'],
+            ],
+            ['an HTML comment', ['<!-- [[brand/voice.md]] -->']],
+            [
+                'an HTML comment never closed',
+                ['<!-- draft', `[x](/works/${WORK_ID}/kb/brand/voice.md)`],
+            ],
+        ])('⭐ leaves a link inside %s alone, as the renderer does', (_label, lines) => {
+            const body = [...lines, '', 'Outside: [[brand/voice.md]]'].join('\n');
+            const out = rewriteKbDocumentLinks(body, move);
+            const comment = lines[0].startsWith('<!--') && !lines.join('\n').includes('-->');
+            const fenceOpen = lines.length === 2 && lines[0] === '```';
+            if (comment || fenceOpen) {
+                // Everything after the opener is code / comment.
+                expect(out).toEqual({ body, rewritten: 0 });
+            } else {
+                expect(out.rewritten).toBe(1);
+                expect(out.body).toBe([...lines, '', 'Outside: [[brand/tone.md]]'].join('\n'));
+            }
+        });
+
+        it.each([
+            ['.', 'See /works/W/kb/brand/voice.md.'],
+            [',', 'See /works/W/kb/brand/voice.md, then'],
+            [';', 'See /works/W/kb/brand/voice.md; then'],
+            [':', 'See /works/W/kb/brand/voice.md: the'],
+            ['!', 'See /works/W/kb/brand/voice.md!'],
+            ['| (a table cell)', '| /works/W/kb/brand/voice.md | x |'],
+        ])('⭐ rewrites a bare URL followed by %s', (_label, template) => {
+            const body = template.replace('W', WORK_ID);
+            const out = rewriteKbDocumentLinks(body, move);
+            expect(out.rewritten).toBe(1);
+            expect(out.body).toBe(body.replace('brand/voice.md', 'brand/tone.md'));
+        });
+
+        it('still leaves a longer path alone when it continues after a "." or ":"', () => {
+            const body = [
+                `/works/${WORK_ID}/kb/brand/voice.md.bak`,
+                `/works/${WORK_ID}/kb/brand/voice.md.v2 here`,
+                `/works/${WORK_ID}/kb/brand/voice.md:x`,
+            ].join('\n');
+            expect(rewriteKbDocumentLinks(body, move)).toEqual({ body, rewritten: 0 });
+        });
+
+        it('helpers: the class folder, the parent paths, a unique violation', () => {
+            expect(classFolderOfKbPath('legal/2026/terms.md')).toBe('legal');
+            expect(kbPathParents('brand/guide.md/voice.md')).toEqual(['brand', 'brand/guide.md']);
+            expect(kbPathParents('brand/voice.md')).toEqual(['brand']);
+            expect(isKbUniqueViolation({ code: '23505' })).toBe(true);
+            expect(isKbUniqueViolation({ driverError: { code: 'SQLITE_CONSTRAINT_UNIQUE' } })).toBe(
+                true,
+            );
+            expect(isKbUniqueViolation(new Error('UNIQUE constraint failed: x.path'))).toBe(true);
+            expect(isKbUniqueViolation(new Error('connection reset'))).toBe(false);
+            expect(isKbUniqueViolation(undefined)).toBe(false);
         });
     });
 });
