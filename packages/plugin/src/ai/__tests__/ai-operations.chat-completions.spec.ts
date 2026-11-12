@@ -13,7 +13,10 @@ import { AiOperations } from '../ai-operations';
 
 type Sent = { url: string; body: Record<string, any> };
 
-function stubChatCompletions(message: Record<string, unknown>): Sent[] {
+function stubChatCompletions(
+	message: Record<string, unknown>,
+	reply: { finishReason?: string; usage?: Record<string, number> } = {}
+): Sent[] {
 	const sent: Sent[] = [];
 	vi.stubGlobal(
 		'fetch',
@@ -25,8 +28,14 @@ function stubChatCompletions(message: Record<string, unknown>): Sent[] {
 					object: 'chat.completion',
 					created: 1,
 					model: 'm',
-					choices: [{ index: 0, message, finish_reason: message.tool_calls ? 'tool_calls' : 'stop' }],
-					usage: { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5 }
+					choices: [
+						{
+							index: 0,
+							message,
+							finish_reason: reply.finishReason ?? (message.tool_calls ? 'tool_calls' : 'stop')
+						}
+					],
+					usage: reply.usage ?? { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5 }
 				}),
 				{ status: 200, headers: { 'content-type': 'application/json' } }
 			);
@@ -81,5 +90,38 @@ describe('AiOperations — Chat Completions for every model', () => {
 		expect(response.choices[0].message.toolCalls).toEqual([
 			{ id: 'call_1', type: 'function', function: { name: 'get_weather', arguments: '{"city":"Paris"}' } }
 		]);
+	});
+
+	// The PR reviewer's "no readable output" (2026-11-12): OpenRouter's
+	// nvidia/nemotron-3.5-super-vl:free spent its whole 4096-token budget
+	// reasoning, so the reply was empty with finish_reason "length", and this
+	// reported "stop" — an empty answer looked like a finished one.
+	it('reports the provider’s finish_reason "length" when the output budget ran out', async () => {
+		stubChatCompletions(
+			{ role: 'assistant', content: '', reasoning: 'Let me look at the diff first…' },
+			{ finishReason: 'length', usage: { prompt_tokens: 12674, completion_tokens: 4096, total_tokens: 16770 } }
+		);
+
+		const response = await ops().createChatCompletion({
+			model: 'nvidia/nemotron-3.5-super-vl:free',
+			messages: [{ role: 'user', content: 'review this' }]
+		});
+
+		expect(response.choices[0].finishReason).toBe('length');
+		expect(response.choices[0].message.content).toBe('');
+		expect(response.usage?.completionTokens).toBe(4096);
+	});
+
+	it.each([
+		['stop', 'stop'],
+		['content_filter', 'content_filter'],
+		['max_tokens', 'length'],
+		['something_new', 'stop']
+	])('maps finish_reason "%s" to "%s"', async (raw, expected) => {
+		stubChatCompletions({ role: 'assistant', content: 'OK' }, { finishReason: raw });
+
+		const response = await ops().createChatCompletion({ messages: [{ role: 'user', content: 'hi' }] });
+
+		expect(response.choices[0].finishReason).toBe(expected);
 	});
 });

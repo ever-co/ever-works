@@ -18,6 +18,23 @@ export const PR_REVIEW_INSTRUCTION_MAX_CHARS = 4_000;
 /** Cap on the PR body excerpt included in the prompt. */
 export const PR_REVIEW_PR_BODY_MAX_CHARS = 2_000;
 
+/**
+ * Output-token budget of the review call. A reasoning model spends its hidden
+ * reasoning from this same budget before it writes a word of the answer. With
+ * no budget of its own the review got the provider default (4096 on
+ * OpenRouter), and on 2026-11-11/12 the platform's default model
+ * (`nvidia/nemotron-3.5-super-vl:free`) spent all of it reasoning on 47 of 67
+ * reviews: empty reply, "The reviewer produced no readable output." posted.
+ */
+export const PR_REVIEW_MAX_OUTPUT_TOKENS = 16_384;
+
+/**
+ * Model calls one review may make: the first, and one retry when it gave no
+ * usable answer (no text, or text cut off at the output limit) or refused
+ * the output budget as larger than the model allows.
+ */
+export const PR_REVIEW_MAX_ATTEMPTS = 2;
+
 /** One review request — from the webhook bridge, chat tool, or API. */
 export interface PrReviewRequest {
     /** Platform user the review runs AS (facade auth + ingest owner). */
@@ -75,8 +92,9 @@ export interface PrReviewResult {
     /**
      * - `posted`  — review generated AND the summary comment landed on
      *               the PR.
-     * - `failed`  — the loop could not complete (PR missing, AI error,
-     *               comment post rejected). `error` says why; partial
+     * - `failed`  — the loop could not complete (PR missing, AI error, no
+     *               usable answer from the model — nothing is posted then —
+     *               or comment post rejected). `error` says why; partial
      *               fields (summary) are still populated when available.
      */
     status: 'posted' | 'failed';

@@ -13,7 +13,11 @@ jest.mock('../../ingest/event-ingest.service', () => ({ EventIngestService: clas
 jest.mock('../../services/knowledge-base.service', () => ({ KnowledgeBaseService: class {} }));
 
 import { PrReviewService, codeFenceFor } from '../pr-review.service';
-import { PR_REVIEW_DIFF_MAX_BYTES, PR_REVIEW_MAX_COMMENTS } from '../pr-review.types';
+import {
+    PR_REVIEW_DIFF_MAX_BYTES,
+    PR_REVIEW_MAX_COMMENTS,
+    PR_REVIEW_MAX_OUTPUT_TOKENS,
+} from '../pr-review.types';
 import { AGENT_MEMORY_FENCE_TAG } from '../../services/memory-recall';
 
 const PR = {
@@ -375,6 +379,123 @@ describe('PrReviewService', () => {
         });
         expect(result.summary).toBe('Just plain prose review.');
         expect(result.comments).toEqual([]);
+    });
+
+    /**
+     * "The reviewer produced no readable output." (ever-co/ever-works #3152,
+     * #3153, #3155, #3174, #3196, #3198 …): on 2026-11-11/12, 47 of 67
+     * production reviews ran on OpenRouter's `nvidia/nemotron-3.5-super-vl:free`,
+     * a reasoning model, with the provider's default 4096-token budget, and
+     * every one of the 47 used exactly 4096 completion tokens: the reasoning
+     * ate the budget, the reply was `''` with finish_reason `length`, and that
+     * placeholder was posted. 9 more were cut off mid-JSON at 4096 and posted
+     * as raw half-JSON.
+     */
+    describe('a reply with no usable review', () => {
+        const completion = (
+            content: string,
+            finishReason: 'stop' | 'length' | null,
+            completionTokens = 4096,
+        ) => ({
+            id: 'c1',
+            model: 'nvidia/nemotron-3.5-super-vl:free',
+            created: 0,
+            choices: [{ index: 0, message: { role: 'assistant', content }, finishReason }],
+            usage: {
+                promptTokens: 12674,
+                completionTokens,
+                totalTokens: 12674 + completionTokens,
+            },
+        });
+        const review = () =>
+            build().reviewPullRequest({
+                userId: 'user-1',
+                owner: 'octo',
+                repo: 'site',
+                prNumber: 7,
+            });
+
+        it('⭐ asks for an output budget of its own, not the provider default', async () => {
+            await review();
+            expect(aiFacade.createChatCompletion.mock.calls[0][0]).toMatchObject({
+                maxTokens: PR_REVIEW_MAX_OUTPUT_TOKENS,
+            });
+            expect(PR_REVIEW_MAX_OUTPUT_TOKENS).toBeGreaterThan(4096);
+        });
+
+        it('⭐ posts nothing when the budget ran out before the answer, twice, and says why', async () => {
+            aiFacade.createChatCompletion.mockResolvedValue(completion('', 'length'));
+            const result = await review();
+            expect(aiFacade.createChatCompletion).toHaveBeenCalledTimes(2);
+            expect(gitFacade.createPullRequestComment).not.toHaveBeenCalled();
+            expect(eventIngest.ingest).not.toHaveBeenCalled();
+            expect(result.status).toBe('failed');
+            expect(result.summary).toBe('');
+            expect(result.error).toBe(
+                'AI review produced no usable answer: the model returned no text (finish_reason: length, 4096 output tokens): its output budget ran out before it began the answer',
+            );
+        });
+
+        it('⭐ retries once on an empty reply and posts the retry’s review', async () => {
+            aiFacade.createChatCompletion
+                .mockResolvedValueOnce(completion('', 'length'))
+                .mockResolvedValueOnce(completion(reviewJson(1), 'stop', 3200));
+            const result = await review();
+            expect(aiFacade.createChatCompletion).toHaveBeenCalledTimes(2);
+            expect(result.status).toBe('posted');
+            const body = gitFacade.createPullRequestComment.mock.calls[0][3] as string;
+            expect(body).toContain('Verdict: looks solid.');
+            expect(body).not.toContain('no readable output');
+        });
+
+        it('an empty reply that is NOT a budget overrun is reported as such', async () => {
+            aiFacade.createChatCompletion.mockResolvedValue(completion('   ', 'stop', 12));
+            const result = await review();
+            expect(gitFacade.createPullRequestComment).not.toHaveBeenCalled();
+            expect(result.error).toBe(
+                'AI review produced no usable answer: the model returned no text (finish_reason: stop, 12 output tokens)',
+            );
+        });
+
+        it('⭐ never posts half a JSON object cut off at the output limit', async () => {
+            const cut =
+                '{"summary":"Verdict: Safe to merge with minor observations. Risk flags: touches the critical order-creation';
+            aiFacade.createChatCompletion.mockResolvedValue(completion(cut, 'length'));
+            const result = await review();
+            expect(aiFacade.createChatCompletion).toHaveBeenCalledTimes(2);
+            expect(gitFacade.createPullRequestComment).not.toHaveBeenCalled();
+            expect(result.status).toBe('failed');
+            expect(result.error).toContain(
+                "the model's answer was cut off at its output limit (finish_reason: length, 4096 output tokens)",
+            );
+        });
+
+        it('a complete JSON review that happens to end at the limit is still posted', async () => {
+            aiFacade.createChatCompletion.mockResolvedValue(completion(reviewJson(), 'length'));
+            const result = await review();
+            expect(aiFacade.createChatCompletion).toHaveBeenCalledTimes(1);
+            expect(result.status).toBe('posted');
+        });
+
+        it('retries without the budget when the provider refuses it, then posts', async () => {
+            aiFacade.createChatCompletion
+                .mockRejectedValueOnce(
+                    new Error(
+                        '400 max_tokens is too large: 16384. This model supports at most 4096 completion tokens, whereas you provided 16384.',
+                    ),
+                )
+                .mockResolvedValueOnce(completion(reviewJson(), 'stop', 900));
+            const result = await review();
+            expect(result.status).toBe('posted');
+            expect(aiFacade.createChatCompletion.mock.calls[1][0].maxTokens).toBeUndefined();
+        });
+
+        it('does not retry a provider error that is not about the budget', async () => {
+            aiFacade.createChatCompletion.mockRejectedValue(new Error('429 rate limited'));
+            const result = await review();
+            expect(aiFacade.createChatCompletion).toHaveBeenCalledTimes(1);
+            expect(result.error).toBe('AI review failed: 429 rate limited');
+        });
     });
 
     /**
