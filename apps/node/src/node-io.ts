@@ -4,6 +4,7 @@ import { accessSync, constants as fsConstants, existsSync, realpathSync, statSyn
 import * as fsp from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { createBootIdentityProbe, type BootIdentityProbe } from './core/boot-identity';
 import { resolveBrowserPath } from './core/browser-probe';
 import type { CommandRunner } from './core/capabilities';
 import { readEnvironment, type CapabilityEnvironment } from './core/capabilities';
@@ -95,7 +96,9 @@ export function windowsSystemRoot(env: NodeJS.ProcessEnv): string {
 const WINDOWS_SYSTEM_TOOLS: Readonly<Record<string, readonly string[]>> = {
 	powershell: ['WindowsPowerShell', 'v1.0', 'powershell.exe'],
 	where: ['where.exe'],
-	icacls: ['icacls.exe']
+	icacls: ['icacls.exe'],
+	// The boot counter the worker-safety marker records (`core/boot-identity.ts`).
+	reg: ['reg.exe']
 };
 
 /**
@@ -759,6 +762,26 @@ export function createHealthProbeIo(runner: CommandRunner): HealthProbeIo {
 			}
 		}
 	};
+}
+
+/**
+ * Which boot of this machine this is (`core/boot-identity.ts`): Linux reads
+ * `/proc`, macOS asks `/usr/sbin/sysctl`, Windows asks `reg.exe` (System32).
+ */
+export function createSystemBootIdentityProbe(runner: CommandRunner): BootIdentityProbe {
+	return createBootIdentityProbe({
+		platform: process.platform,
+		readFile: async (filePath) => {
+			try {
+				return await fsp.readFile(filePath, 'utf8');
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+				throw error;
+			}
+		},
+		runner,
+		uptimeSec: () => os.uptime()
+	});
 }
 
 /**

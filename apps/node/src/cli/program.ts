@@ -42,6 +42,7 @@ import {
 } from '../core/runtime';
 import type { SecretStore } from '../core/secret-store';
 import { formatBytes, type ResourceProbe } from '../core/resource-limits';
+import type { BootIdentityProbe } from '../core/boot-identity';
 import { createConfigWorkerSafetyGate } from '../core/worker-safety-store';
 import { measureWorkspaceFreeBytes } from '../core/workspaces/disk-headroom';
 import { defaultFleetTaskWorkspaceRoot } from '../core/workspaces/fleet-task-workspace';
@@ -189,6 +190,14 @@ export interface CliDeps {
 	};
 	/** Wall clock for ages and stamps; defaults to `Date.now`. */
 	now?: () => number;
+	/**
+	 * Which boot of this machine this is (Linux `boot_id`, the macOS boot
+	 * session UUID, the Windows boot counter). The worker-safety marker records
+	 * it, so a quarantine that a REBOOT left behind clears itself at the next
+	 * `start` (see `clearQuarantineLeftByReboot`). Absent (tests, embedders):
+	 * markers record no boot and nothing clears itself.
+	 */
+	bootIdentity?: BootIdentityProbe;
 	/**
 	 * Sessions on computers (FL-04) — how to run this build's hidden
 	 * `session-daemon` subcommand: the Node binary and this CLI's entry
@@ -705,7 +714,9 @@ export async function runStart(deps: CliDeps, options: StartCommandOptions): Pro
 	const codeFolders = parseCodeFolders(options.codeFolder, deps.platform);
 	const filesRoots = parseFilesRoots(options.filesRoot, deps.platform);
 	const workspaceGcOverrides = parseWorkspaceGcFlags(options);
-	const stored = await requireConfig(deps);
+	// Before anything reads `unsafe`: a quarantine a reboot left behind is gone
+	// by the time the worker, the management lane and the overrides below see it.
+	const stored = await clearQuarantineLeftByReboot(deps, await requireConfig(deps));
 	// The reaper policy is persisted on `start` (see `StartCommandOptions`),
 	// onto the STORED config — the heartbeat-interval override above is
 	// process-only and must not be written along with it.
@@ -849,7 +860,11 @@ export async function runStart(deps: CliDeps, options: StartCommandOptions): Pro
 				}
 			);
 		},
-		workerSafetyGate: createConfigWorkerSafetyGate(deps.fs, deps.configPath, { platform: deps.platform }),
+		// The marker records this boot, so a reboot can later prove this session's processes gone.
+		workerSafetyGate: createConfigWorkerSafetyGate(deps.fs, deps.configPath, {
+			platform: deps.platform,
+			...(deps.bootIdentity ? { bootIdentity: deps.bootIdentity } : {})
+		}),
 		// Node lifecycle (slice AR): what the platform last said about this
 		// daemon's version, recorded beside the config for `status`/`doctor`.
 		persistLifecycle: (record) => writeNodeLifecycleRecord(deps.fs, deps.configPath, record),
@@ -1429,6 +1444,64 @@ export async function runPause(deps: CliDeps, paused: boolean, options: PauseCom
 	if (paused) {
 		deps.out('In-flight jobs keep running and still report their results. Heartbeats continue.');
 	}
+}
+
+/**
+ * A worker quarantine that a REBOOT left behind clears itself (2026-11-12).
+ *
+ * The worker-safety marker outlives a crashed session on purpose: that
+ * session's process tree may still be running, so only an operator who has
+ * verified it is gone may clear it (`clear-quarantine`). A reboot IS that
+ * verification: it ends every process of the previous boot. So when the
+ * marker provably belongs to an earlier boot of this machine (see
+ * `findPreviousBootSession`), `start` clears it exactly as `clear-quarantine`
+ * would: the config's `unsafe` first, the marker last, so a crash between
+ * the two leaves the marker and stays fail-closed.
+ *
+ * Anything short of that proof keeps the quarantine as it was: a marker that
+ * records no boot (an older node's), the same boot (a crash or a restart), a
+ * boot that cannot be read, or a marker that cannot be read or parsed. It
+ * runs before the worker arms its own marker, and removes only the exact
+ * bytes it judged, so it never touches a live session's marker.
+ */
+async function clearQuarantineLeftByReboot(deps: CliDeps, config: NodeConfig): Promise<NodeConfig> {
+	if (!deps.bootIdentity) return config;
+	const safetyGate = createConfigWorkerSafetyGate(deps.fs, deps.configPath, {
+		platform: deps.platform,
+		bootIdentity: deps.bootIdentity,
+		...(deps.now ? { now: deps.now } : {})
+	});
+	const previous = await safetyGate.findPreviousBootSession();
+	if (!previous) return config;
+
+	let current = config;
+	try {
+		if (config.unsafe) {
+			const cleared = { ...config };
+			delete cleared.unsafe;
+			await saveConfig(deps.fs, deps.configPath, cleared, {
+				platform: deps.platform,
+				secrets: deps.secrets ?? null,
+				logger: deps.io.logger
+			});
+			current = cleared;
+		}
+		if (!(await safetyGate.clearPreviousBootSession(previous))) {
+			deps.io.logger.warn(
+				'The worker safety marker changed while the quarantine a reboot left behind was being cleared; it was left in place'
+			);
+			return current;
+		}
+	} catch (error) {
+		deps.io.logger.warn(
+			`Could not clear the quarantine a reboot left behind (${describeError(error)}); it stays until \`ever-works-node clear-quarantine --confirm-process-tree-stopped\``
+		);
+		return current;
+	}
+	deps.io.logger.warn(
+		`Previous worker session (marker armed ${previous.since}) ended with the reboot at ${previous.bootedAt}; quarantine cleared automatically — a reboot stops every process tree of that session`
+	);
+	return current;
 }
 
 /** Clear only after the operator has independently verified no child survives. */

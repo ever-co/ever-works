@@ -5,6 +5,7 @@ import { createLogger } from './core/logger';
 import {
 	createCommandRunner,
 	createConfigFileSystem,
+	createSystemBootIdentityProbe,
 	createDiskProbe,
 	createHealthProbeIo,
 	createSecretStore,
@@ -72,6 +73,9 @@ async function buildDeps(): Promise<CliDeps> {
 		fs: createConfigFileSystem({ runner, logger: bootProbeLogger }),
 		configPath: defaultConfigPath(),
 		platform: process.platform,
+		// Which boot this is: the worker-safety marker records it, so a quarantine
+		// that a reboot left behind clears itself at the next start.
+		bootIdentity: createSystemBootIdentityProbe(runner),
 		// Null when this host has no keychain — `resolveSecretStore`
 		// warns on that path rather than downgrading in silence.
 		secrets: createSecretStore(logger),

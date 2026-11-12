@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { publishFileExclusively } from './atomic-state-file';
+import { BOOT_IDENTITY_SOURCES, type BootIdentity, type BootIdentityProbe } from './boot-identity';
 import { CONFIG_FILE_MODE, supportsAtomicWrites, type ConfigFileSystem } from './config-store';
 
 const MARKER_VERSION = 1;
@@ -8,6 +9,13 @@ interface WorkerSessionMarker {
 	version: typeof MARKER_VERSION;
 	sessionId: string;
 	since: string;
+	/**
+	 * The machine boot the session armed the marker in (2026-11-12). Optional
+	 * and unversioned on purpose: an older node reads such a marker as before,
+	 * and a marker without it (an older node's, or one armed while the boot
+	 * could not be read) never clears itself.
+	 */
+	boot?: BootIdentity;
 }
 
 export interface WorkerSafetyState {
@@ -27,10 +35,46 @@ export interface WorkerSafetyGate {
 	clear(): Promise<void>;
 }
 
+/**
+ * An unreleased marker armed in an EARLIER boot of this machine: the reboot
+ * since then ended every process tree that session started.
+ */
+export interface PreviousBootSession {
+	/** When that session armed the marker. */
+	since: string;
+	/** When the current boot began (now minus uptime). */
+	bootedAt: string;
+	previousBoot: BootIdentity;
+	currentBoot: BootIdentity;
+	/** The exact marker bytes this verdict is about; clearance removes nothing else. */
+	raw: string;
+}
+
+/** The config-backed gate, plus the reboot clearance only `start` uses. */
+export interface ConfigWorkerSafetyGate extends WorkerSafetyGate {
+	/**
+	 * The unreleased marker when it PROVABLY belongs to an earlier boot, else
+	 * null. Proof needs both: the marker records a boot identity that differs
+	 * from this boot's (same source), and this boot began after the marker
+	 * was armed (now minus uptime is later than its `since`). No marker, a
+	 * corrupt or unreadable one, one without a boot (an older node), the same
+	 * boot (a crash or a restart), or a boot that cannot be read: null, and the
+	 * quarantine stands. Never rejects.
+	 */
+	findPreviousBootSession(): Promise<PreviousBootSession | null>;
+	/**
+	 * Remove exactly the marker `findPreviousBootSession` judged. False (and
+	 * nothing removed) when the marker on disk is no longer those bytes.
+	 */
+	clearPreviousBootSession(session: PreviousBootSession): Promise<boolean>;
+}
+
 export interface ConfigWorkerSafetyGateOptions {
 	platform?: string;
 	now?: () => number;
 	createSessionId?: () => string;
+	/** Records this boot in the marker and recognises a marker from an earlier one. Absent: neither. */
+	bootIdentity?: BootIdentityProbe;
 }
 
 export class WorkerSafetyPrerequisiteError extends Error {
@@ -56,10 +100,17 @@ export function createConfigWorkerSafetyGate(
 	fs: ConfigFileSystem,
 	configPath: string,
 	options: ConfigWorkerSafetyGateOptions = {}
-): WorkerSafetyGate {
+): ConfigWorkerSafetyGate {
 	const markerPath = workerSafetyMarkerPath(configPath);
 	const now = options.now ?? (() => Date.now());
 	const createSessionId = options.createSessionId ?? randomUUID;
+	const bootIdentity = async (): Promise<BootIdentity | null> => {
+		try {
+			return (await options.bootIdentity?.identity()) ?? null;
+		} catch {
+			return null;
+		}
+	};
 
 	const readRaw = async (): Promise<string | null> => {
 		try {
@@ -83,11 +134,13 @@ export function createConfigWorkerSafetyGate(
 			}
 
 			await fs.mkdir(fs.dirname(markerPath));
+			const boot = await bootIdentity();
 			const marker: WorkerSessionMarker = {
 				version: MARKER_VERSION,
 				sessionId: createSessionId(),
 				since: new Date(now()).toISOString()
 			};
+			if (boot) marker.boot = boot;
 			try {
 				await publishMarker(fs, markerPath, `${JSON.stringify(marker)}\n`, options.platform);
 			} catch (error) {
@@ -145,6 +198,54 @@ export function createConfigWorkerSafetyGate(
 			if ((await readRaw()) !== null) {
 				throw prerequisite('worker safety marker still exists after explicit clearance');
 			}
+		},
+
+		async findPreviousBootSession(): Promise<PreviousBootSession | null> {
+			let raw: string | null;
+			try {
+				raw = await readRaw();
+			} catch {
+				return null;
+			}
+			const marker = raw === null ? null : parseMarker(raw);
+			if (raw === null || !marker?.boot) return null;
+			const current = await bootIdentity();
+			if (!current || current.source !== marker.boot.source || current.value === marker.boot.value) {
+				return null;
+			}
+			// Second, independent proof: this boot began AFTER the marker was
+			// armed. A boot identity that moved without a reboot (a counter
+			// touched on resume, say) cannot clear a quarantine on its own.
+			let uptimeSec: number | null;
+			try {
+				uptimeSec = options.bootIdentity?.uptimeSec() ?? null;
+			} catch {
+				uptimeSec = null;
+			}
+			if (uptimeSec === null || !Number.isFinite(uptimeSec) || uptimeSec < 0) return null;
+			const bootedAtMs = now() - uptimeSec * 1000;
+			if (!Number.isFinite(bootedAtMs) || !(bootedAtMs > Date.parse(marker.since))) return null;
+			return {
+				since: marker.since,
+				bootedAt: new Date(bootedAtMs).toISOString(),
+				previousBoot: marker.boot,
+				currentBoot: current,
+				raw
+			};
+		},
+
+		async clearPreviousBootSession(session: PreviousBootSession): Promise<boolean> {
+			// Re-read: only the bytes that were judged may go. A marker armed
+			// meanwhile (this boot's, by another start racing this one) stays.
+			const raw = await readRaw();
+			if (raw === null) return true;
+			if (raw !== session.raw) return false;
+			if (!fs.remove) throw prerequisite('filesystem cannot clear the durable safety marker');
+			await fs.remove(markerPath);
+			if ((await readRaw()) !== null) {
+				throw prerequisite('worker safety marker still exists after reboot clearance');
+			}
+			return true;
 		}
 	};
 }
@@ -214,14 +315,27 @@ function parseMarker(raw: string): WorkerSessionMarker | null {
 		) {
 			return null;
 		}
-		return {
+		const marker: WorkerSessionMarker = {
 			version: MARKER_VERSION,
 			sessionId: candidate.sessionId,
 			since: new Date(candidate.since).toISOString()
 		};
+		// A malformed boot reads as no boot: the marker still blocks, and it
+		// never clears itself.
+		const boot = parseBoot(candidate.boot);
+		if (boot) marker.boot = boot;
+		return marker;
 	} catch {
 		return null;
 	}
+}
+
+function parseBoot(candidate: unknown): BootIdentity | null {
+	if (!candidate || typeof candidate !== 'object') return null;
+	const { source, value } = candidate as Partial<BootIdentity>;
+	if (typeof source !== 'string' || !BOOT_IDENTITY_SOURCES.includes(source)) return null;
+	if (typeof value !== 'string' || !value || value.length > 200) return null;
+	return { source, value };
 }
 
 function blockedState(raw: string, now: number): WorkerSafetyState {
