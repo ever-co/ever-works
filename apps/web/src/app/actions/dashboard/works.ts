@@ -675,21 +675,47 @@ export async function createWorkWithAI(request: AIWorkOptions) {
 
         const { work } = await workAPI.create(workValidation.data);
 
-        await itemsGeneratorAPI.generate(work.id, {
-            name: validation.data.name,
-            prompt: generationPrompt,
-            providers: request.providers || undefined,
-            pluginConfig: {
-                ...(request.pluginConfig || {}),
-                // Security: server-authoritative key listed AFTER the
-                // user-supplied spread so a malicious caller cannot override
-                // the generation target keywords via pluginConfig.
-                target_keywords: workDetails.keywords,
-            },
-        });
-
+        // A proposal becomes this Work the moment the Work exists — whether or
+        // not its generation starts below. Left open, it could be accepted
+        // again into a second Work.
         if (request.proposalId) {
             await markProposalAcceptedWithRetry(request.proposalId, work.id);
+        }
+
+        // The Work exists from here on. If its generation cannot start (a
+        // provider not enabled or set up for it, a run already in progress, a
+        // refusal from the API), answer with the Work so the caller opens it —
+        // its Generator tab starts generation again. A refused start leaves the
+        // Work as it was: the API refuses before it records a run or sets
+        // GENERATING (`WorkGenerationService.generateItems`). Failing
+        // the whole action left the Work behind unseen, and submitting the
+        // form again then failed with "slug taken".
+        try {
+            await itemsGeneratorAPI.generate(work.id, {
+                name: validation.data.name,
+                prompt: generationPrompt,
+                providers: request.providers || undefined,
+                pluginConfig: {
+                    ...(request.pluginConfig || {}),
+                    // Security: server-authoritative key listed AFTER the
+                    // user-supplied spread so a malicious caller cannot override
+                    // the generation target keywords via pluginConfig.
+                    target_keywords: workDetails.keywords,
+                },
+            });
+        } catch (generationError) {
+            console.error('Work created, but its generation did not start:', generationError);
+            return {
+                success: false,
+                work,
+                generationNotStarted: true,
+                error: t('generationNotStarted', {
+                    reason:
+                        generationError instanceof Error && generationError.message
+                            ? generationError.message
+                            : t('createFailed'),
+                }),
+            };
         }
 
         return {

@@ -306,6 +306,12 @@ export function WorkAICreator({
                 } else {
                     router.push(ROUTES.DASHBOARD_WORKS);
                 }
+            } else if (result.generationNotStarted && result.work) {
+                // The Work was created but its generation did not start: open
+                // it (its Generator tab retries) instead of leaving the user on
+                // a form whose slug is now taken.
+                toast.error(result.error || t('errors.createFailed'));
+                router.push(ROUTES.DASHBOARD_WORK(result.work.id));
             } else if (result.requiresGitProvider) {
                 // Stay put. This used to `router.push(ROUTES.DASHBOARD_WORKS_NEW)`,
                 // which is THIS page minus its query string — and

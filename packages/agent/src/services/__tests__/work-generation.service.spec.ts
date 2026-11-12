@@ -2305,6 +2305,30 @@ describe('WorkGenerationService', () => {
             expect(generationHistoryRepository.createEntry).not.toHaveBeenCalled();
         });
 
+        it('a start refused by the provider check leaves no run row and does not set GENERATING', async () => {
+            // `createWorkWithAI` sends the user to the Work's Generator tab after a
+            // refused start; the retry must find the Work exactly as it was.
+            const work = buildWork({ generateStatus: null as any });
+            ownershipService.ensureCanEdit.mockResolvedValue({ work } as any);
+
+            const service = buildService({ withDispatcher: true });
+            jest.spyOn(service as any, 'prepareProviders').mockRejectedValue(
+                new Error('Provider "openai" is not enabled for this Work'),
+            );
+
+            await expect(
+                service.generateItems(
+                    'work-1',
+                    { name: 'X', prompt: 'p' } as any,
+                    buildUser(),
+                    false,
+                ),
+            ).rejects.toThrow('not enabled');
+            expect(generationHistoryRepository.createEntry).not.toHaveBeenCalled();
+            expect(workRepository.updateGenerateStatus).not.toHaveBeenCalled();
+            expect(generationDispatcher.dispatchWorkGeneration).not.toHaveBeenCalled();
+        });
+
         it('returns "pending" envelope w/ historyId + slug + parameters when awaitCompletion=false', async () => {
             const work = buildWork();
             ownershipService.ensureCanEdit.mockResolvedValue({ work } as any);

@@ -13494,6 +13494,7 @@
             "updateFailed": "Failed to update Work",
             "invalidGeneratedData": "Failed to generate valid Work data",
             "aiGenerationStarted": "Work created — AI is generating content…",
+            "generationNotStarted": "The Work was created, but its generation did not start: {reason}. Open it to try again.",
             "invalidId": "Invalid Work ID",
             "deleteSuccess": "Work deleted successfully",
             "deletePending": "Deleting… the App is being removed from where it runs. The Work disappears once that is done.",
