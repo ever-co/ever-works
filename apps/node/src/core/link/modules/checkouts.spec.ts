@@ -160,7 +160,10 @@ describe('checkouts module (FL-14 T-11)', () => {
 	it('clones with no branch named onto what it cloned; a worktree still needs one (FL-14 FR-16)', async () => {
 		git = async (args) => {
 			calls.push([...args]);
-			return args[0] === 'clone' ? { code: 0, stdout: '', stderr: '' } : { code: 1, stdout: '', stderr: '' };
+			if (args[0] === 'clone') return { code: 0, stdout: '', stderr: '' };
+			// The clone ended on a branch (the default one): `symbolic-ref --quiet HEAD` names it.
+			if (args[0] === 'symbolic-ref') return { code: 0, stdout: 'refs/heads/main\n', stderr: '' };
+			return { code: 1, stdout: '', stderr: '' };
 		};
 		const create = build(MANAGE).machineVerbs!['checkouts.create'];
 		const clone = (checkoutId: string, leaf: string, branch: null | undefined) =>
@@ -183,7 +186,7 @@ describe('checkouts module (FL-14 T-11)', () => {
 			calls = [];
 			const result = (await create.run(clone(checkoutId, leaf, branch))) as { exitCode: number };
 			expect(result.exitCode).toBe(0);
-			expect(calls.map((argv) => argv[0])).toEqual(['clone']);
+			expect(calls.map((argv) => argv[0])).toEqual(['clone', 'symbolic-ref']);
 		}
 		await expect(
 			create.run(

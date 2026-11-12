@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -12,7 +12,8 @@ import { cloneCheckout } from './checkout-operations';
  * one) stays on what it cloned: the base ref when given, else the
  * repository's default branch. Real git against a bare repository whose
  * default branch is deliberately not `main`, so the answer is the remote's,
- * never a guess.
+ * never a guess. A tag as the base ref would leave it on no branch, so that
+ * is refused.
  */
 
 const git = (cwd: string, ...args: string[]): string =>
@@ -42,6 +43,8 @@ describe('cloneCheckout — no branch named: the clone stays on what it cloned (
 		git(seed, 'add', 'CHANGELOG.md');
 		commit('release');
 		git(seed, 'push', remote, 'HEAD:refs/heads/release');
+		git(seed, 'tag', 'v1');
+		git(seed, 'push', remote, 'refs/tags/v1');
 		const real = createCheckoutGitRunner();
 		recording = (args, options) => {
 			calls.push([...args]);
@@ -67,8 +70,8 @@ describe('cloneCheckout — no branch named: the clone stays on what it cloned (
 		expect(git(path, 'rev-parse', '--abbrev-ref', 'HEAD')).toBe('trunk');
 		expect(git(path, 'rev-parse', '--abbrev-ref', '@{upstream}')).toBe('origin/trunk');
 		expect(localBranches(path)).toEqual(['trunk']);
-		// Nothing after the clone: no switch, no branch named "null".
-		expect(calls.map((argv) => argv[0])).toEqual(['clone']);
+		// Nothing after the clone but a local read that it is on a branch: no switch, no branch named "null".
+		expect(calls.map((argv) => argv[0])).toEqual(['clone', 'symbolic-ref']);
 	});
 
 	it('stays on the base ref when one is given', async () => {
@@ -82,5 +85,15 @@ describe('cloneCheckout — no branch named: the clone stays on what it cloned (
 		expect(result.code).toBe(0);
 		expect(git(path, 'rev-parse', '--abbrev-ref', 'HEAD')).toBe('release');
 		expect(localBranches(path)).toEqual(['release']);
+	});
+
+	it('refuses a tag as the base ref, which would leave the clone on no branch, and removes the folder', async () => {
+		const path = target();
+
+		const result = await cloneCheckout({ path, repoUrl: remote, branch: null, baseRef: 'v1' }, { git: recording });
+
+		expect(result.code).not.toBe(0);
+		expect(result.stderr).toMatch(/^v1 is not a branch/);
+		expect(existsSync(path)).toBe(false);
 	});
 });
