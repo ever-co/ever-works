@@ -1966,17 +1966,23 @@ export class KnowledgeBaseService {
             kbPathParents(newPath),
             docId,
         );
-        if (clash) {
-            throw new ConflictException({
-                statusCode: 409,
-                error: 'Conflict',
-                code: 'KbPathNesting',
-                message: clash.startsWith(`${newPath}/`)
-                    ? `Documents are stored under ${newPath}/ (${clash}), so ${newPath} cannot also be a document.`
-                    : `${clash} is a document, so no document can be stored under ${clash}/.`,
-                path: clash,
-            });
-        }
+        if (clash) throw this.pathNestingError(newPath, clash);
+    }
+
+    /**
+     * 409 `KbPathNesting`: `path` and the document at `clash` would be a file
+     * and a folder of one name in the git mirror (one is under the other).
+     */
+    private pathNestingError(path: string, clash: string): ConflictException {
+        return new ConflictException({
+            statusCode: 409,
+            error: 'Conflict',
+            code: 'KbPathNesting',
+            message: clash.startsWith(`${path}/`)
+                ? `Documents are stored under ${path}/ (${clash}), so ${path} cannot also be a document.`
+                : `${clash} is a document, so no document can be stored under ${clash}/.`,
+            path: clash,
+        });
     }
 
     /** The trimmed move target, or 400 `KbPathInvalid` (the pattern, then create's class-folder / traversal rules). */
@@ -4720,10 +4726,30 @@ export class KnowledgeBaseService {
         return last.replace(/\.md$/i, '').toLowerCase();
     }
 
+    /**
+     * The path a new document gets: `path`, or the first free `-2`, `-3`…
+     * variant of it. A path is not free when a document is at it, nor when
+     * documents are stored UNDER it (`brand/notes.md/a.md` makes
+     * `brand/notes.md` a folder in the git mirror): both take the next
+     * variant. A path UNDER a document (`brand/guide.md/voice.md` while
+     * `brand/guide.md` exists) has no free variant, since every one is under
+     * the same document: 409 `KbPathNesting`. The mirror writes every
+     * document as the file at its path, so either clash made every later
+     * mirror run of the Work fail.
+     */
     private async resolvePathCollision(workId: string, path: string): Promise<string> {
+        for (const parent of kbPathParents(path)) {
+            if (await this.documentRepository.pathExists(workId, parent)) {
+                throw this.pathNestingError(path, parent);
+            }
+        }
+        const taken = async (candidate: string): Promise<boolean> =>
+            (await this.documentRepository.pathExists(workId, candidate)) ||
+            (await this.documentRepository.findPathNestingClash(workId, candidate, [])) !== null;
+
         let candidate = path;
         let n = 2;
-        while (await this.documentRepository.pathExists(workId, candidate)) {
+        while (await taken(candidate)) {
             const dot = path.lastIndexOf('.');
             const stem = dot >= 0 ? path.slice(0, dot) : path;
             const ext = dot >= 0 ? path.slice(dot) : '';

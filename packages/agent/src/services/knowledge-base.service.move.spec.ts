@@ -1017,4 +1017,63 @@ describe('KnowledgeBaseService.moveDocument — rename a Work document', () => {
             expect(into.decision).toEqual({ status: KbDecisionStatus.ACCEPTED });
         });
     });
+
+    /**
+     * Create had no file/folder check (#3204 closure check, informational):
+     * the git mirror writes every document as the file at its path, so a
+     * document under another one's path, or at a path other documents are
+     * stored under, made every later mirror run of the Work fail. A move
+     * refuses both (KbPathNesting); create now does too.
+     */
+    describe('create: file/folder clashes', () => {
+        const create = (path: string) =>
+            build().createDocument({
+                workId: WORK_ID,
+                userId: USER_ID,
+                path,
+                title: 'New',
+                class: KbDocumentClass.BRAND,
+                body: 'x',
+            });
+        let inserts: jest.Mock;
+
+        beforeEach(() => {
+            inserts = jest.fn(async (data: Partial<WorkKnowledgeDocument>) => {
+                const row = buildDocument({
+                    ...data,
+                    id: 'new-doc',
+                } as Partial<WorkKnowledgeDocument>);
+                docs.add(row);
+                return row;
+            });
+            (docs as unknown as { create: jest.Mock }).create = inserts;
+        });
+
+        it.each([
+            ['directly under it', 'brand/guide.md/voice.md'],
+            ['deeper under it', 'brand/guide.md/2026/voice.md'],
+        ])(
+            '⭐ refuses a path %s a document (409 KbPathNesting), nothing inserted',
+            async (_l, path) => {
+                const error = await create(path).catch((e: unknown) => e);
+                expect(error).toBeInstanceOf(ConflictException);
+                expect((error as ConflictException).getResponse()).toMatchObject({
+                    code: 'KbPathNesting',
+                    path: 'brand/guide.md',
+                });
+                expect(inserts).not.toHaveBeenCalled();
+            },
+        );
+
+        it('⭐ a path other documents are stored under is taken: the create gets the next free one', async () => {
+            docs.add(buildDocument({ id: 'nested', path: 'brand/notes.md/a.md', slug: 'a' }));
+            const doc = await create('brand/notes.md');
+            expect(doc.path).toBe('brand/notes-2.md');
+        });
+
+        it('a free path is used as asked', async () => {
+            const doc = await create('brand/notes.md');
+            expect(doc.path).toBe('brand/notes.md');
+        });
+    });
 });
