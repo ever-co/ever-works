@@ -788,15 +788,22 @@ export class FleetCheckoutService {
                 },
             });
         }
+        const fresh = (await this.checkouts.findById(row.id)) ?? row;
+        // `branch` is the branch the checkout is on: the node's own report when its result came with the
+        // answer; else the name it will be on — unknown (left out) while the node still has to choose
+        // between the asked branch and the fallback. The row keeps the fallback meanwhile: it reserves the
+        // new name against a concurrent create, and the node's result replaces it.
+        const reported = 'result' in outcome && fresh.state === 'ready';
+        const onBranch = reported ? (fresh.branch ?? null) : existingBranch ? undefined : branch;
         await this.record('node.checkout.create', actor, node, path, {
             kind,
-            branch,
-            ...(existingBranch ? { existingBranch } : {}),
+            ...(onBranch !== undefined ? { branch: onBranch } : {}),
+            ...(request.branch ? { requestedBranch: request.branch } : {}),
+            ...(existingBranch ? { fallbackBranch: branch } : {}),
             confirmationClass: 'plain',
             outcome: 'operationId' in outcome ? 'started' : 'done',
             ...(parent ? { parent: parent.path } : {}),
         });
-        const fresh = (await this.checkouts.findById(row.id)) ?? row;
         return {
             checkout: await this.view(fresh, actor),
             operationId: 'operationId' in outcome ? outcome.operationId : null,

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { FleetNodeCheckoutRecord } from '@ever-works/contracts';
+import type { FleetNodeCheckoutRecord, FleetOperationView } from '@ever-works/contracts';
 import type { FleetCheckout } from '../../../entities/fleet-checkout.entity';
 import type { FleetNode } from '../../../entities/fleet-node.entity';
 import type { FleetCheckoutNodePort, FleetCheckoutNodeRequest } from '../fleet-checkout-node.port';
@@ -100,7 +100,37 @@ function nodeBranchChoice(params: Record<string, unknown>, remoteHeads: readonly
     return params.branch as string;
 }
 
-function fakeNode(remoteHeads: readonly string[]) {
+/** The node's `checkouts.create` result for these params. */
+function createResult(params: Record<string, unknown>, remoteHeads: readonly string[]) {
+    const record: FleetNodeCheckoutRecord = {
+        path: params.path as string,
+        checkoutId: params.checkoutId as string,
+        kind: 'clone',
+        origin: 'platform',
+        parentPath: null,
+        remoteUrl: 'https://github.com/acme/api.git',
+        remoteHadCredential: false,
+        branch: nodeBranchChoice(params, remoteHeads),
+        baseRef: null,
+        headSha: null,
+        isolation: 'host',
+        present: true,
+        gitLine: null,
+        sizeBytes: null,
+        busy: null,
+        reaperNote: null,
+        lastUsedAt: null,
+    };
+    return {
+        checkoutId: params.checkoutId,
+        path: params.path,
+        exitCode: 0,
+        stderrHead: null,
+        checkout: record,
+    };
+}
+
+function fakeNode(remoteHeads: readonly string[], mode: 'inline' | 'operation' = 'inline') {
     const requests: FleetCheckoutNodeRequest[] = [];
     const port: FleetCheckoutNodePort = {
         isConnected: () => true,
@@ -120,35 +150,9 @@ function fakeNode(remoteHeads: readonly string[]) {
                 };
             }
             if (input.verb === 'checkouts.create') {
-                const params = input.params;
-                const record: FleetNodeCheckoutRecord = {
-                    path: params.path as string,
-                    checkoutId: params.checkoutId as string,
-                    kind: 'clone',
-                    origin: 'platform',
-                    parentPath: null,
-                    remoteUrl: 'https://github.com/acme/api.git',
-                    remoteHadCredential: false,
-                    branch: nodeBranchChoice(params, remoteHeads),
-                    baseRef: null,
-                    headSha: null,
-                    isolation: 'host',
-                    present: true,
-                    gitLine: null,
-                    sizeBytes: null,
-                    busy: null,
-                    reaperNote: null,
-                    lastUsedAt: null,
-                };
-                return {
-                    result: {
-                        checkoutId: params.checkoutId,
-                        path: params.path,
-                        exitCode: 0,
-                        stderrHead: null,
-                        checkout: record,
-                    },
-                };
+                // A slow clone continues as a link operation; its result arrives when it ends.
+                if (mode === 'operation') return { operationId: OPERATION_ID };
+                return { result: createResult(input.params, remoteHeads) };
             }
             throw new Error(`unexpected verb ${input.verb}`);
         },
@@ -156,9 +160,16 @@ function fakeNode(remoteHeads: readonly string[]) {
     return { port, requests };
 }
 
-function build(rows: FleetCheckout[], remoteHeads: readonly string[]) {
+const OPERATION_ID = '44444444-4444-4444-8444-444444444444';
+
+function build(
+    rows: FleetCheckout[],
+    remoteHeads: readonly string[],
+    mode: 'inline' | 'operation' = 'inline',
+) {
     const checkouts = memoryCheckouts(rows);
-    const node = fakeNode(remoteHeads);
+    const node = fakeNode(remoteHeads, mode);
+    const audits: Array<{ action: string; details: Record<string, unknown> }> = [];
     const service = new FleetCheckoutService(
         checkouts as unknown as FleetCheckoutRepository,
         { findById: async () => nodeRow(), findByUser: async () => [nodeRow()] } as never,
@@ -168,12 +179,28 @@ function build(rows: FleetCheckout[], remoteHeads: readonly string[]) {
         } as never,
         { isStopped: async () => false } as never,
         { find: async () => [] } as never,
-        undefined,
+        {
+            tryRecord: async (entry: { action: string; details: Record<string, unknown> }) => {
+                audits.push(entry);
+            },
+        } as never,
         node.port,
     );
     const createParams = () =>
         node.requests.find((request) => request.verb === 'checkouts.create')?.params ?? null;
-    return { service, checkouts, createParams };
+    /** The link operation ending with the node's result (FL-02 `FleetOperationsService`). */
+    const endOperation = async () =>
+        service.applyOperationEnded({
+            id: OPERATION_ID,
+            nodeId: NODE_ID,
+            family: 'machine',
+            verb: 'checkouts.create',
+            state: 'done',
+            result: createResult(createParams()!, remoteHeads),
+        } as unknown as FleetOperationView);
+    const createAudit = () =>
+        audits.find((entry) => entry.action === 'node.checkout.create')?.details ?? null;
+    return { service, checkouts, createParams, endOperation, createAudit };
 }
 
 /** A worktree of the user's own clone, on this same computer, already on the pull request's head. */
@@ -266,5 +293,76 @@ describe('FleetCheckoutService.create — a fresh clone keeps the pull request�
 
         expect(createParams()).toMatchObject({ branch: `${HEAD}-2` });
         expect(createParams()).not.toHaveProperty('existingBranch');
+    });
+});
+
+describe('FleetCheckoutService.create — the audit row names the branch the checkout is really on', () => {
+    const clone = {
+        nodeId: NODE_ID,
+        source: { kind: 'clone' as const, repoUrl: REMOTE },
+        branch: HEAD,
+    };
+
+    it('records what was asked, the fallback, and the branch the node reported (remote has the head)', async () => {
+        const { service, createAudit } = build(
+            [checkoutRow({}), otherCheckoutOnHead()],
+            ['main', HEAD],
+        );
+
+        await service.create({ userId: USER_ID }, clone);
+
+        const details = createAudit();
+        expect(details).toMatchObject({
+            branch: HEAD,
+            requestedBranch: HEAD,
+            fallbackBranch: `${HEAD}-2`,
+        });
+        expect(details).not.toHaveProperty('existingBranch');
+    });
+
+    it('records the fallback as the branch when the node had to make it (remote lacks the head)', async () => {
+        const { service, createAudit } = build([checkoutRow({}), otherCheckoutOnHead()], ['main']);
+
+        await service.create({ userId: USER_ID }, clone);
+
+        expect(createAudit()).toMatchObject({
+            branch: `${HEAD}-2`,
+            requestedBranch: HEAD,
+            fallbackBranch: `${HEAD}-2`,
+        });
+    });
+
+    it('leaves `branch` out while the node still chooses, keeps `-2` as the row’s reservation, then takes the node’s branch', async () => {
+        const { service, checkouts, createAudit, endOperation } = build(
+            [checkoutRow({}), otherCheckoutOnHead()],
+            ['main', HEAD],
+            'operation',
+        );
+
+        const created = await service.create({ userId: USER_ID }, clone);
+
+        expect(created.operationId).toBe(OPERATION_ID);
+        const details = createAudit();
+        expect(details).toMatchObject({ requestedBranch: HEAD, fallbackBranch: `${HEAD}-2` });
+        expect(details).not.toHaveProperty('branch');
+        // The provisional row holds the fallback: a concurrent create sees that new name as taken.
+        expect(checkouts.rows.get(created.checkout.id)?.branch).toBe(`${HEAD}-2`);
+
+        await endOperation();
+
+        expect(checkouts.rows.get(created.checkout.id)).toMatchObject({
+            state: 'ready',
+            branch: HEAD,
+        });
+    });
+
+    it('records the branch alone when the name was free (no fallback to name)', async () => {
+        const { service, createAudit } = build([checkoutRow({})], ['main', HEAD]);
+
+        await service.create({ userId: USER_ID }, clone);
+
+        const details = createAudit();
+        expect(details).toMatchObject({ branch: HEAD, requestedBranch: HEAD });
+        expect(details).not.toHaveProperty('fallbackBranch');
     });
 });
