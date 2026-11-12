@@ -1,3 +1,4 @@
+import { posix, win32 } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { killableDisk, type DiskOp } from './__fixtures__/killable-disk';
 import type { BootIdentity, BootIdentityProbe } from './boot-identity';
@@ -625,6 +626,115 @@ describe('a quarantine a reboot left behind (2026-11-12)', () => {
 		await expect(bootGate(h.fs, probe(BOOT_B), RESTARTED, 'fresh').acquire()).resolves.toEqual({
 			kind: 'acquired',
 			sessionId: 'fresh'
+		});
+	});
+});
+
+describe('leftover claims are found whatever the config path looks like (2026-11-12 follow-ups)', () => {
+	const CLAIM_TAIL = '.worker-session.0f0e0d0c-0b0a-4908-8706-050403020100.reboot-clear';
+	const LIVE = JSON.stringify({ version: 1, sessionId: 'racing', since: '2026-11-12T03:30:00.000Z' });
+
+	/**
+	 * A disk with real path semantics for `pathApi`, optionally ignoring case
+	 * as NTFS and APFS do (lookups fold case; listings keep the stored name).
+	 */
+	function disk(pathApi: typeof posix, ignoreCase = false) {
+		const fold = (path: string) => (ignoreCase ? path.toLowerCase() : path);
+		const files = new Map<string, { path: string; content: string }>();
+		const fs: ConfigFileSystem = {
+			readFile: async (path) => files.get(fold(path))?.content ?? null,
+			writeFile: async (path, content) => void files.set(fold(path), { path, content }),
+			createFileExclusive: async (path, content) => {
+				if (files.has(fold(path))) throw Object.assign(new Error('already exists'), { code: 'EEXIST' });
+				files.set(fold(path), { path, content });
+			},
+			mkdir: async () => undefined,
+			chmod: async () => undefined,
+			restrict: async () => undefined,
+			remove: async (path) => void files.delete(fold(path)),
+			rename: async (from, to) => {
+				const entry = files.get(fold(from));
+				if (!entry) throw Object.assign(new Error('missing'), { code: 'ENOENT' });
+				files.delete(fold(from));
+				files.set(fold(to), { path: to, content: entry.content });
+			},
+			readDirectory: async (dir) =>
+				[...files.values()]
+					.filter((entry) => fold(pathApi.dirname(entry.path)) === fold(dir))
+					.map((entry) => pathApi.basename(entry.path)),
+			dirname: (path) => pathApi.dirname(path)
+		};
+		return {
+			fs,
+			has: (path: string) => files.has(fold(path)),
+			put: (path: string, content: string) => fs.writeFile(path, content)
+		};
+	}
+
+	function gateOn(fs: ConfigFileSystem, configPath: string, platform: string) {
+		return createConfigWorkerSafetyGate(fs, configPath, { platform, createSessionId: () => 'next' });
+	}
+
+	it('a bare config file name (EVER_WORKS_NODE_CONFIG=node-config.json): the claim beside it still blocks', async () => {
+		const h = disk(posix);
+		await h.put(`node-config.json${CLAIM_TAIL}`, LIVE);
+		const gate = gateOn(h.fs, 'node-config.json', 'linux');
+
+		await expect(gate.acquire()).resolves.toMatchObject({
+			kind: 'blocked',
+			state: { reason: expect.stringContaining(`node-config.json${CLAIM_TAIL}`) }
+		});
+		await gate.clear();
+		expect(h.has(`node-config.json${CLAIM_TAIL}`)).toBe(false);
+		await expect(gate.acquire()).resolves.toEqual({ kind: 'acquired', sessionId: 'next' });
+	});
+
+	it('a Windows config path: the claim beside it blocks, and clear-quarantine removes it', async () => {
+		const h = disk(win32, true);
+		const config = 'C:\\Users\\worker\\AppData\\Roaming\\ever-works-node\\node-config.json';
+		await h.put(`${config}${CLAIM_TAIL}`, LIVE);
+		const gate = gateOn(h.fs, config, 'win32');
+
+		await expect(gate.acquire()).resolves.toMatchObject({ kind: 'blocked' });
+		await gate.clear();
+		await expect(gate.acquire()).resolves.toEqual({ kind: 'acquired', sessionId: 'next' });
+	});
+
+	it('Windows and macOS ignore case: a claim made under a differently-cased config path still blocks', async () => {
+		for (const [pathApi, platform, madeUnder, configPath] of [
+			[
+				win32,
+				'win32',
+				'C:\\Users\\Worker\\AppData\\Roaming\\ever-works-node\\Node-Config.json',
+				'c:\\users\\worker\\appdata\\roaming\\ever-works-node\\node-config.json'
+			],
+			[
+				posix,
+				'darwin',
+				'/Users/worker/.config/ever-works-node/NODE-CONFIG.json',
+				'/Users/worker/.config/ever-works-node/node-config.json'
+			]
+		] as const) {
+			const h = disk(pathApi, true);
+			await h.put(`${madeUnder}${CLAIM_TAIL}`, LIVE);
+			const gate = gateOn(h.fs, configPath, platform);
+
+			await expect(gate.inspect()).resolves.toMatchObject({
+				reason: expect.stringMatching(/interrupted reboot clearance/)
+			});
+			await expect(gate.acquire()).resolves.toMatchObject({ kind: 'blocked' });
+			await gate.clear();
+			expect(h.has(`${madeUnder}${CLAIM_TAIL}`)).toBe(false);
+		}
+	});
+
+	it("Linux file systems keep case: a differently-cased file is another config's file, not this one's", async () => {
+		const h = disk(posix);
+		await h.put(`/srv/ever-works-node/NODE-CONFIG.json${CLAIM_TAIL}`, LIVE);
+
+		await expect(gateOn(h.fs, '/srv/ever-works-node/node-config.json', 'linux').acquire()).resolves.toEqual({
+			kind: 'acquired',
+			sessionId: 'next'
 		});
 	});
 });
