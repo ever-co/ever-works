@@ -342,6 +342,45 @@ describe('WorkQueryService', () => {
         );
     });
 
+    describe('getWorks page bounds', () => {
+        const pageFor = async (limit?: number, offset?: number) => {
+            workMemberRepository.getAccessibleWorkIds.mockResolvedValue([]);
+            workRepository.findAllAccessible.mockResolvedValue([]);
+            workRepository.countAllAccessible.mockResolvedValue(0);
+            workMemberRepository.getMemberRolesForWorks.mockResolvedValue(new Map());
+            generationHistoryRepository.findLatestPositiveItemCounts.mockResolvedValue(new Map());
+
+            const result = await service.getWorks({ limit, offset }, user);
+            const calls = workRepository.findAllAccessible.mock.calls;
+            const arg = calls[calls.length - 1][0];
+            // The echoed page and the query page must always agree.
+            expect(result.limit).toBe(arg.limit);
+            expect(result.offset).toBe(arg.offset);
+            return { limit: arg.limit, offset: arg.offset };
+        };
+
+        it.each([
+            [undefined, undefined, 20, 0],
+            [-5, -10, 20, 0],
+            [0, 0, 20, 0],
+            [Number.NaN, Number.NaN, 20, 0],
+            [Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY, 20, 0],
+            [2.7, 3.9, 2, 3],
+            [999_999_999, 40, 1000, 40],
+        ])('limit %p / offset %p -> %p / %p', async (limit, offset, wantLimit, wantOffset) => {
+            expect(await pageFor(limit, offset)).toEqual({
+                limit: wantLimit,
+                offset: wantOffset,
+            });
+        });
+
+        it('keeps in-range values unchanged (the Work switcher asks for 1000)', async () => {
+            expect(await pageFor(1, 0)).toEqual({ limit: 1, offset: 0 });
+            expect(await pageFor(100, 200)).toEqual({ limit: 100, offset: 200 });
+            expect(await pageFor(1000, 0)).toEqual({ limit: 1000, offset: 0 });
+        });
+    });
+
     it('returns Work rows owned by the user with the OWNER role', async () => {
         const ownedWork = {
             id: 'owned-work-1',
