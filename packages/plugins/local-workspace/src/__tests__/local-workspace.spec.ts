@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { execFile, execFileSync } from 'node:child_process';
 import { promises as fs } from 'node:fs';
-import { mkdtempSync, writeFileSync, mkdirSync, existsSync, readdirSync, rmSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, mkdirSync, existsSync, readdirSync, rmSync, utimesSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { pathToFileURL } from 'node:url';
@@ -51,6 +51,21 @@ const seedCommit = (file: string, content: string, message: string): string => {
 	git(seedDir, 'push', originUrl, 'HEAD:refs/heads/main');
 	return git(seedDir, 'rev-parse', 'HEAD');
 };
+
+/** The Git subcommand of an argv, past any leading `-c <key=value>` and `--flag`. */
+const gitSubcommand = (args: readonly string[]): string | undefined => {
+	for (let index = 0; index < args.length; index += 1) {
+		if (args[index] === '-c') index += 1;
+		else if (!args[index].startsWith('-')) return args[index];
+	}
+	return undefined;
+};
+
+/** What a scripted fetch does instead of running Git. */
+type ScriptedFetch = 'stall' | 'stall-locked' | 'succeed' | 'fail' | 'run';
+
+/** The stall bound the merge simulation's and the branch judge's fetches carry. */
+const STALL_ARGS = ['-c', 'http.lowSpeedLimit=1000', '-c', 'http.lowSpeedTime=60'];
 
 /** The pool must hold exactly ONE base clone for the loopback origin. */
 const poolRepoDir = (): string => {
@@ -443,9 +458,16 @@ describe('provision (persistent pool + worktree)', () => {
 			...spec('lw-abort', 'task/abort-99990000'),
 			signal: controller.signal
 		} as never);
+		void pending.catch(() => undefined);
 
-		await expect.poll(() => blockingCalls, { timeout: 500 }).toBeGreaterThan(0);
-		controller.abort();
+		// This fake Git never answers, and the suite's pool lock is shared by
+		// every instance in the process: whatever fails here, abort, or the
+		// provision keeps that pool for the rest of the file.
+		try {
+			await expect.poll(() => blockingCalls, { timeout: 500 }).toBeGreaterThan(0);
+		} finally {
+			controller.abort();
+		}
 		await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
 		expect(terminated).toEqual([child]);
 	});
@@ -474,9 +496,14 @@ describe('provision (persistent pool + worktree)', () => {
 			...spec('lw-abort-unproven', 'task/abort-unproven-99991111'),
 			signal: controller.signal
 		} as never);
+		void pending.catch(() => undefined);
 
-		await expect.poll(() => blockingCalls, { timeout: 500 }).toBeGreaterThan(0);
-		controller.abort();
+		// Abort whatever fails: see the test above.
+		try {
+			await expect.poll(() => blockingCalls, { timeout: 500 }).toBeGreaterThan(0);
+		} finally {
+			controller.abort();
+		}
 		await expect(pending).rejects.toMatchObject({
 			name: 'ProcessTreeTerminationError',
 			message: expect.stringMatching(/could not be proven stopped/i)
@@ -601,11 +628,12 @@ describe('one fetch into a pool at a time', () => {
 		let holdNext = false;
 		let heldOpen = false;
 		let release: (() => void) | null = null;
-		let failNextWorktreeDiff = false;
+		let failWorktreeDiffs = 0;
 		let failNextWorktreeMergeTree = false;
 		let releaseMergeTree: (() => void) | null = null;
-		let worktreeFetchScript: ((args: readonly string[]) => 'stall' | 'succeed' | 'run') | null = null;
+		let worktreeFetchScript: ((args: readonly string[]) => ScriptedFetch) | null = null;
 		const stalled: unknown[] = [];
+		const scriptedFetches: string[][] = [];
 		const fetchesWhileHeld: string[] = [];
 		const events: string[] = [];
 		const gatedExecFile = ((
@@ -615,9 +643,9 @@ describe('one fetch into a pool at a time', () => {
 			callback: (error: Error | null, stdout?: string | Buffer, stderr?: string | Buffer) => void
 		) => {
 			const where = String(options.cwd ?? '').startsWith(worktreesDir) ? 'worktree' : 'pool';
-			if (failNextWorktreeDiff && where === 'worktree' && args.includes('diff')) {
+			if (failWorktreeDiffs > 0 && where === 'worktree' && args.includes('diff')) {
 				// A history too shallow for a merge base: the judge deepens the pool.
-				failNextWorktreeDiff = false;
+				failWorktreeDiffs -= 1;
 				queueMicrotask(() =>
 					callback(Object.assign(new Error('no merge base'), { code: 128 }), '', 'fatal: no merge base')
 				);
@@ -633,23 +661,28 @@ describe('one fetch into a pool at a time', () => {
 				};
 				return { pid: 4747, kill: () => true };
 			}
-			const fetch = args[0] === 'fetch';
+			const fetch = gitSubcommand(args) === 'fetch';
 			if (fetch) {
 				if (heldOpen) fetchesWhileHeld.push(`${where}: git ${args.join(' ')}`);
 				events.push(`${where} fetch started`);
 			}
 			const scripted = fetch && where === 'worktree' ? worktreeFetchScript?.(args) : undefined;
-			if (scripted === 'stall') {
+			if (scripted && scripted !== 'run') scriptedFetches.push([...args]);
+			if (scripted === 'stall' || scripted === 'stall-locked') {
 				// A transfer that stalls: no process, no result, ever. Only the
 				// plugin's deadline (through `terminateProcessTree`) ends it.
+				// `stall-locked` first takes the pool's `shallow.lock`, as a
+				// deepen does before its pack arrives, and as a killed Git leaves it.
+				if (scripted === 'stall-locked') writeFileSync(join(poolDirOf(), 'shallow.lock'), '');
 				const child = { pid: 4848, kill: () => true };
 				stalled.push(child);
 				return child;
 			}
-			if (scripted === 'succeed') {
+			if (scripted === 'succeed' || scripted === 'fail') {
 				queueMicrotask(() => {
 					events.push(`${where} fetch ended`);
-					callback(null, '', '');
+					if (scripted === 'succeed') callback(null, '', '');
+					else callback(Object.assign(new Error('refused'), { code: 128 }), '', 'fatal: the remote refused');
 				});
 				return { pid: 4949, kill: () => true };
 			}
@@ -679,33 +712,35 @@ describe('one fetch into a pool at a time', () => {
 		const harnessPlugin = new LocalWorkspacePlugin({ ...pluginOptions, execFile: gatedExecFile });
 		// The lock map is process-wide: find THIS harness's pool among the keys.
 		const poolKeyPrefix = `repo:${process.platform === 'win32' ? join(baseDir, 'repos').toLowerCase() : join(baseDir, 'repos')}`;
+		const poolDirOf = (): string => {
+			const entries = readdirSync(join(baseDir, 'repos'));
+			expect(entries).toHaveLength(1);
+			return join(baseDir, 'repos', entries[0]);
+		};
 		return {
 			plugin: harnessPlugin,
 			spec: (bindingKey: string, branch: string) => ({
 				...spec(bindingKey, branch),
 				settings: { baseDir, fetchDepth: 1 }
 			}),
-			poolDir: () => {
-				const entries = readdirSync(join(baseDir, 'repos'));
-				expect(entries).toHaveLength(1);
-				return join(baseDir, 'repos', entries[0]);
-			},
+			poolDir: poolDirOf,
 			holdNextPoolFetch: () => {
 				holdNext = true;
 			},
-			failNextWorktreeDiff: () => {
-				failNextWorktreeDiff = true;
+			failNextWorktreeDiff: (times = 1) => {
+				failWorktreeDiffs = times;
 			},
 			failNextWorktreeMergeTree: () => {
 				failNextWorktreeMergeTree = true;
 			},
 			mergeTreeParked: () => releaseMergeTree !== null,
 			releaseMergeTree: () => releaseMergeTree?.(),
-			/** Decide each later worktree fetch: stall it, answer it at once, or run real Git. */
-			scriptWorktreeFetches: (script: (args: readonly string[]) => 'stall' | 'succeed' | 'run') => {
+			/** Decide each later worktree fetch: stall it, answer it at once, refuse it, or run real Git. */
+			scriptWorktreeFetches: (script: (args: readonly string[]) => ScriptedFetch) => {
 				worktreeFetchScript = script;
 			},
 			stalled,
+			scriptedFetches,
 			parked: () => release !== null,
 			release: () => release?.(),
 			repoLockTail: () =>
@@ -858,24 +893,28 @@ describe('one fetch into a pool at a time', () => {
 	});
 
 	describe('a fetch that stalls while it holds the lock', () => {
-		// Git has no stall timeout of its own. Each locked fetch is stopped at
-		// its deadline, which hands the lock to whatever waits behind it and
-		// gives the caller an error naming the fetch.
-		const stopsAtTheDeadline = async (
+		// Every locked fetch carries Git's own stall bound, so an HTTP(S)
+		// transfer that stops moving is ended by Git, which removes its own
+		// locks. Whatever that misses is stopped at the deadline: the lock goes
+		// to whatever waits behind it, the `shallow.lock` a killed deepen leaves
+		// is removed, and the caller gets an error naming the fetch.
+		type Harness = ReturnType<typeof poolFetchHarness>;
+		type Handle = Awaited<ReturnType<LocalWorkspacePlugin['provision']>>;
+
+		const runUntilTheDeadline = async (
 			name: string,
-			arrange: (h: ReturnType<typeof poolFetchHarness>) => void,
-			operate: (
-				h: ReturnType<typeof poolFetchHarness>,
-				first: Awaited<ReturnType<LocalWorkspacePlugin['provision']>>
-			) => Promise<unknown>,
-			message: RegExp
+			arrange: (h: Harness) => void,
+			operate: (h: Harness, first: Handle) => Promise<unknown>,
+			terminate?: LocalWorkspacePluginOptions['terminateProcessTree']
 		) => {
 			const terminated: unknown[] = [];
 			const h = poolFetchHarness(`deadline-${name}`, {
 				poolFetchTimeoutMs: 300,
-				terminateProcessTree: async (child) => {
-					terminated.push(child);
-				}
+				terminateProcessTree:
+					terminate ??
+					(async (child) => {
+						terminated.push(child);
+					})
 			});
 			const first = await h.plugin.provision(h.spec('lw-pool-fetch-a', 'task/pool-fetch-a-1a2b3c4d'));
 			arrange(h);
@@ -886,26 +925,52 @@ describe('one fetch into a pool at a time', () => {
 			// The next waiter on the pool (a provision, the node's scan) gets its
 			// turn only once the stalled fetch has been stopped.
 			const next = withPoolLock(h.poolDir(), async () => terminated.length);
-			await expect(work).rejects.toThrow(message);
-			expect(terminated).toEqual(h.stalled);
-			await expect(next).resolves.toBe(1);
+			const error = await work.then(
+				() => null,
+				(failure: unknown) => failure
+			);
+			await expect(next).resolves.toBe(terminated.length);
+			// Git's own stall bound rides on every one of these fetches.
+			expect(h.scriptedFetches.length).toBeGreaterThan(0);
+			for (const args of h.scriptedFetches) {
+				expect(args.slice(0, STALL_ARGS.length)).toEqual(STALL_ARGS);
+				expect(gitSubcommand(args)).toBe('fetch');
+			}
+			return { h, error, terminated, shallowLock: join(h.poolDir(), 'shallow.lock') };
 		};
 
-		it("the merge simulation's target fetch", async () => {
-			await stopsAtTheDeadline(
+		it("the merge simulation's target fetch (a shallow.lock older than the fetch is not its own, and stays)", async () => {
+			let foreignLock = '';
+			const { h, error, terminated, shallowLock } = await runUntilTheDeadline(
 				'target',
-				(h) => h.scriptWorktreeFetches(() => 'stall'),
-				(h, first) => h.plugin.simulateMerge(first, 'main'),
-				/^fetch of merge target 'main' did not finish within 0\.3s and was stopped/
+				(h) => {
+					foreignLock = join(h.poolDir(), 'shallow.lock');
+					writeFileSync(foreignLock, '');
+					const anHourAgo = new Date(Date.now() - 60 * 60_000);
+					utimesSync(foreignLock, anHourAgo, anHourAgo);
+					h.scriptWorktreeFetches(() => 'stall');
+				},
+				(h, first) => h.plugin.simulateMerge(first, 'main')
 			);
+			try {
+				expect(error).toMatchObject({
+					message: expect.stringMatching(
+						/^fetch of merge target 'main' did not finish within 0\.3s and was stopped, so the work/
+					)
+				});
+				expect(terminated).toEqual(h.stalled);
+				expect(existsSync(shallowLock)).toBe(true);
+			} finally {
+				rmSync(foreignLock, { force: true });
+			}
 		});
 
-		it("the merge simulation's --unshallow retry", async () => {
-			await stopsAtTheDeadline(
+		it("the merge simulation's --unshallow retry, and the shallow.lock it left", async () => {
+			const { h, error, terminated, shallowLock } = await runUntilTheDeadline(
 				'merge-deepen',
 				(h) => {
 					h.failNextWorktreeMergeTree();
-					h.scriptWorktreeFetches((args) => (args.includes('--unshallow') ? 'stall' : 'succeed'));
+					h.scriptWorktreeFetches((args) => (args.includes('--unshallow') ? 'stall-locked' : 'succeed'));
 				},
 				async (h, first) => {
 					const merge = h.plugin.simulateMerge(first, 'main');
@@ -913,22 +978,78 @@ describe('one fetch into a pool at a time', () => {
 					await expect.poll(h.mergeTreeParked, { timeout: 20_000 }).toBe(true);
 					h.releaseMergeTree();
 					return merge;
-				},
-				/^deepening the pool's history \(fetch --unshallow\) did not finish within 0\.3s and was stopped/
+				}
 			);
+			expect(error).toMatchObject({
+				message: expect.stringMatching(
+					/^deepening the pool's history \(fetch --unshallow\) did not finish within 0\.3s and was stopped, and the 'shallow\.lock' it left in the repository pool was removed/
+				)
+			});
+			expect(terminated).toEqual(h.stalled);
+			expect(existsSync(shallowLock)).toBe(false);
+			// The target fetch, then the stalled deepen.
+			expect(h.scriptedFetches).toHaveLength(2);
 		});
 
-		it("the branch judge's --unshallow", async () => {
-			await stopsAtTheDeadline(
+		it("the branch judge's --unshallow: its shallow.lock is removed, and the next provision's --depth fetch works", async () => {
+			const { h, error, terminated, shallowLock } = await runUntilTheDeadline(
 				'judge-deepen',
 				(h) => {
 					h.failNextWorktreeDiff();
-					h.scriptWorktreeFetches(() => 'stall');
+					h.scriptWorktreeFetches(() => 'stall-locked');
+				},
+				(h, first) => h.plugin.branchChanges(first, { headSha: git(first.path, 'rev-parse', 'HEAD') })
+			);
+			expect(error).toMatchObject({
+				message: expect.stringMatching(
+					/^deepening the pool's history \(fetch --unshallow\) did not finish within 0\.3s and was stopped, and the 'shallow\.lock' it left in the repository pool was removed/
+				)
+			});
+			expect(terminated).toEqual(h.stalled);
+			expect(existsSync(shallowLock)).toBe(false);
+			// Left in place, the lock fails this with "Unable to create
+			// '…/shallow.lock': File exists" — and every provision after it.
+			await expect(
+				h.plugin.provision(h.spec('lw-pool-fetch-b', 'task/pool-fetch-b-2b3c4d5e'))
+			).resolves.toMatchObject({ bindingKey: 'lw-pool-fetch-b' });
+		});
+
+		it('a stop that cannot be proven keeps its error name, names the fetch and the bound, and removes nothing', async () => {
+			const { error, terminated, shallowLock } = await runUntilTheDeadline(
+				'unproven',
+				(h) => {
+					h.failNextWorktreeDiff();
+					h.scriptWorktreeFetches(() => 'stall-locked');
 				},
 				(h, first) => h.plugin.branchChanges(first, { headSha: git(first.path, 'rev-parse', 'HEAD') }),
-				/^deepening the pool's history \(fetch --unshallow\) did not finish within 0\.3s and was stopped/
+				async () => {
+					throw new Error('There is no running instance of the task.');
+				}
 			);
+			try {
+				expect(error).toMatchObject({
+					name: 'ProcessTreeTerminationError',
+					message: expect.stringMatching(
+						/^deepening the pool's history \(fetch --unshallow\) did not finish within 0\.3s, and stopping it: .*could not be proven stopped/
+					)
+				});
+				expect(terminated).toEqual([]);
+				// That Git may still be running, and the lock may still be its own.
+				expect(existsSync(shallowLock)).toBe(true);
+			} finally {
+				rmSync(shallowLock, { force: true });
+			}
 		});
+	});
+
+	it("the branch judge passes on Git's reason when deepening the history fails", async () => {
+		const h = poolFetchHarness('judge-deepen-fails');
+		const first = await h.plugin.provision(h.spec('lw-pool-fetch-a', 'task/pool-fetch-a-1a2b3c4d'));
+		h.failNextWorktreeDiff(2);
+		h.scriptWorktreeFetches(() => 'fail');
+		await expect(h.plugin.branchChanges(first, { headSha: git(first.path, 'rev-parse', 'HEAD') })).rejects.toThrow(
+			"the branch's changes could not be read: fatal: no merge base; deepening the history first failed: fatal: the remote refused"
+		);
 	});
 });
 

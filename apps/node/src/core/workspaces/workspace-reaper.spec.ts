@@ -873,6 +873,51 @@ describe('workspace reaper — real Git worktrees and a real remote', { timeout:
 			expect(result.errors).toEqual([]);
 			expect(result.removedPools).toHaveLength(1);
 			expect(existsSync(poolPath)).toBe(false);
+			expect(existsSync(scanned.repositories[0].repositoryRoot)).toBe(false);
+		});
+
+		it('leaves the queue for the pool when the reaper is stopped, and keeps the pool', async () => {
+			const rootPath = freshRoot();
+			await provisionAt(rootPath, 'task-pool-stop', 'ever/repo-pool-stop', 'task/pool-stop', OLD);
+			const { scanned, plan } = await scanAndPlan(rootPath);
+			expect(plan.remove).toHaveLength(1);
+			const poolPath = scanned.repositories[0].pools[0].path;
+
+			const provider = new LocalWorkspacePlugin();
+			const controller = new AbortController();
+			let pool: ReturnType<typeof holdPool> | undefined;
+			const reaping = runWorkspaceReap(plan, {
+				now: () => NOW,
+				signal: controller.signal,
+				plugin: {
+					teardown: async (handle) => {
+						await provider.teardown(handle);
+						pool = holdPool(poolPath);
+					}
+				}
+			});
+			let settled = false;
+			const markSettled = (): void => {
+				settled = true;
+			};
+			void reaping.then(markSettled, markSettled);
+			try {
+				await expect
+					.poll(() => pool !== undefined && poolLockTail(poolPath) !== pool.tail, { timeout: 20_000 })
+					.toBe(true);
+				// A provision's own fetch has no deadline: the reaper must not wait
+				// for it once it is told to stop.
+				controller.abort();
+				await expect.poll(() => settled, { timeout: 5_000 }).toBe(true);
+			} finally {
+				pool?.release();
+			}
+			await pool?.held;
+			const result = await reaping;
+			expect(result.removedPools).toEqual([]);
+			expect(result.keptPools.map((verdict) => verdict.reason)).toContain('reaper stopped before this pool');
+			expect(existsSync(join(poolPath, 'HEAD'))).toBe(true);
+			expect(existsSync(scanned.repositories[0].repositoryRoot)).toBe(true);
 		});
 	});
 });

@@ -22,7 +22,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import { basename, dirname, isAbsolute, join, relative, resolve as resolvePath } from 'node:path';
 import { tmpdir } from 'node:os';
-import { execFileWithVerifiedCancellation } from './verified-exec.js';
+import { execFileWithVerifiedCancellation, ProcessTreeTerminationError } from './verified-exec.js';
 import { poolLockKey, withWorkspaceLock, workspaceLocks, worktreeLockKey } from './pool-lock.js';
 import {
 	credentialedCommandEntries,
@@ -63,6 +63,24 @@ const WORKTREES_DIR = 'worktrees';
 
 /** How the deadline error names the `fetch --unshallow` of the merge simulation and the branch judge. */
 const DEEPEN_FETCH = "deepening the pool's history (fetch --unshallow)";
+
+/**
+ * Git's own stall bound, for the fetches the merge simulation and the branch
+ * judge run into a pool: an HTTP(S) transfer that moves fewer than 1000
+ * bytes a second for 60 seconds is ended by Git itself (`http.lowSpeedLimit`,
+ * `http.lowSpeedTime`), which then removes its own lock files — a stall no
+ * longer has to wait for {@link POOL_FETCH_TIMEOUT_MS}, whose stop is a kill.
+ * A slow transfer that is still moving keeps going until that backstop. Other
+ * transports ignore both keys. Plain numbers: nothing here names a program,
+ * a path or a host, and the command-scope `-c` outranks any repository config.
+ */
+const POOL_FETCH_STALL_ARGS = ['-c', 'http.lowSpeedLimit=1000', '-c', 'http.lowSpeedTime=60'] as const;
+
+/**
+ * Slack for comparing a lock file's mtime with the moment a fetch started:
+ * some file systems keep coarse timestamps (FAT: 2 s).
+ */
+const LOCK_MTIME_SLACK_MS = 2_000;
 
 /**
  * A full, lower-case object id — SHA-1 (40) or SHA-256 (64). Nothing symbolic,
@@ -260,13 +278,16 @@ export const POOL_MAINTENANCE_TIMEOUT_MS = 120_000;
  * next waiter, and the caller gets an error that names the fetch. Generous
  * enough to deepen an ordinary repository's whole history.
  *
- * The cost, measured (Git for Windows 2.52, `taskkill /T /F` as the
- * provider kills): an `--unshallow` stopped mid-transfer leaves the pool's
- * `shallow.lock` behind, and every later fetch into that pool then fails
- * with "Unable to create '…/shallow.lock': File exists" until the file is
- * removed — as a cancelled provision's own `--depth` fetch can. The target
- * fetch does not deepen and held no `shallow.lock` during its transfer. A
- * loud, named failure, where there was a lock held with no end.
+ * A stall is usually ended sooner, by Git itself ({@link POOL_FETCH_STALL_ARGS});
+ * this bound is the backstop for whatever that does not catch.
+ *
+ * What the stop leaves, measured (Git for Windows 2.52, `taskkill /T /F` as
+ * the provider kills; a group `SIGKILL` on Linux runs no cleanup either): an
+ * `--unshallow` stopped mid-transfer leaves the pool's `shallow.lock`, and
+ * every later `--depth` or `--unshallow` fetch into that pool fails with
+ * "Unable to create '…/shallow.lock': File exists" — across restarts. So
+ * after a stop that is proven, and still under the pool's lock, the
+ * `shallow.lock` that fetch created is removed (see `withFetchDeadline`).
  */
 export const POOL_FETCH_TIMEOUT_MS = 10 * 60_000;
 
@@ -1111,13 +1132,24 @@ export class LocalWorkspacePlugin implements IPlugin, IWorkspacePlugin {
 			const repoUrl = (
 				await this.gitOrThrow(['remote', 'get-url', 'origin'], dir, undefined, 'origin remote missing')
 			).stdout.trim();
-			await this.withPoolFetchLock(dir, DEEPEN_FETCH, (signal) =>
-				this.git(['fetch', this.authedUrl(repoUrl, undefined), '--unshallow'], dir, undefined, signal)
+			const deepened = await this.withPoolFetchLock(dir, DEEPEN_FETCH, (signal) =>
+				this.git(
+					[...POOL_FETCH_STALL_ARGS, 'fetch', this.authedUrl(repoUrl, undefined), '--unshallow'],
+					dir,
+					undefined,
+					signal
+				)
 			);
 			diff = await this.gitLiteral(diffArgs, dir, undefined);
 			if (diff.code !== 0) {
+				// Git's reason for a failed deepen is usually the real one: the
+				// diff only reports the merge base it still cannot find.
+				const deepenFailure =
+					deepened.code !== 0
+						? `; deepening the history first failed: ${deepened.stderr.trim() || `git exited ${deepened.code}`}`
+						: '';
 				throw new Error(
-					`the branch's changes could not be read: ${diff.stderr.trim() || `git exited ${diff.code}`}`
+					`the branch's changes could not be read: ${diff.stderr.trim() || `git exited ${diff.code}`}${deepenFailure}`
 				);
 			}
 		}
@@ -1261,7 +1293,12 @@ export class LocalWorkspacePlugin implements IPlugin, IWorkspacePlugin {
 		const targetFetch = `fetch of merge target '${targetRef}'`;
 		await this.withPoolFetchLock(dir, targetFetch, (signal) =>
 			this.gitOrThrow(
-				['fetch', this.authedUrl(repoUrl, auth), `+refs/heads/${targetRef}:refs/remotes/origin/${targetRef}`],
+				[
+					...POOL_FETCH_STALL_ARGS,
+					'fetch',
+					this.authedUrl(repoUrl, auth),
+					`+refs/heads/${targetRef}:refs/remotes/origin/${targetRef}`
+				],
 				dir,
 				auth,
 				`${targetFetch} failed`,
@@ -1278,7 +1315,12 @@ export class LocalWorkspacePlugin implements IPlugin, IWorkspacePlugin {
 		// Shallow histories can lack a merge base; deepen once and retry.
 		if (result.code > 1) {
 			await this.withPoolFetchLock(dir, DEEPEN_FETCH, (signal) =>
-				this.git(['fetch', this.authedUrl(repoUrl, auth), '--unshallow'], dir, auth, signal)
+				this.git(
+					[...POOL_FETCH_STALL_ARGS, 'fetch', this.authedUrl(repoUrl, auth), '--unshallow'],
+					dir,
+					auth,
+					signal
+				)
 			);
 			result = await this.git(
 				['merge-tree', '--write-tree', '--name-only', `refs/remotes/origin/${targetRef}`, 'HEAD'],
@@ -1427,29 +1469,59 @@ export class LocalWorkspacePlugin implements IPlugin, IWorkspacePlugin {
 		what: string,
 		fetch: (signal: AbortSignal) => Promise<T>
 	): Promise<T> {
-		const key = await this.poolLockKeyOf(worktreePath);
-		const bounded = (): Promise<T> => this.withFetchDeadline(what, fetch);
-		return key ? this.withRepoLock(key, bounded) : bounded();
+		const pool = await this.poolLockOf(worktreePath);
+		if (!pool) return this.withFetchDeadline(what, fetch, null);
+		return this.withRepoLock(pool.key, () => this.withFetchDeadline(what, fetch, pool.poolDir));
 	}
 
 	/**
 	 * Run `fetch` with a signal that aborts after `poolFetchTimeoutMs`, and
-	 * turn that abort into an error naming the fetch and the bound. Anything
-	 * else — a Git failure, a process tree that could not be proven stopped —
-	 * is passed on unchanged.
+	 * turn that abort into an error naming the fetch and the bound.
+	 *
+	 * A stop that is PROVEN (the whole process tree is gone) also removes the
+	 * `shallow.lock` that fetch left in `poolDir`, when there is one and it is
+	 * not older than the fetch: Git takes that lock with `O_EXCL` while a
+	 * deepen transfers, a killed Git never removes it, and every later
+	 * `--depth` or `--unshallow` fetch into the pool then fails on it. The
+	 * caller holds the pool's lock, so no other fetch of this process can own
+	 * a lock created meanwhile (another process fetching into the same pool is
+	 * outside that lock already — see `pool-lock.ts`). Removing that one file is safe:
+	 * measured, `fsck --connectivity-only` passes after it and both fetches
+	 * bring their history. `poolDir` is null when the pool did not resolve
+	 * (no lock was taken); nothing is removed then.
+	 *
+	 * A stop that could NOT be proven keeps its `ProcessTreeTerminationError`
+	 * (the node quarantines on that name), renamed after the fetch and the
+	 * bound, and removes nothing: that Git may still be running. Any other
+	 * failure is passed on unchanged.
 	 */
-	private async withFetchDeadline<T>(what: string, fetch: (signal: AbortSignal) => Promise<T>): Promise<T> {
+	private async withFetchDeadline<T>(
+		what: string,
+		fetch: (signal: AbortSignal) => Promise<T>,
+		poolDir: string | null
+	): Promise<T> {
 		const limitMs = this.poolFetchTimeoutMs;
 		const deadline = new AbortController();
+		const startedAt = Date.now();
 		const timer = setTimeout(() => deadline.abort(), limitMs);
 		try {
 			return await fetch(deadline.signal);
 		} catch (error) {
-			if (deadline.signal.aborted && isAbortError(error)) {
+			if (!deadline.signal.aborted) throw error;
+			const overdue = `${what} did not finish within ${formatSeconds(limitMs)}`;
+			if (isAbortError(error)) {
+				const removed = poolDir ? await removeShallowLockLeftSince(poolDir, startedAt) : false;
 				throw new Error(
-					`${what} did not finish within ${formatSeconds(limitMs)} and was stopped, so the work waiting on this repository could go on`,
+					`${overdue} and was stopped${
+						removed ? ", and the 'shallow.lock' it left in the repository pool was removed" : ''
+					}, so the work waiting on this repository could go on`,
 					{ cause: error }
 				);
+			}
+			if (error instanceof Error && error.name === 'ProcessTreeTerminationError') {
+				throw Object.assign(new ProcessTreeTerminationError(`${overdue}, and stopping it: ${error.message}`), {
+					cause: error
+				});
 			}
 			throw error;
 		} finally {
@@ -1458,17 +1530,17 @@ export class LocalWorkspacePlugin implements IPlugin, IWorkspacePlugin {
 	}
 
 	/**
-	 * The key {@link provision} locks for the pool `worktreePath` belongs to.
-	 * Provision keys it on the path it builds (`<baseDir>/repos/<repo-key>`),
-	 * while Git names the common directory with links (and Windows short
-	 * names) resolved: the built spelling is used whenever it is the same
-	 * directory, so both sides take one lock.
+	 * The pool `worktreePath` belongs to (Git's common directory), and the key
+	 * {@link provision} locks for it. Provision keys it on the path it builds
+	 * (`<baseDir>/repos/<repo-key>`), while Git names the common directory with
+	 * links (and Windows short names) resolved: the built spelling is used
+	 * whenever it is the same directory, so both sides take one lock.
 	 */
-	private async poolLockKeyOf(worktreePath: string): Promise<string | null> {
+	private async poolLockOf(worktreePath: string): Promise<{ key: string; poolDir: string } | null> {
 		const poolDir = await this.poolDirOf(worktreePath);
 		if (!poolDir) return null;
 		const built = join(dirname(dirname(worktreePath)), REPOS_DIR, basename(poolDir));
-		return poolLockKey((await sameDirectory(built, poolDir)) ? built : poolDir);
+		return { key: poolLockKey((await sameDirectory(built, poolDir)) ? built : poolDir), poolDir };
 	}
 
 	/** Final provisioning deletion gate. This runs under both repository and
@@ -2823,6 +2895,24 @@ function samePath(left: string, right: string): boolean {
 }
 
 /** Two spellings of one directory: the same path, or the same file identity. */
+/**
+ * Remove `<poolDir>/shallow.lock` when it is a plain file whose mtime is not
+ * older than `since` (less {@link LOCK_MTIME_SLACK_MS}): the lock a fetch
+ * started at `since` and then killed left behind. True when it was removed.
+ * An older lock is not that fetch's, and is left alone.
+ */
+async function removeShallowLockLeftSince(poolDir: string, since: number): Promise<boolean> {
+	const lock = join(poolDir, 'shallow.lock');
+	try {
+		const stat = await fs.lstat(lock);
+		if (!stat.isFile() || stat.mtimeMs < since - LOCK_MTIME_SLACK_MS) return false;
+		await fs.unlink(lock);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
 async function sameDirectory(left: string, right: string): Promise<boolean> {
 	if (samePath(left, right)) return true;
 	const [a, b] = await Promise.all([

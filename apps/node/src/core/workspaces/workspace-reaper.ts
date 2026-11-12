@@ -387,15 +387,34 @@ export async function runWorkspaceReap(
 		// In the provider's queue for this pool (as `teardown` above is): a
 		// provision of the same repository — a job claimed while this cycle
 		// runs — must find the pool either gone or untouched, never half
-		// removed under its `worktree add`.
-		const outcome = await withPoolLock(verdict.pool.path, () => removePool(verdict.pool, deps.signal));
+		// removed under its `worktree add`. The emptied `repos/`, `worktrees/`
+		// and repository directories go in the same turn, not after it. A
+		// reaper stop takes it out of the queue: a provision's own fetch has
+		// no deadline.
+		let outcome: RemovalOutcome;
+		try {
+			outcome = await withPoolLock(
+				verdict.pool.path,
+				async () => {
+					const removal = await removePool(verdict.pool, deps.signal);
+					if (removal.ok) await removeEmptyRepositoryRoot(verdict.pool.repositoryRoot);
+					return removal;
+				},
+				deps.signal
+			);
+		} catch (error) {
+			if (error instanceof Error && error.name === 'AbortError' && deps.signal?.aborted) {
+				result.keptPools.push({ pool: verdict.pool, reason: 'reaper stopped before this pool' });
+				continue;
+			}
+			throw error;
+		}
 		if (outcome.ok) {
 			result.removedPools.push({ pool: verdict.pool, freedBytes: verdict.pool.sizeBytes });
 			result.freedBytes += verdict.pool.sizeBytes;
 			deps.logger?.info(
 				`Removed repository pool ${verdict.pool.path} (${formatBytes(verdict.pool.sizeBytes)}): ${verdict.reason}`
 			);
-			await removeEmptyRepositoryRoot(verdict.pool.repositoryRoot);
 		} else {
 			result.keptPools.push({ pool: verdict.pool, reason: outcome.reason });
 			if (outcome.error) result.errors.push(`${verdict.pool.path}: ${outcome.reason}`);
