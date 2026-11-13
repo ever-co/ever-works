@@ -2817,6 +2817,40 @@ describe('api-side AgentsModule — AGENT_GIT_FACADE Work repository resolution 
             expect(git.push).not.toHaveBeenCalled();
         });
 
+        it.each(['release/1.2', 'release/1.2/hotfix', 'RELEASE/1.2', 'refs/heads/release/1.2'])(
+            'refuses %s under a release/* wildcard entry BEFORE any git operation runs',
+            async (branch) => {
+                const { facade, git } = build({ protectedBranches: ['release/*'] });
+
+                const attempt = facade.commitToRepo(commitInput({ branch }));
+                await expect(attempt).rejects.toThrow(/protected/i);
+                await expect(attempt).rejects.toThrow('release/*');
+
+                expectNoGitWork(git);
+            },
+        );
+
+        it.each(['releases', 'feature/release/x'])(
+            'does not refuse %s under a release/* wildcard entry',
+            async (branch) => {
+                const { facade, git } = build({ protectedBranches: ['release/*'] });
+
+                await facade.commitToRepo(commitInput({ branch })).catch(() => undefined);
+
+                // Past the guard: the adapter went on to open the working copy.
+                expect(git.cloneOrPull).toHaveBeenCalled();
+            },
+        );
+
+        it('still refuses an exact entry next to a wildcard entry', async () => {
+            const { facade, git } = build({ protectedBranches: ['release/*', 'release/frozen'] });
+
+            await expect(
+                facade.commitToRepo(commitInput({ branch: 'Release/Frozen' })),
+            ).rejects.toThrow(/protected/i);
+            expectNoGitWork(git);
+        });
+
         it('refuses develop even when the effective policy no longer lists it (the floor)', async () => {
             const { facade, git } = build({ protectedBranches: ['release/frozen'] });
 

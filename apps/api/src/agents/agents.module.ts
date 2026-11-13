@@ -72,6 +72,7 @@ import {
 // as `repos[role]` in `packages/agent/src/works/repository-work-guard.ts`
 // (`hasRepositoryRole`) — the ONE place that knowledge lives.
 import {
+    findProtectedMergeBranch,
     getWorkCapabilities,
     isAppWorkKind,
     isRepositoryWorkKind,
@@ -1280,10 +1281,9 @@ async function assertRealWriteTarget(
                     branch: string,
                     protectedBranches: readonly string[],
                 ): void => {
-                    const normalized = normalizeBranchRef(branch);
-                    const match = protectedBranches.find(
-                        (entry) => normalizeBranchRef(entry) === normalized,
-                    );
+                    // The merge decision's matcher: exact names AND `*` wildcards
+                    // (`release/*`), so a pattern the merge path refuses is refused here too.
+                    const match = findProtectedMergeBranch(branch, protectedBranches);
                     if (!match) return;
                     throw new Error(
                         `${tool}: refusing to commit to '${branch}' — '${match}' is a protected release branch ` +

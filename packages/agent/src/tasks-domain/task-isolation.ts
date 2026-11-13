@@ -1,4 +1,8 @@
-import { PLATFORM_DEFAULT_MERGE_POLICY, isAppWorkKind } from '@ever-works/contracts';
+import {
+    PLATFORM_DEFAULT_MERGE_POLICY,
+    findProtectedMergeBranch,
+    isAppWorkKind,
+} from '@ever-works/contracts';
 
 /** Per-Task isolation override values accepted end-to-end (API DTO ↔ domain ↔ entity). */
 export type TaskIsolationMode = 'on' | 'off';
@@ -144,12 +148,12 @@ export function protectedTaskBranchReason(
             .replace(/^refs\/heads\//i, '')
             .toLowerCase();
     const candidate = normalize(branch);
-    const protectedBranches = new Set(
-        [...PLATFORM_DEFAULT_MERGE_POLICY.protectedBranches, ...policyProtectedBranches]
-            .filter((name): name is string => typeof name === 'string' && name.trim().length > 0)
-            .map((name) => normalize(name)),
-    );
-    if (protectedBranches.has(candidate)) {
+    // The merge decision's matcher: exact names and `*` wildcards (`release/*`).
+    const protectedBranches = [
+        ...PLATFORM_DEFAULT_MERGE_POLICY.protectedBranches,
+        ...policyProtectedBranches,
+    ].filter((name): name is string => typeof name === 'string' && name.trim().length > 0);
+    if (findProtectedMergeBranch(branch, protectedBranches)) {
         return `'${branch.trim()}' is a protected branch`;
     }
     if (baseRef && normalize(baseRef) === candidate) {
