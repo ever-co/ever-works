@@ -24,6 +24,7 @@ import {
     type EverConnectFeedHandler,
     type EverConnectRoundParticipant,
 } from '../ever-connect-extensions';
+import { EVER_CONNECT_LEASE_HELD, type EverConnectRoundLease } from '../ever-connect-lease.service';
 import { EverConnectService } from '../ever-connect.service';
 import { isEntitlementsEnabled } from '../ever-connect.switches';
 import { platformFailure } from '../identity/platform-answer';
@@ -33,9 +34,9 @@ export const ENTITLEMENT_REFRESH_AFTER_S = 21_600;
 /** A read that failed is not tried again before this (Ever Platform allows six reads an hour). */
 export const ENTITLEMENT_RETRY_AFTER_MS = 15 * 60_000;
 /**
- * Linked Organizations' documents read in one round at most. A round also
- * renews the worker's lease and sends the outbox, so an installation with many
- * links reads its documents over several rounds.
+ * Linked Organizations' documents read in one round at most: an installation
+ * with many links reads its documents over several rounds. The worker's lease
+ * is renewed before each read.
  */
 export const ENTITLEMENT_LINK_READS_PER_ROUND = 20;
 
@@ -149,8 +150,15 @@ export class EverConnectEntitlementService
 
     // -- the worker's round -------------------------------------------------------
 
-    /** Read every document that is due (or all of them, after an announcement). */
-    async round(now: Date = new Date()): Promise<void> {
+    /**
+     * Read every document that is due (or all of them, after an announcement).
+     * The worker's lease is renewed before each link's read; when it is lost
+     * the round stops, and the documents not read stay due.
+     */
+    async round(
+        now: Date = new Date(),
+        lease: EverConnectRoundLease = EVER_CONNECT_LEASE_HELD,
+    ): Promise<void> {
         if (!this.isEnabled()) return;
         const row = await this.connection.connection();
         if (row.status !== 'active' || !row.platformInstanceId) return;
@@ -170,6 +178,7 @@ export class EverConnectEntitlementService
             if (!link.platformLinkId || !LINK_ID.test(link.platformLinkId)) continue;
             const subject = linkEntitlementSubject(link.platformLinkId);
             if (!this.due(subject, read.get(subject), now)) continue;
+            if (!(await lease.keep())) return;
             reads += 1;
             await this.refreshLink(link, now);
         }

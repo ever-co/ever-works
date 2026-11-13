@@ -1,5 +1,6 @@
 import { EverConnectFeedService } from '../ever-connect-feed.service';
 import type { EverConnectIntegrationService } from '../ever-connect-integration.service';
+import type { EverConnectRoundLease } from '../ever-connect-lease.service';
 import type { EverConnectService } from '../ever-connect.service';
 import type { PersonRequestsHandler } from '../identity/person-requests.handler';
 import {
@@ -11,8 +12,9 @@ import {
 /**
  * Where the separately switched parts join the feed and the worker's round:
  * with none registered nothing changes; a part that fails in a round does not
- * stop the others; a part that cannot read a feed event stops the feed at that
- * event, so it is read again.
+ * stop the others; the worker's lease is renewed before each part and the round
+ * stops when it is lost; a part that cannot read a feed event stops the feed at
+ * that event, so it is read again.
  */
 describe('EverConnectExtensions', () => {
     const NOW = new Date('2026-11-13T10:00:00.000Z');
@@ -48,6 +50,40 @@ describe('EverConnectExtensions', () => {
             `failing@${NOW.toISOString()}`,
             `last@${NOW.toISOString()}`,
         ]);
+    });
+
+    it("the worker's lease is renewed before each part, handed to it, and a lost lease stops the round", async () => {
+        const extensions = new EverConnectExtensions();
+        const ran: string[] = [];
+        const handed: EverConnectRoundLease[] = [];
+        for (const name of ['heartbeat', 'entitlements', 'apps mirror']) {
+            extensions.addRoundParticipant({
+                name,
+                round: async (_now, lease) => {
+                    ran.push(name);
+                    handed.push(lease);
+                },
+            });
+        }
+        let asked = 0;
+        const lease: EverConnectRoundLease = {
+            held: true,
+            // Held before the first two parts, lost before the third.
+            keep: async () => (asked += 1) <= 2,
+        };
+        await extensions.runRound(NOW, lease);
+        expect(ran).toEqual(['heartbeat', 'entitlements']);
+        expect(asked).toBe(3);
+        expect(handed).toEqual([lease, lease]);
+
+        // Control: a lease that is held runs all three.
+        ran.length = 0;
+        await extensions.runRound(NOW, { held: true, keep: async () => true });
+        expect(ran).toEqual(['heartbeat', 'entitlements', 'apps mirror']);
+        // Run on its own (no lease given): nothing holds a part back.
+        ran.length = 0;
+        await extensions.runRound(NOW);
+        expect(ran).toEqual(['heartbeat', 'entitlements', 'apps mirror']);
     });
 
     it('a feed event goes to every part that reads its type, and only to those', async () => {

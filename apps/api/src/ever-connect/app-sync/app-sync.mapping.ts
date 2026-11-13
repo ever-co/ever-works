@@ -21,6 +21,19 @@ export const APP_SYNC_KEY = 'app_sync';
 
 /** The outbox event of a Work whose mirror row is owed. */
 export const APP_SYNC_OUTBOX_EVENT = 'app_sync';
+/**
+ * The outbox event of a Work queued by a full send (the daily reconciliation,
+ * or the first send after the integration turned on) and not changed since.
+ * A pass takes every change first and these after, so a Work that just changed
+ * never waits behind a full send. A Work has one row: a change moves it to
+ * {@link APP_SYNC_OUTBOX_EVENT}.
+ */
+export const APP_SYNC_FULL_SEND_OUTBOX_EVENT = 'app_sync_full';
+/** Every outbox event the apps mirror writes. */
+export const APP_SYNC_OUTBOX_EVENTS = [
+    APP_SYNC_OUTBOX_EVENT,
+    APP_SYNC_FULL_SEND_OUTBOX_EVENT,
+] as const;
 
 /**
  * The first scope version of `app_sync` that lists what the mirror's contract
