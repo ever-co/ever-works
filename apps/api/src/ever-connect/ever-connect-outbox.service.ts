@@ -1,9 +1,11 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, LessThanOrEqual, MoreThan, type Repository } from 'typeorm';
+import { In, LessThanOrEqual, MoreThan, Not, type Repository } from 'typeorm';
 import { EverConnectOutbox } from '@ever-works/agent/entities';
+import { APP_SYNC_OUTBOX_EVENTS } from './app-sync/app-sync.mapping';
 import { EverConnectConnectionChangedEvent } from './ever-connect.events';
+import { EVER_CONNECT_LEASE_HELD, type EverConnectRoundLease } from './ever-connect-lease.service';
 import type {
     EverConnectReportQueue,
     PersonLinkReport,
@@ -15,6 +17,14 @@ export const PERSON_LINK_EVENT = 'person_link';
 
 /** How many rows one pass of the worker reads. */
 const PASS_SIZE = 100;
+
+/**
+ * Rows of the outbox that a separately switched part writes, sends and reports
+ * itself (the apps mirror: one row per Work it owes, shown under "Apps on Ever
+ * Platform"). They are not reports owed for a person, so they stay out of the
+ * operator's general outbox numbers.
+ */
+const REPORTED_BY_THEIR_PART: readonly string[] = APP_SYNC_OUTBOX_EVENTS;
 
 let seqCounter = 0;
 
@@ -61,11 +71,13 @@ export class EverConnectOutboxService implements EverConnectReportQueue {
             .execute();
     }
 
+    /** The reports owed to Ever Platform, without the rows a part reports itself. */
     async status(): Promise<EverConnectOutboxStatus> {
-        const pending = await this.outbox.count({ where: { state: 'pending' } });
-        const failed = await this.outbox.count({ where: { state: 'failed' } });
+        const event = Not(In([...REPORTED_BY_THEIR_PART]));
+        const pending = await this.outbox.count({ where: { event, state: 'pending' } });
+        const failed = await this.outbox.count({ where: { event, state: 'failed' } });
         const last = await this.outbox.findOne({
-            where: { state: In(['pending', 'failed']) },
+            where: { event, state: In(['pending', 'failed']) },
             order: { updatedAt: 'DESC' },
         });
         return { pending, failed, lastError: last?.lastError ?? null };
@@ -94,8 +106,15 @@ export class EverConnectOutboxWorker {
         private readonly reporter: PersonLinkReporter,
     ) {}
 
-    /** One pass. Returns how many reports were delivered. */
-    async drainOnce(now = new Date()): Promise<number> {
+    /**
+     * One pass. Returns how many reports were delivered. The worker's lease is
+     * renewed between two reports; when it is lost the pass stops, and the
+     * reports not sent yet stay owed.
+     */
+    async drainOnce(
+        now = new Date(),
+        lease: EverConnectRoundLease = EVER_CONNECT_LEASE_HELD,
+    ): Promise<number> {
         // Only due rows: reports waiting for a retry never hold up the others.
         const rows = await this.outbox.find({
             where: {
@@ -134,6 +153,7 @@ export class EverConnectOutboxWorker {
             const seq = BigInt(String(row.seq));
             const blockedFrom = waitingFrom.get(account);
             if (blockedFrom !== undefined && seq > blockedFrom) continue;
+            if (!(await lease.keep())) break;
             const outcome = await this.reporter.send(report, row.attempts);
             switch (outcome.outcome) {
                 case 'sent':

@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { EventEmitter2 } from '@nestjs/event-emitter';
-import type { DataSource } from 'typeorm';
+import { In, type DataSource } from 'typeorm';
 import type { ActivityLogService } from '@ever-works/agent/activity-log';
 import {
     EverConnectConnection,
@@ -20,7 +20,7 @@ import {
 } from '@ever-works/agent/entities';
 import { EverInstanceService } from '@ever-works/agent/ever-instance';
 import { AppSyncListener } from '../app-sync/app-sync.listener';
-import { APP_SYNC_KEY, APP_SYNC_OUTBOX_EVENT } from '../app-sync/app-sync.mapping';
+import { APP_SYNC_KEY, APP_SYNC_OUTBOX_EVENTS } from '../app-sync/app-sync.mapping';
 import { AppSyncService } from '../app-sync/app-sync.service';
 import { readEverConnectConfig } from '../ever-connect.config';
 import {
@@ -202,7 +202,7 @@ describeMock('Ever Connect — link codes, heartbeat, entitlements and the apps 
     const outboxRows = () =>
         dataSource
             .getRepository(EverConnectOutbox)
-            .find({ where: { event: APP_SYNC_OUTBOX_EVENT } });
+            .find({ where: { event: In([...APP_SYNC_OUTBOX_EVENTS]) } });
     const linkRow = (organizationId: string) =>
         dataSource.getRepository(EverConnectLink).findOne({ where: { organizationId } });
 
@@ -422,7 +422,10 @@ describeMock('Ever Connect — link codes, heartbeat, entitlements and the apps 
             link: null,
             entitlement: null,
             appSync: false,
+            // The service says "may change it" only when its caller says so.
+            canManage: false,
         });
+        expect((await links.view(acme, true)).canManage).toBe(true);
         expect(await record()).toEqual([]);
     });
 
@@ -521,6 +524,8 @@ describeMock('Ever Connect — link codes, heartbeat, entitlements and the apps 
             connected: true,
             link: { everOrgId: GLOBEX.id, handle: 'globex', createdVia: 'link_code' },
             appSync: false,
+            // Only an administrator of the Organization reaches link().
+            canManage: true,
         });
         // The link's own entitlement document was read and verified.
         expect(view.entitlement).toMatchObject({ status: 'valid', handle: 'globex' });
@@ -817,6 +822,7 @@ describeMock('Ever Connect — link codes, heartbeat, entitlements and the apps 
             link: null,
             entitlement: null,
             appSync: false,
+            canManage: true,
         });
         expect((await linkRow(acme.id))?.status).toBe('archived');
         expect(await documents.findOne({ where: { subject } })).toBeNull();

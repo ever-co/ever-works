@@ -1,8 +1,11 @@
 // The Organization module pulls in the whole auth stack, which this app's jest
 // cannot load. The link module needs two things of it: the membership service
 // and the ownership guard. The guard is the real one; the membership service is
-// a small stand-in over `mockOrganizations` with the real one's contract (404
-// for an Organization of another account, 403 for a member who is not an admin).
+// a small stand-in over `mockOrganizations` with the real one's contract, as
+// `organization-access.contract.spec.ts` pins it on the real service: 404 for an
+// Organization of another account; `ensureAdmin` lets every member of the
+// account through (its role check is opt-in and off by default);
+// `ensureRoleAdmin` lets only the owner and an admin through, always.
 jest.mock('../../organizations/organizations.module', () => {
     const { ForbiddenException, Module, NotFoundException } = jest.requireActual('@nestjs/common');
     const { OrganizationMembershipService } = jest.requireActual(
@@ -20,12 +23,25 @@ jest.mock('../../organizations/organizations.module', () => {
             return organization;
         }
 
+        // As the real one while `ORG_ADMIN_ROLE_ENFORCED` is unset: membership only.
         async ensureAdmin(orgId: string, userId: string) {
+            mockGeneralAdminChecks.push(userId);
+            return this.ensureMember(orgId, userId);
+        }
+
+        async ensureRoleAdmin(orgId: string, userId: string) {
             const organization = await this.ensureMember(orgId, userId);
-            if (!organization.admins.includes(userId)) {
+            if (organization.owner !== userId && !organization.admins.includes(userId)) {
                 throw new ForbiddenException('Only an organization admin can change this.');
             }
             return organization;
+        }
+
+        async isRoleAdmin(orgId: string, userId: string) {
+            return this.ensureRoleAdmin(orgId, userId).then(
+                () => true,
+                () => false,
+            );
         }
     }
     class OrganizationsModule {}
@@ -60,10 +76,16 @@ interface TestOrganization {
     id: string;
     tenantId: string;
     slug: string;
+    /** The account's owner. */
+    owner: string;
+    /** Everyone of the account. */
     members: string[];
+    /** The members whose role in the Organization is `admin`. */
     admins: string[];
 }
 const mockOrganizations = new Map<string, TestOrganization>();
+/** Who the general (opt-in) admin check was asked about: the link routes must not rely on it. */
+const mockGeneralAdminChecks: string[] = [];
 
 /**
  * An Organization's link over HTTP, with the modules wired by Nest as
@@ -96,6 +118,7 @@ class TestActivityLogModule {}
 
 const ORG = '11111111-1111-4111-8111-111111111111';
 const FOREIGN_ORG = '22222222-2222-4222-8222-222222222222';
+const OWNER = 'user-owner';
 const ADMIN = 'user-admin';
 const MEMBER = 'user-member';
 const LINK = `/api/ever-connect/organizations/${ORG}/link`;
@@ -154,19 +177,22 @@ describe("Ever Connect — an Organization's link over HTTP", () => {
 
     beforeEach(() => {
         mockOrganizations.clear();
+        mockGeneralAdminChecks.length = 0;
         mockOrganizations.set(ORG, {
             id: ORG,
             tenantId: '33333333-3333-4333-8333-333333333333',
             slug: 'acme-works',
-            members: [ADMIN, MEMBER],
+            owner: OWNER,
+            members: [OWNER, ADMIN, MEMBER],
             admins: [ADMIN],
         });
         mockOrganizations.set(FOREIGN_ORG, {
             id: FOREIGN_ORG,
             tenantId: '44444444-4444-4444-8444-444444444444',
             slug: 'someone-else',
+            owner: 'user-other',
             members: ['user-other'],
-            admins: ['user-other'],
+            admins: [],
         });
     });
 
@@ -227,8 +253,17 @@ describe("Ever Connect — an Organization's link over HTTP", () => {
                 link: null,
                 entitlement: null,
                 appSync: false,
+                // A member reads; the page does not offer them to change it.
+                canManage: false,
             });
             expect(answer.headers['cache-control']).toBe('no-store');
+            for (const administrator of [OWNER, ADMIN]) {
+                const theirs = await http
+                    .get(LINK)
+                    .set('x-test-user', as(administrator))
+                    .expect(200);
+                expect(theirs.body.canManage).toBe(true);
+            }
             // An API key may read as the member it acts for.
             await http.get(LINK).set('x-test-user', as(MEMBER, 'api-key')).expect(200);
 
@@ -249,14 +284,84 @@ describe("Ever Connect — an Organization's link over HTTP", () => {
         }
     });
 
-    it('only an admin of the Organization changes the link, and only in an interactive session', async () => {
+    it.each([
+        ['unset (the default)', undefined],
+        ['false', 'false'],
+        ['true', 'true'],
+    ])(
+        'a plain member of the account neither links nor removes a link, with ORG_ADMIN_ROLE_ENFORCED %s; the owner and an admin do',
+        async (_name, enforced) => {
+            Object.assign(process.env, ON);
+            if (enforced === undefined) delete process.env.ORG_ADMIN_ROLE_ENFORCED;
+            else process.env.ORG_ADMIN_ROLE_ENFORCED = enforced;
+            const app = await boot(ON);
+            try {
+                const http = request(app.getHttpServer());
+                const code = { code: 'EVL-TEST-0000-0001' };
+                const dataSource = app.get<DataSource>(getDataSourceToken());
+                const organization = mockOrganizations.get(ORG) as TestOrganization;
+                await dataSource.getRepository(EverConnectLink).insert({
+                    organizationId: ORG,
+                    tenantId: organization.tenantId,
+                    everOrgId: '01JMQCK0RG000000000000000B',
+                    handle: 'globex',
+                    platformLinkId: '01JZ8Q3M4N5P6R7S8T9V0W1XA1',
+                    createdVia: 'provisioning',
+                    status: 'active',
+                });
+
+                // The member: refused on both, and the real link is still there.
+                const linking = await http
+                    .post(LINK)
+                    .set('x-test-user', as(MEMBER))
+                    .send(code)
+                    .expect(403);
+                expect(linking.body.code).not.toBe('session_required');
+                await http.delete(LINK).set('x-test-user', as(MEMBER)).expect(403);
+                expect(await dataSource.getRepository(EverConnectLink).find()).toMatchObject([
+                    { organizationId: ORG, status: 'active' },
+                ]);
+                // They still read it.
+                await http.get(LINK).set('x-test-user', as(MEMBER)).expect(200);
+
+                // The owner and an admin pass the same check: their answers are
+                // about the link (it exists) and the connection, not about them.
+                for (const administrator of [OWNER, ADMIN]) {
+                    const again = await http
+                        .post(LINK)
+                        .set('x-test-user', as(administrator))
+                        .send(code)
+                        .expect(409);
+                    expect(again.body.code).toBe('not_connected');
+                }
+                await http.delete(LINK).set('x-test-user', as(ADMIN)).expect(200);
+                expect(await dataSource.getRepository(EverConnectLink).find()).toMatchObject([
+                    { organizationId: ORG, status: 'archived' },
+                ]);
+                const gone = await http.delete(LINK).set('x-test-user', as(OWNER)).expect(404);
+                expect(gone.body.code).toBe('not_linked');
+
+                // Another account, also its owner: not found, as before.
+                const foreign = `/api/ever-connect/organizations/${FOREIGN_ORG}/link`;
+                await http.post(foreign).set('x-test-user', as(OWNER)).send(code).expect(404);
+                await http.delete(foreign).set('x-test-user', as(MEMBER)).expect(404);
+                await http.post(LINK).set('x-test-user', as('user-other')).send(code).expect(404);
+
+                // None of this asked the general admin check, whose role rule is opt-in.
+                expect(mockGeneralAdminChecks).toEqual([]);
+                expect(fetchSpy).not.toHaveBeenCalled();
+            } finally {
+                await app.close();
+            }
+        },
+    );
+
+    it('a link is changed only in an interactive session', async () => {
         Object.assign(process.env, ON);
         const app = await boot(ON);
         try {
             const http = request(app.getHttpServer());
             const code = { code: 'EVL-TEST-0000-0001' };
-            await http.post(LINK).set('x-test-user', as(MEMBER)).send(code).expect(403);
-            await http.delete(LINK).set('x-test-user', as(MEMBER)).expect(403);
             // An API key acting as the admin is refused.
             const keyed = await http
                 .post(LINK)
@@ -383,9 +488,11 @@ describe("Ever Connect — an Organization's link over HTTP", () => {
                 link: null,
                 entitlement: null,
                 appSync: false,
+                canManage: true,
             });
             const after = await http.get(LINK).set('x-test-user', as(MEMBER)).expect(200);
             expect(after.body.link).toBeNull();
+            expect(after.body.canManage).toBe(false);
             const again = await http.delete(LINK).set('x-test-user', as(ADMIN)).expect(404);
             expect(again.body.code).toBe('not_linked');
             // Nothing in Ever Works was deleted: the link is archived.

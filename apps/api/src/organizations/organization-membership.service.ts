@@ -118,9 +118,44 @@ export class OrganizationMembershipService {
     async ensureAdmin(orgId: string, userId: string): Promise<Organization> {
         const org = await this.ensureMember(orgId, userId);
         if (!orgAdminRoleEnforced()) return org;
-        // Enforced: the Tenant owner, or a roster member whose role is
-        // `admin` (or `owner`). A same-Tenant caller already knows the org
-        // exists, so this refusal is a 403, not the 404 of `ensureMember`.
+        return this.requireRoleAdmin(org, orgId, userId);
+    }
+
+    /**
+     * Authorize a change that only an administrator of the Organization may
+     * make, **whatever `ORG_ADMIN_ROLE_ENFORCED` says**: the Tenant owner, or a
+     * roster member whose role is `admin` (or `owner`).
+     *
+     * For a change whose effect reaches outside this installation and cannot be
+     * left to every member of the account: linking the Organization to an
+     * organization on Ever Platform, or removing that link. `ensureAdmin` keeps
+     * its opt-in behaviour for every other route.
+     *
+     * The existence-leak contract is the one of {@link ensureMember}: another
+     * account's Organization, or a missing one, is `404`; a member of the
+     * account who is not an administrator is `403`.
+     */
+    async ensureRoleAdmin(orgId: string, userId: string): Promise<Organization> {
+        const org = await this.ensureMember(orgId, userId);
+        return this.requireRoleAdmin(org, orgId, userId);
+    }
+
+    /** Whether {@link ensureRoleAdmin} would let the caller through (never throws). */
+    async isRoleAdmin(orgId: string, userId: string): Promise<boolean> {
+        return this.ensureRoleAdmin(orgId, userId).then(
+            () => true,
+            () => false,
+        );
+    }
+
+    private async requireRoleAdmin(
+        org: Organization,
+        orgId: string,
+        userId: string,
+    ): Promise<Organization> {
+        // The Tenant owner, or a roster member whose role is `admin` (or
+        // `owner`). A same-Tenant caller already knows the org exists, so this
+        // refusal is a 403, not the 404 of `ensureMember`.
         if (!this.tenantRepository || !this.memberRepository) {
             throw new ForbiddenException('Organization admin access cannot be verified here.');
         }

@@ -4688,6 +4688,7 @@
                     "unlinked": "The link was removed.",
                     "cancel": "Cancel",
                     "notConnected": "This installation is not connected to Ever Platform yet. A platform admin must connect it before an organization can be linked.",
+                    "adminOnly": "Only an administrator of this organization can link it or remove its link: the owner of the account, or a member with the admin or owner role in this organization.",
                     "codeLabel": "Link code",
                     "codeHelp": "Paste a link code created for Ever Works in your organization on",
                     "link": "Link",

@@ -129,4 +129,10 @@ export interface EverPlatformOrganizationLinkView {
 	readonly entitlement: EverPlatformEntitlementView | null;
 	/** Whether the apps mirror runs for this Organization (switched on here and enabled in app.ever.co). */
 	readonly appSync: boolean;
+	/**
+	 * Whether the person asking may link the Organization or remove its link: the account's owner,
+	 * or a member whose role in the Organization is `admin` or `owner`. Everyone else of the account
+	 * reads the link only.
+	 */
+	readonly canManage: boolean;
 }

@@ -37,7 +37,9 @@ export const FEED_PAGES_PER_ROUND = 10;
  *    (long-poll, or every 15 minutes) and the outbox sent, every round, with
  *    the install status reports owed to Ever Platform; then the round of
  *    every separately switched part (the heartbeat, entitlement documents,
- *    the apps mirror), none of which exists unless its switch is on.
+ *    the apps mirror), none of which exists unless its switch is on. The
+ *    lease is renewed between these steps (and between the requests of a long
+ *    one); when a renewal fails the round stops where it is.
  *
  * Nothing runs while the installation is not connected beyond reading the
  * local connection row.
@@ -97,10 +99,18 @@ export class EverConnectRunner implements OnApplicationBootstrap, OnModuleDestro
         if (await this.integrations.isEnabled()) await this.login.start();
     }
 
-    /** One round of step 3; `true` when it ran on this replica. */
+    /**
+     * One round of step 3; `true` when it ran to its end on this replica.
+     * `false`: not connected, another replica holds the lease, or the lease
+     * was lost on the way (the round stopped there).
+     */
     async round(now = Date.now()): Promise<boolean> {
         if (!(await this.connection.client())) return false;
         if (!(await this.lease.hold(new Date(now)))) return false;
+        // The lease lasts two minutes and a round can take longer (a long-poll,
+        // a backlog of feed pages, a full send of the apps mirror): it is renewed
+        // between the steps below, and a step is not started without it.
+        const lease = this.lease.roundLease();
         const longpoll = this.config.feedMode === 'longpoll';
         if (longpoll || now - this.lastFeedReadAt >= FEED_INTERVAL_MS) {
             this.lastFeedReadAt = now;
@@ -110,7 +120,10 @@ export class EverConnectRunner implements OnApplicationBootstrap, OnModuleDestro
                 // renewed and the outbox sent on schedule.
                 for (
                     let page = 1;
-                    pass.more && !this.stopped && page < FEED_PAGES_PER_ROUND;
+                    pass.more &&
+                    !this.stopped &&
+                    page < FEED_PAGES_PER_ROUND &&
+                    (await lease.keep());
                     page += 1
                 ) {
                     pass = await this.feed.pollOnce(0);
@@ -119,7 +132,9 @@ export class EverConnectRunner implements OnApplicationBootstrap, OnModuleDestro
                 this.logger.warn(`Reading the Ever Platform feed failed: ${errorName(error)}`);
             }
         }
-        await this.outbox.drainOnce();
+        if (!(await lease.keep())) return this.leaseLost();
+        await this.outbox.drainOnce(undefined, lease);
+        if (!(await lease.keep())) return this.leaseLost();
         if (this.installs) {
             // Install status reports owed to Ever Platform, and `removed` for a
             // plugin installed from a request and uninstalled here since.
@@ -129,8 +144,17 @@ export class EverConnectRunner implements OnApplicationBootstrap, OnModuleDestro
                     this.logger.warn(`Install status reports not sent: ${errorName(error)}`),
                 );
         }
-        if (this.extensions && !this.stopped) await this.extensions.runRound(new Date(now));
-        return true;
+        if (this.extensions && !this.stopped) {
+            await this.extensions.runRound(new Date(now), lease);
+        }
+        return lease.held ? true : this.leaseLost();
+    }
+
+    private leaseLost(): false {
+        this.logger.warn(
+            'The Ever Connect lease was not renewed during a round: the round stopped, and what is still owed is sent by the replica that holds the lease.',
+        );
+        return false;
     }
 
     private schedule(delayMs: number): void {
