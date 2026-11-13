@@ -21,3 +21,17 @@ export class EverConnectIntegrationChangedEvent {
         readonly linkId?: string,
     ) {}
 }
+
+/**
+ * An Organization's link to its Ever organization was made (`linked`) or ended
+ * (`unlinked`), here or at Ever Platform.
+ */
+export class EverConnectLinkChangedEvent {
+    static readonly EVENT_NAME = 'ever_connect.link_changed';
+    constructor(
+        readonly organizationId: string,
+        readonly change: 'linked' | 'unlinked',
+        /** Ever Platform's id of the link, when it is known. */
+        readonly platformLinkId: string | null,
+    ) {}
+}

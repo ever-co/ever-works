@@ -19,6 +19,7 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 const listForSettingsMenu = vi.fn();
 const isStatsAvailable = vi.fn();
 const isInstallRequestsAvailable = vi.fn();
+const isLinksAvailable = vi.fn();
 const isFleetEnabled = vi.fn();
 const isAppLauncherEnabled = vi.fn();
 const getAuthFromRequest = vi.fn();
@@ -36,6 +37,11 @@ vi.mock('@/lib/api/instance-stats', () => ({
 vi.mock('@/lib/api/ever-connect-installs', () => ({
     everConnectInstallsAPI: {
         isAvailable: (...args: unknown[]) => isInstallRequestsAvailable(...args),
+    },
+}));
+vi.mock('@/lib/api/ever-connect', () => ({
+    everConnectAPI: {
+        linksAvailable: (...args: unknown[]) => isLinksAvailable(...args),
     },
 }));
 vi.mock('@/lib/fleet-flags', () => ({
@@ -60,6 +66,7 @@ beforeEach(() => {
     listForSettingsMenu.mockReset().mockResolvedValue({ categories: [] });
     isStatsAvailable.mockReset().mockResolvedValue(true);
     isInstallRequestsAvailable.mockReset().mockResolvedValue(false);
+    isLinksAvailable.mockReset().mockResolvedValue(false);
     isFleetEnabled.mockReset().mockReturnValue(true);
     isAppLauncherEnabled.mockReset().mockResolvedValue(true);
     getAuthFromRequest.mockReset().mockResolvedValue({
@@ -147,6 +154,15 @@ describe('SettingsLayout — the Ever Platform tab', () => {
     it('passes everPlatformEnabled=true for a platform admin of a connected installation without statistics', async () => {
         isStatsAvailable.mockResolvedValue(false);
         isInstallRequestsAvailable.mockResolvedValue(true);
+        const tree = (await SettingsLayout({ children: null })) as React.ReactElement<{
+            everPlatformEnabled?: boolean;
+        }>;
+        expect(tree.props.everPlatformEnabled).toBe(true);
+    });
+
+    it('passes everPlatformEnabled=true for a member of an Organization where linking is switched on', async () => {
+        isStatsAvailable.mockResolvedValue(false);
+        isLinksAvailable.mockResolvedValue(true);
         const tree = (await SettingsLayout({ children: null })) as React.ReactElement<{
             everPlatformEnabled?: boolean;
         }>;

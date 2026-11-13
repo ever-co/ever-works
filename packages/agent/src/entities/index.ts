@@ -301,5 +301,7 @@ export * from './ever-connect-lease.entity';
 export * from './ever-connect-provision-intent.entity';
 export * from './ever-connect-provision-record.entity';
 export * from './ever-connect-link.entity';
+// Ever Connect — the entitlement documents read from Ever Platform and its key set.
+export * from './ever-connect-entitlement.entity';
 export * from './ever-connect-install-request.entity';
 export * from './organization-company-import.entity';

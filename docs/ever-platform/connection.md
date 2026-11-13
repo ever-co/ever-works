@@ -8,6 +8,12 @@ client, the answers to **people's export and deletion requests**, and
 installed only once a platform admin approves it: see
 [Install requests from apps.ever.co](./install-requests.md)).
 
+Four more parts can be switched on, each on its own and each off by default:
+[linking an Organization](#linking-an-organization) to its organization on Ever
+Platform with a link code, a daily [heartbeat](#heartbeat), reading the
+[entitlement documents](#entitlement-documents), and listing an Organization's
+[apps on Ever Platform](#apps-on-ever-platform).
+
 The connection is off by default and nothing is sent until you connect.
 
 ## Turning it on
@@ -20,17 +26,36 @@ The connection is off by default and nothing is sent until you connect.
 | `EVER_PLATFORM_API_URL`        | `https://api.ever.co` | The Ever Platform API. `https` only (plain `http` only for a local or private address, such as a test platform). |
 | `PLUGIN_SECRET_ENCRYPTION_KEY` | unset                 | When set, the connect key and the Ever ID sign-in client are stored encrypted. Set it in production.             |
 
+Each of the following needs `EVER_CONNECT_ENABLED=true` as well, is off unless
+it is exactly `true`, and does nothing while the installation is not connected:
+
+| Variable                            | Default     | Meaning                                                                                                                                |
+| ----------------------------------- | ----------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `EVER_CONNECT_LINK_CODES_ENABLED`   | unset (off) | An Organization's admin can link it to an organization on Ever Platform with a link code. Off: the link routes answer `404`.           |
+| `EVER_CONNECT_HEARTBEAT_ENABLED`    | unset (off) | The installation tells Ever Platform that it is running, with its version, shortly after a start and then once a day.                  |
+| `EVER_CONNECT_ENTITLEMENTS_ENABLED` | unset (off) | The signed entitlement documents are read, verified, kept and shown in Settings.                                                       |
+| `EVER_CONNECT_APP_SYNC_ENABLED`     | unset (off) | The apps mirror: for an Organization that enabled it in app.ever.co, the identifiers and status of its Works and deployments are sent. |
+
+## Connecting in Settings
+
+A platform administrator connects in **Settings → Ever Platform**: create a
+connect code for Ever Works in your organization on app.ever.co, paste it into
+**Connect code** and choose **Connect**. The same section shows where the
+connection stands (not connected, waiting for approval, connected, revoked),
+the installation's ID on Ever Platform, and **Disconnect**, which asks for a
+confirmation first. The code is used once and is not kept in the page.
+
 A platform administrator can also connect and manage the connection through the
 API (each route needs a platform administrator; the ones that change something
 also need an interactive session, not an API key):
 
-| Route                                                          | What it does                                                               |
-| -------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| `GET /api/ever-connect/status`                                 | The connection, the integrations, the Ever ID client and the outbox.       |
-| `POST /api/ever-connect/connect` `{code}`                      | Connect with a connect code.                                               |
-| `POST /api/ever-connect/disconnect`                            | Disconnect (Ever Platform is told; the connection ends here in any case).  |
-| `POST /api/ever-connect/integrations/refresh`                  | Read the integration states from Ever Platform again.                      |
-| `POST /api/ever-connect/integrations/:key/accept` `{accepted}` | Accept or decline an installation-wide integration enabled in app.ever.co. |
+| Route                                                          | What it does                                                                                                                                                                                        |
+| -------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /api/ever-connect/status`                                 | The connection, the integrations, the Ever ID client and the outbox; and, for the parts switched on: the last heartbeat, what the installation's entitlement says and where the apps mirror stands. |
+| `POST /api/ever-connect/connect` `{code}`                      | Connect with a connect code.                                                                                                                                                                        |
+| `POST /api/ever-connect/disconnect`                            | Disconnect (Ever Platform is told; the connection ends here in any case).                                                                                                                           |
+| `POST /api/ever-connect/integrations/refresh`                  | Read the integration states from Ever Platform again.                                                                                                                                               |
+| `POST /api/ever-connect/integrations/:key/accept` `{accepted}` | Accept or decline an installation-wide integration enabled in app.ever.co.                                                                                                                          |
 
 The install-request routes (`/api/ever-connect/install-requests`) are described in
 [Install requests from apps.ever.co](./install-requests.md).
@@ -48,6 +73,131 @@ The install-request routes (`/api/ever-connect/install-requests`) are described 
   administrator of this installation to accept them.
 - Disconnecting ends every integration here, removes the stored Ever ID client
   and discards the connect key (a new connection makes a new key).
+
+## Linking an Organization
+
+With `EVER_CONNECT_LINK_CODES_ENABLED=true`, an Organization here can be linked
+to your organization on Ever Platform, so that both are known as the same
+organization. A company created from Ever Platform is linked already; this is
+for an Organization that existed before.
+
+1. In app.ever.co, an owner or admin of the organization creates a **link code**
+   for Ever Works (`EVL-XXXX-XXXX-XXXX`).
+2. In Ever Works, an admin of the Organization opens **Settings → Ever Platform
+   → Organization link**, pastes the code and chooses **Link**.
+
+- **Sent:** the code, the account's (tenant's) ID and the Organization's slug.
+  No other name, no e-mail address, no member, no content.
+- **Received:** Ever Platform's ID of the link and of its organization. Its
+  handle (`ever.co/<handle>`) is shown once the link's entitlement document was
+  read.
+- One Organization has one link, an account has one linked Organization, and
+  an organization on Ever Platform is linked to one Organization of this
+  installation.
+- **Remove link** tells Ever Platform first. When it cannot be reached the link
+  stays, so the two sides never disagree: try again, or remove the link in
+  app.ever.co. A link removed in app.ever.co ends here within one read of the
+  feed. Removing a link stops the integrations turned on for it; nothing in
+  Ever Works is deleted. Disconnecting the installation ends its links.
+
+| Route                                                | Who                                               | What it does                              |
+| ---------------------------------------------------- | ------------------------------------------------- | ----------------------------------------- |
+| `GET /api/ever-connect/organizations/:orgId/link`    | a member of the Organization                      | The link and what it has on Ever Platform |
+| `POST /api/ever-connect/organizations/:orgId/link`   | an admin of the Organization, interactive session | Link with a link code (`{code}`)          |
+| `DELETE /api/ever-connect/organizations/:orgId/link` | an admin of the Organization, interactive session | Remove the link                           |
+
+An Organization of another account answers `404`, as on every
+`/organizations/:orgId` route. Who counts as an admin follows the same rule as
+there (`ORG_ADMIN_ROLE_ENFORCED`).
+
+## Heartbeat
+
+With `EVER_CONNECT_HEARTBEAT_ENABLED=true`, a connected installation tells Ever
+Platform that it is running: within a few minutes of a start, then once a day.
+
+- **Sent:** the Ever Works version and the product name (`works`). Nothing else.
+- Ever Platform shows when it last heard from the installation; the time of the
+  last heartbeat is also shown to the platform administrator here.
+
+## Entitlement documents
+
+With `EVER_CONNECT_ENTITLEMENTS_ENABLED=true`, the installation reads the signed
+documents that say what the account has on Ever Platform: the plan, the tier,
+and which Ever Platform features and limits apply. There is one document for
+the installation and one for each linked Organization.
+
+- **Fetched:** every six hours (or as the document says), and when Ever Platform
+  announces a new one. An unchanged document is not downloaded again.
+- **Verified:** every document is checked with the Ever Platform SDK before it
+  is kept: the signing key under Ever Platform's root key, the signature, that it
+  was issued by the Ever Platform this installation is connected to, for this
+  installation and for the expected subject, and that it is not older than the
+  one already kept. A document that fails any check is not kept; the previous one
+  stays, and Settings names the reason.
+- **Kept:** as received, in the database (encrypted when
+  `PLUGIN_SECRET_ENCRYPTION_KEY` is set), with the key set it was verified with.
+- **Shown:** read-only in Settings → Ever Platform (the status, the plan, the
+  features that are on, when it expires and when it was last read). The document
+  itself is never shown.
+
+Nothing in Ever Works depends on a document: only Ever Platform features do.
+After a document expires its features still apply for a grace period.
+
+## Apps on Ever Platform
+
+With `EVER_CONNECT_APP_SYNC_ENABLED=true`, a linked Organization can list the
+apps Ever Works builds for it on its **Apps** page in app.ever.co. An owner of
+the organization enables **Apps and deployments** for the link there (a consent
+given on Ever Platform); until then, and after it is switched off, nothing of a
+Work is sent. Ever Works stays the source of truth: Ever Platform never writes
+back.
+
+**What is sent**, for each Work of the Organization:
+
+- the Work's ID, its kind, its name, its slug and its status (draft, live,
+  registered, archived), with the account's ID and the Organization's slug the
+  link was made with;
+- for its current deployment in each environment (production, preview): where
+  it runs (the deploy target, the provider, the deploy shape and who manages
+  it), its state, and its public address without credentials, query or
+  fragment.
+
+**What is never sent:** Work content or items, repositories or their addresses,
+prompts, memory, agents, budgets, approvals, credits, environment values,
+secrets, build logs, error messages, commits, branches, members or e-mail
+addresses.
+
+How it works:
+
+- A change to a Work or to one of its deployments is noted in the outbox (the
+  Work's ID only). The worker sends what is noted in batches, one for each link,
+  every 30 seconds while there is something to send, with the Work as it is at
+  that moment. Each operation carries a version that only grows, so sending one
+  twice changes nothing.
+- A Work that was deleted here is deleted on the Apps page.
+- Once a day, and when the integration is enabled for a link, every Work of the
+  Organization is sent again and compared with what Ever Platform holds. Nothing
+  in Ever Works is ever changed or deleted by this.
+- A consent given for an earlier version of the integration, which did not list
+  the name and the slug, moves nothing until the owner consents again.
+- Switching the integration off, removing the link or disconnecting stops it at
+  once and drops what was waiting. Ever Platform then archives the apps it
+  listed for the link.
+
+The platform administrator sees in Settings → Ever Platform how many
+Organizations have it enabled, how many Works wait to be sent, how many Ever
+Platform refused (with the reason code), and when the full list was last sent.
+
+Deploy targets are told in Ever Platform's open vocabulary:
+
+| In Ever Works                                 | Target            | Provider     | Shape               | Managed by    |
+| --------------------------------------------- | ----------------- | ------------ | ------------------- | ------------- |
+| An App on your own cluster                    | `your-cluster`    | `k8s`        | `custom-kubeconfig` | `customer`    |
+| An App on the shared apps cluster             | `ever-works-apps` | `k8s`        | `k8s-works-shared`  | `ever`        |
+| A site on Ever Works hosting                  | `ever-works`      | `ever-works` | `k8s-works-shared`  | `ever`        |
+| A site on Kubernetes with your own kubeconfig | `k8s`             | `k8s`        | `custom-kubeconfig` | `customer`    |
+| A site on Kubernetes on an Ever Works cluster | `k8s`             | `k8s`        | the cluster source  | `ever`        |
+| A site deployed by any other deploy plugin    | the plugin's ID   | the same     | `provider-plugin`   | `third_party` |
 
 ## Sign in with Ever ID
 
@@ -105,17 +255,24 @@ installation's published address; that check is not active yet.
 
 Every request goes to `EVER_PLATFORM_API_URL`, with the installation's token:
 
-| When                             | Request                                                                                |
-| -------------------------------- | -------------------------------------------------------------------------------------- |
-| Connect                          | `POST /v1/connect/redeem`                                                              |
-| Each request (token, every hour) | `POST /v1/instances/token`                                                             |
-| Reading the feed                 | `GET /v1/instances/me/events`, `POST /v1/instances/me/events/ack`                      |
-| Integration states               | `GET /v1/instances/me/integrations`, `POST /v1/instances/me/integrations/{key}/accept` |
-| Sign in with Ever ID             | `POST` / `GET /v1/instances/me/oidc-client`                                            |
-| Linked accounts                  | `POST /v1/instances/me/person-links`, `DELETE /v1/instances/me/person-links/{ref}`     |
-| Answers to requests              | `POST /v1/instances/me/ack`                                                            |
-| Disconnect                       | `POST /v1/instances/me/disconnect`                                                     |
-| Install requests (when enabled)  | `POST /v1/installs/{install}/status`, after a platform admin answered a request        |
+| When                                                            | Request                                                                                                                                                                                           |
+| --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Connect                                                         | `POST /v1/connect/redeem`                                                                                                                                                                         |
+| Each request (token, every hour)                                | `POST /v1/instances/token`                                                                                                                                                                        |
+| Reading the feed                                                | `GET /v1/instances/me/events`, `POST /v1/instances/me/events/ack`                                                                                                                                 |
+| Integration states                                              | `GET /v1/instances/me/integrations`, `POST /v1/instances/me/integrations/{key}/accept`                                                                                                            |
+| Sign in with Ever ID                                            | `POST` / `GET /v1/instances/me/oidc-client`                                                                                                                                                       |
+| Linked accounts                                                 | `POST /v1/instances/me/person-links`, `DELETE /v1/instances/me/person-links/{ref}`                                                                                                                |
+| Answers to requests                                             | `POST /v1/instances/me/ack`                                                                                                                                                                       |
+| Disconnect                                                      | `POST /v1/instances/me/disconnect`                                                                                                                                                                |
+| Install requests (when enabled)                                 | `POST /v1/installs/{install}/status`, after a platform admin answered a request                                                                                                                   |
+| Linking an Organization (when switched on)                      | `POST /v1/instances/me/tenant-links`, `DELETE /v1/instances/me/tenant-links/{link}`, when an admin links or removes a link                                                                        |
+| Heartbeat (when switched on)                                    | `POST /v1/instances/me/heartbeat`, after a start and once a day                                                                                                                                   |
+| Entitlement documents (when switched on)                        | `GET /v1/instances/me/entitlement`, `GET /v1/instances/me/tenant-links/{link}/entitlement`, `GET /.well-known/ever-keys.json` (the key set), every six hours and when a new document is announced |
+| Apps on Ever Platform (when switched on and enabled for a link) | `POST /v1/instances/me/mirror/apps` while Works wait to be sent, `GET /v1/instances/me/mirror/apps` once a day                                                                                    |
+
+With none of the four switches on, the calls above the "Linking an Organization"
+row are all there is.
 
 ## Creating a company from Ever Platform
 

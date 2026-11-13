@@ -6,6 +6,7 @@ import {
     HttpCode,
     HttpStatus,
     NotFoundException,
+    Optional,
     Param,
     Post,
     UseGuards,
@@ -14,7 +15,12 @@ import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagg
 import { Throttle } from '@nestjs/throttler';
 import { IsPlatformAdminGuard } from '../auth/guards/platform-admin.guard';
 import { SessionOnlyGuard } from '../auth/guards/session-only.guard';
+import type {
+    EverPlatformAppSyncStatusView,
+    EverPlatformEntitlementView,
+} from '@ever-works/contracts';
 import { EverConnectAcceptDto, EverConnectConnectDto } from './dto/ever-connect.dto';
+import { EverConnectExtensions } from './ever-connect-extensions';
 import {
     EverConnectIntegrationService,
     type EverConnectIntegrationView,
@@ -24,6 +30,9 @@ import {
     type EverConnectOutboxStatus,
 } from './ever-connect-outbox.service';
 import { EverConnectService, type EverConnectStatus } from './ever-connect.service';
+import { everConnectFeatures, type EverConnectFeatures } from './ever-connect.switches';
+import { EverConnectEntitlementService } from './entitlements/ever-connect-entitlement.service';
+import { EverConnectHeartbeatService } from './heartbeat/ever-connect-heartbeat.service';
 import { EverIdLoginHandler, type EverIdLoginClientStatus } from './identity/ever-id-login.handler';
 import {
     provisionCapabilities,
@@ -41,12 +50,21 @@ export interface EverConnectAdminStatus {
     readonly outbox: EverConnectOutboxStatus;
     /** What this installation can do with a request from Ever Platform. */
     readonly capabilities: EverConnectProvisionCapabilities;
+    /** Which separately switched parts run here. */
+    readonly features: EverConnectFeatures;
+    /** When Ever Platform last recorded a heartbeat (`null`: none, or the heartbeat is off). */
+    readonly heartbeat: { readonly lastSentAt: string | null };
+    /** What the installation's entitlement document says (`null`: none stored, or reading is off). */
+    readonly entitlement: EverPlatformEntitlementView | null;
+    /** Where the apps mirror stands (`null`: switched off). */
+    readonly appSync: EverPlatformAppSyncStatusView | null;
 }
 
 /**
  * Ever Platform connection — the operator routes (platform administrators only):
  *
- *   GET  /api/ever-connect/status                     the connection, integrations, Ever ID client, outbox
+ *   GET  /api/ever-connect/status                     the connection, integrations, Ever ID client, outbox,
+ *                                                     and what the separately switched parts report
  *   POST /api/ever-connect/connect                    connect with an `EVC-…` code
  *   POST /api/ever-connect/disconnect                 disconnect (Ever Platform told, best effort)
  *   POST /api/ever-connect/integrations/refresh       read the integration states again
@@ -68,6 +86,9 @@ export class EverConnectAdminController {
         private readonly integrations: EverConnectIntegrationService,
         private readonly login: EverIdLoginHandler,
         private readonly outbox: EverConnectOutboxService,
+        @Optional() private readonly heartbeat?: EverConnectHeartbeatService,
+        @Optional() private readonly entitlements?: EverConnectEntitlementService,
+        @Optional() private readonly extensions?: EverConnectExtensions,
     ) {}
 
     @Get('status')
@@ -80,6 +101,10 @@ export class EverConnectAdminController {
             everIdClient: this.login.getStatus(),
             outbox: await this.outbox.status(),
             capabilities: provisionCapabilities(),
+            features: everConnectFeatures(),
+            heartbeat: { lastSentAt: (await this.heartbeat?.lastSentAt()) ?? null },
+            entitlement: (await this.entitlements?.instanceView()) ?? null,
+            appSync: (await this.extensions?.appSyncStatus()) ?? null,
         };
     }
 

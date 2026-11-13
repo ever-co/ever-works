@@ -1,3 +1,9 @@
+// The Organization module pulls in the whole auth stack; the manifest needs the
+// link controller and its guards only.
+jest.mock('../../organizations/organizations.module', () => ({
+    OrganizationsModule: class OrganizationsModule {},
+}));
+
 import 'reflect-metadata';
 import { readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
@@ -5,10 +11,17 @@ import { Controller, Get, RequestMethod, type Type } from '@nestjs/common';
 import { GUARDS_METADATA, METHOD_METADATA, PATH_METADATA } from '@nestjs/common/constants';
 import { IS_PUBLIC_KEY, Public } from '../../auth/decorators/public.decorator';
 import { IsPlatformAdminGuard } from '../../auth/guards/platform-admin.guard';
+import { SessionOnlyGuard } from '../../auth/guards/session-only.guard';
+import {
+    ORG_OWNERSHIP_ADMIN,
+    OrganizationOwnershipGuard,
+} from '../../organizations/guards/organization-ownership.guard';
 import { EverConnectAdminController } from '../ever-connect-admin.controller';
 import { EverConnectModule } from '../ever-connect.module';
 import { EverConnectWellKnownController } from '../well-known.controller';
 import { InstallRequestsController } from '../installs/install-requests.controller';
+import { EverConnectLinkController } from '../links/ever-connect-link.controller';
+import { EverConnectLinkModule } from '../links/ever-connect-link.module';
 
 /**
  * The module's route manifest (`ever-connect.routes.json`) is the controllers'
@@ -16,7 +29,8 @@ import { InstallRequestsController } from '../installs/install-requests.controll
  * needs, `public` (answers without a session) and `inbound` (requests Ever
  * Platform makes to the installation). The only public route is the address
  * statement Ever Platform reads; every operator route is for platform
- * administrators.
+ * administrators; an Organization's link is read by its members and changed by
+ * its admins (the link module, loaded only with its own switch).
  *
  * A route added without a guard, or made public, changes the generated
  * manifest and fails here until the committed file is updated on purpose
@@ -25,7 +39,7 @@ import { InstallRequestsController } from '../installs/install-requests.controll
 interface ManifestRoute {
     method: string;
     path: string;
-    auth: 'public' | 'session' | 'platform-admin';
+    auth: 'public' | 'session' | 'platform-admin' | 'organization-member' | 'organization-admin';
 }
 
 const MANIFEST_PATH = join(__dirname, '..', 'ever-connect.routes.json');
@@ -57,7 +71,11 @@ function routesOf(controller: Type): ManifestRoute[] {
                 ? 'public'
                 : guards.includes(IsPlatformAdminGuard)
                   ? 'platform-admin'
-                  : 'session',
+                  : guards.includes(OrganizationOwnershipGuard)
+                    ? Reflect.getMetadata(ORG_OWNERSHIP_ADMIN, handler) === true
+                        ? 'organization-admin'
+                        : 'organization-member'
+                    : 'session',
         });
     }
     return out.sort((a, b) => a.path.localeCompare(b.path) || a.method.localeCompare(b.method));
@@ -82,13 +100,17 @@ describe('Ever Connect — route manifest', () => {
         inbound: unknown[];
         routes: ManifestRoute[];
     };
-    const controllers: Type[] = Reflect.getMetadata('controllers', EverConnectModule) ?? [];
+    const controllers: Type[] = [
+        ...(Reflect.getMetadata('controllers', EverConnectModule) ?? []),
+        ...(Reflect.getMetadata('controllers', EverConnectLinkModule) ?? []),
+    ];
 
     it('is generated from every controller of the module', () => {
         expect(controllers).toEqual([
             EverConnectAdminController,
             EverConnectWellKnownController,
             InstallRequestsController,
+            EverConnectLinkController,
         ]);
         const generated = generate(controllers);
         if (process.env.UPDATE_ROUTES_MANIFEST === '1') {
@@ -110,11 +132,37 @@ describe('Ever Connect — route manifest', () => {
             public: [{ method: 'GET', path: '/.well-known/ever-connect' }],
             inbound: [{ method: 'GET', path: '/.well-known/ever-connect' }],
         });
+        // Beside the platform admins' routes: an Organization's link, and nothing else.
         expect(
             committed.routes.filter(
                 (route) => route.auth !== 'platform-admin' && route.path.startsWith('/api/'),
             ),
-        ).toEqual([]);
+        ).toEqual([
+            {
+                method: 'DELETE',
+                path: '/api/ever-connect/organizations/:orgId/link',
+                auth: 'organization-admin',
+            },
+            {
+                method: 'GET',
+                path: '/api/ever-connect/organizations/:orgId/link',
+                auth: 'organization-member',
+            },
+            {
+                method: 'POST',
+                path: '/api/ever-connect/organizations/:orgId/link',
+                auth: 'organization-admin',
+            },
+        ]);
+    });
+
+    it('a route that changes a link needs an interactive session as well', () => {
+        const proto = EverConnectLinkController.prototype as unknown as Record<string, unknown>;
+        const guardsOf = (name: string): unknown[] =>
+            Reflect.getMetadata(GUARDS_METADATA, proto[name] as object) ?? [];
+        expect(guardsOf('link')).toContain(SessionOnlyGuard);
+        expect(guardsOf('unlink')).toContain(SessionOnlyGuard);
+        expect(guardsOf('get')).not.toContain(SessionOnlyGuard);
     });
 
     it('control: a planted unguarded or public route changes the manifest', () => {
