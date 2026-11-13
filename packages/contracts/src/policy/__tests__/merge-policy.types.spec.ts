@@ -7,6 +7,7 @@ import {
 	MERGE_POLICY_PROTECTED_BRANCH_FLOOR,
 	MERGE_POLICY_SCOPE_PRECEDENCE,
 	PLATFORM_DEFAULT_MERGE_POLICY,
+	findProtectedMergeBranch,
 	mergeTargetNeedsFloorApproval,
 	sameMergeBranch
 } from '../merge-policy.types.js';
@@ -238,5 +239,46 @@ describe('MERGE_POLICY_PROTECTED_BRANCH_FLOOR (works-security lane 3a)', () => {
 		expect(sameMergeBranch('develop', 'main')).toBe(false);
 		expect(sameMergeBranch(null, 'main')).toBe(false);
 		expect(sameMergeBranch(' ', ' ')).toBe(false);
+	});
+});
+
+describe('findProtectedMergeBranch', () => {
+	it('keeps exact names matching, case-insensitively and through refs/heads/ (old behaviour)', () => {
+		expect(findProtectedMergeBranch('main', ['main'])).toBe('main');
+		expect(findProtectedMergeBranch('MAIN', ['main'])).toBe('main');
+		expect(findProtectedMergeBranch('refs/heads/main', ['main'])).toBe('main');
+		expect(findProtectedMergeBranch('main', ['refs/heads/Main'])).toBe('refs/heads/Main');
+		expect(findProtectedMergeBranch('develop', ['main'])).toBeNull();
+		expect(findProtectedMergeBranch('main-2', ['main'])).toBeNull();
+	});
+
+	it('matches `*` wildcard entries, returning the entry as written', () => {
+		expect(findProtectedMergeBranch('release/1.2', ['release/*'])).toBe('release/*');
+		expect(findProtectedMergeBranch('refs/heads/Release/1.2.x', ['release/*'])).toBe('release/*');
+		expect(findProtectedMergeBranch('release/a/b', ['release/*'])).toBe('release/*');
+		expect(findProtectedMergeBranch('hotfix-prod', ['*-prod'])).toBe('*-prod');
+		expect(findProtectedMergeBranch('rel/x/prod', ['rel/*/prod'])).toBe('rel/*/prod');
+		expect(findProtectedMergeBranch('a.b', ['a.*'])).toBe('a.*');
+	});
+
+	it('does not let a wildcard match more than it says', () => {
+		expect(findProtectedMergeBranch('releases', ['release/*'])).toBeNull();
+		expect(findProtectedMergeBranch('release', ['release/*'])).toBeNull();
+		expect(findProtectedMergeBranch('prod-hotfix', ['*-prod'])).toBeNull();
+		expect(findProtectedMergeBranch('rel/x/dev', ['rel/*/prod'])).toBeNull();
+		// Regex metacharacters in an entry are literal, not syntax.
+		expect(findProtectedMergeBranch('axb', ['a.b'])).toBeNull();
+		expect(findProtectedMergeBranch('ab', ['a?b*'])).toBeNull();
+	});
+
+	it('returns the first matching entry and ignores blank or non-string entries', () => {
+		expect(findProtectedMergeBranch('release/1', ['  ', 'release/*', 'release/1'])).toBe('release/*');
+		expect(findProtectedMergeBranch('main', [null as unknown as string, '', 'main'])).toBe('main');
+	});
+
+	it('never matches a blank or unknown ref, and stays fast on many wildcards', () => {
+		expect(findProtectedMergeBranch(null, ['*'])).toBeNull();
+		expect(findProtectedMergeBranch(' ', ['*'])).toBeNull();
+		expect(findProtectedMergeBranch('a'.repeat(500), ['*a*a*a*a*a*a*a*a*a*b'])).toBeNull();
 	});
 });

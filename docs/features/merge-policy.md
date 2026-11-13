@@ -18,7 +18,7 @@ Note the distinction: _opening_ a pull request is an Agent permission (`canOpenP
 | `requireGreenGate`     | `true`                                | The run's [quality gate](./quality-gates.md) must be green first.       |
 | `requireHumanApproval` | `true`                                | A recorded human approval must exist first.                             |
 | `allowedMergeMethods`  | `['squash']`                          | Strategies an Agent may use. An **empty list refuses every merge**.     |
-| `protectedBranches`    | `['main','master','develop','stage']` | Branches an Agent may never merge **into**. Matched case-insensitively. |
+| `protectedBranches`    | `['main','master','develop','stage']` | Branches an Agent may never merge **into**. Matched case-insensitively; an entry may use `*` as a wildcard (`release/*` protects `release/1.2`). |
 
 ## Four scopes, resolved field by field
 
