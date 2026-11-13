@@ -47,8 +47,12 @@ const OP_KEYS = [
     'op',
 ];
 
-/** A Work as the database holds it, with everything the mirror must never send. */
-const fullWork = (overrides: Record<string, unknown> = {}) =>
+/**
+ * A Work as the database holds it, with everything the mirror must never send.
+ * Typed as the mirror's facts plus the columns it must ignore, so a fact the
+ * mapping starts to need fails to compile here until the fixture has it.
+ */
+const fullWork = (overrides: Record<string, unknown> = {}): WorkFacts & Record<string, unknown> =>
     ({
         id: WORK_ID,
         name: 'Acme Store',
@@ -67,9 +71,11 @@ const fullWork = (overrides: Record<string, unknown> = {}) =>
         readmeConfig: { header: 'SECRET-README' },
         user: { email: 'secret-user@example.test' },
         ...overrides,
-    }) as unknown as WorkFacts;
+    }) as WorkFacts & Record<string, unknown>;
 
-const fullDeployment = (overrides: Record<string, unknown> = {}) =>
+const fullDeployment = (
+    overrides: Record<string, unknown> = {},
+): DeploymentFacts & Record<string, unknown> =>
     ({
         workId: WORK_ID,
         environment: 'production',
@@ -88,7 +94,7 @@ const fullDeployment = (overrides: Record<string, unknown> = {}) =>
         appRender: { namespace: 'SECRET-NAMESPACE' },
         componentStatuses: [{ name: 'SECRET-COMPONENT' }],
         ...overrides,
-    }) as unknown as DeploymentFacts;
+    }) as DeploymentFacts & Record<string, unknown>;
 
 /** An operation's `data`, read loosely. */
 const dataOf = (op: unknown) => (op as { data: Record<string, unknown> }).data;
@@ -201,9 +207,21 @@ describe('apps mirror — what an operation carries', () => {
         expect(appUpsert(fullWork(), { ...LINK, tenantId: '' }, 1, NOW)).toBeNull();
     });
 
-    it('a change dated in the future is dated now', () => {
-        const op = appUpsert(fullWork({ updatedAt: new Date('2030-01-01') }), LINK, 1, NOW);
-        expect(op?.occurred_at).toBe(NOW.toISOString());
+    it('a change dated in the future, or without a readable date, is dated now', () => {
+        for (const updatedAt of [
+            new Date('2030-01-01'),
+            new Date('nonsense'),
+            'not a date',
+            null,
+        ]) {
+            const op = appUpsert(fullWork({ updatedAt }), LINK, 1, NOW);
+            expect(op?.occurred_at).toBe(NOW.toISOString());
+        }
+        expect(
+            appUpsert(fullWork({ updatedAt: '2026-11-13T09:00:00.000Z' }), LINK, 1, NOW),
+        ).toMatchObject({
+            occurred_at: '2026-11-13T09:00:00.000Z',
+        });
     });
 });
 

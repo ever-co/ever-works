@@ -157,6 +157,11 @@ function displayText(value: string | null | undefined, max: number): string | nu
     return Array.from(cleaned).slice(0, max).join('').trim() || null;
 }
 
+/**
+ * When a change happened, for Ever Platform: the row's last change, never later
+ * than now. A row without a readable date is told as changed now, which is when
+ * it is sent; the date orders nothing (the version does).
+ */
 function isoOf(value: Date | string | null | undefined, now: Date): string {
     const date = value ? new Date(value) : now;
     const time = date.getTime();

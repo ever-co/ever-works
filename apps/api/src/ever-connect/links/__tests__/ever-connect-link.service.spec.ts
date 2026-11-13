@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { Logger } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import type { DataSource } from 'typeorm';
 import { EverConnectConnection, EverConnectLink } from '@ever-works/agent/entities';
@@ -197,6 +198,44 @@ describe('EverConnectLinkService', () => {
             expect(refresh).not.toHaveBeenCalled();
         },
     );
+
+    it('no log line and no answer carries the code, whatever happens to it', async () => {
+        const lines: string[] = [];
+        const spies = (['log', 'warn', 'error', 'debug', 'verbose'] as const).map((level) =>
+            jest.spyOn(Logger.prototype, level).mockImplementation((...args: unknown[]) => {
+                lines.push(args.map(String).join(' '));
+            }),
+        );
+        try {
+            const answers: unknown[] = [];
+            for (const error of [
+                problem(422, 'code_invalid'),
+                problem(503, 'unavailable'),
+                Object.assign(new Error(`refused ${CODE}`), {
+                    name: 'ProblemError',
+                    status: 409,
+                    code: 'already_linked',
+                }),
+            ]) {
+                create.mockRejectedValueOnce(error);
+                answers.push(
+                    await links
+                        .link(acme, CODE)
+                        .catch((refused) =>
+                            (refused as { getResponse?: () => unknown }).getResponse?.(),
+                        ),
+                );
+            }
+            answers.push(await links.link(acme, CODE));
+            answers.push(await links.unlink(acme));
+            const said = JSON.stringify([lines, answers]);
+            expect(lines.length).toBeGreaterThan(3);
+            expect(said).not.toContain(CODE);
+            expect(said.toUpperCase()).not.toContain('7K2M');
+        } finally {
+            for (const spy of spies) spy.mockRestore();
+        }
+    });
 
     it('a revoked credential ends the connection', async () => {
         create.mockRejectedValueOnce(problem(401, 'credential_revoked'));

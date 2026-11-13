@@ -149,7 +149,8 @@ describe("Ever Connect — an Organization's link over HTTP", () => {
     };
     let fetchSpy: jest.SpyInstance;
 
-    beforeAll(() => {
+    beforeEach(() => {
+        mockOrganizations.clear();
         mockOrganizations.set(ORG, {
             id: ORG,
             tenantId: '33333333-3333-4333-8333-333333333333',
@@ -261,6 +262,16 @@ describe("Ever Connect — an Organization's link over HTTP", () => {
                 .expect(403);
             expect(keyed.body.code).toBe('session_required');
             await http.delete(LINK).set('x-test-user', as(ADMIN, 'api-key')).expect(403);
+            // A request whose way of signing in is not known is refused too (fail closed).
+            await http
+                .post(LINK)
+                .set('x-test-user', JSON.stringify({ userId: ADMIN }))
+                .send(code)
+                .expect(403);
+            await http
+                .delete(LINK)
+                .set('x-test-user', JSON.stringify({ userId: ADMIN }))
+                .expect(403);
             await http
                 .post(LINK)
                 .set('x-test-user', as(ADMIN, 'ever-id-delegated'))
@@ -295,6 +306,8 @@ describe("Ever Connect — an Organization's link over HTTP", () => {
                 const refused = await post({ code }).expect(400);
                 expect(refused.body.code).toBe('code_invalid');
             }
+            // A code is the same code in any case, as app.ever.co shows it or typed
+            // by hand: this one is well formed, so the answer is about the connection.
             const notConnected = await post({ code: 'evl-test-0000-0001' }).expect(409);
             expect(notConnected.body.code).toBe('not_connected');
             const notLinked = await http.delete(LINK).set('x-test-user', as(ADMIN)).expect(404);

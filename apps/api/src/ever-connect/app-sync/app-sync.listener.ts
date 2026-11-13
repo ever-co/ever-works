@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
 import {
     DeploymentCompletedEvent,
@@ -36,6 +36,8 @@ interface WorkDomainEvent {
  */
 @Injectable()
 export class AppSyncListener {
+    private readonly logger = new Logger(AppSyncListener.name);
+
     constructor(private readonly mirror: AppSyncService) {}
 
     @OnEvent('domain.work.created', { async: true })
@@ -44,7 +46,13 @@ export class AppSyncListener {
     @OnEvent('domain.work.deleted', { async: true })
     async onWorkDomainEvent(event: WorkDomainEvent): Promise<void> {
         const workId = event?.aggregate?.type === 'work' ? event.aggregate.id : undefined;
-        if (workId) await this.mirror.workChanged(workId, event.organizationId ?? null);
+        if (!workId) {
+            // Not a Work's event after all (its shape changed): said once per
+            // event, and the daily reconciliation still sends the Work.
+            this.logger.debug('A Work event without a Work id was not queued for the apps mirror');
+            return;
+        }
+        await this.mirror.workChanged(workId, event.organizationId ?? null);
     }
 
     @OnEvent(WorkCreatedEvent.EVENT_NAME, { async: true })
