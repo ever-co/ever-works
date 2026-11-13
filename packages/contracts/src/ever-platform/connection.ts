@@ -12,11 +12,27 @@
 export const EVER_PLATFORM_CONNECTION_STATES = ['disconnected', 'pending_approval', 'active', 'revoked'] as const;
 export type EverPlatformConnectionState = (typeof EVER_PLATFORM_CONNECTION_STATES)[number];
 
-/** A connect code as app.ever.co shows it (`EVC-XXXX-XXXX-XXXX`, case-insensitive). */
-export const EVER_PLATFORM_CONNECT_CODE_PATTERN = /^EVC(-[0-9A-HJKMNP-TV-Z]{4}){3}$/i;
+/** The two codes a person brings from app.ever.co. */
+export type EverPlatformCodeKind = 'connect' | 'link';
 
-/** A link code as app.ever.co shows it (`EVL-XXXX-XXXX-XXXX`, case-insensitive). */
-export const EVER_PLATFORM_LINK_CODE_PATTERN = /^EVL(-[0-9A-HJKMNP-TV-Z]{4}){3}$/i;
+const CODE_PREFIX: Readonly<Record<EverPlatformCodeKind, string>> = { connect: 'EVC', link: 'EVL' };
+
+/**
+ * The canonical spelling of a code a person typed or pasted
+ * (`EVC-XXXX-XXXX-XXXX` to connect an installation, `EVL-XXXX-XXXX-XXXX` to
+ * link an Organization), or `null` when it is not one. Case, surrounding
+ * space and the dashes between the groups do not matter; the letters I, L, O
+ * and U never appear in a code.
+ */
+export function normalizeEverPlatformCode(input: unknown, kind: EverPlatformCodeKind): string | null {
+	if (typeof input !== 'string' || input.length > 64) return null;
+	const prefix = CODE_PREFIX[kind];
+	const compact = input.toUpperCase().replace(/[\s-]+/g, '');
+	if (!compact.startsWith(prefix)) return null;
+	const body = compact.slice(prefix.length);
+	if (!/^[0-9A-HJKMNP-TV-Z]{12}$/.test(body)) return null;
+	return `${prefix}-${body.slice(0, 4)}-${body.slice(4, 8)}-${body.slice(8, 12)}`;
+}
 
 /**
  * Where an entitlement document stands: `valid` until it expires, `grace` for

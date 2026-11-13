@@ -29,6 +29,12 @@ export interface EverConnectRoundParticipant {
     round(now: Date): Promise<void>;
 }
 
+/** What the apps mirror tells the rest of Ever Connect (it lives in a module of its own). */
+export interface EverConnectAppSyncReader {
+    status(): Promise<EverPlatformAppSyncStatusView | null>;
+    runsFor(organizationId: string): Promise<boolean>;
+}
+
 /**
  * Where the parts of Ever Connect that are switched on separately (the
  * heartbeat, entitlement documents, tenant links, the apps mirror) join the
@@ -40,7 +46,7 @@ export class EverConnectExtensions {
     private readonly logger = new Logger(EverConnectExtensions.name);
     private readonly feedHandlers: EverConnectFeedHandler[] = [];
     private readonly participants: EverConnectRoundParticipant[] = [];
-    private appSync: (() => Promise<EverPlatformAppSyncStatusView | null>) | null = null;
+    private appSync: EverConnectAppSyncReader | null = null;
 
     addFeedHandler(handler: EverConnectFeedHandler): void {
         if (!this.feedHandlers.includes(handler)) this.feedHandlers.push(handler);
@@ -50,14 +56,19 @@ export class EverConnectExtensions {
         if (!this.participants.includes(participant)) this.participants.push(participant);
     }
 
-    /** The apps mirror tells the operator's status where it stands. */
-    provideAppSyncStatus(read: () => Promise<EverPlatformAppSyncStatusView | null>): void {
-        this.appSync = read;
+    /** The apps mirror says where it stands and which Organizations it runs for. */
+    provideAppSync(reader: EverConnectAppSyncReader): void {
+        this.appSync = reader;
     }
 
     /** Where the apps mirror stands, or `null` when it is switched off. */
     async appSyncStatus(): Promise<EverPlatformAppSyncStatusView | null> {
-        return this.appSync ? this.appSync().catch(() => null) : null;
+        return this.appSync ? this.appSync.status().catch(() => null) : null;
+    }
+
+    /** Whether the apps mirror runs for an Organization (never while it is switched off). */
+    async appSyncRunsFor(organizationId: string): Promise<boolean> {
+        return this.appSync ? this.appSync.runsFor(organizationId).catch(() => false) : false;
     }
 
     /** Whether any registered handler reads this event type. */

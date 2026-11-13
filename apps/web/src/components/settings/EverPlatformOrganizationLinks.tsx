@@ -5,7 +5,7 @@ import { useFormatter, useTranslations } from 'next-intl';
 import { toast } from 'sonner';
 import { Building2, ExternalLink } from 'lucide-react';
 import {
-    EVER_PLATFORM_LINK_CODE_PATTERN,
+    normalizeEverPlatformCode,
     type EverPlatformOrganizationLinkView,
 } from '@ever-works/contracts';
 import {
@@ -99,7 +99,7 @@ function OrganizationLinkRow({ item }: { item: EverPlatformOrganizationLinkItem 
     const [pending, startTransition] = useTransition();
 
     const link = view?.link ?? null;
-    const codeLooksRight = EVER_PLATFORM_LINK_CODE_PATTERN.test(code.trim());
+    const codeLooksRight = normalizeEverPlatformCode(code, 'link') !== null;
 
     const submit = () => {
         if (!codeLooksRight) {

@@ -99,8 +99,30 @@ const VOCAB = /^[a-z0-9][a-z0-9_.-]{0,39}$/;
 /** A reference Ever Platform accepts for a tenant or an organization. */
 const REFERENCE = /^[A-Za-z0-9._:/-]{1,64}$/;
 
-/** A Work's lifecycle status, as Ever Platform reads Works' own words. */
-const APP_STATUSES: ReadonlySet<string> = new Set(['draft', 'active', 'registered', 'archived']);
+/**
+ * A Work's lifecycle status in Ever Platform's words: an `active` Work is
+ * `live` there, the others keep their name.
+ */
+const APP_STATUSES: Readonly<Record<string, string>> = {
+    draft: 'draft',
+    active: 'live',
+    registered: 'registered',
+    archived: 'archived',
+};
+
+/**
+ * A deployment row's state in Ever Platform's words. A deployment that was
+ * rolled back or replaced no longer serves (`retired`); every state not listed
+ * is one still on its way (`pending`).
+ */
+const DEPLOYMENT_STATUSES: Readonly<Record<string, string>> = {
+    READY: 'ready',
+    ERROR: 'error',
+    CANCELED: 'canceled',
+    TIMEOUT: 'timeout',
+    ROLLED_BACK: 'retired',
+    SUPERSEDED: 'retired',
+};
 
 /**
  * A Work's kind in Ever Platform's vocabulary. A kind it has no word for is
@@ -157,13 +179,18 @@ export function appUpsert(
 ): AppSyncOp | null {
     if (!isExternalId(work.id)) return null;
     if (!REFERENCE.test(link.tenantId) || !REFERENCE.test(link.productOrgRef)) return null;
-    const status = typeof work.status === 'string' ? work.status : '';
-    if (!APP_STATUSES.has(status)) return null;
+    const status =
+        typeof work.status === 'string' && Object.hasOwn(APP_STATUSES, work.status)
+            ? APP_STATUSES[work.status]
+            : null;
+    if (!status) return null;
     const slug = displayText(work.slug, 128);
     const name = displayText(work.name, 200) ?? slug;
     if (!name || !slug) return null;
     const kind = work.kind === 'app' ? 'app' : 'work';
-    const workKind = kind === 'work' ? WORK_KINDS[work.kind ?? 'default'] : undefined;
+    const ownKind = work.kind ?? 'default';
+    const workKind =
+        kind === 'work' && Object.hasOwn(WORK_KINDS, ownKind) ? WORK_KINDS[ownKind] : undefined;
     const data: AppSyncAppData = {
         product_tenant_id: link.tenantId,
         product_org_id: link.productOrgRef,
@@ -299,9 +326,11 @@ export function publicAddress(value: string | null | undefined): string | null {
     return clean.length <= 2048 ? clean : null;
 }
 
-/** A deployment row's state, in the words Ever Platform reads (Works' own, or `pending`). */
+/** A deployment row's state in Ever Platform's words (`pending` for one still on its way). */
 export function deploymentStatus(state: string | null | undefined): string {
-    return typeof state === 'string' && /^[A-Z_]{1,32}$/.test(state) ? state : 'pending';
+    return typeof state === 'string' && Object.hasOwn(DEPLOYMENT_STATUSES, state)
+        ? DEPLOYMENT_STATUSES[state]
+        : 'pending';
 }
 
 /**

@@ -24,6 +24,7 @@ import {
     type EverConnectRoundParticipant,
 } from '../ever-connect-extensions';
 import { EverConnectIntegrationService } from '../ever-connect-integration.service';
+import { withAppSyncLink } from '../ever-connect-link-header';
 import { EverConnectService } from '../ever-connect.service';
 import { isAppSyncEnabled } from '../ever-connect.switches';
 import { describeFailure, platformFailure } from '../identity/platform-answer';
@@ -130,7 +131,10 @@ export class AppSyncService
         // With a handler, the integration's state is kept for each tenant link.
         this.registry?.register(this);
         this.extensions?.addRoundParticipant(this);
-        this.extensions?.provideAppSyncStatus(() => this.status());
+        this.extensions?.provideAppSync({
+            status: () => this.status(),
+            runsFor: async (organizationId) => (await this.enabledLinks()).has(organizationId),
+        });
     }
 
     private get outbox(): Repository<EverConnectOutbox> {
@@ -224,8 +228,8 @@ export class AppSyncService
     private async enqueue(
         workIds: readonly string[],
         organizationId: string | null,
+        now: Date = new Date(),
     ): Promise<void> {
-        const now = new Date();
         for (let at = 0; at < workIds.length; at += CHUNK) {
             const ids = workIds.slice(at, at + CHUNK).filter(isExternalId);
             if (ids.length === 0) continue;
@@ -274,8 +278,9 @@ export class AppSyncService
     }
 
     /**
-     * One pass: the rows that are due, as one batch. Returns how many Works were
-     * reported (applied, or already current).
+     * One pass: the rows that are due, as one batch for each tenant link they act
+     * for (a batch names its link). Returns how many Works were reported
+     * (applied, or already current).
      */
     async drainOnce(now: Date = new Date()): Promise<number> {
         if (!isAppSyncEnabled()) return 0;
@@ -292,27 +297,31 @@ export class AppSyncService
         const client = await this.connection.client();
         if (!client) return 0;
         const links = await this.enabledLinks();
+        const [anyLink] = links.values();
 
         const workIds = rows.map((row) => String(row.payload?.workId ?? ''));
         const works = await this.readWorks(workIds);
         const deployments = await this.currentDeployments([...works.keys()]);
 
-        const ops: AppSyncOp[] = [];
-        /** For each row: the indexes of its operations, or why it has none. */
-        const plan: Array<{ row: EverConnectOutbox; indexes: number[] }> = [];
+        /** For each tenant link: its operations, and which of them are each row's. */
+        const batches = new Map<
+            string,
+            { ops: AppSyncOp[]; plan: Array<{ row: EverConnectOutbox; indexes: number[] }> }
+        >();
         for (const row of rows) {
             const workId = String(row.payload?.workId ?? '');
             const work = works.get(workId);
             const built: AppSyncOp[] = [];
+            let link: EnabledLink | undefined;
             if (!work) {
                 // Gone here: deleted there, while its Organization's link still runs
-                // (a row queued by a reconciliation names no Organization).
-                const allowed =
-                    links.size > 0 && (row.accountRef === null || links.has(row.accountRef));
-                const op = allowed ? appDelete(workId, this.nextVersion(now), now) : null;
+                // (a row queued by a reconciliation may name no Organization: it
+                // travels with any link the mirror runs for).
+                link = row.accountRef === null ? anyLink : links.get(row.accountRef);
+                const op = link ? appDelete(workId, this.nextVersion(now), now) : null;
                 if (op) built.push(op);
             } else {
-                const link = work.organizationId ? links.get(work.organizationId) : undefined;
+                link = work.organizationId ? links.get(work.organizationId) : undefined;
                 const app = link ? appUpsert(work, link, this.nextVersion(now), now) : null;
                 if (app) {
                     built.push(app);
@@ -331,54 +340,60 @@ export class AppSyncService
                     }
                 }
             }
-            if (built.length === 0) {
+            if (!link || built.length === 0) {
                 // Nothing of it may move (its link ended, or it cannot be told in
                 // the contract's words): the row is not owed any more.
                 await this.outbox.delete({ id: row.id, seq: row.seq });
                 continue;
             }
-            plan.push({ row, indexes: built.map((_, i) => ops.length + i) });
-            ops.push(...built);
-        }
-        if (ops.length === 0) return 0;
-
-        let results: readonly OpResult[];
-        try {
-            const answer = await client.instances.mirrorApps.push({ ops } as Parameters<
-                typeof client.instances.mirrorApps.push
-            >[0]);
-            results = answer.results as readonly OpResult[];
-        } catch (error) {
-            await this.batchFailed(
-                plan.map((entry) => entry.row),
-                error,
-                now,
-            );
-            return 0;
+            const batch = batches.get(link.platformLinkId) ?? { ops: [], plan: [] };
+            batch.plan.push({ row, indexes: built.map((_, i) => batch.ops.length + i) });
+            batch.ops.push(...built);
+            batches.set(link.platformLinkId, batch);
         }
 
         let reported = 0;
         let refresh = false;
-        for (const { row, indexes } of plan) {
-            const outcomes = indexes.map((index) => results[index] ?? {});
-            const rejected = outcomes.filter((result) => result.outcome === 'rejected');
-            if (outcomes.some((result) => !result.outcome)) {
-                // An answer without this operation: sent again.
-                await this.retry(row, 'no_result', now);
-            } else if (rejected.length === 0) {
-                reported += 1;
-                await this.outbox.delete({ id: row.id, seq: row.seq });
-            } else {
-                const code = rejected[0].code ?? 'rejected';
-                if (code === 'unlinked_org' || code === 'integration_disabled') {
-                    // Ever Platform ended the link or the consent: nothing is owed,
-                    // and the states are read again.
-                    refresh = true;
+        for (const [linkId, { ops, plan }] of batches) {
+            let results: readonly OpResult[];
+            try {
+                const answer = await withAppSyncLink(linkId, () =>
+                    client.instances.mirrorApps.push({ ops } as Parameters<
+                        typeof client.instances.mirrorApps.push
+                    >[0]),
+                );
+                results = answer.results as readonly OpResult[];
+            } catch (error) {
+                const ended = await this.batchFailed(
+                    plan.map((entry) => entry.row),
+                    error,
+                    now,
+                );
+                if (ended) return reported;
+                continue;
+            }
+
+            for (const { row, indexes } of plan) {
+                const outcomes = indexes.map((index) => results[index] ?? {});
+                const rejected = outcomes.filter((result) => result.outcome === 'rejected');
+                if (outcomes.some((result) => !result.outcome)) {
+                    // An answer without this operation: sent again.
+                    await this.retry(row, 'no_result', now);
+                } else if (rejected.length === 0) {
+                    reported += 1;
                     await this.outbox.delete({ id: row.id, seq: row.seq });
-                } else if (code === 'unknown_app') {
-                    await this.retry(row, code, now);
                 } else {
-                    await this.giveUp(row, code);
+                    const code = rejected[0].code ?? 'rejected';
+                    if (code === 'unlinked_org' || code === 'integration_disabled') {
+                        // Ever Platform ended the link or the consent: nothing is owed,
+                        // and the states are read again.
+                        refresh = true;
+                        await this.outbox.delete({ id: row.id, seq: row.seq });
+                    } else if (code === 'unknown_app') {
+                        await this.retry(row, code, now);
+                    } else {
+                        await this.giveUp(row, code);
+                    }
                 }
             }
         }
@@ -387,17 +402,20 @@ export class AppSyncService
         return reported;
     }
 
-    /** A batch Ever Platform did not take: every row of it waits, or is given up. */
+    /**
+     * A batch Ever Platform did not take: every row of it waits, or is given up.
+     * `true` when the connection ended with it (nothing more is sent).
+     */
     private async batchFailed(
         rows: readonly EverConnectOutbox[],
         error: unknown,
         now: Date,
-    ): Promise<void> {
+    ): Promise<boolean> {
         const failure = platformFailure(error);
         this.logger.warn(`An apps mirror batch was not taken: ${describeFailure(failure)}`);
         if (failure.kind === 'problem' && failure.code === 'credential_revoked') {
             await this.connection.ended('revoked');
-            return;
+            return true;
         }
         if (failure.kind === 'problem' && failure.status === 403) {
             // No link has the integration any more: read the states again; the
@@ -418,6 +436,7 @@ export class AppSyncService
             if (final) await this.giveUp(row, code);
             else await this.retry(row, code, now, waitMs);
         }
+        return false;
     }
 
     private async retry(
@@ -492,13 +511,19 @@ export class AppSyncService
                 await this.enqueue(
                     rows.map((row) => row.id),
                     link.organizationId,
+                    now,
                 );
             }
 
             const byLink = new Map([...links.values()].map((l) => [l.platformLinkId, l]));
+            // The read names one link the mirror runs for; it answers what Ever
+            // Platform holds for the whole installation.
+            const [reader] = links.values();
             let cursor: string | undefined;
             for (let page = 0; page < INVENTORY_MAX_PAGES; page += 1) {
-                const answer = (await client.instances.mirrorApps.list(cursor, INVENTORY_PAGE)) as {
+                const answer = (await withAppSyncLink(reader.platformLinkId, () =>
+                    client.instances.mirrorApps.list(cursor, INVENTORY_PAGE),
+                )) as {
                     items?: ReadonlyArray<{
                         external_id: string;
                         kind: string;
@@ -516,7 +541,7 @@ export class AppSyncService
                     // Held under a link the mirror no longer runs for: Ever Platform
                     // ends those rows itself.
                     if (item.org_link_id && !link) continue;
-                    await this.enqueue([item.external_id], link?.organizationId ?? null);
+                    await this.enqueue([item.external_id], link?.organizationId ?? null, now);
                 }
                 if (!answer.next_cursor) break;
                 cursor = answer.next_cursor;

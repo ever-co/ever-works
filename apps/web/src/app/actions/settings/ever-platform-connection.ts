@@ -3,8 +3,7 @@
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
 import {
-    EVER_PLATFORM_CONNECT_CODE_PATTERN,
-    EVER_PLATFORM_LINK_CODE_PATTERN,
+    normalizeEverPlatformCode,
     type EverPlatformConnectionStatusView,
     type EverPlatformOrganizationLinkView,
 } from '@ever-works/contracts';
@@ -67,7 +66,7 @@ function failure(error: unknown): { success: false; code: EverPlatformActionCode
         if (error.code && KNOWN_CODES.has(error.code as EverPlatformActionCode)) {
             return { success: false, code: error.code as EverPlatformActionCode };
         }
-        if (error.code === 'sessionRequired') return { success: false, code: 'session_required' };
+        if (error.code === 'session_required') return { success: false, code: 'session_required' };
         if (error.statusCode === 403) return { success: false, code: 'forbidden' };
         if (error.statusCode === 404) return { success: false, code: 'unavailable' };
         if (error.statusCode === 429) return { success: false, code: 'rate_limited' };
@@ -93,10 +92,8 @@ async function run<T>(fn: () => Promise<T>): Promise<EverPlatformActionResult<T>
 export async function connectEverPlatformAction(
     code: string,
 ): Promise<EverPlatformActionResult<EverPlatformConnectionStatusView>> {
-    const typed = typeof code === 'string' ? code.trim() : '';
-    if (!EVER_PLATFORM_CONNECT_CODE_PATTERN.test(typed)) {
-        return { success: false, code: 'code_invalid' };
-    }
+    const typed = normalizeEverPlatformCode(code, 'connect');
+    if (!typed) return { success: false, code: 'code_invalid' };
     return run(async () => {
         await everConnectAPI.connect(typed);
         return everConnectAPI.status();
@@ -119,10 +116,8 @@ export async function linkOrganizationAction(
     code: string,
 ): Promise<EverPlatformActionResult<EverPlatformOrganizationLinkView>> {
     if (!ORGANIZATION_ID.test(organizationId)) return { success: false, code: 'unavailable' };
-    const typed = typeof code === 'string' ? code.trim() : '';
-    if (!EVER_PLATFORM_LINK_CODE_PATTERN.test(typed)) {
-        return { success: false, code: 'code_invalid' };
-    }
+    const typed = normalizeEverPlatformCode(code, 'link');
+    if (!typed) return { success: false, code: 'code_invalid' };
     return run(() => everConnectAPI.link(organizationId, typed));
 }
 

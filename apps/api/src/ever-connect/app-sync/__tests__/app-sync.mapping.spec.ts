@@ -110,7 +110,7 @@ describe('apps mirror — what an operation carries', () => {
                 name: 'Acme Store',
                 slug: 'acme-store',
                 base_kind: 'none',
-                status: 'active',
+                status: 'live',
             },
         });
         expect(Object.keys(op as object).every((key) => OP_KEYS.includes(key))).toBe(true);
@@ -133,7 +133,7 @@ describe('apps mirror — what an operation carries', () => {
                 shape: 'k8s-works-shared',
                 managed_by: 'ever',
                 environment: 'production',
-                status: 'READY',
+                status: 'ready',
                 url: 'https://store.acme.example/',
             },
         });
@@ -165,14 +165,21 @@ describe('apps mirror — what an operation carries', () => {
         expect(kindOf('repo')).toMatchObject({ kind: 'work' });
         expect(kindOf('repo')).not.toHaveProperty('work_kind');
         expect(kindOf('project')).not.toHaveProperty('work_kind');
+        expect(kindOf('constructor')).not.toHaveProperty('work_kind');
     });
 
-    it('every lifecycle status of a Work is sent as it is; any other word is not sent', () => {
-        for (const status of ['draft', 'active', 'registered', 'archived']) {
+    it("every lifecycle status of a Work is told in Ever Platform's words; any other word is not sent", () => {
+        for (const [status, told] of [
+            ['draft', 'draft'],
+            ['active', 'live'],
+            ['registered', 'registered'],
+            ['archived', 'archived'],
+        ]) {
             expect(appUpsert(fullWork({ status }), LINK, 1, NOW)).toMatchObject({
-                data: { status },
+                data: { status: told },
             });
         }
+        expect(appUpsert(fullWork({ status: 'constructor' }), LINK, 1, NOW)).toBeNull();
         expect(appUpsert(fullWork({ status: 'generating' }), LINK, 1, NOW)).toBeNull();
         expect(appUpsert(fullWork({ status: null }), LINK, 1, NOW)).toBeNull();
     });
@@ -284,24 +291,25 @@ describe('apps mirror — where a deployment runs', () => {
         expect(deploymentUpsert(fullDeployment({ provider: '' }), 1, NOW)).toBeNull();
     });
 
-    it('every state of a deployment row is sent in the words Ever Platform reads', () => {
-        for (const state of [
-            'INITIALIZING',
-            'BUILDING',
-            'DEPLOYING',
-            'VERIFYING',
-            'READY',
-            'ERROR',
-            'CANCELED',
-            'TIMEOUT',
-            'ROLLED_BACK',
-            'SUPERSEDED',
-        ]) {
-            expect(deploymentStatus(state)).toBe(state);
+    it("every state of a deployment row is told in Ever Platform's words", () => {
+        const told: Record<string, string> = {
+            INITIALIZING: 'pending',
+            BUILDING: 'pending',
+            DEPLOYING: 'pending',
+            VERIFYING: 'pending',
+            READY: 'ready',
+            ERROR: 'error',
+            CANCELED: 'canceled',
+            TIMEOUT: 'timeout',
+            ROLLED_BACK: 'retired',
+            SUPERSEDED: 'retired',
+        };
+        for (const [state, status] of Object.entries(told)) {
+            expect(deploymentStatus(state)).toBe(status);
         }
         expect(deploymentStatus('not a state')).toBe('pending');
+        expect(deploymentStatus('constructor')).toBe('pending');
         expect(deploymentStatus(null)).toBe('pending');
-        expect(deploymentStatus('X'.repeat(33))).toBe('pending');
     });
 
     it('an address is sent without credentials, a query or a fragment, or not at all', () => {

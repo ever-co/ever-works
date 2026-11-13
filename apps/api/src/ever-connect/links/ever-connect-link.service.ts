@@ -29,7 +29,7 @@ import {
 } from '../ever-connect-extensions';
 import { EverConnectIntegrationService } from '../ever-connect-integration.service';
 import { EverConnectService } from '../ever-connect.service';
-import { isAppSyncEnabled, isLinkCodesEnabled } from '../ever-connect.switches';
+import { isLinkCodesEnabled } from '../ever-connect.switches';
 import {
     EverConnectEntitlementService,
     linkEntitlementSubject,
@@ -44,9 +44,6 @@ const LINK_ENDED_EVENTS: ReadonlySet<string> = new Set([
     'ever.registry.tenant_link.unlinked',
     'ever.registry.tenant_link.orphaned',
 ]);
-
-/** The integration key of the apps mirror. */
-const APP_SYNC = 'app_sync';
 
 function problem(status: number, code: string, message: string): HttpException {
     return new HttpException({ statusCode: status, code, message }, status);
@@ -96,11 +93,10 @@ export class EverConnectLinkService implements OnModuleInit, EverConnectFeedHand
             link.platformLinkId && this.entitlements
                 ? await this.entitlements.view(linkEntitlementSubject(link.platformLinkId))
                 : null;
+        // The mirror's own answer: the switch, the consent and its scope version.
         const appSync =
-            connected && isAppSyncEnabled() && link.platformLinkId
-                ? (await this.integrations.linkStates(APP_SYNC)).some(
-                      (state) => state.linkId === link.platformLinkId && state.enabled,
-                  )
+            connected && this.extensions
+                ? await this.extensions.appSyncRunsFor(organization.id)
                 : false;
         return { connected, link: linkView(link), entitlement, appSync };
     }

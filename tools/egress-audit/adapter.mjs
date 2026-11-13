@@ -24,14 +24,20 @@ const STATS_ROUTES = [
 ];
 
 /**
- * The install-request routes of the Ever Connect module (install requests from apps.ever.co). The
- * audit never sets `EVER_CONNECT_ENABLED`, so the module is not loaded in any mode and each must
- * answer 404: no route, no outbound call (the sniffer proves the second).
+ * Routes of the Ever Connect module: install requests from apps.ever.co, the connection itself and
+ * an Organization's link to its organization on Ever Platform. The audit never sets
+ * `EVER_CONNECT_ENABLED` (nor any of the switches that need it), so the module is not loaded in any
+ * mode and each must answer 404: no route, no outbound call (the sniffer proves the second).
  */
 const EVER_CONNECT_INSTALL_ROUTES = [
 	['GET', '/api/ever-connect/install-requests'],
 	['POST', '/api/ever-connect/install-requests/01JZ8Q3M4N5P6R7S8T9V0W1X2Y/approve'],
-	['POST', '/api/ever-connect/install-requests/01JZ8Q3M4N5P6R7S8T9V0W1X2Y/decline']
+	['POST', '/api/ever-connect/install-requests/01JZ8Q3M4N5P6R7S8T9V0W1X2Y/decline'],
+	['GET', '/api/ever-connect/status'],
+	['POST', '/api/ever-connect/connect'],
+	['GET', '/api/ever-connect/organizations/11111111-1111-4111-8111-111111111111/link'],
+	['POST', '/api/ever-connect/organizations/11111111-1111-4111-8111-111111111111/link'],
+	['DELETE', '/api/ever-connect/organizations/11111111-1111-4111-8111-111111111111/link']
 ];
 
 /**
@@ -255,7 +261,9 @@ export default {
 				method,
 				redirect: 'manual',
 				headers: method === 'GET' ? {} : { 'content-type': 'application/json' },
-				body: method === 'GET' ? undefined : JSON.stringify({ addToAllowlist: true })
+				// A body each of these routes would read if it existed; none does.
+				body:
+					method === 'GET' ? undefined : JSON.stringify({ addToAllowlist: true, code: 'EVL-0000-0000-0000' })
 			});
 			connect.push({ route: `${method} ${path}`, status: response.status });
 		}

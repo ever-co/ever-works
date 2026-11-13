@@ -5,7 +5,7 @@ import { useFormatter, useTranslations } from 'next-intl';
 import { toast } from 'sonner';
 import { ExternalLink, Link2 } from 'lucide-react';
 import {
-    EVER_PLATFORM_CONNECT_CODE_PATTERN,
+    normalizeEverPlatformCode,
     type EverPlatformConnectionState,
     type EverPlatformConnectionStatusView,
     type EverPlatformEntitlementView,
@@ -86,7 +86,7 @@ export function EverPlatformConnectionPanel({ state, initial }: EverPlatformConn
 
     const connection = status?.connection ?? null;
     const connected = connection?.status === 'active' || connection?.status === 'pending_approval';
-    const codeLooksRight = EVER_PLATFORM_CONNECT_CODE_PATTERN.test(code.trim());
+    const codeLooksRight = normalizeEverPlatformCode(code, 'connect') !== null;
     const dateTime = (value: string | null) =>
         value
             ? format.dateTime(new Date(value), { dateStyle: 'medium', timeStyle: 'short' })
