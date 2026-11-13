@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import type { EverPlatformAppSyncStatusView } from '@ever-works/contracts';
+import { EVER_CONNECT_LEASE_HELD, type EverConnectRoundLease } from './ever-connect-lease.service';
 
 /** One event of the installation's feed, as a handler receives it. */
 export interface EverConnectFeedEvent {
@@ -23,10 +24,14 @@ export interface EverConnectFeedHandler {
  * the replica holding the Ever Connect lease, while the installation is
  * connected). `round` should not throw; one that does is logged by name and the
  * other parts still run.
+ *
+ * A round that makes several requests calls `lease.keep()` between them and
+ * stops when it answers `false`: the worker's lease lasts two minutes, and a
+ * long round must not run on after another replica has taken it.
  */
 export interface EverConnectRoundParticipant {
     readonly name: string;
-    round(now: Date): Promise<void>;
+    round(now: Date, lease: EverConnectRoundLease): Promise<void>;
 }
 
 /** What the apps mirror tells the rest of Ever Connect (it lives in a module of its own). */
@@ -83,11 +88,19 @@ export class EverConnectExtensions {
         }
     }
 
-    /** Run every participant's round; a failure of one is logged and the next still runs. */
-    async runRound(now: Date): Promise<void> {
+    /**
+     * Run every participant's round; a failure of one is logged and the next
+     * still runs. The lease is renewed before each one, and the round stops
+     * there when this replica no longer holds it.
+     */
+    async runRound(
+        now: Date,
+        lease: EverConnectRoundLease = EVER_CONNECT_LEASE_HELD,
+    ): Promise<void> {
         for (const participant of this.participants) {
+            if (!(await lease.keep())) return;
             try {
-                await participant.round(now);
+                await participant.round(now, lease);
             } catch (error) {
                 this.logger.warn(
                     `Ever Connect ${participant.name} round failed: ${

@@ -31,7 +31,7 @@ it is exactly `true`, and does nothing while the installation is not connected:
 
 | Variable                            | Default     | Meaning                                                                                                                                |
 | ----------------------------------- | ----------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| `EVER_CONNECT_LINK_CODES_ENABLED`   | unset (off) | An Organization's admin can link it to an organization on Ever Platform with a link code. Off: the link routes answer `404`.           |
+| `EVER_CONNECT_LINK_CODES_ENABLED`   | unset (off) | An Organization's administrator can link it to an organization on Ever Platform with a link code. Off: the link routes answer `404`.   |
 | `EVER_CONNECT_HEARTBEAT_ENABLED`    | unset (off) | The installation tells Ever Platform that it is running, with its version, shortly after a start and then once a day.                  |
 | `EVER_CONNECT_ENTITLEMENTS_ENABLED` | unset (off) | The signed entitlement documents are read, verified, kept and shown in Settings.                                                       |
 | `EVER_CONNECT_APP_SYNC_ENABLED`     | unset (off) | The apps mirror: for an Organization that enabled it in app.ever.co, the identifiers and status of its Works and deployments are sent. |
@@ -83,8 +83,9 @@ for an Organization that existed before.
 
 1. In app.ever.co, an owner or admin of the organization creates a **link code**
    for Ever Works (`EVL-XXXX-XXXX-XXXX`).
-2. In Ever Works, an admin of the Organization opens **Settings → Ever Platform
-   → Organization link**, pastes the code and chooses **Link**.
+2. In Ever Works, an administrator of the Organization (see
+   [who may change a link](#who-may-change-a-link)) opens **Settings → Ever
+   Platform → Organization link**, pastes the code and chooses **Link**.
 
 - **Sent:** the code, the account's (tenant's) ID and the Organization's slug.
   No other name, no e-mail address, no member, no content.
@@ -100,15 +101,32 @@ for an Organization that existed before.
   feed. Removing a link stops the integrations turned on for it; nothing in
   Ever Works is deleted. Disconnecting the installation ends its links.
 
-| Route                                                | Who                                               | What it does                              |
-| ---------------------------------------------------- | ------------------------------------------------- | ----------------------------------------- |
-| `GET /api/ever-connect/organizations/:orgId/link`    | a member of the Organization                      | The link and what it has on Ever Platform |
-| `POST /api/ever-connect/organizations/:orgId/link`   | an admin of the Organization, interactive session | Link with a link code (`{code}`)          |
-| `DELETE /api/ever-connect/organizations/:orgId/link` | an admin of the Organization, interactive session | Remove the link                           |
+| Route                                                | Who                                                       | What it does                                                                                      |
+| ---------------------------------------------------- | --------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `GET /api/ever-connect/organizations/:orgId/link`    | any member of the Organization's account                  | The link, what it has on Ever Platform, and whether the person asking may change it (`canManage`) |
+| `POST /api/ever-connect/organizations/:orgId/link`   | an administrator of the Organization, interactive session | Link with a link code (`{code}`)                                                                  |
+| `DELETE /api/ever-connect/organizations/:orgId/link` | an administrator of the Organization, interactive session | Remove the link                                                                                   |
 
 An Organization of another account answers `404`, as on every
-`/organizations/:orgId` route. Who counts as an admin follows the same rule as
-there (`ORG_ADMIN_ROLE_ENFORCED`).
+`/organizations/:orgId` route.
+
+### Who may change a link
+
+Linking an Organization and removing its link are for an **administrator of the
+Organization** only:
+
+- the owner of the account the Organization belongs to, or
+- a member whose role in the Organization is `admin` or `owner`.
+
+Any other member of the account is refused with `403`, in every configuration.
+This does not depend on `ORG_ADMIN_ROLE_ENFORCED`: that setting decides whether
+other Organization routes check the role, and the link routes always do, because
+a link decides which organization on Ever Platform the Organization's apps may
+be listed under.
+
+Every member of the account can read the link. Settings shows it to them
+without the form for a code and without **Remove link**, and says who can
+change it.
 
 ## Heartbeat
 
@@ -171,22 +189,33 @@ How it works:
 
 - A change to a Work or to one of its deployments is noted in the outbox (the
   Work's ID only). The worker sends what is noted in batches, one for each link,
-  every 30 seconds while there is something to send, with the Work as it is at
-  that moment. Each operation carries a version that only grows, so sending one
-  twice changes nothing.
+  every 30 seconds while there is something to send (up to 150 Works a round),
+  with the Work as it is at that moment. Each operation carries a version that
+  only grows, so sending one twice changes nothing.
 - A Work that was deleted here is deleted on the Apps page.
 - Once a day, and when the integration is enabled for a link, every Work of the
   Organization is sent again and compared with what Ever Platform holds. Nothing
   in Ever Works is ever changed or deleted by this.
+- **Changes go first.** A Work that changed is sent before the Works of that
+  daily full send, so a change reaches the Apps page in the next round even
+  while a large installation is still sending its full list. A Work that
+  already waits keeps its place when the full send starts.
+- With several API replicas, one of them does this work at a time: it holds a
+  two-minute lease and renews it between the steps of a round (before each
+  batch and each page it reads). A replica that cannot renew stops at once; what
+  it had not sent stays noted, and the replica that takes over sends it.
 - A consent given for an earlier version of the integration, which did not list
   the name and the slug, moves nothing until the owner consents again.
 - Switching the integration off, removing the link or disconnecting stops it at
-  once and drops what was waiting. Ever Platform then archives the apps it
+  once and drops what was waiting (after a disconnect, also what Ever Platform
+  had refused). Ever Platform then archives the apps it
   listed for the link.
 
 The platform administrator sees in Settings → Ever Platform how many
 Organizations have it enabled, how many Works wait to be sent, how many Ever
 Platform refused (with the reason code), and when the full list was last sent.
+Works waiting for the Apps page are counted there only: the outbox numbers of
+the connection count the reports owed about people's Ever ID links.
 
 Deploy targets are told in Ever Platform's open vocabulary:
 

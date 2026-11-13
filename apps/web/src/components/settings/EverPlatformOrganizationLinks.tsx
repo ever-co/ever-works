@@ -14,6 +14,8 @@ import {
     type EverPlatformActionCode,
 } from '@/app/actions/settings/ever-platform-connection';
 import { Button } from '@/components/ui/button';
+// A type only: nothing of the server-side API client reaches the browser.
+import type { EverPlatformOrganizationLinkItem } from '@/lib/api/ever-connect';
 import {
     EntitlementSummary,
     EVER_PLATFORM_APP_URL,
@@ -21,14 +23,7 @@ import {
     EVER_PLATFORM_ERROR_KEY,
 } from './EverPlatformConnectionPanel';
 
-/** One of the person's Organizations, with its link as the API answered it. */
-export interface EverPlatformOrganizationLinkItem {
-    readonly organizationId: string;
-    readonly displayName: string;
-    readonly slug: string;
-    /** `null`: the link could not be read. */
-    readonly view: EverPlatformOrganizationLinkView | null;
-}
+export type { EverPlatformOrganizationLinkItem };
 
 interface EverPlatformOrganizationLinksProps {
     organizations: readonly EverPlatformOrganizationLinkItem[];
@@ -41,8 +36,13 @@ interface EverPlatformOrganizationLinksProps {
  * For each Organization: whether it is linked to an Ever organization and, when
  * it is not, the form for a link code created in app.ever.co. A linked
  * Organization shows its Ever organization and what its entitlement document
- * says, and can be unlinked after a confirmation. The API decides who may
- * change a link (an admin of the Organization); a refusal is said in words.
+ * says, and can be unlinked after a confirmation.
+ *
+ * Every member of the account reads the link. Only an administrator of the
+ * Organization changes it (the account's owner, or a member whose role in it
+ * is `admin` or `owner`): the API says who that is (`canManage`) and refuses
+ * anyone else, so the form and Remove link are offered to an administrator
+ * only, and everyone else is told who can do it.
  */
 export function EverPlatformOrganizationLinks({
     organizations,
@@ -99,6 +99,7 @@ function OrganizationLinkRow({ item }: { item: EverPlatformOrganizationLinkItem 
     const [pending, startTransition] = useTransition();
 
     const link = view?.link ?? null;
+    const canManage = view?.canManage === true;
     const codeLooksRight = normalizeEverPlatformCode(code, 'link') !== null;
 
     const submit = () => {
@@ -197,7 +198,7 @@ function OrganizationLinkRow({ item }: { item: EverPlatformOrganizationLinkItem 
                             testId="ever-platform-link-entitlement"
                         />
                     )}
-                    {!confirming && (
+                    {canManage && !confirming && (
                         <Button
                             type="button"
                             variant="secondary"
@@ -211,7 +212,7 @@ function OrganizationLinkRow({ item }: { item: EverPlatformOrganizationLinkItem 
                             {t('unlink')}
                         </Button>
                     )}
-                    {confirming && (
+                    {canManage && confirming && (
                         <div
                             className="space-y-2 p-3 rounded-md border border-border dark:border-border-dark"
                             data-testid="ever-platform-unlink-confirm"
@@ -252,7 +253,16 @@ function OrganizationLinkRow({ item }: { item: EverPlatformOrganizationLinkItem 
                 </p>
             )}
 
-            {view && !link && view.connected && (
+            {view && !canManage && (link || view.connected) && (
+                <p
+                    className="text-sm text-text-muted dark:text-text-muted-dark max-w-3xl"
+                    data-testid="ever-platform-link-admin-only"
+                >
+                    {t('adminOnly')}
+                </p>
+            )}
+
+            {view && !link && view.connected && canManage && (
                 <div className="space-y-2" data-testid="ever-platform-link-form">
                     <label
                         htmlFor={codeId}

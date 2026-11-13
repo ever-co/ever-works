@@ -52,8 +52,9 @@ function problem(status: number, code: string, message: string): HttpException {
 /**
  * An Organization's link to its Ever organization, made with a link code.
  *
- * An admin of the Organization gets a link code (`EVL-XXXX-XXXX-XXXX`) in
- * app.ever.co and pastes it here. The installation redeems it
+ * An administrator of the Organization (the account's owner, or a member whose
+ * role in it is `admin` or `owner`: the routes refuse anyone else) gets a link
+ * code (`EVL-XXXX-XXXX-XXXX`) in app.ever.co and pastes it here. The installation redeems it
  * (`POST /v1/instances/me/tenant-links`) with the tenant's id and the
  * Organization's slug, nothing else: no name, no e-mail, no member. Ever
  * Platform answers the link and the Ever organization it belongs to, which are
@@ -85,10 +86,13 @@ export class EverConnectLinkService implements OnModuleInit, EverConnectFeedHand
     }
 
     /** The Organization's link, with what its entitlement document says. */
-    async view(organization: Pick<Organization, 'id'>): Promise<EverPlatformOrganizationLinkView> {
+    async view(
+        organization: Pick<Organization, 'id'>,
+        canManage = false,
+    ): Promise<EverPlatformOrganizationLinkView> {
         const connected = (await this.connection.status()).status === 'active';
         const link = await this.active(organization.id);
-        if (!link) return { connected, link: null, entitlement: null, appSync: false };
+        if (!link) return { connected, link: null, entitlement: null, appSync: false, canManage };
         const entitlement =
             link.platformLinkId && this.entitlements
                 ? await this.entitlements.view(linkEntitlementSubject(link.platformLinkId))
@@ -98,7 +102,7 @@ export class EverConnectLinkService implements OnModuleInit, EverConnectFeedHand
             connected && this.extensions
                 ? await this.extensions.appSyncRunsFor(organization.id)
                 : false;
-        return { connected, link: linkView(link), entitlement, appSync };
+        return { connected, link: linkView(link), entitlement, appSync, canManage };
     }
 
     /**
@@ -191,7 +195,7 @@ export class EverConnectLinkService implements OnModuleInit, EverConnectFeedHand
             EverConnectLinkChangedEvent.EVENT_NAME,
             new EverConnectLinkChangedEvent(organization.id, 'linked', created.id),
         );
-        return this.view(organization);
+        return this.view(organization, true);
     }
 
     /**
@@ -223,7 +227,7 @@ export class EverConnectLinkService implements OnModuleInit, EverConnectFeedHand
             }
         }
         await this.archive(link);
-        return this.view(organization);
+        return this.view(organization, true);
     }
 
     // -- the feed ---------------------------------------------------------------

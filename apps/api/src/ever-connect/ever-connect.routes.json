@@ -2,7 +2,7 @@
     "manifest": "ever-connect.routes.v1",
     "product": "works",
     "module": "ever-connect",
-    "description": "Routes of the Ever Connect module (an installation's connection to Ever Platform). `public` lists routes that answer without a session and `inbound` lists requests Ever Platform makes to this installation: only the address statement, which answers 404 unless Ever Platform is checking the installation's published address. `routes` lists every route with the authentication it requires (`platform-admin`, or for an Organization's link `organization-member` to read and `organization-admin` to change; the link routes exist only with `EVER_CONNECT_LINK_CODES_ENABLED=true`). Generated from the controllers by routes-manifest.spec.ts (UPDATE_ROUTES_MANIFEST=1 rewrites it).",
+    "description": "Routes of the Ever Connect module (an installation's connection to Ever Platform). `public` lists routes that answer without a session and `inbound` lists requests Ever Platform makes to this installation: only the address statement, which answers 404 unless Ever Platform is checking the installation's published address. `routes` lists every route with the authentication it requires (`platform-admin`, or for an Organization's link `organization-member`, a member of its account, to read, and `organization-admin` to change: the account's owner or a member whose role in the Organization is `admin` or `owner`, whatever `ORG_ADMIN_ROLE_ENFORCED` says; the link routes exist only with `EVER_CONNECT_LINK_CODES_ENABLED=true`). Generated from the controllers by routes-manifest.spec.ts (UPDATE_ROUTES_MANIFEST=1 rewrites it).",
     "public": [
         {
             "method": "GET",

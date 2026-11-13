@@ -16,7 +16,8 @@ import {
  *
  * Pins what a platform admin sees of the connection (the state in words, the
  * connect form only while not connected, Disconnect only behind a
- * confirmation), what a member sees of an Organization's link, that a code is
+ * confirmation), what a member sees of an Organization's link (and that only
+ * its administrator is offered the form and Remove link), that a code is
  * checked before any request and never kept in the page, and that the parts
  * switched on separately appear only when they are on.
  * Queries by test id and text, not by role (the slow path in this app).
@@ -82,7 +83,14 @@ const CONNECTED = {
 function linkView(
     over: Partial<EverPlatformOrganizationLinkView> = {},
 ): EverPlatformOrganizationLinkView {
-    return { connected: true, link: null, entitlement: null, appSync: false, ...over };
+    return {
+        connected: true,
+        link: null,
+        entitlement: null,
+        appSync: false,
+        canManage: true,
+        ...over,
+    };
 }
 
 function item(view: EverPlatformOrganizationLinkView | null): EverPlatformOrganizationLinkItem {
@@ -456,5 +464,64 @@ describe('EverPlatformOrganizationLinks', () => {
         );
         expect(screen.queryByTestId('ever-platform-link-form')).toBeNull();
         expect(screen.queryByTestId('ever-platform-unlink')).toBeNull();
+        expect(screen.queryByTestId('ever-platform-link-admin-only')).toBeNull();
+    });
+
+    it('a member who is not an administrator reads a missing link and is not offered the form', () => {
+        render(
+            <EverPlatformOrganizationLinks
+                organizations={[item(linkView({ canManage: false }))]}
+            />,
+        );
+        expect(screen.getByTestId('ever-platform-link-state').getAttribute('data-state')).toBe(
+            'not-linked',
+        );
+        expect(screen.queryByTestId('ever-platform-link-form')).toBeNull();
+        expect(screen.queryByTestId('ever-platform-link-code')).toBeNull();
+        expect(screen.getByTestId('ever-platform-link-admin-only').textContent).toBe('adminOnly');
+        // Control: the same view for an administrator has the form and no such note.
+        render(<EverPlatformOrganizationLinks organizations={[item(linkView())]} />);
+        expect(screen.getAllByTestId('ever-platform-link-form')).toHaveLength(1);
+        expect(screen.getAllByTestId('ever-platform-link-admin-only')).toHaveLength(1);
+    });
+
+    it('a member who is not an administrator reads the link and cannot remove it', () => {
+        render(
+            <EverPlatformOrganizationLinks
+                organizations={[
+                    item(
+                        linkView({
+                            canManage: false,
+                            link: {
+                                everOrgId: '01JMQCK0RG000000000000000B',
+                                handle: 'globex',
+                                createdVia: 'link_code',
+                                linkedAt: '2026-11-13T10:00:00.000Z',
+                            },
+                            appSync: true,
+                        }),
+                    ),
+                ]}
+            />,
+        );
+        expect(screen.getByTestId('ever-platform-link-organization').textContent).toBe(
+            'ever.co/globex',
+        );
+        expect(screen.getByTestId('ever-platform-link-app-sync').textContent).toBe('appSyncOn');
+        expect(screen.queryByTestId('ever-platform-unlink')).toBeNull();
+        expect(screen.queryByTestId('ever-platform-unlink-confirm')).toBeNull();
+        expect(screen.getByTestId('ever-platform-link-admin-only').textContent).toBe('adminOnly');
+        expect(unlink).not.toHaveBeenCalled();
+    });
+
+    it('a member who is not an administrator on an installation that is not connected is told that first', () => {
+        render(
+            <EverPlatformOrganizationLinks
+                organizations={[item(linkView({ canManage: false, connected: false }))]}
+            />,
+        );
+        expect(screen.getByTestId('ever-platform-link-not-connected')).toBeTruthy();
+        expect(screen.queryByTestId('ever-platform-link-admin-only')).toBeNull();
+        expect(screen.queryByTestId('ever-platform-link-form')).toBeNull();
     });
 });

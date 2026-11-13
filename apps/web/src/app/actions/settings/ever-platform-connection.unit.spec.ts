@@ -175,7 +175,13 @@ describe('linkOrganizationAction / unlinkOrganizationAction', () => {
     });
 
     it('removes a link, and says when it is not linked', async () => {
-        const view = { connected: true, link: null, entitlement: null, appSync: false };
+        const view = {
+            connected: true,
+            link: null,
+            entitlement: null,
+            appSync: false,
+            canManage: true,
+        };
         unlink.mockResolvedValue(view);
         expect(await unlinkOrganizationAction(ORG)).toEqual({ success: true, data: view });
         unlink.mockRejectedValue(new ApiResponseError('x', 404, 'not_linked'));
