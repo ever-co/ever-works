@@ -20,6 +20,8 @@ Note the distinction: _opening_ a pull request is an Agent permission (`canOpenP
 | `allowedMergeMethods`  | `['squash']`                          | Strategies an Agent may use. An **empty list refuses every merge**.     |
 | `protectedBranches`    | `['main','master','develop','stage']` | Branches an Agent may never merge **into**. Matched case-insensitively. |
 
+A `protectedBranches` entry may use `*` as a wildcard. `*` matches any run of characters, `/` included, so `release/*` protects `release/1.2` and `release/1.2/hotfix`. It is the only wildcard: `?` and `[...]` are matched literally.
+
 ## Four scopes, resolved field by field
 
 A policy can be stored at four scopes. Least specific first:

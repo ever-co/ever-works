@@ -17,6 +17,7 @@ const FUNCTION_EXPORTS = [
 	// Works-security lane 3a — the protected-branch floor predicate.
 	'mergeTargetNeedsFloorApproval',
 	'sameMergeBranch',
+	'findProtectedMergeBranch',
 	'sanitizeToolGrantOverride',
 	'matchesToolPattern',
 	'matchesAnyToolPattern',
@@ -62,12 +63,12 @@ describe('policy barrel', () => {
 		expect((policy as Record<string, unknown>)[name]).toBeInstanceOf(RegExp);
 	});
 
-	it('exposes exactly these 26 runtime symbols', () => {
+	it('exposes exactly these 27 runtime symbols', () => {
 		// Regression guard in BOTH directions: a re-export accidentally deleted
 		// from index.ts fails here, and a NEW runtime export added without a spec
 		// also fails here — forcing the author back to cover it.
 		expect(Object.keys(policy).sort()).toEqual([...FUNCTION_EXPORTS, ...VALUE_EXPORTS].sort());
-		expect(Object.keys(policy)).toHaveLength(26);
+		expect(Object.keys(policy)).toHaveLength(27);
 	});
 
 	it('names each of the six source modules in the barrel', () => {

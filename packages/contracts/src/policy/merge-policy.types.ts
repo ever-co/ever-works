@@ -165,6 +165,51 @@ export function sameMergeBranch(a: string | null | undefined, b: string | null |
 	return left !== null && left === normalizeFloorRef(b);
 }
 
+/** `*` matches any run of characters (including `/` and none); everything else is literal. */
+function wildcardMatches(pattern: string, value: string): boolean {
+	let p = 0;
+	let v = 0;
+	let starP = -1;
+	let starV = 0;
+	while (v < value.length) {
+		if (p < pattern.length && pattern[p] === '*') {
+			starP = p++;
+			starV = v;
+		} else if (p < pattern.length && pattern[p] === value[v]) {
+			p++;
+			v++;
+		} else if (starP !== -1) {
+			p = starP + 1;
+			v = ++starV;
+		} else {
+			return false;
+		}
+	}
+	while (p < pattern.length && pattern[p] === '*') p++;
+	return p === pattern.length;
+}
+
+/**
+ * The first entry of `patterns` (a policy's `protectedBranches`) that names
+ * `ref`, or `null`. An entry is a branch name or a name with `*` wildcards
+ * (`release/*`) — the same pattern shape the Fleet session actions already
+ * honour, so a branch the UI shows as protected is one the merge decision
+ * refuses. Both sides are normalised like every other merge-branch
+ * comparison: `refs/heads/` stripped, case-insensitive. A blank or unknown
+ * `ref` never matches (the caller fails closed on an unknown base before it
+ * asks).
+ */
+export function findProtectedMergeBranch(ref: string | null | undefined, patterns: readonly string[]): string | null {
+	const target = normalizeFloorRef(ref);
+	if (target === null) return null;
+	for (const raw of patterns) {
+		const pattern = normalizeFloorRef(raw);
+		if (pattern === null) continue;
+		if (pattern === target || (pattern.includes('*') && wildcardMatches(pattern, target))) return raw;
+	}
+	return null;
+}
+
 /** Every field name of {@link MergePolicy}; the deep-merge iterates this. */
 export const MERGE_POLICY_FIELDS: readonly (keyof MergePolicy)[] = [
 	'allowAgentMerge',
