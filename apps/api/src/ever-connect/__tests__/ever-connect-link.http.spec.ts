@@ -43,14 +43,17 @@ import 'reflect-metadata';
 import { Global, Module, type INestApplication, ValidationPipe } from '@nestjs/common';
 import { EventEmitterModule } from '@nestjs/event-emitter';
 import { Test } from '@nestjs/testing';
-import { TypeOrmModule } from '@nestjs/typeorm';
+import { TypeOrmModule, getDataSourceToken } from '@nestjs/typeorm';
 import * as request from 'supertest';
+import type { DataSource } from 'typeorm';
 import { ActivityLogModule, ActivityLogService } from '@ever-works/agent/activity-log';
 import { DatabaseModule, ENTITIES, UserRepository } from '@ever-works/agent/database';
+import { EverConnectConnection, EverConnectLink } from '@ever-works/agent/entities';
 import { everConnectAppSyncModuleImports } from '../app-sync/app-sync.module';
 import { EverConnectAdminController } from '../ever-connect-admin.controller';
 import { EVER_CONNECT_CONFIG, readEverConnectConfig } from '../ever-connect.config';
 import { everConnectModuleImports } from '../ever-connect.module';
+import { EverConnectService } from '../ever-connect.service';
 import { everConnectLinkModuleImports } from '../links/ever-connect-link.module';
 
 interface TestOrganization {
@@ -334,6 +337,142 @@ describe("Ever Connect — an Organization's link over HTTP", () => {
                 lastError: null,
                 reconciledAt: null,
             });
+            expect(fetchSpy).not.toHaveBeenCalled();
+        } finally {
+            await app.close();
+        }
+    });
+
+    it('a link that exists is shown to a member and removed by an admin; not connected, it is removed here only', async () => {
+        Object.assign(process.env, ON);
+        const app = await boot(ON);
+        try {
+            const http = request(app.getHttpServer());
+            const dataSource = app.get<DataSource>(getDataSourceToken());
+            const organization = mockOrganizations.get(ORG) as TestOrganization;
+            await dataSource.getRepository(EverConnectLink).insert({
+                organizationId: ORG,
+                tenantId: organization.tenantId,
+                everOrgId: '01JMQCK0RG000000000000000B',
+                handle: 'globex',
+                platformLinkId: '01JZ8Q3M4N5P6R7S8T9V0W1XA1',
+                createdVia: 'provisioning',
+                status: 'active',
+            });
+
+            const shown = await http.get(LINK).set('x-test-user', as(MEMBER)).expect(200);
+            expect(shown.body).toMatchObject({
+                connected: false,
+                link: {
+                    everOrgId: '01JMQCK0RG000000000000000B',
+                    handle: 'globex',
+                    createdVia: 'provisioning',
+                },
+                appSync: false,
+            });
+            // What Ever Platform calls the link stays inside the installation.
+            expect(JSON.stringify(shown.body)).not.toContain('01JZ8Q3M4N5P6R7S8T9V0W1XA1');
+
+            // A member may not remove it; an admin may.
+            await http.delete(LINK).set('x-test-user', as(MEMBER)).expect(403);
+            const removed = await http.delete(LINK).set('x-test-user', as(ADMIN)).expect(200);
+            expect(removed.body).toEqual({
+                connected: false,
+                link: null,
+                entitlement: null,
+                appSync: false,
+            });
+            const after = await http.get(LINK).set('x-test-user', as(MEMBER)).expect(200);
+            expect(after.body.link).toBeNull();
+            const again = await http.delete(LINK).set('x-test-user', as(ADMIN)).expect(404);
+            expect(again.body.code).toBe('not_linked');
+            // Nothing in Ever Works was deleted: the link is archived.
+            expect(await dataSource.getRepository(EverConnectLink).find()).toMatchObject([
+                { organizationId: ORG, status: 'archived' },
+            ]);
+            expect(fetchSpy).not.toHaveBeenCalled();
+        } finally {
+            await app.close();
+        }
+    });
+
+    it('connected: an admin links with a code and removes the link, Ever Platform played by a fake client', async () => {
+        Object.assign(process.env, ON);
+        const app = await boot(ON);
+        try {
+            const http = request(app.getHttpServer());
+            const dataSource = app.get<DataSource>(getDataSourceToken());
+            const organization = mockOrganizations.get(ORG) as TestOrganization;
+            const connection = app.get(EverConnectService);
+            // The connection row exists once it was read; then it is a connected installation.
+            await connection.status();
+            await dataSource
+                .getRepository(EverConnectConnection)
+                .update(
+                    { id: 'self' },
+                    { status: 'active', platformInstanceId: '01JZ8Q3M4N5P6R7S8T9V0W1X2Y' },
+                );
+            const create = jest.fn(async () => ({
+                id: '01JZ8Q3M4N5P6R7S8T9V0W1XA1',
+                org_id: '01JMQCK0RG000000000000000B',
+            }));
+            const remove = jest.fn(async () => undefined);
+            const unavailable = async () => {
+                throw Object.assign(new Error('x'), {
+                    name: 'ProblemError',
+                    status: 503,
+                    code: 'unavailable',
+                });
+            };
+            jest.spyOn(connection, 'client').mockResolvedValue({
+                instances: {
+                    tenantLinks: { create, remove },
+                    integrations: async () => ({ instance: {}, links: {} }),
+                    entitlement: unavailable,
+                    linkEntitlement: unavailable,
+                },
+            } as never);
+
+            // The body names a code only: the Organization is the one of the route,
+            // checked against the session, never one the body could name.
+            const linked = await http
+                .post(LINK)
+                .set('x-test-user', as(ADMIN))
+                .send({
+                    code: ' evl-7k2m-9qxr-4htb ',
+                    organizationId: FOREIGN_ORG,
+                    tenantId: 'someone-else',
+                })
+                .expect(201);
+            expect(linked.body).toMatchObject({
+                connected: true,
+                link: { everOrgId: '01JMQCK0RG000000000000000B', createdVia: 'link_code' },
+            });
+            expect(linked.headers['cache-control']).toBe('no-store');
+            expect(create).toHaveBeenCalledTimes(1);
+            expect((create.mock.calls[0] as unknown[])[0]).toEqual({
+                link_code: 'EVL-7K2M-9QXR-4HTB',
+                product: 'works',
+                product_tenant_id: organization.tenantId,
+                product_org_id: 'acme-works',
+            });
+            expect(JSON.stringify(linked.body)).not.toMatch(/7K2M/i);
+
+            // Linked already: refused here, Ever Platform is not asked again.
+            const twice = await http
+                .post(LINK)
+                .set('x-test-user', as(ADMIN))
+                .send({ code: 'EVL-0000-0000-0001' })
+                .expect(409);
+            expect(twice.body.code).toBe('already_linked');
+            expect(create).toHaveBeenCalledTimes(1);
+
+            const shown = await http.get(LINK).set('x-test-user', as(MEMBER)).expect(200);
+            expect(shown.body.link).toMatchObject({ everOrgId: '01JMQCK0RG000000000000000B' });
+
+            const removed = await http.delete(LINK).set('x-test-user', as(ADMIN)).expect(200);
+            expect(removed.body).toMatchObject({ connected: true, link: null });
+            expect(remove).toHaveBeenCalledWith('01JZ8Q3M4N5P6R7S8T9V0W1XA1');
             expect(fetchSpy).not.toHaveBeenCalled();
         } finally {
             await app.close();
