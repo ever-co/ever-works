@@ -65,7 +65,7 @@ import { API_BASE, authedHeaders, createWorkViaAPI, registerUserViaAPI } from '.
  *     ?offset past end   -> 200, works:[], total = full count (NO error).
  *     ?limit=0           -> falls back to DEFAULT 20 (echoes limit:20) — 0 is "unset".
  *     ?limit=abc / non-numeric -> 200, falls back to default (NEVER 400 — tolerant parse).
- *     ?limit=-5 / ?offset=-5   -> 200, echoed verbatim, NO effective clamp on the rows
+ *     ?limit=-5 / ?offset=-5   -> 200; normalized before SQL (#3195): limit -> default 20, offset -> 0
  *       (negative is ignored by the slice) — endpoint is CLAMP/IGNORE, never REJECT.
  *     ?search=term       -> case-INSENSITIVE substring match over name AND slug;
  *                           empty ?search= -> no filter (all rows); no-match -> total:0.
@@ -367,7 +367,7 @@ test.describe('Works list — pagination, search, clamp-vs-reject, isolation', (
         expect(nan.status, 'non-numeric limit not rejected').toBe(200);
         expect(nan.works.length, 'non-numeric limit falls back to a real page').toBe(3);
 
-        // negative → echoed verbatim but the slice ignores it (no effective clamp).
+        // negative → falls back to the default page size (#3195), never an error.
         const neg = await listWorks(request, token, 'limit=-5');
         expect(neg.status, 'negative limit not rejected').toBe(200);
         expect(neg.works.length, 'negative limit does not zero the page').toBe(3);
