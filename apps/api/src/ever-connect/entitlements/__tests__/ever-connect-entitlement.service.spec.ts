@@ -6,6 +6,7 @@ import {
     EverConnectLink,
 } from '@ever-works/agent/entities';
 import { EverConnectExtensions } from '../../ever-connect-extensions';
+import type { EverConnectRoundLease } from '../../ever-connect-lease.service';
 import type { EverConnectService } from '../../ever-connect.service';
 import { createIdentityDataSource } from '../../identity/__tests__/db.helper-spec';
 import {
@@ -211,6 +212,23 @@ describe('EverConnectEntitlementService — which documents a round reads', () =
         ]);
         await entitlements.round(T0);
         expect(linkRead.mock.calls.map(([id]) => id)).toEqual([linkId(0)]);
+    });
+
+    it("the worker's lease is renewed before each link's read; when it is lost the round stops and the rest stays due", async () => {
+        await addLinks(4);
+        let asked = 0;
+        const lease: EverConnectRoundLease = {
+            held: true,
+            // Held for the first two links, lost before the third.
+            keep: async () => (asked += 1) <= 2,
+        };
+        await entitlements.round(T0, lease);
+        expect(instanceRead).toHaveBeenCalledTimes(1);
+        expect(linkRead).toHaveBeenCalledTimes(2);
+        expect(asked).toBe(3);
+        // The two that were not read are read by the next round that holds the lease.
+        await entitlements.round(after(1000));
+        expect(linkRead).toHaveBeenCalledTimes(4);
     });
 
     it.each(['pending_approval', 'disconnected', 'revoked'] as const)(

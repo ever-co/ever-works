@@ -16,6 +16,7 @@ import {
 } from '@ever-works/agent/entities';
 import { PluginSettingsService } from '@ever-works/agent/plugins';
 import {
+    EverConnectConnectionChangedEvent,
     EverConnectIntegrationChangedEvent,
     EverConnectLinkChangedEvent,
 } from '../ever-connect.events';
@@ -24,6 +25,7 @@ import {
     type EverConnectRoundParticipant,
 } from '../ever-connect-extensions';
 import { EverConnectIntegrationService } from '../ever-connect-integration.service';
+import { EVER_CONNECT_LEASE_HELD, type EverConnectRoundLease } from '../ever-connect-lease.service';
 import { withAppSyncLink } from '../ever-connect-link-header';
 import { EverConnectService } from '../ever-connect.service';
 import { isAppSyncEnabled } from '../ever-connect.switches';
@@ -33,9 +35,11 @@ import {
     IntegrationHandlerRegistry,
 } from '../integrations/integration-handler.registry';
 import {
+    APP_SYNC_FULL_SEND_OUTBOX_EVENT,
     APP_SYNC_KEY,
     APP_SYNC_MIN_SCOPE_VERSION,
     APP_SYNC_OUTBOX_EVENT,
+    APP_SYNC_OUTBOX_EVENTS,
     appDelete,
     appUpsert,
     deploymentUpsert,
@@ -46,8 +50,8 @@ import {
 /** How many Works one pass sends (at most three operations each, under the batch limit of 500). */
 export const APP_SYNC_PASS_WORKS = 150;
 /**
- * How many tenant links one pass sends a batch for. A round also renews the
- * worker's lease, so the rows of further links stay due for the next round.
+ * How many tenant links one pass sends a batch for; the rows of further links
+ * stay due for the next round. The worker's lease is renewed before each batch.
  */
 export const APP_SYNC_PASS_LINKS = 20;
 /** Between two full sends of the identifier set. */
@@ -71,6 +75,15 @@ interface EnabledLink {
     readonly platformLinkId: string;
     readonly productOrgRef: string;
 }
+
+/**
+ * Why a Work is queued. A `change` is sent before every `full_send` row, so a
+ * Work that just changed never waits behind the daily full send.
+ */
+type QueueReason = 'change' | 'full_send';
+
+/** Every outbox event of the mirror, for a `where`. */
+const MIRROR_EVENTS = () => In([...APP_SYNC_OUTBOX_EVENTS]);
 
 /** One result of a batch, as Ever Platform answers it. */
 interface OpResult {
@@ -98,13 +111,20 @@ function nextSeq(): string {
  *   it. A second change before the row is sent moves the same row.
  * - **Worker.** Each round of the Ever Connect worker (the replica holding the
  *   lease) reads the rows that are due, builds each Work's operations from its
- *   row as it is NOW ({@link app-sync.mapping}), and sends one batch. Every
- *   operation carries a version that only grows, so sending one again changes
- *   nothing. A Work that no longer exists is sent as a delete.
+ *   row as it is NOW ({@link app-sync.mapping}), and sends one batch for each
+ *   tenant link. Every operation carries a version that only grows, so sending
+ *   one again changes nothing. A Work that no longer exists is sent as a
+ *   delete. **Changes go first:** a pass takes the Works that changed, oldest
+ *   change first, and fills what is left of it with the rows of a full send.
  * - **Reconciliation.** Once a day, and when the integration turns on for a
- *   link, every Work of every enabled link is queued again, and what Ever
- *   Platform holds (`GET /v1/instances/me/mirror/apps`) is read: a row it holds
- *   for a Work that is gone is deleted there. Nothing is ever deleted here.
+ *   link, every Work of every enabled link is queued as a full-send row (a Work
+ *   that already waits keeps its row and its place), and what Ever Platform
+ *   holds (`GET /v1/instances/me/mirror/apps`) is read: a row it holds for a
+ *   Work that is gone is deleted there. Nothing is ever deleted here.
+ * - **The lease.** A full send can take longer than the worker's lease lasts,
+ *   so the lease is renewed before each batch and each page read; when it is
+ *   lost the round stops, nothing is marked as done, and what is owed is sent
+ *   by the replica that holds the lease.
  *
  * Nothing is queued or sent unless `EVER_CONNECT_APP_SYNC_ENABLED=true`, the
  * installation is connected, and the link's consent is at the scope version
@@ -221,7 +241,7 @@ export class AppSyncService
             }
             if (!organization) return;
             if (!(await this.enabledLinks()).has(organization)) return;
-            await this.enqueue([workId], organization);
+            await this.enqueue([workId], organization, 'change');
         } catch (error) {
             this.logger.warn(
                 `A Work's mirror row was not queued (${error instanceof Error ? error.name : 'unknown'}); the next reconciliation sends it.`,
@@ -229,12 +249,24 @@ export class AppSyncService
         }
     }
 
-    /** Queue rows for Works of one Organization (`null`: Works that no longer exist). */
+    /**
+     * Queue rows for Works of one Organization (`null`: Works that no longer
+     * exist). A Work has one row whatever queued it:
+     *
+     * - a `change` writes a change row, or moves the Work's row to one (due now,
+     *   after the changes already waiting): a pass that read the row before this
+     *   change does not remove it, and a row given up is tried again;
+     * - a `full_send` writes a full-send row for a Work that has none. A row that
+     *   already waits (a change, or a row waiting for its next try) is left as
+     *   it is and keeps its place; only a row given up is tried again.
+     */
     private async enqueue(
         workIds: readonly string[],
         organizationId: string | null,
+        reason: QueueReason,
         now: Date = new Date(),
     ): Promise<void> {
+        const event = reason === 'change' ? APP_SYNC_OUTBOX_EVENT : APP_SYNC_FULL_SEND_OUTBOX_EVENT;
         for (let at = 0; at < workIds.length; at += CHUNK) {
             const ids = workIds.slice(at, at + CHUNK).filter(isExternalId);
             if (ids.length === 0) continue;
@@ -244,7 +276,7 @@ export class AppSyncService
                 .into(EverConnectOutbox)
                 .values(
                     ids.map((workId) => ({
-                        event: APP_SYNC_OUTBOX_EVENT,
+                        event,
                         payload: { workId } as Record<string, unknown>,
                         dedupeKey: dedupeKey(workId),
                         seq: nextSeq(),
@@ -256,11 +288,14 @@ export class AppSyncService
                 )
                 .orIgnore()
                 .execute();
-            // A row that existed is moved: a pass that read it before this change
-            // does not remove it, and a row given up is tried again.
             await this.outbox.update(
-                { event: APP_SYNC_OUTBOX_EVENT, dedupeKey: In(ids.map(dedupeKey)) },
                 {
+                    event: MIRROR_EVENTS(),
+                    dedupeKey: In(ids.map(dedupeKey)),
+                    ...(reason === 'full_send' ? { state: 'failed' as const } : {}),
+                },
+                {
+                    event,
                     seq: nextSeq(),
                     state: 'pending',
                     attempts: 0,
@@ -274,30 +309,51 @@ export class AppSyncService
 
     // -- the worker's round ------------------------------------------------------
 
-    async round(now: Date = new Date()): Promise<void> {
+    async round(
+        now: Date = new Date(),
+        lease: EverConnectRoundLease = EVER_CONNECT_LEASE_HELD,
+    ): Promise<void> {
         if (!isAppSyncEnabled()) return;
         const connection = await this.connection.connection();
         if (connection.status !== 'active' || !connection.platformInstanceId) return;
-        await this.reconcileIfDue(now);
-        await this.drainOnce(now);
+        await this.reconcileIfDue(now, lease);
+        if (!(await lease.keep())) return;
+        await this.drainOnce(now, lease);
+    }
+
+    /** The rows of one kind that are due, oldest first. */
+    private due(event: string, now: Date, take: number): Promise<EverConnectOutbox[]> {
+        return this.outbox.find({
+            where: { event, state: 'pending', nextAttemptAt: LessThanOrEqual(now) },
+            order: { seq: 'ASC', createdAt: 'ASC' },
+            take,
+        });
     }
 
     /**
      * One pass: the rows that are due, as one batch for each tenant link they act
-     * for (a batch names its link). Returns how many Works were reported
-     * (applied, or already current).
+     * for (a batch names its link). The Works that changed come first; the rows
+     * of a full send fill what is left of the pass. Returns how many Works were
+     * reported (applied, or already current).
+     *
+     * The worker's lease is renewed before each batch; when it is lost the pass
+     * stops and the batches not sent stay owed.
      */
-    async drainOnce(now: Date = new Date()): Promise<number> {
+    async drainOnce(
+        now: Date = new Date(),
+        lease: EverConnectRoundLease = EVER_CONNECT_LEASE_HELD,
+    ): Promise<number> {
         if (!isAppSyncEnabled()) return 0;
-        const rows = await this.outbox.find({
-            where: {
-                event: APP_SYNC_OUTBOX_EVENT,
-                state: 'pending',
-                nextAttemptAt: LessThanOrEqual(now),
-            },
-            order: { seq: 'ASC', createdAt: 'ASC' },
-            take: APP_SYNC_PASS_WORKS,
-        });
+        const rows = await this.due(APP_SYNC_OUTBOX_EVENT, now, APP_SYNC_PASS_WORKS);
+        if (rows.length < APP_SYNC_PASS_WORKS) {
+            rows.push(
+                ...(await this.due(
+                    APP_SYNC_FULL_SEND_OUTBOX_EVENT,
+                    now,
+                    APP_SYNC_PASS_WORKS - rows.length,
+                )),
+            );
+        }
         if (rows.length === 0) return 0;
         const client = await this.connection.client();
         if (!client) return 0;
@@ -362,6 +418,7 @@ export class AppSyncService
         let sent = 0;
         for (const [linkId, { ops, plan }] of batches) {
             if (sent >= APP_SYNC_PASS_LINKS) break;
+            if (!(await lease.keep())) break;
             sent += 1;
             let results: readonly OpResult[];
             try {
@@ -481,7 +538,10 @@ export class AppSyncService
     // -- reconciliation ----------------------------------------------------------
 
     /** Send the full identifier set again when a day has passed (or it was asked for). */
-    async reconcileIfDue(now: Date = new Date()): Promise<boolean> {
+    async reconcileIfDue(
+        now: Date = new Date(),
+        lease: EverConnectRoundLease = EVER_CONNECT_LEASE_HELD,
+    ): Promise<boolean> {
         if (!isAppSyncEnabled()) return false;
         if (now.getTime() < this.reconcileRetryAt) return false;
         const connection = await this.connection.connection();
@@ -489,14 +549,23 @@ export class AppSyncService
             ? new Date(connection.appSyncReconciledAt).getTime()
             : null;
         if (last !== null && now.getTime() - last < APP_SYNC_RECONCILE_INTERVAL_MS) return false;
-        return this.reconcile(now);
+        return this.reconcile(now, lease);
     }
 
     /**
      * Queue every Work of every enabled link, and a delete for every app Ever
      * Platform holds whose Work is gone here. `true` when it finished.
+     *
+     * It can take longer than the worker's lease lasts (a page is read for every
+     * hundred apps Ever Platform holds), so the lease is renewed before each
+     * link and each page. When it is lost this stops without marking the full
+     * send as done: the replica that holds the lease starts it again, and what
+     * was queued so far is simply already queued.
      */
-    async reconcile(now: Date = new Date()): Promise<boolean> {
+    async reconcile(
+        now: Date = new Date(),
+        lease: EverConnectRoundLease = EVER_CONNECT_LEASE_HELD,
+    ): Promise<boolean> {
         if (!isAppSyncEnabled()) return false;
         const client = await this.connection.client();
         const links = await this.enabledLinks();
@@ -509,6 +578,7 @@ export class AppSyncService
         try {
             const works = this.dataSource.getRepository(Work);
             for (const link of links.values()) {
+                if (!(await lease.keep())) return false;
                 const rows = await works
                     .createQueryBuilder('work')
                     .select(['work.id'])
@@ -519,6 +589,7 @@ export class AppSyncService
                 await this.enqueue(
                     rows.map((row) => row.id),
                     link.organizationId,
+                    'full_send',
                     now,
                 );
             }
@@ -529,6 +600,7 @@ export class AppSyncService
             const [reader] = links.values();
             let cursor: string | undefined;
             for (let page = 0; page < INVENTORY_MAX_PAGES; page += 1) {
+                if (!(await lease.keep())) return false;
                 const answer = (await withAppSyncLink(reader.platformLinkId, () =>
                     client.instances.mirrorApps.list(cursor, INVENTORY_PAGE),
                 )) as {
@@ -549,7 +621,12 @@ export class AppSyncService
                     // Held under a link the mirror no longer runs for: Ever Platform
                     // ends those rows itself.
                     if (item.org_link_id && !link) continue;
-                    await this.enqueue([item.external_id], link?.organizationId ?? null, now);
+                    await this.enqueue(
+                        [item.external_id],
+                        link?.organizationId ?? null,
+                        'full_send',
+                        now,
+                    );
                 }
                 if (!answer.next_cursor) break;
                 cursor = answer.next_cursor;
@@ -606,16 +683,22 @@ export class AppSyncService
         await this.dropOwed(event.organizationId).catch(() => undefined);
     }
 
-    /** `IntegrationHandler`: the integration is off; nothing may move. */
-    async onDisabled(): Promise<void> {
+    /**
+     * The connection ended: nothing is owed to Ever Platform any more, the rows
+     * given up included (the rows still waiting go with the rest of the outbox).
+     */
+    @OnEvent(EverConnectConnectionChangedEvent.EVENT_NAME, { async: true })
+    async onConnectionChanged(event: EverConnectConnectionChangedEvent): Promise<void> {
+        if (event.status !== 'disconnected' && event.status !== 'revoked') return;
+        this.reconcileRetryAt = 0;
         await this.outbox
-            .delete({ event: APP_SYNC_OUTBOX_EVENT, state: In(['pending', 'failed']) })
+            .delete({ event: MIRROR_EVENTS(), state: In(['pending', 'failed']) })
             .catch(() => undefined);
     }
 
     private async dropOwed(organizationId: string): Promise<void> {
         await this.outbox.delete({
-            event: APP_SYNC_OUTBOX_EVENT,
+            event: MIRROR_EVENTS(),
             accountRef: organizationId,
             state: In(['pending', 'failed']),
         });
@@ -626,13 +709,13 @@ export class AppSyncService
     async status(): Promise<EverPlatformAppSyncStatusView | null> {
         if (!isAppSyncEnabled()) return null;
         const pending = await this.outbox.count({
-            where: { event: APP_SYNC_OUTBOX_EVENT, state: 'pending' },
+            where: { event: MIRROR_EVENTS(), state: 'pending' },
         });
         const failed = await this.outbox.count({
-            where: { event: APP_SYNC_OUTBOX_EVENT, state: 'failed' },
+            where: { event: MIRROR_EVENTS(), state: 'failed' },
         });
         const last = await this.outbox.findOne({
-            where: { event: APP_SYNC_OUTBOX_EVENT, state: In(['pending', 'failed']) },
+            where: { event: MIRROR_EVENTS(), state: In(['pending', 'failed']) },
             order: { updatedAt: 'DESC' },
         });
         const connection = await this.connection.connection();

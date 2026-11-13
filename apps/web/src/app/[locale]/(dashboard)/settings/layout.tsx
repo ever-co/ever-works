@@ -1,6 +1,5 @@
 import { getAuthFromRequest } from '@/lib/auth';
 import { everConnectAPI } from '@/lib/api/ever-connect';
-import { everConnectInstallsAPI } from '@/lib/api/ever-connect-installs';
 import { instanceStatsAPI } from '@/lib/api/instance-stats';
 import { pluginsAPI, type SettingsMenuResponse } from '@/lib/api/plugins';
 import { isAppLauncherEnabled } from '@/lib/feature-flags/app-launcher';
@@ -11,26 +10,28 @@ export default async function SettingsLayout({ children }: { children: React.Rea
     // The Ever Platform tab exists only where the API has something to show
     // there: the statistics module (unless `EVER_STATS_ENABLED=true`, off by
     // default, its status route answers 404), or, for a platform admin, the
-    // install requests of the Ever Connect module (unless
+    // connection and the install requests of the Ever Connect module (unless
     // `EVER_CONNECT_ENABLED=true`, off by default, its routes answer 404), or,
     // for a member of an Organization, its link to an Ever organization
     // (unless `EVER_CONNECT_LINK_CODES_ENABLED=true` as well, off by default,
     // its routes answer 404).
     // Otherwise: no tab, and the page itself answers 404.
-    const [settingsMenu, statsAvailable, installRequestsAvailable, linksAvailable] =
-        await Promise.all([
-            pluginsAPI
-                .listForSettingsMenu()
-                .catch((error: unknown): SettingsMenuResponse | null => {
-                    // If the API fails, we'll just show static tabs without plugin categories
-                    console.error('Failed to fetch settings menu:', error);
-                    return null;
-                }),
-            instanceStatsAPI.isAvailable(),
-            everConnectInstallsAPI.isAvailable(),
-            everConnectAPI.linksAvailable(),
-        ]);
-    const everPlatformEnabled = statsAvailable || installRequestsAvailable || linksAvailable;
+    //
+    // This runs on every Settings navigation, so the Ever Connect module is
+    // asked ONE question (its status route): where the module is off, which is
+    // the default, that 404 is the only request, and for a platform admin the
+    // 200 is. An Organization's link is probed only for a person who is not a
+    // platform admin on a deployment that has the module loaded.
+    const [settingsMenu, statsAvailable, everConnectAvailable] = await Promise.all([
+        pluginsAPI.listForSettingsMenu().catch((error: unknown): SettingsMenuResponse | null => {
+            // If the API fails, we'll just show static tabs without plugin categories
+            console.error('Failed to fetch settings menu:', error);
+            return null;
+        }),
+        instanceStatsAPI.isAvailable(),
+        everConnectAPI.settingsTabAvailable(),
+    ]);
+    const everPlatformEnabled = statsAvailable || everConnectAvailable;
 
     // APW-11 T16 — the App Launcher flag is resolved HERE, in the nested server
     // layout that renders the nav, and passed down as a prop.

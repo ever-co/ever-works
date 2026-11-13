@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { DataSource } from 'typeorm';
+import { In, type DataSource } from 'typeorm';
 import {
     EverConnectConnection,
     EverConnectIntegration,
@@ -11,9 +11,17 @@ import {
 import { createIdentityDataSource } from '../../identity/__tests__/db.helper-spec';
 import { EverConnectExtensions } from '../../ever-connect-extensions';
 import type { EverConnectIntegrationService } from '../../ever-connect-integration.service';
+import type { EverConnectRoundLease } from '../../ever-connect-lease.service';
+import { EverConnectOutboxService } from '../../ever-connect-outbox.service';
 import type { EverConnectService } from '../../ever-connect.service';
 import { IntegrationHandlerRegistry } from '../../integrations/integration-handler.registry';
-import { APP_SYNC_KEY, APP_SYNC_MAX_OPS, APP_SYNC_OUTBOX_EVENT } from '../app-sync.mapping';
+import {
+    APP_SYNC_FULL_SEND_OUTBOX_EVENT,
+    APP_SYNC_KEY,
+    APP_SYNC_MAX_OPS,
+    APP_SYNC_OUTBOX_EVENT,
+    APP_SYNC_OUTBOX_EVENTS,
+} from '../app-sync.mapping';
 import {
     APP_SYNC_MAX_ATTEMPTS,
     APP_SYNC_PASS_LINKS,
@@ -26,9 +34,11 @@ import {
 /**
  * The apps mirror's worker on a real database with Ever Platform's answers
  * played by a fake client: what is queued and for whom, what each answer of a
- * batch does to its row, how a batch that was not taken is retried, and when
- * the full set is sent again. (The wire itself is covered against the mock
- * platform in `ever-connect-links-mirror.mock.spec.ts`.)
+ * batch does to its row, how a batch that was not taken is retried, when the
+ * full set is sent again, that a Work that changed is sent before the rows of a
+ * full send, and that a pass and a full send stop when the worker's lease is
+ * lost. (The wire itself is covered against the mock platform in
+ * `ever-connect-links-mirror.mock.spec.ts`.)
  */
 const LINK_A = '01JZ8Q3M4N5P6R7S8T9V0W1XA1';
 const LINK_B = '01JZ8Q3M4N5P6R7S8T9V0W1XB2';
@@ -44,6 +54,20 @@ interface Op {
 
 const problem = (status: number, code: string) =>
     Object.assign(new Error(code), { name: 'ProblemError', status, code });
+
+/** A worker's lease that is held for the first `keeps` renewals and lost after. */
+function leaseLostAfter(keeps: number): EverConnectRoundLease & { asked: number } {
+    const lease = {
+        asked: 0,
+        held: true,
+        keep: async () => {
+            lease.asked += 1;
+            lease.held = lease.held && lease.asked <= keeps;
+            return lease.held;
+        },
+    };
+    return lease;
+}
 
 describe('AppSyncService', () => {
     const savedEnv = { ...process.env };
@@ -62,10 +86,17 @@ describe('AppSyncService', () => {
     const orgB = { id: randomUUID(), tenantId: tenantB, slug: 'globex' };
     const orgC = { id: randomUUID(), tenantId: randomUUID(), slug: 'not-linked' };
 
+    /** The mirror's rows, changes and full-send rows alike, in the order they were queued. */
     const rows = () =>
         dataSource
             .getRepository(EverConnectOutbox)
-            .find({ where: { event: APP_SYNC_OUTBOX_EVENT }, order: { seq: 'ASC' } });
+            .find({ where: { event: In([...APP_SYNC_OUTBOX_EVENTS]) }, order: { seq: 'ASC' } });
+    const rowOf = async (workId: string) =>
+        dataSource
+            .getRepository(EverConnectOutbox)
+            .findOneOrFail({ where: { dedupeKey: `app_sync:${workId}` } });
+    /** A time no row is due after: whatever queued it (the test's clock or the machine's). */
+    const later = () => new Date(Math.max(Date.now(), NOW.getTime()) + 60_000);
     const addWork = async (organization: { id: string; tenantId: string }, name: string) => {
         const id = randomUUID();
         await dataSource.getRepository(Work).insert({
@@ -618,6 +649,226 @@ describe('AppSyncService', () => {
         });
     });
 
+    describe('a Work that changed goes before a full send', () => {
+        it('a change is queued as a change, a full send as a full-send row', async () => {
+            const changed = await addWork(orgA, 'Store');
+            await mirror.workChanged(changed);
+            const swept = await addWork(orgA, 'Blog');
+            await mirror.reconcile(NOW);
+            expect((await rowOf(changed)).event).toBe(APP_SYNC_OUTBOX_EVENT);
+            expect((await rowOf(swept)).event).toBe(APP_SYNC_FULL_SEND_OUTBOX_EVENT);
+            // One row for a Work, whatever queued it.
+            expect(await rows()).toHaveLength(2);
+        });
+
+        it('with more full-send rows waiting than a pass takes, the Works that changed are in the next pass, first', async () => {
+            const total = APP_SYNC_PASS_WORKS + 25;
+            const ids = Array.from({ length: total }, () => randomUUID());
+            await dataSource.getRepository(Work).insert(
+                ids.map((id, index) => ({
+                    id,
+                    name: `Work ${index}`,
+                    slug: `work-${index}`,
+                    userId: randomUUID(),
+                    description: '',
+                    kind: 'website',
+                    status: 'active',
+                    organizationId: orgA.id,
+                    tenantId: orgA.tenantId,
+                })) as never,
+            );
+            await mirror.reconcile(NOW);
+            const queued = await rows();
+            expect(queued).toHaveLength(total);
+            expect(queued.every((row) => row.event === APP_SYNC_FULL_SEND_OUTBOX_EVENT)).toBe(true);
+
+            // After the full send was queued: a new Work, and a change to the Work
+            // that is LAST in the queue (it would have waited for the second pass).
+            const fresh = await addWork(orgA, 'Fresh');
+            await mirror.workChanged(fresh);
+            const last = String(queued[queued.length - 1].payload.workId);
+            await mirror.workChanged(last);
+            expect((await rowOf(last)).event).toBe(APP_SYNC_OUTBOX_EVENT);
+            expect(await rows()).toHaveLength(total + 1);
+
+            expect(await mirror.drainOnce(later())).toBe(APP_SYNC_PASS_WORKS);
+            expect(push).toHaveBeenCalledTimes(1);
+            const sent = (push.mock.calls[0][0].ops as Op[])
+                .filter((op) => op.kind === 'app')
+                .map((op) => op.external_id);
+            expect(sent).toHaveLength(APP_SYNC_PASS_WORKS);
+            // The two changes lead the pass, in the order they happened; the rest
+            // of the pass is the head of the full send, in its own order.
+            expect(sent.slice(0, 2)).toEqual([fresh, last]);
+            expect(sent.slice(2)).toEqual(
+                queued.slice(0, APP_SYNC_PASS_WORKS - 2).map((row) => row.payload.workId),
+            );
+
+            // What is left is only full-send rows, sent by the next pass.
+            const left = await rows();
+            expect(left).toHaveLength(total + 1 - APP_SYNC_PASS_WORKS);
+            expect(left.every((row) => row.event === APP_SYNC_FULL_SEND_OUTBOX_EVENT)).toBe(true);
+            expect(await mirror.drainOnce(later())).toBe(left.length);
+            expect(await rows()).toEqual([]);
+        });
+
+        it('a pass full of changes takes no full-send row', async () => {
+            const changes = Array.from({ length: APP_SYNC_PASS_WORKS }, () => randomUUID());
+            const swept = await addWork(orgA, 'Swept first');
+            await mirror.reconcile(NOW);
+            await dataSource.getRepository(Work).insert(
+                changes.map((id, index) => ({
+                    id,
+                    name: `Changed ${index}`,
+                    slug: `changed-${index}`,
+                    userId: randomUUID(),
+                    description: '',
+                    kind: 'website',
+                    status: 'active',
+                    organizationId: orgA.id,
+                    tenantId: orgA.tenantId,
+                })) as never,
+            );
+            for (const id of changes) await mirror.workChanged(id, orgA.id);
+            await mirror.drainOnce(later());
+            const sent = (push.mock.calls[0][0].ops as Op[]).map((op) => op.external_id);
+            expect(sent).toHaveLength(APP_SYNC_PASS_WORKS);
+            expect(sent).not.toContain(swept);
+            expect((await rows()).map((row) => row.payload.workId)).toEqual([swept]);
+        });
+
+        it('a full send leaves a row that already waits as it is, and tries a row given up again', async () => {
+            const outbox = dataSource.getRepository(EverConnectOutbox);
+            const waiting = await addWork(orgA, 'Waiting');
+            const retrying = await addWork(orgA, 'Retrying');
+            const givenUp = await addWork(orgA, 'Given up');
+            for (const id of [waiting, retrying, givenUp]) await mirror.workChanged(id);
+            const nextTry = new Date(NOW.getTime() + 3_600_000);
+            await outbox.update(
+                { dedupeKey: `app_sync:${retrying}` },
+                { attempts: 3, nextAttemptAt: nextTry, lastError: 'unavailable' },
+            );
+            await outbox.update(
+                { dedupeKey: `app_sync:${givenUp}` },
+                { state: 'failed', attempts: 5, lastError: 'rejected' },
+            );
+            const before = {
+                waiting: await rowOf(waiting),
+                retrying: await rowOf(retrying),
+                givenUp: await rowOf(givenUp),
+            };
+
+            expect(await mirror.reconcile(NOW)).toBe(true);
+
+            // A change that waits keeps its kind and its place among the changes.
+            expect(await rowOf(waiting)).toMatchObject({
+                event: APP_SYNC_OUTBOX_EVENT,
+                seq: before.waiting.seq,
+                state: 'pending',
+                attempts: 0,
+            });
+            // A row waiting for its next try is not hurried.
+            const stillRetrying = await rowOf(retrying);
+            expect(stillRetrying).toMatchObject({
+                event: APP_SYNC_OUTBOX_EVENT,
+                seq: before.retrying.seq,
+                attempts: 3,
+                lastError: 'unavailable',
+            });
+            expect(new Date(stillRetrying.nextAttemptAt).getTime()).toBe(nextTry.getTime());
+            // A row given up is tried again, as part of the full send.
+            const again = await rowOf(givenUp);
+            expect(again).toMatchObject({
+                event: APP_SYNC_FULL_SEND_OUTBOX_EVENT,
+                state: 'pending',
+                attempts: 0,
+                lastError: null,
+            });
+            expect(again.seq).not.toBe(before.givenUp.seq);
+            expect(await rows()).toHaveLength(3);
+        });
+
+        it('a change to a Work whose full-send row a pass has already read is sent again', async () => {
+            const work = await addWork(orgA, 'Store');
+            await mirror.reconcile(NOW);
+            push.mockImplementationOnce(async (batch: { ops: Op[] }) => {
+                // The Work changes while its batch is on the wire.
+                await mirror.workChanged(work);
+                return applied(batch);
+            });
+            expect(await mirror.drainOnce(later())).toBe(1);
+            const [row] = await rows();
+            expect(row).toMatchObject({ event: APP_SYNC_OUTBOX_EVENT, state: 'pending' });
+            expect(await mirror.drainOnce(later())).toBe(1);
+            expect(await rows()).toEqual([]);
+        });
+    });
+
+    describe("the worker's lease", () => {
+        it('a pass renews the lease before each batch and stops when it is lost; what was not sent stays owed', async () => {
+            const a = await addWork(orgA, 'Store');
+            const b = await addWork(orgB, 'Shop');
+            await mirror.workChanged(a);
+            await mirror.workChanged(b);
+            const lease = leaseLostAfter(1);
+            expect(await mirror.drainOnce(later(), lease)).toBe(1);
+            expect(push).toHaveBeenCalledTimes(1);
+            expect(lease.asked).toBe(2);
+            const left = await rows();
+            expect(left.map((row) => row.payload.workId)).toEqual([b]);
+            // Untouched: not counted as a failed try.
+            expect(left[0]).toMatchObject({ state: 'pending', attempts: 0, lastError: null });
+
+            // Control: with the lease held, the same pass sends it.
+            expect(await mirror.drainOnce(later(), leaseLostAfter(10))).toBe(1);
+            expect(await rows()).toEqual([]);
+        });
+
+        it('a full send that loses the lease between two pages stops, and is not marked as done', async () => {
+            await addWork(orgA, 'Store');
+            await addWork(orgB, 'Shop');
+            list.mockResolvedValue({ items: [], next_cursor: 'more' });
+            // Held for the two links and the first page; lost before the second.
+            const lease = leaseLostAfter(3);
+            expect(await mirror.reconcile(NOW, lease)).toBe(false);
+            expect(list).toHaveBeenCalledTimes(1);
+            expect(lease.asked).toBe(4);
+            expect((await mirror.status())?.reconciledAt).toBeNull();
+
+            // Not held back for an hour: it is due as soon as the lease is held again.
+            list.mockResolvedValue({ items: [], next_cursor: null });
+            expect(await mirror.reconcileIfDue(new Date(NOW.getTime() + 1000))).toBe(true);
+            expect((await mirror.status())?.reconciledAt).not.toBeNull();
+        });
+
+        it('a full send that loses the lease before a link queues nothing more', async () => {
+            await addWork(orgA, 'Store');
+            await addWork(orgB, 'Shop');
+            const lease = leaseLostAfter(1);
+            expect(await mirror.reconcile(NOW, lease)).toBe(false);
+            expect(await rows()).toHaveLength(1);
+            expect(list).not.toHaveBeenCalled();
+        });
+
+        it('a round without the lease reads nothing and sends nothing', async () => {
+            await mirror.workChanged(await addWork(orgA, 'Store'));
+            await mirror.round(later(), leaseLostAfter(0));
+            expect(list).not.toHaveBeenCalled();
+            expect(push).not.toHaveBeenCalled();
+            expect(await rows()).toHaveLength(1);
+        });
+
+        it('a round that loses the lease during the full send does not go on to send', async () => {
+            await addWork(orgA, 'Store');
+            await addWork(orgB, 'Shop');
+            // Held for both links and the page of the full send; lost before the pass.
+            await mirror.round(later(), leaseLostAfter(3));
+            expect(list).toHaveBeenCalledTimes(1);
+            expect(push).not.toHaveBeenCalled();
+            expect(await rows()).toHaveLength(2);
+        });
+    });
+
     describe('what turns it on and off', () => {
         it('enabled for a link: the full set is due now', async () => {
             await mirror.reconcileIfDue(NOW);
@@ -661,6 +912,81 @@ describe('AppSyncService', () => {
                 platformLinkId: LINK_A,
             });
             expect(await rows()).toHaveLength(1);
+        });
+
+        it('the connection ended: nothing of the mirror is owed any more, the rows given up included', async () => {
+            const outbox = dataSource.getRepository(EverConnectOutbox);
+            const failed = await addWork(orgA, 'Given up');
+            await mirror.workChanged(failed);
+            await outbox.update(
+                { dedupeKey: `app_sync:${failed}` },
+                { state: 'failed', lastError: 'rejected' },
+            );
+            await mirror.workChanged(await addWork(orgA, 'Store'));
+            await addWork(orgB, 'Shop');
+            await mirror.reconcile(NOW);
+            // A report of another part, given up: not the mirror's to drop.
+            await outbox.insert({
+                event: 'person_link',
+                payload: { id: 'report-1' },
+                dedupeKey: 'person_link:report-1',
+                seq: '1',
+                accountRef: 'user-1',
+                state: 'failed',
+                attempts: 1,
+                nextAttemptAt: NOW,
+            } as never);
+            expect(await rows()).toHaveLength(3);
+
+            await mirror.onConnectionChanged({ status: 'active' });
+            await mirror.onConnectionChanged({ status: 'pending_approval' });
+            expect(await rows()).toHaveLength(3);
+
+            await mirror.onConnectionChanged({ status: 'disconnected' });
+            expect(await rows()).toEqual([]);
+            expect((await outbox.find()).map((row) => row.event)).toEqual(['person_link']);
+        });
+
+        it("the mirror's rows are counted under the mirror, not in the general outbox numbers", async () => {
+            const outbox = dataSource.getRepository(EverConnectOutbox);
+            const general = new EverConnectOutboxService(outbox);
+            expect(await general.status()).toEqual({ pending: 0, failed: 0, lastError: null });
+
+            const failed = await addWork(orgA, 'Given up');
+            await mirror.workChanged(failed);
+            await mirror.workChanged(await addWork(orgA, 'Store'));
+            await addWork(orgB, 'Shop');
+            await mirror.reconcile(NOW);
+            await outbox.update(
+                { dedupeKey: `app_sync:${failed}` },
+                { state: 'failed', lastError: 'rejected' },
+            );
+            // Two waiting (a change and a full-send row) and one given up: the mirror's.
+            expect(await mirror.status()).toMatchObject({
+                pending: 2,
+                failed: 1,
+                lastError: 'rejected',
+            });
+            expect(await general.status()).toEqual({ pending: 0, failed: 0, lastError: null });
+
+            // A report owed for a person is the general outbox's, and only that.
+            await outbox.insert({
+                event: 'person_link',
+                payload: { id: 'report-1' },
+                dedupeKey: 'person_link:report-1',
+                seq: '1',
+                accountRef: 'user-1',
+                state: 'pending',
+                attempts: 2,
+                nextAttemptAt: NOW,
+                lastError: 'platform_unreachable',
+            } as never);
+            expect(await general.status()).toEqual({
+                pending: 1,
+                failed: 0,
+                lastError: 'platform_unreachable',
+            });
+            expect(await mirror.status()).toMatchObject({ pending: 2, failed: 1 });
         });
 
         it('tells the rest of Ever Connect which Organizations it runs for', async () => {
