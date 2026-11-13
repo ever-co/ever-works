@@ -22,20 +22,18 @@
  *     relative order is unstable — assertions use monotonic-non-increasing
  *     (ties allowed) + set-based page-union invariants, never a pinned slug
  *     order for same-second rows.
- *   • limit coercion (controller `parsedLimit && !isNaN(parsedLimit)` guard →
- *     service default 20, repo `if (limit) take(limit)`):
- *       - limit=0 / non-numeric  → falls back to default 20 (echoed limit=20)
+ *   • limit / offset are normalized by `normalizeWorksPage` in the Works query
+ *     service (#3195) before they reach SQL, and the response echoes the
+ *     normalized values:
+ *       - limit=0 / below 1 / non-numeric → default 20 (echoed limit=20)
  *       - limit=5                → caps to 5 (echoed 5)
- *       - limit=100000           → NO upper clamp; echoed 100000; returns all
- *       - limit=-5               → truthy-negative → `take(-5)` = no cap; all
- *       - limit=3.0              → Number('3.0')===3 → accepted as 3
- *       - limit=2.9 (non-int)    → TypeORM/sqlite reject → normalized 400
- *                                  `{status:'error',message:'SqliteError: datatype mismatch'}`
- *   • offset coercion (`if (offset) skip(offset)`):
- *       - offset=0 / non-numeric → default 0
+ *       - limit above 1000       → capped at 1000
+ *       - limit=3.0              → accepted as 3
+ *       - limit=2.9 (non-int)    → floored to 2
+ *       - offset=0 / non-numeric → 0
  *       - offset=1000 (past end) → empty page, `total` unchanged
- *       - offset=-5              → sqlite treats negative OFFSET as 0; all rows
- *       - offset=2.5 (non-int)   → normalized 400 datatype mismatch
+ *       - offset=-5              → clamped to 0 (echoed 0); all rows
+ *       - offset=2.5 (non-int)   → floored to 2 (echoed 2)
  *   • search: trimmed + sliced to 100 chars, case-insensitive CONTAINS over
  *     name OR description OR slug. Whitespace-only search is a no-op (all rows).
  *   • `sort`, `status`, `q` are NOT read by the handler → silently ignored
@@ -267,20 +265,21 @@ test.describe('GET /api/works — limit semantics', () => {
         expect(body.works.length).toBe(SEED_COUNT); // 12 < 20 ⇒ all
     });
 
-    test('limit far above total is NOT clamped (echoes 100000, returns all rows)', async ({
+    test('limit above the 1000 cap is clamped (echoes 1000, returns all rows)', async ({
         request,
     }) => {
+        // #3195: the Works list serves at most 1000 per page and echoes the page it applied.
         const { body } = await listJson(request, reader.access_token, '?limit=100000');
-        expect(body.limit).toBe(100000);
+        expect(body.limit).toBe(1000);
         expect(body.works.length).toBe(SEED_COUNT);
         expect(body.total).toBe(SEED_COUNT);
     });
 
-    test('negative limit disables the cap and echoes the raw value', async ({ request }) => {
+    test('negative limit falls back to the default 20', async ({ request }) => {
+        // #3195: a limit below 1 used to reach SQL as-is (no LIMIT in sqlite ⇒ every row).
         const { body } = await listJson(request, reader.access_token, '?limit=-5');
-        expect(body.limit).toBe(-5);
-        // take(-5) = no LIMIT in sqlite ⇒ all rows come back.
-        expect(body.works.length).toBe(SEED_COUNT);
+        expect(body.limit).toBe(20);
+        expect(body.works.length).toBe(SEED_COUNT); // 12 < 20 ⇒ all
     });
 
     test('non-numeric limit falls back to the default 20', async ({ request }) => {
@@ -295,13 +294,11 @@ test.describe('GET /api/works — limit semantics', () => {
         expect(body.works.length).toBe(3);
     });
 
-    test('non-integer limit (2.9) is a normalized 400, never a 5xx', async ({ request }) => {
-        const res = await listWorks(request, reader.access_token, '?limit=2.9');
-        expect([400, 422]).toContain(res.status());
-        expect(res.status()).toBeLessThan(500);
-        const body = await res.json();
-        expect(body.status).toBe('error');
-        expect(String(body.message)).toContain('datatype mismatch');
+    test('non-integer limit (2.9) is floored to 2', async ({ request }) => {
+        // #3195: used to reach SQL and answer a 400 'datatype mismatch'; now a whole page size.
+        const { body } = await listJson(request, reader.access_token, '?limit=2.9');
+        expect(body.limit).toBe(2);
+        expect(body.works.length).toBe(2);
     });
 });
 
@@ -327,12 +324,12 @@ test.describe('GET /api/works — offset semantics', () => {
         expect(body.total).toBe(SEED_COUNT);
     });
 
-    test('negative offset is tolerated (treated as 0) and never 5xx', async ({ request }) => {
+    test('negative offset is clamped to 0 and never 5xx', async ({ request }) => {
         const res = await listWorks(request, reader.access_token, '?offset=-5');
         expect(res.status()).toBe(200);
         const body = await res.json();
-        expect(body.offset).toBe(-5);
-        // sqlite clamps a negative OFFSET to 0 ⇒ the window starts at the top.
+        // #3195: the offset is clamped before SQL and the clamped value is echoed.
+        expect(body.offset).toBe(0);
         expect(body.works.length).toBe(Math.min(SEED_COUNT, 20));
         expect(body.total).toBe(SEED_COUNT);
     });
@@ -343,13 +340,14 @@ test.describe('GET /api/works — offset semantics', () => {
         expect(body.works.length).toBe(SEED_COUNT);
     });
 
-    test('non-integer offset (2.5) is a normalized 400, never a 5xx', async ({ request }) => {
+    test('non-integer offset (2.5) is floored to 2, never a 5xx', async ({ request }) => {
+        // #3195: used to reach SQL and answer a 400 'datatype mismatch'; now a whole offset.
         const res = await listWorks(request, reader.access_token, '?offset=2.5');
-        expect([400, 422]).toContain(res.status());
-        expect(res.status()).toBeLessThan(500);
+        expect(res.status()).toBe(200);
         const body = await res.json();
-        expect(body.status).toBe('error');
-        expect(String(body.message)).toContain('datatype mismatch');
+        expect(body.offset).toBe(2);
+        expect(body.works.length).toBe(SEED_COUNT - 2);
+        expect(body.total).toBe(SEED_COUNT);
     });
 });
 

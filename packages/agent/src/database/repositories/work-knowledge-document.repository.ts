@@ -727,6 +727,18 @@ export class WorkKnowledgeDocumentRepository {
         return row?.path ?? null;
     }
 
+    /** The first of `paths` a document of the Work is at, or `null` (one query). */
+    async findExistingPath(workId: string, paths: string[]): Promise<string | null> {
+        if (paths.length === 0) return null;
+        const row = await this.repository
+            .createQueryBuilder('doc')
+            .select(['doc.id', 'doc.path'])
+            .where('doc.workId = :workId', { workId })
+            .andWhere('doc.path IN (:...paths)', { paths })
+            .getOne();
+        return row?.path ?? null;
+    }
+
     /**
      * Path-collision check used to suffix on conflict (see service).
      */

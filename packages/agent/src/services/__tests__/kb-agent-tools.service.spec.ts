@@ -250,6 +250,8 @@ describe('KbAgentToolsService', () => {
                     source: 'agent',
                     generatedByAgentRunId: 'run-99',
                 }),
+                // An upsert by path never suffixes (#3209 review).
+                { exactPath: true },
             );
             expect(kb.updateDocument).not.toHaveBeenCalled();
         });

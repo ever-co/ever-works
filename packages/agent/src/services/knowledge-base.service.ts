@@ -1461,7 +1461,17 @@ export class KnowledgeBaseService {
 
     async createDocument(
         input: CreateDocumentInput,
-        options: { readonly withinCreate?: KbDocumentWithinCreate } = {},
+        options: {
+            readonly withinCreate?: KbDocumentWithinCreate;
+            /**
+             * The document goes at `input.path` or nowhere: a taken path, or
+             * one other documents are stored under, is a 409 instead of the
+             * next free `-2` variant. For an upsert-by-path caller (the agent
+             * `kb_write` tool), whose every write would otherwise leave a new
+             * copy beside a path it cannot write.
+             */
+            readonly exactPath?: boolean;
+        } = {},
     ): Promise<KbDocumentBodyDto> {
         await this.ownershipService.ensureCanEdit(input.workId, input.userId);
 
@@ -1469,9 +1479,23 @@ export class KnowledgeBaseService {
         // input boundary so a bad row never lands in the DB. The mirror
         // service repeats the check defense-in-depth.
         KnowledgeBaseGitMirrorService.validateRelativeKbPath(input.path);
+        // A `.` or empty segment (`brand/./x.md`, `brand//x.md`, a trailing
+        // `/`) is stored as written, but the git mirror writes it at the
+        // normalized path: the path checks below would look at one path and
+        // the file land at another. A move refuses them too (the move pattern).
+        if (input.path.split('/').some((segment) => segment === '' || segment === '.')) {
+            throw new BadRequestException({
+                statusCode: 400,
+                error: 'Bad Request',
+                code: 'KbPathInvalid',
+                message: `A document path cannot have an empty or "." segment: ${input.path}`,
+            });
+        }
 
         const slug = this.slugFromPath(input.path);
-        let path = await this.resolvePathCollision(input.workId, input.path);
+        let path = await this.resolvePathCollision(input.workId, input.path, {
+            exact: options.exactPath === true,
+        });
 
         const body = input.body ?? '';
         const wordCount = this.countWords(body);
@@ -1528,7 +1552,7 @@ export class KnowledgeBaseService {
                 break;
             } catch (error) {
                 if (!isUniqueConstraintError(error)) throw error;
-                if (attempt >= KB_CREATE_PATH_ATTEMPTS) {
+                if (attempt >= KB_CREATE_PATH_ATTEMPTS || options.exactPath) {
                     throw new ConflictException({
                         statusCode: 409,
                         error: 'Conflict',
@@ -1536,7 +1560,9 @@ export class KnowledgeBaseService {
                         message: `Other documents kept taking the free path near ${input.path}; try again.`,
                     });
                 }
-                path = await this.resolvePathCollision(input.workId, input.path);
+                path = await this.resolvePathCollision(input.workId, input.path, {
+                    exact: options.exactPath === true,
+                });
             }
         }
 
@@ -1966,17 +1992,23 @@ export class KnowledgeBaseService {
             kbPathParents(newPath),
             docId,
         );
-        if (clash) {
-            throw new ConflictException({
-                statusCode: 409,
-                error: 'Conflict',
-                code: 'KbPathNesting',
-                message: clash.startsWith(`${newPath}/`)
-                    ? `Documents are stored under ${newPath}/ (${clash}), so ${newPath} cannot also be a document.`
-                    : `${clash} is a document, so no document can be stored under ${clash}/.`,
-                path: clash,
-            });
-        }
+        if (clash) throw this.pathNestingError(newPath, clash);
+    }
+
+    /**
+     * 409 `KbPathNesting`: `path` and the document at `clash` would be a file
+     * and a folder of one name in the git mirror (one is under the other).
+     */
+    private pathNestingError(path: string, clash: string): ConflictException {
+        return new ConflictException({
+            statusCode: 409,
+            error: 'Conflict',
+            code: 'KbPathNesting',
+            message: clash.startsWith(`${path}/`)
+                ? `Documents are stored under ${path}/ (${clash}), so ${path} cannot also be a document.`
+                : `${clash} is a document, so no document can be stored under ${clash}/.`,
+            path: clash,
+        });
     }
 
     /** The trimmed move target, or 400 `KbPathInvalid` (the pattern, then create's class-folder / traversal rules). */
@@ -4720,22 +4752,57 @@ export class KnowledgeBaseService {
         return last.replace(/\.md$/i, '').toLowerCase();
     }
 
-    private async resolvePathCollision(workId: string, path: string): Promise<string> {
+    /**
+     * The path a new document gets: `path`, or the first free `-2`, `-3`…
+     * variant of it. A path is not free when a document is at it, nor when
+     * documents are stored UNDER it (`brand/notes.md/a.md` makes
+     * `brand/notes.md` a folder in the git mirror): both take the next
+     * variant. A path UNDER a document (`brand/guide.md/voice.md` while
+     * `brand/guide.md` exists) has no free variant, since every one is under
+     * the same document: 409 `KbPathNesting`. The mirror writes every
+     * document as the file at its path, so either clash made every later
+     * mirror run of the Work fail.
+     *
+     * The suffix goes before the extension of the LAST segment only, so a
+     * variant stays in the same folder (`brand/v1.0/notes` → `brand/v1.0/notes-2`)
+     * and the parent check made once holds for every variant. With `exact`,
+     * a path that is not free is a 409 (`KbPathTaken` / `KbPathNesting`).
+     */
+    private async resolvePathCollision(
+        workId: string,
+        path: string,
+        options: { readonly exact?: boolean } = {},
+    ): Promise<string> {
+        const parent = await this.documentRepository.findExistingPath(workId, kbPathParents(path));
+        if (parent) throw this.pathNestingError(path, parent);
+
+        const slash = path.lastIndexOf('/');
+        const folder = path.slice(0, slash + 1);
+        const leaf = path.slice(slash + 1);
+        const dot = leaf.lastIndexOf('.');
+        const stem = dot > 0 ? leaf.slice(0, dot) : leaf;
+        const ext = dot > 0 ? leaf.slice(dot) : '';
+
         let candidate = path;
-        let n = 2;
-        while (await this.documentRepository.pathExists(workId, candidate)) {
-            const dot = path.lastIndexOf('.');
-            const stem = dot >= 0 ? path.slice(0, dot) : path;
-            const ext = dot >= 0 ? path.slice(dot) : '';
-            candidate = `${stem}-${n}${ext}`;
-            n += 1;
+        for (let n = 2; ; n += 1) {
+            if (await this.documentRepository.pathExists(workId, candidate)) {
+                if (options.exact) throw this.pathTakenError(candidate);
+            } else {
+                const nested = await this.documentRepository.findPathNestingClash(
+                    workId,
+                    candidate,
+                    [],
+                );
+                if (!nested) return candidate;
+                if (options.exact) throw this.pathNestingError(candidate, nested);
+            }
             if (n > 100) {
                 throw new BadRequestException(
                     `Too many path collisions for '${path}'; refusing to suffix further`,
                 );
             }
+            candidate = `${folder}${stem}-${n}${ext}`;
         }
-        return candidate;
     }
 
     private assertNotLockedFull(doc: WorkKnowledgeDocument): void {

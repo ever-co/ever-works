@@ -186,20 +186,26 @@ export class KbAgentToolsService {
             // internal entities use enums. Cast at the boundary per the
             // operator's standing rule for KB controller→service hops
             // (KbDocumentClass + KbDocumentSource).
-            const created = await this.knowledgeBaseService.createDocument({
-                workId,
-                userId,
-                path: input.path,
-                title: input.title,
-                class: input.class as KbDocumentClassEnum,
-                body: input.body,
-                description: input.description ?? null,
-                tags: input.tags,
-                categories: input.categories,
-                language: input.language,
-                source: 'agent' as KbDocumentSourceEnum,
-                generatedByAgentRunId: input.generatedByAgentRunId ?? null,
-            });
+            // At the path asked for or nowhere: an upsert that suffixed would
+            // leave a new copy (`notes-2.md`, `notes-3.md`, …) on every write
+            // to a path it cannot take (one other documents are stored under).
+            const created = await this.knowledgeBaseService.createDocument(
+                {
+                    workId,
+                    userId,
+                    path: input.path,
+                    title: input.title,
+                    class: input.class as KbDocumentClassEnum,
+                    body: input.body,
+                    description: input.description ?? null,
+                    tags: input.tags,
+                    categories: input.categories,
+                    language: input.language,
+                    source: 'agent' as KbDocumentSourceEnum,
+                    generatedByAgentRunId: input.generatedByAgentRunId ?? null,
+                },
+                { exactPath: true },
+            );
             return { ok: true, data: { document: created, action: 'created' } };
         } catch (err) {
             return this.toErrorResult(err, 'kb_write');
