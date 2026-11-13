@@ -76,7 +76,12 @@ describe('WorkAICreator — a typed slug longer than a derived one may be', () =
         checkWorkSlug.mockImplementation(async (slug: string) => ({ available: true, slug }));
     });
 
-    it('takes a slug of exactly the cap', () => {
+    // 60 s, not the suite's 30 s. This file timed out once at 30 s in stage
+    // `lint-and-test`, where every package's tests share the pod, and this first test
+    // is the one that pays the file's cold first render (~250 ms on an idle machine,
+    // against 15-45 ms for the others). It is synchronous with every dependency
+    // mocked, so a timeout can only be a slow render, never a hang.
+    it('takes a slug of exactly the cap', { timeout: 60_000 }, () => {
         renderForm();
         fireEvent.change(slugField(), {
             target: { value: 'a'.repeat(TYPED_WORK_SLUG_MAX_LENGTH) },

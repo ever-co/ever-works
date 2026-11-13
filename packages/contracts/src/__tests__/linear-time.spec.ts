@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { expectLinearTime } from './linear-time.js';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { SKIP_GROWTH_ENV, expectLinearTime, growthStepsSkipped } from './linear-time.js';
 
 /**
  * The guard itself (`linear-time.ts`). Noise must not hide a regression: a
@@ -56,7 +56,9 @@ function stalledOnce(run: (text: string) => number, smallest = 256) {
 
 const build = (size: number): string => 'a'.repeat(size);
 
-describe('expectLinearTime under a stall', () => {
+// These time code: skipped where the growth steps are skipped (the contended
+// `lint-and-test`), run in the jobs that judge them (see `SKIP_GROWTH_ENV`).
+describe.skipIf(growthStepsSkipped())('expectLinearTime under a stall', () => {
 	it('fails a quadratic under the cap even when the first timed small batch stalls', () => {
 		const stalled = stalledOnce(cappedQuadratic);
 		expect(() => expectLinearTime(build, stalled.run, { maxGrowth: 3 })).toThrow(/cost per character grew/);
@@ -67,5 +69,52 @@ describe('expectLinearTime under a stall', () => {
 		expectLinearTime(build, stalled.run, { maxGrowth: 3 });
 		// The large input of every step, past the cap too: no step ended the ladder early.
 		for (const size of [4096, 16_384, 65_536, 262_144, 1_048_576]) expect(stalled.sizes.has(size)).toBe(true);
+	});
+});
+
+/** The contended run (`lint-and-test`): no growth step, the ceiling still holds. No timing is asserted here. */
+describe('expectLinearTime with the growth steps skipped', () => {
+	afterEach(() => {
+		vi.unstubAllEnvs();
+	});
+
+	it('builds and runs only the full input, held to the ceiling', () => {
+		vi.stubEnv(SKIP_GROWTH_ENV, '1');
+		const built: number[] = [];
+		const ran = new Set<number>();
+		expectLinearTime(
+			(size) => {
+				built.push(size);
+				return build(size);
+			},
+			(text) => {
+				ran.add(text.length);
+				return cappedLinear(text);
+			}
+		);
+		expect(built).toEqual([1_048_576]);
+		expect([...ran]).toEqual([1_048_576]);
+	});
+
+	it('still fails a run over the ceiling', () => {
+		vi.stubEnv(SKIP_GROWTH_ENV, '1');
+		const slow = (text: string): number => {
+			stall(30);
+			return text.length;
+		};
+		expect(() => expectLinearTime(build, slow, { size: 4096, ceilingMs: 10 })).toThrow(
+			/one run on 4096 characters took/
+		);
+	});
+
+	it('skips them only on exactly `1`: anything else runs them', () => {
+		for (const value of ['', '0', 'true', 'yes', ' 1']) {
+			vi.stubEnv(SKIP_GROWTH_ENV, value);
+			expect(growthStepsSkipped()).toBe(false);
+		}
+		vi.stubEnv(SKIP_GROWTH_ENV, undefined);
+		expect(growthStepsSkipped()).toBe(false);
+		vi.stubEnv(SKIP_GROWTH_ENV, '1');
+		expect(growthStepsSkipped()).toBe(true);
 	});
 });
