@@ -1285,10 +1285,15 @@ async function assertRealWriteTarget(
                     // (`release/*`), so a pattern the merge path refuses is refused here too.
                     const match = findProtectedMergeBranch(branch, protectedBranches);
                     if (!match) return;
+                    // A wildcard entry (`release/*`) is no branch a pull request can
+                    // target; the branch the caller named is.
+                    const prTarget = match.includes('*')
+                        ? branch.trim().replace(/^refs\/heads\//i, '')
+                        : match;
                     throw new Error(
                         `${tool}: refusing to commit to '${branch}' — '${match}' is a protected release branch ` +
                             `(protected: ${protectedBranches.join(', ')}). Agent pushes to a protected branch are ` +
-                            `not allowed: commit to a feature branch and open a pull request into '${match}' instead.`,
+                            `not allowed: commit to a feature branch and open a pull request into '${prTarget}' instead.`,
                     );
                 };
 

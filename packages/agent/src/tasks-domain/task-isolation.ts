@@ -153,8 +153,11 @@ export function protectedTaskBranchReason(
         ...PLATFORM_DEFAULT_MERGE_POLICY.protectedBranches,
         ...policyProtectedBranches,
     ].filter((name): name is string => typeof name === 'string' && name.trim().length > 0);
-    if (findProtectedMergeBranch(branch, protectedBranches)) {
-        return `'${branch.trim()}' is a protected branch`;
+    const match = findProtectedMergeBranch(branch, protectedBranches);
+    if (match) {
+        // Name a wildcard entry: under `*` even a generated Task branch is refused.
+        const via = match.includes('*') ? ` (matches '${match}')` : '';
+        return `'${branch.trim()}' is a protected branch${via}`;
     }
     if (baseRef && normalize(baseRef) === candidate) {
         return `'${branch.trim()}' is this Work's base branch`;

@@ -2842,6 +2842,24 @@ describe('api-side AgentsModule — AGENT_GIT_FACADE Work repository resolution 
             },
         );
 
+        it('names the refused branch, not the wildcard entry, as the pull request target', async () => {
+            const { facade, git } = build({ protectedBranches: ['release/*'] });
+
+            await expect(
+                facade.commitToRepo(commitInput({ branch: 'refs/heads/Release/1.2' })),
+            ).rejects.toThrow("open a pull request into 'Release/1.2' instead");
+            expectNoGitWork(git);
+        });
+
+        it("refuses every branch under a bare '*' entry BEFORE any git operation runs", async () => {
+            const { facade, git } = build({ protectedBranches: ['*'] });
+
+            await expect(facade.commitToRepo(commitInput({ branch: 'feature/x' }))).rejects.toThrow(
+                "'*' is a protected release branch",
+            );
+            expectNoGitWork(git);
+        });
+
         it('still refuses an exact entry next to a wildcard entry', async () => {
             const { facade, git } = build({ protectedBranches: ['release/*', 'release/frozen'] });
 

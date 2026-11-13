@@ -88,22 +88,40 @@ describe('protectedTaskBranchReason (prompt-injection hardening)', () => {
         expect(protectedTaskBranchReason('feature/x', 'main', ['release/frozen'])).toBeNull();
     });
 
-    it.each(['release/1.2', 'release/1.2/hotfix', 'RELEASE/1.2', 'refs/heads/release/1.2', ' release/1.2 '])(
-        'refuses %p under a release/* wildcard entry',
+    it.each([
+        'release/1.2',
+        'release/1.2/hotfix',
+        'RELEASE/1.2',
+        'refs/heads/release/1.2',
+        ' release/1.2 ',
+    ])('refuses %p under a release/* wildcard entry', (branch) => {
+        expect(protectedTaskBranchReason(branch, 'main', ['release/*'])).toMatch(
+            /protected branch/,
+        );
+    });
+
+    it.each(['releases', 'release', 'feature/release/x'])(
+        'allows %p under a release/* wildcard entry',
         (branch) => {
-            expect(protectedTaskBranchReason(branch, 'main', ['release/*'])).toMatch(/protected branch/);
+            expect(protectedTaskBranchReason(branch, 'main', ['release/*'])).toBeNull();
         },
     );
 
-    it.each(['releases', 'release', 'feature/release/x'])('allows %p under a release/* wildcard entry', (branch) => {
-        expect(protectedTaskBranchReason(branch, 'main', ['release/*'])).toBeNull();
-    });
-
     it('keeps refusing exact entries alongside a wildcard entry', () => {
-        expect(protectedTaskBranchReason('main', undefined, ['release/*'])).toMatch(/protected branch/);
-        expect(protectedTaskBranchReason('Release/Frozen', undefined, ['release/frozen', 'x/*'])).toMatch(
+        expect(protectedTaskBranchReason('main', undefined, ['release/*'])).toMatch(
             /protected branch/,
         );
+        expect(
+            protectedTaskBranchReason('Release/Frozen', undefined, ['release/frozen', 'x/*']),
+        ).toMatch(/protected branch/);
+    });
+
+    it("refuses every branch under a bare '*' entry, a generated one too, and names the entry", () => {
+        const generated = taskBranchName({ id: 'abc-1', slug: 'T-1' });
+        expect(protectedTaskBranchReason(generated, 'main', ['*'])).toBe(
+            `'${generated}' is a protected branch (matches '*')`,
+        );
+        expect(protectedTaskBranchReason('feature/x', 'main', ['*'])).toMatch(/protected branch/);
     });
 
     it("refuses the Work's own base branch", () => {
