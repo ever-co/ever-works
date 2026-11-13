@@ -1,3 +1,7 @@
+import { EverConnectFeedService } from '../ever-connect-feed.service';
+import type { EverConnectIntegrationService } from '../ever-connect-integration.service';
+import type { EverConnectService } from '../ever-connect.service';
+import type { PersonRequestsHandler } from '../identity/person-requests.handler';
 import {
     EverConnectExtensions,
     type EverConnectFeedHandler,
@@ -95,5 +99,71 @@ describe('EverConnectExtensions', () => {
         });
         expect(await extensions.appSyncStatus()).toBeNull();
         expect(await extensions.appSyncRunsFor('organization')).toBe(false);
+    });
+
+    it('on the feed: an event a part could not read is not acknowledged, and is read again on the next pass', async () => {
+        const events = ['e1', 'e2', 'e3'].map((id) => ({
+            id,
+            type: 'ever.registry.tenant_link.unlinked',
+            data: { tenant_link_id: id },
+        }));
+        let cursor: string | null = null;
+        const acknowledged: string[] = [];
+        const client = {
+            instances: {
+                events: async (after: string | null) => ({
+                    events: events.slice(events.findIndex((event) => event.id === after) + 1),
+                    has_more: false,
+                    last_id: 'e3',
+                }),
+                ackEvents: async (id: string) => {
+                    acknowledged.push(id);
+                    return { acknowledged: id };
+                },
+            },
+        };
+        const connection = {
+            client: async () => client,
+            connection: async () => ({ lastFeedCursor: cursor }),
+            saveFeedCursor: async (next: string) => {
+                cursor = next;
+            },
+        } as unknown as EverConnectService;
+
+        const extensions = new EverConnectExtensions();
+        const read: string[] = [];
+        let broken = true;
+        extensions.addFeedHandler({
+            name: 'links',
+            handles: (type) => type === 'ever.registry.tenant_link.unlinked',
+            handle: async (event) => {
+                if (event.id === 'e2' && broken) throw new Error('database unavailable');
+                read.push(event.id);
+            },
+        });
+        const feed = new EverConnectFeedService(
+            connection,
+            { refresh: async () => [] } as unknown as EverConnectIntegrationService,
+            { handles: () => false } as unknown as PersonRequestsHandler,
+            undefined,
+            extensions,
+        );
+
+        // The pass stops at the event that failed: only what came before is acknowledged.
+        expect(await feed.pollOnce(0)).toEqual({ handled: 1, more: false });
+        expect(read).toEqual(['e1']);
+        expect(acknowledged).toEqual(['e1']);
+        expect(cursor).toBe('e1');
+
+        // Still failing: nothing moves, nothing is skipped.
+        expect(await feed.pollOnce(0)).toEqual({ handled: 0, more: false });
+        expect(acknowledged).toEqual(['e1']);
+
+        // Readable again: the same event is delivered again, then the rest.
+        broken = false;
+        expect(await feed.pollOnce(0)).toEqual({ handled: 2, more: false });
+        expect(read).toEqual(['e1', 'e2', 'e3']);
+        expect(acknowledged).toEqual(['e1', 'e3']);
+        expect(cursor).toBe('e3');
     });
 });

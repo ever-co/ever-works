@@ -308,6 +308,8 @@ describe("Ever Connect — an Organization's link over HTTP", () => {
             ]) {
                 const refused = await post({ code }).expect(400);
                 expect(refused.body.code).toBe('code_invalid');
+                // A refused code is not said back, whatever was typed.
+                expect(JSON.stringify(refused.body)).not.toContain(code);
             }
             // A code is the same code in any case, as app.ever.co shows it or typed
             // by hand: this one is well formed, so the answer is about the connection.
@@ -465,6 +467,7 @@ describe("Ever Connect — an Organization's link over HTTP", () => {
                 .send({ code: 'EVL-0000-0000-0001' })
                 .expect(409);
             expect(twice.body.code).toBe('already_linked');
+            expect(JSON.stringify(twice.body)).not.toMatch(/EVL-|0000-0001/i);
             expect(create).toHaveBeenCalledTimes(1);
 
             const shown = await http.get(LINK).set('x-test-user', as(MEMBER)).expect(200);
