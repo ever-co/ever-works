@@ -9,17 +9,13 @@ import type {
 } from '@ever-works/contracts';
 import { isInstanceStatsOperatorStatus } from '@ever-works/contracts';
 import { EverPlatformConnectionPanel } from '@/components/settings/EverPlatformConnectionPanel';
-import {
-    EverPlatformOrganizationLinks,
-    type EverPlatformOrganizationLinkItem,
-} from '@/components/settings/EverPlatformOrganizationLinks';
+import { EverPlatformOrganizationLinks } from '@/components/settings/EverPlatformOrganizationLinks';
 import { InstallRequestsPanel } from '@/components/settings/InstallRequestsPanel';
 import { UsageStatisticsSettings } from '@/components/settings/UsageStatisticsSettings';
 import { ApiResponseError } from '@/lib/api/server-api';
 import { everConnectAPI } from '@/lib/api/ever-connect';
 import { everConnectInstallsAPI } from '@/lib/api/ever-connect-installs';
 import { instanceStatsAPI } from '@/lib/api/instance-stats';
-import { teamsAPI } from '@/lib/api/teams';
 
 export const dynamic = 'force-dynamic';
 
@@ -38,7 +34,10 @@ export async function generateMetadata(): Promise<Metadata> {
  *   are switched on separately report.
  * - An Organization's link to its Ever organization (off unless
  *   `EVER_CONNECT_LINK_CODES_ENABLED=true` as well): for each Organization
- *   the person belongs to, its link and the form for a link code.
+ *   the person belongs to, its link and, for its administrators, the form for
+ *   a link code. Nothing is asked for it where the connection's own answer
+ *   already says linking is off, and a failure to read it hides this section
+ *   only.
  * - Anonymous usage statistics (off unless `EVER_STATS_ENABLED=true`). The
  *   platform admin gets the full section (state, what is sent, the last
  *   payload, Send now, the switch, Reset identity); anyone else gets whether
@@ -72,39 +71,18 @@ export default async function EverPlatformSettingsPage() {
         installsState = 'unavailable';
     }
 
-    let connection: EverPlatformConnectionStatusView | null = null;
-    let connectionState: 'loaded' | 'unavailable' | 'absent' = 'loaded';
-    try {
-        connection = await everConnectAPI.statusIfAvailable();
-        if (!connection) connectionState = 'absent';
-    } catch {
-        connectionState = 'unavailable';
-    }
+    // One request tells how the Ever Connect module answers this person: not
+    // at all (404), as a platform admin (the status), or as someone else (403).
+    const access = await everConnectAPI.access();
+    const connection: EverPlatformConnectionStatusView | null =
+        access.kind === 'admin' ? access.status : null;
+    const connectionState: 'loaded' | 'unavailable' | 'absent' =
+        access.kind === 'admin' ? 'loaded' : access.kind === 'unknown' ? 'unavailable' : 'absent';
 
-    // An Organization's link: read for each Organization of the person. The
-    // first answer tells whether linking is switched on at all (404: no section).
-    const links: EverPlatformOrganizationLinkItem[] = [];
-    let linksAbsent = false;
-    for (const organization of await teamsAPI.listOrganizations()) {
-        if (linksAbsent) break;
-        let view = null;
-        try {
-            view = await everConnectAPI.organizationLinkIfAvailable(organization.id);
-            if (!view) {
-                linksAbsent = true;
-                break;
-            }
-        } catch {
-            // Read failed for this Organization: its row says so.
-        }
-        links.push({
-            organizationId: organization.id,
-            displayName: organization.displayName,
-            slug: organization.slug,
-            view,
-        });
-    }
-    const linksShown = !linksAbsent && links.length > 0;
+    // An Organization's link: asked only where linking can be switched on, and
+    // never fatal to the page (`null`: no section).
+    const links = await everConnectAPI.organizationLinks(access).catch(() => null);
+    const linksShown = links !== null;
 
     if (
         statsState === 'absent' &&
@@ -128,7 +106,7 @@ export default async function EverPlatformSettingsPage() {
             {connectionState !== 'absent' && (
                 <EverPlatformConnectionPanel state={connectionState} initial={connection} />
             )}
-            {linksShown && <EverPlatformOrganizationLinks organizations={links} />}
+            {links !== null && <EverPlatformOrganizationLinks organizations={links} />}
             {statsState !== 'absent' && (
                 <UsageStatisticsSettings
                     state={statsState}

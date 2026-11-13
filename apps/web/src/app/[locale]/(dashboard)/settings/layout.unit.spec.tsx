@@ -18,8 +18,7 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 
 const listForSettingsMenu = vi.fn();
 const isStatsAvailable = vi.fn();
-const isInstallRequestsAvailable = vi.fn();
-const isLinksAvailable = vi.fn();
+const isEverConnectTabAvailable = vi.fn();
 const isFleetEnabled = vi.fn();
 const isAppLauncherEnabled = vi.fn();
 const getAuthFromRequest = vi.fn();
@@ -34,14 +33,13 @@ vi.mock('@/lib/api/instance-stats', () => ({
         isAvailable: (...args: unknown[]) => isStatsAvailable(...args),
     },
 }));
-vi.mock('@/lib/api/ever-connect-installs', () => ({
-    everConnectInstallsAPI: {
-        isAvailable: (...args: unknown[]) => isInstallRequestsAvailable(...args),
-    },
-}));
+// The Ever Connect module is asked through ONE function, which makes one
+// request where the module is off (its own spec: `lib/api/ever-connect`). The
+// stand-in has no other method, so a layout that probed the install requests
+// or an Organization's link by itself again would fail here.
 vi.mock('@/lib/api/ever-connect', () => ({
     everConnectAPI: {
-        linksAvailable: (...args: unknown[]) => isLinksAvailable(...args),
+        settingsTabAvailable: (...args: unknown[]) => isEverConnectTabAvailable(...args),
     },
 }));
 vi.mock('@/lib/fleet-flags', () => ({
@@ -65,8 +63,7 @@ import SettingsLayout from './layout';
 beforeEach(() => {
     listForSettingsMenu.mockReset().mockResolvedValue({ categories: [] });
     isStatsAvailable.mockReset().mockResolvedValue(true);
-    isInstallRequestsAvailable.mockReset().mockResolvedValue(false);
-    isLinksAvailable.mockReset().mockResolvedValue(false);
+    isEverConnectTabAvailable.mockReset().mockResolvedValue(false);
     isFleetEnabled.mockReset().mockReturnValue(true);
     isAppLauncherEnabled.mockReset().mockResolvedValue(true);
     getAuthFromRequest.mockReset().mockResolvedValue({
@@ -151,21 +148,21 @@ describe('SettingsLayout — the Ever Platform tab', () => {
         expect(tree.props.fleetEnabled).toBe(true);
     });
 
-    it('passes everPlatformEnabled=true for a platform admin of a connected installation without statistics', async () => {
+    it('passes everPlatformEnabled=true where the Ever Connect module has something for the person, without statistics', async () => {
+        // A platform admin of an installation with the module (the connection and
+        // the install requests), or a member of an Organization where linking is
+        // switched on.
         isStatsAvailable.mockResolvedValue(false);
-        isInstallRequestsAvailable.mockResolvedValue(true);
+        isEverConnectTabAvailable.mockResolvedValue(true);
         const tree = (await SettingsLayout({ children: null })) as React.ReactElement<{
             everPlatformEnabled?: boolean;
         }>;
         expect(tree.props.everPlatformEnabled).toBe(true);
     });
 
-    it('passes everPlatformEnabled=true for a member of an Organization where linking is switched on', async () => {
-        isStatsAvailable.mockResolvedValue(false);
-        isLinksAvailable.mockResolvedValue(true);
-        const tree = (await SettingsLayout({ children: null })) as React.ReactElement<{
-            everPlatformEnabled?: boolean;
-        }>;
-        expect(tree.props.everPlatformEnabled).toBe(true);
+    it('asks the Ever Connect module once per navigation', async () => {
+        await SettingsLayout({ children: null });
+        expect(isEverConnectTabAvailable).toHaveBeenCalledTimes(1);
+        expect(isEverConnectTabAvailable).toHaveBeenCalledWith();
     });
 });
