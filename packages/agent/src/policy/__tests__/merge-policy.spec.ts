@@ -247,7 +247,9 @@ describe('evaluateAgentMerge — the single decision point', () => {
             expect(decision.reason).toContain('release/*');
         }
         for (const target of ['releases', 'feature/release/x', 'feature/x']) {
-            expect(evaluateAgentMerge({ ...okCtx, policy, targetBranch: target }).allowed).toBe(true);
+            expect(evaluateAgentMerge({ ...okCtx, policy, targetBranch: target }).allowed).toBe(
+                true,
+            );
         }
     });
 

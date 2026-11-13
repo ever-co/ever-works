@@ -269,6 +269,8 @@ describe('findProtectedMergeBranch', () => {
 		// Regex metacharacters in an entry are literal, not syntax.
 		expect(findProtectedMergeBranch('axb', ['a.b'])).toBeNull();
 		expect(findProtectedMergeBranch('ab', ['a?b*'])).toBeNull();
+		expect(findProtectedMergeBranch('release-1', ['release-?'])).toBeNull();
+		expect(findProtectedMergeBranch('v1', ['v[12]'])).toBeNull();
 	});
 
 	it('returns the first matching entry and ignores blank or non-string entries', () => {
