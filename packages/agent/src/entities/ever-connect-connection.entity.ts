@@ -60,6 +60,14 @@ export class EverConnectConnection {
     @Column({ type: 'varchar', length: 64, nullable: true })
     lastError: string | null;
 
+    /** When Ever Platform last recorded this installation's heartbeat. */
+    @PortableDateColumn({ nullable: true })
+    lastHeartbeatAt: Date | null;
+
+    /** When the apps mirror last sent its full set again (`null`: due now). */
+    @PortableDateColumn({ nullable: true })
+    appSyncReconciledAt: Date | null;
+
     @CreateDateColumn()
     createdAt: Date;
 

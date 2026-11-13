@@ -5,3 +5,6 @@ export * from './stats.js';
 // Install requests from apps.ever.co: the feed messages a connected
 // installation receives under `marketplace_installs` and the status it reports.
 export * from './installs.js';
+// The connection to Ever Platform as Settings → Ever Platform shows it: the
+// connection, an Organization's link and the separately switched parts.
+export * from './connection.js';

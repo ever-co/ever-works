@@ -6,12 +6,15 @@ import { IsPlatformAdminGuard } from '../auth/guards/platform-admin.guard';
 import { SessionOnlyGuard } from '../auth/guards/session-only.guard';
 import { EVER_CONNECT_CONFIG, readEverConnectConfig } from './ever-connect.config';
 import { EverConnectAdminController } from './ever-connect-admin.controller';
+import { EverConnectExtensions } from './ever-connect-extensions';
 import { EverConnectFeedService } from './ever-connect-feed.service';
 import { EverConnectIntegrationService } from './ever-connect-integration.service';
 import { EverConnectKeyService } from './ever-connect-key.service';
 import { EverConnectLeaseService } from './ever-connect-lease.service';
 import { EverConnectOutboxService, EverConnectOutboxWorker } from './ever-connect-outbox.service';
 import { EverConnectRunner } from './ever-connect.runner';
+import { EverConnectEntitlementService } from './entitlements/ever-connect-entitlement.service';
+import { EverConnectHeartbeatService } from './heartbeat/ever-connect-heartbeat.service';
 import { EverConnectService } from './ever-connect.service';
 import {
     EVER_CONNECT_PLATFORM,
@@ -60,6 +63,13 @@ import {
  *   ({@link InstallApprovalService}); the outcome is reported to Ever Platform
  *   ({@link InstallStatusReporter}).
  *
+ * - Switched on separately, each off by default (`ever-connect.switches.ts`):
+ *   the heartbeat ({@link EverConnectHeartbeatService}) and the entitlement
+ *   documents ({@link EverConnectEntitlementService}) here; linking an
+ *   Organization with a link code and the apps mirror in modules of their own
+ *   (`links/`, `app-sync/`), which join the feed and the worker's round through
+ *   {@link EverConnectExtensions}.
+ *
  * Imported only with `EVER_CONNECT_ENABLED=true` ({@link everConnectModuleImports}).
  */
 @Module({
@@ -75,6 +85,7 @@ import {
         SessionOnlyGuard,
         EverConnectKeyService,
         EverConnectService,
+        EverConnectExtensions,
         EverConnectIntegrationService,
         EverConnectLeaseService,
         EverConnectOutboxService,
@@ -95,6 +106,9 @@ import {
         InstallStatusReporter,
         InstallApprovalService,
         InstallRequestsIntegration,
+        // Each does nothing unless its own switch is on (`ever-connect.switches.ts`).
+        EverConnectHeartbeatService,
+        EverConnectEntitlementService,
     ],
     exports: [
         EverConnectService,
@@ -102,6 +116,10 @@ import {
         PersonRequestsHandler,
         EverConnectLeaseService,
         EVER_CONNECT_CONFIG,
+        EverConnectExtensions,
+        EverConnectIntegrationService,
+        EverConnectEntitlementService,
+        IntegrationHandlerRegistry,
     ],
 })
 export class EverConnectModule {}

@@ -7,6 +7,7 @@ import {
     Optional,
 } from '@nestjs/common';
 import { EVER_CONNECT_CONFIG, type EverConnectConfig } from './ever-connect.config';
+import { EverConnectExtensions } from './ever-connect-extensions';
 import { EverConnectFeedService } from './ever-connect-feed.service';
 import { EverConnectIntegrationService } from './ever-connect-integration.service';
 import { EverConnectLeaseService } from './ever-connect-lease.service';
@@ -34,7 +35,9 @@ export const FEED_PAGES_PER_ROUND = 10;
  *    `ever_id_login` on, the Ever ID sign-in client is made sure of.
  * 3. On the replica holding the Ever Connect lease: the feed is read
  *    (long-poll, or every 15 minutes) and the outbox sent, every round, with
- *    the install status reports owed to Ever Platform.
+ *    the install status reports owed to Ever Platform; then the round of
+ *    every separately switched part (the heartbeat, entitlement documents,
+ *    the apps mirror), none of which exists unless its switch is on.
  *
  * Nothing runs while the installation is not connected beyond reading the
  * local connection row.
@@ -55,6 +58,7 @@ export class EverConnectRunner implements OnApplicationBootstrap, OnModuleDestro
         private readonly feed: EverConnectFeedService,
         private readonly outbox: EverConnectOutboxWorker,
         @Optional() private readonly installs?: InstallRequestsIntegration,
+        @Optional() private readonly extensions?: EverConnectExtensions,
     ) {}
 
     onApplicationBootstrap(): void {
@@ -125,6 +129,7 @@ export class EverConnectRunner implements OnApplicationBootstrap, OnModuleDestro
                     this.logger.warn(`Install status reports not sent: ${errorName(error)}`),
                 );
         }
+        if (this.extensions && !this.stopped) await this.extensions.runRound(new Date(now));
         return true;
     }
 

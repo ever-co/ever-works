@@ -618,6 +618,9 @@ export class EverConnectProvisionService {
                             tenantId: organization.tenantId as string,
                             everOrgId: claims.org.id,
                             handle: claims.org.handle,
+                            // What Ever Platform is told as this Organization's id
+                            // (the report below sends the same slug).
+                            productOrgRef: organization.slug,
                             createdVia: 'provisioning',
                             status: 'active',
                         });

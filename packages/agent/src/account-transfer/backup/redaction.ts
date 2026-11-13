@@ -142,6 +142,9 @@ export const BACKUP_DROPPED_ENTITIES: readonly string[] = Object.freeze([
     'EverConnectProvisionIntent',
     'EverConnectProvisionRecord',
     'EverConnectLink',
+    // The entitlement documents read from Ever Platform belong to the connection:
+    // a restore reads them again.
+    'EverConnectEntitlement',
     // Plugin installs requested from apps.ever.co for this installation: they
     // belong to the installation, and a restore must never replay a request.
     'EverConnectInstallRequest',
