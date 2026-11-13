@@ -1,4 +1,5 @@
 import { getAuthFromRequest } from '@/lib/auth';
+import { everConnectAPI } from '@/lib/api/ever-connect';
 import { everConnectInstallsAPI } from '@/lib/api/ever-connect-installs';
 import { instanceStatsAPI } from '@/lib/api/instance-stats';
 import { pluginsAPI, type SettingsMenuResponse } from '@/lib/api/plugins';
@@ -11,18 +12,25 @@ export default async function SettingsLayout({ children }: { children: React.Rea
     // there: the statistics module (unless `EVER_STATS_ENABLED=true`, off by
     // default, its status route answers 404), or, for a platform admin, the
     // install requests of the Ever Connect module (unless
-    // `EVER_CONNECT_ENABLED=true`, off by default, its routes answer 404).
+    // `EVER_CONNECT_ENABLED=true`, off by default, its routes answer 404), or,
+    // for a member of an Organization, its link to an Ever organization
+    // (unless `EVER_CONNECT_LINK_CODES_ENABLED=true` as well, off by default,
+    // its routes answer 404).
     // Otherwise: no tab, and the page itself answers 404.
-    const [settingsMenu, statsAvailable, installRequestsAvailable] = await Promise.all([
-        pluginsAPI.listForSettingsMenu().catch((error: unknown): SettingsMenuResponse | null => {
-            // If the API fails, we'll just show static tabs without plugin categories
-            console.error('Failed to fetch settings menu:', error);
-            return null;
-        }),
-        instanceStatsAPI.isAvailable(),
-        everConnectInstallsAPI.isAvailable(),
-    ]);
-    const everPlatformEnabled = statsAvailable || installRequestsAvailable;
+    const [settingsMenu, statsAvailable, installRequestsAvailable, linksAvailable] =
+        await Promise.all([
+            pluginsAPI
+                .listForSettingsMenu()
+                .catch((error: unknown): SettingsMenuResponse | null => {
+                    // If the API fails, we'll just show static tabs without plugin categories
+                    console.error('Failed to fetch settings menu:', error);
+                    return null;
+                }),
+            instanceStatsAPI.isAvailable(),
+            everConnectInstallsAPI.isAvailable(),
+            everConnectAPI.linksAvailable(),
+        ]);
+    const everPlatformEnabled = statsAvailable || installRequestsAvailable || linksAvailable;
 
     // APW-11 T16 — the App Launcher flag is resolved HERE, in the nested server
     // layout that renders the nav, and passed down as a prop.

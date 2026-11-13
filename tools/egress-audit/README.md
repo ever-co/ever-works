@@ -48,9 +48,11 @@ This directory holds only Works' inputs:
   plugin, a workflow and a playbook of the catalogue), each best effort, and hand their ids to the
   walk; for `loaded_off` switch statistics off in Settings; in the off modes, call all six
   statistics routes with their own method (the
-  harness's probe sends GET only) and require 404 from each; in every mode, call the install-request
-  routes of the Ever Connect module (install requests from apps.ever.co, `/api/ever-connect/install-requests`,
-  its approve and decline) and require 404 from each, since the audit never sets `EVER_CONNECT_ENABLED`; sign in through the web app's sign-in
+  harness's probe sends GET only) and require 404 from each; in every mode, call the routes
+  of the Ever Connect module (install requests from apps.ever.co, `/api/ever-connect/install-requests`,
+  its approve and decline; the connection's status and connect; an Organization's link,
+  `/api/ever-connect/organizations/:orgId/link`, read, link and remove) and require 404 from each, since the
+  audit never sets `EVER_CONNECT_ENABLED` nor any switch that needs it; sign in through the web app's sign-in
   page and prove the session holds (in `positive_stats`, the operator's statistics section on Settings → Ever Platform must render, not its "unavailable" notice); per
   mode, `CI=true` so the module honours the modes' short send interval (otherwise raised to one
   hour);
