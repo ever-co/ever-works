@@ -889,7 +889,9 @@ describe('composeRunPullRequestTitle', () => {
  * ("1 MB in under 50 ms" failed on a busy CI runner with nothing wrong): each
  * step times one input against sixteen inputs a sixteenth its size, of the same
  * shape, on the same machine a few milliseconds apart, so only a cost that grows
- * faster than the text fails — see `expectLinearTime`.
+ * faster than the text fails — see `expectLinearTime`. In ci.yml's
+ * `lint-and-test` only the 1 MB ceiling runs; the growth steps are judged by
+ * `node-contract-gate`, which runs this package alone (see `SKIP_GROWTH_ENV`).
  */
 describe('bounded on adversarial input', () => {
 	const MB = 1024 * 1024;
