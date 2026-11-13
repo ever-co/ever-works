@@ -45,11 +45,20 @@ describe('EverConnectHeartbeatService', () => {
     const setStatus = (status: EverConnectConnection['status']) =>
         dataSource.getRepository(EverConnectConnection).update({ id: 'self' }, { status });
 
+    beforeAll(async () => {
+        dataSource = await createIdentityDataSource();
+    });
+
+    afterAll(async () => {
+        await dataSource.destroy();
+    });
+
     beforeEach(async () => {
         process.env.EVER_CONNECT_ENABLED = 'true';
         process.env.EVER_CONNECT_HEARTBEAT_ENABLED = 'true';
-        dataSource = await createIdentityDataSource();
         const connections = dataSource.getRepository(EverConnectConnection);
+        await connections.clear();
+        await dataSource.getRepository(EverConnectEntitlement).clear();
         await connections.insert({ id: 'self', status: 'active', platformInstanceId: INSTANCE });
         send = jest.fn(async () => ({
             recorded: true,
@@ -79,8 +88,7 @@ describe('EverConnectHeartbeatService', () => {
         } as unknown as EverConnectService;
     });
 
-    afterEach(async () => {
-        await dataSource.destroy();
+    afterEach(() => {
         process.env = { ...savedEnv };
     });
 

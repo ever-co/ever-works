@@ -16,6 +16,7 @@ import { IntegrationHandlerRegistry } from '../../integrations/integration-handl
 import { APP_SYNC_KEY, APP_SYNC_MAX_OPS, APP_SYNC_OUTBOX_EVENT } from '../app-sync.mapping';
 import {
     APP_SYNC_MAX_ATTEMPTS,
+    APP_SYNC_PASS_LINKS,
     APP_SYNC_PASS_WORKS,
     APP_SYNC_RECONCILE_INTERVAL_MS,
     APP_SYNC_RECONCILE_RETRY_MS,
@@ -92,10 +93,27 @@ describe('AppSyncService', () => {
         results: batch.ops.map((op) => ({ external_id: op.external_id, outcome, code })),
     });
 
+    beforeAll(async () => {
+        dataSource = await createIdentityDataSource();
+    });
+
+    afterAll(async () => {
+        await dataSource.destroy();
+    });
+
     beforeEach(async () => {
         process.env.EVER_CONNECT_ENABLED = 'true';
         process.env.EVER_CONNECT_APP_SYNC_ENABLED = 'true';
-        dataSource = await createIdentityDataSource();
+        for (const entity of [
+            EverConnectOutbox,
+            EverConnectIntegration,
+            EverConnectLink,
+            EverConnectConnection,
+            Work,
+            Organization,
+        ]) {
+            await dataSource.getRepository(entity).clear();
+        }
         await dataSource.getRepository(EverConnectConnection).insert({
             id: 'self',
             status: 'active',
@@ -169,8 +187,7 @@ describe('AppSyncService', () => {
         );
     });
 
-    afterEach(async () => {
-        await dataSource.destroy();
+    afterEach(() => {
         process.env = { ...savedEnv };
     });
 
@@ -287,6 +304,50 @@ describe('AppSyncService', () => {
         it('a pass sends at most a batch Ever Platform reads', async () => {
             // Three operations for a Work at most: the Work and its two environments.
             expect(APP_SYNC_PASS_WORKS * 3).toBeLessThanOrEqual(APP_SYNC_MAX_OPS);
+        });
+
+        it('a pass sends for a bounded number of links; the rows of the others stay due', async () => {
+            const alphabet = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+            const extra = APP_SYNC_PASS_LINKS;
+            for (let index = 0; index < extra; index += 1) {
+                const organization = {
+                    id: randomUUID(),
+                    tenantId: randomUUID(),
+                    slug: `extra-${index}`,
+                };
+                const linkId = `01JZ8Q3M4N5P6R7S8T9V0W1X${alphabet[Math.floor(index / 32)]}${alphabet[index % 32]}`;
+                await dataSource
+                    .getRepository(Organization)
+                    .insert({ ...organization, displayName: organization.slug } as never);
+                await dataSource.getRepository(EverConnectLink).insert({
+                    organizationId: organization.id,
+                    tenantId: organization.tenantId,
+                    everOrgId: `ever-org-${index}`,
+                    handle: '',
+                    platformLinkId: linkId,
+                    productOrgRef: organization.slug,
+                    createdVia: 'link_code',
+                    status: 'active',
+                });
+                await dataSource.getRepository(EverConnectIntegration).insert({
+                    linkId,
+                    integrationKey: APP_SYNC_KEY,
+                    state: 'enabled',
+                    enabled: true,
+                    scopeVersion: 2,
+                });
+                await mirror.workChanged(await addWork(organization, `Work ${index}`));
+            }
+            await mirror.workChanged(await addWork(orgA, 'Store'));
+            expect(await rows()).toHaveLength(extra + 1);
+
+            expect(await mirror.drainOnce(new Date())).toBe(APP_SYNC_PASS_LINKS);
+            expect(push).toHaveBeenCalledTimes(APP_SYNC_PASS_LINKS);
+            const left = await rows();
+            expect(left).toHaveLength(1);
+            expect(left[0]).toMatchObject({ state: 'pending', attempts: 0 });
+            expect(await mirror.drainOnce(new Date())).toBe(1);
+            expect(await rows()).toEqual([]);
         });
 
         it('a row whose Work may not move any more is dropped without a request', async () => {

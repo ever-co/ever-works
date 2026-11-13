@@ -32,6 +32,12 @@ import { platformFailure } from '../identity/platform-answer';
 export const ENTITLEMENT_REFRESH_AFTER_S = 21_600;
 /** A read that failed is not tried again before this (Ever Platform allows six reads an hour). */
 export const ENTITLEMENT_RETRY_AFTER_MS = 15 * 60_000;
+/**
+ * Linked Organizations' documents read in one round at most. A round also
+ * renews the worker's lease and sends the outbox, so an installation with many
+ * links reads its documents over several rounds.
+ */
+export const ENTITLEMENT_LINK_READS_PER_ROUND = 20;
 
 /** A tenant link id as Ever Platform issues it (a ULID). */
 const LINK_ID = /^[0-9A-HJKMNP-TV-Z]{26}$/;
@@ -102,10 +108,12 @@ export class EverConnectEntitlementService
     readonly name = 'entitlements';
     private readonly logger = new Logger(EverConnectEntitlementService.name);
     private readonly secrets: PluginSecretEncService;
-    /** Set when the feed announced a new document: every one is read again on the next round. */
-    private announced = false;
+    /** When the feed last announced a new document: every one read before it is due again. */
+    private announcedAt = 0;
     /** When each subject's read last failed (this process), so it is not retried at once. */
     private readonly failedAt = new Map<string, number>();
+    /** How long each document said it may be used before it is read again (this process). */
+    private readonly refreshAfterMs = new Map<string, number>();
 
     constructor(
         @InjectRepository(EverConnectEntitlement)
@@ -136,7 +144,7 @@ export class EverConnectEntitlementService
     }
 
     async handle(_event: EverConnectFeedEvent): Promise<void> {
-        this.announced = true;
+        this.announcedAt = Date.now();
     }
 
     // -- the worker's round -------------------------------------------------------
@@ -146,18 +154,24 @@ export class EverConnectEntitlementService
         if (!this.isEnabled()) return;
         const row = await this.connection.connection();
         if (row.status !== 'active' || !row.platformInstanceId) return;
-        const all = this.announced;
-        this.announced = false;
+        // When each document was last read: one statement for the round.
+        const read = new Map(
+            (await this.documents.find({ select: { subject: true, fetchedAt: true } })).map(
+                (document) => [document.subject, document.fetchedAt],
+            ),
+        );
+        const instance = EVER_CONNECT_INSTANCE_ENTITLEMENT_SUBJECT;
+        if (this.due(instance, read.get(instance), now)) await this.refreshInstance(now);
 
-        if (all || (await this.due(EVER_CONNECT_INSTANCE_ENTITLEMENT_SUBJECT, now))) {
-            await this.refreshInstance(now);
-        }
+        let reads = 0;
         const linked = await this.links.find({ where: { status: 'active' } });
         for (const link of linked) {
+            if (reads >= ENTITLEMENT_LINK_READS_PER_ROUND) break;
             if (!link.platformLinkId || !LINK_ID.test(link.platformLinkId)) continue;
-            if (all || (await this.due(linkEntitlementSubject(link.platformLinkId), now))) {
-                await this.refreshLink(link, now);
-            }
+            const subject = linkEntitlementSubject(link.platformLinkId);
+            if (!this.due(subject, read.get(subject), now)) continue;
+            reads += 1;
+            await this.refreshLink(link, now);
         }
     }
 
@@ -232,21 +246,26 @@ export class EverConnectEntitlementService
             .delete({ subject: Not(EVER_CONNECT_KEY_SET_SUBJECT) })
             .catch(() => undefined);
         this.failedAt.clear();
+        this.refreshAfterMs.clear();
     }
 
     // -- internals --------------------------------------------------------------
 
-    private async due(subject: string, now: Date): Promise<boolean> {
+    /**
+     * Whether a document is read now: never read, read before the feed's last
+     * announcement, or older than it said it may be used (six hours unless it
+     * named another period). A read that failed waits before it is tried again.
+     */
+    private due(subject: string, fetchedAt: Date | null | undefined, now: Date): boolean {
         const failed = this.failedAt.get(subject);
         if (failed !== undefined && now.getTime() - failed < ENTITLEMENT_RETRY_AFTER_MS) {
             return false;
         }
-        const row = await this.documents.findOne({ where: { subject } });
-        if (!row?.fetchedAt) return true;
-        const after = this.claimsOf(row)?.ever?.refresh_after_s;
-        const waitS =
-            typeof after === 'number' && after >= 600 ? after : ENTITLEMENT_REFRESH_AFTER_S;
-        return now.getTime() - new Date(row.fetchedAt).getTime() >= waitS * 1000;
+        if (!fetchedAt) return true;
+        const fetched = new Date(fetchedAt).getTime();
+        if (fetched < this.announcedAt) return true;
+        const wait = this.refreshAfterMs.get(subject) ?? ENTITLEMENT_REFRESH_AFTER_S * 1000;
+        return now.getTime() - fetched >= wait;
     }
 
     private async refresh(
@@ -340,6 +359,10 @@ export class EverConnectEntitlementService
                 .execute();
         }
         this.failedAt.delete(subject);
+        const after = (verified.claims as unknown as Claims).ever?.refresh_after_s;
+        if (typeof after === 'number' && after >= 600) {
+            this.refreshAfterMs.set(subject, after * 1000);
+        }
         const handle = verified.claims.ever.handle;
         if (link && handle && handle !== link.handle) {
             await this.links.update({ id: link.id }, { handle: handle.slice(0, 64) });

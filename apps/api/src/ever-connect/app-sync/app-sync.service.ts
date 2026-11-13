@@ -45,6 +45,11 @@ import {
 
 /** How many Works one pass sends (at most three operations each, under the batch limit of 500). */
 export const APP_SYNC_PASS_WORKS = 150;
+/**
+ * How many tenant links one pass sends a batch for. A round also renews the
+ * worker's lease, so the rows of further links stay due for the next round.
+ */
+export const APP_SYNC_PASS_LINKS = 20;
 /** Between two full sends of the identifier set. */
 export const APP_SYNC_RECONCILE_INTERVAL_MS = 24 * 60 * 60_000;
 /** After a reconciliation that could not finish, the next try waits this long. */
@@ -354,7 +359,10 @@ export class AppSyncService
 
         let reported = 0;
         let refresh = false;
+        let sent = 0;
         for (const [linkId, { ops, plan }] of batches) {
+            if (sent >= APP_SYNC_PASS_LINKS) break;
+            sent += 1;
             let results: readonly OpResult[];
             try {
                 const answer = await withAppSyncLink(linkId, () =>

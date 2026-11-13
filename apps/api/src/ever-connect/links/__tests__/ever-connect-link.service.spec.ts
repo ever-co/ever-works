@@ -58,11 +58,20 @@ describe('EverConnectLinkService', () => {
     const setStatus = (status: EverConnectConnection['status']) =>
         dataSource.getRepository(EverConnectConnection).update({ id: 'self' }, { status });
 
+    beforeAll(async () => {
+        dataSource = await createIdentityDataSource();
+    });
+
+    afterAll(async () => {
+        await dataSource.destroy();
+    });
+
     beforeEach(async () => {
         process.env.EVER_CONNECT_ENABLED = 'true';
         process.env.EVER_CONNECT_LINK_CODES_ENABLED = 'true';
-        dataSource = await createIdentityDataSource();
         const connections = dataSource.getRepository(EverConnectConnection);
+        await connections.clear();
+        await dataSource.getRepository(EverConnectLink).clear();
         await connections.insert({ id: 'self', status: 'active', platformInstanceId: INSTANCE });
         create = jest.fn(async () => ({ id: LINK_ID, org_id: EVER_ORG }));
         remove = jest.fn(async () => undefined);
@@ -104,8 +113,7 @@ describe('EverConnectLinkService', () => {
         );
     });
 
-    afterEach(async () => {
-        await dataSource.destroy();
+    afterEach(() => {
         process.env = { ...savedEnv };
     });
 
