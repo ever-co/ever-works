@@ -238,6 +238,21 @@ describe('evaluateAgentMerge — the single decision point', () => {
         }
     });
 
+    it('refuses a target matched by a wildcard protected entry, and still allows non-matches', () => {
+        const policy = { ...permissive, protectedBranches: ['main', 'release/*'] };
+        for (const target of ['release/1.2', 'refs/heads/Release/2024-q4']) {
+            const decision = evaluateAgentMerge({ ...okCtx, policy, targetBranch: target });
+            expect(decision.allowed).toBe(false);
+            expect(decision.code).toBe('protected-branch');
+            expect(decision.reason).toContain('release/*');
+        }
+        for (const target of ['releases', 'feature/release/x', 'feature/x']) {
+            expect(evaluateAgentMerge({ ...okCtx, policy, targetBranch: target }).allowed).toBe(
+                true,
+            );
+        }
+    });
+
     it('fails CLOSED when the target branch is unknown and branches are protected', () => {
         const decision = evaluateAgentMerge({ ...okCtx, targetBranch: null });
         expect(decision.allowed).toBe(false);

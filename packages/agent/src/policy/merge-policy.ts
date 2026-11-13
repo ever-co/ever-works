@@ -3,6 +3,7 @@ import {
     MERGE_POLICY_PROTECTED_BRANCH_FLOOR,
     MERGE_POLICY_SCOPE_PRECEDENCE,
     PLATFORM_DEFAULT_MERGE_POLICY,
+    findProtectedMergeBranch,
     mergeTargetNeedsFloorApproval,
     sanitizeMergePolicyOverride,
     type GateStatus,
@@ -161,13 +162,6 @@ export interface MergeDecisionContext {
     mergeMethod?: MergeMethod | null;
 }
 
-function normalizeBranch(ref: string): string {
-    return ref
-        .trim()
-        .replace(/^refs\/heads\//i, '')
-        .toLowerCase();
-}
-
 /**
  * THE decision point. Every agent-driven merge path routes through this
  * one function so there is exactly one place where "may this agent land
@@ -202,11 +196,9 @@ export function evaluateAgentMerge(ctx: MergeDecisionContext): MergeDecision {
                     `${policy.protectedBranches.length} branch(es) — refusing rather than merging blind.`,
             );
         }
-        const target = normalizeBranch(ctx.targetBranch);
-        const protectedMatch = policy.protectedBranches.find(
-            (branch) => normalizeBranch(branch) === target,
-        );
-        if (protectedMatch) {
+        // Entries may carry `*` wildcards (`release/*`), as in Fleet.
+        const protectedMatch = findProtectedMergeBranch(ctx.targetBranch, policy.protectedBranches);
+        if (protectedMatch !== null) {
             return deny(
                 'protected-branch',
                 `Branch '${protectedMatch}' is protected by the effective merge policy — an agent may not merge into it.`,
