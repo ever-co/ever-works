@@ -20,7 +20,7 @@ Note the distinction: _opening_ a pull request is an Agent permission (`canOpenP
 | `allowedMergeMethods`  | `['squash']`                          | Strategies an Agent may use. An **empty list refuses every merge**.     |
 | `protectedBranches`    | `['main','master','develop','stage']` | Branches an Agent may never merge **into**. Matched case-insensitively. |
 
-A `protectedBranches` entry may use `*` as a wildcard. `*` matches any run of characters, `/` included, so `release/*` protects `release/1.2` and `release/1.2/hotfix`. It is the only wildcard: `?` and `[...]` are matched literally.
+A `protectedBranches` entry may use `*` as a wildcard. `*` matches any run of characters, `/` included, so `release/*` protects `release/1.2` and `release/1.2/hotfix`. It is the only wildcard: `?` and `[...]` are matched literally. The Agent push guard and Task branch naming use this same matching, so `release/*` also stops an Agent committing straight to `release/1.2` and a Task branch from being named `release/1.2`. An entry that matches every branch, such as a bare `*`, therefore also stops every Agent commit and every Task that runs on its own branch; to keep Agents from merging, leave `allowAgentMerge` at `false` instead.
 
 ## Four scopes, resolved field by field
 
