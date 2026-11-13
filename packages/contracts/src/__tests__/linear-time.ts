@@ -40,7 +40,29 @@ import { expect } from 'vitest';
  * to a costlier path past an input cap grows up to ~3× on the step that
  * crosses the cap, idle or under load, and a quadratic one grows 16×. Code
  * without such a path can pass a tighter `maxGrowth`.
+ *
+ * Where the growth steps are judged. All of the above holds on a busy machine,
+ * not on an oversubscribed one: in `lint-and-test` (`.github/workflows/ci.yml`)
+ * turbo runs every package's tests at once, each vitest with its own pool, in
+ * one pod, and linear code read 4.2–10.0× there on every stage run of rounds
+ * 26 and 26b (5, 46, 1 and 18 failures), while `node-contract-gate` ran the
+ * same commit's suite green in 26 s. That step sets {@link SKIP_GROWTH_ENV}, so
+ * there only the ceiling runs, on the full input; the growth steps run in the
+ * jobs that run this package alone: `node-contract-gate` in ci.yml and
+ * `node-contract` in promotion-gate.yml.
  */
+
+/**
+ * Set to `1` to skip the growth steps (see above). Only the `run test on all
+ * packages` step of `lint-and-test` sets it (turbo.json passes it to `test`);
+ * any other value, or none, runs them. Read on every call.
+ */
+export const SKIP_GROWTH_ENV = 'EW_TEST_SKIP_LINEAR_TIME_GROWTH';
+
+/** Whether this run skips the growth steps and checks only the ceiling. */
+export function growthStepsSkipped(): boolean {
+	return process.env[SKIP_GROWTH_ENV] === '1';
+}
 
 /** Size ratio between the two inputs of one growth step. */
 const FACTOR = 16;
@@ -198,7 +220,8 @@ function costRatio(
 /**
  * Assert that `run` costs linear time (or less) in the size of the inputs
  * `build` makes, and that one run on the full input stays under the ceiling.
- * `build(size)` must answer the SAME shape at every size.
+ * `build(size)` must answer the SAME shape at every size. With
+ * {@link SKIP_GROWTH_ENV} set to `1`, only the ceiling is checked.
  */
 export function expectLinearTime<T>(
 	build: (size: number) => T,
@@ -211,7 +234,9 @@ export function expectLinearTime<T>(
 	const ceilingMs = options.ceilingMs ?? DEFAULT_CEILING_MS;
 
 	const smallSizes: number[] = [];
-	for (let small = size / FACTOR; small >= minSize; small /= RUNG) smallSizes.unshift(Math.floor(small));
+	if (!growthStepsSkipped()) {
+		for (let small = size / FACTOR; small >= minSize; small /= RUNG) smallSizes.unshift(Math.floor(small));
+	}
 	let fullSizeChecked = false;
 	for (const small of smallSizes) {
 		const smallInput = build(small);

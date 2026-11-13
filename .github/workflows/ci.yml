@@ -298,7 +298,10 @@ jobs:
   # the moment they merge, with no branch-protection change. This job exists so
   # the signal is a NAMED check in the checks list instead of three lines in a
   # 40-package test log, and so the same commands run in front of a promotion
-  # (see promotion-gate.yml).
+  # (see promotion-gate.yml). One exception: the growth steps of the contracts
+  # linear-time guard run ONLY here (and in promotion-gate), not in
+  # `lint-and-test`, because they time code and need a job that runs the
+  # package alone (see the contracts step below).
   node-contract-gate:
     runs-on: ${{ vars.RUNNER_LINUX_X64_4 || 'ubuntu-latest' }}
     timeout-minutes: 20
@@ -341,7 +344,13 @@ jobs:
       # `@ever-works/contracts` to SOURCE (moduleNameMapper), so the suite
       # judges the types as written rather than a stale dist — and the ARC pool
       # is already tight enough that two matrix jobs skip on promotion pushes.
+      # This step is also where the growth steps of the contracts linear-time guard are
+      # judged: `lint-and-test` skips them (see its `run test on all packages` step),
+      # because there every package's tests share the pod at once. Pinned to `0` so no
+      # workflow- or job-level env can switch them off here.
       - name: Contracts — fleet wire types and the package inventory guard
+        env:
+          EW_TEST_SKIP_LINEAR_TIME_GROWTH: '0'
         run: pnpm --filter @ever-works/contracts test
 
       # Spec files are excluded from every package's `type-check` tsconfig (and vitest
@@ -650,8 +659,25 @@ jobs:
 
           exit $rc
 
+      # EW_TEST_SKIP_LINEAR_TIME_GROWTH: the contracts specs that pin "linear on hostile
+      # input" (`expectLinearTime`, packages/contracts/src/__tests__/linear-time.ts)
+      # compare the cost per character of one input with sixteen inputs a sixteenth its
+      # size. Here turbo runs every package's tests at once, each vitest with its own
+      # pool, so those timings share the pod's CPUs with dozens of workers: on stage,
+      # rounds 26 and 26b, linear code read 4.2-10.0x against a bound of 3 on every run
+      # (5, 46, 1 and 18 failures; the spec took 72-285 s here), while the same commit's
+      # `node-contract-gate` ran the same suite green in 26 s. With the flag set, this
+      # step keeps the 2 s ceiling on the 1 MB input, which a real blowup still fails;
+      # the growth steps run in `node-contract-gate` (and promotion-gate's
+      # `node-contract`), which run the contracts package alone. Do not set it anywhere
+      # else. Raising `maxGrowth` instead would let the capped quadratic it exists to
+      # catch (3.7-7x) through. turbo.json lists the variable under `test.env`: turbo's
+      # strict env mode drops any variable it does not list, and listing it keeps the
+      # two modes apart in turbo's cache.
       - name: run test on all packages
         if: steps.scope.outputs.code == 'true'
+        env:
+          EW_TEST_SKIP_LINEAR_TIME_GROWTH: '1'
         run: pnpm test
 
       # The App Works e2e harness's own unit specs (`apps/web/vitest.e2e-harness.config.ts`):

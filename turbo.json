@@ -26,6 +26,7 @@
 			"outputs": []
 		},
 		"test": {
+			"env": ["EW_TEST_SKIP_LINEAR_TIME_GROWTH"],
 			"outputs": []
 		},
 		"test:e2e": {
