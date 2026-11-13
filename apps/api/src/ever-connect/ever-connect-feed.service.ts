@@ -1,4 +1,5 @@
 import { Injectable, Logger, Optional } from '@nestjs/common';
+import { EverConnectExtensions } from './ever-connect-extensions';
 import { EverConnectIntegrationService } from './ever-connect-integration.service';
 import { EverConnectService } from './ever-connect.service';
 import { PersonRequestsHandler } from './identity/person-requests.handler';
@@ -34,6 +35,9 @@ export interface FeedPass {
  * - Install messages from apps.ever.co (`ever.listings.install.state_changed`
  *   and the `install_requested` / `install_withdrawn` / `remove_requested`
  *   commands): kept by the install-request service, which installs nothing.
+ * - Events a separately switched part reads (tenant links, entitlement
+ *   documents): handed to it first ({@link EverConnectExtensions}); with no such
+ *   part switched on, nothing changes.
  *
  * A handler that fails stops the pass at that event: it and the events after it
  * are read again on the next pass. Other event types are acknowledged unread.
@@ -47,6 +51,7 @@ export class EverConnectFeedService {
         private readonly integrations: EverConnectIntegrationService,
         private readonly requests: PersonRequestsHandler,
         @Optional() private readonly installs?: InstallRequestService,
+        @Optional() private readonly extensions?: EverConnectExtensions,
     ) {}
 
     async pollOnce(waitS = 0): Promise<FeedPass> {
@@ -109,6 +114,9 @@ export class EverConnectFeedService {
 
     /** Hand one event to its handler. `true` when the connection ended with it. */
     private async dispatch(event: FeedEvent): Promise<boolean> {
+        if (this.extensions?.handlesFeedEvent(event.type)) {
+            await this.extensions.dispatchFeedEvent(event);
+        }
         if (this.requests.handles(event.type)) {
             await this.requests.handle(event);
             return false;

@@ -143,6 +143,8 @@ import { UpstreamPullRequestsModule } from '@ever-works/agent/upstream-pull-requ
 import { instanceStatsModuleImports } from './instance-stats';
 import { everConnectModuleImports } from './ever-connect';
 import { everConnectProvisionModuleImports } from './ever-connect/provision/ever-connect-provision.module';
+import { everConnectLinkModuleImports } from './ever-connect/links/ever-connect-link.module';
+import { everConnectAppSyncModuleImports } from './ever-connect/app-sync/app-sync.module';
 import { AccountDeletionModule } from './account-deletion/account-deletion.module';
 import {
     PluginsModule as AgentPluginsModule,
@@ -533,6 +535,10 @@ import { DatabaseModule } from '@ever-works/agent/database';
         ...everConnectModuleImports(),
         // Creating a company a person asked for in Ever (off by default).
         ...everConnectProvisionModuleImports(),
+        // Linking an Organization to its Ever organization with a link code, and
+        // the apps mirror (each off by default, each behind its own switch).
+        ...everConnectLinkModuleImports(),
+        ...everConnectAppSyncModuleImports(),
         // EW-P1-2 — Integration API v1 (`/api/integrations/v1/*`), the stable
         // contract integrations such as Ever Gauzy code against. Additive;
         // reachable only with an `ew_int_` integration key.
