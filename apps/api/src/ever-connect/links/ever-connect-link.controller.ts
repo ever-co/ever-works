@@ -17,12 +17,10 @@ import type { EverPlatformOrganizationLinkView } from '@ever-works/contracts';
 import { CurrentUser } from '../../auth/decorators/user.decorator';
 import { SessionOnlyGuard } from '../../auth/guards/session-only.guard';
 import type { AuthenticatedUser } from '../../auth/types/auth.types';
-import {
-    OrgAdmin,
-    OrganizationOwnershipGuard,
-} from '../../organizations/guards/organization-ownership.guard';
+import { OrganizationOwnershipGuard } from '../../organizations/guards/organization-ownership.guard';
 import { OrganizationMembershipService } from '../../organizations/organization-membership.service';
 import { EverConnectLinkService } from './ever-connect-link.service';
+import { OrganizationLinkAdminGuard } from './organization-link-admin.guard';
 
 /** Body of `POST /api/ever-connect/organizations/:orgId/link`. */
 export class EverConnectLinkDto {
@@ -42,13 +40,21 @@ export class EverConnectLinkDto {
  *   POST   /api/ever-connect/organizations/:orgId/link   link with a link code (`EVL-…`)
  *   DELETE /api/ever-connect/organizations/:orgId/link   remove the link
  *
- * Reading needs a member of the Organization; linking and removing need one of
- * its admins (`OrganizationOwnershipGuard`, as every `/organizations/:orgId`
- * route: an Organization of another account answers 404) in an interactive
- * session (an API key is refused). The routes exist only with
- * `EVER_CONNECT_ENABLED=true` and `EVER_CONNECT_LINK_CODES_ENABLED=true`;
- * otherwise each answers 404 like any unknown address. Responses are never
- * cached and never carry a code, a key or a signed document.
+ * - **Reading** needs a member of the Organization's account
+ *   (`OrganizationOwnershipGuard`, as every `/organizations/:orgId` route: an
+ *   Organization of another account answers 404). The settings page shows the
+ *   link to every member.
+ * - **Linking and removing** need an administrator of the Organization: the
+ *   account's owner, or a member whose role in it is `admin` or `owner`
+ *   ({@link OrganizationLinkAdminGuard}). This does not depend on
+ *   `ORG_ADMIN_ROLE_ENFORCED`: a plain member is refused with 403 in every
+ *   configuration. Both also need an interactive session (an API key is
+ *   refused).
+ *
+ * The routes exist only with `EVER_CONNECT_ENABLED=true` and
+ * `EVER_CONNECT_LINK_CODES_ENABLED=true`; otherwise each answers 404 like any
+ * unknown address. Responses are never cached and never carry a code, a key or
+ * a signed document.
  */
 @ApiTags('ever-connect')
 @ApiBearerAuth('JWT-auth')
@@ -67,17 +73,22 @@ export class EverConnectLinkController {
         @Param('orgId') orgId: string,
         @CurrentUser() user: AuthenticatedUser,
     ): Promise<EverPlatformOrganizationLinkView> {
-        return this.links.view(await this.membership.ensureMember(orgId, user.userId));
+        const organization = await this.membership.ensureMember(orgId, user.userId);
+        // Whether this person may change the link, so the page offers it to them only.
+        return this.links.view(organization, await this.membership.isRoleAdmin(orgId, user.userId));
     }
 
     @Post()
-    @OrgAdmin()
-    @UseGuards(SessionOnlyGuard)
+    @UseGuards(SessionOnlyGuard, OrganizationLinkAdminGuard)
     @HttpCode(HttpStatus.CREATED)
     @Header('Cache-Control', 'no-store')
     @Throttle({ long: { limit: 10, ttl: 3_600_000 } })
-    @ApiOperation({ summary: 'Link the Organization with a link code from app.ever.co' })
+    @ApiOperation({
+        summary:
+            'Link the Organization with a link code from app.ever.co (an administrator of the Organization only)',
+    })
     @ApiResponse({ status: 400, description: '`code_invalid`: not a link code' })
+    @ApiResponse({ status: 403, description: 'Not an administrator of the Organization' })
     @ApiResponse({
         status: 409,
         description: '`not_connected`, `already_linked`, `tenant_already_linked`',
@@ -92,15 +103,20 @@ export class EverConnectLinkController {
         @Body() body: EverConnectLinkDto,
         @CurrentUser() user: AuthenticatedUser,
     ): Promise<EverPlatformOrganizationLinkView> {
-        return this.links.link(await this.membership.ensureAdmin(orgId, user.userId), body.code);
+        // The guard already refused anyone else; the same check answers the Organization.
+        const organization = await this.membership.ensureRoleAdmin(orgId, user.userId);
+        return this.links.link(organization, body.code);
     }
 
     @Delete()
-    @OrgAdmin()
-    @UseGuards(SessionOnlyGuard)
+    @UseGuards(SessionOnlyGuard, OrganizationLinkAdminGuard)
     @HttpCode(HttpStatus.OK)
     @Header('Cache-Control', 'no-store')
-    @ApiOperation({ summary: "Remove the Organization's link (Ever Platform is told first)" })
+    @ApiOperation({
+        summary:
+            "Remove the Organization's link (an administrator of the Organization only; Ever Platform is told first)",
+    })
+    @ApiResponse({ status: 403, description: 'Not an administrator of the Organization' })
     @ApiResponse({ status: 404, description: '`not_linked`' })
     @ApiResponse({
         status: 502,
@@ -110,6 +126,7 @@ export class EverConnectLinkController {
         @Param('orgId') orgId: string,
         @CurrentUser() user: AuthenticatedUser,
     ): Promise<EverPlatformOrganizationLinkView> {
-        return this.links.unlink(await this.membership.ensureAdmin(orgId, user.userId));
+        const organization = await this.membership.ensureRoleAdmin(orgId, user.userId);
+        return this.links.unlink(organization);
     }
 }

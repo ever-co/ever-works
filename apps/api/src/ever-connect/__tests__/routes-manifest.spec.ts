@@ -12,16 +12,14 @@ import { GUARDS_METADATA, METHOD_METADATA, PATH_METADATA } from '@nestjs/common/
 import { IS_PUBLIC_KEY, Public } from '../../auth/decorators/public.decorator';
 import { IsPlatformAdminGuard } from '../../auth/guards/platform-admin.guard';
 import { SessionOnlyGuard } from '../../auth/guards/session-only.guard';
-import {
-    ORG_OWNERSHIP_ADMIN,
-    OrganizationOwnershipGuard,
-} from '../../organizations/guards/organization-ownership.guard';
+import { OrganizationOwnershipGuard } from '../../organizations/guards/organization-ownership.guard';
 import { EverConnectAdminController } from '../ever-connect-admin.controller';
 import { EverConnectModule } from '../ever-connect.module';
 import { EverConnectWellKnownController } from '../well-known.controller';
 import { InstallRequestsController } from '../installs/install-requests.controller';
 import { EverConnectLinkController } from '../links/ever-connect-link.controller';
 import { EverConnectLinkModule } from '../links/ever-connect-link.module';
+import { OrganizationLinkAdminGuard } from '../links/organization-link-admin.guard';
 
 /**
  * The module's route manifest (`ever-connect.routes.json`) is the controllers'
@@ -29,8 +27,11 @@ import { EverConnectLinkModule } from '../links/ever-connect-link.module';
  * needs, `public` (answers without a session) and `inbound` (requests Ever
  * Platform makes to the installation). The only public route is the address
  * statement Ever Platform reads; every operator route is for platform
- * administrators; an Organization's link is read by its members and changed by
- * its admins (the link module, loaded only with its own switch).
+ * administrators; an Organization's link is read by the members of its account
+ * and changed by its administrators only (the account's owner, or a member whose
+ * role in the Organization is `admin` or `owner`, whatever
+ * `ORG_ADMIN_ROLE_ENFORCED` says: `OrganizationLinkAdminGuard`). The link module
+ * is loaded only with its own switch.
  *
  * A route added without a guard, or made public, changes the generated
  * manifest and fails here until the committed file is updated on purpose
@@ -71,11 +72,11 @@ function routesOf(controller: Type): ManifestRoute[] {
                 ? 'public'
                 : guards.includes(IsPlatformAdminGuard)
                   ? 'platform-admin'
-                  : guards.includes(OrganizationOwnershipGuard)
-                    ? Reflect.getMetadata(ORG_OWNERSHIP_ADMIN, handler) === true
-                        ? 'organization-admin'
-                        : 'organization-member'
-                    : 'session',
+                  : guards.includes(OrganizationLinkAdminGuard)
+                    ? 'organization-admin'
+                    : guards.includes(OrganizationOwnershipGuard)
+                      ? 'organization-member'
+                      : 'session',
         });
     }
     return out.sort((a, b) => a.path.localeCompare(b.path) || a.method.localeCompare(b.method));
@@ -156,13 +157,20 @@ describe('Ever Connect — route manifest', () => {
         ]);
     });
 
-    it('a route that changes a link needs an interactive session as well', () => {
+    it("a route that changes a link needs the Organization's administrator and an interactive session", () => {
         const proto = EverConnectLinkController.prototype as unknown as Record<string, unknown>;
         const guardsOf = (name: string): unknown[] =>
             Reflect.getMetadata(GUARDS_METADATA, proto[name] as object) ?? [];
-        expect(guardsOf('link')).toContain(SessionOnlyGuard);
-        expect(guardsOf('unlink')).toContain(SessionOnlyGuard);
-        expect(guardsOf('get')).not.toContain(SessionOnlyGuard);
+        for (const name of ['link', 'unlink']) {
+            expect(guardsOf(name)).toContain(SessionOnlyGuard);
+            // The link's own guard, not the general admin mark whose check is opt-in.
+            expect(guardsOf(name)).toContain(OrganizationLinkAdminGuard);
+        }
+        expect(guardsOf('get')).toEqual([]);
+        // Every route, reading included, is behind the account check of the class.
+        expect(Reflect.getMetadata(GUARDS_METADATA, EverConnectLinkController)).toEqual([
+            OrganizationOwnershipGuard,
+        ]);
     });
 
     it('control: a planted unguarded or public route changes the manifest', () => {

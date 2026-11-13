@@ -6,6 +6,7 @@ import { EverConnectModule } from '../ever-connect.module';
 import { isLinkCodesEnabled } from '../ever-connect.switches';
 import { EverConnectLinkController } from './ever-connect-link.controller';
 import { EverConnectLinkService } from './ever-connect-link.service';
+import { OrganizationLinkAdminGuard } from './organization-link-admin.guard';
 
 /**
  * Linking an Organization to its Ever organization with a link code. A module
@@ -17,7 +18,7 @@ import { EverConnectLinkService } from './ever-connect-link.service';
 @Module({
     imports: [DatabaseModule, EverConnectModule, OrganizationsModule],
     controllers: [EverConnectLinkController],
-    providers: [SessionOnlyGuard, EverConnectLinkService],
+    providers: [SessionOnlyGuard, OrganizationLinkAdminGuard, EverConnectLinkService],
     exports: [EverConnectLinkService],
 })
 export class EverConnectLinkModule {}

@@ -422,7 +422,10 @@ describeMock('Ever Connect — link codes, heartbeat, entitlements and the apps 
             link: null,
             entitlement: null,
             appSync: false,
+            // The service says "may change it" only when its caller says so.
+            canManage: false,
         });
+        expect((await links.view(acme, true)).canManage).toBe(true);
         expect(await record()).toEqual([]);
     });
 
@@ -521,6 +524,8 @@ describeMock('Ever Connect — link codes, heartbeat, entitlements and the apps 
             connected: true,
             link: { everOrgId: GLOBEX.id, handle: 'globex', createdVia: 'link_code' },
             appSync: false,
+            // Only an administrator of the Organization reaches link().
+            canManage: true,
         });
         // The link's own entitlement document was read and verified.
         expect(view.entitlement).toMatchObject({ status: 'valid', handle: 'globex' });
@@ -817,6 +822,7 @@ describeMock('Ever Connect — link codes, heartbeat, entitlements and the apps 
             link: null,
             entitlement: null,
             appSync: false,
+            canManage: true,
         });
         expect((await linkRow(acme.id))?.status).toBe('archived');
         expect(await documents.findOne({ where: { subject } })).toBeNull();
