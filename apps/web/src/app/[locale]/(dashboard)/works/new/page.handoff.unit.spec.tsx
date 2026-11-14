@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, render, screen } from '@testing-library/react';
 
 /**
@@ -90,6 +90,11 @@ beforeEach(() => {
     signedIn.current = true;
     disabledKinds.current = [];
     clientProps.current = null;
+    vi.stubEnv('EVER_CONNECT_BLUEPRINT_HANDOFF_ENABLED', 'true');
+});
+
+afterEach(() => {
+    vi.unstubAllEnvs();
 });
 
 describe('/works/new — a Blueprint hand-off from the marketplace', () => {
@@ -157,6 +162,30 @@ describe('/works/new — a Blueprint hand-off from the marketplace', () => {
         expect(workspaceOf).not.toHaveBeenCalled();
         expect(resolve).not.toHaveBeenCalled();
     });
+
+    it.each([
+        ['unset', undefined],
+        ['`false`', 'false'],
+        ['a value that is not `true`', 'yes'],
+    ])(
+        'with the switch %s the page is as it was: nothing is looked up, the form gets no hand-off',
+        async (_name, value) => {
+            vi.unstubAllEnvs();
+            if (value !== undefined) vi.stubEnv('EVER_CONNECT_BLUEPRINT_HANDOFF_ENABLED', value);
+            workspaceOf.mockResolvedValue({ kind: 'organization', slug: 'acme' });
+
+            expect(await visit(query)).toBeNull();
+            expect(workspaceOf).not.toHaveBeenCalled();
+            expect(resolve).not.toHaveBeenCalled();
+            expect(clientProps.current).toMatchObject({
+                initialKind: 'app',
+                initialMode: 'manual',
+                appBlueprintHandoff: null,
+            });
+            // And without a `mode` the visitor is sent to /new, as before.
+            expect(await visit({ kind: 'app', blueprint: 'cal-diy' })).toBe('/new');
+        },
+    );
 
     it('a disabled App kind gets no hand-off', async () => {
         disabledKinds.current = ['app'];

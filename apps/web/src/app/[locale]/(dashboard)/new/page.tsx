@@ -14,7 +14,7 @@ import { missionsAPI, type MissionTemplateManifestView } from '@/lib/api/mission
 import { getDisabledWorkKinds } from '@/lib/feature-flags/work-kinds';
 import {
     blueprintHandoffFormHref,
-    readBlueprintHandoff,
+    readEnabledBlueprintHandoff,
 } from '@/lib/works/blueprint-handoff.shared';
 import {
     BROWSER_WORKSPACE_SCOPE_HEADER,
@@ -71,7 +71,8 @@ const VALID_CHIP_TYPES: ChipType[] = [
  * Work canvas, not from this page's prompt, so such a visit goes straight on to
  * the App create form with the three values kept
  * (`@/lib/works/blueprint-handoff.shared`). Without a `blueprint` spelled like
- * one, or for any other chip, nothing here changes.
+ * one, for any other chip, or while the hand-off is switched off (the default:
+ * `EVER_CONNECT_BLUEPRINT_HANDOFF_ENABLED`), nothing here changes.
  */
 type SearchParams = Promise<{
     type?: string;
@@ -129,7 +130,7 @@ export default async function NewPage({ searchParams }: { searchParams: SearchPa
     // workspace the visitor is in. After the flag check above, so a disabled
     // App kind is not reachable this way either.
     if (initialType === 'app') {
-        const handoff = readBlueprintHandoff(params ?? {});
+        const handoff = readEnabledBlueprintHandoff(params ?? {});
         if (handoff) {
             redirect(
                 buildWorkspaceHref(await currentWorkspace(), blueprintHandoffFormHref(handoff)),

@@ -28,7 +28,7 @@ import { ROUTES } from '@/lib/constants';
 import { resolveManagedStorageStatus } from '@/lib/works/managed-storage';
 import {
     blueprintHandoffFormHref,
-    readBlueprintHandoff,
+    readEnabledBlueprintHandoff,
     type BlueprintHandoff,
 } from '@/lib/works/blueprint-handoff.shared';
 import {
@@ -59,7 +59,8 @@ interface NewWorkPageProps {
         prompt?: string;
         kind?: string;
         // A Blueprint hand-off from Ever Platform's marketplace
-        // (`@/lib/works/blueprint-handoff.shared`): read only with `kind=app`.
+        // (`@/lib/works/blueprint-handoff.shared`): read only with `kind=app`,
+        // and only with `EVER_CONNECT_BLUEPRINT_HANDOFF_ENABLED=true`.
         blueprint?: string | string[];
         install?: string | string[];
         ever_org?: string | string[];
@@ -99,7 +100,7 @@ export default async function NewWorkPage({ searchParams }: NewWorkPageProps) {
         : null;
     // A Blueprint hand-off opens the App form whatever `mode` says (an App has one form).
     const handoff: BlueprintHandoff | null =
-        initialKind === 'app' && !proposalId ? readBlueprintHandoff(params) : null;
+        initialKind === 'app' && !proposalId ? readEnabledBlueprintHandoff(params) : null;
     const initialMode = (VALID_CREATION_MODES as string[]).includes(params.mode ?? '')
         ? (params.mode as CreationMode)
         : handoff

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, render, screen } from '@testing-library/react';
 
 /**
@@ -61,6 +61,11 @@ beforeEach(() => {
     listMissions.mockClear();
     workspace.current = 'personal';
     disabledKinds.current = [];
+    vi.stubEnv('EVER_CONNECT_BLUEPRINT_HANDOFF_ENABLED', 'true');
+});
+
+afterEach(() => {
+    vi.unstubAllEnvs();
 });
 
 describe('/new — a Blueprint hand-off from the marketplace', () => {
@@ -133,6 +138,28 @@ describe('/new — a Blueprint hand-off from the marketplace', () => {
         expect(redirect).not.toHaveBeenCalled();
         expect(screen.getByTestId('new-page').getAttribute('data-type')).not.toBe('app');
     });
+
+    it.each([
+        ['unset', undefined],
+        ['`false`', 'false'],
+        ['a value that is not `true`', '1'],
+    ])(
+        'with the switch %s the page is as it was: the App chip, and no redirect',
+        async (_name, value) => {
+            vi.unstubAllEnvs();
+            if (value !== undefined) vi.stubEnv('EVER_CONNECT_BLUEPRINT_HANDOFF_ENABLED', value);
+            expect(
+                await visit({
+                    type: 'app',
+                    blueprint: 'cal-diy',
+                    ever_org: EVER_ORG,
+                    install: INSTALL,
+                }),
+            ).toBeNull();
+            expect(redirect).not.toHaveBeenCalled();
+            expect(screen.getByTestId('new-page').getAttribute('data-type')).toBe('app');
+        },
+    );
 
     it('a disabled App kind is not reachable this way: the page falls back as for any `?type=app`', async () => {
         disabledKinds.current = ['app'];

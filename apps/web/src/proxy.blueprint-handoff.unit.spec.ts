@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { NextRequest } from 'next/server';
 
 const { getAuthFromRequestMock, intlMock } = vi.hoisted(() => ({
@@ -38,7 +38,34 @@ describe('the sign-in gate — a Blueprint hand-off', () => {
     beforeEach(() => {
         vi.clearAllMocks();
         getAuthFromRequestMock.mockResolvedValue({ isAuthenticated: false, isExpired: false });
+        vi.stubEnv('EVER_CONNECT_BLUEPRINT_HANDOFF_ENABLED', 'true');
     });
+
+    afterEach(() => {
+        vi.unstubAllEnvs();
+    });
+
+    it.each([
+        ['unset', undefined],
+        ['`false`', 'false'],
+        ['a value that is not `true`', '1'],
+    ])(
+        'with the switch %s the gate is as it always was: sign-in, with nothing to come back to',
+        async (_name, value) => {
+            vi.unstubAllEnvs();
+            if (value !== undefined) vi.stubEnv('EVER_CONNECT_BLUEPRINT_HANDOFF_ENABLED', value);
+            const response = await visit(
+                `/new?type=app&blueprint=cal-diy&ever_org=${EVER_ORG}&install=${INSTALL}`,
+            );
+            expect(response.status).toBe(307);
+            expect(target(response)).toEqual({
+                origin: ORIGIN,
+                pathname: '/login',
+                keys: [],
+                back: null,
+            });
+        },
+    );
 
     it('a signed-out visitor signs in and comes back with the Blueprint, the install and the Ever organization', async () => {
         const response = await visit(

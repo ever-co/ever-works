@@ -85,7 +85,7 @@ describe('AuthSessionGuard — the delegated write', () => {
         const delegation = { authenticate: jest.fn().mockResolvedValue(admitted) };
         const { guard, authProvider } = createGuard({ metadata: WRITE, delegation });
         const request: Record<string, unknown> = {
-            headers: { authorization: `Bearer ${JWT}`, 'user-agent': 'portal/1' },
+            headers: { authorization: `Bearer ${JWT}`, 'user-agent': 'ever-app/1' },
             ip: '203.0.113.7',
         };
 
@@ -95,7 +95,7 @@ describe('AuthSessionGuard — the delegated write', () => {
         expect(delegation.authenticate).toHaveBeenCalledWith(
             JWT,
             'apps:write',
-            { ipAddress: '203.0.113.7', userAgent: 'portal/1' },
+            { ipAddress: '203.0.113.7', userAgent: 'ever-app/1' },
             { access: 'write' },
         );
         expect(request.user).toEqual(admitted.user);

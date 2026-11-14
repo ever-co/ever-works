@@ -16,6 +16,12 @@ import { REDIRECT_SEARCH_PARAM, ROUTES } from '@/lib/constants';
  * that is not spelled like one, is not a hand-off at all and changes nothing.
  * Nothing here is trusted: the API settles the Blueprint, and whether the
  * person may create a Work in an Organization, on its own.
+ *
+ * **Off by default.** The hand-off is read only with
+ * `EVER_CONNECT_BLUEPRINT_HANDOFF_ENABLED=true` on the web app
+ * ({@link isBlueprintHandoffEnabled}). Without it the three query keys mean
+ * nothing: `/new`, `/works/new` and the sign-in gate behave exactly as they
+ * did before this module existed.
  */
 export interface BlueprintHandoff {
     /** The Blueprint's id in the Apps catalog. */
@@ -54,6 +60,20 @@ const EVER_ORG = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 
 type Query = Readonly<Record<string, string | readonly string[] | undefined>> | URLSearchParams;
 
+type Env = Readonly<Record<string, string | undefined>>;
+
+/** The web app's switch of the hand-off (server-side only, never `NEXT_PUBLIC_`). */
+export const BLUEPRINT_HANDOFF_SWITCH = 'EVER_CONNECT_BLUEPRINT_HANDOFF_ENABLED';
+
+/**
+ * Whether this web app reads a Blueprint hand-off. Off by default; only the
+ * exact value `true` (any case) turns it on, as for every Ever Connect switch.
+ * Read per call, so a change needs a restart of the web app and no new build.
+ */
+export function isBlueprintHandoffEnabled(env: Env = process.env): boolean {
+    return env[BLUEPRINT_HANDOFF_SWITCH]?.trim().toLowerCase() === 'true';
+}
+
 /**
  * The canonical spelling of an install id, or `null` when the value is not one.
  * The runtime twin of `normalizeEverPlatformInstallId` in `@ever-works/contracts`
@@ -89,6 +109,17 @@ export function readBlueprintHandoff(query: Query): BlueprintHandoff | null {
     };
 }
 
+/**
+ * {@link readBlueprintHandoff} for the pages: `null` while the switch is off
+ * ({@link isBlueprintHandoffEnabled}), whatever the address carries.
+ */
+export function readEnabledBlueprintHandoff(
+    query: Query,
+    env: Env = process.env,
+): BlueprintHandoff | null {
+    return isBlueprintHandoffEnabled(env) ? readBlueprintHandoff(query) : null;
+}
+
 /** The hand-off as query entries, in a fixed order: only what was read, never the address as it came. */
 export function blueprintHandoffEntries(handoff: BlueprintHandoff): Array<[string, string]> {
     const entries: Array<[string, string]> = [['blueprint', handoff.blueprint]];
@@ -117,8 +148,9 @@ function withoutWorkspacePrefix(pathname: string): string {
 
 /**
  * Where a signed-out visitor of a hand-off address is sent: the sign-in page,
- * told to come back to the same hand-off. `null` for every other address (the
- * caller then redirects to sign-in as it always did).
+ * told to come back to the same hand-off. `null` for every other address, and
+ * for every address while the switch is off (the caller then redirects to
+ * sign-in as it always did).
  *
  * The address to come back to is rebuilt from the values that were read: the
  * path the visitor asked for (`/new` or `/works/new`, with its workspace prefix
@@ -129,7 +161,9 @@ function withoutWorkspacePrefix(pathname: string): string {
 export function blueprintHandoffSignInHref(
     pathname: string,
     query: URLSearchParams,
+    env: Env = process.env,
 ): string | null {
+    if (!isBlueprintHandoffEnabled(env)) return null;
     const page = withoutWorkspacePrefix(pathname);
     if (page !== ROUTES.DASHBOARD_NEW && page !== ROUTES.DASHBOARD_WORKS_NEW) return null;
     // A well-formed path of this site only: a single leading slash, no backslash.

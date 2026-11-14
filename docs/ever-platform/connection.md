@@ -245,6 +245,10 @@ Deploy targets are told in Ever Platform's open vocabulary:
 
 ## An App installed from the marketplace
 
+Off by default: set `EVER_CONNECT_BLUEPRINT_HANDOFF_ENABLED=true` **on the web
+app** (only the exact value `true` turns it on). Without it the address below is
+an ordinary visit to `/new`, and nothing described here happens.
+
 A person who installs a Blueprint listing on Ever Platform's marketplace is sent
 to Ever Works to create the App, with an address like:
 
@@ -271,14 +275,15 @@ to Ever Works to create the App, with an address like:
   link, it is repeated to Ever Platform so the install and the App it produced
   are known to be the same thing.
 
-Nothing here needs a switch of its own: without the address above nothing
-changes, and nothing is sent to Ever Platform unless the apps mirror is on.
+Nothing is sent to Ever Platform by any of this: the install's ID leaves the
+installation only through the apps mirror, when that is on and enabled for the
+Organization's link.
 
 ## Creating and deploying an App for a person
 
-With `EVER_CONNECT_APPS_WRITE_ENABLED=true`, another Ever app (such as the
-portal on app.ever.co) can create an App here, and start a deployment of one,
-**for a person who allowed it there**. Off by default: unset, both routes below
+With `EVER_CONNECT_APPS_WRITE_ENABLED=true`, another Ever app (such as
+app.ever.co) can create an App here, and start a deployment of one, **for a
+person who allowed it there**. Off by default: unset, both routes below
 answer `404`.
 
 The caller presents a short-lived Ever ID access token issued for that person,

@@ -1,12 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import { normalizeEverPlatformInstallId } from '@ever-works/contracts';
 import {
+    BLUEPRINT_HANDOFF_SWITCH,
     blueprintHandoffEntries,
     blueprintHandoffFormHref,
     blueprintHandoffSignInHref,
+    isBlueprintHandoffEnabled,
     normalizeInstallId,
     organizationOfEverOrg,
     readBlueprintHandoff,
+    readEnabledBlueprintHandoff,
 } from './blueprint-handoff.shared';
 
 /**
@@ -18,6 +21,46 @@ const INSTALL = '01JC5R7Y6K1M9E0V3Q2A8XW4TB';
 const EVER_ORG = '01JMQCK0RG000000000000000A';
 
 const query = (entries: Record<string, string>) => new URLSearchParams(entries);
+/** The web app's environment with the hand-off switched on. */
+const ON = { EVER_CONNECT_BLUEPRINT_HANDOFF_ENABLED: 'true' };
+
+describe('the switch', () => {
+    it('is off by default and on only with `true`', () => {
+        expect(BLUEPRINT_HANDOFF_SWITCH).toBe('EVER_CONNECT_BLUEPRINT_HANDOFF_ENABLED');
+        expect(isBlueprintHandoffEnabled({})).toBe(false);
+        for (const value of ['', ' ', 'false', '1', 'yes', 'on', 'enabled']) {
+            expect(isBlueprintHandoffEnabled({ [BLUEPRINT_HANDOFF_SWITCH]: value })).toBe(false);
+        }
+        expect(isBlueprintHandoffEnabled(ON)).toBe(true);
+        expect(isBlueprintHandoffEnabled({ [BLUEPRINT_HANDOFF_SWITCH]: ' TRUE ' })).toBe(true);
+        // Another Ever Connect switch does not turn it on.
+        expect(isBlueprintHandoffEnabled({ EVER_CONNECT_ENABLED: 'true' })).toBe(false);
+    });
+
+    it('off, an address carries no hand-off for the pages, whatever it says', () => {
+        const address = { blueprint: 'cal-diy', install: INSTALL, ever_org: EVER_ORG };
+        expect(readEnabledBlueprintHandoff(address, {})).toBeNull();
+        expect(
+            readEnabledBlueprintHandoff(address, { [BLUEPRINT_HANDOFF_SWITCH]: 'false' }),
+        ).toBeNull();
+        expect(readEnabledBlueprintHandoff(address, ON)).toEqual({
+            blueprint: 'cal-diy',
+            install: INSTALL,
+            everOrg: EVER_ORG,
+        });
+        // On, an address without a Blueprint is still not one.
+        expect(readEnabledBlueprintHandoff({ install: INSTALL }, ON)).toBeNull();
+    });
+
+    it('off, a signed-out visitor is sent to sign in as always: nothing to come back to', () => {
+        const address = query({ type: 'app', blueprint: 'cal-diy', install: INSTALL });
+        expect(blueprintHandoffSignInHref('/new', address, {})).toBeNull();
+        expect(
+            blueprintHandoffSignInHref('/new', address, { [BLUEPRINT_HANDOFF_SWITCH]: '1' }),
+        ).toBeNull();
+        expect(blueprintHandoffSignInHref('/new', address, ON)).not.toBeNull();
+    });
+});
 
 describe('readBlueprintHandoff', () => {
     it('reads the Blueprint, the install and the Ever organization', () => {
@@ -135,7 +178,7 @@ describe('where a hand-off goes', () => {
 describe('blueprintHandoffSignInHref — a signed-out visitor comes back to the same hand-off', () => {
     /** The address sign-in is told to come back to. */
     const back = (pathname: string, entries: Record<string, string>) => {
-        const href = blueprintHandoffSignInHref(pathname, query(entries));
+        const href = blueprintHandoffSignInHref(pathname, query(entries), ON);
         if (href === null) return null;
         const url = new URL(href, 'https://works.example.test');
         expect(url.pathname).toBe('/login');
@@ -207,7 +250,7 @@ describe('blueprintHandoffSignInHref — a signed-out visitor comes back to the 
     ])(
         'is not a hand-off: %s (sign-in then goes where it always did)',
         (_name, pathname, entries) => {
-            expect(blueprintHandoffSignInHref(pathname, query(entries))).toBeNull();
+            expect(blueprintHandoffSignInHref(pathname, query(entries), ON)).toBeNull();
         },
     );
 });
