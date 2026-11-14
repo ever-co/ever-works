@@ -15,6 +15,11 @@ interface WorkDomainEvent {
     readonly aggregate?: { readonly type?: string; readonly id?: string };
 }
 
+/** A step of an App's deployment, as far as the mirror reads one: which Work. */
+interface AppDeploymentEvent {
+    readonly workId?: unknown;
+}
+
 /**
  * What tells the apps mirror that a Work changed. Each listener only names the
  * Work ({@link AppSyncService.workChanged}); nothing of the event is kept or
@@ -27,9 +32,13 @@ interface WorkDomainEvent {
  *   is off.
  * - Deployments: `deployment.dispatched`, `deployment.completed` and
  *   `deployment.failed`.
+ * - Deployments of an App: `app.deploy.started`, `app.deploy.succeeded`,
+ *   `app.deploy.failed` and `app.deploy.rolled_back`. The worker that runs an
+ *   App's deployment writes its row in another process and reports each step
+ *   to the API, which emits it here under these names; the event carries the
+ *   Work's id, which is all that is read of it.
  *
- * A change no event announces (a deployment of an App, a deployment row
- * written by a worker process) is picked up by the daily reconciliation.
+ * A change no event announces is picked up by the daily reconciliation.
  *
  * The listeners exist only with `EVER_CONNECT_APP_SYNC_ENABLED=true`, and
  * queue nothing for an Organization the mirror does not run for.
@@ -75,5 +84,16 @@ export class AppSyncListener {
     ): Promise<void> {
         const work = event?.payload?.work;
         if (work?.id) await this.mirror.workChanged(work.id, work.organizationId ?? null);
+    }
+
+    // One decorator per name: the emitter's `wildcard` option is not assumed.
+    @OnEvent('app.deploy.started', { async: true })
+    @OnEvent('app.deploy.succeeded', { async: true })
+    @OnEvent('app.deploy.failed', { async: true })
+    @OnEvent('app.deploy.rolled_back', { async: true })
+    async onAppDeployment(payload: AppDeploymentEvent): Promise<void> {
+        const workId = typeof payload?.workId === 'string' ? payload.workId.trim() : '';
+        // The Organization is read from the Work: the event does not name it.
+        if (workId) await this.mirror.workChanged(workId);
     }
 }
