@@ -397,8 +397,24 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # The growth steps of the contracts linear-time guard are judged here (and in
+      # ci.yml's `node-contract-gate`); `lint-and-test` skips them. Pinned to `0` so no
+      # workflow-, job- or runner-level env can switch them off in this required gate.
       - name: Contracts — fleet wire types and the package inventory guard
+        env:
+          EW_TEST_SKIP_LINEAR_TIME_GROWTH: '0'
         run: pnpm --filter @ever-works/contracts test
+
+      # Same for the apps/web time-budget guard: its growth and ratio comparisons run here,
+      # alone and one file at a time.
+      - name: Web — time-budget specs, growth and ratio steps judged
+        env:
+          EW_TEST_SKIP_LINEAR_TIME_GROWTH: '0'
+        run: >-
+          pnpm --filter ever-works-web exec vitest run --no-file-parallelism
+          src/lib/__tests__/time-budget.unit.spec.ts
+          src/lib/markdown/markdown-excerpt.unit.spec.ts
+          src/components/markdown/MarkdownContent.budget.unit.spec.tsx
 
       # An 8 GiB heap per worker: these specs load the agent package from SOURCE
       # through ts-jest, and since the 10-21 build sprint
