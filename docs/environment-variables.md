@@ -274,7 +274,10 @@ person; without PostHog, `EVER_WORKS_APP_LAUNCHER_ENABLED` alone decides.
 
 `EVER_WORKS_APP_LAUNCHER_ORIGINS` takes exact `https://` origins, comma-separated, at most 50: a delegated read from
 any other origin, or from none, is refused (`403`), and an invalid entry stops a production API from starting.
-`EVER_ID_TRUSTED_CLIENT_IDS` takes at most 5 client ids; unset, any client whose token verifies may read.
+`EVER_ID_TRUSTED_CLIENT_IDS` takes at most 5 client ids; unset, any client whose token verifies may read. The same
+list applies to a delegated token that creates or deploys an App for a person (`EVER_CONNECT_APPS_WRITE_ENABLED`, off by
+default; see [Connecting Ever Works to Ever Platform](./ever-platform/connection.md#creating-and-deploying-an-app-for-a-person)):
+set it before turning that on.
 
 ---
 

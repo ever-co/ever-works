@@ -8,11 +8,13 @@ client, the answers to **people's export and deletion requests**, and
 installed only once a platform admin approves it: see
 [Install requests from apps.ever.co](./install-requests.md)).
 
-Four more parts can be switched on, each on its own and each off by default:
+Five more parts can be switched on, each on its own and each off by default:
 [linking an Organization](#linking-an-organization) to its organization on Ever
 Platform with a link code, a daily [heartbeat](#heartbeat), reading the
-[entitlement documents](#entitlement-documents), and listing an Organization's
-[apps on Ever Platform](#apps-on-ever-platform).
+[entitlement documents](#entitlement-documents), listing an Organization's
+[apps on Ever Platform](#apps-on-ever-platform), and letting another Ever app
+[create and deploy an App for a person](#creating-and-deploying-an-app-for-a-person)
+who allowed it.
 
 The connection is off by default and nothing is sent until you connect.
 
@@ -29,12 +31,13 @@ The connection is off by default and nothing is sent until you connect.
 Each of the following needs `EVER_CONNECT_ENABLED=true` as well, is off unless
 it is exactly `true`, and does nothing while the installation is not connected:
 
-| Variable                            | Default     | Meaning                                                                                                                                |
-| ----------------------------------- | ----------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| `EVER_CONNECT_LINK_CODES_ENABLED`   | unset (off) | An Organization's administrator can link it to an organization on Ever Platform with a link code. Off: the link routes answer `404`.   |
-| `EVER_CONNECT_HEARTBEAT_ENABLED`    | unset (off) | The installation tells Ever Platform that it is running, with its version, shortly after a start and then once a day.                  |
-| `EVER_CONNECT_ENTITLEMENTS_ENABLED` | unset (off) | The signed entitlement documents are read, verified, kept and shown in Settings.                                                       |
-| `EVER_CONNECT_APP_SYNC_ENABLED`     | unset (off) | The apps mirror: for an Organization that enabled it in app.ever.co, the identifiers and status of its Works and deployments are sent. |
+| Variable                            | Default     | Meaning                                                                                                                                                                               |
+| ----------------------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `EVER_CONNECT_LINK_CODES_ENABLED`   | unset (off) | An Organization's administrator can link it to an organization on Ever Platform with a link code. Off: the link routes answer `404`.                                                  |
+| `EVER_CONNECT_HEARTBEAT_ENABLED`    | unset (off) | The installation tells Ever Platform that it is running, with its version, shortly after a start and then once a day.                                                                 |
+| `EVER_CONNECT_ENTITLEMENTS_ENABLED` | unset (off) | The signed entitlement documents are read, verified, kept and shown in Settings.                                                                                                      |
+| `EVER_CONNECT_APP_SYNC_ENABLED`     | unset (off) | The apps mirror: for an Organization that enabled it in app.ever.co, the identifiers and status of its Works and deployments are sent.                                                |
+| `EVER_CONNECT_APPS_WRITE_ENABLED`   | unset (off) | Another Ever app may create an App in a linked Organization, and start a deployment of one, for a person who allowed it there. Off: the `/api/ever-connect/apps` routes answer `404`. |
 
 ## Connecting in Settings
 
@@ -178,7 +181,16 @@ back.
 - for its current deployment in each environment (production, preview): where
   it runs (the deploy target, the provider, the deploy shape and who manages
   it), its state, and its public address without credentials, query or
-  fragment.
+  fragment;
+- for an App that was created from a Blueprint of the Apps catalog, where it
+  comes from (`lineage`): `blueprint`, the Blueprint's ID in the catalog;
+  `provisioned_by: "blueprint"`; and `install_id`, Ever Platform's own ID of the
+  marketplace install the App was created for, when the address that sent the
+  person here named one (see
+  [An App installed from the marketplace](#an-app-installed-from-the-marketplace)).
+  Such an App is also told as based on one of Ever's own products
+  (`base_kind: "ever"`) or on another open-source project (`base_kind: "oss"`);
+  every other Work is `base_kind: "none"` and has no `lineage`.
 
 **What is never sent:** Work content or items, repositories or their addresses,
 prompts, memory, agents, budgets, approvals, credits, environment values,
@@ -192,6 +204,9 @@ How it works:
   every 30 seconds while there is something to send (up to 150 Works a round),
   with the Work as it is at that moment. Each operation carries a version that
   only grows, so sending one twice changes nothing.
+- A deployment of an App is noted when it starts, succeeds, fails or is rolled
+  back, like a deployment of a site: its state reaches the Apps page in the next
+  round, not at the next daily full send.
 - A Work that was deleted here is deleted on the Apps page.
 - Once a day, and when the integration is enabled for a link, every Work of the
   Organization is sent again and compared with what Ever Platform holds. Nothing
@@ -227,6 +242,154 @@ Deploy targets are told in Ever Platform's open vocabulary:
 | A site on Kubernetes with your own kubeconfig | `k8s`             | `k8s`        | `custom-kubeconfig` | `customer`    |
 | A site on Kubernetes on an Ever Works cluster | `k8s`             | `k8s`        | the cluster source  | `ever`        |
 | A site deployed by any other deploy plugin    | the plugin's ID   | the same     | `provider-plugin`   | `third_party` |
+
+## An App installed from the marketplace
+
+A person who installs a Blueprint listing on Ever Platform's marketplace is sent
+to Ever Works to create the App, with an address like:
+
+```
+/new?type=app&blueprint=<blueprint id>&ever_org=<Ever organization>&install=<install id>
+```
+
+- `blueprint` is the Blueprint's ID in the Apps catalog; `install` is Ever
+  Platform's ID of the install; `ever_org` is the Ever organization that
+  installed it (its ID or its handle). Each is read only when it is spelled like
+  one; an address without a `blueprint` is an ordinary visit to `/new`.
+- A visitor who is not signed in signs in first and comes back to the same
+  address: the three values are kept, and nothing else of the address is.
+- The App create form opens on that Blueprint's repository, as this
+  installation's Apps catalog names it, and checks it at once. When `ever_org`
+  names an Ever organization that one of the person's Organizations is
+  [linked](#linking-an-organization) to, the form opens in that Organization, so
+  the App is created where its apps are listed. When the catalog here does not
+  have the Blueprint, the form opens on the catalog and says so.
+- Creating the App keeps the install's ID on the Work, for as long as the person
+  keeps that Blueprint; choosing another repository creates an ordinary App
+  without it. The ID is an identifier only. With the
+  [apps mirror](#apps-on-ever-platform) on and enabled for the Organization's
+  link, it is repeated to Ever Platform so the install and the App it produced
+  are known to be the same thing.
+
+Nothing here needs a switch of its own: without the address above nothing
+changes, and nothing is sent to Ever Platform unless the apps mirror is on.
+
+## Creating and deploying an App for a person
+
+With `EVER_CONNECT_APPS_WRITE_ENABLED=true`, another Ever app (such as the
+portal on app.ever.co) can create an App here, and start a deployment of one,
+**for a person who allowed it there**. Off by default: unset, both routes below
+answer `404`.
+
+The caller presents a short-lived Ever ID access token issued for that person,
+for the audience `ever-works`, carrying the scope `apps:write`
+(`Authorization: Bearer <token>`, never in the address). The token is checked as
+every delegated token is: signature, issuer, audience, expiry, a lifetime of at
+most an hour, and, when `EVER_ID_TRUSTED_CLIENT_IDS` lists the trusted apps,
+that it was issued to one of them. A token that may only read (`apps:read`) is
+refused. Nothing else is admitted on these routes: not a session, not an API
+key.
+
+Both routes act **as the person**, and decide nothing about the App themselves:
+
+- the request names the Organization by the ID of its link (`link_id`, as Ever
+  Platform issued it); the installation must be connected and the link active;
+- the person must be a member of that Organization's account, which is what lets
+  them create a Work in it when they are signed in;
+- the App is then created, or the deployment asked for, through the same path a
+  signed-in person's own request takes. Whether App Works are on
+  (`EVER_WORKS_APP_WORKS_ENABLED`), the person's connected GitHub account, what
+  the repository allows, an App that already exists, the deploy preconditions:
+  each is checked there and refuses with the code it always has.
+
+A call made this way is **never the person's own session**. A deployment that
+needs the Work owner at their own keyboard (the first deployment with a cluster
+credential another member saved, a change of the cluster an App runs on) is
+refused, and nothing is confirmed on anyone's behalf.
+
+### `POST /api/ever-connect/apps`
+
+Creates an App from a Blueprint of this installation's Apps catalog.
+
+|         |                                                                                                                                         |
+| ------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| Headers | `Authorization: Bearer <token with apps:write>`, `Idempotency-Key: <1 to 128 characters>`                                               |
+| Body    | `{ "link_id": "<link ID>", "name": "<1 to 100 characters>", "blueprint_id": "<Blueprint ID>", "install_id": "<install ID, optional>" }` |
+| `201`   | `{ "id": "<the App's ID here>", "name": "…", "url": "<the App's page in Ever Works>" }`                                                 |
+| `200`   | The same body, for an identical App the person already has                                                                              |
+
+The repository is the one the catalog names for the Blueprint; it becomes the
+App's own as the create form does it before a person changes anything (the mode
+the repository offers by default, in the first account the person can create a
+repository in). `install_id` is kept on the App (see above). `id` is the ID the
+[apps mirror](#apps-on-ever-platform) reports the App under.
+
+The same `Idempotency-Key` with the same body answers the App made before, with
+the header `Idempotent-Replayed: true`, for 24 hours; a key belongs to the
+person. A refused request keeps nothing, so the same key can be sent again once
+the cause is gone.
+
+Every refusal is `{ "status": "error", "code": "…", "message": "…" }`:
+
+| Status | `code`                                                               | When                                                                                                                   |
+| ------ | -------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `400`  | `validation`                                                         | A header or a field is missing or not spelled as it must be (`details.field` names it); a field outside the four above |
+| `400`  | `token_in_query`                                                     | A token was sent in the address                                                                                        |
+| `400`  | `app_works_disabled`                                                 | App Works are off on this installation                                                                                 |
+| `400`  | `provider_not_connected`                                             | The person has no connected GitHub account                                                                             |
+| `400`  | `target_owner_unavailable`, `not_found`, `blueprint_mismatch`, …     | The repository cannot become an App for this person: the code the create form shows for the same case                  |
+| `401`  | (none)                                                               | The token does not verify                                                                                              |
+| `403`  | `insufficient_scope`                                                 | The token does not carry `apps:write`                                                                                  |
+| `403`  | `no_linked_identity`                                                 | The token is valid, but the person has no Ever ID connected to an account here                                         |
+| `403`  | `delegated_token_required`                                           | The caller is not a delegated token (a session, an API key)                                                            |
+| `403`  | `not_a_member`                                                       | The person is not a member of the Organization the link is for                                                         |
+| `404`  | `link_not_found`                                                     | No link with this ID here                                                                                              |
+| `404`  | `blueprint_not_found`                                                | The Apps catalog here does not have the Blueprint                                                                      |
+| `409`  | `not_connected`                                                      | The installation is not connected to Ever Platform                                                                     |
+| `409`  | `link_not_active`                                                    | The link was removed                                                                                                   |
+| `409`  | `idempotency_key_reused_with_different_body`                         | The key was used with other values                                                                                     |
+| `409`  | `request_in_progress`                                                | A request with this key is still running                                                                               |
+| `409`  | `app_work_exists`, `create_in_progress`, `in_use_by_another_account` | The App, or its repository, already exists (`details.workId` names the person's own)                                   |
+| `422`  | `blueprint_required`                                                 | No `blueprint_id`: an App is started from a Blueprint                                                                  |
+| `422`  | `blueprint_not_available`                                            | The Blueprint is listed but cannot start an App yet                                                                    |
+| `422`  | `slug_unavailable`                                                   | No address could be made from the name                                                                                 |
+| `503`  | `catalog_unavailable`                                                | The Apps catalog cannot be read right now                                                                              |
+| `503`  | `rate_limited`                                                       | GitHub is rate-limiting the person's account (`details.retryAfter`)                                                    |
+
+### `POST /api/ever-connect/apps/:workId/deploy`
+
+Asks for a deployment of an App: the request of `POST /api/works/:id/deploy`,
+with the same preconditions.
+
+|         |                                                                                       |
+| ------- | ------------------------------------------------------------------------------------- |
+| Headers | `Authorization: Bearer <token with apps:write>`                                       |
+| Body    | `{ "link_id": "<link ID>", "environment": "production" }` (`environment` is optional) |
+| `202`   | `{ "deployment_id": "…", "status": "accepted" }`, or `"queued"` behind a running one  |
+
+The App must be one of the Organization the link is for, and one the person may
+change. Refusals:
+
+| Status | `code`                                                                                 | When                                                                                             |
+| ------ | -------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| `400`  | `validation`, `token_in_query`                                                         | As above; `environment` other than `production`; a field outside the two above                   |
+| `401`  | (none)                                                                                 | The token does not verify                                                                        |
+| `403`  | `insufficient_scope`, `no_linked_identity`, `delegated_token_required`, `not_a_member` | As above                                                                                         |
+| `403`  | `ownerRequired`                                                                        | The deployment needs the Work owner, and the person is not the owner                             |
+| `403`  | `session_required`                                                                     | The deployment needs the Work owner's own session: the owner deploys it once in Ever Works first |
+| `404`  | `link_not_found`                                                                       | No link with this ID here                                                                        |
+| `404`  | `not_found`                                                                            | No such App for this person in this Organization                                                 |
+| `409`  | `not_connected`, `link_not_active`                                                     | As above                                                                                         |
+| `409`  | `APP_DEPLOY_IN_PROGRESS`                                                               | Another deployment is running (`running_deployment_id`)                                          |
+| `422`  | `notAnAppWork`                                                                         | The Work is not an App                                                                           |
+| `422`  | `APP_DEPLOY_PRECONDITIONS`                                                             | A precondition is not met; `unmet` lists each with its own `code` and `message`                  |
+| `422`  | `worker_not_isolated`                                                                  | No isolated worker is available to run the deployment                                            |
+
+Before switching it on: connect the installation, switch on and use
+[linking](#linking-an-organization), turn on App Works and Sign in with Ever ID,
+and list the apps you trust in `EVER_ID_TRUSTED_CLIENT_IDS`. A person can be
+acted for only after they connected their Ever ID to their account here, and
+only in an Organization they are a member of.
 
 ## Sign in with Ever ID
 
@@ -300,8 +463,10 @@ Every request goes to `EVER_PLATFORM_API_URL`, with the installation's token:
 | Entitlement documents (when switched on)                        | `GET /v1/instances/me/entitlement`, `GET /v1/instances/me/tenant-links/{link}/entitlement`, `GET /.well-known/ever-keys.json` (the key set), every six hours and when a new document is announced |
 | Apps on Ever Platform (when switched on and enabled for a link) | `POST /v1/instances/me/mirror/apps` while Works wait to be sent, `GET /v1/instances/me/mirror/apps` once a day                                                                                    |
 
-With none of the four switches on, the calls above the "Linking an Organization"
-row are all there is.
+With none of those four switches on, the calls above the "Linking an Organization"
+row are all there is. Creating or deploying an App for a person
+(`EVER_CONNECT_APPS_WRITE_ENABLED`) makes no call to Ever Platform: it answers a
+request, and what it creates is told only by the apps mirror.
 
 ## Creating a company from Ever Platform
 
