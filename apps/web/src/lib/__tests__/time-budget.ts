@@ -27,7 +27,37 @@ import { expect } from 'vitest';
  * over its bound is timed once more from a clean heap (see {@link collect}).
  * Noise can also make work look CHEAPER (a stall on the side it is compared
  * with), so every early decision rests on the fastest timing of that side.
+ *
+ * Where the growth and ratio comparisons are judged. All of the above holds on
+ * a busy machine, not on an oversubscribed one: in `lint-and-test`
+ * (`.github/workflows/ci.yml`) turbo runs every package's tests at once in one
+ * pod, and `MarkdownContent.budget.unit.spec.tsx` failed 2 tests there under
+ * load (stage CI, round 26b) with nothing wrong. That step sets
+ * {@link SKIP_GROWTH_ENV} to `1`, so there:
+ *
+ *  - {@link expectLinearTime} skips its growth steps and checks only the
+ *    ceiling, on one run over the full input;
+ *  - {@link RelativeBudget.measure} runs the work once and does not judge it
+ *    against the reference (`budgetMs` is `Infinity`). The absolute ceilings
+ *    stay: {@link RelativeBudget.calibrate} is untouched, so a spec that holds
+ *    it under its own ceiling (the reference render) still does.
+ *
+ * The comparisons run uncontended in the CI step that runs this app's unit
+ * specs on their own with the variable set to `0` (a separate step in
+ * `ci.yml`, added alongside this change). Any value other than exactly `1`, or
+ * none, runs the full guard.
  */
+
+/**
+ * Set to `1` to skip the growth and ratio comparisons (see above). Any other
+ * value, or none, runs them. Read on every call.
+ */
+export const SKIP_GROWTH_ENV = 'EW_TEST_SKIP_LINEAR_TIME_GROWTH';
+
+/** Whether this run skips the growth and ratio comparisons and keeps only the ceilings. */
+export function growthStepsSkipped(): boolean {
+    return process.env[SKIP_GROWTH_ENV] === '1';
+}
 
 let sink: unknown;
 
@@ -199,7 +229,7 @@ function costRatio(
  * Assert that `run` costs linear time (or less) in the size of the inputs
  * `build` makes, and that one run on the full input stays under
  * {@link DEFAULT_CEILING_MS}. `build(size)` must answer the SAME shape at every
- * size.
+ * size. With {@link SKIP_GROWTH_ENV} set to `1`, only the ceiling is checked.
  *
  * ONE input of size 16n is timed against SIXTEEN inputs of size n of the same
  * shape: the same number of characters, so a linear function answers about 1
@@ -223,8 +253,10 @@ export function expectLinearTime<T>(
     const ceilingMs = options.ceilingMs ?? DEFAULT_CEILING_MS;
 
     const smallSizes: number[] = [];
-    for (let small = size / FACTOR; small >= minSize; small /= RUNG) {
-        smallSizes.unshift(Math.floor(small));
+    if (!growthStepsSkipped()) {
+        for (let small = size / FACTOR; small >= minSize; small /= RUNG) {
+            smallSizes.unshift(Math.floor(small));
+        }
     }
     let fullSizeChecked = false;
     for (const small of smallSizes) {
@@ -285,7 +317,8 @@ export interface RelativeBudget {
      * times) and judged against the FASTER of the two: a burst of load between
      * the work and the unit is not read as a regression, and one burst on a
      * reference timing cannot raise the budget either. The attempt with the
-     * best ratio is answered. Assert `ms < budgetMs`.
+     * best ratio is answered. Assert `ms < budgetMs`. With {@link SKIP_GROWTH_ENV}
+     * set to `1` the work runs once, unjudged: `budgetMs` is `Infinity`.
      */
     measure<T>(units: number, work: () => T): BudgetedRun<T>;
 }
@@ -329,6 +362,13 @@ export function relativeBudget(reference: () => unknown): RelativeBudget {
     return {
         calibrate,
         measure<T>(units: number, work: () => T): BudgetedRun<T> {
+            if (growthStepsSkipped()) {
+                let skipped = undefined as T;
+                const took = timed(() => {
+                    skipped = work();
+                });
+                return { value: skipped, ms: took, budgetMs: Number.POSITIVE_INFINITY };
+            }
             if (samples.length === 0) calibrate();
             else if (++sinceSample >= UNIT_REFRESH) sampleReference();
             let value = undefined as T;
