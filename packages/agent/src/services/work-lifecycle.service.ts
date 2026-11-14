@@ -86,6 +86,7 @@ import { config } from '@src/config';
 import {
     getWorkCapabilities,
     isRepositoryWorkKind,
+    normalizeEverPlatformInstallId,
     normalizeWorkRepoDeclaredCommandPolicy,
     workKindHasRepository,
     type AppSourceRecord,
@@ -663,6 +664,9 @@ export class WorkLifecycleService {
             // DEPLOY_READY poller can emit with the same id later. Nullable
             // when the caller is not a zero-friction quick-create.
             lastDeployCorrelationId: createWorkDto.correlationId ?? null,
+            // The marketplace install this Work is created for, when the request
+            // names one (an identifier; `null` on every other create).
+            installId: normalizeEverPlatformInstallId(createWorkDto.installId),
         };
 
         if (normalizedKind) {

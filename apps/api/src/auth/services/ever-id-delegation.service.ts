@@ -1,14 +1,24 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { HttpException, HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { EVER_ID_LIMITS } from '@ever-works/contracts';
 import { IdentityTokenRejectedError } from '@ever-works/plugin';
 import { ExternalIdentityRepository, UserRepository } from '@ever-works/agent/database';
 import { IdentityProviderFacadeService } from '@ever-works/agent/facades';
 import type { AuthenticatedUser, EverIdDelegationBinding } from '../types/auth.types';
-import { JWT_SHAPED_BEARER, type EverIdDelegationVerifier } from '../guards/ever-id-guard.tokens';
+import {
+    JWT_SHAPED_BEARER,
+    type EverIdDelegationOptions,
+    type EverIdDelegationVerifier,
+} from '../guards/ever-id-guard.tokens';
 import { resolveTrustedClientIds } from '../ever-id-trusted-clients';
 import { EverIdActivityService } from './ever-id-activity.service';
 import { everIdError } from './ever-id-errors';
 import { EVER_ID_TELEMETRY_EVENTS, EverIdTelemetryService } from './ever-id-telemetry.service';
+
+/**
+ * The code of the refusal a write gets when its token verifies but the person
+ * it names has no connected identity on this installation.
+ */
+export const DELEGATED_NO_LINKED_IDENTITY_CODE = 'no_linked_identity';
 
 /** What a successful delegated authentication answers. */
 export interface EverIdDelegatedPrincipal {
@@ -31,6 +41,14 @@ export interface EverIdDelegatedPrincipal {
  * updates the last sign-in time (FR-47); it records the reading app on the
  * identity (FR-48) and writes FR-49's Activity row on the first read per app per
  * 24 hours. Nothing is attempted while Ever ID is turned off.
+ *
+ * A **delegated write** (a handler marked `@DelegatedWrite(scope)`, with a write
+ * scope) is verified by exactly the same rules. One answer differs: a token that
+ * verifies, scope included, but whose subject is not a connected identity here
+ * is refused with `403 no_linked_identity`, so the calling app can tell the
+ * person to sign in to Ever Works with Ever ID first. It is told only after the
+ * token verified, to the holder of a token issued for that very person, and it
+ * names nobody. An account that exists but is disabled keeps the plain 401.
  */
 @Injectable()
 export class EverIdDelegationService implements EverIdDelegationVerifier {
@@ -59,6 +77,7 @@ export class EverIdDelegationService implements EverIdDelegationVerifier {
         token: string,
         scope: string,
         ctx: { ipAddress: string | null; userAgent: string | null },
+        options: EverIdDelegationOptions = {},
     ): Promise<EverIdDelegatedPrincipal | null> {
         if (!JWT_SHAPED_BEARER.test(token)) return null;
         if (!(await this.facade.isEnabled().catch(() => false))) return null;
@@ -85,7 +104,19 @@ export class EverIdDelegationService implements EverIdDelegationVerifier {
         }
 
         const identity = await this.identities.findByIssuerSubject(claims.issuer, claims.subject);
-        if (!identity) return null;
+        if (!identity) {
+            if (options.access !== 'write') return null;
+            this.sample('rejected');
+            throw new HttpException(
+                {
+                    status: 'error',
+                    code: DELEGATED_NO_LINKED_IDENTITY_CODE,
+                    message:
+                        'This Ever ID is not connected to an account here. Sign in to Ever Works with Ever ID first.',
+                },
+                HttpStatus.FORBIDDEN,
+            );
+        }
         const user = await this.users.findById(identity.userId);
         if (!user || !user.isActive) return null;
 

@@ -1,5 +1,6 @@
 import {
     appDelete,
+    appLineage,
     appUpsert,
     deploymentExternalId,
     deploymentStatus,
@@ -28,6 +29,9 @@ const APP_DATA_KEYS = [
     'status',
     'work_kind',
 ];
+/** What a Work created from a Blueprint may say of where it comes from. */
+const LINEAGE_KEYS = ['blueprint', 'install_id', 'provisioned_by'];
+const INSTALL = '01JC5R7Y6K1M9E0V3Q2A8XW4TB';
 const DEPLOYMENT_DATA_KEYS = [
     'environment',
     'managed_by',
@@ -354,6 +358,117 @@ describe('apps mirror — where a deployment runs', () => {
             NOW,
         );
         expect(dataOf(op)).not.toHaveProperty('url');
+    });
+
+    describe('where an App created from a Blueprint comes from', () => {
+        /** An App as the database holds it after a create from an Apps catalog Blueprint. */
+        const blueprintApp = (overrides: Record<string, unknown> = {}) =>
+            fullWork({
+                kind: 'app',
+                blueprintId: 'cal-diy',
+                baseOwner: 'calcom',
+                installId: INSTALL,
+                ...overrides,
+            });
+
+        it('carries the Blueprint, the install it was created for and what it is based on, and nothing else', () => {
+            const op = appUpsert(blueprintApp(), LINK, 1_800_000_000_000, NOW);
+            expect(op).toEqual({
+                op: 'upsert',
+                kind: 'app',
+                external_id: WORK_ID,
+                external_version: 1_800_000_000_000,
+                occurred_at: '2026-11-13T09:00:00.000Z',
+                data: {
+                    product_tenant_id: LINK.tenantId,
+                    product_org_id: 'acme',
+                    kind: 'app',
+                    name: 'Acme Store',
+                    slug: 'acme-store',
+                    base_kind: 'oss',
+                    status: 'live',
+                    lineage: {
+                        install_id: INSTALL,
+                        provisioned_by: 'blueprint',
+                        blueprint: 'cal-diy',
+                    },
+                },
+            });
+            expect(Object.keys(dataOf(op)).sort()).toEqual(
+                [...APP_DATA_KEYS.filter((key) => key !== 'work_kind'), 'lineage'].sort(),
+            );
+            const lineage = dataOf(op).lineage as Record<string, unknown>;
+            expect(Object.keys(lineage).sort()).toEqual(LINEAGE_KEYS);
+            // Not the account that owns what the Blueprint is for, nor anything else of the row.
+            expect(JSON.stringify(op)).not.toMatch(/calcom|SECRET|secret|@/);
+        });
+
+        it('a Blueprint without an install says so: no install id is made up', () => {
+            for (const installId of [null, undefined, '', 'not-an-install', `${INSTALL}0`, 42]) {
+                const data = dataOf(appUpsert(blueprintApp({ installId }), LINK, 1, NOW));
+                expect(data.lineage).toEqual({ provisioned_by: 'blueprint', blueprint: 'cal-diy' });
+                expect(data.base_kind).toBe('oss');
+            }
+        });
+
+        it("one of Ever's own products is told as `ever`, any other project as `oss`", () => {
+            const baseOf = (baseOwner: unknown) =>
+                dataOf(appUpsert(blueprintApp({ baseOwner }), LINK, 1, NOW)).base_kind;
+            expect(baseOf('ever-co')).toBe('ever');
+            expect(baseOf('Ever-Co')).toBe('ever');
+            expect(baseOf(' ever-works ')).toBe('ever');
+            expect(baseOf('calcom')).toBe('oss');
+            // A name that only looks like one of them is another account.
+            expect(baseOf('ever-co-fan')).toBe('oss');
+            expect(baseOf('not-ever-co')).toBe('oss');
+            // Not recorded: another project, never guessed to be Ever's.
+            expect(baseOf(null)).toBe('oss');
+            expect(baseOf(undefined)).toBe('oss');
+            expect(baseOf(42)).toBe('oss');
+        });
+
+        it('a Work that was not created from a Blueprint says nothing of where it comes from', () => {
+            for (const work of [
+                // An App made from a repository a person pasted.
+                blueprintApp({ blueprintId: null }),
+                blueprintApp({ blueprintId: undefined }),
+                blueprintApp({ blueprintId: '' }),
+                // An install alone names no Blueprint.
+                blueprintApp({ blueprintId: null, installId: INSTALL }),
+                // Not an App: a generated site has no Blueprint of the Apps catalog.
+                blueprintApp({ kind: 'website' }),
+                blueprintApp({ kind: null }),
+                fullWork({ installId: INSTALL }),
+            ]) {
+                const data = dataOf(appUpsert(work, LINK, 1, NOW));
+                expect(data.base_kind).toBe('none');
+                expect(data).not.toHaveProperty('lineage');
+                expect(appLineage(work)).toBeNull();
+            }
+        });
+
+        it("a Blueprint id outside the catalog's own spelling is not told", () => {
+            for (const blueprintId of [
+                'Cal-DIY',
+                '-cal',
+                'cal diy',
+                'cal/diy',
+                'https://example.test/SECRET-REPO',
+                '../../etc/passwd',
+                'x'.repeat(101),
+                42,
+                { id: 'cal-diy' },
+            ]) {
+                const data = dataOf(appUpsert(blueprintApp({ blueprintId }), LINK, 1, NOW));
+                expect(data.base_kind).toBe('none');
+                expect(data).not.toHaveProperty('lineage');
+            }
+            // The longest id the catalog allows is told as it is.
+            const longest = `a${'b'.repeat(99)}`;
+            expect(
+                dataOf(appUpsert(blueprintApp({ blueprintId: longest }), LINK, 1, NOW)).lineage,
+            ).toMatchObject({ blueprint: longest });
+        });
     });
 
     it('a deployment is one per Work and environment', () => {

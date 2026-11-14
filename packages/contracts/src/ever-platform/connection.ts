@@ -34,6 +34,21 @@ export function normalizeEverPlatformCode(input: unknown, kind: EverPlatformCode
 	return `${prefix}-${body.slice(0, 4)}-${body.slice(4, 8)}-${body.slice(8, 12)}`;
 }
 
+/** An install id as Ever Platform issues it (a ULID): 26 Crockford base32 characters, upper case. */
+export const EVER_PLATFORM_INSTALL_ID_PATTERN = /^[0-9A-HJKMNP-TV-Z]{26}$/;
+
+/**
+ * The canonical spelling of the install id a person brings from the marketplace
+ * on Ever Platform (in the address that sends them here to create the Work the
+ * install is for), or `null` when the value is not one. Case and surrounding
+ * space do not matter.
+ */
+export function normalizeEverPlatformInstallId(input: unknown): string | null {
+	if (typeof input !== 'string' || input.length > 64) return null;
+	const id = input.trim().toUpperCase();
+	return EVER_PLATFORM_INSTALL_ID_PATTERN.test(id) ? id : null;
+}
+
 /**
  * Where an entitlement document stands: `valid` until it expires, `grace` for
  * the period after that (its features still apply), then `paused`. Only Ever
@@ -79,6 +94,11 @@ export interface EverPlatformFeaturesView {
 	readonly heartbeat: boolean;
 	readonly entitlements: boolean;
 	readonly appSync: boolean;
+	/**
+	 * Another Ever app may create an App Work, or start a deployment of one, for a person who
+	 * allowed it. Absent on an installation that does not report it (read as off).
+	 */
+	readonly appsWrite?: boolean;
 }
 
 /** One installation-wide integration as Ever Platform reports it. */

@@ -13,7 +13,11 @@ import {
     MaxLength,
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { APP_REPOSITORY_MODES, type AppRepositoryMode } from '@ever-works/contracts';
+import {
+    APP_REPOSITORY_MODES,
+    EVER_PLATFORM_INSTALL_ID_PATTERN,
+    type AppRepositoryMode,
+} from '@ever-works/contracts';
 import {
     MarkdownReadmeConfig,
     normalizeCreateWorkKind,
@@ -264,6 +268,22 @@ export class CreateWorkDto {
     @IsOptional()
     @IsObject()
     appEnv?: Record<string, string>;
+
+    @ApiPropertyOptional({
+        description:
+            'The install on Ever Platform’s marketplace this Work is created for, when a person was sent ' +
+            'here from a listing they installed there: Ever Platform’s id of the install (a ULID), as the ' +
+            'address that brought them carried it. Kept on the Work as an identifier; never required.',
+        example: '01JC5R7Y6K1M9E0V3Q2A8XW4TB',
+        pattern: EVER_PLATFORM_INSTALL_ID_PATTERN.source,
+    })
+    @IsOptional()
+    @IsString()
+    @Matches(EVER_PLATFORM_INSTALL_ID_PATTERN, {
+        message: 'installId must be an install id of Ever Platform (26 characters)',
+    })
+    @Transform(({ value }) => (typeof value === 'string' ? value.trim().toUpperCase() : value))
+    installId?: string;
 
     @ApiPropertyOptional({
         description: 'Custom README configuration',

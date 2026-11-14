@@ -332,6 +332,62 @@ describe('AppSyncService', () => {
             expect(await rows()).toEqual([]);
         });
 
+        it('an App created from a Blueprint is sent with where it comes from, read from its row', async () => {
+            const install = '01JC5R7Y6K1M9E0V3Q2A8XW4TB';
+            const fromBlueprint = await addWork(orgA, 'Booking');
+            const pasted = await addWork(orgA, 'Pasted');
+            const site = await addWork(orgA, 'Site');
+            const works = dataSource.getRepository(Work);
+            await works.update(
+                { id: fromBlueprint },
+                {
+                    kind: 'app',
+                    installId: install,
+                    // What a create from a Blueprint records: a fork of the project the Blueprint is for.
+                    sourceRepository: {
+                        url: 'https://github.com/acme-member/SECRET-FORK',
+                        owner: 'acme-member',
+                        repo: 'SECRET-FORK',
+                        type: 'fork',
+                        upstream: { owner: 'calcom', repo: 'SECRET-UPSTREAM', defaultBranch: 'main' },
+                        blueprintId: 'cal-diy',
+                        blueprintMatchSource: 'explicit',
+                        createdByThisWork: true,
+                    },
+                } as never,
+            );
+            await works.update(
+                { id: pasted },
+                {
+                    kind: 'app',
+                    sourceRepository: {
+                        url: 'https://github.com/acme-member/SECRET-PASTED',
+                        owner: 'acme-member',
+                        repo: 'SECRET-PASTED',
+                        type: 'linked',
+                    },
+                } as never,
+            );
+            for (const work of [fromBlueprint, pasted, site]) await mirror.workChanged(work);
+            expect(await mirror.drainOnce(new Date())).toBe(3);
+
+            const ops = push.mock.calls.flatMap(([batch]) => batch.ops as Op[]);
+            const dataOf = (id: string) =>
+                ops.find((op) => op.external_id === id)?.data as Record<string, unknown>;
+            expect(dataOf(fromBlueprint)).toMatchObject({
+                kind: 'app',
+                base_kind: 'oss',
+                lineage: { install_id: install, provisioned_by: 'blueprint', blueprint: 'cal-diy' },
+            });
+            // An App made from a pasted repository, and a site: nothing is told of where they come from.
+            for (const id of [pasted, site]) {
+                expect(dataOf(id)).toMatchObject({ base_kind: 'none' });
+                expect(dataOf(id)).not.toHaveProperty('lineage');
+            }
+            // Nothing of a repository leaves: not its address, its name or its owner.
+            expect(JSON.stringify(ops)).not.toMatch(/SECRET|github|acme-member|calcom/);
+        });
+
         it('a pass sends at most a batch Ever Platform reads', async () => {
             // Three operations for a Work at most: the Work and its two environments.
             expect(APP_SYNC_PASS_WORKS * 3).toBeLessThanOrEqual(APP_SYNC_MAX_OPS);

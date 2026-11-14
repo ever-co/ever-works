@@ -17,6 +17,7 @@ import {
     APP_REPOSITORY_MODES,
     APP_SOURCE_REPOSITORY_TYPE_BY_MODE,
     isAppWorkKind,
+    normalizeEverPlatformInstallId,
     type AppDeployTargetChoice,
     type AppRepositoryMode,
     type AppSourceBlueprintMatchSource,
@@ -1413,6 +1414,10 @@ export class AppWorkCreateService {
             syncIntervalMinutes: 0,
             readmeConfig: dto.readmeConfig,
             lastDeployCorrelationId: dto.correlationId ?? null,
+            // The marketplace install this Work is created for, when the request
+            // names one. Read again here because a caller that did not pass through
+            // the validation pipe (a direct service call) is held to the same shape.
+            installId: normalizeEverPlatformInstallId(dto.installId),
             kind: 'app',
             sourceRepository,
         };

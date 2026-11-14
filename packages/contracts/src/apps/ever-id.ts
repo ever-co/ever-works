@@ -31,13 +31,20 @@
 export const EVER_ID_REGISTRATION_PROVIDER = 'ever-id';
 
 /**
- * The two OAuth scopes Ever Works asks for (plan.md:254, idp-options.md:203).
+ * The OAuth scopes of an Ever ID access token that Ever Works reads (plan.md:254,
+ * idp-options.md:203).
  *
  * `APPS_READ` is the delegated-read scope another Ever platform presents to read
- * a person's App Works; `SESSION_EXCHANGE` is what a local client (CLI, node)
- * exchanges for an Ever Works session and is never a delegated read.
+ * a person's App Works; `APPS_WRITE` is the delegated-write scope it presents to
+ * create an App Work, or start a deployment of one, for the person;
+ * `SESSION_EXCHANGE` is what a local client (CLI, node) exchanges for an Ever
+ * Works session and is never a delegated read or write.
  */
-export const EVER_ID_SCOPES = { APPS_READ: 'apps:read', SESSION_EXCHANGE: 'ever-works:session' } as const;
+export const EVER_ID_SCOPES = {
+	APPS_READ: 'apps:read',
+	APPS_WRITE: 'apps:write',
+	SESSION_EXCHANGE: 'ever-works:session'
+} as const;
 
 /** The audience an API token must contain (plan.md:255, spec.md:284-286). */
 export const EVER_ID_DEFAULT_API_AUDIENCE = 'ever-works';
@@ -90,12 +97,25 @@ export const EVER_ID_DELEGATED_SCOPES = ['apps:read'] as const;
 export type EverIdDelegatedScope = (typeof EVER_ID_DELEGATED_SCOPES)[number];
 
 /**
+ * The scopes a route may be marked `@DelegatedWrite(scope)` for.
+ *
+ * A list of its own, so a read mark can never name a write scope and a write
+ * mark can never be satisfied by a token that may only read: a token carrying
+ * `apps:read` alone is refused on a write route with `insufficient_scope`.
+ * `ever-works:session` is in neither list.
+ */
+export const EVER_ID_DELEGATED_WRITE_SCOPES = ['apps:write'] as const;
+
+/** Union derived from {@link EVER_ID_DELEGATED_WRITE_SCOPES}. */
+export type EverIdDelegatedWriteScope = (typeof EVER_ID_DELEGATED_WRITE_SCOPES)[number];
+
+/**
  * The ONE value APW-12 appends to the existing
  * `AuthenticatedUser.authMethod` union (R-19, CONTRACTS.md:62; plan.md:559-562).
  *
  * A delegated principal is admitted only on handlers carrying
- * `@DelegatedRead(scope)`; everywhere else it is answered exactly like an
- * invalid credential. `'session'` and `'api-key'` keep their meaning and their
+ * `@DelegatedRead(scope)` or `@DelegatedWrite(scope)`; everywhere else it is
+ * answered exactly like an invalid credential. `'session'` and `'api-key'` keep their meaning and their
  * stamps, and `@HumanOnly()` keeps refusing anything that is not `'session'`.
  */
 export const EVER_ID_DELEGATED_AUTH_METHOD = 'ever-id-delegated';

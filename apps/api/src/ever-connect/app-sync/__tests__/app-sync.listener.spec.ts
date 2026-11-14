@@ -67,8 +67,17 @@ describe('AppSyncListener', () => {
         } as never);
         return id;
     };
-    /** Emit as the API does, and wait for every listener of the name. */
-    const emit = (name: string, payload: unknown) => emitter.emitAsync(name, payload);
+    /** What the listeners asked of the mirror and has not finished yet. */
+    const asked: Array<Promise<void>> = [];
+    /**
+     * Emit as the API does (`emit`, nothing awaited), then wait for the
+     * listeners: each is asynchronous and runs on the next turn of the loop.
+     */
+    const emit = async (name: string, payload: unknown): Promise<void> => {
+        emitter.emit(name, payload);
+        await new Promise((resolve) => setImmediate(resolve));
+        await Promise.all(asked.splice(0));
+    };
 
     beforeAll(async () => {
         dataSource = await createIdentityDataSource();
@@ -128,6 +137,13 @@ describe('AppSyncListener', () => {
         mirror = new AppSyncService(dataSource, connection, {
             refresh: async () => [],
         } as unknown as EverConnectIntegrationService);
+        const workChanged = mirror.workChanged.bind(mirror);
+        asked.length = 0;
+        jest.spyOn(mirror, 'workChanged').mockImplementation((...args) => {
+            const done = workChanged(...args);
+            asked.push(done);
+            return done;
+        });
 
         moduleRef = await Test.createTestingModule({
             imports: [EventEmitterModule.forRoot()],
@@ -213,7 +229,7 @@ describe('AppSyncListener', () => {
             ['an id that is not one', { workId: 'not an id' }],
             ['no payload', undefined],
         ])('queues nothing for an event with %s, and does not throw', async (_name, payload) => {
-            await expect(emit('app.deploy.succeeded', payload)).resolves.toBeDefined();
+            await expect(emit('app.deploy.succeeded', payload)).resolves.toBeUndefined();
             expect(await rows()).toEqual([]);
         });
 
@@ -230,14 +246,14 @@ describe('AppSyncListener', () => {
         it('a failure to queue never reaches the emitter (the reconciliation sends the Work)', async () => {
             const work = await addWork(linked);
             jest.spyOn(mirror, 'enabledLinks').mockRejectedValueOnce(new Error('database is gone'));
-            await expect(emit('app.deploy.succeeded', { workId: work })).resolves.toBeDefined();
+            await expect(emit('app.deploy.succeeded', { workId: work })).resolves.toBeUndefined();
+            expect(mirror.workChanged).toHaveBeenCalledWith(work);
             expect(await rows()).toEqual([]);
         });
     });
 
     it('queues nothing for what the mirror does not say of an App (a job, a check, its health, a dependency)', async () => {
         const work = await addWork(linked);
-        const changed = jest.spyOn(mirror, 'workChanged');
         for (const name of [
             'app.job.succeeded',
             'app.job.failed',
@@ -249,7 +265,7 @@ describe('AppSyncListener', () => {
         ]) {
             await emit(name, { workId: work });
         }
-        expect(changed).not.toHaveBeenCalled();
+        expect(mirror.workChanged).not.toHaveBeenCalled();
         expect(await rows()).toEqual([]);
     });
 });
