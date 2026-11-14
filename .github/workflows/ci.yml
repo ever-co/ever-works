@@ -292,16 +292,15 @@ jobs:
   # protection a SKIPPED job reports as SUCCESS, so any condition added here
   # would be a hole a red run could be laundered through.
   #
-  # The load-bearing half of "required" is not this job. These same specs run
-  # inside `pnpm test` under `lint-and-test`, which this file already documents
-  # as the ONLY required status check on main/develop/stage — so they gate from
-  # the moment they merge, with no branch-protection change. This job exists so
-  # the signal is a NAMED check in the checks list instead of three lines in a
-  # 40-package test log, and so the same commands run in front of a promotion
-  # (see promotion-gate.yml). One exception: the growth steps of the contracts
-  # linear-time guard run ONLY here (and in promotion-gate), not in
-  # `lint-and-test`, because they time code and need a job that runs the
-  # package alone (see the contracts step below).
+  # These same specs also run inside `pnpm test` under `lint-and-test`. The check
+  # branch protection requires on stage and main is `ci-builds/promotion-gate.yml`
+  # (develop requires none), and promotion-gate runs the same contract commands in
+  # front of every promotion. This job exists so the signal is a NAMED check in
+  # the checks list instead of three lines in a 40-package test log. One exception:
+  # the growth steps of the two time guards — the contracts linear-time guard and
+  # the apps/web time-budget guard — run ONLY here (and in promotion-gate), not in
+  # `lint-and-test`, because they time code and need a job that runs them alone
+  # (see the two steps below).
   node-contract-gate:
     runs-on: ${{ vars.RUNNER_LINUX_X64_4 || 'ubuntu-latest' }}
     timeout-minutes: 20
@@ -352,6 +351,19 @@ jobs:
         env:
           EW_TEST_SKIP_LINEAR_TIME_GROWTH: '0'
         run: pnpm --filter @ever-works/contracts test
+
+      # The apps/web time guard (apps/web/src/lib/__tests__/time-budget.ts) skips its growth
+      # and ratio comparisons in `lint-and-test`, where EW_TEST_SKIP_LINEAR_TIME_GROWTH is `1`.
+      # They are judged here: the guard's spec and its two callers, alone, one file at a time.
+      # Pinned to `0` so no workflow- or job-level env can switch them off here.
+      - name: Web — time-budget specs, growth and ratio steps judged
+        env:
+          EW_TEST_SKIP_LINEAR_TIME_GROWTH: '0'
+        run: >-
+          pnpm --fail-if-no-match --filter ever-works-web exec vitest run --no-file-parallelism
+          src/lib/__tests__/time-budget.unit.spec.ts
+          src/lib/markdown/markdown-excerpt.unit.spec.ts
+          src/components/markdown/MarkdownContent.budget.unit.spec.tsx
 
       # Spec files are excluded from every package's `type-check` tsconfig (and vitest
       # strips types before running), so `type-check:tests` is the ONLY thing that type-
@@ -669,9 +681,12 @@ jobs:
       # `node-contract-gate` ran the same suite green in 26 s. With the flag set, this
       # step keeps the 2 s ceiling on the 1 MB input, which a real blowup still fails;
       # the growth steps run in `node-contract-gate` (and promotion-gate's
-      # `node-contract`), which run the contracts package alone. Do not set it anywhere
-      # else. Raising `maxGrowth` instead would let the capped quadratic it exists to
-      # catch (3.7-7x) through. turbo.json lists the variable under `test.env`: turbo's
+      # `node-contract`), which run the contracts package alone. The apps/web time-budget
+      # guard (apps/web/src/lib/__tests__/time-budget.ts, used by the markdown budget specs)
+      # honours the same flag the same way; its growth steps run in the "Web — time-budget
+      # specs" step of `node-contract-gate` (and of promotion-gate's `node-contract`).
+      # Do not set it anywhere else. Raising `maxGrowth` instead would let the capped
+      # quadratic it exists to catch (3.7-7x) through. turbo.json lists the variable under `test.env`: turbo's
       # strict env mode drops any variable it does not list, and listing it keeps the
       # two modes apart in turbo's cache.
       - name: run test on all packages

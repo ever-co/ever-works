@@ -397,8 +397,25 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # The growth steps of the contracts linear-time guard are judged here (and in
+      # ci.yml's `node-contract-gate`); `lint-and-test` skips them. Pinned to `0` so no
+      # workflow-, job- or runner-level env can switch them off in this required gate.
       - name: Contracts — fleet wire types and the package inventory guard
+        env:
+          EW_TEST_SKIP_LINEAR_TIME_GROWTH: '0'
         run: pnpm --filter @ever-works/contracts test
+
+      # Same for the apps/web time-budget guard: its growth and ratio comparisons run here,
+      # alone and one file at a time.
+      - name: Web — time-budget specs, growth and ratio steps judged
+        id: web_time_budget
+        env:
+          EW_TEST_SKIP_LINEAR_TIME_GROWTH: '0'
+        run: >-
+          pnpm --fail-if-no-match --filter ever-works-web exec vitest run --no-file-parallelism
+          src/lib/__tests__/time-budget.unit.spec.ts
+          src/lib/markdown/markdown-excerpt.unit.spec.ts
+          src/components/markdown/MarkdownContent.budget.unit.spec.tsx
 
       # An 8 GiB heap per worker: these specs load the agent package from SOURCE
       # through ts-jest, and since the 10-21 build sprint
@@ -425,7 +442,17 @@ jobs:
 
       - name: Explain a failure in the terms a promotion decision needs
         if: failure()
+        env:
+          WEB_TIME_BUDGET: ${{ steps.web_time_budget.outcome }}
         run: |
+          if [ "$WEB_TIME_BUDGET" = "failure" ]; then
+            echo "::error::APPS/WEB TIME BUDGET FAILED on the commit being promoted. This is NOT a node-contract break."
+            echo "A markdown excerpt or render grew faster than linear, or went over its budget, with the"
+            echo "growth checks judged alone (apps/web/src/lib/__tests__/time-budget.ts). The platform and"
+            echo "node contract steps after it did not run, so the contract is unverified for this commit."
+            echo "Fix the code, or re-run the gate if the pod was disturbed. Do not raise a budget to pass."
+            exit 1
+          fi
           echo "::error::NODE CONTRACT BROKEN on the commit being promoted."
           echo "The failing case names the DIRECTION:"
           echo "  PLATFORM TOO NEW - the API now requires something every deployed node"
