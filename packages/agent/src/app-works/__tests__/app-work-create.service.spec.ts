@@ -1489,6 +1489,34 @@ describe('AppWorkCreateService', () => {
             expect(result.appSource.blueprint).toBeUndefined();
         });
 
+        it('keeps the marketplace install the App is created for, in its canonical spelling', async () => {
+            const install = '01JC5R7Y6K1M9E0V3Q2A8XW4TB';
+            const h = harness({});
+
+            await h.service.create(dto({ installId: ` ${install.toLowerCase()} ` }), USER);
+
+            expect(h.workRepository.create.mock.calls[0][0].installId).toBe(install);
+        });
+
+        it.each([
+            ['none is sent', undefined],
+            ['null', null],
+            ['empty', ''],
+            ['a value that is not an install id', 'install-1'],
+            ['an address', 'https://apps.example.test/installs/1'],
+            ['a value that is not text', 42],
+        ])(
+            'stores no install when %s (a direct call is held to the same shape)',
+            async (_label, installId) => {
+                const h = harness({});
+
+                const result = await h.service.create(dto({ installId }), USER);
+
+                expect(result.status).toBe('success');
+                expect(h.workRepository.create.mock.calls[0][0].installId).toBeNull();
+            },
+        );
+
         it('creates without a Blueprint when the catalog port is unbound', async () => {
             const h = harness({
                 catalog: false,
