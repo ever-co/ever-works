@@ -8,6 +8,7 @@ import { everConnectAppSyncModuleImports } from '../app-sync/app-sync.module';
 import {
     everConnectFeatures,
     isAppSyncEnabled,
+    isAppsWriteEnabled,
     isEntitlementsEnabled,
     isHeartbeatEnabled,
     isLinkCodesEnabled,
@@ -24,6 +25,7 @@ describe('Ever Connect — switches', () => {
         ['EVER_CONNECT_HEARTBEAT_ENABLED', isHeartbeatEnabled, 'heartbeat'],
         ['EVER_CONNECT_ENTITLEMENTS_ENABLED', isEntitlementsEnabled, 'entitlements'],
         ['EVER_CONNECT_APP_SYNC_ENABLED', isAppSyncEnabled, 'appSync'],
+        ['EVER_CONNECT_APPS_WRITE_ENABLED', isAppsWriteEnabled, 'appsWrite'],
     ] as const;
 
     it.each(SWITCHES)('%s is off by default and on only with `true`', (name, isOn, feature) => {
@@ -39,6 +41,7 @@ describe('Ever Connect — switches', () => {
             heartbeat: false,
             entitlements: false,
             appSync: false,
+            appsWrite: false,
             [feature]: true,
         });
     });
@@ -72,5 +75,40 @@ describe('Ever Connect — switches', () => {
                 EVER_CONNECT_APP_SYNC_ENABLED: 'true',
             }),
         ).toHaveLength(1);
+    });
+
+    it('nothing is on by default: every part is off on an installation that sets nothing', () => {
+        expect(everConnectFeatures({})).toEqual({
+            linkCodes: false,
+            heartbeat: false,
+            entitlements: false,
+            appSync: false,
+            appsWrite: false,
+        });
+        expect(everConnectFeatures({ EVER_CONNECT_ENABLED: 'true' })).toEqual({
+            linkCodes: false,
+            heartbeat: false,
+            entitlements: false,
+            appSync: false,
+            appsWrite: false,
+        });
+    });
+
+    it('one part does not turn on another', () => {
+        // Linking an Organization, or its mirror, does not let another app write for a person.
+        expect(
+            isAppsWriteEnabled({
+                EVER_CONNECT_ENABLED: 'true',
+                EVER_CONNECT_LINK_CODES_ENABLED: 'true',
+                EVER_CONNECT_APP_SYNC_ENABLED: 'true',
+                EVER_CONNECT_PROVISIONING_ENABLED: 'true',
+            }),
+        ).toBe(false);
+        expect(
+            isAppSyncEnabled({
+                EVER_CONNECT_ENABLED: 'true',
+                EVER_CONNECT_APPS_WRITE_ENABLED: 'true',
+            }),
+        ).toBe(false);
     });
 });

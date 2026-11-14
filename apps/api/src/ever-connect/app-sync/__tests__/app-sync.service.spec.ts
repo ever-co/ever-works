@@ -338,36 +338,30 @@ describe('AppSyncService', () => {
             const pasted = await addWork(orgA, 'Pasted');
             const site = await addWork(orgA, 'Site');
             const works = dataSource.getRepository(Work);
-            await works.update(
-                { id: fromBlueprint },
-                {
-                    kind: 'app',
-                    installId: install,
-                    // What a create from a Blueprint records: a fork of the project the Blueprint is for.
-                    sourceRepository: {
-                        url: 'https://github.com/acme-member/SECRET-FORK',
-                        owner: 'acme-member',
-                        repo: 'SECRET-FORK',
-                        type: 'fork',
-                        upstream: { owner: 'calcom', repo: 'SECRET-UPSTREAM', defaultBranch: 'main' },
-                        blueprintId: 'cal-diy',
-                        blueprintMatchSource: 'explicit',
-                        createdByThisWork: true,
-                    },
-                } as never,
-            );
-            await works.update(
-                { id: pasted },
-                {
-                    kind: 'app',
-                    sourceRepository: {
-                        url: 'https://github.com/acme-member/SECRET-PASTED',
-                        owner: 'acme-member',
-                        repo: 'SECRET-PASTED',
-                        type: 'linked',
-                    },
-                } as never,
-            );
+            await works.update({ id: fromBlueprint }, {
+                kind: 'app',
+                installId: install,
+                // What a create from a Blueprint records: a fork of the project the Blueprint is for.
+                sourceRepository: {
+                    url: 'https://github.com/acme-member/SECRET-FORK',
+                    owner: 'acme-member',
+                    repo: 'SECRET-FORK',
+                    type: 'fork',
+                    upstream: { owner: 'calcom', repo: 'SECRET-UPSTREAM', defaultBranch: 'main' },
+                    blueprintId: 'cal-diy',
+                    blueprintMatchSource: 'explicit',
+                    createdByThisWork: true,
+                },
+            } as never);
+            await works.update({ id: pasted }, {
+                kind: 'app',
+                sourceRepository: {
+                    url: 'https://github.com/acme-member/SECRET-PASTED',
+                    owner: 'acme-member',
+                    repo: 'SECRET-PASTED',
+                    type: 'linked',
+                },
+            } as never);
             for (const work of [fromBlueprint, pasted, site]) await mirror.workChanged(work);
             expect(await mirror.drainOnce(new Date())).toBe(3);
 

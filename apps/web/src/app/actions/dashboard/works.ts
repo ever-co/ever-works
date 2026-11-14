@@ -17,6 +17,7 @@ import {
     GitProviderConnectionInfo,
 } from '@/lib/api';
 import type { Work } from '@/lib/api/types-only';
+import { normalizeInstallId } from '@/lib/works/blueprint-handoff.shared';
 import type { AppDeletionPreviewResponse } from '@/lib/api/work';
 import type {
     MergePolicyOverride,
@@ -169,6 +170,13 @@ const getCreateWorkSchema = async () => {
             .transform((val) => (val === false ? false : undefined)),
         // Write-only Blueprint prompt answers (FR-55). Never logged.
         appEnv: z.record(z.string().max(200), z.string().max(10_000)).optional(),
+        // The marketplace install the Work is created for (a Blueprint hand-off
+        // from Ever Platform). Kept only when it is spelled like an install id;
+        // the API validates again.
+        installId: z
+            .string()
+            .optional()
+            .transform((val) => normalizeInstallId(val) ?? undefined),
         readmeConfig: readmeConfigSchema.optional(),
     });
 

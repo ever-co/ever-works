@@ -18,6 +18,12 @@
  *   identifiers and status of its Works and their deployments are sent to Ever
  *   Platform. Off, nothing is queued and nothing is sent, whatever was
  *   consented.
+ * - `EVER_CONNECT_APPS_WRITE_ENABLED`: another Ever app may, for a person who
+ *   allowed it there (an Ever ID access token carrying `apps:write`), create an
+ *   App in an Organization linked to an Ever organization and start a
+ *   deployment of one. The person must be a member of that Organization, and
+ *   everything a signed-in person's own request is checked against applies. Off,
+ *   every `/api/ever-connect/apps*` route answers 404 like any unknown address.
  */
 type Env = Readonly<Record<string, string | undefined>>;
 
@@ -45,12 +51,17 @@ export function isAppSyncEnabled(env: Env = process.env): boolean {
     return withConnect(env, 'EVER_CONNECT_APP_SYNC_ENABLED');
 }
 
+export function isAppsWriteEnabled(env: Env = process.env): boolean {
+    return withConnect(env, 'EVER_CONNECT_APPS_WRITE_ENABLED');
+}
+
 /** Which of the switched parts this installation runs (shown to the operator). */
 export interface EverConnectFeatures {
     readonly linkCodes: boolean;
     readonly heartbeat: boolean;
     readonly entitlements: boolean;
     readonly appSync: boolean;
+    readonly appsWrite: boolean;
 }
 
 export function everConnectFeatures(env: Env = process.env): EverConnectFeatures {
@@ -59,5 +70,6 @@ export function everConnectFeatures(env: Env = process.env): EverConnectFeatures
         heartbeat: isHeartbeatEnabled(env),
         entitlements: isEntitlementsEnabled(env),
         appSync: isAppSyncEnabled(env),
+        appsWrite: isAppsWriteEnabled(env),
     };
 }

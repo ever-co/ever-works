@@ -146,6 +146,11 @@ export interface CreateWorkDto {
     autoProvision?: boolean;
     /** App Work only — write-only answers to the Blueprint's prompts (FR-55). */
     appEnv?: Record<string, string>;
+    /**
+     * The install on Ever Platform's marketplace the Work is created for (its
+     * id there), when the person was sent here from a listing they installed.
+     */
+    installId?: string;
     readmeConfig?: MarkdownReadmeConfig;
 }
 

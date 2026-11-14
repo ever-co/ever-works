@@ -26,7 +26,10 @@ import { DELEGATED_WRITE, DelegatedWrite } from '../decorators/delegated-write.d
 import { EVER_ID_DELEGATION_VERIFIER, EVER_ID_SIGNED_OUT_PROBE } from './ever-id-guard.tokens';
 import { NO_TOKEN_IN_QUERY, NoTokenInQueryGuard } from './no-token-in-query.guard';
 import { EverIdHttpException } from '../services/ever-id-errors';
-import { DELEGATED_TOKEN_REQUIRED_CODE, DelegatedPrincipalGuard } from './delegated-principal.guard';
+import {
+    DELEGATED_TOKEN_REQUIRED_CODE,
+    DelegatedPrincipalGuard,
+} from './delegated-principal.guard';
 
 /**
  * The delegated write: a handler marked `@DelegatedWrite('apps:write')` takes
@@ -222,9 +225,9 @@ describe('AuthSessionGuard — the delegated write', () => {
         it('no credential on a write handler is the plain 401', async () => {
             const { guard, delegation } = createGuard({ metadata: WRITE });
 
-            await expect(
-                guard.canActivate(createContext({ headers: {} })),
-            ).rejects.toBeInstanceOf(UnauthorizedException);
+            await expect(guard.canActivate(createContext({ headers: {} }))).rejects.toBeInstanceOf(
+                UnauthorizedException,
+            );
             expect(delegation!.authenticate).not.toHaveBeenCalled();
         });
 
@@ -309,18 +312,24 @@ describe('DelegatedPrincipalGuard', () => {
     const run = (request: unknown) => guard.canActivate(createContext(request));
 
     it('admits a delegated principal', () => {
-        expect(run({ user: principal(['apps:write']).user, everIdDelegation: { scopes: [] } })).toBe(
-            true,
-        );
+        expect(
+            run({ user: principal(['apps:write']).user, everIdDelegation: { scopes: [] } }),
+        ).toBe(true);
     });
 
     it.each([
         ['a session', { user: { userId: 'u1', authMethod: 'session' } }],
-        ['a personal API key or a fleet-run token', { user: { userId: 'u1', authMethod: 'api-key' } }],
+        [
+            'a personal API key or a fleet-run token',
+            { user: { userId: 'u1', authMethod: 'api-key' } },
+        ],
         ['an integration key', { user: { userId: 'u1', authMethod: 'integration' } }],
         ['a principal without a stamp', { user: { userId: 'u1' } }],
         // The stamp alone, without what the guard leaves on the request, is not enough.
-        ['a stamp without the delegation', { user: { userId: 'u1', authMethod: 'ever-id-delegated' } }],
+        [
+            'a stamp without the delegation',
+            { user: { userId: 'u1', authMethod: 'ever-id-delegated' } },
+        ],
         ['nobody', {}],
     ])('refuses %s with 403 delegated_token_required', (_name, request) => {
         try {

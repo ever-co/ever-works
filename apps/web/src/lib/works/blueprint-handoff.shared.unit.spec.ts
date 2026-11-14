@@ -1,0 +1,241 @@
+import { describe, expect, it } from 'vitest';
+import { normalizeEverPlatformInstallId } from '@ever-works/contracts';
+import {
+    blueprintHandoffEntries,
+    blueprintHandoffFormHref,
+    blueprintHandoffSignInHref,
+    normalizeInstallId,
+    organizationOfEverOrg,
+    readBlueprintHandoff,
+} from './blueprint-handoff.shared';
+
+/**
+ * The address a marketplace install sends a person to
+ * (`/new?type=app&blueprint=…&ever_org=…&install=…`): what is read of it, what
+ * is ignored, and how it travels through sign-in and on to the create form.
+ */
+const INSTALL = '01JC5R7Y6K1M9E0V3Q2A8XW4TB';
+const EVER_ORG = '01JMQCK0RG000000000000000A';
+
+const query = (entries: Record<string, string>) => new URLSearchParams(entries);
+
+describe('readBlueprintHandoff', () => {
+    it('reads the Blueprint, the install and the Ever organization', () => {
+        const expected = { blueprint: 'cal-diy', install: INSTALL, everOrg: EVER_ORG };
+        expect(
+            readBlueprintHandoff({ blueprint: 'cal-diy', install: INSTALL, ever_org: EVER_ORG }),
+        ).toEqual(expected);
+        // The same from a query string, whatever the order of its keys.
+        expect(
+            readBlueprintHandoff(
+                query({ install: INSTALL, type: 'app', ever_org: EVER_ORG, blueprint: 'cal-diy' }),
+            ),
+        ).toEqual(expected);
+    });
+
+    it('a Blueprint alone is a hand-off; an Ever organization may be a handle', () => {
+        expect(readBlueprintHandoff({ blueprint: 'cal-diy' })).toEqual({
+            blueprint: 'cal-diy',
+            install: null,
+            everOrg: null,
+        });
+        expect(readBlueprintHandoff({ blueprint: ' cal-diy ', ever_org: 'Acme.Inc' })).toEqual({
+            blueprint: 'cal-diy',
+            install: null,
+            everOrg: 'Acme.Inc',
+        });
+    });
+
+    it('an install id is read in its canonical spelling', () => {
+        expect(
+            readBlueprintHandoff({ blueprint: 'cal-diy', install: ` ${INSTALL.toLowerCase()} ` }),
+        ).toMatchObject({ install: INSTALL });
+    });
+
+    it.each([
+        ['none', {}],
+        ['an empty one', { blueprint: '' }],
+        ['an address', { blueprint: 'https://github.com/calcom/cal.diy' }],
+        ['a repository', { blueprint: 'calcom/cal.diy' }],
+        ['upper case', { blueprint: 'Cal-DIY' }],
+        ['a path', { blueprint: '../../etc/passwd' }],
+        ['markup', { blueprint: '<script>alert(1)</script>' }],
+        ['one that is too long', { blueprint: 'a'.repeat(101) }],
+        ['one given twice', { blueprint: ['cal-diy', 'umami'] }],
+    ])('without a Blueprint spelled like one there is no hand-off (%s)', (_name, params) => {
+        expect(
+            readBlueprintHandoff({ install: INSTALL, ever_org: EVER_ORG, ...params }),
+        ).toBeNull();
+    });
+
+    it('leaves out an install or an Ever organization that is not spelled like one', () => {
+        for (const install of ['', 'install-1', `${INSTALL}0`, 'https://evil.example/x']) {
+            expect(readBlueprintHandoff({ blueprint: 'cal-diy', install })).toMatchObject({
+                install: null,
+            });
+        }
+        for (const everOrg of ['', '-acme', 'a b', 'acme/../x', 'a'.repeat(65), '<b>acme</b>']) {
+            expect(readBlueprintHandoff({ blueprint: 'cal-diy', ever_org: everOrg })).toMatchObject(
+                {
+                    everOrg: null,
+                },
+            );
+        }
+    });
+});
+
+describe('normalizeInstallId', () => {
+    it("agrees with the contract package's own reading of an install id", () => {
+        for (const value of [
+            INSTALL,
+            INSTALL.toLowerCase(),
+            ` ${INSTALL} `,
+            '',
+            'install-1',
+            `${INSTALL}0`,
+            INSTALL.slice(0, 25),
+            // The letters I, L, O and U never appear in an id.
+            `${INSTALL.slice(0, 25)}U`,
+            'x'.repeat(65),
+            null,
+            undefined,
+            42,
+            {},
+        ]) {
+            expect(normalizeInstallId(value)).toBe(normalizeEverPlatformInstallId(value));
+        }
+        expect(normalizeInstallId(INSTALL.toLowerCase())).toBe(INSTALL);
+    });
+});
+
+describe('where a hand-off goes', () => {
+    const handoff = { blueprint: 'cal-diy', install: INSTALL, everOrg: EVER_ORG };
+
+    it('travels as its own entries, in a fixed order, without what it does not have', () => {
+        expect(blueprintHandoffEntries(handoff)).toEqual([
+            ['blueprint', 'cal-diy'],
+            ['ever_org', EVER_ORG],
+            ['install', INSTALL],
+        ]);
+        expect(
+            blueprintHandoffEntries({ blueprint: 'cal-diy', install: null, everOrg: null }),
+        ).toEqual([['blueprint', 'cal-diy']]);
+    });
+
+    it('opens the App create form with the Blueprint, the install and the Ever organization', () => {
+        expect(blueprintHandoffFormHref(handoff)).toBe(
+            `/works/new?mode=manual&kind=app&blueprint=cal-diy&ever_org=${EVER_ORG}&install=${INSTALL}`,
+        );
+        expect(
+            blueprintHandoffFormHref({ blueprint: 'cal-diy', install: null, everOrg: null }),
+        ).toBe('/works/new?mode=manual&kind=app&blueprint=cal-diy');
+    });
+});
+
+describe('blueprintHandoffSignInHref — a signed-out visitor comes back to the same hand-off', () => {
+    /** The address sign-in is told to come back to. */
+    const back = (pathname: string, entries: Record<string, string>) => {
+        const href = blueprintHandoffSignInHref(pathname, query(entries));
+        if (href === null) return null;
+        const url = new URL(href, 'https://works.example.test');
+        expect(url.pathname).toBe('/login');
+        expect([...url.searchParams.keys()]).toEqual(['redirect_uri']);
+        return url.searchParams.get('redirect_uri');
+    };
+
+    it('keeps the Blueprint, the install and the Ever organization through sign-in', () => {
+        expect(
+            back('/new', {
+                type: 'app',
+                blueprint: 'cal-diy',
+                ever_org: EVER_ORG,
+                install: INSTALL,
+            }),
+        ).toBe(`/new?type=app&blueprint=cal-diy&ever_org=${EVER_ORG}&install=${INSTALL}`);
+        expect(back('/new', { type: 'APP', blueprint: 'cal-diy' })).toBe(
+            '/new?type=app&blueprint=cal-diy',
+        );
+    });
+
+    it('the create form itself, and a workspace, come back as they were asked for', () => {
+        expect(back('/works/new', { kind: 'app', blueprint: 'cal-diy', install: INSTALL })).toBe(
+            `/works/new?mode=manual&kind=app&blueprint=cal-diy&install=${INSTALL}`,
+        );
+        expect(back('/org/acme/new', { type: 'app', blueprint: 'cal-diy' })).toBe(
+            '/org/acme/new?type=app&blueprint=cal-diy',
+        );
+        expect(back('/org/acme-inc/works/new', { kind: 'app', blueprint: 'cal-diy' })).toBe(
+            '/org/acme-inc/works/new?mode=manual&kind=app&blueprint=cal-diy',
+        );
+    });
+
+    it('carries nothing through sign-in but the hand-off itself', () => {
+        const target = back('/new', {
+            type: 'app',
+            blueprint: 'cal-diy',
+            install: 'not-an-install',
+            ever_org: '<b>',
+            redirect_uri: 'https://evil.example',
+            next: '//evil.example',
+            template: 'x',
+            prompt: 'https://token@github.com/x/y',
+            access_token: 'secret',
+        });
+        expect(target).toBe('/new?type=app&blueprint=cal-diy');
+    });
+
+    it.each([
+        ['another page', '/works', { kind: 'app', blueprint: 'cal-diy' }],
+        ['the dashboard', '/', { type: 'app', blueprint: 'cal-diy' }],
+        [
+            'a page under the create form',
+            '/works/new/campaign',
+            { kind: 'app', blueprint: 'cal-diy' },
+        ],
+        ['another kind', '/new', { type: 'mission', blueprint: 'cal-diy' }],
+        ['no kind', '/new', { blueprint: 'cal-diy' }],
+        ['the kind of the other page', '/new', { kind: 'app', blueprint: 'cal-diy' }],
+        ['no Blueprint', '/new', { type: 'app', install: INSTALL, ever_org: EVER_ORG }],
+        ['a Blueprint that is not one', '/new', { type: 'app', blueprint: 'https://x.test' }],
+        ['a workspace that is not one', '/org/Acme_Inc/new', { type: 'app', blueprint: 'cal-diy' }],
+        [
+            'a path that leaves the site',
+            '//evil.example/new',
+            { type: 'app', blueprint: 'cal-diy' },
+        ],
+        ['a backslash path', '/\\evil.example/new', { type: 'app', blueprint: 'cal-diy' }],
+    ])(
+        'is not a hand-off: %s (sign-in then goes where it always did)',
+        (_name, pathname, entries) => {
+            expect(blueprintHandoffSignInHref(pathname, query(entries))).toBeNull();
+        },
+    );
+});
+
+describe('organizationOfEverOrg', () => {
+    const organizations = [
+        { slug: 'acme', everOrgId: EVER_ORG, handle: 'acme-inc' },
+        { slug: 'globex', everOrgId: '01JMQCK0RG000000000000000B', handle: 'Globex' },
+        { slug: 'not-linked', everOrgId: null, handle: null },
+    ];
+
+    it("finds the person's Organization linked to the Ever organization, by id or by handle", () => {
+        expect(organizationOfEverOrg(EVER_ORG, organizations)?.slug).toBe('acme');
+        expect(organizationOfEverOrg('acme-inc', organizations)?.slug).toBe('acme');
+        expect(organizationOfEverOrg('GLOBEX', organizations)?.slug).toBe('globex');
+    });
+
+    it('answers nothing when none is linked to it, or when it cannot tell which', () => {
+        expect(organizationOfEverOrg('01JMQCK0RG000000000000000Z', organizations)).toBeNull();
+        expect(organizationOfEverOrg('initech', organizations)).toBeNull();
+        expect(organizationOfEverOrg(EVER_ORG, [])).toBeNull();
+        // An id is compared exactly: its lower-case spelling is not the id.
+        expect(organizationOfEverOrg(EVER_ORG.toLowerCase(), organizations)).toBeNull();
+        expect(
+            organizationOfEverOrg('acme-inc', [
+                ...organizations,
+                { slug: 'acme-two', everOrgId: null, handle: 'ACME-INC' },
+            ]),
+        ).toBeNull();
+    });
+});

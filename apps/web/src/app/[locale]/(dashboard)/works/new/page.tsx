@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import { headers } from 'next/headers';
 import { getTranslations } from 'next-intl/server';
 import { getAuthFromCookie } from '@/lib/auth';
 import {
@@ -25,6 +26,21 @@ import { workProposalsAPI } from '@/lib/api/work-proposals';
 import type { WorkProposal } from '@/lib/api/work-proposals';
 import { ROUTES } from '@/lib/constants';
 import { resolveManagedStorageStatus } from '@/lib/works/managed-storage';
+import {
+    blueprintHandoffFormHref,
+    readBlueprintHandoff,
+    type BlueprintHandoff,
+} from '@/lib/works/blueprint-handoff.shared';
+import {
+    resolveBlueprintHandoff,
+    workspaceOfBlueprintHandoff,
+} from '@/lib/works/blueprint-handoff.server';
+import {
+    BROWSER_WORKSPACE_SCOPE_HEADER,
+    buildWorkspaceHref,
+    parseWorkspaceSelector,
+    type WorkspaceScope,
+} from '@/lib/workspace-scope';
 
 export async function generateMetadata(): Promise<Metadata> {
     const t = await getTranslations('metadata.pages');
@@ -37,7 +53,26 @@ export interface ProviderWithConnection {
 }
 
 interface NewWorkPageProps {
-    searchParams: Promise<{ proposal?: string; mode?: string; prompt?: string; kind?: string }>;
+    searchParams: Promise<{
+        proposal?: string;
+        mode?: string;
+        prompt?: string;
+        kind?: string;
+        // A Blueprint hand-off from Ever Platform's marketplace
+        // (`@/lib/works/blueprint-handoff.shared`): read only with `kind=app`.
+        blueprint?: string | string[];
+        install?: string | string[];
+        ever_org?: string | string[];
+    }>;
+}
+
+/** The workspace the visitor is in, as the proxy read it from the address. */
+async function currentWorkspace(): Promise<WorkspaceScope> {
+    try {
+        return parseWorkspaceSelector((await headers()).get(BROWSER_WORKSPACE_SCOPE_HEADER));
+    } catch {
+        return { kind: 'personal' };
+    }
 }
 
 const KUBERNETES_DEPLOY_PROVIDER_ID = 'k8s';
@@ -59,14 +94,19 @@ export default async function NewWorkPage({ searchParams }: NewWorkPageProps) {
     const params = await searchParams;
     const proposalId = params.proposal;
     const initialPrompt = (params.prompt ?? '').trim().slice(0, 4000);
-    const initialMode = (VALID_CREATION_MODES as string[]).includes(params.mode ?? '')
-        ? (params.mode as CreationMode)
-        : initialPrompt.length > 0
-          ? 'ai'
-          : null;
     const initialKind = (VALID_WORK_KINDS as readonly string[]).includes(params.kind ?? '')
         ? (params.kind as InitialWorkKind)
         : null;
+    // A Blueprint hand-off opens the App form whatever `mode` says (an App has one form).
+    const handoff: BlueprintHandoff | null =
+        initialKind === 'app' && !proposalId ? readBlueprintHandoff(params) : null;
+    const initialMode = (VALID_CREATION_MODES as string[]).includes(params.mode ?? '')
+        ? (params.mode as CreationMode)
+        : handoff
+          ? 'manual'
+          : initialPrompt.length > 0
+            ? 'ai'
+            : null;
 
     if (!proposalId && !initialMode) {
         redirect(ROUTES.DASHBOARD_NEW);
@@ -78,6 +118,17 @@ export default async function NewWorkPage({ searchParams }: NewWorkPageProps) {
     // server response is a clean 307 instead of a 500.
     if (!user) {
         redirect('/login');
+    }
+
+    // A hand-off that names an Ever organization is for the Organization linked to
+    // it: the App belongs there, which is also where Ever Platform is told of it.
+    // Only from the personal workspace, and only to one of the person's own
+    // Organizations; when none is linked to it the form opens where the visitor is.
+    if (handoff?.everOrg && (await currentWorkspace()).kind === 'personal') {
+        const workspace = await workspaceOfBlueprintHandoff(handoff);
+        if (workspace) {
+            redirect(buildWorkspaceHref(workspace, blueprintHandoffFormHref(handoff)));
+        }
     }
 
     // Get all available git providers and their connection status
@@ -193,6 +244,12 @@ export default async function NewWorkPage({ searchParams }: NewWorkPageProps) {
     // its own first live kind).
     const safeInitialKind = initialKind && disabledSet.has(initialKind) ? null : initialKind;
 
+    // The Blueprint of a hand-off, as this installation's Apps catalog names it.
+    // Read only when the App form will be shown; a catalog that cannot be read,
+    // or a Blueprint it does not have, opens the form on the catalog instead.
+    const appBlueprintHandoff =
+        handoff && safeInitialKind === 'app' ? await resolveBlueprintHandoff(handoff) : null;
+
     return (
         <NewWorkClient
             user={user!}
@@ -206,6 +263,7 @@ export default async function NewWorkPage({ searchParams }: NewWorkPageProps) {
             initialMode={initialMode}
             initialPrompt={initialPrompt}
             initialKind={safeInitialKind}
+            appBlueprintHandoff={appBlueprintHandoff}
             disabledKinds={disabledKinds}
             managedGitStorage={managedStorage.managedGitActive}
         />

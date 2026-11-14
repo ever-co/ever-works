@@ -1,4 +1,10 @@
-import { CanActivate, ExecutionContext, HttpException, HttpStatus, Injectable } from '@nestjs/common';
+import {
+    CanActivate,
+    ExecutionContext,
+    HttpException,
+    HttpStatus,
+    Injectable,
+} from '@nestjs/common';
 import type { AuthenticatedUser, EverIdDelegationBinding } from '../types/auth.types';
 
 /** The code of the refusal {@link DelegatedPrincipalGuard} gives. */
