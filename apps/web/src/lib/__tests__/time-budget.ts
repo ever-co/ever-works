@@ -32,8 +32,8 @@ import { expect } from 'vitest';
  * a busy machine, not on an oversubscribed one: in `lint-and-test`
  * (`.github/workflows/ci.yml`) turbo runs every package's tests at once in one
  * pod, and `MarkdownContent.budget.unit.spec.tsx` failed 2 tests there under
- * load (stage CI, round 26b) with nothing wrong. That step sets
- * {@link SKIP_GROWTH_ENV} to `1`, so there:
+ * load (stage CI, round 26b) with nothing wrong. Its `run test on all
+ * packages` step sets {@link SKIP_GROWTH_ENV} to `1`, so there:
  *
  *  - {@link expectLinearTime} skips its growth steps and checks only the
  *    ceiling, on one run over the full input;
@@ -42,10 +42,11 @@ import { expect } from 'vitest';
  *    stay: {@link RelativeBudget.calibrate} is untouched, so a spec that holds
  *    it under its own ceiling (the reference render) still does.
  *
- * The comparisons run uncontended in the CI step that runs this app's unit
- * specs on their own with the variable set to `0` (a separate step in
- * `ci.yml`, added alongside this change). Any value other than exactly `1`, or
- * none, runs the full guard.
+ * The comparisons are judged in `node-contract-gate` (`ci.yml`), whose
+ * `Web — time-budget specs, growth and ratio steps judged` step runs this
+ * guard's spec and its two callers alone, one file at a time, with the
+ * variable pinned to `0` (added by a separate workflow change). Any value
+ * other than exactly `1`, or none, runs the full guard.
  */
 
 /**

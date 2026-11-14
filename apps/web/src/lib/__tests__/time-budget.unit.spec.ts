@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { SKIP_GROWTH_ENV, expectLinearTime, growthStepsSkipped, relativeBudget } from './time-budget';
+import {
+    SKIP_GROWTH_ENV,
+    expectLinearTime,
+    growthStepsSkipped,
+    relativeBudget,
+} from './time-budget';
 
 /**
  * The guards themselves (`time-budget.ts`). Noise must not hide a regression:
@@ -77,17 +82,20 @@ describe.skipIf(growthStepsSkipped())('expectLinearTime under a stall', () => {
 describe('relativeBudget', () => {
     // Wall-clock spins overshoot when the process is descheduled, so every
     // margin below is wide enough for a busy runner to leave the verdict alone.
-    it.skipIf(growthStepsSkipped())('keeps work over budget when one reference timing of its retry is slow', () => {
-        let references = 0;
-        // 10 ms a reference; the 4th timing (the first one of the first retry,
-        // after three to calibrate) is slowed to 150 ms by a burst of load. Judged
-        // against that one timing alone, the work would pass (200 < 2 × 150).
-        const budget = relativeBudget(() => stall(++references === 4 ? 150 : 10));
-        budget.calibrate();
-        // 200 ms of work against 2 units of ~10 ms: 10× its budget, every time.
-        const run = budget.measure(2, () => stall(200));
-        expect(run.ms).toBeGreaterThanOrEqual(run.budgetMs);
-    });
+    it.skipIf(growthStepsSkipped())(
+        'keeps work over budget when one reference timing of its retry is slow',
+        () => {
+            let references = 0;
+            // 10 ms a reference; the 4th timing (the first one of the first retry,
+            // after three to calibrate) is slowed to 150 ms by a burst of load. Judged
+            // against that one timing alone, the work would pass (200 < 2 × 150).
+            const budget = relativeBudget(() => stall(++references === 4 ? 150 : 10));
+            budget.calibrate();
+            // 200 ms of work against 2 units of ~10 ms: 10× its budget, every time.
+            const run = budget.measure(2, () => stall(200));
+            expect(run.ms).toBeGreaterThanOrEqual(run.budgetMs);
+        },
+    );
 
     it.skipIf(growthStepsSkipped())('passes work within budget at once', () => {
         const budget = relativeBudget(() => stall(10));
@@ -184,24 +192,35 @@ describe('the guards with the growth steps skipped', () => {
 
     // These two run the full guard, so they time code: like the specs above they
     // are skipped in the contended job (the real variable is read when collected).
-    it.skipIf(growthStepsSkipped()).each(['0', undefined])('runs every growth step when the variable is %s', (value) => {
-        vi.stubEnv(SKIP_GROWTH_ENV, value);
-        const sizes = new Set<number>();
-        expectLinearTime(build, (text) => {
-            sizes.add(text.length);
-            return cappedLinear(text);
-        }, { maxGrowth: 4 });
-        for (const size of [4096, 16_384, 65_536, 262_144, 1_048_576]) expect(sizes.has(size)).toBe(true);
-    });
-
-    it.skipIf(growthStepsSkipped())('relativeBudget.measure judges against the reference when the variable is unset or `0`', () => {
-        for (const value of ['0', undefined]) {
+    it.skipIf(growthStepsSkipped()).each(['0', undefined])(
+        'runs every growth step when the variable is %s',
+        (value) => {
             vi.stubEnv(SKIP_GROWTH_ENV, value);
-            const budget = relativeBudget(() => stall(10));
-            budget.calibrate();
-            const run = budget.measure(2, () => stall(200));
-            expect(Number.isFinite(run.budgetMs)).toBe(true);
-            expect(run.ms).toBeGreaterThanOrEqual(run.budgetMs);
-        }
-    });
+            const sizes = new Set<number>();
+            expectLinearTime(
+                build,
+                (text) => {
+                    sizes.add(text.length);
+                    return cappedLinear(text);
+                },
+                { maxGrowth: 4 },
+            );
+            for (const size of [4096, 16_384, 65_536, 262_144, 1_048_576])
+                expect(sizes.has(size)).toBe(true);
+        },
+    );
+
+    it.skipIf(growthStepsSkipped())(
+        'relativeBudget.measure judges against the reference when the variable is unset or `0`',
+        () => {
+            for (const value of ['0', undefined]) {
+                vi.stubEnv(SKIP_GROWTH_ENV, value);
+                const budget = relativeBudget(() => stall(10));
+                budget.calibrate();
+                const run = budget.measure(2, () => stall(200));
+                expect(Number.isFinite(run.budgetMs)).toBe(true);
+                expect(run.ms).toBeGreaterThanOrEqual(run.budgetMs);
+            }
+        },
+    );
 });
