@@ -61,6 +61,8 @@ import { InstallRequestsController } from '../installs/install-requests.controll
 import { EverConnectLinkController } from '../links/ever-connect-link.controller';
 import { EverConnectLinkModule } from '../links/ever-connect-link.module';
 import { OrganizationLinkAdminGuard } from '../links/organization-link-admin.guard';
+import { PersonDataExportController } from '../person-data/person-data-export.controller';
+import { EverConnectPersonDataModule } from '../person-data/person-data.module';
 
 /**
  * The module's route manifest (`ever-connect.routes.json`) is the controllers'
@@ -75,7 +77,9 @@ import { OrganizationLinkAdminGuard } from '../links/organization-link-admin.gua
  * is loaded only with its own switch. So is the apps-write module, whose two
  * routes take a delegated Ever ID access token only (`delegated`:
  * `DelegatedPrincipalGuard` on the class, `@DelegatedWrite('apps:write')` on
- * each route).
+ * each route). So is the person-data module, whose one route gives a signed-in
+ * person their own export (`session`: `SessionOnlyGuard` on the class, the
+ * caller's own account only).
  *
  * A route added without a guard, or made public, changes the generated
  * manifest and fails here until the committed file is updated on purpose
@@ -157,6 +161,7 @@ describe('Ever Connect — route manifest', () => {
         ...(Reflect.getMetadata('controllers', EverConnectModule) ?? []),
         ...(Reflect.getMetadata('controllers', EverConnectLinkModule) ?? []),
         ...(Reflect.getMetadata('controllers', EverConnectAppsModule) ?? []),
+        ...(Reflect.getMetadata('controllers', EverConnectPersonDataModule) ?? []),
     ];
 
     it('is generated from every controller of the module', () => {
@@ -166,6 +171,7 @@ describe('Ever Connect — route manifest', () => {
             InstallRequestsController,
             EverConnectLinkController,
             EverConnectAppsController,
+            PersonDataExportController,
         ]);
         const generated = generate(controllers);
         if (process.env.UPDATE_ROUTES_MANIFEST === '1') {
@@ -188,7 +194,7 @@ describe('Ever Connect — route manifest', () => {
             inbound: [{ method: 'GET', path: '/.well-known/ever-connect' }],
         });
         // Beside the platform admins' routes: an Organization's link, what another Ever
-        // app may do for a person, and nothing else.
+        // app may do for a person, a person's own export, and nothing else.
         expect(
             committed.routes.filter(
                 (route) => route.auth !== 'platform-admin' && route.path.startsWith('/api/'),
@@ -211,6 +217,11 @@ describe('Ever Connect — route manifest', () => {
             },
             { method: 'POST', path: '/api/ever-connect/apps', auth: 'delegated' },
             { method: 'POST', path: '/api/ever-connect/apps/:workId/deploy', auth: 'delegated' },
+            {
+                method: 'GET',
+                path: '/api/ever-connect/person-exports/:jobId',
+                auth: 'session',
+            },
         ]);
     });
 
@@ -244,6 +255,15 @@ describe('Ever Connect — route manifest', () => {
         expect(Reflect.getMetadata(GUARDS_METADATA, EverConnectLinkController)).toEqual([
             OrganizationOwnershipGuard,
         ]);
+    });
+
+    it("a person's export needs an interactive session and is never public", () => {
+        expect(Reflect.getMetadata(GUARDS_METADATA, PersonDataExportController)).toEqual([
+            SessionOnlyGuard,
+        ]);
+        expect(Reflect.getMetadata(IS_PUBLIC_KEY, PersonDataExportController)).toBeUndefined();
+        const proto = PersonDataExportController.prototype as unknown as Record<string, unknown>;
+        expect(Reflect.getMetadata(IS_PUBLIC_KEY, proto.download as object)).toBeUndefined();
     });
 
     it('control: a planted unguarded or public route changes the manifest', () => {

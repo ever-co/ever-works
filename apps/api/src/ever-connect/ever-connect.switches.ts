@@ -32,6 +32,11 @@
  *   of the install it is for, and it is kept on that App. Off, an install id
  *   in a create request is ignored and nothing is stored. (The web app has a
  *   switch of the same name for reading the address that carries it.)
+ * - `EVER_CONNECT_PERSON_EXPORT_ENABLED`: Ever Platform's export request for a
+ *   person is answered `exported` with an address where the person, signed in
+ *   here, downloads what Ever Works holds about their own account. Off, the
+ *   answer stays `failed` with `export_not_available` and the download route
+ *   answers 404.
  */
 import { parseTrustedClientIds } from '../auth/ever-id-trusted-clients';
 
@@ -84,6 +89,10 @@ export function isAppsWriteEnabled(env: Env = process.env): boolean {
 
 export function isBlueprintHandoffEnabled(env: Env = process.env): boolean {
     return withConnect(env, 'EVER_CONNECT_BLUEPRINT_HANDOFF_ENABLED');
+}
+
+export function isPersonExportEnabled(env: Env = process.env): boolean {
+    return withConnect(env, 'EVER_CONNECT_PERSON_EXPORT_ENABLED');
 }
 
 /** Which of the switched parts this installation runs (shown to the operator). */

@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import type { EverPlatformAppSyncStatusView } from '@ever-works/contracts';
 import { EVER_CONNECT_LEASE_HELD, type EverConnectRoundLease } from './ever-connect-lease.service';
+import type { PersonDataParticipant } from './identity/person-data-participant.port';
 
 /** One event of the installation's feed, as a handler receives it. */
 export interface EverConnectFeedEvent {
@@ -52,6 +53,7 @@ export class EverConnectExtensions {
     private readonly feedHandlers: EverConnectFeedHandler[] = [];
     private readonly participants: EverConnectRoundParticipant[] = [];
     private appSync: EverConnectAppSyncReader | null = null;
+    private personData: PersonDataParticipant | null = null;
 
     addFeedHandler(handler: EverConnectFeedHandler): void {
         if (!this.feedHandlers.includes(handler)) this.feedHandlers.push(handler);
@@ -64,6 +66,19 @@ export class EverConnectExtensions {
     /** The apps mirror says where it stands and which Organizations it runs for. */
     provideAppSync(reader: EverConnectAppSyncReader): void {
         this.appSync = reader;
+    }
+
+    /**
+     * The person-data module answers people's export and deletion requests for
+     * the accounts (each part only while its own switch is on).
+     */
+    providePersonData(participant: PersonDataParticipant): void {
+        this.personData = participant;
+    }
+
+    /** The registered person-data participant, or `null` when none is switched on. */
+    personDataParticipant(): PersonDataParticipant | null {
+        return this.personData;
     }
 
     /** Where the apps mirror stands, or `null` when it is switched off. */
