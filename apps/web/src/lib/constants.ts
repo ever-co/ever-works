@@ -455,6 +455,9 @@ export const ROUTES = {
     // and the return address of "Also sign out of Ever ID" (S7).
     API_AUTH_EVER_ID_CALLBACK: '/api/auth/ever-id/callback',
     API_AUTH_EVER_ID_LOGOUT_RETURN: '/api/auth/ever-id/logout-return',
+    // A link from another Ever app that begins "Sign in with Ever ID" directly.
+    // Answers only with `EVER_ID_START_ROUTE_ENABLED=true` (off by default).
+    API_AUTH_EVER_ID_START: '/api/auth/ever-id/start',
     API_AUTH_PROVIDER_CALLBACK: '/api/auth/provider/callback/:providerId',
     API_CHAT: '/api/chat',
     API_OAUTH_CALLBACK: '/api/oauth/:providerId/callback',
