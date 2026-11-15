@@ -8,13 +8,17 @@ client, the answers to **people's export and deletion requests**, and
 installed only once a platform admin approves it: see
 [Install requests from apps.ever.co](./install-requests.md)).
 
-Five more parts can be switched on, each on its own and each off by default:
+More parts can be switched on, each on its own and each off by default:
 [linking an Organization](#linking-an-organization) to its organization on Ever
 Platform with a link code, a daily [heartbeat](#heartbeat), reading the
 [entitlement documents](#entitlement-documents), listing an Organization's
-[apps on Ever Platform](#apps-on-ever-platform), and letting another Ever app
+[apps on Ever Platform](#apps-on-ever-platform), letting another Ever app
 [create and deploy an App for a person](#creating-and-deploying-an-app-for-a-person)
-who allowed it.
+who allowed it, answering
+[people's export and deletion requests](#answering-with-the-persons-data) with
+their data, and applying the
+[membership changes](#membership-changes-from-ever-platform) Ever Platform sends
+for a linked Organization.
 
 The connection is off by default and nothing is sent until you connect.
 
@@ -38,6 +42,9 @@ it is exactly `true`, and does nothing while the installation is not connected:
 | `EVER_CONNECT_ENTITLEMENTS_ENABLED`      | unset (off) | The signed entitlement documents are read, verified, kept and shown in Settings.                                                                                                                                                                                                                                               |
 | `EVER_CONNECT_APP_SYNC_ENABLED`          | unset (off) | The apps mirror: for an Organization that enabled it in app.ever.co, the identifiers and status of its Works and deployments are sent.                                                                                                                                                                                         |
 | `EVER_CONNECT_APPS_WRITE_ENABLED`        | unset (off) | Another Ever app may create an App in a linked Organization, and start a deployment of one, for a person who allowed it there. **Requires a non-empty `EVER_ID_TRUSTED_CLIENT_IDS`** (the apps that may write): without it the switch does nothing. Off: the `/api/ever-connect/apps` routes answer `404`.                     |
+| `EVER_CONNECT_PERSON_EXPORT_ENABLED`     | unset (off) | A person's export request is answered with an address where the person, signed in here, downloads what Ever Works holds about their own account (see [Answering with the person's data](#answering-with-the-persons-data)). Off: the answer stays `failed` with `export_not_available`.                                        |
+| `EVER_CONNECT_PERSON_DELETION_ENABLED`   | unset (off) | A person's deletion request deletes the matching accounts, through the account deletion of Settings → Danger Zone, when that is safe for everyone else. **Irreversible.** Off: only the connected identities are removed and the answer stays `failed` with `account_deletion_pending`.                                        |
+| `EVER_CONNECT_MEMBERSHIP_SYNC_ENABLED`   | unset (off) | The membership changes Ever Platform sends for a linked Organization are applied to its members (see [Membership changes from Ever Platform](#membership-changes-from-ever-platform)). Off: they are read past and nothing changes.                                                                                            |
 | `EVER_CONNECT_BLUEPRINT_HANDOFF_ENABLED` | unset (off) | `POST /api/works` keeps the marketplace install a create request names, for an App made from a Blueprint in the Organization linked to the install's Ever organization. Off: an install in a create request is ignored and nothing is kept. The web app has a switch of the same name for reading the address that carries it. |
 
 ## Connecting in Settings
@@ -597,19 +604,84 @@ With it on, another Ever app can link straight into the sign-in:
 When a person asks Ever Platform to export or delete their Ever ID data, each
 connected installation that holds a link to them receives the request on its
 feed. The request names the person only by hashes of their Ever ID identities.
-The installation answers once per request:
+The installation answers once per request. The accounts concerned are the ones
+whose connected identity matches one of those hashes, and no other.
 
 - **Deletion:** the matching connected identities (and the sessions they
-  opened) are removed. The accounts themselves are not deleted automatically
-  yet, so the answer is `failed` with the reason `account_deletion_pending` and
-  the account's Activity records it; delete the account here (Settings → Danger
+  opened) are removed. By default the accounts themselves are not deleted, so
+  the answer is `failed` with the reason `account_deletion_pending` and the
+  account's Activity records it; delete the account here (Settings → Danger
   Zone) to finish. No matching account: `no_account`.
-- **Export:** the answer is `failed` with `export_not_available` until a
-  per-person export is wired in; the person can export their account here
-  (Settings). No matching account: `no_account`.
+- **Export:** by default the answer is `failed` with `export_not_available`;
+  the person can export their account here (Settings). No matching account:
+  `no_account`.
 
 An answer is never `retained_legal` without a stated legal basis, and a request
 delivered again is answered with the same result.
+
+### Answering with the person's data
+
+Two switches, each off by default and each on its own, make these answers final:
+
+- **`EVER_CONNECT_PERSON_EXPORT_ENABLED`:** the answer is `exported`, with the
+  address `<WEB_URL>/api/ever-connect/person-export/<job>` (`WEB_URL` must be
+  `https`; Ever Platform keeps the address and shows it to the person, it never
+  opens it). Nothing is prepared or stored. A person who opens the address is
+  asked to sign in here, then downloads a JSON document
+  (`ever-works.person-data`, version 1) built at that moment by
+  `GET /api/ever-connect/person-exports/:jobId`, which needs an interactive
+  session (an API key is refused) and always answers **the signed-in account's
+  own data**, whoever holds the address. It holds the account's profile, its
+  connected identities, its workspaces and their Organizations with the
+  person's own role in each, the Works and Apps the account owns or is a member
+  of, its notification and onboarding settings, the plugins it turned on and its
+  API keys by name. Never another member, a password, a token, a key or a
+  plugin's settings. The address works for 30 days after the answer; otherwise,
+  and while the switch is off, it answers `404`.
+- **`EVER_CONNECT_PERSON_DELETION_ENABLED`:** the accounts are deleted by the
+  same deletion as Settings → Danger Zone (the audit record names Ever Platform
+  as its source, and the account's address gets the same "account deleted"
+  e-mail), and the answer is `deleted`. A workspace the account owns with other
+  people in it is handed to the longest-standing admin (else member), with what
+  the account created there; in somebody else's workspace, the account's
+  membership goes and what it created there stays with the workspace; only a
+  workspace the account is alone in goes with it. **Every account is checked
+  first, and none is deleted** (the answer stays `failed` with
+  `account_deletion_pending`) when one of them is an installation
+  administrator, or would take with it a workspace that still has other people
+  in it or that holds an Organization linked to Ever Platform: such an account
+  is deleted here by the person, in Settings → Danger Zone. **A deletion cannot
+  be undone.**
+
+Neither switch makes a call to Ever Platform beyond the answer itself.
+
+## Membership changes from Ever Platform
+
+With `EVER_CONNECT_MEMBERSHIP_SYNC_ENABLED=true`, the membership changes Ever
+Platform sends on the installation's feed for an organization linked to an
+Organization here (`ever.registry.membership.created`, `.role_changed` and
+`.removed`) are applied to that Organization's members:
+
+- **Who:** the one account whose connected Ever ID has the identity the change
+  names (and, when the change also names the local account, that account). A
+  person with no account here, or a link that is not active, changes nothing:
+  no account is ever created.
+- **Roles:** Ever `owner` and `admin` become `admin` here, `member` stays
+  `member`. The owner of the account the Organization belongs to is never
+  changed or removed, so an Organization never loses its owner. Any other role
+  changes nothing.
+- **Added:** the person joins the Organization with that role, as an accepted
+  invitation makes them join (a free seat is needed). A person whose account
+  already belongs to another account here is never moved.
+- **Role changed:** the role of a member is set; it adds nobody.
+- **Removed:** the person leaves the Organization, as when an administrator
+  removes them; nothing they made is deleted.
+- **Order and repeats:** the last change applied for a person in an
+  Organization is kept, so the same change delivered again does nothing and a
+  change older than it (by its time, then its id) is skipped.
+
+Each change is logged by a code only, never with an identity or a name. It makes
+no call to Ever Platform. Off, these changes are read past and nothing changes.
 
 ## `/.well-known/ever-connect`
 

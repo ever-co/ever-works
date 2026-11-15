@@ -106,6 +106,7 @@ export const AGENT_ENTITY_NAMES: ReadonlyArray<string> = [
     'EverConnectIntegration',
     'EverConnectLease',
     'EverConnectLink',
+    'EverConnectMembershipSync',
     'EverConnectOutbox',
     'EverConnectPersonRequest',
     'EverConnectProvisionIntent',

@@ -6,7 +6,11 @@
  * Unbound (the default), a deletion is answered `failed` with
  * `account_deletion_pending` and an export `failed` with `export_not_available`:
  * honest answers that keep Ever Platform's receipt open, never a claim that data
- * was kept for a legal reason.
+ * was kept for a legal reason. A participant that offers only one of the two
+ * leaves the other answered as if it were unbound.
+ *
+ * Bound either through {@link EVER_PERSON_DATA_PARTICIPANT} or, by a module
+ * switched on separately, through `EverConnectExtensions.providePersonData`.
  */
 
 export const EVER_PERSON_DATA_PARTICIPANT = Symbol('EVER_PERSON_DATA_PARTICIPANT');
@@ -15,7 +19,12 @@ export const EVER_PERSON_DATA_PARTICIPANT = Symbol('EVER_PERSON_DATA_PARTICIPANT
 export type PersonDeletionOutcome =
     | { readonly result: 'deleted' | 'anonymised' }
     /** The statute or contract clause the data is kept under (1-200 characters, never personal data). */
-    | { readonly result: 'retained_legal'; readonly legalBasis: string };
+    | { readonly result: 'retained_legal'; readonly legalBasis: string }
+    /**
+     * Nothing was deleted: the accounts are kept until they are deleted here
+     * (answered as without a participant, `failed` with `account_deletion_pending`).
+     */
+    | { readonly result: 'pending' };
 
 /** Where the person's export can be fetched (`https`, never fetched by Ever Platform). */
 export interface PersonExportOutcome {
@@ -33,6 +42,8 @@ export interface PersonDataRequest {
 }
 
 export interface PersonDataParticipant {
-    deleteAccounts(request: PersonDataRequest): Promise<PersonDeletionOutcome>;
-    exportAccounts(request: PersonDataRequest): Promise<PersonExportOutcome>;
+    /** Absent: deletions are answered as without a participant. */
+    deleteAccounts?(request: PersonDataRequest): Promise<PersonDeletionOutcome>;
+    /** Absent: exports are answered as without a participant. */
+    exportAccounts?(request: PersonDataRequest): Promise<PersonExportOutcome>;
 }

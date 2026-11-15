@@ -148,6 +148,9 @@ export const BACKUP_DROPPED_ENTITIES: readonly string[] = Object.freeze([
     // Plugin installs requested from apps.ever.co for this installation: they
     // belong to the installation, and a restore must never replay a request.
     'EverConnectInstallRequest',
+    // The last membership change Ever Platform sent for a person in a linked
+    // Organization: it orders the next one, and a restore must never replay it.
+    'EverConnectMembershipSync',
     // A keyed import belongs to the creation that ran it.
     'OrganizationCompanyImport',
 ]);
