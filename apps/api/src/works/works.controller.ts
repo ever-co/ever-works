@@ -17,6 +17,7 @@ import {
     Req,
     Res,
     Logger,
+    Optional,
     UseGuards,
     UseInterceptors,
     UploadedFile,
@@ -132,6 +133,7 @@ import { ZERO_FRICTION_FUNNEL_EVENTS } from '@ever-works/contracts/telemetry';
 import { getWorkCapabilities, WORK_KINDS } from '@ever-works/contracts';
 import { AuthenticatedUser } from '@src/auth/types/auth.types';
 import { GenerateWorkDetailDto } from './dto/generate-detail.dto';
+import { MarketplaceInstallClaimService } from './marketplace-install-claim.service';
 import { GenerateManualComparisonDto } from './dto/generate-manual-comparison.dto';
 import { CACHE_MANAGER, Cache, CacheEntryRepository } from '@ever-works/agent/cache';
 import { UpdateWorkScheduleDto, UpdateSourceValidationDto } from '@ever-works/agent/dto';
@@ -252,6 +254,9 @@ export class WorksController {
         private readonly platformSyncSecretService: PlatformSyncSecretService,
         private readonly captchaVerifier: CaptchaVerifierService,
         private readonly funnel: ZeroFrictionFunnelService,
+        // Appended LAST and optional, so every positional construction keeps its
+        // slots: without it a create is exactly what it was.
+        @Optional() private readonly installClaims?: MarketplaceInstallClaimService,
     ) {}
 
     private async invalidateWorkCaches(workId: string): Promise<void> {
@@ -420,7 +425,10 @@ export class WorksController {
     @ApiResponse({
         status: 409,
         description:
-            'An App Work create conflicted with something that already exists: `create_in_progress` (the ' +
+            '`install_organization_mismatch`: the request names a marketplace install of an Ever ' +
+            'organization the Organization it is made in is not linked to (only where that hand-off is ' +
+            'switched on). Otherwise ' +
+            'an App Work create conflicted with something that already exists: `create_in_progress` (the ' +
             'same upstream is being created right now, plan §4.2 step 7), `in_use_by_another_account` (that ' +
             'repository is already another account’s App Work, step 6), `app_work_exists` (+ ' +
             '`details.workId` / `details.workName` when it is the caller’s own, step 8) or ' +
@@ -435,7 +443,13 @@ export class WorksController {
     })
     async createWork(@CurrentUser() auth: AuthenticatedUser, @Body() createWorkDto: CreateWorkDto) {
         const user = await this.authService.getUser(auth.userId);
-        return this.workLifecycleService.createWork(createWorkDto, user);
+        // A marketplace install named in the request is a claim. It is read only
+        // where `MarketplaceInstallClaimService` says so (switched off by default);
+        // otherwise it is ignored and the create is called exactly as before.
+        const vouched = await this.installClaims?.forSessionCreate(createWorkDto);
+        return vouched
+            ? this.workLifecycleService.createWork(createWorkDto, user, vouched)
+            : this.workLifecycleService.createWork(createWorkDto, user);
     }
 
     @Post('works/quick-create')

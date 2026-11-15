@@ -106,7 +106,10 @@ import {
 } from '@src/works/repository-work-guard';
 import { ActivityLogService } from '@src/activity-log/activity-log.service';
 import { ActivityActionType, ActivityStatus } from '@src/entities/activity-log.types';
-import { AppWorkCreateService } from '@src/app-works/app-work-create.service';
+import {
+    AppWorkCreateService,
+    type AppWorkCreateOptions,
+} from '@src/app-works/app-work-create.service';
 import {
     APP_WORK_DELETION_PORT,
     isAppWorkDeletionNotStarted,
@@ -557,7 +560,14 @@ export class WorkLifecycleService {
         return this.websiteRepositoryState.isInitialized(work, user);
     }
 
-    async createWork(createWorkDto: CreateWorkDto, user: User) {
+    /**
+     * `options` is what the CALLER vouches for beside the request itself, and
+     * is never read from the DTO: today the marketplace install an App is
+     * created for (`AppWorkCreateOptions.marketplaceInstallId`), which only the
+     * routes that checked the claim pass. Every other caller passes nothing,
+     * and nothing of it is stored.
+     */
+    async createWork(createWorkDto: CreateWorkDto, user: User, options?: AppWorkCreateOptions) {
         const { slug, name, description, owner, readmeConfig, organization, websiteTemplateId } =
             createWorkDto;
 
@@ -589,7 +599,11 @@ export class WorkLifecycleService {
                         'not wired into WorkModule.',
                 );
             }
-            return this.appWorkCreate.create(createWorkDto, user);
+            // Two arguments unless the caller vouched for something: every
+            // existing caller reaches the App path exactly as it did.
+            return options
+                ? this.appWorkCreate.create(createWorkDto, user, options)
+                : this.appWorkCreate.create(createWorkDto, user);
         }
 
         // Repository Work (self-build slice D, EW-766) — resolve and verify

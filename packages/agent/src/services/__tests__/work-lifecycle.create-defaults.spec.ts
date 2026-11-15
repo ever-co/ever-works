@@ -634,6 +634,48 @@ describe('WorkLifecycleService.createWork — provider defaults + quota', () => 
  * `getDataRepo()` / `getRepoOwner()` resolve to the user's repo, and no
  * template, managed repo, deploy or generation is touched.
  */
+describe('WorkLifecycleService.createWork — the marketplace install claim', () => {
+    const INSTALL = '01JC5R7Y6K1M9E0V3Q2A8XW4TB';
+    const claim = { installId: INSTALL, everOrg: '01JMQCK0RG000000000000000A' };
+
+    it.each(['website', 'landing-page', 'blog', 'directory', 'awesome-repo', undefined])(
+        'stores nothing of it on a Work that is not an App (%s), whoever passes it',
+        async (kind) => {
+            const { service, deps } = makeService(null);
+
+            await service.createWork(
+                { ...baseDto, ...(kind ? { kind } : {}), ...claim },
+                baseUser,
+                {
+                    marketplaceInstallId: INSTALL,
+                },
+            );
+
+            const persisted = deps.workRepo.create.mock.calls[0][0];
+            expect(persisted).not.toHaveProperty('installId');
+            expect(JSON.stringify(persisted)).not.toContain(INSTALL);
+        },
+    );
+
+    it('an App goes to its own create path with what the caller vouched for, never with the request alone', async () => {
+        const { service, deps } = makeService(null);
+        const create = jest.fn().mockResolvedValue({ status: 'success' });
+        // The App create service, in the slot `WorkModule` binds it to.
+        (service as unknown as { appWorkCreate: { create: jest.Mock } }).appWorkCreate = { create };
+        const dto = { ...baseDto, kind: 'app', ...claim };
+
+        // The request alone: two arguments, exactly as before the option existed.
+        await service.createWork(dto, baseUser);
+        expect(create.mock.calls[0]).toEqual([dto, baseUser]);
+
+        // The caller vouches: the option travels, and is the caller's own value.
+        await service.createWork(dto, baseUser, { marketplaceInstallId: INSTALL });
+        expect(create.mock.calls[1]).toEqual([dto, baseUser, { marketplaceInstallId: INSTALL }]);
+
+        expect(deps.workRepo.create).not.toHaveBeenCalled();
+    });
+});
+
 describe('WorkLifecycleService.createWork — repository kind', () => {
     const repoDto: CreateWorkDto = {
         ...baseDto,

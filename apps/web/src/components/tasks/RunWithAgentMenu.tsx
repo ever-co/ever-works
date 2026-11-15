@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Loader2, Play } from 'lucide-react';
+import { useTranslations } from 'next-intl';
 import { cn } from '@/lib/utils/cn';
 import {
     listTaskRunCandidatesAction,
@@ -32,11 +33,12 @@ import { isRunRefused, runRefusalText } from './run-refusal';
  * Server-Action messages — only on the stable `code` the action returns.
  */
 
-const SOURCE_LABELS: Record<RunCandidateAgent['source'], string> = {
-    assignee: 'Assigned',
-    task: 'Task agent',
-    'work-default': 'Work default',
-};
+/** Catalogue key (under `dashboard.tasksPage.runMenu`) for each way an Agent became a candidate. */
+const SOURCE_LABEL_KEYS = {
+    assignee: 'sourceAssignee',
+    task: 'sourceTask',
+    'work-default': 'sourceWorkDefault',
+} as const satisfies Record<RunCandidateAgent['source'], string>;
 
 export interface RunWithAgentMenuProps {
     taskId: string;
@@ -58,6 +60,7 @@ export function RunWithAgentMenu({
     onRunStarted,
     className,
 }: RunWithAgentMenuProps) {
+    const t = useTranslations('dashboard.tasksPage.runMenu');
     const [uncontrolledOpen, setUncontrolledOpen] = useState(false);
     const isControlled = open !== undefined;
     const pickerOpen = isControlled ? open : uncontrolledOpen;
@@ -124,7 +127,7 @@ export function RunWithAgentMenu({
                     // permission, App changes paused): say why, never "Run started".
                     setOpen(false);
                     setTone('error');
-                    setMessage(runRefusalText(result.run.error));
+                    setMessage(runRefusalText(result.run.error, t('refusedFallback')));
                     return;
                 }
                 if (result.ok) {
@@ -132,8 +135,10 @@ export function RunWithAgentMenu({
                     setTone('ok');
                     setMessage(
                         result.run.parked
-                            ? `Queued — waiting for capacity (${result.run.queuedReason ?? 'queued'}).`
-                            : 'Run started.',
+                            ? t('queued', {
+                                  reason: result.run.queuedReason ?? t('queuedDefaultReason'),
+                              })
+                            : t('runStarted'),
                     );
                     onRunStarted?.(result);
                     return;
@@ -145,22 +150,20 @@ export function RunWithAgentMenu({
                     setCandidates(result.candidates ?? []);
                     setOpen(true);
                     setMessage(
-                        result.code === RUN_NO_AGENT
-                            ? 'No Agent is assigned to this Task and its Work has no default Agent.'
-                            : 'Pick which Agent should run this Task.',
+                        result.code === RUN_NO_AGENT ? t('noAgentAssigned') : t('pickAgent'),
                     );
                     return;
                 }
                 if (result.code === RUN_ALREADY_IN_FLIGHT) {
-                    setMessage('A run is already in flight for this Agent.');
+                    setMessage(t('alreadyInFlight'));
                     return;
                 }
-                setMessage(result.message || 'Run failed.');
+                setMessage(result.message || t('runFailed'));
             } finally {
                 setBusy(false);
             }
         },
-        [taskId, setOpen, onRunStarted],
+        [taskId, setOpen, onRunStarted, t],
     );
 
     return (
@@ -169,8 +172,8 @@ export function RunWithAgentMenu({
                 type="button"
                 disabled={busy}
                 onClick={() => void dispatch(null)}
-                aria-label="Run this Task"
-                title="Run this Task (r)"
+                aria-label={t('runLabel')}
+                title={t('runTitle')}
                 data-testid="task-run-button"
                 className={cn(
                     'inline-flex items-center gap-1 rounded font-medium transition-colors disabled:opacity-50',
@@ -180,13 +183,13 @@ export function RunWithAgentMenu({
                 )}
             >
                 {busy ? <Loader2 className="w-3 h-3 animate-spin" /> : <Play className="w-3 h-3" />}
-                Run
+                {t('run')}
             </button>
 
             {pickerOpen && (
                 <div
                     role="dialog"
-                    aria-label="Choose an Agent to run this Task"
+                    aria-label={t('pickerLabel')}
                     data-testid="task-run-agent-picker"
                     className={cn(
                         'absolute top-full right-0 mt-1 z-20 min-w-[200px] max-w-[280px]',
@@ -195,13 +198,13 @@ export function RunWithAgentMenu({
                     )}
                 >
                     <p className="px-1.5 pb-1 text-[10px] uppercase tracking-wide text-text-muted">
-                        Run with
+                        {t('runWith')}
                     </p>
                     {candidates === null ? (
-                        <p className="px-1.5 py-1 text-[11px] text-text-muted">Loading…</p>
+                        <p className="px-1.5 py-1 text-[11px] text-text-muted">{t('loading')}</p>
                     ) : candidates.length === 0 ? (
                         <p className="px-1.5 py-1 text-[11px] text-text-muted">
-                            No Agent available. Assign one to this Task (or to its Work) first.
+                            {t('noAgentAvailable')}
                         </p>
                     ) : (
                         <ul className="flex flex-col gap-0.5">
@@ -216,7 +219,7 @@ export function RunWithAgentMenu({
                                     >
                                         <span className="truncate">{agent.name}</span>
                                         <span className="text-[9px] text-text-muted shrink-0">
-                                            {SOURCE_LABELS[agent.source]}
+                                            {t(SOURCE_LABEL_KEYS[agent.source])}
                                         </span>
                                     </button>
                                 </li>

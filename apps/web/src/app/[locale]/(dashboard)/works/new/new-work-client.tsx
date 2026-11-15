@@ -7,6 +7,7 @@ import { WorkAICreator } from '@/components/works/WorkAICreator';
 import { WorkImportForm } from '@/components/works/WorkImportForm';
 import { RepositoryWorkForm } from '@/components/works/RepositoryWorkForm';
 import { AppWorkForm } from '@/components/works/app/AppWorkForm';
+import type { AppBlueprintHandoff } from '@/lib/works/blueprint-handoff.shared';
 import { isHiddenWhenDisabled } from '@/lib/work-kinds/flag-gated-kinds';
 import { GitProviderSelector } from './git-provider-selector';
 import { DeployProviderSelector, type DeployProvider } from './deploy-provider-selector';
@@ -135,6 +136,12 @@ interface NewWorkClientProps {
     initialPrompt?: string;
     initialKind?: InitialWorkKind | null;
     /**
+     * A Blueprint hand-off from Ever Platform's marketplace, resolved by the
+     * page against this installation's Apps catalog: the App form opens with
+     * that Blueprint, and carries the install it was created for.
+     */
+    appBlueprintHandoff?: AppBlueprintHandoff | null;
+    /**
      * Work-kind chip values whose `works-<value>` PostHog flag resolved
      * to an explicit `false` (evaluated server-side). Defaults to `[]` →
      * everything enabled (fail-open).
@@ -164,6 +171,7 @@ export default function NewWorkClient({
     initialMode = null,
     initialPrompt,
     initialKind = null,
+    appBlueprintHandoff = null,
     disabledKinds = [],
     managedGitStorage = false,
 }: NewWorkClientProps) {
@@ -502,6 +510,7 @@ export default function NewWorkClient({
                     <AppWorkForm
                         gitProvider={selectedProviderId || undefined}
                         initialRepositoryUrl={repositoryUrlSeed || initialPrompt}
+                        handoff={appBlueprintHandoff}
                     />
                 )}
                 {effectiveKind !== 'repo' &&

@@ -13,6 +13,7 @@ jest.mock('./ever-id-telemetry.service', () => ({
     EVER_ID_TELEMETRY_EVENTS: { DELEGATED_READ: 'ever_id.delegated_read' },
 }));
 
+import { IdentityTokenRejectedError } from '@ever-works/plugin';
 import { EVER_ID_TRUSTED_CLIENT_IDS_ENV } from '../ever-id-trusted-clients';
 import { EverIdDelegationService } from './ever-id-delegation.service';
 
@@ -75,7 +76,7 @@ function build(trusted: string | undefined, nodeEnv = 'test') {
             activity as never,
             telemetry as never,
         );
-        return { service, facade };
+        return { service, facade, identities, users, activity };
     } finally {
         if (previous.trusted === undefined) delete process.env[EVER_ID_TRUSTED_CLIENT_IDS_ENV];
         else process.env[EVER_ID_TRUSTED_CLIENT_IDS_ENV] = previous.trusted;
@@ -142,5 +143,216 @@ describe('EverIdDelegationService — the token rules it asks the provider to ap
 
     it('a misconfigured value stops a production boot', () => {
         expect(() => build('not a client id', 'production')).toThrow(/EVER_ID_TRUSTED_CLIENT_IDS/);
+    });
+});
+
+/**
+ * The delegated write (`@DelegatedWrite('apps:write')`): the same token rules
+ * with the write scope, and the one answer that differs from a read.
+ */
+describe('EverIdDelegationService — a delegated write', () => {
+    const WRITE = { access: 'write' } as const;
+    /** The provider's refusal of a token that does not carry a scope it was asked for. */
+    const missingScope = () => new IdentityTokenRejectedError('missingScope');
+
+    it('asks the provider for the write scope, with every other rule of a read', async () => {
+        const { service, facade } = build('app-ever-co');
+        facade.verifyAccessToken.mockResolvedValueOnce({
+            issuer: 'https://id.example.test',
+            subject: 'subject-1',
+            audience: ['ever-works'],
+            scopes: ['apps:read', 'apps:write'],
+            authorizedParty: 'app-ever-co',
+            issuedAt: 1,
+            expiresAt: 2,
+            jti: null,
+        });
+
+        const principal = await service.authenticate(TOKEN, 'apps:write', CTX, WRITE);
+
+        expect(facade.verifyAccessToken).toHaveBeenCalledWith(TOKEN, {
+            requiredScopes: ['apps:write'],
+            maxLifetimeSeconds: 3_600,
+            allowedAuthorizedParties: ['app-ever-co'],
+        });
+        expect(principal).toMatchObject({
+            // Never a session: every control that needs a person's own session refuses it.
+            user: { userId: 'user-1', authMethod: 'ever-id-delegated' },
+            binding: {
+                identityId: 'identity-1',
+                clientId: 'app-ever-co',
+                scopes: ['apps:read', 'apps:write'],
+            },
+        });
+    });
+
+    it('refuses a token that may only read with 403 insufficient_scope', async () => {
+        const { service, facade, identities } = build('app-ever-co');
+        facade.verifyAccessToken.mockRejectedValueOnce(missingScope());
+
+        const refusal = service.authenticate(TOKEN, 'apps:write', CTX, WRITE);
+        await expect(refusal).rejects.toMatchObject({
+            status: 403,
+            response: { status: 'error', code: 'insufficient_scope' },
+        });
+        // Refused on the token alone: nobody is looked up.
+        expect(identities.findByIssuerSubject).not.toHaveBeenCalled();
+    });
+
+    it('says so when a valid token names a person with no connected identity here', async () => {
+        const { service, identities, users, activity } = build('app-ever-co');
+        identities.findByIssuerSubject.mockResolvedValueOnce(null);
+
+        const refusal = service.authenticate(TOKEN, 'apps:write', CTX, WRITE);
+        await expect(refusal).rejects.toMatchObject({
+            status: 403,
+            response: { status: 'error', code: 'no_linked_identity' },
+        });
+        // Nothing of the person is in the answer, and nothing is recorded for nobody.
+        await refusal.catch((error: { response: { message: string } }) => {
+            expect(error.response.message).not.toMatch(/subject-1|id\.example\.test|@/);
+        });
+        expect(users.findById).not.toHaveBeenCalled();
+        expect(identities.recordDelegatedClient).not.toHaveBeenCalled();
+        expect(activity.delegatedRead).not.toHaveBeenCalled();
+    });
+
+    it('a read of the same token keeps the plain 401 (null): only a write explains', async () => {
+        const { service, identities } = build(undefined);
+        identities.findByIssuerSubject.mockResolvedValue(null);
+
+        await expect(service.authenticate(TOKEN, 'apps:read', CTX)).resolves.toBeNull();
+        await expect(
+            service.authenticate(TOKEN, 'apps:read', CTX, { access: 'read' }),
+        ).resolves.toBeNull();
+    });
+
+    it.each([
+        ['a token that does not verify', 'badSignature'],
+        ['an expired token', 'expired'],
+        ['a token minted for another client', 'badAuthorizedParty'],
+        ['a token for another audience', 'badAudience'],
+    ])('answers %s with null — the plain 401, never a reason', async (_name, code) => {
+        const { service, facade, identities } = build('app-ever-co');
+        facade.verifyAccessToken.mockRejectedValueOnce(
+            new IdentityTokenRejectedError(code as never),
+        );
+
+        await expect(service.authenticate(TOKEN, 'apps:write', CTX, WRITE)).resolves.toBeNull();
+        expect(identities.findByIssuerSubject).not.toHaveBeenCalled();
+    });
+
+    it('answers a disabled or missing account with null, as a read does', async () => {
+        const { service, users } = build('app-ever-co');
+        users.findById.mockResolvedValueOnce({ id: 'user-1', isActive: false });
+        await expect(service.authenticate(TOKEN, 'apps:write', CTX, WRITE)).resolves.toBeNull();
+        users.findById.mockResolvedValueOnce(null);
+        await expect(service.authenticate(TOKEN, 'apps:write', CTX, WRITE)).resolves.toBeNull();
+    });
+
+    it('does nothing while Ever ID is turned off', async () => {
+        const { service, facade } = build('app-ever-co');
+        facade.isEnabled.mockResolvedValueOnce(false);
+
+        await expect(service.authenticate(TOKEN, 'apps:write', CTX, WRITE)).resolves.toBeNull();
+        expect(facade.verifyAccessToken).not.toHaveBeenCalled();
+    });
+});
+
+/**
+ * A write changes things in a person's name, so it is never open to every
+ * client of the identity provider: it is accepted only from an app the operator
+ * listed in `EVER_ID_TRUSTED_CLIENT_IDS`, and only when the token says which app
+ * it was issued to. A read keeps "no list, no `azp` rule".
+ */
+describe('EverIdDelegationService — a write is accepted only from a listed app', () => {
+    const WRITE = { access: 'write' } as const;
+    /** A token that verifies and carries the write scope, issued to `authorizedParty`. */
+    const claimsFor = (authorizedParty: string | null | undefined) => ({
+        issuer: 'https://id.example.test',
+        subject: 'subject-1',
+        audience: ['ever-works'],
+        scopes: ['apps:read', 'apps:write'],
+        authorizedParty,
+        issuedAt: 1,
+        expiresAt: 2,
+        jti: null,
+    });
+
+    it.each([
+        ['unset', undefined],
+        ['empty (an unset variable rendered by a manifest)', ''],
+        ['only separators', ' , ,, '],
+        ['nothing that is a client id', 'not a client id'],
+    ])('refuses every write while the list is %s', async (_name, list) => {
+        const { service, facade, identities, users, activity } = build(list);
+        // The token is as good as a token can be: it is the list that is missing.
+        facade.verifyAccessToken.mockResolvedValue(claimsFor('app-ever-co'));
+
+        await expect(service.authenticate(TOKEN, 'apps:write', CTX, WRITE)).resolves.toBeNull();
+        // Refused before the token is read: nothing is verified, nobody is looked up.
+        expect(facade.isEnabled).not.toHaveBeenCalled();
+        expect(facade.verifyAccessToken).not.toHaveBeenCalled();
+        expect(identities.findByIssuerSubject).not.toHaveBeenCalled();
+        expect(users.findById).not.toHaveBeenCalled();
+        expect(activity.delegatedRead).not.toHaveBeenCalled();
+    });
+
+    it.each([
+        ['unset', undefined],
+        ['empty', ''],
+    ])(
+        'a read keeps its own rule while the list is %s: no list, no `azp` rule',
+        async (_n, list) => {
+            const { service, facade } = build(list);
+
+            await expect(service.authenticate(TOKEN, 'apps:write', CTX, WRITE)).resolves.toBeNull();
+            await expect(service.authenticate(TOKEN, 'apps:read', CTX)).resolves.not.toBeNull();
+            expect(facade.verifyAccessToken).toHaveBeenCalledTimes(1);
+            expect(facade.verifyAccessToken.mock.calls[0][1]).toEqual({
+                requiredScopes: ['apps:read'],
+                maxLifetimeSeconds: 3_600,
+            });
+        },
+    );
+
+    it.each([
+        ['no authorised party at all', undefined],
+        ['an authorised party of null', null],
+        ['an empty authorised party', ''],
+    ])('refuses a write whose token names no app (%s)', async (_name, authorizedParty) => {
+        const { service, facade, identities, users } = build('app-ever-co');
+        // Even if the provider let such a token through, it is not a write here.
+        facade.verifyAccessToken.mockResolvedValueOnce(claimsFor(authorizedParty));
+
+        await expect(service.authenticate(TOKEN, 'apps:write', CTX, WRITE)).resolves.toBeNull();
+        expect(identities.findByIssuerSubject).not.toHaveBeenCalled();
+        expect(users.findById).not.toHaveBeenCalled();
+    });
+
+    it('refuses a write whose token was issued to an app that is not on the list', async () => {
+        const { service, facade, identities } = build('app-ever-co, launcher-two');
+        // The provider applies the same list (`badAuthorizedParty`); this is the
+        // second check, for a provider that answered claims all the same.
+        facade.verifyAccessToken.mockResolvedValueOnce(claimsFor('someone-else'));
+
+        await expect(service.authenticate(TOKEN, 'apps:write', CTX, WRITE)).resolves.toBeNull();
+        expect(identities.findByIssuerSubject).not.toHaveBeenCalled();
+    });
+
+    it('accepts a write from each app on the list, and says which app it was', async () => {
+        const { service, facade } = build('app-ever-co, launcher-two');
+        for (const client of ['app-ever-co', 'launcher-two']) {
+            facade.verifyAccessToken.mockResolvedValueOnce(claimsFor(client));
+            const principal = await service.authenticate(TOKEN, 'apps:write', CTX, WRITE);
+            expect(principal?.binding.clientId).toBe(client);
+        }
+    });
+
+    it('a read from a token that names no app is still a read: only a write needs the name', async () => {
+        const { service, facade } = build(undefined);
+        facade.verifyAccessToken.mockResolvedValueOnce(claimsFor(undefined));
+
+        await expect(service.authenticate(TOKEN, 'apps:read', CTX)).resolves.not.toBeNull();
     });
 });
