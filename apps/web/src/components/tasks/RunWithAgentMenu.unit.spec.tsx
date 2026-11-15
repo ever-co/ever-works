@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render as renderPlain, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render as renderPlain, screen, waitFor } from '@testing-library/react';
 import type { ReactElement } from 'react';
 import { NextIntlClientProvider } from 'next-intl';
 import messages from '../../../messages/en.json';
@@ -274,6 +274,111 @@ describe('RunWithAgentMenu — every user-facing string comes from the catalogue
         fireEvent.click(button);
         expect(await screen.findByText('Ejecución iniciada.')).toBeTruthy();
         expect(screen.queryByText('Run started.')).toBeNull();
+    });
+
+    // The English catalogue matches the old literals word for word, so the specs above would also
+    // pass against hard-coded English. A catalogue of markers cannot: every string must come from it.
+    const marked = {
+        dashboard: {
+            tasksPage: {
+                runMenu: Object.fromEntries(
+                    Object.keys(copy).map((key) => [
+                        key,
+                        key === 'queued' ? '«queued {reason}»' : `«${key}»`,
+                    ]),
+                ),
+            },
+        },
+    };
+
+    it('reads every label, title, badge and picker line from the catalogue', async () => {
+        let resolveCandidates: (rows: unknown[]) => void = () => undefined;
+        listTaskRunCandidatesAction.mockReturnValue(
+            new Promise((resolve) => {
+                resolveCandidates = resolve;
+            }),
+        );
+        render(<RunWithAgentMenu taskId="t1" open onOpenChange={() => undefined} />, marked);
+        const button = screen.getByTestId('task-run-button');
+        expect(button.textContent).toBe('«run»');
+        expect(button.getAttribute('aria-label')).toBe('«runLabel»');
+        expect(button.getAttribute('title')).toBe('«runTitle»');
+        const picker = screen.getByTestId('task-run-agent-picker');
+        expect(picker.getAttribute('aria-label')).toBe('«pickerLabel»');
+        expect(screen.getByText('«runWith»')).toBeTruthy();
+        expect(screen.getByText('«loading»')).toBeTruthy();
+        await act(async () => {
+            resolveCandidates([
+                { id: 'a1', name: 'Builder', source: 'assignee' },
+                { id: 'a2', name: 'Reviewer', source: 'task' },
+                { id: 'a3', name: 'Planner', source: 'work-default' },
+            ]);
+        });
+        const options = await screen.findAllByTestId('task-run-agent-option');
+        expect(options.map((option) => option.textContent)).toEqual([
+            'Builder«sourceAssignee»',
+            'Reviewer«sourceTask»',
+            'Planner«sourceWorkDefault»',
+        ]);
+    });
+
+    it('reads the empty-picker line from the catalogue', async () => {
+        render(<RunWithAgentMenu taskId="t1" open onOpenChange={() => undefined} />, marked);
+        expect(await screen.findByText('«noAgentAvailable»')).toBeTruthy();
+    });
+
+    const run = { taskId: 't1', agentId: 'a1', runId: 'r1' };
+    it.each([
+        [
+            'a dispatched run',
+            { ok: true, run: { ...run, dispatched: true, parked: false } },
+            '«runStarted»',
+        ],
+        [
+            'a parked run with a reason',
+            {
+                ok: true,
+                run: { ...run, dispatched: false, parked: true, queuedReason: 'concurrency-limit' },
+            },
+            '«queued concurrency-limit»',
+        ],
+        [
+            'a parked run with no reason',
+            { ok: true, run: { ...run, dispatched: false, parked: true } },
+            '«queued «queuedDefaultReason»»',
+        ],
+        [
+            'a refusal with no sentence',
+            { ok: true, run: { ...run, runId: null, dispatched: false, parked: false } },
+            '«refusedFallback»',
+        ],
+        [
+            'RUN_NO_AGENT',
+            { ok: false, code: 'RUN_NO_AGENT', message: 'x', candidates: [] },
+            '«noAgentAssigned»',
+        ],
+        [
+            'RUN_AGENT_AMBIGUOUS',
+            { ok: false, code: 'RUN_AGENT_AMBIGUOUS', message: 'x', candidates: [] },
+            '«pickAgent»',
+        ],
+        [
+            'RUN_ALREADY_IN_FLIGHT',
+            { ok: false, code: 'RUN_ALREADY_IN_FLIGHT', message: 'x' },
+            '«alreadyInFlight»',
+        ],
+        [
+            'a failure with no message',
+            { ok: false, code: 'RUN_FAILED', message: '' },
+            '«runFailed»',
+        ],
+    ])('reads the message for %s from the catalogue', async (_label, result, expected) => {
+        runTaskAction.mockResolvedValue(result);
+        render(<RunWithAgentMenu taskId="t1" />, marked);
+        fireEvent.click(screen.getByTestId('task-run-button'));
+        await waitFor(() =>
+            expect(screen.getByTestId('task-run-message').textContent).toBe(expected),
+        );
     });
 });
 

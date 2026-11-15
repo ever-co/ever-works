@@ -150,9 +150,7 @@ export function RunWithAgentMenu({
                     setCandidates(result.candidates ?? []);
                     setOpen(true);
                     setMessage(
-                        result.code === RUN_NO_AGENT
-                            ? t('noAgentAssigned')
-                            : t('pickAgent'),
+                        result.code === RUN_NO_AGENT ? t('noAgentAssigned') : t('pickAgent'),
                     );
                     return;
                 }
