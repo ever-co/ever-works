@@ -45,6 +45,7 @@ import {
     deploymentUpsert,
     isExternalId,
     type AppSyncOp,
+    type WorkFacts,
 } from './app-sync.mapping';
 
 /** How many Works one pass sends (at most three operations each, under the batch limit of 500). */
@@ -383,7 +384,9 @@ export class AppSyncService
                 if (op) built.push(op);
             } else {
                 link = work.organizationId ? links.get(work.organizationId) : undefined;
-                const app = link ? appUpsert(work, link, this.nextVersion(now), now) : null;
+                const app = link
+                    ? appUpsert(workFacts(work), link, this.nextVersion(now), now)
+                    : null;
                 if (app) {
                     built.push(app);
                     for (const deployment of deployments.get(work.id) ?? []) {
@@ -749,6 +752,10 @@ export class AppSyncService
                     'work.userId',
                     'work.organizationId',
                     'work.updatedAt',
+                    // Where an App created from a Blueprint comes from: read for
+                    // the Blueprint's id only (`workFacts`), never sent as it is.
+                    'work.sourceRepository',
+                    'work.installId',
                 ])
                 .where('work.id IN (:...ids)', { ids: wanted.slice(at, at + CHUNK) })
                 .getMany();
@@ -819,6 +826,33 @@ export class AppSyncService
         this.lastVersion = Math.max(now.getTime(), Date.now(), this.lastVersion + 1);
         return this.lastVersion;
     }
+}
+
+/**
+ * What the mirror's mapping is given of a Work row: its own columns and, of the
+ * record of where an App came from, the Blueprint's id and the account that
+ * owns what the Blueprint is for. Field by field: nothing else of that record
+ * (no address, no repository name, no branch) leaves this function.
+ */
+export function workFacts(work: Work): WorkFacts {
+    const source = (work.sourceRepository ?? null) as {
+        owner?: unknown;
+        blueprintId?: unknown;
+        upstream?: { owner?: unknown } | null;
+    } | null;
+    const text = (value: unknown): string | null => (typeof value === 'string' ? value : null);
+    return {
+        id: work.id,
+        name: work.name,
+        slug: work.slug,
+        kind: work.kind,
+        status: work.status,
+        updatedAt: work.updatedAt,
+        blueprintId: text(source?.blueprintId),
+        // A fork or a copy records what it was made from; a linked repository is its own base.
+        baseOwner: text(source?.upstream?.owner) ?? text(source?.owner),
+        installId: work.installId ?? null,
+    };
 }
 
 function dedupeKey(workId: string): string {

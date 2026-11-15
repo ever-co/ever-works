@@ -11318,6 +11318,10 @@
                 "promptHint": "The {name} Blueprint asks for these. You can change them later in Settings.",
                 "promptRequired": "Required",
                 "promptsIncomplete": "Fill in the values the app needs first.",
+                "handoff": {
+                    "blueprintNotFound": "The app you chose on Ever Platform is not in the Apps catalog here. Pick an app below, or paste a repository.",
+                    "forInstall": "You installed this app on Ever Platform. The App you create here is the one that install is for."
+                },
                 "autoProvision": "Let an agent work out how to run it",
                 "autoProvisionHelp": "Starts when the repository is ready. It spends AI tokens and build runner minutes, within the provisioning caps. You can cancel it, or untick this and start it later from the Overview with Provision.",
                 "deployTargetTitle": "Where should it run?",

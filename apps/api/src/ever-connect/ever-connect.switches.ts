@@ -18,7 +18,23 @@
  *   identifiers and status of its Works and their deployments are sent to Ever
  *   Platform. Off, nothing is queued and nothing is sent, whatever was
  *   consented.
+ * - `EVER_CONNECT_APPS_WRITE_ENABLED`: another Ever app may, for a person who
+ *   allowed it there (an Ever ID access token carrying `apps:write`), create an
+ *   App in an Organization linked to an Ever organization and start a
+ *   deployment of one. The person must be a member of that Organization, and
+ *   everything a signed-in person's own request is checked against applies. Off,
+ *   every `/api/ever-connect/apps*` route answers 404 like any unknown address.
+ *   **It needs a list of the apps that may write** (`EVER_ID_TRUSTED_CLIENT_IDS`,
+ *   at least one client id): with the switch on and no such list the routes
+ *   stay off, and the start says so ({@link isAppsWriteEnabled}).
+ * - `EVER_CONNECT_BLUEPRINT_HANDOFF_ENABLED`: a person sent here from Ever
+ *   Platform's marketplace to create an App from a Blueprint may bring the id
+ *   of the install it is for, and it is kept on that App. Off, an install id
+ *   in a create request is ignored and nothing is stored. (The web app has a
+ *   switch of the same name for reading the address that carries it.)
  */
+import { parseTrustedClientIds } from '../auth/ever-id-trusted-clients';
+
 type Env = Readonly<Record<string, string | undefined>>;
 
 function isOn(value: string | undefined): boolean {
@@ -45,12 +61,40 @@ export function isAppSyncEnabled(env: Env = process.env): boolean {
     return withConnect(env, 'EVER_CONNECT_APP_SYNC_ENABLED');
 }
 
+/** The switch itself: `EVER_CONNECT_APPS_WRITE_ENABLED=true` on an installation with Ever Connect on. */
+export function isAppsWriteSwitchedOn(env: Env = process.env): boolean {
+    return withConnect(env, 'EVER_CONNECT_APPS_WRITE_ENABLED');
+}
+
+/** Whether `EVER_ID_TRUSTED_CLIENT_IDS` names at least one app (a client id spelled like one). */
+export function hasTrustedWriteClients(env: Env = process.env): boolean {
+    return parseTrustedClientIds(env.EVER_ID_TRUSTED_CLIENT_IDS).clientIds.length > 0;
+}
+
+/**
+ * Whether another Ever app may write for a person here: the switch, **and** a
+ * list of the apps that may. A write changes things in a person's name (a
+ * repository in their Git account, a deployment), so it is never open to every
+ * client of the identity provider: without a list the part stays off, whatever
+ * the switch says. Reading for a person keeps its own, older rule.
+ */
+export function isAppsWriteEnabled(env: Env = process.env): boolean {
+    return isAppsWriteSwitchedOn(env) && hasTrustedWriteClients(env);
+}
+
+export function isBlueprintHandoffEnabled(env: Env = process.env): boolean {
+    return withConnect(env, 'EVER_CONNECT_BLUEPRINT_HANDOFF_ENABLED');
+}
+
 /** Which of the switched parts this installation runs (shown to the operator). */
 export interface EverConnectFeatures {
     readonly linkCodes: boolean;
     readonly heartbeat: boolean;
     readonly entitlements: boolean;
     readonly appSync: boolean;
+    /** The routes exist: the switch is on and the list of trusted apps is not empty. */
+    readonly appsWrite: boolean;
+    readonly blueprintHandoff: boolean;
 }
 
 export function everConnectFeatures(env: Env = process.env): EverConnectFeatures {
@@ -59,5 +103,7 @@ export function everConnectFeatures(env: Env = process.env): EverConnectFeatures
         heartbeat: isHeartbeatEnabled(env),
         entitlements: isEntitlementsEnabled(env),
         appSync: isAppSyncEnabled(env),
+        appsWrite: isAppsWriteEnabled(env),
+        blueprintHandoff: isBlueprintHandoffEnabled(env),
     };
 }

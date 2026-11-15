@@ -6,15 +6,23 @@
  *
  * - of a Work: its id, kind, name, slug and lifecycle status, with the tenant
  *   id and the Organization's id as Ever Platform holds them for the link;
+ * - of an App created from an Apps catalog Blueprint, also where it comes from
+ *   ({@link AppSyncLineage}): the Blueprint's id in the catalog, the id of the
+ *   install on Ever Platform's marketplace the App was created for (Ever
+ *   Platform's own id, as the address that sent the person here carried it),
+ *   and whether what the Blueprint is for is one of Ever's own products or
+ *   another open-source project (`base_kind`);
  * - of a deployment: where it runs (target, provider, shape, who manages it),
  *   the environment, its state and its public address.
  *
  * Never anything else: no Work content or items, no repository (not even its
- * address), no prompt, memory, agent, budget, approval, credit, environment
- * value, secret, build log, error text, commit, branch, pull request, member or
- * e-mail address. Each function below builds its object field by field from
- * the few columns it is given; there is no spread of an entity anywhere.
+ * address or its owner), no prompt, memory, agent, budget, approval, credit,
+ * environment value, secret, build log, error text, commit, branch, pull
+ * request, member or e-mail address. Each function below builds its object
+ * field by field from the few columns it is given; there is no spread of an
+ * entity anywhere.
  */
+import { EVER_PLATFORM_INSTALL_ID_PATTERN } from '@ever-works/contracts';
 
 /** The integration the mirror runs under (an Ever Platform key, not copy). */
 export const APP_SYNC_KEY = 'app_sync';
@@ -56,6 +64,41 @@ export interface AppSyncOp {
     data?: AppSyncAppData | AppSyncDeploymentData;
 }
 
+/**
+ * What a Work is based on, in Ever Platform's words: nothing it knows of
+ * (`none`), one of Ever's own products (`ever`) or another open-source project
+ * (`oss`).
+ */
+export type AppSyncBaseKind = 'none' | 'ever' | 'oss';
+
+/** The Blueprint an App was created from: its id in the Apps catalog. */
+export interface AppSyncLineageBlueprint {
+    id: string;
+    /**
+     * The version of the Blueprint the App was created from. Part of the shape;
+     * not sent today, because a Work does not record which version it was
+     * created from (only the one it is on now, which an upgrade changes).
+     */
+    version?: string;
+}
+
+/**
+ * Where an App created from an Apps catalog Blueprint comes from. Identifiers
+ * only: the Blueprint (an object: its id in the catalog) and, when the App was
+ * created for an install on Ever Platform's marketplace, Ever Platform's id of
+ * that install.
+ *
+ * `install_id` is a **claim**: it is the id the address that sent the person
+ * here carried. Ever Platform decides whether it matches (the same organization
+ * as the link the batch is sent under, the same Blueprint, an install not
+ * already bound to another App); nothing here asserts it.
+ */
+export interface AppSyncLineage {
+    install_id?: string;
+    provisioned_by: 'blueprint';
+    blueprint: AppSyncLineageBlueprint;
+}
+
 export interface AppSyncAppData {
     product_tenant_id: string;
     product_org_id: string;
@@ -63,7 +106,8 @@ export interface AppSyncAppData {
     work_kind?: string;
     name: string;
     slug: string;
-    base_kind: 'none';
+    base_kind: AppSyncBaseKind;
+    lineage?: AppSyncLineage;
     status: string;
 }
 
@@ -85,6 +129,15 @@ export interface WorkFacts {
     readonly kind: string | null;
     readonly status: string | null;
     readonly updatedAt?: Date | string | null;
+    /** The Apps catalog Blueprint the Work was created from (its id), when it was. */
+    readonly blueprintId?: string | null;
+    /**
+     * The account that owns the repository the Blueprint is for. Read only to
+     * tell one of Ever's own products from another project; never sent.
+     */
+    readonly baseOwner?: string | null;
+    /** The marketplace install the Work was created for (Ever Platform's id), when there is one. */
+    readonly installId?: string | null;
 }
 
 /** What the mirror reads of a deployment row. */
@@ -152,6 +205,37 @@ const WORK_KINDS: Readonly<Record<string, string>> = {
     default: 'default',
 };
 
+/** A Blueprint's id in the Apps catalog: lower-case letters, digits and hyphens, at most 100. */
+const BLUEPRINT_ID = /^[a-z0-9][a-z0-9-]{0,99}$/;
+
+/** The accounts whose repositories are Ever's own products. */
+const EVER_BASE_OWNERS: ReadonlySet<string> = new Set(['ever-co', 'ever-works']);
+
+/**
+ * Where a Work comes from, or `null` for a Work that was not created from an
+ * Apps catalog Blueprint (nothing is told of it: `base_kind` stays `none`).
+ *
+ * An install id is told only with the Blueprint it was for, and only when it
+ * is one of Ever Platform's ids; a Blueprint id outside the catalog's own
+ * spelling is not told at all.
+ */
+export function appLineage(
+    work: Pick<WorkFacts, 'kind' | 'blueprintId' | 'baseOwner' | 'installId'>,
+): { baseKind: Exclude<AppSyncBaseKind, 'none'>; lineage: AppSyncLineage } | null {
+    if (work.kind !== 'app') return null;
+    const blueprint = typeof work.blueprintId === 'string' ? work.blueprintId.trim() : '';
+    if (!BLUEPRINT_ID.test(blueprint)) return null;
+    const lineage: AppSyncLineage = { provisioned_by: 'blueprint', blueprint: { id: blueprint } };
+    if (
+        typeof work.installId === 'string' &&
+        EVER_PLATFORM_INSTALL_ID_PATTERN.test(work.installId)
+    ) {
+        lineage.install_id = work.installId;
+    }
+    const owner = typeof work.baseOwner === 'string' ? work.baseOwner.trim().toLowerCase() : '';
+    return { baseKind: EVER_BASE_OWNERS.has(owner) ? 'ever' : 'oss', lineage };
+}
+
 /** A deployment's external id: one per Work and environment (the current deployment). */
 export function deploymentExternalId(workId: string, environment: 'production' | 'preview') {
     return `${workId}:${environment}`;
@@ -209,16 +293,18 @@ export function appUpsert(
     const ownKind = work.kind ?? 'default';
     const workKind =
         kind === 'work' && Object.hasOwn(WORK_KINDS, ownKind) ? WORK_KINDS[ownKind] : undefined;
+    const origin = appLineage(work);
     const data: AppSyncAppData = {
         product_tenant_id: link.tenantId,
         product_org_id: link.productOrgRef,
         kind,
         name,
         slug,
-        base_kind: 'none',
+        base_kind: origin ? origin.baseKind : 'none',
         status,
     };
     if (workKind) data.work_kind = workKind;
+    if (origin) data.lineage = origin.lineage;
     return {
         op: 'upsert',
         kind: 'app',

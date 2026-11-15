@@ -10,18 +10,31 @@ import type { AuthenticatedUser, EverIdDelegationBinding } from '../types/auth.t
 /** A token shaped like a compact JWS. An Ever Works session bearer never contains a dot (plan §5.3). */
 export const JWT_SHAPED_BEARER = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
 
-/** Verifies a delegated Ever ID access token on a `@DelegatedRead(scope)` handler. */
+/** Verifies a delegated Ever ID access token on a `@DelegatedRead(scope)` or `@DelegatedWrite(scope)` handler. */
 export const EVER_ID_DELEGATION_VERIFIER = Symbol('EVER_ID_DELEGATION_VERIFIER');
+
+/** How the handler a delegated token arrived at uses it. Absent: a read. */
+export interface EverIdDelegationOptions {
+    /**
+     * `write` for a handler marked `@DelegatedWrite(scope)`: a token that
+     * verifies but whose person has no connected identity here is refused with
+     * `403 no_linked_identity` instead of the plain 401.
+     */
+    readonly access?: 'read' | 'write';
+}
 
 export interface EverIdDelegationVerifier {
     /**
      * `null` for any refusal the guard answers with the plain 401; throws
-     * `403 insufficientScope` for a valid token without the scope.
+     * `403 insufficientScope` for a valid token without the scope and, on a
+     * write only, `403 no_linked_identity` for a valid token whose person has no
+     * connected identity here.
      */
     authenticate(
         token: string,
         scope: string,
         ctx: { ipAddress: string | null; userAgent: string | null },
+        options?: EverIdDelegationOptions,
     ): Promise<{ user: AuthenticatedUser; binding: EverIdDelegationBinding } | null>;
 }
 

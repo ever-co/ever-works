@@ -1,14 +1,24 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { HttpException, HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { EVER_ID_LIMITS } from '@ever-works/contracts';
 import { IdentityTokenRejectedError } from '@ever-works/plugin';
 import { ExternalIdentityRepository, UserRepository } from '@ever-works/agent/database';
 import { IdentityProviderFacadeService } from '@ever-works/agent/facades';
 import type { AuthenticatedUser, EverIdDelegationBinding } from '../types/auth.types';
-import { JWT_SHAPED_BEARER, type EverIdDelegationVerifier } from '../guards/ever-id-guard.tokens';
+import {
+    JWT_SHAPED_BEARER,
+    type EverIdDelegationOptions,
+    type EverIdDelegationVerifier,
+} from '../guards/ever-id-guard.tokens';
 import { resolveTrustedClientIds } from '../ever-id-trusted-clients';
 import { EverIdActivityService } from './ever-id-activity.service';
 import { everIdError } from './ever-id-errors';
 import { EVER_ID_TELEMETRY_EVENTS, EverIdTelemetryService } from './ever-id-telemetry.service';
+
+/**
+ * The code of the refusal a write gets when its token verifies but the person
+ * it names has no connected identity on this installation.
+ */
+export const DELEGATED_NO_LINKED_IDENTITY_CODE = 'no_linked_identity';
 
 /** What a successful delegated authentication answers. */
 export interface EverIdDelegatedPrincipal {
@@ -31,6 +41,21 @@ export interface EverIdDelegatedPrincipal {
  * updates the last sign-in time (FR-47); it records the reading app on the
  * identity (FR-48) and writes FR-49's Activity row on the first read per app per
  * 24 hours. Nothing is attempted while Ever ID is turned off.
+ *
+ * A **delegated write** (a handler marked `@DelegatedWrite(scope)`, with a write
+ * scope) is verified by exactly the same rules. One answer differs: a token that
+ * verifies, scope included, but whose subject is not a connected identity here
+ * is refused with `403 no_linked_identity`, so the calling app can tell the
+ * person to sign in to Ever Works with Ever ID first. It is told only after the
+ * token verified, to the holder of a token issued for that very person, and it
+ * names nobody. An account that exists but is disabled keeps the plain 401.
+ *
+ * A write also **needs a list of trusted apps**, and a token that names its app:
+ * while `EVER_ID_TRUSTED_CLIENT_IDS` is unset or empty every write is refused
+ * (a read keeps "no `azp` rule" in that case), and a token without an
+ * authorised party, or issued to an app that is not on the list, is refused
+ * too. All three are the plain 401: a write is never accepted from a client
+ * nobody named, and every write that is accepted can be attributed to one.
  */
 @Injectable()
 export class EverIdDelegationService implements EverIdDelegationVerifier {
@@ -59,8 +84,17 @@ export class EverIdDelegationService implements EverIdDelegationVerifier {
         token: string,
         scope: string,
         ctx: { ipAddress: string | null; userAgent: string | null },
+        options: EverIdDelegationOptions = {},
     ): Promise<EverIdDelegatedPrincipal | null> {
         if (!JWT_SHAPED_BEARER.test(token)) return null;
+        const write = options.access === 'write';
+        // A write is accepted only from an app the operator listed. No list (unset,
+        // empty, or nothing in it that is a client id): refused before the token is
+        // read, whatever it carries. Fail closed; a read keeps its own rule below.
+        if (write && !this.trustedClientIds?.length) {
+            this.warnWriteWithoutTrustedClients();
+            return null;
+        }
         if (!(await this.facade.isEnabled().catch(() => false))) return null;
 
         let claims: Awaited<ReturnType<IdentityProviderFacadeService['verifyAccessToken']>>;
@@ -84,8 +118,31 @@ export class EverIdDelegationService implements EverIdDelegationVerifier {
             return null;
         }
 
+        // Checked here as well as by the provider's own rule above: a write is
+        // attributed to the app that made it, so a token that names no app, or one
+        // that is not on the list, is never a write.
+        if (
+            write &&
+            (!claims.authorizedParty || !this.trustedClientIds?.includes(claims.authorizedParty))
+        ) {
+            this.sample('rejected');
+            return null;
+        }
+
         const identity = await this.identities.findByIssuerSubject(claims.issuer, claims.subject);
-        if (!identity) return null;
+        if (!identity) {
+            if (!write) return null;
+            this.sample('rejected');
+            throw new HttpException(
+                {
+                    status: 'error',
+                    code: DELEGATED_NO_LINKED_IDENTITY_CODE,
+                    message:
+                        'This Ever ID is not connected to an account here. Sign in to Ever Works with Ever ID first.',
+                },
+                HttpStatus.FORBIDDEN,
+            );
+        }
         const user = await this.users.findById(identity.userId);
         if (!user || !user.isActive) return null;
 
@@ -118,6 +175,18 @@ export class EverIdDelegationService implements EverIdDelegationVerifier {
             user: principal,
             binding: { identityId: identity.id, clientId, scopes: [...claims.scopes] },
         };
+    }
+
+    /** Said once per process: the operator's log, not the caller's answer, explains the refusal. */
+    private warnedWriteWithoutTrustedClients = false;
+
+    private warnWriteWithoutTrustedClients(): void {
+        if (this.warnedWriteWithoutTrustedClients) return;
+        this.warnedWriteWithoutTrustedClients = true;
+        this.logger.warn(
+            'A delegated write was refused: EVER_ID_TRUSTED_CLIENT_IDS names no app, and a write is ' +
+                'accepted only from an app listed there.',
+        );
     }
 
     private async clientName(clientId: string): Promise<string> {

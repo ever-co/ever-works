@@ -8,6 +8,10 @@ name: API boot
 # no `.env`), and asserts that
 # `GET /api/health` answers 200. A provider the container cannot resolve makes the
 # process exit during bootstrap, which fails the job with the log tail.
+# A module behind a switch that is off by default is not in that graph, so the API is
+# then booted once more with the switches of the routes that let another Ever app
+# create and deploy an App for a person: the routes must exist (401 without a
+# credential, where a module that is not there answers 404).
 # Before the boot it also loads the built migrations through TypeORM's own loader
 # (`scripts/check-migrations-load.cjs`): the boot runs on `synchronize`, so it cannot
 # see a loader that silently finds no migration (prod from 2026-11-07, #3107).
@@ -103,8 +107,19 @@ jobs:
           PID=$!
           for i in $(seq 1 90); do
             if curl -sf -o /dev/null http://127.0.0.1:3999/api/health; then
-              echo "API healthy after $((i * 2)) s"
+              # Nothing is switched on in this boot, so a route behind a switch that is off
+              # by default must not exist: the same request the boot below expects 401 for
+              # answers 404 here. That tells a switch that gates its routes from routes
+              # that are always there.
+              OFF=$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+                -H 'content-type: application/json' -d '{}' \
+                http://127.0.0.1:3999/api/ever-connect/apps)
               kill "$PID" || true
+              if [ "$OFF" != "404" ]; then
+                echo "::error::POST /api/ever-connect/apps answered $OFF with nothing switched on (expected 404: the route is behind a switch that is off by default)"
+                exit 1
+              fi
+              echo "API healthy after $((i * 2)) s; POST /api/ever-connect/apps with nothing switched on: 404"
               exit 0
             fi
             if ! kill -0 "$PID" 2>/dev/null; then
@@ -116,5 +131,57 @@ jobs:
           done
           echo "::error::no 200 from /api/health within 180 s; log tail below"
           tail -n 150 "$RUNNER_TEMP/api-boot.log"
+          kill "$PID" || true
+          exit 1
+
+      # The modules behind a switch are not in the graph of the boot above: a switched
+      # module is imported only with its switch, so its providers are resolved for the
+      # first time on the installation that turns it on. Boot once more with the switches
+      # of the apps-write routes on. No connection and no credential is needed to build
+      # the graph, and nothing is called while the installation is not connected (the
+      # platform address below is a closed local port, to make that certain).
+      # The routes must then exist: without a credential they answer 401, where a module
+      # that is not there answers 404.
+      - name: Boot the API with the apps-write routes switched on
+        working-directory: apps/api
+        env:
+          DATABASE_TYPE: sqlite
+          DATABASE_IN_MEMORY: 'true'
+          DATABASE_AUTOMIGRATE: 'true'
+          AUTH_SECRET: api-boot-ci-only-fixture-value-not-a-secret-000000
+          PORT: '3998'
+          EVER_CONNECT_ENABLED: 'true'
+          EVER_CONNECT_APPS_WRITE_ENABLED: 'true'
+          EVER_CONNECT_BLUEPRINT_HANDOFF_ENABLED: 'true'
+          # A fixture client id, not a credential: the routes exist only with a list of
+          # the apps that may write.
+          EVER_ID_TRUSTED_CLIENT_IDS: api-boot-ci-fixture-client
+          EVER_PLATFORM_API_URL: http://127.0.0.1:9
+        run: |
+          node dist/main.js > "$RUNNER_TEMP/api-boot-apps-write.log" 2>&1 &
+          PID=$!
+          for i in $(seq 1 90); do
+            if curl -sf -o /dev/null http://127.0.0.1:3998/api/health; then
+              CODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+                -H 'content-type: application/json' -d '{}' \
+                http://127.0.0.1:3998/api/ever-connect/apps)
+              kill "$PID" || true
+              if [ "$CODE" != "401" ]; then
+                echo "::error::POST /api/ever-connect/apps answered $CODE without a credential (expected 401: the route exists and needs one); log tail below"
+                tail -n 150 "$RUNNER_TEMP/api-boot-apps-write.log"
+                exit 1
+              fi
+              echo "API healthy with the apps-write routes on after $((i * 2)) s; POST /api/ever-connect/apps without a credential: 401"
+              exit 0
+            fi
+            if ! kill -0 "$PID" 2>/dev/null; then
+              echo "::error::the API exited during boot with the apps-write routes switched on (a DI or configuration failure); log tail below"
+              tail -n 150 "$RUNNER_TEMP/api-boot-apps-write.log"
+              exit 1
+            fi
+            sleep 2
+          done
+          echo "::error::no 200 from /api/health within 180 s with the apps-write routes switched on; log tail below"
+          tail -n 150 "$RUNNER_TEMP/api-boot-apps-write.log"
           kill "$PID" || true
           exit 1

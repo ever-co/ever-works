@@ -3,16 +3,57 @@
 jest.mock('../../organizations/organizations.module', () => ({
     OrganizationsModule: class OrganizationsModule {},
 }));
+// The apps-write module composes the Work, App and deploy modules; the manifest
+// needs its controller and that controller's guards only.
+jest.mock('@ever-works/agent/app-runtime', () => ({
+    AppDeployRequestModule: class AppDeployRequestModule {},
+    AppDeployRequestService: class AppDeployRequestService {},
+    AppTargetService: class AppTargetService {},
+    APPS_TIER_POLICY: Symbol('APPS_TIER_POLICY'),
+}));
+jest.mock('@ever-works/agent/app-works', () => ({
+    AppWorksModule: class AppWorksModule {},
+    AppSourceInspectorService: class AppSourceInspectorService {},
+}));
+jest.mock('@ever-works/agent/services', () => ({
+    WorkModule: class WorkModule {},
+    WorkLifecycleService: class WorkLifecycleService {},
+    WorkOwnershipService: class WorkOwnershipService {},
+    WorkQueryService: class WorkQueryService {},
+}));
+jest.mock('@ever-works/agent/facades', () => ({
+    FacadesModule: class FacadesModule {},
+    GitFacadeService: class GitFacadeService {},
+}));
+jest.mock('@ever-works/agent/activity-log', () => ({
+    ActivityLogModule: class ActivityLogModule {},
+    ActivityLogService: class ActivityLogService {},
+}));
+jest.mock('@ever-works/agent/integrations-api', () => ({
+    IntegrationsApiFoundationModule: class IntegrationsApiFoundationModule {},
+    IntegrationIdempotencyService: class IntegrationIdempotencyService {},
+    IdempotencyConflictError: class IdempotencyConflictError extends Error {},
+    IDEMPOTENCY_KEY_MAX_LENGTH: 128,
+    idempotencyRequestHash: () => '',
+}));
+jest.mock('../../organizations/organization-membership.service', () => ({
+    OrganizationMembershipService: class OrganizationMembershipService {},
+}));
 
 import 'reflect-metadata';
 import { readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { Controller, Get, RequestMethod, type Type } from '@nestjs/common';
 import { GUARDS_METADATA, METHOD_METADATA, PATH_METADATA } from '@nestjs/common/constants';
+import { DELEGATED_READ_SCOPE } from '../../auth/decorators/delegated-read.decorator';
+import { DELEGATED_WRITE } from '../../auth/decorators/delegated-write.decorator';
 import { IS_PUBLIC_KEY, Public } from '../../auth/decorators/public.decorator';
+import { DelegatedPrincipalGuard } from '../../auth/guards/delegated-principal.guard';
 import { IsPlatformAdminGuard } from '../../auth/guards/platform-admin.guard';
 import { SessionOnlyGuard } from '../../auth/guards/session-only.guard';
 import { OrganizationOwnershipGuard } from '../../organizations/guards/organization-ownership.guard';
+import { EverConnectAppsController } from '../apps-write/ever-connect-apps.controller';
+import { EverConnectAppsModule } from '../apps-write/ever-connect-apps.module';
 import { EverConnectAdminController } from '../ever-connect-admin.controller';
 import { EverConnectModule } from '../ever-connect.module';
 import { EverConnectWellKnownController } from '../well-known.controller';
@@ -31,7 +72,10 @@ import { OrganizationLinkAdminGuard } from '../links/organization-link-admin.gua
  * and changed by its administrators only (the account's owner, or a member whose
  * role in the Organization is `admin` or `owner`, whatever
  * `ORG_ADMIN_ROLE_ENFORCED` says: `OrganizationLinkAdminGuard`). The link module
- * is loaded only with its own switch.
+ * is loaded only with its own switch. So is the apps-write module, whose two
+ * routes take a delegated Ever ID access token only (`delegated`:
+ * `DelegatedPrincipalGuard` on the class, `@DelegatedWrite('apps:write')` on
+ * each route).
  *
  * A route added without a guard, or made public, changes the generated
  * manifest and fails here until the committed file is updated on purpose
@@ -40,7 +84,13 @@ import { OrganizationLinkAdminGuard } from '../links/organization-link-admin.gua
 interface ManifestRoute {
     method: string;
     path: string;
-    auth: 'public' | 'session' | 'platform-admin' | 'organization-member' | 'organization-admin';
+    auth:
+        | 'public'
+        | 'session'
+        | 'platform-admin'
+        | 'organization-member'
+        | 'organization-admin'
+        | 'delegated';
 }
 
 const MANIFEST_PATH = join(__dirname, '..', 'ever-connect.routes.json');
@@ -72,11 +122,13 @@ function routesOf(controller: Type): ManifestRoute[] {
                 ? 'public'
                 : guards.includes(IsPlatformAdminGuard)
                   ? 'platform-admin'
-                  : guards.includes(OrganizationLinkAdminGuard)
-                    ? 'organization-admin'
-                    : guards.includes(OrganizationOwnershipGuard)
-                      ? 'organization-member'
-                      : 'session',
+                  : guards.includes(DelegatedPrincipalGuard)
+                    ? 'delegated'
+                    : guards.includes(OrganizationLinkAdminGuard)
+                      ? 'organization-admin'
+                      : guards.includes(OrganizationOwnershipGuard)
+                        ? 'organization-member'
+                        : 'session',
         });
     }
     return out.sort((a, b) => a.path.localeCompare(b.path) || a.method.localeCompare(b.method));
@@ -104,6 +156,7 @@ describe('Ever Connect — route manifest', () => {
     const controllers: Type[] = [
         ...(Reflect.getMetadata('controllers', EverConnectModule) ?? []),
         ...(Reflect.getMetadata('controllers', EverConnectLinkModule) ?? []),
+        ...(Reflect.getMetadata('controllers', EverConnectAppsModule) ?? []),
     ];
 
     it('is generated from every controller of the module', () => {
@@ -112,6 +165,7 @@ describe('Ever Connect — route manifest', () => {
             EverConnectWellKnownController,
             InstallRequestsController,
             EverConnectLinkController,
+            EverConnectAppsController,
         ]);
         const generated = generate(controllers);
         if (process.env.UPDATE_ROUTES_MANIFEST === '1') {
@@ -133,7 +187,8 @@ describe('Ever Connect — route manifest', () => {
             public: [{ method: 'GET', path: '/.well-known/ever-connect' }],
             inbound: [{ method: 'GET', path: '/.well-known/ever-connect' }],
         });
-        // Beside the platform admins' routes: an Organization's link, and nothing else.
+        // Beside the platform admins' routes: an Organization's link, what another Ever
+        // app may do for a person, and nothing else.
         expect(
             committed.routes.filter(
                 (route) => route.auth !== 'platform-admin' && route.path.startsWith('/api/'),
@@ -154,7 +209,25 @@ describe('Ever Connect — route manifest', () => {
                 path: '/api/ever-connect/organizations/:orgId/link',
                 auth: 'organization-admin',
             },
+            { method: 'POST', path: '/api/ever-connect/apps', auth: 'delegated' },
+            { method: 'POST', path: '/api/ever-connect/apps/:workId/deploy', auth: 'delegated' },
         ]);
+    });
+
+    it('a route another Ever app calls for a person takes a delegated write token, and only that', () => {
+        const proto = EverConnectAppsController.prototype as unknown as Record<string, unknown>;
+        // Every route of the class: nothing but a delegated principal is admitted.
+        expect(Reflect.getMetadata(GUARDS_METADATA, EverConnectAppsController)).toEqual([
+            DelegatedPrincipalGuard,
+        ]);
+        for (const name of ['create', 'deploy']) {
+            const handler = proto[name] as object;
+            // The write scope: a token that may only read is refused by the session guard.
+            expect(Reflect.getMetadata(DELEGATED_READ_SCOPE, handler)).toBe('apps:write');
+            expect(Reflect.getMetadata(DELEGATED_WRITE, handler)).toBe(true);
+            expect(Reflect.getMetadata(IS_PUBLIC_KEY, handler)).toBeUndefined();
+        }
+        expect(Reflect.getMetadata(IS_PUBLIC_KEY, EverConnectAppsController)).toBeUndefined();
     });
 
     it("a route that changes a link needs the Organization's administrator and an interactive session", () => {

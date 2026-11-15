@@ -6,6 +6,7 @@ import {
     DELEGATED_READ_SCOPE,
     type DelegatedReadOriginsResolver,
 } from '../decorators/delegated-read.decorator';
+import { DELEGATED_WRITE } from '../decorators/delegated-write.decorator';
 import { ApiKeyService } from '../services/api-key.service';
 import { UserRepository } from '@ever-works/agent/database';
 import { FleetRunCredentialService } from '@ever-works/agent/fleet';
@@ -212,6 +213,12 @@ export class AuthSessionGuard {
         // a JWT (an Ever Works session bearer never contains a dot). Everywhere
         // else such a token falls through to the provider below and is refused
         // exactly as before (FR-46).
+        //
+        // A handler marked `@DelegatedWrite(scope)` takes this same branch: its
+        // scope travels under the same key, so a write is admitted by exactly
+        // the checks of a read, with a write scope a read token does not carry
+        // (`403 insufficient_scope`). The one thing the mark changes is told to
+        // the verifier below.
         const delegatedScope = this.reflector.getAllAndOverride<string>(DELEGATED_READ_SCOPE, [
             context.getHandler(),
             context.getClass(),
@@ -233,15 +240,27 @@ export class AuthSessionGuard {
                     throw new DelegatedReadOriginRefusedException();
                 }
                 const delegation = this.resolveDelegationService();
-                const principal = delegation
-                    ? await delegation.authenticate(bearer, delegatedScope, {
-                          ipAddress: typeof request.ip === 'string' ? request.ip : null,
-                          userAgent:
-                              typeof request.headers?.['user-agent'] === 'string'
-                                  ? request.headers['user-agent']
-                                  : null,
-                      })
-                    : null;
+                const requestFacts = {
+                    ipAddress: typeof request.ip === 'string' ? request.ip : null,
+                    userAgent:
+                        typeof request.headers?.['user-agent'] === 'string'
+                            ? request.headers['user-agent']
+                            : null,
+                };
+                // A write route says why a valid token names nobody here
+                // (`403 no_linked_identity`); a read keeps the plain 401.
+                const isWrite =
+                    this.reflector.getAllAndOverride<boolean>(DELEGATED_WRITE, [
+                        context.getHandler(),
+                        context.getClass(),
+                    ]) === true;
+                const principal = !delegation
+                    ? null
+                    : isWrite
+                      ? await delegation.authenticate(bearer, delegatedScope, requestFacts, {
+                            access: 'write',
+                        })
+                      : await delegation.authenticate(bearer, delegatedScope, requestFacts);
                 if (!principal) {
                     throw new UnauthorizedException();
                 }

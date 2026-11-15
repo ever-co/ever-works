@@ -348,6 +348,18 @@ export class Work {
     @Column({ type: 'varchar', length: 64, nullable: true })
     lastDeployCorrelationId?: string | null;
 
+    /**
+     * The install on Ever Platform's marketplace this Work was created for
+     * (Ever Platform's id of the install, a ULID), when there is one: a person
+     * installed a listing there and was sent here to create the Work, and the
+     * address that brought them named the install. Set once, at creation, from
+     * `CreateWorkDto.installId`; `NULL` on every other Work. An identifier only:
+     * the apps mirror repeats it to Ever Platform so the install and the Work
+     * it produced can be told to be the same thing.
+     */
+    @Column({ type: 'varchar', length: 26, nullable: true })
+    installId?: string | null;
+
     // Repository FIELDS
     @Column('simple-json', { nullable: true })
     lastPullRequest?: { main?: PRUpdate; data?: PRUpdate };
