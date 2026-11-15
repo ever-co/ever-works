@@ -107,8 +107,19 @@ jobs:
           PID=$!
           for i in $(seq 1 90); do
             if curl -sf -o /dev/null http://127.0.0.1:3999/api/health; then
-              echo "API healthy after $((i * 2)) s"
+              # Nothing is switched on in this boot, so a route behind a switch that is off
+              # by default must not exist: the same request the boot below expects 401 for
+              # answers 404 here. That tells a switch that gates its routes from routes
+              # that are always there.
+              OFF=$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+                -H 'content-type: application/json' -d '{}' \
+                http://127.0.0.1:3999/api/ever-connect/apps)
               kill "$PID" || true
+              if [ "$OFF" != "404" ]; then
+                echo "::error::POST /api/ever-connect/apps answered $OFF with nothing switched on (expected 404: the route is behind a switch that is off by default)"
+                exit 1
+              fi
+              echo "API healthy after $((i * 2)) s; POST /api/ever-connect/apps with nothing switched on: 404"
               exit 0
             fi
             if ! kill -0 "$PID" 2>/dev/null; then

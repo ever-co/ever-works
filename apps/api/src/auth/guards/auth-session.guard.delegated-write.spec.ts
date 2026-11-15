@@ -194,6 +194,43 @@ describe('AuthSessionGuard — the delegated write', () => {
         expect(delegation.authenticate).not.toHaveBeenCalled();
     });
 
+    it('with an origin rule, a request that names no origin is refused too, and a listed origin is let through', async () => {
+        const delegation = {
+            authenticate: jest.fn().mockResolvedValue(principal(['apps:write'])),
+        };
+        const { guard } = createGuard({
+            metadata: { ...WRITE, [DELEGATED_READ_ORIGINS]: () => ['https://app.ever.co'] },
+            delegation,
+        });
+
+        // A rule names where a browser may call from; a call from nowhere is not one of them.
+        await expect(
+            guard.canActivate(createContext({ headers: { authorization: `Bearer ${JWT}` } })),
+        ).rejects.toMatchObject({ status: 403, response: { code: 'origin_not_allowed' } });
+        expect(delegation.authenticate).not.toHaveBeenCalled();
+
+        await expect(
+            guard.canActivate(
+                createContext({
+                    headers: { authorization: `Bearer ${JWT}`, origin: 'https://app.ever.co' },
+                }),
+            ),
+        ).resolves.toBe(true);
+        expect(delegation.authenticate).toHaveBeenCalledTimes(1);
+    });
+
+    it('without an origin rule (a route another app’s server calls), a request that names no origin is not refused for it', async () => {
+        const delegation = {
+            authenticate: jest.fn().mockResolvedValue(principal(['apps:write'])),
+        };
+        const { guard } = createGuard({ metadata: WRITE, delegation });
+
+        await expect(
+            guard.canActivate(createContext({ headers: { authorization: `Bearer ${JWT}` } })),
+        ).resolves.toBe(true);
+        expect(delegation.authenticate).toHaveBeenCalledTimes(1);
+    });
+
     describe('everything else is as it was', () => {
         it('a session on a write handler is a session: the verifier is never asked', async () => {
             const user = { userId: 'u1', iss: 'auth-runtime' };
