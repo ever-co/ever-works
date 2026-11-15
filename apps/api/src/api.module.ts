@@ -148,6 +148,7 @@ import { everConnectAppSyncModuleImports } from './ever-connect/app-sync/app-syn
 import { everConnectAppsModuleImports } from './ever-connect/apps-write/ever-connect-apps.module';
 import { everConnectPersonDataModuleImports } from './ever-connect/person-data/person-data.module';
 import { everConnectPersonDeletionModuleImports } from './ever-connect/person-data/person-deletion.module';
+import { everConnectMembershipSyncModuleImports } from './ever-connect/membership/membership-sync.module';
 import { AccountDeletionModule } from './account-deletion/account-deletion.module';
 import {
     PluginsModule as AgentPluginsModule,
@@ -549,6 +550,9 @@ import { DatabaseModule } from '@ever-works/agent/database';
         // their data (off by default, each behind its own switch).
         ...everConnectPersonDataModuleImports(),
         ...everConnectPersonDeletionModuleImports(),
+        // Applying the membership changes Ever Platform sends for a linked
+        // Organization (off by default, behind its own switch).
+        ...everConnectMembershipSyncModuleImports(),
         // EW-P1-2 — Integration API v1 (`/api/integrations/v1/*`), the stable
         // contract integrations such as Ever Gauzy code against. Additive;
         // reachable only with an `ew_int_` integration key.

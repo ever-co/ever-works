@@ -42,6 +42,10 @@
  *   Settings → Danger Zone, when that is safe for everyone else. Off, nothing is
  *   deleted beyond the connected identities, and the answer stays `failed` with
  *   `account_deletion_pending`.
+ * - `EVER_CONNECT_MEMBERSHIP_SYNC_ENABLED`: the membership changes Ever Platform
+ *   sends on the feed for an organization linked to an Organization here (a person
+ *   added, their role changed, removed) are applied to that Organization's
+ *   members. Off, those events are read past and nothing changes.
  */
 import { parseTrustedClientIds } from '../auth/ever-id-trusted-clients';
 
@@ -102,6 +106,10 @@ export function isPersonExportEnabled(env: Env = process.env): boolean {
 
 export function isPersonDeletionEnabled(env: Env = process.env): boolean {
     return withConnect(env, 'EVER_CONNECT_PERSON_DELETION_ENABLED');
+}
+
+export function isMembershipSyncEnabled(env: Env = process.env): boolean {
+    return withConnect(env, 'EVER_CONNECT_MEMBERSHIP_SYNC_ENABLED');
 }
 
 /** Which of the switched parts this installation runs (shown to the operator). */
