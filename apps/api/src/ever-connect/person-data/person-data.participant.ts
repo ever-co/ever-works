@@ -31,9 +31,10 @@ export function personExportUrl(jobId: string, webAppUrl: string = config.webApp
 }
 
 /**
- * Ever Works' part in people's export (and, with its own switch, deletion)
- * requests from Ever Platform, registered with the request handler through
- * {@link EverConnectExtensions} only for what is switched on.
+ * Ever Works' part in people's export requests from Ever Platform, registered
+ * with the request handler through {@link EverConnectExtensions} only while
+ * its switch is on (deletion is a module of its own:
+ * `person-deletion.participant.ts`).
  *
  * **Export** (`EVER_CONNECT_PERSON_EXPORT_ENABLED`): the answer is `exported`
  * with an address on this installation ({@link personExportUrl}). Nothing is
