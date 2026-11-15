@@ -553,6 +553,45 @@ Platform records a link only for someone who signed in through this
 installation's own client, so an Ever ID connected before the client existed is
 reported at that person's next sign-in.
 
+### A link that starts the sign-in
+
+Off by default, behind a switch on the web app:
+
+| Where       | Variable                           | What it turns on                                                    |
+| ----------- | ---------------------------------- | ------------------------------------------------------------------- |
+| The web app | `EVER_ID_START_ROUTE_ENABLED=true` | The web app answers the address below. Off: the address is a `404`. |
+
+With it on, another Ever app can link straight into the sign-in:
+
+```
+<WEB_URL>/api/auth/ever-id/start
+<WEB_URL>/api/auth/ever-id/start?return=/works
+```
+
+- **What it is for.** A person who follows the link is not shown the sign-in
+  page: the sign-in that the **Sign in with Ever ID** button starts begins at
+  once, and after signing in at Ever ID they land where that sign-in always
+  lands. A person who is already signed in goes straight there, and no sign-in
+  is started. The address makes the same requests the button makes, and no
+  others.
+- **When it answers.** Only the exact value `true` turns it on, and only while
+  **Sign in with Ever ID** is shown on the sign-in page (an administrator turned
+  Ever ID on). In every other case the address answers `404`, like any address
+  that does not exist, and nothing else changes. The switch needs no new build:
+  restart the web app.
+- **The return path.** `return` names where to land, and is used only when it is
+  a path of this installation: it starts with a single `/`. An absolute URL,
+  `//host`, a backslash, a control or invisible character, a `.` or `..`
+  segment, a percent-encoded spelling of any of those (however many times it is
+  encoded), a path of more than 512 characters and a `return` given twice are
+  all refused. A refused value is ignored, not repaired: the person still signs
+  in and lands on the normal page. The address can therefore not be used to
+  send anyone to another site.
+- **Only a link.** Only a person following a link starts a sign-in. A page that
+  loads the address in the background (an image, a frame, a script request, a
+  prefetch) gets a `404` and starts nothing. The limit on starting a sign-in is
+  the button's own; a sign-in that cannot start lands on the sign-in error page.
+
 ## People's export and deletion requests
 
 When a person asks Ever Platform to export or delete their Ever ID data, each
