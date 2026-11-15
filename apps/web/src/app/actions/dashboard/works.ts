@@ -17,7 +17,7 @@ import {
     GitProviderConnectionInfo,
 } from '@/lib/api';
 import type { Work } from '@/lib/api/types-only';
-import { normalizeInstallId } from '@/lib/works/blueprint-handoff.shared';
+import { marketplaceInstallClaim } from '@/lib/works/blueprint-handoff.shared';
 import type { AppDeletionPreviewResponse } from '@/lib/api/work';
 import type {
     MergePolicyOverride,
@@ -170,45 +170,59 @@ const getCreateWorkSchema = async () => {
             .transform((val) => (val === false ? false : undefined)),
         // Write-only Blueprint prompt answers (FR-55). Never logged.
         appEnv: z.record(z.string().max(200), z.string().max(10_000)).optional(),
-        // The marketplace install the Work is created for (a Blueprint hand-off
-        // from Ever Platform). Kept only when it is spelled like an install id;
-        // the API validates again.
-        installId: z
-            .string()
-            .optional()
-            .transform((val) => normalizeInstallId(val) ?? undefined),
+        // The marketplace install the Work is created for and the Ever
+        // organization it belongs to (a Blueprint hand-off from Ever Platform).
+        // Declared so zod reads them; whether they travel on is decided once the
+        // whole request is known (`marketplaceInstallClaim`, below).
+        installId: z.string().max(64).optional().catch(undefined),
+        everOrg: z.string().max(64).optional().catch(undefined),
         readmeConfig: readmeConfigSchema.optional(),
     });
 
     // An App Work needs the repository, the mode and — for a fork or a private
     // copy — the target owner. Checked here so the form gets the message before
     // the round-trip; the API's validation pipe says the same thing.
-    return createWorkSchema.superRefine((data, ctx) => {
-        if (data.kind !== 'app') return;
-        if (!data.repositoryUrl) {
-            ctx.addIssue({
-                code: 'custom',
-                path: ['repositoryUrl'],
-                message: t('app.repositoryUrlRequired'),
+    return createWorkSchema
+        .superRefine((data, ctx) => {
+            if (data.kind !== 'app') return;
+            if (!data.repositoryUrl) {
+                ctx.addIssue({
+                    code: 'custom',
+                    path: ['repositoryUrl'],
+                    message: t('app.repositoryUrlRequired'),
+                });
+            }
+            if (!data.repositoryMode) {
+                ctx.addIssue({
+                    code: 'custom',
+                    path: ['repositoryMode'],
+                    message: t('app.repositoryModeRequired'),
+                });
+            } else if (
+                (data.repositoryMode === 'fork' || data.repositoryMode === 'private-copy') &&
+                !data.targetOwner
+            ) {
+                ctx.addIssue({
+                    code: 'custom',
+                    path: ['targetOwner'],
+                    message: t('app.targetOwnerRequired'),
+                });
+            }
+        })
+        .transform(({ installId, everOrg, ...request }) => {
+            // A server action can be called with any body, so what the form chose to
+            // send decides nothing. The install and its Ever organization travel on
+            // together, only for an App made from a Blueprint, and only while the
+            // hand-off is switched on here; otherwise neither is sent, and the create
+            // is the one it always was. The API decides again, behind its own switch.
+            const claim = marketplaceInstallClaim({
+                kind: request.kind,
+                blueprintId: request.blueprintId,
+                installId,
+                everOrg,
             });
-        }
-        if (!data.repositoryMode) {
-            ctx.addIssue({
-                code: 'custom',
-                path: ['repositoryMode'],
-                message: t('app.repositoryModeRequired'),
-            });
-        } else if (
-            (data.repositoryMode === 'fork' || data.repositoryMode === 'private-copy') &&
-            !data.targetOwner
-        ) {
-            ctx.addIssue({
-                code: 'custom',
-                path: ['targetOwner'],
-                message: t('app.targetOwnerRequired'),
-            });
-        }
-    });
+            return claim ? { ...request, ...claim } : request;
+        });
 };
 
 async function markProposalAcceptedWithRetry(proposalId: string, workId: string): Promise<void> {

@@ -63,7 +63,17 @@ const INSTALL = '01JC5R7Y6K1M9E0V3Q2A8XW4TB';
 const EVER_ORG = '01JMQCK0RG000000000000000A';
 const UPSTREAM = 'https://github.com/calcom/cal.diy';
 const HANDOFF = { blueprint: 'cal-diy', install: INSTALL, everOrg: EVER_ORG };
-const RESOLVED = { blueprintId: 'cal-diy', repositoryUrl: UPSTREAM, installId: INSTALL };
+const RESOLVED = {
+    blueprintId: 'cal-diy',
+    repositoryUrl: UPSTREAM,
+    installId: INSTALL,
+    everOrg: EVER_ORG,
+};
+/** The form is given the install: it is opened in the Organization the install belongs to. */
+const WITH_INSTALL = { keepInstall: true };
+/** The form is given the Blueprint only. */
+const WITHOUT_INSTALL = { keepInstall: false };
+const ACME = { kind: 'organization', slug: 'acme' };
 
 type Params = Record<string, string | string[] | undefined>;
 
@@ -106,10 +116,13 @@ describe('/works/new — a Blueprint hand-off from the marketplace', () => {
         install: INSTALL,
     };
 
-    it('opens the App form with the Blueprint’s repository and the install', async () => {
+    it('opens the App form with the Blueprint’s repository and the install, in the Organization linked to the Ever organization', async () => {
+        workspace.current = 'org:acme';
+        workspaceOf.mockResolvedValue(ACME);
         expect(await visit(query)).toBeNull();
         expect(screen.getByTestId('new-work')).toBeTruthy();
-        expect(resolve).toHaveBeenCalledWith(HANDOFF);
+        expect(workspaceOf).toHaveBeenCalledWith(HANDOFF);
+        expect(resolve).toHaveBeenCalledWith(HANDOFF, WITH_INSTALL);
         expect(clientProps.current).toMatchObject({
             initialKind: 'app',
             initialMode: 'manual',
@@ -120,11 +133,10 @@ describe('/works/new — a Blueprint hand-off from the marketplace', () => {
     it('needs no `mode`: a hand-off opens the App form on its own', async () => {
         expect(await visit({ kind: 'app', blueprint: 'cal-diy' })).toBeNull();
         expect(clientProps.current).toMatchObject({ initialKind: 'app', initialMode: 'manual' });
-        expect(resolve).toHaveBeenCalledWith({
-            blueprint: 'cal-diy',
-            install: null,
-            everOrg: null,
-        });
+        expect(resolve).toHaveBeenCalledWith(
+            { blueprint: 'cal-diy', install: null, everOrg: null },
+            WITHOUT_INSTALL,
+        );
     });
 
     it('goes to the person’s Organization linked to the Ever organization, keeping the hand-off', async () => {
@@ -137,23 +149,48 @@ describe('/works/new — a Blueprint hand-off from the marketplace', () => {
         expect(resolve).not.toHaveBeenCalled();
     });
 
-    it('already in an Organization: the form opens there, and no other one is looked for', async () => {
-        workspace.current = 'org:acme';
-        workspaceOf.mockResolvedValue({ kind: 'organization', slug: 'globex' });
-        expect(await visit(query)).toBeNull();
-        expect(workspaceOf).not.toHaveBeenCalled();
-        expect(clientProps.current).toMatchObject({ appBlueprintHandoff: RESOLVED });
-    });
+    describe('the install is a claim: the form is given it only in the Organization it belongs to', () => {
+        it('in another Organization than the linked one: the form opens there, without the install', async () => {
+            workspace.current = 'org:acme';
+            workspaceOf.mockResolvedValue({ kind: 'organization', slug: 'globex' });
+            // No redirect out of an Organization the visitor chose.
+            expect(await visit(query)).toBeNull();
+            expect(resolve).toHaveBeenCalledWith(HANDOFF, WITHOUT_INSTALL);
+        });
 
-    it('no Organization linked to it (or linking is off here): the form opens where the visitor is', async () => {
-        expect(await visit(query)).toBeNull();
-        expect(workspaceOf).toHaveBeenCalledTimes(1);
-        expect(clientProps.current).toMatchObject({ appBlueprintHandoff: RESOLVED });
-    });
+        it('no Organization linked to it (or linking is off here): the form opens where the visitor is, without the install', async () => {
+            expect(await visit(query)).toBeNull();
+            expect(workspaceOf).toHaveBeenCalledTimes(1);
+            expect(resolve).toHaveBeenCalledWith(HANDOFF, WITHOUT_INSTALL);
 
-    it('a hand-off that names no Ever organization asks for none', async () => {
-        expect(await visit({ kind: 'app', blueprint: 'cal-diy', install: INSTALL })).toBeNull();
-        expect(workspaceOf).not.toHaveBeenCalled();
+            workspace.current = 'org:acme';
+            resolve.mockClear();
+            expect(await visit(query)).toBeNull();
+            expect(resolve).toHaveBeenCalledWith(HANDOFF, WITHOUT_INSTALL);
+        });
+
+        it('a hand-off that names no Ever organization asks for none, and its install binds nothing', async () => {
+            workspace.current = 'org:acme';
+            workspaceOf.mockResolvedValue(ACME);
+            expect(await visit({ kind: 'app', blueprint: 'cal-diy', install: INSTALL })).toBeNull();
+            expect(workspaceOf).not.toHaveBeenCalled();
+            expect(resolve).toHaveBeenCalledWith(
+                { blueprint: 'cal-diy', install: INSTALL, everOrg: null },
+                WITHOUT_INSTALL,
+            );
+        });
+
+        it('a hand-off without an install has none to keep, in the linked Organization too', async () => {
+            workspace.current = 'org:acme';
+            workspaceOf.mockResolvedValue(ACME);
+            expect(
+                await visit({ kind: 'app', blueprint: 'cal-diy', ever_org: EVER_ORG }),
+            ).toBeNull();
+            expect(resolve).toHaveBeenCalledWith(
+                { blueprint: 'cal-diy', install: null, everOrg: EVER_ORG },
+                WITHOUT_INSTALL,
+            );
+        });
     });
 
     it('a signed-out visitor is sent to sign in before anything is looked up', async () => {

@@ -53,11 +53,12 @@ export interface AppWorkFormProps {
      * a Blueprint listing there and was sent here to create the App. The form
      * opens on that Blueprint's repository and checks it at once, exactly as a
      * pick from the catalog tab does, and the create carries the install the App
-     * is for (`installId`) for as long as the person keeps that Blueprint.
-     * Typing another repository, or picking another app, leaves the hand-off:
-     * neither its Blueprint nor its install is sent. When the catalog here does
-     * not have the Blueprint (`repositoryUrl: null`) the form opens on the
-     * catalog tab and says so.
+     * is for and the Ever organization it belongs to (`installId` with
+     * `everOrg`, together or not at all) for as long as the person keeps that
+     * Blueprint. Typing another repository, or picking another app, leaves the
+     * hand-off: neither its Blueprint nor its install is sent. When the catalog
+     * here does not have the Blueprint (`repositoryUrl: null`) the form opens on
+     * the catalog tab and says so.
      */
     handoff?: AppBlueprintHandoff | null;
 }
@@ -139,6 +140,12 @@ export function AppWorkForm({
     // another app: from then on neither its Blueprint nor its install is sent.
     const [handoffKept, setHandoffKept] = useState(handoffUrl !== null);
     const handoffBlueprintId = handoffKept ? handoff?.blueprintId : undefined;
+    // The install of the hand-off, while the person keeps its Blueprint: an install
+    // id and the Ever organization it belongs to, or nothing.
+    const handoffInstall =
+        handoffKept && handoff?.installId && handoff.everOrg
+            ? { installId: handoff.installId, everOrg: handoff.everOrg }
+            : null;
     const chosenBlueprintId = pickedBlueprintId ?? handoffBlueprintId ?? initialBlueprintId;
     const [repositoryUrl, setRepositoryUrl] = useState(seed);
     const [preview, setPreview] = useState<AppSourceInspectResponse | null>(null);
@@ -321,9 +328,11 @@ export function AppWorkForm({
                 repositoryMode: mode,
                 ...(ownerNeeded ? { targetOwner: owner } : {}),
                 ...(blueprintId ? { blueprintId } : {}),
-                // The install the App is for: only with the Blueprint it was for.
-                ...(handoffKept && handoff?.installId && blueprintId === handoff.blueprintId
-                    ? { installId: handoff.installId }
+                // The install the App is for, with the Ever organization it belongs
+                // to: only with the Blueprint it was for, and never one without the
+                // other (the API checks the Organization against the Ever organization).
+                ...(handoffInstall && blueprintId === handoff?.blueprintId
+                    ? { installId: handoffInstall.installId, everOrg: handoffInstall.everOrg }
                     : {}),
                 ...(providerId ? { deployProvider: providerId } : {}),
                 ...(showAutoProvision && !autoProvision ? { autoProvision: false } : {}),
@@ -411,7 +420,7 @@ export function AppWorkForm({
                     {t('handoff.blueprintNotFound')}
                 </p>
             )}
-            {handoffKept && handoff?.installId && (
+            {handoffInstall && (
                 <p
                     className="text-sm text-text-secondary dark:text-text-secondary-dark"
                     data-testid="app-work-handoff-install"

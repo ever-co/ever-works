@@ -89,10 +89,14 @@ function renderForm(props: Partial<Parameters<typeof AppWorkForm>[0]> = {}) {
     );
 }
 
+const EVER_ORG = '01JMQCK0RG000000000000000A';
+
+/** As the page gives it in the Organization the install belongs to. */
 const handoff = (over: Record<string, unknown> = {}) => ({
     blueprintId: 'cal-diy',
     repositoryUrl: UPSTREAM as string | null,
     installId: INSTALL as string | null,
+    everOrg: EVER_ORG as string | null,
     ...over,
 });
 
@@ -146,17 +150,25 @@ describe('AppWorkForm — a Blueprint hand-off', () => {
             repositoryMode: 'fork',
             targetOwner: 'me',
             blueprintId: 'cal-diy',
+            // Together: the API checks the Organization against the Ever organization.
             installId: INSTALL,
+            everOrg: EVER_ORG,
         });
         await waitFor(() => expect(pushMock).toHaveBeenCalledWith('/works/work-1'));
     });
 
-    it('a hand-off without an install sends none, and says nothing about one', async () => {
-        renderForm({ handoff: handoff({ installId: null }) });
+    it.each([
+        ['without an install', { installId: null, everOrg: null }],
+        // Opened outside the Organization the install belongs to, the page gives neither.
+        ['with an install and no Ever organization', { everOrg: null }],
+        ['with an Ever organization and no install', { installId: null }],
+    ])('a hand-off %s sends neither, and says nothing about an install', async (_name, over) => {
+        renderForm({ handoff: handoff(over) });
         await submit();
 
         expect(createMock.mock.calls[0][0]).toMatchObject({ blueprintId: 'cal-diy' });
         expect(createMock.mock.calls[0][0]).not.toHaveProperty('installId');
+        expect(createMock.mock.calls[0][0]).not.toHaveProperty('everOrg');
         expect(screen.queryByTestId('app-work-handoff-install')).toBeNull();
     });
 
@@ -194,6 +206,7 @@ describe('AppWorkForm — a Blueprint hand-off', () => {
         const sent = createMock.mock.calls[0][0];
         expect(sent).toMatchObject({ repositoryUrl: 'https://github.com/acme/other' });
         expect(sent).not.toHaveProperty('installId');
+        expect(sent).not.toHaveProperty('everOrg');
         expect(sent).not.toHaveProperty('blueprintId');
     });
 
@@ -240,5 +253,6 @@ describe('AppWorkForm — a Blueprint hand-off', () => {
         });
         await submit();
         expect(createMock.mock.calls[0][0]).not.toHaveProperty('installId');
+        expect(createMock.mock.calls[0][0]).not.toHaveProperty('everOrg');
     });
 });

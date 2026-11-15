@@ -149,8 +149,16 @@ export interface CreateWorkDto {
     /**
      * The install on Ever Platform's marketplace the Work is created for (its
      * id there), when the person was sent here from a listing they installed.
+     * A claim: sent only with `everOrg`, for an App made from a Blueprint.
      */
     installId?: string;
+    /**
+     * The Ever organization that install belongs to (its id on Ever Platform or
+     * its handle). The API keeps the install only when the Organization the Work
+     * is created in is linked to this Ever organization, and refuses the create
+     * otherwise; it is not stored.
+     */
+    everOrg?: string;
     readmeConfig?: MarkdownReadmeConfig;
 }
 

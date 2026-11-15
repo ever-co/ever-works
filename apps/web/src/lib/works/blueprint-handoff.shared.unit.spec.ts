@@ -6,6 +6,7 @@ import {
     blueprintHandoffFormHref,
     blueprintHandoffSignInHref,
     isBlueprintHandoffEnabled,
+    marketplaceInstallClaim,
     normalizeInstallId,
     organizationOfEverOrg,
     readBlueprintHandoff,
@@ -280,5 +281,73 @@ describe('organizationOfEverOrg', () => {
                 { slug: 'acme-two', everOrgId: null, handle: 'ACME-INC' },
             ]),
         ).toBeNull();
+    });
+});
+
+/**
+ * What the create action lets through of a marketplace install. The install id
+ * is a claim that came in an address, and a server action can be called with
+ * any body: this rule, not the form, decides what is sent on.
+ */
+describe('marketplaceInstallClaim — what a create request may carry of an install', () => {
+    const request = (overrides: Record<string, unknown> = {}) => ({
+        kind: 'app',
+        blueprintId: 'cal-diy',
+        installId: INSTALL,
+        everOrg: EVER_ORG,
+        ...overrides,
+    });
+
+    it('lets the install through with its Ever organization, for an App made from a Blueprint', () => {
+        expect(marketplaceInstallClaim(request(), ON)).toEqual({
+            installId: INSTALL,
+            everOrg: EVER_ORG,
+        });
+        // A handle names an Ever organization as well as its id does.
+        expect(marketplaceInstallClaim(request({ everOrg: ' acme ' }), ON)).toEqual({
+            installId: INSTALL,
+            everOrg: 'acme',
+        });
+        // One spelling of the install id.
+        expect(
+            marketplaceInstallClaim(request({ installId: ` ${INSTALL.toLowerCase()} ` }), ON),
+        ).toEqual({ installId: INSTALL, everOrg: EVER_ORG });
+    });
+
+    it.each([
+        ['unset', {}],
+        ['`false`', { [BLUEPRINT_HANDOFF_SWITCH]: 'false' }],
+        ['a value that is not `true`', { [BLUEPRINT_HANDOFF_SWITCH]: '1' }],
+        ['another Ever Connect switch', { EVER_CONNECT_ENABLED: 'true' }],
+    ])('lets nothing through with the switch %s, whatever was sent', (_name, env) => {
+        expect(marketplaceInstallClaim(request(), env)).toBeNull();
+    });
+
+    it.each([
+        ['a generated site', { kind: 'website' }],
+        ['a repository Work', { kind: 'repo' }],
+        ['a request that names no kind', { kind: undefined }],
+        ['an App that is not made from a Blueprint', { blueprintId: undefined }],
+        ['an empty Blueprint id', { blueprintId: '' }],
+        ['a Blueprint id that is not one', { blueprintId: 'calcom/cal.diy' }],
+        ['a Blueprint id that is not text', { blueprintId: 42 }],
+        ['no install id', { installId: undefined }],
+        ['an install id that is not one', { installId: 'install-1' }],
+        ['an install id that is too long', { installId: `${INSTALL}0` }],
+        ['an install id that is not text', { installId: 42 }],
+        // One without the other binds nothing.
+        ['an install without its Ever organization', { everOrg: undefined }],
+        ['an empty Ever organization', { everOrg: '  ' }],
+        ['an Ever organization that is not one', { everOrg: 'acme corp' }],
+        ['an Ever organization that is an address', { everOrg: 'https://x.test/acme' }],
+        ['an Ever organization that is too long', { everOrg: 'a'.repeat(65) }],
+        ['an Ever organization that is not text', { everOrg: { id: EVER_ORG } }],
+        ['an Ever organization without an install', { installId: undefined }],
+    ])('lets nothing through for %s (ignored, never an error)', (_name, overrides) => {
+        expect(marketplaceInstallClaim(request(overrides), ON)).toBeNull();
+    });
+
+    it('reads the switch of this process by default: off unless it is set', () => {
+        expect(marketplaceInstallClaim(request(), {})).toBeNull();
     });
 });

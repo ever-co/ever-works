@@ -123,13 +123,25 @@ export default async function NewWorkPage({ searchParams }: NewWorkPageProps) {
 
     // A hand-off that names an Ever organization is for the Organization linked to
     // it: the App belongs there, which is also where Ever Platform is told of it.
-    // Only from the personal workspace, and only to one of the person's own
-    // Organizations; when none is linked to it the form opens where the visitor is.
-    if (handoff?.everOrg && (await currentWorkspace()).kind === 'personal') {
-        const workspace = await workspaceOfBlueprintHandoff(handoff);
-        if (workspace) {
-            redirect(buildWorkspaceHref(workspace, blueprintHandoffFormHref(handoff)));
+    // The visitor is sent there only from the personal workspace, and only to one
+    // of their own Organizations; when none is linked to it the form opens where
+    // the visitor is.
+    //
+    // The install the address names is a claim, kept only in that Organization:
+    // opened anywhere else (another Organization, the personal workspace, or with
+    // no Ever organization named) the form gets the Blueprint and no install.
+    let keepInstall = false;
+    if (handoff?.everOrg) {
+        const here = await currentWorkspace();
+        const linked = await workspaceOfBlueprintHandoff(handoff);
+        if (linked && here.kind === 'personal') {
+            redirect(buildWorkspaceHref(linked, blueprintHandoffFormHref(handoff)));
         }
+        keepInstall =
+            handoff.install !== null &&
+            linked?.kind === 'organization' &&
+            here.kind === 'organization' &&
+            here.slug === linked.slug;
     }
 
     // Get all available git providers and their connection status
@@ -249,7 +261,9 @@ export default async function NewWorkPage({ searchParams }: NewWorkPageProps) {
     // Read only when the App form will be shown; a catalog that cannot be read,
     // or a Blueprint it does not have, opens the form on the catalog instead.
     const appBlueprintHandoff =
-        handoff && safeInitialKind === 'app' ? await resolveBlueprintHandoff(handoff) : null;
+        handoff && safeInitialKind === 'app'
+            ? await resolveBlueprintHandoff(handoff, { keepInstall })
+            : null;
 
     return (
         <NewWorkClient

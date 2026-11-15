@@ -21,9 +21,15 @@ import {
  * catalog names for the Blueprint, or none when the catalog does not have it,
  * lists it as not selectable, or cannot be read (the form then opens on the
  * catalog, without the Blueprint).
+ *
+ * The install travels on only with `keepInstall`: the caller says so when the
+ * form is opened in the person's Organization linked to the Ever organization
+ * the address named. Otherwise the form gets no install and no Ever
+ * organization (the App can still be created; it is not bound to an install).
  */
 export async function resolveBlueprintHandoff(
     handoff: BlueprintHandoff,
+    { keepInstall = false }: { readonly keepInstall?: boolean } = {},
 ): Promise<AppBlueprintHandoff> {
     let repositoryUrl: string | null = null;
     try {
@@ -33,7 +39,13 @@ export async function resolveBlueprintHandoff(
     } catch {
         // Not readable here: the form says so and offers the catalog.
     }
-    return { blueprintId: handoff.blueprint, repositoryUrl, installId: handoff.install };
+    const bound = keepInstall && handoff.install !== null && handoff.everOrg !== null;
+    return {
+        blueprintId: handoff.blueprint,
+        repositoryUrl,
+        installId: bound ? handoff.install : null,
+        everOrg: bound ? handoff.everOrg : null,
+    };
 }
 
 /**

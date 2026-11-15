@@ -17,6 +17,15 @@ import { REDIRECT_SEARCH_PARAM, ROUTES } from '@/lib/constants';
  * Nothing here is trusted: the API settles the Blueprint, and whether the
  * person may create a Work in an Organization, on its own.
  *
+ * **The install id is a claim.** Anyone can write an address, so the install it
+ * names is kept only with the Ever organization it belongs to, only for an App
+ * made from the Blueprint, and only in the person's Organization linked to that
+ * Ever organization ({@link marketplaceInstallClaim} is the rule the create
+ * action applies; the API applies its own, behind its own switch, and refuses a
+ * create made in an Organization that is not linked to the Ever organization).
+ * Whether the install really is that organization's is for Ever Platform to
+ * decide when it is told of the App.
+ *
  * **Off by default.** The hand-off is read only with
  * `EVER_CONNECT_BLUEPRINT_HANDOFF_ENABLED=true` on the web app
  * ({@link isBlueprintHandoffEnabled}). Without it the three query keys mean
@@ -44,8 +53,18 @@ export interface AppBlueprintHandoff {
      * the catalog does not have the Blueprint or could not be read.
      */
     readonly repositoryUrl: string | null;
-    /** Ever Platform's id of the install the App is created for, when the address named one. */
+    /**
+     * Ever Platform's id of the install the App is created for: only when the
+     * address named one together with its Ever organization, and the form is
+     * opened in the person's Organization linked to that Ever organization.
+     */
     readonly installId: string | null;
+    /**
+     * The Ever organization the install belongs to (its id or its handle), sent
+     * with `installId` so the API can check the Organization against it; `null`
+     * whenever `installId` is.
+     */
+    readonly everOrg: string | null;
 }
 
 /** The query keys of the hand-off address. */
@@ -118,6 +137,38 @@ export function readEnabledBlueprintHandoff(
     env: Env = process.env,
 ): BlueprintHandoff | null {
     return isBlueprintHandoffEnabled(env) ? readBlueprintHandoff(query) : null;
+}
+
+/**
+ * What a create request may carry of a marketplace install: the install id and
+ * the Ever organization it belongs to, **together or not at all**, and only
+ *
+ * - with the hand-off switched on here ({@link isBlueprintHandoffEnabled});
+ * - for an **App** (`kind: 'app'`) made from a **Blueprint** (`blueprintId`);
+ * - when both are spelled like what they are.
+ *
+ * `null` in every other case: the create action then sends neither, whatever
+ * the browser sent it. A server action is a public endpoint, so this is the
+ * rule that counts on the web side, not what the form chooses to send.
+ */
+export function marketplaceInstallClaim(
+    request: {
+        readonly kind?: unknown;
+        readonly blueprintId?: unknown;
+        readonly installId?: unknown;
+        readonly everOrg?: unknown;
+    },
+    env: Env = process.env,
+): { installId: string; everOrg: string } | null {
+    if (!isBlueprintHandoffEnabled(env)) return null;
+    if (request.kind !== 'app') return null;
+    if (typeof request.blueprintId !== 'string' || !BLUEPRINT_ID.test(request.blueprintId)) {
+        return null;
+    }
+    const installId = normalizeInstallId(request.installId);
+    const everOrg = typeof request.everOrg === 'string' ? request.everOrg.trim() : '';
+    if (!installId || !EVER_ORG.test(everOrg)) return null;
+    return { installId, everOrg };
 }
 
 /** The hand-off as query entries, in a fixed order: only what was read, never the address as it came. */
