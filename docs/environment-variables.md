@@ -267,17 +267,23 @@ The [App Launcher](./features/app-launcher.md) is off by default on every instal
 | `EVER_WORKS_PLATFORM_CATALOG_ENV`     | Whose addresses the tiles use. Set it per deployment, or a stage installation shows production addresses.    | `production` \| `stage` \| `develop` | `production`           | No       |
 | `EVER_WORKS_PLATFORM_CATALOG_SELF_ID` | The catalog entry marked as the app you are in.                                                              | `string`                             | `ever-works`           | No       |
 | `EVER_WORKS_APP_LAUNCHER_ORIGINS`     | Origins another Ever app may read a person's launcher list from, with a delegated token.                     | `string`                             | --                     | No       |
-| `EVER_ID_TRUSTED_CLIENT_IDS`          | Optional: the Ever ID client ids such a delegated token must have been issued to.                            | `string`                             | --                     | No       |
+| `EVER_ID_TRUSTED_CLIENT_IDS`          | The Ever ID client ids a delegated token must have been issued to. Optional to read; required to write.      | `string`                             | --                     | No       |
 
 Where the web app has PostHog configured, the launcher also needs the `app-launcher` flag to resolve to `true` for the
 person; without PostHog, `EVER_WORKS_APP_LAUNCHER_ENABLED` alone decides.
 
 `EVER_WORKS_APP_LAUNCHER_ORIGINS` takes exact `https://` origins, comma-separated, at most 50: a delegated read from
 any other origin, or from none, is refused (`403`), and an invalid entry stops a production API from starting.
-`EVER_ID_TRUSTED_CLIENT_IDS` takes at most 5 client ids; unset, any client whose token verifies may read. The same
-list applies to a delegated token that creates or deploys an App for a person (`EVER_CONNECT_APPS_WRITE_ENABLED`, off by
-default; see [Connecting Ever Works to Ever Platform](./ever-platform/connection.md#creating-and-deploying-an-app-for-a-person)):
-set it before turning that on.
+`EVER_ID_TRUSTED_CLIENT_IDS` takes at most 5 client ids; unset, any client whose token verifies may read. A delegated
+token that creates or deploys an App for a person (`EVER_CONNECT_APPS_WRITE_ENABLED`, off by default; see
+[Connecting Ever Works to Ever Platform](./ever-platform/connection.md#creating-and-deploying-an-app-for-a-person))
+**requires** the list: with that switch on and the list unset or empty the routes stay off (`404`) and the API logs an
+error at its start, and a token that names no app, or an app that is not listed, is refused.
+
+`EVER_CONNECT_BLUEPRINT_HANDOFF_ENABLED` (off by default) is set on the API and on the web app: on the web app it reads
+the address a marketplace install sends a person to; on the API it keeps the install that a create request names, for an
+App made from a Blueprint in the Organization linked to the install's Ever organization (see
+[An App installed from the marketplace](./ever-platform/connection.md#an-app-installed-from-the-marketplace)).
 
 ---
 
