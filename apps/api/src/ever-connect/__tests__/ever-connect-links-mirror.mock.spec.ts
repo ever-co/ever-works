@@ -794,7 +794,11 @@ describeMock('Ever Connect — link codes, heartbeat, entitlements and the apps 
             data: {
                 kind: 'app',
                 base_kind: 'oss',
-                lineage: { install_id: install, provisioned_by: 'blueprint', blueprint: 'cal-diy' },
+                lineage: {
+                    install_id: install,
+                    provisioned_by: 'blueprint',
+                    blueprint: { id: 'cal-diy' },
+                },
             },
         });
         // Nothing of a repository: not its address, its name or an owner.

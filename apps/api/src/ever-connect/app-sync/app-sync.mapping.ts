@@ -71,15 +71,32 @@ export interface AppSyncOp {
  */
 export type AppSyncBaseKind = 'none' | 'ever' | 'oss';
 
+/** The Blueprint an App was created from: its id in the Apps catalog. */
+export interface AppSyncLineageBlueprint {
+    id: string;
+    /**
+     * The version of the Blueprint the App was created from. Part of the shape;
+     * not sent today, because a Work does not record which version it was
+     * created from (only the one it is on now, which an upgrade changes).
+     */
+    version?: string;
+}
+
 /**
  * Where an App created from an Apps catalog Blueprint comes from. Identifiers
- * only: the Blueprint's id in the catalog and, when the App was created for an
- * install on Ever Platform's marketplace, Ever Platform's id of that install.
+ * only: the Blueprint (an object: its id in the catalog) and, when the App was
+ * created for an install on Ever Platform's marketplace, Ever Platform's id of
+ * that install.
+ *
+ * `install_id` is a **claim**: it is the id the address that sent the person
+ * here carried. Ever Platform decides whether it matches (the same organization
+ * as the link the batch is sent under, the same Blueprint, an install not
+ * already bound to another App); nothing here asserts it.
  */
 export interface AppSyncLineage {
     install_id?: string;
     provisioned_by: 'blueprint';
-    blueprint: string;
+    blueprint: AppSyncLineageBlueprint;
 }
 
 export interface AppSyncAppData {
@@ -208,7 +225,7 @@ export function appLineage(
     if (work.kind !== 'app') return null;
     const blueprint = typeof work.blueprintId === 'string' ? work.blueprintId.trim() : '';
     if (!BLUEPRINT_ID.test(blueprint)) return null;
-    const lineage: AppSyncLineage = { provisioned_by: 'blueprint', blueprint };
+    const lineage: AppSyncLineage = { provisioned_by: 'blueprint', blueprint: { id: blueprint } };
     if (
         typeof work.installId === 'string' &&
         EVER_PLATFORM_INSTALL_ID_PATTERN.test(work.installId)

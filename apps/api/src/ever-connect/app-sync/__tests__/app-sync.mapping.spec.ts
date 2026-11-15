@@ -390,7 +390,7 @@ describe('apps mirror — where a deployment runs', () => {
                     lineage: {
                         install_id: INSTALL,
                         provisioned_by: 'blueprint',
-                        blueprint: 'cal-diy',
+                        blueprint: { id: 'cal-diy' },
                     },
                 },
             });
@@ -399,6 +399,14 @@ describe('apps mirror — where a deployment runs', () => {
             );
             const lineage = dataOf(op).lineage as Record<string, unknown>;
             expect(Object.keys(lineage).sort()).toEqual(LINEAGE_KEYS);
+            // The Blueprint is an object of text values (its id; a version only when the
+            // Work records which one it was created from, which it does not today); the
+            // install and how the App came to be are plain text.
+            expect(lineage.blueprint).toEqual({ id: 'cal-diy' });
+            expect(typeof (lineage.blueprint as { id: unknown }).id).toBe('string');
+            expect(lineage.blueprint).not.toHaveProperty('version');
+            expect(typeof lineage.install_id).toBe('string');
+            expect(typeof lineage.provisioned_by).toBe('string');
             // Not the account that owns what the Blueprint is for, nor anything else of the row.
             expect(JSON.stringify(op)).not.toMatch(/calcom|SECRET|secret|@/);
         });
@@ -406,7 +414,10 @@ describe('apps mirror — where a deployment runs', () => {
         it('a Blueprint without an install says so: no install id is made up', () => {
             for (const installId of [null, undefined, '', 'not-an-install', `${INSTALL}0`, 42]) {
                 const data = dataOf(appUpsert(blueprintApp({ installId }), LINK, 1, NOW));
-                expect(data.lineage).toEqual({ provisioned_by: 'blueprint', blueprint: 'cal-diy' });
+                expect(data.lineage).toEqual({
+                    provisioned_by: 'blueprint',
+                    blueprint: { id: 'cal-diy' },
+                });
                 expect(data.base_kind).toBe('oss');
             }
         });
@@ -467,7 +478,11 @@ describe('apps mirror — where a deployment runs', () => {
             const longest = `a${'b'.repeat(99)}`;
             expect(
                 dataOf(appUpsert(blueprintApp({ blueprintId: longest }), LINK, 1, NOW)).lineage,
-            ).toMatchObject({ blueprint: longest });
+            ).toEqual({
+                install_id: INSTALL,
+                provisioned_by: 'blueprint',
+                blueprint: { id: longest },
+            });
         });
     });
 

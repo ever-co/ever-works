@@ -371,7 +371,11 @@ describe('AppSyncService', () => {
             expect(dataOf(fromBlueprint)).toMatchObject({
                 kind: 'app',
                 base_kind: 'oss',
-                lineage: { install_id: install, provisioned_by: 'blueprint', blueprint: 'cal-diy' },
+                lineage: {
+                    install_id: install,
+                    provisioned_by: 'blueprint',
+                    blueprint: { id: 'cal-diy' },
+                },
             });
             // An App made from a pasted repository, and a site: nothing is told of where they come from.
             for (const id of [pasted, site]) {
