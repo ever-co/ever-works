@@ -191,6 +191,7 @@ export class PersonRequestsHandler {
         if (!participant?.deleteAccounts) return answer('failed', 'account_deletion_pending');
         try {
             const outcome = await participant.deleteAccounts(request);
+            if (outcome.result === 'pending') return answer('failed', 'account_deletion_pending');
             if (outcome.result === 'retained_legal') {
                 const basis = outcome.legalBasis?.trim() ?? '';
                 if (basis.length < 1 || basis.length > 200) {

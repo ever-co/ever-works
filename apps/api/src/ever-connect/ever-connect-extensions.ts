@@ -53,7 +53,7 @@ export class EverConnectExtensions {
     private readonly feedHandlers: EverConnectFeedHandler[] = [];
     private readonly participants: EverConnectRoundParticipant[] = [];
     private appSync: EverConnectAppSyncReader | null = null;
-    private personData: PersonDataParticipant | null = null;
+    private readonly personData: PersonDataParticipant = {};
 
     addFeedHandler(handler: EverConnectFeedHandler): void {
         if (!this.feedHandlers.includes(handler)) this.feedHandlers.push(handler);
@@ -69,16 +69,21 @@ export class EverConnectExtensions {
     }
 
     /**
-     * The person-data module answers people's export and deletion requests for
-     * the accounts (each part only while its own switch is on).
+     * A person-data module answers people's export or deletion requests for the
+     * accounts (each part only while its own switch is on). Parts provided by
+     * different modules are combined; a part provided again replaces the earlier
+     * one.
      */
     providePersonData(participant: PersonDataParticipant): void {
-        this.personData = participant;
+        if (participant.exportAccounts) this.personData.exportAccounts = participant.exportAccounts;
+        if (participant.deleteAccounts) this.personData.deleteAccounts = participant.deleteAccounts;
     }
 
-    /** The registered person-data participant, or `null` when none is switched on. */
+    /** The registered person-data parts, or `null` when none is switched on. */
     personDataParticipant(): PersonDataParticipant | null {
-        return this.personData;
+        return this.personData.exportAccounts || this.personData.deleteAccounts
+            ? this.personData
+            : null;
     }
 
     /** Where the apps mirror stands, or `null` when it is switched off. */

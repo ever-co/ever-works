@@ -19,7 +19,12 @@ export const EVER_PERSON_DATA_PARTICIPANT = Symbol('EVER_PERSON_DATA_PARTICIPANT
 export type PersonDeletionOutcome =
     | { readonly result: 'deleted' | 'anonymised' }
     /** The statute or contract clause the data is kept under (1-200 characters, never personal data). */
-    | { readonly result: 'retained_legal'; readonly legalBasis: string };
+    | { readonly result: 'retained_legal'; readonly legalBasis: string }
+    /**
+     * Nothing was deleted: the accounts are kept until they are deleted here
+     * (answered as without a participant, `failed` with `account_deletion_pending`).
+     */
+    | { readonly result: 'pending' };
 
 /** Where the person's export can be fetched (`https`, never fetched by Ever Platform). */
 export interface PersonExportOutcome {

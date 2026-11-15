@@ -37,6 +37,11 @@
  *   here, downloads what Ever Works holds about their own account. Off, the
  *   answer stays `failed` with `export_not_available` and the download route
  *   answers 404.
+ * - `EVER_CONNECT_PERSON_DELETION_ENABLED`: Ever Platform's deletion request for
+ *   a person deletes the matching accounts through the account deletion of
+ *   Settings → Danger Zone, when that is safe for everyone else. Off, nothing is
+ *   deleted beyond the connected identities, and the answer stays `failed` with
+ *   `account_deletion_pending`.
  */
 import { parseTrustedClientIds } from '../auth/ever-id-trusted-clients';
 
@@ -93,6 +98,10 @@ export function isBlueprintHandoffEnabled(env: Env = process.env): boolean {
 
 export function isPersonExportEnabled(env: Env = process.env): boolean {
     return withConnect(env, 'EVER_CONNECT_PERSON_EXPORT_ENABLED');
+}
+
+export function isPersonDeletionEnabled(env: Env = process.env): boolean {
+    return withConnect(env, 'EVER_CONNECT_PERSON_DELETION_ENABLED');
 }
 
 /** Which of the switched parts this installation runs (shown to the operator). */

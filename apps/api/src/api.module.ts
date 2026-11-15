@@ -147,6 +147,7 @@ import { everConnectLinkModuleImports } from './ever-connect/links/ever-connect-
 import { everConnectAppSyncModuleImports } from './ever-connect/app-sync/app-sync.module';
 import { everConnectAppsModuleImports } from './ever-connect/apps-write/ever-connect-apps.module';
 import { everConnectPersonDataModuleImports } from './ever-connect/person-data/person-data.module';
+import { everConnectPersonDeletionModuleImports } from './ever-connect/person-data/person-deletion.module';
 import { AccountDeletionModule } from './account-deletion/account-deletion.module';
 import {
     PluginsModule as AgentPluginsModule,
@@ -544,9 +545,10 @@ import { DatabaseModule } from '@ever-works/agent/database';
         // Creating an App, and starting a deployment of one, for a person another
         // Ever app acts for (off by default, behind its own switch).
         ...everConnectAppsModuleImports(),
-        // Answering people's export requests from Ever Platform with their data
-        // (off by default, behind its own switch).
+        // Answering people's export and deletion requests from Ever Platform with
+        // their data (off by default, each behind its own switch).
         ...everConnectPersonDataModuleImports(),
+        ...everConnectPersonDeletionModuleImports(),
         // EW-P1-2 — Integration API v1 (`/api/integrations/v1/*`), the stable
         // contract integrations such as Ever Gauzy code against. Additive;
         // reachable only with an `ew_int_` integration key.
