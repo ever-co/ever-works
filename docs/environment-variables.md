@@ -285,6 +285,11 @@ the address a marketplace install sends a person to; on the API it keeps the ins
 App made from a Blueprint in the Organization linked to the install's Ever organization (see
 [An App installed from the marketplace](./ever-platform/connection.md#an-app-installed-from-the-marketplace)).
 
+`EVER_ID_START_ROUTE_ENABLED` (off by default) is set on the web app only: with it on, `GET /api/auth/ever-id/start`
+begins Sign in with Ever ID at once, so that a link from another Ever app lands a person in the sign-in instead of on
+the sign-in page; off, the address answers `404` (see
+[A link that starts the sign-in](./ever-platform/connection.md#a-link-that-starts-the-sign-in)).
+
 ---
 
 ## Anonymous Usage Statistics
