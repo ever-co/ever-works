@@ -33,6 +33,7 @@ import { EVER_ID_ANONYMOUS_DISTINCT_ID, isEverIdOffered } from '@/lib/feature-fl
  * | ------------------------------------------ | ---------------------------------------- |
  * | switch off (the default)                   | `404`, nothing read, nothing called      |
  * | not a top-level `GET` navigation           | `404`, nothing called                    |
+ * | any other method                           | `404`, nothing called                    |
  * | Ever ID not offered on the sign-in page    | `404`                                    |
  * | already signed in                          | the destination, no new authorization    |
  * | signed out                                 | the provider's authorization address     |
@@ -64,7 +65,16 @@ import { EVER_ID_ANONYMOUS_DISTINCT_ID, isEverIdOffered } from '@/lib/feature-fl
  * changes.
  */
 
-/** The app-wide Referrer-Policy (`next.config.ts`), the one the sign-in page is served with. */
+/**
+ * Answered per request, never from a build or a cache: the switch, the cookies
+ * and the transaction all belong to the one request.
+ */
+export const dynamic = 'force-dynamic';
+
+/**
+ * The app-wide Referrer-Policy, the one the sign-in page is served with
+ * (`next.config.ts` and `proxy.ts`; the unit spec fails if they stop agreeing).
+ */
 const REFERRER_POLICY = 'strict-origin-when-cross-origin';
 
 const RESPONSE_HEADERS = {
@@ -92,15 +102,17 @@ function redirectTo(location: string): NextResponse {
 
 /**
  * The provider address the API returned, checked to be an absolute http(s) URL
- * (http only matters for a local provider in development). The same check
- * `startEverIdSignIn` applies before it navigates.
+ * (http only matters for a local provider in development): the check
+ * `startEverIdSignIn` applies before it navigates. Here the address goes into a
+ * `Location` header, so it is sent as the URL parser writes it, which is always
+ * a valid header value (and the same text for any well-formed address).
  */
 function toProviderUrl(value: unknown): string {
     if (typeof value === 'string') {
         try {
             const url = new URL(value);
             if (url.protocol === 'https:' || url.protocol === 'http:') {
-                return value;
+                return url.href;
             }
         } catch {
             // fall through
@@ -151,7 +163,12 @@ export async function GET(request: NextRequest) {
             return notFound();
         }
 
-        console.error('Ever ID sign-in could not start:', error);
+        // Anyone can request this address, so a refusal is logged as its status
+        // and code only, never as the answer's body.
+        console.error(
+            'Ever ID sign-in could not start:',
+            error instanceof EverIdRequestError ? error.message : error,
+        );
         const failure = toEverIdFailure(error, 'provider_unavailable');
         return redirectTo(
             getPathname({
@@ -163,3 +180,19 @@ export async function GET(request: NextRequest) {
 
     return redirectTo(authorizationUrl);
 }
+
+/**
+ * The address is a link: a `GET`, and nothing else. Every other method gets the
+ * `404` of a path that does not exist, whatever the switch says, in place of
+ * the `405` and the `Allow` list that would tell a route is here while it is
+ * off. (`HEAD` is answered through `GET`, which refuses it the same way.)
+ */
+async function notALink(): Promise<NextResponse> {
+    return notFound();
+}
+
+export const POST = notALink;
+export const PUT = notALink;
+export const PATCH = notALink;
+export const DELETE = notALink;
+export const OPTIONS = notALink;

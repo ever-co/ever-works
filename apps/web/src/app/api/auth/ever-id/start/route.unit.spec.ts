@@ -428,6 +428,42 @@ describe('GET /api/auth/ever-id/start — only a person following a link starts 
     it('a client that sends no fetch metadata is served', async () => {
         expectRedirect(await run('', { headers: {} }), PROVIDER_URL);
     });
+
+    it.each(['POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'] as const)(
+        '%s → the 404 of a path that does not exist, switch on or off',
+        async (method) => {
+            const route = await import('./route');
+            expectNotFound(await route[method]());
+
+            process.env.EVER_ID_START_ROUTE_ENABLED = 'false';
+            expectNotFound(await route[method]());
+
+            expect(availabilityMock).not.toHaveBeenCalled();
+            expect(signedInMock).not.toHaveBeenCalled();
+        },
+    );
+
+    it('answers no method with a 405 or an Allow list: only GET does anything', async () => {
+        const route = await import('./route');
+
+        // Next answers 405 for a method a route does not export, and lists the
+        // exported ones for OPTIONS: both would tell the route is here.
+        expect(Object.keys(route).sort()).toEqual([
+            'DELETE',
+            'GET',
+            'OPTIONS',
+            'PATCH',
+            'POST',
+            'PUT',
+            'dynamic',
+        ]);
+    });
+
+    it('is answered per request, never from a build or a cache', async () => {
+        const route = await import('./route');
+
+        expect(route.dynamic).toBe('force-dynamic');
+    });
 });
 
 describe('GET /api/auth/ever-id/start — when the sign-in cannot start', () => {
@@ -489,6 +525,61 @@ describe('GET /api/auth/ever-id/start — when the sign-in cannot start', () => 
         });
 
         expectErrorPage(await run(), 'ever_id_provider_unavailable');
+        // Refused by the flow's own cookie module, before anything was written.
+        expect(console.error).toHaveBeenCalledWith(
+            expect.any(String),
+            expect.objectContaining({ name: 'EverIdCookieTooLargeError' }),
+        );
+    });
+
+    it('logs a refusal as its status and code, never the answer’s body', async () => {
+        const { EverIdRequestError } = await import('@/lib/api/ever-id');
+        authorizeMock.mockRejectedValue(
+            new EverIdRequestError(429, null, 25, { message: 'BODY-TEXT', echoed: '/works/42' }),
+        );
+
+        await run('?return=/works/42');
+
+        expect(console.error).toHaveBeenCalledTimes(1);
+        const logged = vi.mocked(console.error).mock.calls[0];
+        expect(logged).toEqual([
+            'Ever ID sign-in could not start:',
+            'Ever ID request failed with status 429',
+        ]);
+        expect(JSON.stringify(logged)).not.toContain('BODY-TEXT');
+    });
+});
+
+describe('GET /api/auth/ever-id/start — its headers', () => {
+    beforeEach(() => setUp());
+    afterEach(tearDown);
+
+    // `apps/web`, from `src/app/api/auth/ever-id/start`.
+    const webRoot = join(__dirname, '..', '..', '..', '..', '..', '..');
+
+    it('carries the Referrer-Policy the app serves the sign-in page with', async () => {
+        const policy = (await run()).headers.get('Referrer-Policy');
+
+        // The route cannot import the value (it lives in the build config and
+        // in the proxy), so this fails the day either of them changes.
+        expect(readFileSync(join(webRoot, 'next.config.ts'), 'utf8')).toContain(
+            `{ key: 'Referrer-Policy', value: '${policy}' }`,
+        );
+        expect(readFileSync(join(webRoot, 'src', 'proxy.ts'), 'utf8')).toContain(
+            `'Referrer-Policy': '${policy}'`,
+        );
+    });
+
+    it('sends the provider address as a valid header value', async () => {
+        authorizeMock.mockResolvedValue({
+            authorizationUrl: 'HTTPS://ID.example/authorize?state=a b\n&next=1',
+            transaction: TRANSACTION,
+        });
+
+        const location = (await run()).headers.get('Location')!;
+
+        expect(location).toBe('https://id.example/authorize?state=a%20b&next=1');
+        expect(location).not.toMatch(/\s/);
     });
 });
 
