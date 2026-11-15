@@ -769,3 +769,127 @@ describe('createWorkWithAI — prompt length (UI ↔ API contract)', () => {
         expect(workAPICreateMock).not.toHaveBeenCalled();
     });
 });
+
+/**
+ * A marketplace install named in a create request is a claim that came in an
+ * address, and a server action can be called with any body. What reaches the
+ * API is decided here, not by what the form sent: the install and its Ever
+ * organization together, only for an App made from a Blueprint, and only with
+ * `EVER_CONNECT_BLUEPRINT_HANDOFF_ENABLED=true` on the web app.
+ */
+describe('createWork — a marketplace install named in the request', () => {
+    const INSTALL = '01JC5R7Y6K1M9E0V3Q2A8XW4TB';
+    const EVER_ORG = '01JMQCK0RG000000000000000A';
+    const app = {
+        slug: 'booking',
+        name: 'Booking',
+        description: 'calcom/cal.diy',
+        organization: false,
+        gitProvider: 'github',
+        kind: 'app' as const,
+        repositoryUrl: 'https://github.com/calcom/cal.diy',
+        repositoryMode: 'link' as const,
+        blueprintId: 'cal-diy',
+    };
+
+    beforeEach(() => {
+        vi.clearAllMocks();
+        getAuthFromCookieMock.mockResolvedValue({ id: 'user-1', username: 'qa-user' });
+        getStateMock.mockResolvedValue(onboardingStateWith('user-github'));
+        getCatalogMock.mockResolvedValue(catalogWithEverWorksGit(true));
+        checkGitProviderConnectionMock.mockResolvedValue({
+            success: true,
+            connected: true,
+            username: 'me',
+            organizations: [],
+        });
+        workAPICreateMock.mockResolvedValue({ work: { id: 'w-app' } });
+        vi.stubEnv('EVER_CONNECT_BLUEPRINT_HANDOFF_ENABLED', 'true');
+    });
+
+    afterEach(() => {
+        vi.unstubAllEnvs();
+        vi.resetModules();
+    });
+
+    const sent = () => workAPICreateMock.mock.calls.at(-1)![0];
+
+    it('sends the install with its Ever organization, for an App made from a Blueprint', async () => {
+        const { createWork } = await import('./works');
+
+        const result = await createWork({ ...app, installId: INSTALL, everOrg: EVER_ORG });
+
+        expect(result.success).toBe(true);
+        expect(sent()).toMatchObject({
+            kind: 'app',
+            blueprintId: 'cal-diy',
+            installId: INSTALL,
+            everOrg: EVER_ORG,
+        });
+    });
+
+    it('sends the install id in its one spelling', async () => {
+        const { createWork } = await import('./works');
+
+        await createWork({ ...app, installId: ` ${INSTALL.toLowerCase()} `, everOrg: ' acme ' });
+
+        expect(sent()).toMatchObject({ installId: INSTALL, everOrg: 'acme' });
+    });
+
+    it.each([
+        ['unset', undefined],
+        ['`false`', 'false'],
+        ['a value that is not `true`', 'yes'],
+    ])(
+        'with the switch %s it sends neither, whatever the browser sent: the create is as it was',
+        async (_name, value) => {
+            vi.unstubAllEnvs();
+            if (value !== undefined) vi.stubEnv('EVER_CONNECT_BLUEPRINT_HANDOFF_ENABLED', value);
+            const { createWork } = await import('./works');
+
+            const result = await createWork({ ...app, installId: INSTALL, everOrg: EVER_ORG });
+
+            // Not an error: the App is created, without an install.
+            expect(result.success).toBe(true);
+            expect(sent()).toMatchObject({ kind: 'app', blueprintId: 'cal-diy' });
+            expect(sent()).not.toHaveProperty('installId');
+            expect(sent()).not.toHaveProperty('everOrg');
+        },
+    );
+
+    it.each<[string, Record<string, unknown>]>([
+        ['an App that is not made from a Blueprint', { blueprintId: undefined }],
+        ['a repository Work', { kind: 'repo', repositoryMode: undefined, blueprintId: undefined }],
+        ['an install without its Ever organization', { everOrg: undefined }],
+        ['an Ever organization without an install', { installId: undefined }],
+        ['an install id that is not one', { installId: 'install-1' }],
+        ['an install id that is not text', { installId: 42 }],
+        ['an install id that is too long', { installId: 'X'.repeat(65) }],
+        ['an Ever organization that is not one', { everOrg: 'acme corp' }],
+        ['an Ever organization that is not text', { everOrg: { id: EVER_ORG } }],
+    ])('sends neither for %s, and the create goes on (ignored, not an error)', async (_n, over) => {
+        const { createWork } = await import('./works');
+
+        const result = await createWork({
+            ...app,
+            installId: INSTALL,
+            everOrg: EVER_ORG,
+            ...over,
+        } as never);
+
+        expect(result.success).toBe(true);
+        expect(workAPICreateMock).toHaveBeenCalledTimes(1);
+        expect(sent()).not.toHaveProperty('installId');
+        expect(sent()).not.toHaveProperty('everOrg');
+    });
+
+    it('a create that names no install is the request it always was', async () => {
+        const { createWork } = await import('./works');
+
+        await createWork(app);
+
+        expect(sent()).toMatchObject({ kind: 'app', blueprintId: 'cal-diy' });
+        expect(sent()).not.toHaveProperty('installId');
+        expect(sent()).not.toHaveProperty('everOrg');
+    });
+});

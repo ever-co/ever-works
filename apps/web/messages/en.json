@@ -3073,6 +3073,26 @@
                 "containmentDowngrade": "This machine runs app changes without an isolated home. Allow it once, or run this Task in an isolated sandbox.",
                 "allowOnThisMachine": "Allow on this machine"
             },
+            "runMenu": {
+                "run": "Run",
+                "runLabel": "Run this Task",
+                "runTitle": "Run this Task (r)",
+                "pickerLabel": "Choose an Agent to run this Task",
+                "runWith": "Run with",
+                "loading": "Loading…",
+                "noAgentAvailable": "No Agent available. Assign one to this Task (or to its Work) first.",
+                "sourceAssignee": "Assigned",
+                "sourceTask": "Task agent",
+                "sourceWorkDefault": "Work default",
+                "runStarted": "Run started.",
+                "queued": "Queued — waiting for capacity ({reason}).",
+                "queuedDefaultReason": "queued",
+                "noAgentAssigned": "No Agent is assigned to this Task and its Work has no default Agent.",
+                "pickAgent": "Pick which Agent should run this Task.",
+                "alreadyInFlight": "A run is already in flight for this Agent.",
+                "runFailed": "Run failed.",
+                "refusedFallback": "The run did not start."
+            },
             "deliveryPosts": {
                 "runStarted": "Run started.",
                 "prOpened": "Opened pull request #{number}.",
@@ -11318,6 +11338,10 @@
                 "promptHint": "The {name} Blueprint asks for these. You can change them later in Settings.",
                 "promptRequired": "Required",
                 "promptsIncomplete": "Fill in the values the app needs first.",
+                "handoff": {
+                    "blueprintNotFound": "The app you chose on Ever Platform is not in the Apps catalog here. Pick an app below, or paste a repository.",
+                    "forInstall": "You installed this app on Ever Platform. The App you create here is the one that install is for."
+                },
                 "autoProvision": "Let an agent work out how to run it",
                 "autoProvisionHelp": "Starts when the repository is ready. It spends AI tokens and build runner minutes, within the provisioning caps. You can cancel it, or untick this and start it later from the Overview with Provision.",
                 "deployTargetTitle": "Where should it run?",

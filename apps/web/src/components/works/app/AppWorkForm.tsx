@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useRef, useState, useTransition, type KeyboardEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, useTransition, type KeyboardEvent } from 'react';
 import { useTranslations } from 'next-intl';
 import { toast } from 'sonner';
 import { AppWindow } from 'lucide-react';
@@ -35,6 +35,7 @@ import { AppTargetOwnerPicker } from './AppTargetOwnerPicker';
 import { AppDeployTargetPicker } from './AppDeployTargetPicker';
 import { AppBlueprintPrompts, hasMissingRequiredPrompt } from './AppBlueprintPrompts';
 import { AppsCatalogBrowser } from './AppsCatalogBrowser';
+import type { AppBlueprintHandoff } from '@/lib/works/blueprint-handoff.shared';
 
 export interface AppWorkFormProps {
     /** Git provider plugin id selected in the sidebar (inspect + connection gate). */
@@ -47,6 +48,19 @@ export interface AppWorkFormProps {
      * `blueprint_mismatch`.
      */
     initialBlueprintId?: string;
+    /**
+     * A Blueprint hand-off from Ever Platform's marketplace: a person installed
+     * a Blueprint listing there and was sent here to create the App. The form
+     * opens on that Blueprint's repository and checks it at once, exactly as a
+     * pick from the catalog tab does, and the create carries the install the App
+     * is for and the Ever organization it belongs to (`installId` with
+     * `everOrg`, together or not at all) for as long as the person keeps that
+     * Blueprint. Typing another repository, or picking another app, leaves the
+     * hand-off: neither its Blueprint nor its install is sent. When the catalog
+     * here does not have the Blueprint (`repositoryUrl: null`) the form opens on
+     * the catalog tab and says so.
+     */
+    handoff?: AppBlueprintHandoff | null;
 }
 
 /** A refusal the form shows: a §6.3 code when we have one, otherwise free text. */
@@ -96,6 +110,7 @@ export function AppWorkForm({
     gitProvider,
     initialRepositoryUrl,
     initialBlueprintId,
+    handoff = null,
 }: AppWorkFormProps) {
     const t = useTranslations('dashboard.workCreation.app');
     const tReason = useTranslations('dashboard.workCreation.app.reasons');
@@ -107,16 +122,31 @@ export function AppWorkForm({
     // changed is dropped instead of overwriting the cleared preview.
     const inspectTicket = useRef(0);
 
-    const seed =
-        initialRepositoryUrl && parseRepositoryUrl(initialRepositoryUrl)
-            ? initialRepositoryUrl.trim()
-            : '';
+    // A hand-off whose Blueprint the catalog here names a repository for.
+    const handoffUrl =
+        handoff?.repositoryUrl && parseRepositoryUrl(handoff.repositoryUrl)
+            ? handoff.repositoryUrl.trim()
+            : null;
+    const seedSource = handoffUrl ?? initialRepositoryUrl;
+    const seed = seedSource && parseRepositoryUrl(seedSource) ? seedSource.trim() : '';
 
-    const [tab, setTab] = useState<'paste' | 'catalog'>('paste');
+    const [tab, setTab] = useState<'paste' | 'catalog'>(
+        handoff && !handoffUrl ? 'catalog' : 'paste',
+    );
     // The Blueprint chosen in the curated catalog (APW-01 T22): carried on
     // inspect and create until the member types a different URL.
     const [pickedBlueprintId, setPickedBlueprintId] = useState<string | undefined>(undefined);
-    const chosenBlueprintId = pickedBlueprintId ?? initialBlueprintId;
+    // The hand-off stands until the person types another repository or picks
+    // another app: from then on neither its Blueprint nor its install is sent.
+    const [handoffKept, setHandoffKept] = useState(handoffUrl !== null);
+    const handoffBlueprintId = handoffKept ? handoff?.blueprintId : undefined;
+    // The install of the hand-off, while the person keeps its Blueprint: an install
+    // id and the Ever organization it belongs to, or nothing.
+    const handoffInstall =
+        handoffKept && handoff?.installId && handoff.everOrg
+            ? { installId: handoff.installId, everOrg: handoff.everOrg }
+            : null;
+    const chosenBlueprintId = pickedBlueprintId ?? handoffBlueprintId ?? initialBlueprintId;
     const [repositoryUrl, setRepositoryUrl] = useState(seed);
     const [preview, setPreview] = useState<AppSourceInspectResponse | null>(null);
     const [inspectRefusal, setInspectRefusal] = useState<FormRefusal | null>(null);
@@ -240,6 +270,16 @@ export function AppWorkForm({
         });
     };
 
+    // A hand-off is checked at once, as a pick from the catalog tab is: once,
+    // for the repository the page was opened with.
+    const handoffChecked = useRef(false);
+    useEffect(() => {
+        if (handoffChecked.current || !handoffUrl) return;
+        handoffChecked.current = true;
+        inspect(handoffUrl, handoff?.blueprintId);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
     const onUrlKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
         if (event.key === 'Enter') {
             event.preventDefault();
@@ -288,6 +328,12 @@ export function AppWorkForm({
                 repositoryMode: mode,
                 ...(ownerNeeded ? { targetOwner: owner } : {}),
                 ...(blueprintId ? { blueprintId } : {}),
+                // The install the App is for, with the Ever organization it belongs
+                // to: only with the Blueprint it was for, and never one without the
+                // other (the API checks the Organization against the Ever organization).
+                ...(handoffInstall && blueprintId === handoff?.blueprintId
+                    ? { installId: handoffInstall.installId, everOrg: handoffInstall.everOrg }
+                    : {}),
                 ...(providerId ? { deployProvider: providerId } : {}),
                 ...(showAutoProvision && !autoProvision ? { autoProvision: false } : {}),
                 ...(prompts.length > 0 ? { appEnv } : {}),
@@ -365,6 +411,24 @@ export function AppWorkForm({
                 ))}
             </div>
 
+            {handoff && !handoffUrl && (
+                <p
+                    role="status"
+                    className="text-sm text-text-secondary dark:text-text-secondary-dark"
+                    data-testid="app-work-handoff-missing"
+                >
+                    {t('handoff.blueprintNotFound')}
+                </p>
+            )}
+            {handoffInstall && (
+                <p
+                    className="text-sm text-text-secondary dark:text-text-secondary-dark"
+                    data-testid="app-work-handoff-install"
+                >
+                    {t('handoff.forInstall')}
+                </p>
+            )}
+
             {tab === 'catalog' ? (
                 <div data-testid="app-work-catalog">
                     {/* APW-01 T22 — a pick fills the URL and inspects it exactly once;
@@ -372,6 +436,8 @@ export function AppWorkForm({
                     <AppsCatalogBrowser
                         disabled={busy}
                         onPick={(pick) => {
+                            // Another app than the hand-off's: the hand-off is left.
+                            setHandoffKept(false);
                             onUrlChange(pick.url);
                             setPickedBlueprintId(pick.blueprintId);
                             setTab('paste');
@@ -395,8 +461,10 @@ export function AppWorkForm({
                                 name="repositoryUrl"
                                 value={repositoryUrl}
                                 onChange={(event) => {
-                                    // A typed URL is no longer the catalog pick.
+                                    // A typed URL is no longer the catalog pick,
+                                    // nor the repository of a hand-off.
                                     setPickedBlueprintId(undefined);
+                                    setHandoffKept(false);
                                     onUrlChange(event.target.value);
                                 }}
                                 onKeyDown={onUrlKeyDown}

@@ -763,6 +763,50 @@ describeMock('Ever Connect — link codes, heartbeat, entitlements and the apps 
         expect(await outboxRows()).toEqual([]);
     });
 
+    it('a deployment of an App is told when it happens, and an App created from a Blueprint says where it comes from', async () => {
+        const install = '01JC5R7Y6K1M9E0V3Q2A8XW4TB';
+        const before = (await inventory()).get(app)?.external_version as number;
+        // What a create from a Blueprint records on the Work, with the install it was created for.
+        await dataSource.getRepository(Work).update({ id: app }, {
+            installId: install,
+            sourceRepository: {
+                url: 'https://github.com/acme-member/booking',
+                owner: 'acme-member',
+                repo: 'booking',
+                type: 'fork',
+                upstream: { owner: 'calcom', repo: 'cal.diy', defaultBranch: 'main' },
+                blueprintId: 'cal-diy',
+                blueprintMatchSource: 'explicit',
+                createdByThisWork: true,
+            },
+        } as never);
+        // The worker reports a step of the App's deployment; the API emits it under this name.
+        await listener.onAppDeployment({ workId: app });
+        expect(await outboxRows()).toHaveLength(1);
+
+        // Ever Platform takes it as it is sent: applied, not refused for its shape.
+        expect(await mirror.drainOnce()).toBe(1);
+        expect(await outboxRows()).toEqual([]);
+        expect((await inventory()).get(app)?.external_version).toBeGreaterThan(before);
+        const last = batches().at(-1);
+        const sent = last?.ops.find((op) => op.external_id === app);
+        expect(sent).toMatchObject({
+            data: {
+                kind: 'app',
+                base_kind: 'oss',
+                lineage: {
+                    install_id: install,
+                    provisioned_by: 'blueprint',
+                    blueprint: { id: 'cal-diy' },
+                },
+            },
+        });
+        // Nothing of a repository: not its address, its name or an owner.
+        expect(JSON.stringify(sent)).not.toMatch(/github|acme-member|calcom|booking|cal\.diy/);
+        // The App's deployment travels with it.
+        expect(last?.ops.map((op) => op.external_id)).toContain(`${app}:production`);
+    });
+
     it('a removed Work is deleted on Ever Platform; one removed unnoticed is found by the reconciliation', async () => {
         await dataSource.getRepository(WorkDeployment).delete({ workId: app });
         await dataSource.getRepository(Work).delete({ id: app });

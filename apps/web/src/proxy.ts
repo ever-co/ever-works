@@ -6,6 +6,7 @@ import { AUTH_COOKIE_NAME } from './lib/auth/cookies';
 import { resolveApiCspHost, resolveApiCspSocketSources } from './lib/csp-api-sources';
 import { match } from 'path-to-regexp';
 import { getAuthFromRequest } from './lib/auth';
+import { blueprintHandoffSignInHref } from './lib/works/blueprint-handoff.shared';
 import {
     BROWSER_WORKSPACE_SCOPE_HEADER,
     getLegacyOrganizationDashboardRedirect,
@@ -327,9 +328,14 @@ export default async function proxy(req: NextRequest) {
         // same, public, unprefixed page — not to /login. A redirect whose
         // Location has no fragment keeps the visitor's fragment, so a deletion
         // token in it would otherwise land on /login, where analytics run.
+        // A Blueprint hand-off from Ever Platform's marketplace
+        // (`/new?type=app&blueprint=…&install=…`) comes back to itself after
+        // sign-in, so the Blueprint and the install are not lost on the way.
+        // `null` for every other address: sign-in then goes where it always did.
+        const handoffSignIn = blueprintHandoffSignInHref(pathname, req.nextUrl.searchParams);
         const target = isAccountDeletionPage(pathname)
             ? new URL(withoutWorkspacePrefix(pathname), req.url)
-            : new URL(ROUTES.AUTH_LOGIN, req.url);
+            : new URL(handoffSignIn ?? ROUTES.AUTH_LOGIN, req.url);
         const response = NextResponse.redirect(target);
 
         if (req.cookies.has(AUTH_COOKIE_NAME)) {

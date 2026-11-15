@@ -1,7 +1,19 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render as renderPlain, screen, waitFor } from '@testing-library/react';
+import type { ReactElement } from 'react';
+import { NextIntlClientProvider } from 'next-intl';
+import messages from '../../../messages/en.json';
 import { RunWithAgentMenu } from './RunWithAgentMenu';
 import { isRunRefused, runRefusalText } from './run-refusal';
+
+/** Rendered through the REAL English catalogue, so a missing key shows as a raw key path and fails. */
+function render(ui: ReactElement, catalogue: object = messages) {
+    return renderPlain(
+        <NextIntlClientProvider locale="en" messages={catalogue as typeof messages}>
+            {ui}
+        </NextIntlClientProvider>,
+    );
+}
 
 /**
  * Board dispatch (kanban M3) — the Run affordance and its agent picker.
@@ -169,6 +181,207 @@ describe('RunWithAgentMenu', () => {
     });
 });
 
+describe('RunWithAgentMenu — every user-facing string comes from the catalogue', () => {
+    const copy = messages.dashboard.tasksPage.runMenu;
+
+    beforeEach(() => {
+        runTaskAction.mockReset();
+        listTaskRunCandidatesAction.mockReset();
+        listTaskRunCandidatesAction.mockResolvedValue([]);
+    });
+
+    it('labels the button and the picker from the catalogue (accessible names, not literals)', async () => {
+        listTaskRunCandidatesAction.mockResolvedValue([
+            { id: 'a1', name: 'Builder', source: 'assignee' },
+            { id: 'a2', name: 'Reviewer', source: 'task' },
+            { id: 'a3', name: 'Planner', source: 'work-default' },
+        ]);
+        render(<RunWithAgentMenu taskId="t1" open onOpenChange={() => undefined} />);
+        const button = screen.getByTestId('task-run-button');
+        expect(button.getAttribute('aria-label')).toBe(copy.runLabel);
+        expect(button.getAttribute('title')).toBe(copy.runTitle);
+        expect(button.textContent).toBe(copy.run);
+        const picker = await screen.findByTestId('task-run-agent-picker');
+        expect(picker.getAttribute('aria-label')).toBe(copy.pickerLabel);
+        expect(screen.getByText(copy.runWith)).toBeTruthy();
+        const options = await screen.findAllByTestId('task-run-agent-option');
+        expect(options.map((option) => option.textContent)).toEqual([
+            `Builder${copy.sourceAssignee}`,
+            `Reviewer${copy.sourceTask}`,
+            `Planner${copy.sourceWorkDefault}`,
+        ]);
+    });
+
+    it('says so from the catalogue when no Agent is available', async () => {
+        render(<RunWithAgentMenu taskId="t1" open onOpenChange={() => undefined} />);
+        expect(await screen.findByText(copy.noAgentAvailable)).toBeTruthy();
+    });
+
+    it('translates the queued message and keeps the server reason verbatim', async () => {
+        runTaskAction.mockResolvedValue({
+            ok: true,
+            run: {
+                taskId: 't1',
+                agentId: 'a1',
+                runId: 'r1',
+                dispatched: false,
+                parked: true,
+                queuedReason: 'concurrency-limit',
+            },
+        });
+        render(<RunWithAgentMenu taskId="t1" />);
+        fireEvent.click(screen.getByTestId('task-run-button'));
+        expect(
+            await screen.findByText(copy.queued.replace('{reason}', 'concurrency-limit')),
+        ).toBeTruthy();
+    });
+
+    it('uses the translated fallbacks for a refusal with no sentence and for a failure with no message', async () => {
+        runTaskAction.mockResolvedValueOnce({
+            ok: true,
+            run: { taskId: 't1', agentId: 'a1', runId: null, dispatched: false, parked: false },
+        });
+        render(<RunWithAgentMenu taskId="t1" />);
+        fireEvent.click(screen.getByTestId('task-run-button'));
+        expect(await screen.findByText(copy.refusedFallback)).toBeTruthy();
+
+        runTaskAction.mockResolvedValueOnce({ ok: false, code: 'RUN_FAILED', message: '' });
+        fireEvent.click(screen.getByTestId('task-run-button'));
+        expect(await screen.findByText(copy.runFailed)).toBeTruthy();
+    });
+
+    it('renders a translated catalogue, not the English literals', async () => {
+        const translated = {
+            dashboard: {
+                tasksPage: {
+                    runMenu: {
+                        ...copy,
+                        run: 'Ejecutar',
+                        runLabel: 'Ejecutar esta tarea',
+                        runStarted: 'Ejecución iniciada.',
+                    },
+                },
+            },
+        };
+        runTaskAction.mockResolvedValue({
+            ok: true,
+            run: { taskId: 't1', agentId: 'a1', runId: 'r1', dispatched: true, parked: false },
+        });
+        render(<RunWithAgentMenu taskId="t1" />, translated);
+        const button = screen.getByTestId('task-run-button');
+        expect(button.textContent).toBe('Ejecutar');
+        expect(button.getAttribute('aria-label')).toBe('Ejecutar esta tarea');
+        fireEvent.click(button);
+        expect(await screen.findByText('Ejecución iniciada.')).toBeTruthy();
+        expect(screen.queryByText('Run started.')).toBeNull();
+    });
+
+    // The English catalogue matches the old literals word for word, so the specs above would also
+    // pass against hard-coded English. A catalogue of markers cannot: every string must come from it.
+    const marked = {
+        dashboard: {
+            tasksPage: {
+                runMenu: Object.fromEntries(
+                    Object.keys(copy).map((key) => [
+                        key,
+                        key === 'queued' ? '«queued {reason}»' : `«${key}»`,
+                    ]),
+                ),
+            },
+        },
+    };
+
+    it('reads every label, title, badge and picker line from the catalogue', async () => {
+        let resolveCandidates: (rows: unknown[]) => void = () => undefined;
+        listTaskRunCandidatesAction.mockReturnValue(
+            new Promise((resolve) => {
+                resolveCandidates = resolve;
+            }),
+        );
+        render(<RunWithAgentMenu taskId="t1" open onOpenChange={() => undefined} />, marked);
+        const button = screen.getByTestId('task-run-button');
+        expect(button.textContent).toBe('«run»');
+        expect(button.getAttribute('aria-label')).toBe('«runLabel»');
+        expect(button.getAttribute('title')).toBe('«runTitle»');
+        const picker = screen.getByTestId('task-run-agent-picker');
+        expect(picker.getAttribute('aria-label')).toBe('«pickerLabel»');
+        expect(screen.getByText('«runWith»')).toBeTruthy();
+        expect(screen.getByText('«loading»')).toBeTruthy();
+        await act(async () => {
+            resolveCandidates([
+                { id: 'a1', name: 'Builder', source: 'assignee' },
+                { id: 'a2', name: 'Reviewer', source: 'task' },
+                { id: 'a3', name: 'Planner', source: 'work-default' },
+            ]);
+        });
+        const options = await screen.findAllByTestId('task-run-agent-option');
+        expect(options.map((option) => option.textContent)).toEqual([
+            'Builder«sourceAssignee»',
+            'Reviewer«sourceTask»',
+            'Planner«sourceWorkDefault»',
+        ]);
+    });
+
+    it('reads the empty-picker line from the catalogue', async () => {
+        render(<RunWithAgentMenu taskId="t1" open onOpenChange={() => undefined} />, marked);
+        expect(await screen.findByText('«noAgentAvailable»')).toBeTruthy();
+    });
+
+    const run = { taskId: 't1', agentId: 'a1', runId: 'r1' };
+    it.each([
+        [
+            'a dispatched run',
+            { ok: true, run: { ...run, dispatched: true, parked: false } },
+            '«runStarted»',
+        ],
+        [
+            'a parked run with a reason',
+            {
+                ok: true,
+                run: { ...run, dispatched: false, parked: true, queuedReason: 'concurrency-limit' },
+            },
+            '«queued concurrency-limit»',
+        ],
+        [
+            'a parked run with no reason',
+            { ok: true, run: { ...run, dispatched: false, parked: true } },
+            '«queued «queuedDefaultReason»»',
+        ],
+        [
+            'a refusal with no sentence',
+            { ok: true, run: { ...run, runId: null, dispatched: false, parked: false } },
+            '«refusedFallback»',
+        ],
+        [
+            'RUN_NO_AGENT',
+            { ok: false, code: 'RUN_NO_AGENT', message: 'x', candidates: [] },
+            '«noAgentAssigned»',
+        ],
+        [
+            'RUN_AGENT_AMBIGUOUS',
+            { ok: false, code: 'RUN_AGENT_AMBIGUOUS', message: 'x', candidates: [] },
+            '«pickAgent»',
+        ],
+        [
+            'RUN_ALREADY_IN_FLIGHT',
+            { ok: false, code: 'RUN_ALREADY_IN_FLIGHT', message: 'x' },
+            '«alreadyInFlight»',
+        ],
+        [
+            'a failure with no message',
+            { ok: false, code: 'RUN_FAILED', message: '' },
+            '«runFailed»',
+        ],
+    ])('reads the message for %s from the catalogue', async (_label, result, expected) => {
+        runTaskAction.mockResolvedValue(result);
+        render(<RunWithAgentMenu taskId="t1" />, marked);
+        fireEvent.click(screen.getByTestId('task-run-button'));
+        await waitFor(() =>
+            expect(screen.getByTestId('task-run-message').textContent).toBe(expected),
+        );
+    });
+});
+
 describe('run-refusal (APW-08 T12)', () => {
     it('a run that neither started nor parked is refused', () => {
         expect(isRunRefused({ dispatched: false, parked: false })).toBe(true);
@@ -180,5 +393,10 @@ describe('run-refusal (APW-08 T12)', () => {
         expect(runRefusalText('noIsolatedRuntime: None is set up.')).toBe('None is set up.');
         expect(runRefusalText('agent-not-found')).toBe('The run did not start.');
         expect(runRefusalText(undefined)).toBe('The run did not start.');
+        // A caller with a catalogue passes its own words; a real sentence still wins over it.
+        expect(runRefusalText(undefined, 'No se inició.')).toBe('No se inició.');
+        expect(runRefusalText('noIsolatedRuntime: None is set up.', 'No se inició.')).toBe(
+            'None is set up.',
+        );
     });
 });

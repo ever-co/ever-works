@@ -266,6 +266,36 @@ export class CreateWorkDto {
     appEnv?: Record<string, string>;
 
     @ApiPropertyOptional({
+        description:
+            'A claim, not a setting: the install on Ever Platform’s marketplace this App is created for ' +
+            '(Ever Platform’s id of the install), as the address that sent the person here carried it. ' +
+            'Read only for an App created from a Blueprint, in the Organization linked to the Ever ' +
+            'organization named in `everOrg`, on an installation that switched that hand-off on. ' +
+            'Everywhere else, and when it is not spelled like an install id, it is ignored: never an ' +
+            'error, and nothing is stored.',
+        example: '01JC5R7Y6K1M9E0V3Q2A8XW4TB',
+        maxLength: 64,
+    })
+    @IsOptional()
+    @IsString()
+    @MaxLength(64)
+    installId?: string;
+
+    @ApiPropertyOptional({
+        description:
+            'With `installId` only: the Ever organization the install belongs to (Ever Platform’s id of ' +
+            'it, or its handle), as the same address carried it. Used once, to check that the ' +
+            'Organization the App is created in is linked to that Ever organization; it is not stored. ' +
+            'Ignored without an `installId` that is read.',
+        example: '01JMQCK0RG000000000000000A',
+        maxLength: 64,
+    })
+    @IsOptional()
+    @IsString()
+    @MaxLength(64)
+    everOrg?: string;
+
+    @ApiPropertyOptional({
         description: 'Custom README configuration',
         type: MarkdownReadmeConfigDto,
     })

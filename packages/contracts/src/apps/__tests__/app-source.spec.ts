@@ -100,6 +100,7 @@ import {
 	EVER_ID_DEFAULT_DISPLAY_NAME,
 	EVER_ID_DELEGATED_AUTH_METHOD,
 	EVER_ID_DELEGATED_SCOPES,
+	EVER_ID_DELEGATED_WRITE_SCOPES,
 	EVER_ID_ERROR_CODE_WIRE_VALUES,
 	EVER_ID_LIMITS,
 	EVER_ID_LINKED_VIA,
@@ -949,14 +950,28 @@ describe('Ever ID identity constants (APW-12 spec.md:294-306, plan.md:253-255)',
 		expect(EVER_ID_DEFAULT_DISPLAY_NAME).toBe('Ever ID');
 	});
 
-	it('pins the two scopes (idp-options.md:203)', () => {
-		expect(EVER_ID_SCOPES).toEqual({ APPS_READ: 'apps:read', SESSION_EXCHANGE: 'ever-works:session' });
+	it('pins the scopes (idp-options.md:203)', () => {
+		expect(EVER_ID_SCOPES).toEqual({
+			APPS_READ: 'apps:read',
+			APPS_WRITE: 'apps:write',
+			SESSION_EXCHANGE: 'ever-works:session'
+		});
 	});
 
 	it('delegated reads accept apps:read and nothing else (spec.md:296-297, plan.md:14)', () => {
 		assertClosedUnion(EVER_ID_DELEGATED_SCOPES, ['apps:read']);
 		expect(EVER_ID_DELEGATED_SCOPES).toContain(EVER_ID_SCOPES.APPS_READ);
 		expect(EVER_ID_DELEGATED_SCOPES).not.toContain(EVER_ID_SCOPES.SESSION_EXCHANGE);
+		// A token that may write is not thereby one a read mark names.
+		expect(EVER_ID_DELEGATED_SCOPES).not.toContain(EVER_ID_SCOPES.APPS_WRITE);
+	});
+
+	it('delegated writes accept apps:write and nothing else', () => {
+		assertClosedUnion(EVER_ID_DELEGATED_WRITE_SCOPES, ['apps:write']);
+		expect(EVER_ID_DELEGATED_WRITE_SCOPES).toContain(EVER_ID_SCOPES.APPS_WRITE);
+		// Reading does not allow writing, and a session-exchange token allows neither.
+		expect(EVER_ID_DELEGATED_WRITE_SCOPES).not.toContain(EVER_ID_SCOPES.APPS_READ);
+		expect(EVER_ID_DELEGATED_WRITE_SCOPES).not.toContain(EVER_ID_SCOPES.SESSION_EXCHANGE);
 	});
 
 	it('appends exactly one authMethod value and leaves session | api-key alone (R-19, CONTRACTS.md:62)', () => {

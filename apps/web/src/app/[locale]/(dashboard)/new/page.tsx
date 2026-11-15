@@ -1,4 +1,6 @@
 import type { Metadata } from 'next';
+import { headers } from 'next/headers';
+import { redirect } from 'next/navigation';
 import { getTranslations } from 'next-intl/server';
 import { NewPageClient } from '@/components/new';
 // `ALL_NEW_CHIP_VALUES` is imported from `@/lib/work-kinds/chip-values` — a
@@ -10,6 +12,16 @@ import { ALL_NEW_CHIP_VALUES, type ChipType } from '@/lib/work-kinds/chip-values
 import { templatesAPI } from '@/lib/api/templates';
 import { missionsAPI, type MissionTemplateManifestView } from '@/lib/api/missions';
 import { getDisabledWorkKinds } from '@/lib/feature-flags/work-kinds';
+import {
+    blueprintHandoffFormHref,
+    readEnabledBlueprintHandoff,
+} from '@/lib/works/blueprint-handoff.shared';
+import {
+    BROWSER_WORKSPACE_SCOPE_HEADER,
+    buildWorkspaceHref,
+    parseWorkspaceSelector,
+    type WorkspaceScope,
+} from '@/lib/workspace-scope';
 
 export async function generateMetadata(): Promise<Metadata> {
     const t = await getTranslations('dashboard.newPage');
@@ -51,8 +63,33 @@ const VALID_CHIP_TYPES: ChipType[] = [
  * server fetches the Mission template's catalog row and forwards
  * its name + description so NewPageClient can pre-fill the
  * prompt.
+ *
+ * A Blueprint hand-off — also reads `?blueprint=<id>`, `?install=<id>` and
+ * `?ever_org=<org>`, the address a person is sent to after installing a
+ * Blueprint listing on Ever Platform's marketplace
+ * (`/new?type=app&blueprint=…&ever_org=…&install=…`). An App is created on the
+ * Work canvas, not from this page's prompt, so such a visit goes straight on to
+ * the App create form with the three values kept
+ * (`@/lib/works/blueprint-handoff.shared`). Without a `blueprint` spelled like
+ * one, for any other chip, or while the hand-off is switched off (the default:
+ * `EVER_CONNECT_BLUEPRINT_HANDOFF_ENABLED`), nothing here changes.
  */
-type SearchParams = Promise<{ type?: string; template?: string }>;
+type SearchParams = Promise<{
+    type?: string;
+    template?: string;
+    blueprint?: string | string[];
+    install?: string | string[];
+    ever_org?: string | string[];
+}>;
+
+/** The workspace the visitor is in, as the proxy read it from the address. */
+async function currentWorkspace(): Promise<WorkspaceScope> {
+    try {
+        return parseWorkspaceSelector((await headers()).get(BROWSER_WORKSPACE_SCOPE_HEADER));
+    } catch {
+        return { kind: 'personal' };
+    }
+}
 
 export default async function NewPage({ searchParams }: { searchParams: SearchParams }) {
     const params = await searchParams;
@@ -87,6 +124,18 @@ export default async function NewPage({ searchParams }: { searchParams: SearchPa
     // (Mission, which is never flag-gated here).
     if (disabledSet.has(initialType)) {
         initialType = 'mission';
+    }
+
+    // A Blueprint hand-off (see the header): on to the App create form, in the
+    // workspace the visitor is in. After the flag check above, so a disabled
+    // App kind is not reachable this way either.
+    if (initialType === 'app') {
+        const handoff = readEnabledBlueprintHandoff(params ?? {});
+        if (handoff) {
+            redirect(
+                buildWorkspaceHref(await currentWorkspace(), blueprintHandoffFormHref(handoff)),
+            );
+        }
     }
 
     let initialPrompt: string | undefined;
