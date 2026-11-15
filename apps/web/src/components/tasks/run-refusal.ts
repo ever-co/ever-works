@@ -13,8 +13,14 @@ export function isRunRefused(run: Pick<RunTaskResult, 'dispatched' | 'parked'>):
 
 const REFUSAL_PATTERN = /^[A-Za-z][\w-]*:\s+([\s\S]+)$/;
 
-/** The refusal's own sentence (the stable `code: ` prefix dropped), or a plain fallback. */
-export function runRefusalText(error: string | null | undefined): string {
+/**
+ * The refusal's own sentence (the stable `code: ` prefix dropped), or a plain fallback. The
+ * caller passes its translated fallback; the English default only serves callers with no catalogue.
+ */
+export function runRefusalText(
+    error: string | null | undefined,
+    fallback: string = 'The run did not start.',
+): string {
     const match = REFUSAL_PATTERN.exec((error ?? '').trim());
-    return match ? match[1].trim() : 'The run did not start.';
+    return match ? match[1].trim() : fallback;
 }
