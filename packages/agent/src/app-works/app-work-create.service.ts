@@ -125,6 +125,21 @@ import {
 /** The lock key prefix; the full key is `app-create:<userId>:<provider>:<upstream>:<mode>:<owner>`. */
 export const APP_CREATE_LOCK_PREFIX = 'app-create:';
 
+/**
+ * What the caller of a create vouches for beside the request itself. Nothing
+ * here is ever read from the DTO: a field of the request is a claim, and only a
+ * caller that checked the claim passes it on.
+ */
+export interface AppWorkCreateOptions {
+    /**
+     * The install on Ever Platform's marketplace this App is created for (Ever
+     * Platform's id of it). Kept on the Work only when the create settles a
+     * Blueprint, and only in its canonical spelling; `CreateWorkDto.installId`
+     * alone stores nothing.
+     */
+    readonly marketplaceInstallId?: string | null;
+}
+
 /** The `appSource` block plus the Work, as the route answers it (plan `:599-611`). */
 export interface AppWorkCreateResult {
     status: 'success';
@@ -239,13 +254,17 @@ export class AppWorkCreateService {
      * which its mode, deploy target and adopted fork are facts rather than guesses —
      * so a request refused before that point finishes without having started.
      */
-    async create(dto: CreateWorkDto, user: User): Promise<AppWorkCreateResult> {
+    async create(
+        dto: CreateWorkDto,
+        user: User,
+        options?: AppWorkCreateOptions,
+    ): Promise<AppWorkCreateResult> {
         const startedAt = Date.now();
         const mode = (APP_REPOSITORY_MODES as readonly string[]).includes(dto?.repositoryMode)
             ? (dto.repositoryMode as AppRepositoryMode)
             : null;
         try {
-            const result = await this.createUnobserved(dto, user);
+            const result = await this.createUnobserved(dto, user, options);
             this.trackCreateFinished(
                 mode,
                 result.alreadyExisted ? 'already_existed' : 'created',
@@ -282,7 +301,11 @@ export class AppWorkCreateService {
     }
 
     /** `create`'s body — the twelve steps, unobserved. */
-    private async createUnobserved(dto: CreateWorkDto, user: User): Promise<AppWorkCreateResult> {
+    private async createUnobserved(
+        dto: CreateWorkDto,
+        user: User,
+        options?: AppWorkCreateOptions,
+    ): Promise<AppWorkCreateResult> {
         // ── Step 1 — the instance setting (R-6) ──────────────────────────────
         // Checked here as well as in the inspector: a direct service call must be
         // refused identically to an HTTP one, and this is the check that refuses
@@ -479,6 +502,7 @@ export class AppWorkCreateService {
                     requestedOwner,
                     upstreamCoordinates,
                     slugConflictDeferred,
+                    marketplaceInstallId: options?.marketplaceInstallId ?? null,
                 }),
             { ttlMs: APP_CREATE_LOCK_TTL_MS },
         );
@@ -511,6 +535,8 @@ export class AppWorkCreateService {
         upstreamCoordinates: AppUpstreamRef | null;
         /** Step 5 found the slug taken by a fresh own App Work (see step 5). */
         slugConflictDeferred: boolean;
+        /** The install the caller vouched for ({@link AppWorkCreateOptions}); never the DTO's. */
+        marketplaceInstallId: string | null;
     }): Promise<AppWorkCreateResult> {
         const {
             dto,
@@ -633,6 +659,7 @@ export class AppWorkCreateService {
             autoProvision,
             relation,
             targetOwnerIsOrganization: target?.type === 'organization',
+            marketplaceInstallId: input.marketplaceInstallId,
         });
 
         const work = await this.workRepository.withTransaction(async (manager) => {
@@ -1370,6 +1397,7 @@ export class AppWorkCreateService {
         autoProvision: boolean;
         relation: ResolvedRelation;
         targetOwnerIsOrganization: boolean;
+        marketplaceInstallId: string | null;
     }): Partial<Work> {
         const { dto, user, source, mode, deploy, blueprint, autoProvision, relation } = input;
 
@@ -1414,10 +1442,13 @@ export class AppWorkCreateService {
             syncIntervalMinutes: 0,
             readmeConfig: dto.readmeConfig,
             lastDeployCorrelationId: dto.correlationId ?? null,
-            // The marketplace install this Work is created for, when the request
-            // names one. Read again here because a caller that did not pass through
-            // the validation pipe (a direct service call) is held to the same shape.
-            installId: normalizeEverPlatformInstallId(dto.installId),
+            // The marketplace install this App is created for: only the one the
+            // caller vouched for, only with the Blueprint this create settled (an
+            // install is for a Blueprint listing), and only in its canonical
+            // spelling. `dto.installId` is a claim and is never read here.
+            installId: blueprint.id
+                ? normalizeEverPlatformInstallId(input.marketplaceInstallId)
+                : null,
             kind: 'app',
             sourceRepository,
         };

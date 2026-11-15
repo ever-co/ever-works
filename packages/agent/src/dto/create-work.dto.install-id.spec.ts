@@ -5,14 +5,17 @@ import { validate } from 'class-validator';
 import { CreateWorkDto } from './create-work.dto';
 
 /**
- * `CreateWorkDto.installId`: the install on Ever Platform's marketplace a Work
- * is created for, when the address that sent the person here named one. It is
- * optional for every kind, an install id of Ever Platform when present (a ULID,
- * stored in its canonical upper-case spelling), and whitelisted by the global
- * pipe (`whitelist` + `forbidNonWhitelisted`), which would otherwise answer
- * `property installId should not exist`.
+ * `CreateWorkDto.installId` and `CreateWorkDto.everOrg`: what a person sent here
+ * from Ever Platform's marketplace brings with them. Both are **claims**: the
+ * DTO only lets them through the global pipe (`whitelist` +
+ * `forbidNonWhitelisted`, which would otherwise answer `property installId
+ * should not exist`), and it decides nothing about them. Whether a claim is
+ * read, and what is stored, is the caller's (`AppWorkCreateOptions`); a value
+ * that is not spelled like an id is ignored there, never refused here, so a
+ * request that carries one is as valid as a request that does not.
  */
 const INSTALL = '01JC5R7Y6K1M9E0V3Q2A8XW4TB';
+const EVER_ORG = '01JMQCK0RG000000000000000A';
 
 const website = {
     slug: 'demo',
@@ -40,47 +43,48 @@ async function check(body: Record<string, unknown>) {
     return { dto, properties: errors.map((error) => error.property) };
 }
 
-describe('CreateWorkDto.installId', () => {
+describe('CreateWorkDto — the marketplace install claim', () => {
     it.each([
         ['an App', app],
         ['a generated site', website],
-    ])('is optional for %s', async (_name, base) => {
+    ])('is optional for %s: a request without it is as it always was', async (_name, base) => {
         const { dto, properties } = await check({ ...base });
         expect(properties).toEqual([]);
         expect(dto.installId).toBeUndefined();
+        expect(dto.everOrg).toBeUndefined();
     });
 
     it.each([
         ['an App', app],
         ['a generated site', website],
-    ])('is accepted and kept for %s', async (_name, base) => {
-        const { dto, properties } = await check({ ...base, installId: INSTALL });
+    ])('passes the pipe for %s, as it came (nothing is decided here)', async (_name, base) => {
+        const { dto, properties } = await check({ ...base, installId: INSTALL, everOrg: EVER_ORG });
         expect(properties).toEqual([]);
         expect(dto.installId).toBe(INSTALL);
-    });
-
-    it('is kept in its canonical spelling, whatever its case or surrounding space', async () => {
-        const { dto, properties } = await check({
-            ...app,
-            installId: `  ${INSTALL.toLowerCase()} `,
-        });
-        expect(properties).toEqual([]);
-        expect(dto.installId).toBe(INSTALL);
+        expect(dto.everOrg).toBe(EVER_ORG);
     });
 
     it.each([
         ['empty', ''],
-        ['too short', INSTALL.slice(0, 25)],
-        ['too long', `${INSTALL}0`],
-        // The letters I, L, O and U never appear in an id.
-        ['a letter outside the alphabet', `${INSTALL.slice(0, 25)}U`],
+        ['not an install id', 'install-1'],
+        ['lower case', INSTALL.toLowerCase()],
         ['an address', 'https://apps.example.test/installs/1'],
-        ['a path', '../../etc/passwd'],
+    ])(
+        'a value that is not spelled like an id is not an error (%s): it is ignored later',
+        async (_name, value) => {
+            const { properties } = await check({ ...app, installId: value, everOrg: value });
+            expect(properties).toEqual([]);
+        },
+    );
+
+    it.each([
         ['a number', 42],
         ['an object', { id: INSTALL }],
-    ])('refuses a value that is not an install id (%s)', async (_name, installId) => {
-        const { properties } = await check({ ...app, installId });
-        expect(properties).toEqual(['installId']);
+        ['a list', [INSTALL]],
+        ['text that is too long', 'x'.repeat(65)],
+    ])('refuses only what is not short text (%s)', async (_name, value) => {
+        expect((await check({ ...app, installId: value })).properties).toEqual(['installId']);
+        expect((await check({ ...app, everOrg: value })).properties).toEqual(['everOrg']);
     });
 
     it('a field the DTO does not declare is still refused by the pipe', async () => {

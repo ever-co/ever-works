@@ -96,9 +96,15 @@ export interface EverPlatformFeaturesView {
 	readonly appSync: boolean;
 	/**
 	 * Another Ever app may create an App Work, or start a deployment of one, for a person who
-	 * allowed it. Absent on an installation that does not report it (read as off).
+	 * allowed it: the switch is on and the installation lists the apps it trusts to write. Absent on
+	 * an installation that does not report it (read as off).
 	 */
 	readonly appsWrite?: boolean;
+	/**
+	 * A person sent here from Ever Platform's marketplace may bring the id of the install an App is
+	 * created for. Absent on an installation that does not report it (read as off).
+	 */
+	readonly blueprintHandoff?: boolean;
 }
 
 /** One installation-wide integration as Ever Platform reports it. */

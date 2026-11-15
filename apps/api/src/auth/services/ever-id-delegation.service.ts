@@ -49,6 +49,13 @@ export interface EverIdDelegatedPrincipal {
  * person to sign in to Ever Works with Ever ID first. It is told only after the
  * token verified, to the holder of a token issued for that very person, and it
  * names nobody. An account that exists but is disabled keeps the plain 401.
+ *
+ * A write also **needs a list of trusted apps**, and a token that names its app:
+ * while `EVER_ID_TRUSTED_CLIENT_IDS` is unset or empty every write is refused
+ * (a read keeps "no `azp` rule" in that case), and a token without an
+ * authorised party, or issued to an app that is not on the list, is refused
+ * too. All three are the plain 401: a write is never accepted from a client
+ * nobody named, and every write that is accepted can be attributed to one.
  */
 @Injectable()
 export class EverIdDelegationService implements EverIdDelegationVerifier {
@@ -80,6 +87,14 @@ export class EverIdDelegationService implements EverIdDelegationVerifier {
         options: EverIdDelegationOptions = {},
     ): Promise<EverIdDelegatedPrincipal | null> {
         if (!JWT_SHAPED_BEARER.test(token)) return null;
+        const write = options.access === 'write';
+        // A write is accepted only from an app the operator listed. No list (unset,
+        // empty, or nothing in it that is a client id): refused before the token is
+        // read, whatever it carries. Fail closed; a read keeps its own rule below.
+        if (write && !this.trustedClientIds?.length) {
+            this.warnWriteWithoutTrustedClients();
+            return null;
+        }
         if (!(await this.facade.isEnabled().catch(() => false))) return null;
 
         let claims: Awaited<ReturnType<IdentityProviderFacadeService['verifyAccessToken']>>;
@@ -103,9 +118,20 @@ export class EverIdDelegationService implements EverIdDelegationVerifier {
             return null;
         }
 
+        // Checked here as well as by the provider's own rule above: a write is
+        // attributed to the app that made it, so a token that names no app, or one
+        // that is not on the list, is never a write.
+        if (
+            write &&
+            (!claims.authorizedParty || !this.trustedClientIds?.includes(claims.authorizedParty))
+        ) {
+            this.sample('rejected');
+            return null;
+        }
+
         const identity = await this.identities.findByIssuerSubject(claims.issuer, claims.subject);
         if (!identity) {
-            if (options.access !== 'write') return null;
+            if (!write) return null;
             this.sample('rejected');
             throw new HttpException(
                 {
@@ -149,6 +175,18 @@ export class EverIdDelegationService implements EverIdDelegationVerifier {
             user: principal,
             binding: { identityId: identity.id, clientId, scopes: [...claims.scopes] },
         };
+    }
+
+    /** Said once per process: the operator's log, not the caller's answer, explains the refusal. */
+    private warnedWriteWithoutTrustedClients = false;
+
+    private warnWriteWithoutTrustedClients(): void {
+        if (this.warnedWriteWithoutTrustedClients) return;
+        this.warnedWriteWithoutTrustedClients = true;
+        this.logger.warn(
+            'A delegated write was refused: EVER_ID_TRUSTED_CLIENT_IDS names no app, and a write is ' +
+                'accepted only from an app listed there.',
+        );
     }
 
     private async clientName(clientId: string): Promise<string> {

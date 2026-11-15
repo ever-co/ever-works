@@ -78,6 +78,7 @@ import { AppsCatalogController } from './apps-catalog.controller';
 // APW-03 T25 (lane aw-blueprints) — `GET /api/apps-catalog/licenses`, public.
 import { AppsCatalogLicensesController } from './apps-catalog-licenses.controller';
 import { AppsCatalogManifestService } from './apps-catalog-manifest.service';
+import { MarketplaceInstallClaimService } from './marketplace-install-claim.service';
 // APW-03 T30 (lane aw-blueprints) — the hourly Blueprint upgrade-notice pass.
 import { AppsCatalogUpgradeNoticeCronService } from './apps-catalog-upgrade-notice-cron.service';
 import { WorkRunsController } from './work-runs.controller';
@@ -179,6 +180,9 @@ import { WorkScheduleDispatcherCronService } from './tasks/work-schedule-dispatc
         AppsCatalogBlueprintsService,
         // `GET /api/apps-catalog` (+ `/:id`) — the manifest-backed Apps catalog.
         AppsCatalogManifestService,
+        // Whether `POST /api/works` may keep the marketplace install a request names
+        // (off by default: `EVER_CONNECT_BLUEPRINT_HANDOFF_ENABLED`).
+        MarketplaceInstallClaimService,
         // APW-03 T30 — `blueprintLatestVersion` + `app.blueprint.upgrade_available`,
         // hourly at `APPS_CATALOG_REFRESH_CRON`, one replica per tick (the lock below).
         AppsCatalogUpgradeNoticeCronService,

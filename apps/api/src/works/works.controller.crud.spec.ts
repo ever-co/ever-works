@@ -185,7 +185,13 @@ function makeStubs(): Stubs {
  * because the refusals they assert are the create path's own. Omitting it keeps
  * every existing call site on the mock, byte for byte.
  */
-function makeController(s: Stubs, lifecycleService?: unknown): WorksController {
+function makeController(
+    s: Stubs,
+    lifecycleService?: unknown,
+    // What decides whether a create keeps the marketplace install it names. Omitted
+    // (every call site but its own cases): the controller as a graph without it.
+    installClaims?: unknown,
+): WorksController {
     return new WorksController(
         s.cacheManager as any,
         s.cacheEntryRepository as any,
@@ -229,6 +235,7 @@ function makeController(s: Stubs, lifecycleService?: unknown): WorksController {
             verify: jest.fn().mockResolvedValue({ success: true, skipped: true }),
         } as any,
         { emit: jest.fn() } as any,
+        installClaims as any,
     );
 }
 
@@ -581,7 +588,72 @@ describe('WorksController — core CRUD endpoints', () => {
 
             expect(s.authService.getUser).toHaveBeenCalledWith('auth-1');
             expect(s.workLifecycleService.createWork).toHaveBeenCalledWith(dto, { id: 'user-1' });
+            // The request and the person, and nothing else: no third argument.
+            expect(s.workLifecycleService.createWork.mock.calls[0]).toHaveLength(2);
             expect(result).toEqual({ id: 'w-new' });
+        });
+
+        describe('a marketplace install named in the request', () => {
+            const INSTALL = '01JC5R7Y6K1M9E0V3Q2A8XW4TB';
+            const dto: any = {
+                name: 'Booking',
+                kind: 'app',
+                blueprintId: 'cal-diy',
+                installId: INSTALL,
+                everOrg: 'acme',
+            };
+
+            it('is a claim the controller never reads itself: without the service that decides, the create is called as it always was', async () => {
+                s.workLifecycleService.createWork.mockResolvedValue({ id: 'w-new' });
+
+                await controller.createWork(auth, dto);
+
+                expect(s.workLifecycleService.createWork.mock.calls[0]).toEqual([
+                    dto,
+                    { id: 'user-1' },
+                ]);
+            });
+
+            it('is not passed on when it is not vouched for (ignored): the same two-argument call', async () => {
+                const installClaims = { forSessionCreate: jest.fn().mockResolvedValue(undefined) };
+                controller = makeController(s, undefined, installClaims);
+                s.workLifecycleService.createWork.mockResolvedValue({ id: 'w-new' });
+
+                expect(await controller.createWork(auth, dto)).toEqual({ id: 'w-new' });
+
+                expect(installClaims.forSessionCreate).toHaveBeenCalledWith(dto);
+                expect(s.workLifecycleService.createWork.mock.calls[0]).toEqual([
+                    dto,
+                    { id: 'user-1' },
+                ]);
+            });
+
+            it('travels beside the request when it is vouched for', async () => {
+                const installClaims = {
+                    forSessionCreate: jest
+                        .fn()
+                        .mockResolvedValue({ marketplaceInstallId: INSTALL }),
+                };
+                controller = makeController(s, undefined, installClaims);
+                s.workLifecycleService.createWork.mockResolvedValue({ id: 'w-new' });
+
+                await controller.createWork(auth, dto);
+
+                expect(s.workLifecycleService.createWork).toHaveBeenCalledWith(
+                    dto,
+                    { id: 'user-1' },
+                    { marketplaceInstallId: INSTALL },
+                );
+            });
+
+            it('a refusal of the claim is the answer, and nothing is created', async () => {
+                const refusal = new Error('install_organization_mismatch');
+                const installClaims = { forSessionCreate: jest.fn().mockRejectedValue(refusal) };
+                controller = makeController(s, undefined, installClaims);
+
+                await expect(controller.createWork(auth, dto)).rejects.toBe(refusal);
+                expect(s.workLifecycleService.createWork).not.toHaveBeenCalled();
+            });
         });
     });
 

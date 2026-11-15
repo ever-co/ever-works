@@ -25,6 +25,10 @@ jest.mock('@ever-works/agent/facades', () => ({
     FacadesModule: class FacadesModule {},
     GitFacadeService: class GitFacadeService {},
 }));
+jest.mock('@ever-works/agent/activity-log', () => ({
+    ActivityLogModule: class ActivityLogModule {},
+    ActivityLogService: class ActivityLogService {},
+}));
 jest.mock('@ever-works/agent/integrations-api', () => ({
     IntegrationsApiFoundationModule: class IntegrationsApiFoundationModule {},
     IntegrationIdempotencyService: class IntegrationIdempotencyService {},

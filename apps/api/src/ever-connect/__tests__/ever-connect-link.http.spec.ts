@@ -233,6 +233,7 @@ describe("Ever Connect — an Organization's link over HTTP", () => {
                 entitlements: false,
                 appSync: false,
                 appsWrite: false,
+                blueprintHandoff: false,
             });
             expect(status.heartbeat).toEqual({ lastSentAt: null });
             expect(status.entitlement).toBeNull();
@@ -434,8 +435,9 @@ describe("Ever Connect — an Organization's link over HTTP", () => {
                 heartbeat: true,
                 entitlements: true,
                 appSync: true,
-                // Its own switch, which this installation did not set.
+                // Their own switches, which this installation did not set.
                 appsWrite: false,
+                blueprintHandoff: false,
             });
             expect(status.connection.status).toBe('disconnected');
             expect(status.heartbeat).toEqual({ lastSentAt: null });

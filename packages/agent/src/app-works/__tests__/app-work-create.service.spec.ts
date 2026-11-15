@@ -1489,33 +1489,82 @@ describe('AppWorkCreateService', () => {
             expect(result.appSource.blueprint).toBeUndefined();
         });
 
-        it('keeps the marketplace install the App is created for, in its canonical spelling', async () => {
+        describe('the marketplace install an App is created for', () => {
             const install = '01JC5R7Y6K1M9E0V3Q2A8XW4TB';
-            const h = harness({});
+            /** A create that settles a Blueprint: what an install is for. */
+            const withBlueprint = () =>
+                harness({
+                    inspect: inspectResponse({
+                        blueprint: {
+                            status: 'matched',
+                            id: 'cal-diy',
+                            version: '1.0.0',
+                            name: 'Cal.diy',
+                            matchSource: 'manifest',
+                        },
+                    }),
+                });
+            const stored = (h: ReturnType<typeof harness>) =>
+                h.workRepository.create.mock.calls[0][0].installId;
 
-            await h.service.create(dto({ installId: ` ${install.toLowerCase()} ` }), USER);
+            it('is kept when the caller vouches for it, in its canonical spelling', async () => {
+                const h = withBlueprint();
 
-            expect(h.workRepository.create.mock.calls[0][0].installId).toBe(install);
-        });
+                await h.service.create(dto(), USER, {
+                    marketplaceInstallId: ` ${install.toLowerCase()} `,
+                });
 
-        it.each([
-            ['none is sent', undefined],
-            ['null', null],
-            ['empty', ''],
-            ['a value that is not an install id', 'install-1'],
-            ['an address', 'https://apps.example.test/installs/1'],
-            ['a value that is not text', 42],
-        ])(
-            'stores no install when %s (a direct call is held to the same shape)',
-            async (_label, installId) => {
-                const h = harness({});
+                expect(stored(h)).toBe(install);
+            });
 
-                const result = await h.service.create(dto({ installId }), USER);
+            it('is never read from the request: a claim in the DTO alone stores nothing', async () => {
+                const h = withBlueprint();
+
+                const result = await h.service.create(
+                    dto({ installId: install, everOrg: '01JMQCK0RG000000000000000A' }),
+                    USER,
+                );
 
                 expect(result.status).toBe('success');
-                expect(h.workRepository.create.mock.calls[0][0].installId).toBeNull();
-            },
-        );
+                expect(stored(h)).toBeNull();
+            });
+
+            it('is not kept without a Blueprint, even when the caller passes one', async () => {
+                // No Blueprint matched: an install is for a Blueprint listing, so there is nothing to bind it to.
+                const h = harness({});
+
+                await h.service.create(dto(), USER, { marketplaceInstallId: install });
+
+                expect(
+                    h.workRepository.create.mock.calls[0][0].sourceRepository.blueprintId,
+                ).toBeUndefined();
+                expect(stored(h)).toBeNull();
+            });
+
+            it.each([
+                ['no options at all', undefined],
+                ['options that name none', {}],
+                ['null', { marketplaceInstallId: null }],
+                ['empty', { marketplaceInstallId: '' }],
+                ['a value that is not an install id', { marketplaceInstallId: 'install-1' }],
+                ['an address', { marketplaceInstallId: 'https://apps.example.test/installs/1' }],
+                ['a value that is not text', { marketplaceInstallId: 42 }],
+            ])(
+                'stores none for %s, and the create is as it always was',
+                async (_label, options) => {
+                    const h = withBlueprint();
+
+                    const result = await h.service.create(dto(), USER, options as never);
+
+                    expect(result.status).toBe('success');
+                    expect(stored(h)).toBeNull();
+                    // The Blueprint is settled exactly as without the option.
+                    expect(
+                        h.workRepository.create.mock.calls[0][0].sourceRepository.blueprintId,
+                    ).toBe('cal-diy');
+                },
+            );
+        });
 
         it('creates without a Blueprint when the catalog port is unbound', async () => {
             const h = harness({

@@ -17,6 +17,9 @@ jest.mock('@ever-works/agent/app-works', () => ({
 jest.mock('@ever-works/agent/facades', () => ({
     GitFacadeService: class GitFacadeService {},
 }));
+jest.mock('@ever-works/agent/activity-log', () => ({
+    ActivityLogService: class ActivityLogService {},
+}));
 
 import { randomUUID } from 'node:crypto';
 import {
@@ -28,12 +31,16 @@ import {
     ServiceUnavailableException,
 } from '@nestjs/common';
 import type { DataSource } from 'typeorm';
+import type { OrganizationRepository, UserRepository } from '@ever-works/agent/database';
 import {
+    ActivityActionType,
+    ActivityStatus,
     EverConnectConnection,
     EverConnectLink,
     IntegrationIdempotencyKey,
 } from '@ever-works/agent/entities';
 import { IntegrationIdempotencyService } from '@ever-works/agent/integrations-api';
+import { OrganizationMembershipService } from '../../../organizations/organization-membership.service';
 import { ScopeContextService } from '../../../scope/scope-context.service';
 import { createIdentityDataSource } from '../../identity/__tests__/db.helper-spec';
 import {
@@ -51,14 +58,23 @@ import {
  * answers, and every refusal's code.
  */
 const LINK = '01JZ8Q3M4N5P6R7S8T9V0W1XA1';
+/** An active link of another account's Organization. */
 const OTHER_LINK = '01JZ8Q3M4N5P6R7S8T9V0W1XB2';
+/** A removed link of another account's Organization. */
 const ARCHIVED_LINK = '01JZ8Q3M4N5P6R7S8T9V0W1XC3';
+/** A removed link of an Organization of the person's own account. */
+const FORMER_LINK = '01JZ8Q3M4N5P6R7S8T9V0W1XD4';
+/** A link id nothing here has. */
+const UNKNOWN_LINK = '01JZ8Q3M4N5P6R7S8T9V0W1XZ9';
 const INSTALL = '01JC5R7Y6K1M9E0V3Q2A8XW4TB';
 const WEB = 'https://works.example.test';
 
 const tenant = randomUUID();
 const organization = { id: randomUUID(), tenantId: tenant, slug: 'acme' };
+/** Another Organization of the same account, whose link was removed. */
+const formerOrganization = { id: randomUUID(), tenantId: tenant, slug: 'acme-labs' };
 const otherOrganization = { id: randomUUID(), tenantId: randomUUID(), slug: 'globex' };
+const goneOrganization = { id: randomUUID(), tenantId: randomUUID(), slug: 'gone' };
 const PERSON = randomUUID();
 const OUTSIDER = randomUUID();
 
@@ -122,6 +138,9 @@ describe('EverConnectAppsService', () => {
         clusterCredentialNeedsOwnerConfirmation: jest.Mock;
         confirmClusterCredential: jest.Mock;
     };
+    let activity: { log: jest.Mock };
+    /** The service over the doubles above, with `membership` as given. */
+    let appsWith: (membershipService: unknown, activityService?: unknown) => EverConnectAppsService;
 
     const body = (overrides: Record<string, unknown> = {}) => ({
         link_id: LINK,
@@ -166,12 +185,8 @@ describe('EverConnectAppsService', () => {
             .insert([
                 link(LINK, organization, 'active', '01JMQCK0RG000000000000000A'),
                 link(OTHER_LINK, otherOrganization, 'active', '01JMQCK0RG000000000000000B'),
-                link(
-                    ARCHIVED_LINK,
-                    { id: randomUUID(), tenantId: randomUUID(), slug: 'gone' },
-                    'archived',
-                    '01JMQCK0RG000000000000000C',
-                ),
+                link(ARCHIVED_LINK, goneOrganization, 'archived', '01JMQCK0RG000000000000000C'),
+                link(FORMER_LINK, formerOrganization, 'archived', '01JMQCK0RG000000000000000D'),
             ]);
 
         connection = {
@@ -184,7 +199,8 @@ describe('EverConnectAppsService', () => {
         // else, and a missing Organization, is the same 404.
         membership = {
             ensureMember: jest.fn(async (orgId: string, userId: string) => {
-                if (orgId === organization.id && userId === PERSON) return organization;
+                const own = [organization, formerOrganization].find(({ id }) => id === orgId);
+                if (own && userId === PERSON) return own;
                 throw new NotFoundException(`Organization ${orgId} not found`);
             }),
         };
@@ -229,22 +245,26 @@ describe('EverConnectAppsService', () => {
             clusterCredentialNeedsOwnerConfirmation: jest.fn(async () => false),
             confirmClusterCredential: jest.fn(),
         };
+        activity = { log: jest.fn(async () => ({ id: randomUUID() })) };
         scope = new ScopeContextService();
-        apps = new EverConnectAppsService(
-            dataSource,
-            connection as never,
-            membership as never,
-            users as never,
-            scope,
-            catalog as never,
-            inspector as never,
-            works as never,
-            workQuery as never,
-            ownership as never,
-            deployRequest as never,
-            new IntegrationIdempotencyService(dataSource),
-            targets as never,
-        );
+        appsWith = (membershipService, activityService = activity) =>
+            new EverConnectAppsService(
+                dataSource,
+                connection as never,
+                membershipService as never,
+                users as never,
+                scope,
+                catalog as never,
+                inspector as never,
+                works as never,
+                workQuery as never,
+                ownership as never,
+                deployRequest as never,
+                new IntegrationIdempotencyService(dataSource),
+                targets as never,
+                activityService as never,
+            );
+        apps = appsWith(membership);
     });
 
     afterEach(() => {
@@ -274,9 +294,10 @@ describe('EverConnectAppsService', () => {
                 { blueprintId: 'cal-diy' },
             );
             expect(works.createWork).toHaveBeenCalledTimes(1);
-            const [dto, user] = works.createWork.mock.calls[0];
+            const [dto, user, options] = works.createWork.mock.calls[0];
             // An App, from the Blueprint, as the create form sends it before a person changes
             // anything: the default mode, in the first account they can create a repository in.
+            // Nothing is started on its own, and the install is not a field of the request.
             expect({ ...dto }).toEqual({
                 slug: 'booking',
                 name: 'Booking',
@@ -288,8 +309,11 @@ describe('EverConnectAppsService', () => {
                 repositoryMode: 'fork',
                 targetOwner: 'acme-member',
                 blueprintId: 'cal-diy',
-                installId: INSTALL,
+                autoProvision: false,
             });
+            // The install this route vouches for, beside the request: the create path
+            // keeps it only with the Blueprint it settles.
+            expect(options).toEqual({ marketplaceInstallId: INSTALL });
             // As the person, not as the app that asked.
             expect(user).toMatchObject({ id: PERSON });
             // In the Organization's scope: where the Work is created.
@@ -306,14 +330,35 @@ describe('EverConnectAppsService', () => {
                 }),
             );
             await apps.create(person, 'key-1', body());
-            const [dto] = works.createWork.mock.calls[0];
+            const call = works.createWork.mock.calls[0];
+            const [dto] = call;
             expect(dto).toMatchObject({ repositoryMode: 'link', blueprintId: 'cal-diy' });
             expect(dto).not.toHaveProperty('targetOwner');
             expect(dto).not.toHaveProperty('installId');
+            expect(dto).not.toHaveProperty('everOrg');
+            // Called as a create without an install is: the request and the person, nothing else.
+            expect(call).toHaveLength(2);
             // Never a deploy target, a switch or a value the person did not choose.
             expect(dto).not.toHaveProperty('deployProvider');
-            expect(dto).not.toHaveProperty('autoProvision');
             expect(dto).not.toHaveProperty('appEnv');
+        });
+
+        describe('nothing starts on its own', () => {
+            it.each([
+                ['left out', {}],
+                ['null', { auto_provision: null }],
+                ['false', { auto_provision: false }],
+            ])('auto_provision %s: the App is created and nothing is started', async (_n, sent) => {
+                await apps.create(person, 'key-1', body(sent));
+                // Said to the creation path in so many words: its own default is on.
+                expect(works.createWork.mock.calls[0][0].autoProvision).toBe(false);
+            });
+
+            it('auto_provision true: the creation path starts what it starts for a signed-in person', async () => {
+                await apps.create(person, 'key-1', body({ auto_provision: true }));
+                // Left to the creation path's own default (on), and to its own switch.
+                expect(works.createWork.mock.calls[0][0]).not.toHaveProperty('autoProvision');
+            });
         });
 
         it('takes the free address when the name is taken, and the name as the description when the repository has none', async () => {
@@ -352,43 +397,65 @@ describe('EverConnectAppsService', () => {
         });
 
         describe('who may ask', () => {
-            it('refuses a person who is not a member of the Organization: 403 not_a_member', async () => {
-                expect(
-                    await refusalOf(apps.create(callerOf(OUTSIDER), 'key-1', body())),
-                ).toMatchObject({ status: 403, code: 'not_a_member' });
-                // Also for a link of another account's Organization the person names.
-                expect(
-                    await refusalOf(apps.create(person, 'key-2', body({ link_id: OTHER_LINK }))),
-                ).toMatchObject({ status: 403, code: 'not_a_member' });
-                expect(membership.ensureMember).toHaveBeenLastCalledWith(
-                    otherOrganization.id,
-                    PERSON,
-                );
-                expect(works.createWork).not.toHaveBeenCalled();
-                expect(inspector.inspect).not.toHaveBeenCalled();
-                expect(await keys()).toEqual([]);
-            });
-
             it('refuses a link that is not known: 404 link_not_found', async () => {
                 expect(
-                    await refusalOf(
-                        apps.create(
-                            person,
-                            'key-1',
-                            body({ link_id: '01JZ8Q3M4N5P6R7S8T9V0W1XZ9' }),
-                        ),
-                    ),
+                    await refusalOf(apps.create(person, 'key-1', body({ link_id: UNKNOWN_LINK }))),
                 ).toMatchObject({ status: 404, code: 'link_not_found' });
                 expect(membership.ensureMember).not.toHaveBeenCalled();
                 expect(works.createWork).not.toHaveBeenCalled();
             });
 
-            it('refuses a link that was removed: 409 link_not_active', async () => {
-                expect(
-                    await refusalOf(apps.create(person, 'key-1', body({ link_id: ARCHIVED_LINK }))),
-                ).toMatchObject({ status: 409, code: 'link_not_active' });
-                expect(membership.ensureMember).not.toHaveBeenCalled();
+            it('a link is not confirmed to anyone outside it: the answer of a link that is not known, word for word', async () => {
+                const unknown = await refusalOf(
+                    apps.create(person, 'key-0', body({ link_id: UNKNOWN_LINK })),
+                );
+                expect(unknown).toMatchObject({ status: 404, code: 'link_not_found' });
+
+                for (const [caller, linkId] of [
+                    // A person of another account, naming a link that exists and is active.
+                    [callerOf(OUTSIDER), LINK],
+                    // The person, naming another account's active link.
+                    [person, OTHER_LINK],
+                    // The person, naming another account's removed link: not "removed" either.
+                    [person, ARCHIVED_LINK],
+                    [callerOf(OUTSIDER), FORMER_LINK],
+                ] as const) {
+                    expect(
+                        await refusalOf(apps.create(caller, 'key-1', body({ link_id: linkId }))),
+                    ).toEqual(unknown);
+                }
+                expect(membership.ensureMember).toHaveBeenCalledWith(otherOrganization.id, PERSON);
+                expect(membership.ensureMember).toHaveBeenCalledWith(goneOrganization.id, PERSON);
+                // No code of this route says "that link exists, and it is not yours".
+                expect(Object.values(EVER_CONNECT_APPS_CODES)).not.toContain('not_a_member');
                 expect(works.createWork).not.toHaveBeenCalled();
+                expect(inspector.inspect).not.toHaveBeenCalled();
+                expect(activity.log).not.toHaveBeenCalled();
+                expect(await keys()).toEqual([]);
+            });
+
+            it('tells a member that their link was removed: 409 link_not_active', async () => {
+                expect(
+                    await refusalOf(apps.create(person, 'key-1', body({ link_id: FORMER_LINK }))),
+                ).toMatchObject({ status: 409, code: 'link_not_active' });
+                expect(membership.ensureMember).toHaveBeenCalledWith(formerOrganization.id, PERSON);
+                expect(works.createWork).not.toHaveBeenCalled();
+            });
+
+            it('a person whose account is gone is told what a stranger is told', async () => {
+                users.findById.mockResolvedValueOnce(null);
+                expect(await refusalOf(apps.create(person, 'key-1', body()))).toMatchObject({
+                    status: 404,
+                    code: 'link_not_found',
+                });
+                expect(works.createWork).not.toHaveBeenCalled();
+            });
+
+            it('a fault of the membership check is a fault, not "not found"', async () => {
+                membership.ensureMember.mockRejectedValueOnce(new Error('database is down'));
+                await expect(apps.create(person, 'key-1', body())).rejects.toThrow(
+                    'database is down',
+                );
             });
 
             it.each([
@@ -621,6 +688,18 @@ describe('EverConnectAppsService', () => {
                 ],
                 ['an install id that is not text', 'key-1', body({ install_id: 7 }), 'install_id'],
                 [
+                    'an auto_provision that is text',
+                    'key-1',
+                    body({ auto_provision: 'true' }),
+                    'auto_provision',
+                ],
+                [
+                    'an auto_provision that is a number',
+                    'key-1',
+                    body({ auto_provision: 1 }),
+                    'auto_provision',
+                ],
+                [
                     "a repository of the caller's choosing",
                     'key-1',
                     body({ repository_url: 'https://github.com/x/y' }),
@@ -678,6 +757,8 @@ describe('EverConnectAppsService', () => {
                 const again = await apps.create(person, 'key-1', {
                     link_id: LINK,
                     install_id: null,
+                    // Left out, null and false are one request: nothing is started.
+                    auto_provision: false,
                     blueprint_id: 'cal-diy',
                     name: ' Booking ',
                 });
@@ -689,6 +770,7 @@ describe('EverConnectAppsService', () => {
                 ['another name', { name: 'Calendar' }],
                 ['another Blueprint', { blueprint_id: 'umami' }],
                 ['another install', { install_id: INSTALL }],
+                ['auto_provision turned on', { auto_provision: true }],
             ])(
                 'the same key with %s is refused: 409, and nothing is created',
                 async (_name, change) => {
@@ -984,17 +1066,23 @@ describe('EverConnectAppsService', () => {
         });
 
         it('checks the link and the membership as a create does', async () => {
+            const unknown = await refusalOf(apps.deploy(person, WORK, { link_id: UNKNOWN_LINK }));
+            expect(unknown).toMatchObject({ status: 404, code: 'link_not_found' });
+            // Anyone outside a link is told what a link that is not known answers.
+            for (const [caller, linkId] of [
+                [callerOf(OUTSIDER), LINK],
+                [person, OTHER_LINK],
+                [person, ARCHIVED_LINK],
+                [callerOf(OUTSIDER), FORMER_LINK],
+            ] as const) {
+                expect(await refusalOf(apps.deploy(caller, WORK, { link_id: linkId }))).toEqual(
+                    unknown,
+                );
+            }
+            // Only a member learns that their link was removed.
             expect(
-                await refusalOf(apps.deploy(callerOf(OUTSIDER), WORK, { link_id: LINK })),
-            ).toMatchObject({ status: 403, code: 'not_a_member' });
-            expect(
-                await refusalOf(apps.deploy(person, WORK, { link_id: ARCHIVED_LINK })),
+                await refusalOf(apps.deploy(person, WORK, { link_id: FORMER_LINK })),
             ).toMatchObject({ status: 409, code: 'link_not_active' });
-            expect(
-                await refusalOf(
-                    apps.deploy(person, WORK, { link_id: '01JZ8Q3M4N5P6R7S8T9V0W1XZ9' }),
-                ),
-            ).toMatchObject({ status: 404, code: 'link_not_found' });
             connection.connection.mockResolvedValueOnce({ status: 'disconnected' });
             expect(await refusalOf(apps.deploy(person, WORK, { link_id: LINK }))).toMatchObject({
                 status: 409,
@@ -1002,6 +1090,7 @@ describe('EverConnectAppsService', () => {
             });
             expect(ownership.ensureCanEdit).not.toHaveBeenCalled();
             expect(deployRequest.request).not.toHaveBeenCalled();
+            expect(activity.log).not.toHaveBeenCalled();
         });
 
         it.each([
@@ -1045,7 +1134,6 @@ describe('EverConnectAppsService', () => {
             notConnected: 'not_connected',
             linkNotFound: 'link_not_found',
             linkNotActive: 'link_not_active',
-            notAMember: 'not_a_member',
             blueprintRequired: 'blueprint_required',
             blueprintNotFound: 'blueprint_not_found',
             blueprintNotAvailable: 'blueprint_not_available',
@@ -1061,6 +1149,256 @@ describe('EverConnectAppsService', () => {
             ownerRequired: 'ownerRequired',
             sessionRequired: 'session_required',
             deployRefused: 'deploy_refused',
+        });
+    });
+
+    /**
+     * What an app did for a person is written down for that person: one Activity
+     * row per App created and per deployment asked for, naming the app (its
+     * client id) and the person, and nothing of the token.
+     */
+    describe('what was done is written down', () => {
+        const WORK = randomUUID();
+        const deployAccepted = {
+            status: 'accepted',
+            httpStatus: 202,
+            code: null,
+            deploymentId: 'deployment-1',
+            runningDeploymentId: null,
+            unmet: [],
+        };
+        const caller: DelegatedCaller = {
+            auth: { userId: PERSON, authMethod: 'ever-id-delegated' } as DelegatedCaller['auth'],
+            delegation: {
+                identityId: 'identity-of-the-person',
+                clientId: 'app-ever-co',
+                scopes: ['apps:read', 'apps:write'],
+            },
+        };
+
+        beforeEach(() => {
+            ownership.ensureCanEdit.mockResolvedValue({
+                work: { id: WORK, kind: 'app', organizationId: organization.id },
+                role: 'owner',
+            });
+            deployRequest.request.mockResolvedValue(deployAccepted);
+        });
+
+        it('a created App: one row, for the person, naming the app that acted', async () => {
+            works.createWork.mockResolvedValueOnce({
+                status: 'success',
+                work: { id: 'work-1', name: 'Booking' },
+            });
+            await apps.create(caller, 'key-1', body({ install_id: INSTALL }));
+
+            expect(activity.log).toHaveBeenCalledTimes(1);
+            expect(activity.log).toHaveBeenCalledWith({
+                userId: PERSON,
+                workId: 'work-1',
+                actionType: ActivityActionType.WORK_CREATED,
+                action: 'app.created.delegated',
+                status: ActivityStatus.COMPLETED,
+                summary: 'App created by app-ever-co, acting for you',
+                actorKind: 'external',
+                actorLabel: 'app-ever-co',
+                metadata: {
+                    via: 'ever-id-delegated',
+                    clientId: 'app-ever-co',
+                    linkId: LINK,
+                    blueprintId: 'cal-diy',
+                    autoProvision: false,
+                    installId: INSTALL,
+                },
+                // In the Organization the link is for.
+                tenantId: tenant,
+                organizationId: organization.id,
+            });
+        });
+
+        it('a deployment asked for: one row, with the deployment it is', async () => {
+            await apps.deploy(caller, WORK, { link_id: LINK });
+
+            expect(activity.log).toHaveBeenCalledTimes(1);
+            expect(activity.log).toHaveBeenCalledWith({
+                userId: PERSON,
+                workId: WORK,
+                actionType: ActivityActionType.APP_DEPLOY,
+                action: 'app.deploy.requested.delegated',
+                status: ActivityStatus.COMPLETED,
+                summary: 'Deployment asked for by app-ever-co, acting for you',
+                actorKind: 'external',
+                actorLabel: 'app-ever-co',
+                metadata: {
+                    via: 'ever-id-delegated',
+                    clientId: 'app-ever-co',
+                    linkId: LINK,
+                    deploymentId: 'deployment-1',
+                    status: 'accepted',
+                },
+                tenantId: tenant,
+                organizationId: organization.id,
+            });
+        });
+
+        it('nothing of the token is in a row: identifiers of the app, the link and the App only', async () => {
+            await apps.create(caller, 'key-1', body());
+            await apps.deploy(caller, WORK, { link_id: LINK });
+            const written = JSON.stringify(activity.log.mock.calls);
+            expect(written).not.toMatch(/identity-of-the-person|apps:write|apps:read|scopes/);
+            expect(written).not.toMatch(/eyJ|Bearer|token/i);
+        });
+
+        it('writes nothing for what did not happen', async () => {
+            // An App that was already there, and the stored answer of an earlier request.
+            works.createWork.mockResolvedValueOnce({
+                status: 'success',
+                work: { id: 'work-1', name: 'Booking' },
+                alreadyExisted: true,
+            });
+            await apps.create(caller, 'key-1', body());
+            await apps.create(caller, 'key-1', body());
+            // A create and a deployment that were refused.
+            works.createWork.mockRejectedValueOnce(new ConflictException('taken'));
+            await refusalOf(apps.create(caller, 'key-2', body()));
+            deployRequest.request.mockResolvedValueOnce({
+                status: 'refused',
+                httpStatus: 422,
+                code: 'APP_DEPLOY_PRECONDITIONS',
+                deploymentId: null,
+                unmet: [{ code: 'no_target', message: 'Choose where this App runs first.' }],
+            });
+            await refusalOf(apps.deploy(caller, WORK, { link_id: LINK }));
+
+            expect(activity.log).not.toHaveBeenCalled();
+        });
+
+        it('a repeated create writes one row, not two', async () => {
+            await apps.create(caller, 'key-1', body());
+            await apps.create(caller, 'key-1', body());
+            expect(activity.log).toHaveBeenCalledTimes(1);
+        });
+
+        it('a store that cannot be written to never fails what already happened', async () => {
+            activity.log.mockRejectedValueOnce(new Error('the activity store is down'));
+            expect(await apps.create(caller, 'key-1', body())).toMatchObject({ status: 201 });
+            activity.log.mockImplementationOnce(() => {
+                throw new Error('not bound');
+            });
+            expect(await apps.deploy(caller, WORK, { link_id: LINK })).toMatchObject({
+                status: 202,
+            });
+        });
+
+        it('without the Activity store in the graph, both still work', async () => {
+            const lean = appsWith(membership, undefined);
+            expect(await lean.create(caller, 'key-1', body())).toMatchObject({ status: 201 });
+            expect(await lean.deploy(caller, WORK, { link_id: LINK })).toMatchObject({
+                status: 202,
+            });
+        });
+    });
+
+    /**
+     * The same questions on the REAL `OrganizationMembershipService` (the tests
+     * above play it with a stand-in that copies its contract): a member of the
+     * account that owns the Organization is let through; a person of another
+     * account, a person with no account and a person who does not exist are told
+     * what a link that is not known answers.
+     */
+    describe("against the real membership rule: another account's link", () => {
+        const NEWCOMER = randomUUID();
+        const GHOST = randomUUID();
+        const people: Record<string, { id: string; tenantId: string | null }> = {
+            [PERSON]: { id: PERSON, tenantId: tenant },
+            [OUTSIDER]: { id: OUTSIDER, tenantId: otherOrganization.tenantId },
+            // Signed up, with no account of their own yet.
+            [NEWCOMER]: { id: NEWCOMER, tenantId: null },
+        };
+        const organizations = [
+            organization,
+            formerOrganization,
+            otherOrganization,
+            goneOrganization,
+        ];
+        const WORK = randomUUID();
+        let real: EverConnectAppsService;
+
+        beforeEach(() => {
+            real = appsWith(
+                new OrganizationMembershipService(
+                    {
+                        findById: async (id: string) =>
+                            organizations.find((candidate) => candidate.id === id) ?? null,
+                    } as unknown as OrganizationRepository,
+                    {
+                        findById: async (id: string) => people[id] ?? null,
+                    } as unknown as UserRepository,
+                ),
+            );
+            ownership.ensureCanEdit.mockResolvedValue({
+                work: { id: WORK, kind: 'app', organizationId: organization.id },
+                role: 'owner',
+            });
+            deployRequest.request.mockResolvedValue({
+                status: 'accepted',
+                httpStatus: 202,
+                code: null,
+                deploymentId: 'deployment-1',
+                unmet: [],
+            });
+        });
+
+        it('a member of the account creates and deploys in the linked Organization', async () => {
+            expect(await real.create(person, 'key-1', body())).toMatchObject({ status: 201 });
+            expect(await real.deploy(person, WORK, { link_id: LINK })).toMatchObject({
+                status: 202,
+            });
+        });
+
+        it.each([
+            ["a person of another account, naming this account's link", OUTSIDER, LINK],
+            ["the person, naming another account's link", PERSON, OTHER_LINK],
+            ["the person, naming another account's removed link", PERSON, ARCHIVED_LINK],
+            [
+                "a person of another account, naming this account's removed link",
+                OUTSIDER,
+                FORMER_LINK,
+            ],
+            ['a person with no account', NEWCOMER, LINK],
+            ['a person who does not exist here', GHOST, LINK],
+        ])(
+            '%s: 404 link_not_found for a create and for a deployment',
+            async (_n, userId, linkId) => {
+                const unknown = await refusalOf(
+                    real.create(person, 'key-0', body({ link_id: UNKNOWN_LINK })),
+                );
+                expect(unknown).toMatchObject({ status: 404, code: 'link_not_found' });
+
+                const caller = callerOf(userId);
+                expect(
+                    await refusalOf(real.create(caller, 'key-1', body({ link_id: linkId }))),
+                ).toEqual(unknown);
+                expect(await refusalOf(real.deploy(caller, WORK, { link_id: linkId }))).toEqual(
+                    unknown,
+                );
+                // Nothing was looked at, created, started or written down.
+                expect(catalog.get).not.toHaveBeenCalled();
+                expect(inspector.inspect).not.toHaveBeenCalled();
+                expect(works.createWork).not.toHaveBeenCalled();
+                expect(ownership.ensureCanEdit).not.toHaveBeenCalled();
+                expect(deployRequest.request).not.toHaveBeenCalled();
+                expect(activity.log).not.toHaveBeenCalled();
+                expect(await keys()).toEqual([]);
+            },
+        );
+
+        it('only a member is told that a link of their account was removed', async () => {
+            expect(
+                await refusalOf(real.create(person, 'key-1', body({ link_id: FORMER_LINK }))),
+            ).toMatchObject({ status: 409, code: 'link_not_active' });
+            expect(
+                await refusalOf(real.deploy(person, WORK, { link_id: FORMER_LINK })),
+            ).toMatchObject({ status: 409, code: 'link_not_active' });
         });
     });
 });

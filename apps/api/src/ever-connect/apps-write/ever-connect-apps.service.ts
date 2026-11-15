@@ -6,12 +6,19 @@ import {
     type AppRepositoryMode,
     type AppSourceInspectResponse,
 } from '@ever-works/contracts';
+import { ActivityLogService } from '@ever-works/agent/activity-log';
 import { AppDeployRequestService, AppTargetService } from '@ever-works/agent/app-runtime';
 import { AppSourceInspectorService } from '@ever-works/agent/app-works';
 import { config as agentConfig } from '@ever-works/agent/config';
 import { UserRepository } from '@ever-works/agent/database';
 import { CreateWorkDto } from '@ever-works/agent/dto';
-import { EverConnectLink, type Organization, type User } from '@ever-works/agent/entities';
+import {
+    ActivityActionType,
+    ActivityStatus,
+    EverConnectLink,
+    type Organization,
+    type User,
+} from '@ever-works/agent/entities';
 import {
     IDEMPOTENCY_KEY_MAX_LENGTH,
     IdempotencyConflictError,
@@ -55,7 +62,6 @@ export const EVER_CONNECT_APPS_CODES = {
     notConnected: 'not_connected',
     linkNotFound: 'link_not_found',
     linkNotActive: 'link_not_active',
-    notAMember: 'not_a_member',
     blueprintRequired: 'blueprint_required',
     blueprintNotFound: 'blueprint_not_found',
     blueprintNotAvailable: 'blueprint_not_available',
@@ -128,6 +134,19 @@ const invalid = (field: string, message: string) =>
  *
  * A create is repeat-safe under its `Idempotency-Key`: the same key and body
  * answer the App made before; the same key with another body is refused.
+ *
+ * Three more things hold for both:
+ *
+ * - **A link is not confirmed to anyone outside it.** A person who is not a
+ *   member of the Organization a link is for is told exactly what a person
+ *   naming a link that does not exist is told (`404 link_not_found`); only a
+ *   member learns that a link was removed.
+ * - **Nothing starts on its own.** A create does not start the agent run that
+ *   works out how to run a repository unless the request asks for it
+ *   (`auto_provision: true`): nobody is at a keyboard to watch it.
+ * - **What was done is written down.** Each create and each deployment asked
+ *   for leaves an Activity row for the person, naming the app that acted for
+ *   them (its client id) and nothing of its token.
  */
 @Injectable()
 export class EverConnectAppsService {
@@ -149,6 +168,9 @@ export class EverConnectAppsService {
         // Without it nothing can say that a cluster credential waits for its owner; the
         // deploy preconditions still refuse such a credential for every caller.
         @Optional() private readonly targets?: AppTargetService,
+        // The person's record of what an app did for them. Optional so a lean graph
+        // builds the service; a store that is down never fails the request.
+        @Optional() private readonly activity?: ActivityLogService,
     ) {}
 
     // ── Create ───────────────────────────────────────────────────────────────
@@ -195,6 +217,7 @@ export class EverConnectAppsService {
                         name: request.name,
                         blueprint_id: request.blueprintId,
                         install_id: request.installId,
+                        auto_provision: request.autoProvision,
                     }),
                 },
                 () => this.createOnce(caller, { ...request, blueprintId }, link, organization),
@@ -261,9 +284,16 @@ export class EverConnectAppsService {
                     repositoryMode: mode,
                     ...(targetOwner ? { targetOwner } : {}),
                     blueprintId: request.blueprintId,
-                    ...(request.installId ? { installId: request.installId } : {}),
+                    // Off unless asked for: the session route's default is on, because a
+                    // person is there to see it; here nobody is.
+                    ...(request.autoProvision ? {} : { autoProvision: false }),
                 });
-                return this.works.createWork(dto, user);
+                // The install is this route's to vouch for: it came with a link the
+                // person is a member of, and the create path keeps it only with the
+                // Blueprint it settles. It never travels in the DTO.
+                return request.installId
+                    ? this.works.createWork(dto, user, { marketplaceInstallId: request.installId })
+                    : this.works.createWork(dto, user);
             })
             .catch((error: unknown) => {
                 throw coded(error, EVER_CONNECT_APPS_CODES.createRefused);
@@ -283,6 +313,19 @@ export class EverConnectAppsService {
                 caller.delegation.clientId ?? 'unknown'
             })`,
         );
+        if (!existed) {
+            this.record(caller, link, {
+                workId: work.id,
+                actionType: ActivityActionType.WORK_CREATED,
+                action: 'app.created.delegated',
+                summary: `App created by ${clientOf(caller)}, acting for you`,
+                metadata: {
+                    blueprintId: request.blueprintId,
+                    autoProvision: request.autoProvision,
+                    ...(request.installId ? { installId: request.installId } : {}),
+                },
+            });
+        }
         return {
             status: existed ? HttpStatus.OK : HttpStatus.CREATED,
             body: {
@@ -362,6 +405,8 @@ export class EverConnectAppsService {
             trigger: 'manual',
             // Never `requestedByHumanSession`, never `confirmClusterChange`: this caller is
             // not a person at a keyboard, and what needs one stays with the preconditions.
+            // The trigger stays `manual` (a person asked, through an app): which app is
+            // on the Activity row written below, with the deployment's id.
         });
 
         if (result.status === 'refused' || !result.deploymentId) {
@@ -388,6 +433,13 @@ export class EverConnectAppsService {
                 caller.delegation.clientId ?? 'unknown'
             })`,
         );
+        this.record(caller, link, {
+            workId: id,
+            actionType: ActivityActionType.APP_DEPLOY,
+            action: 'app.deploy.requested.delegated',
+            summary: `Deployment asked for by ${clientOf(caller)}, acting for you`,
+            metadata: { deploymentId: result.deploymentId, status: result.status },
+        });
         return {
             status: result.httpStatus,
             body: { deployment_id: result.deploymentId, status: result.status },
@@ -436,6 +488,13 @@ export class EverConnectAppsService {
      * the installation is connected, the link exists and is active, and the
      * person is a member of the Organization's account (what lets a signed-in
      * person create a Work in it).
+     *
+     * **Whether a link exists is told to its members only.** A link id is not a
+     * secret, and a token holder could otherwise learn which ids are links of
+     * other accounts here from the difference between "no such link", "not
+     * yours" and "removed". So a person who is not a member of the link's
+     * Organization gets the answer of a link that does not exist, word for
+     * word; that a link was removed is told only to a member.
      */
     private async resolveLink(
         caller: DelegatedCaller,
@@ -452,46 +511,92 @@ export class EverConnectAppsService {
         const links = await this.dataSource
             .getRepository(EverConnectLink)
             .find({ where: { platformLinkId: linkId } });
-        const link = links.find((candidate) => candidate.status === 'active');
-        if (!link) {
-            throw links.length > 0
-                ? problem(
-                      HttpStatus.CONFLICT,
-                      EVER_CONNECT_APPS_CODES.linkNotActive,
-                      'This link was removed; link the Organization again first.',
-                  )
-                : problem(
-                      HttpStatus.NOT_FOUND,
-                      EVER_CONNECT_APPS_CODES.linkNotFound,
-                      'This link is not known here.',
-                  );
-        }
+        // The active one when there is one; otherwise the removed one, for its members.
+        const link = links.find((candidate) => candidate.status === 'active') ?? links[0];
+        if (!link) throw linkNotFound();
         const organization = await this.membership
             .ensureMember(link.organizationId, caller.auth.userId)
             .catch((error: unknown) => {
                 if (error instanceof HttpException && error.getStatus() === 404) {
-                    throw problem(
-                        HttpStatus.FORBIDDEN,
-                        EVER_CONNECT_APPS_CODES.notAMember,
-                        'This person is not a member of the Organization this link is for.',
-                    );
+                    throw linkNotFound();
                 }
                 throw error;
             });
+        if (link.status !== 'active') {
+            throw problem(
+                HttpStatus.CONFLICT,
+                EVER_CONNECT_APPS_CODES.linkNotActive,
+                'This link was removed; link the Organization again first.',
+            );
+        }
         return { link, organization };
     }
 
     private async personOf(caller: DelegatedCaller): Promise<User> {
         const user = await this.users.findById(caller.auth.userId);
-        if (!user) {
-            throw problem(
-                HttpStatus.FORBIDDEN,
-                EVER_CONNECT_APPS_CODES.notAMember,
-                'This person is not a member of the Organization this link is for.',
-            );
-        }
+        if (!user) throw linkNotFound();
         return user;
     }
+
+    /**
+     * The person's record of what an app did for them: who the app is (its
+     * client id), what it did and to which App. Identifiers only; nothing of
+     * the token. Written in the Organization the link is for, and never the
+     * request's failure: the action already happened.
+     */
+    private record(
+        caller: DelegatedCaller,
+        link: Pick<EverConnectLink, 'tenantId' | 'organizationId' | 'platformLinkId'>,
+        entry: {
+            workId: string;
+            actionType: ActivityActionType;
+            action: string;
+            summary: string;
+            metadata: Record<string, string | boolean | null>;
+        },
+    ): void {
+        if (!this.activity?.log) return;
+        const clientId = clientOf(caller);
+        try {
+            void this.activity
+                .log({
+                    userId: caller.auth.userId,
+                    workId: entry.workId,
+                    actionType: entry.actionType,
+                    action: entry.action,
+                    status: ActivityStatus.COMPLETED,
+                    summary: entry.summary,
+                    // Not the person at a keyboard: another app, named.
+                    actorKind: 'external',
+                    actorLabel: clientId,
+                    metadata: {
+                        via: 'ever-id-delegated',
+                        clientId,
+                        linkId: link.platformLinkId,
+                        ...entry.metadata,
+                    },
+                    tenantId: link.tenantId,
+                    organizationId: link.organizationId,
+                })
+                .catch(() => undefined);
+        } catch {
+            // A synchronous throw from a half-bound store is still not the caller's 500.
+        }
+    }
+}
+
+/** The app that acts for the person: its client id, as the token named it. */
+function clientOf(caller: DelegatedCaller): string {
+    return caller.delegation.clientId ?? 'unknown';
+}
+
+/** The one answer for a link that does not exist and for a link of someone else's Organization. */
+function linkNotFound(): HttpException {
+    return problem(
+        HttpStatus.NOT_FOUND,
+        EVER_CONNECT_APPS_CODES.linkNotFound,
+        'This link is not known here.',
+    );
 }
 
 /** A create request, read and checked. */
@@ -500,9 +605,11 @@ interface CreateRequest {
     name: string;
     blueprintId: string | null;
     installId: string | null;
+    /** Start working out how to run the repository at once. Off unless asked for. */
+    autoProvision: boolean;
 }
 
-const CREATE_FIELDS = new Set(['link_id', 'name', 'blueprint_id', 'install_id']);
+const CREATE_FIELDS = new Set(['link_id', 'name', 'blueprint_id', 'install_id', 'auto_provision']);
 const DEPLOY_FIELDS = new Set(['link_id', 'environment']);
 
 function objectOf(body: unknown, allowed: ReadonlySet<string>): Record<string, unknown> {
@@ -553,9 +660,15 @@ function readCreate(body: unknown): CreateRequest {
     if (!name || Array.from(name).length > NAME_MAX) {
         throw invalid('name', `name is 1 to ${NAME_MAX} characters.`);
     }
+    const autoProvision = optional(fields.auto_provision);
+    if (autoProvision !== null && typeof autoProvision !== 'boolean') {
+        throw invalid('auto_provision', 'auto_provision, when given, is true or false.');
+    }
     return {
         linkId,
         name,
+        // Absent is off: nothing is started for a person who is not there to see it.
+        autoProvision: autoProvision === true,
         blueprintId: optionalText(
             fields,
             'blueprint_id',

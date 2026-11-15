@@ -55,7 +55,7 @@ const callerOf = (request: DelegatedRequest): DelegatedCaller => ({
  * on, so both routes answer 404 otherwise. No answer is cached, and neither
  * route is offered to agents.
  *
- * - `POST /apps {link_id, name, blueprint_id, install_id?}` with
+ * - `POST /apps {link_id, name, blueprint_id, install_id?, auto_provision?}` with
  *   `Idempotency-Key`: create an App in the Organization the link is for.
  * - `POST /apps/:workId/deploy {link_id, environment?}`: start a deployment of
  *   one.
@@ -98,6 +98,12 @@ export class EverConnectAppsController {
                     nullable: true,
                     description: "Ever Platform's id of the marketplace install the App is for.",
                 },
+                auto_provision: {
+                    type: 'boolean',
+                    default: false,
+                    description:
+                        'Start the agent run that works out how to run the repository at once. Off unless `true`.',
+                },
             },
         },
     })
@@ -119,10 +125,13 @@ export class EverConnectAppsController {
     @ApiResponse({ status: 401, description: 'The token does not verify' })
     @ApiResponse({
         status: 403,
-        description:
-            '`insufficient_scope`, `no_linked_identity`, `delegated_token_required`, `not_a_member`',
+        description: '`insufficient_scope`, `no_linked_identity`, `delegated_token_required`',
     })
-    @ApiResponse({ status: 404, description: '`link_not_found`, `blueprint_not_found`' })
+    @ApiResponse({
+        status: 404,
+        description:
+            '`link_not_found` (also for a link of an Organization the person is not a member of), `blueprint_not_found`',
+    })
     @ApiResponse({
         status: 409,
         description:
@@ -175,7 +184,7 @@ export class EverConnectAppsController {
     @ApiResponse({
         status: 403,
         description:
-            '`insufficient_scope`, `no_linked_identity`, `delegated_token_required`, `not_a_member`, `ownerRequired`, `session_required`',
+            '`insufficient_scope`, `no_linked_identity`, `delegated_token_required`, `ownerRequired`, `session_required`',
     })
     @ApiResponse({ status: 404, description: '`link_not_found`, `not_found`' })
     @ApiResponse({
