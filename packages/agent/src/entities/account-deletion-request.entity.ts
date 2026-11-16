@@ -1,8 +1,11 @@
 import { Column, CreateDateColumn, Entity, Index, PrimaryGeneratedColumn } from 'typeorm';
 import { PortableDateColumn } from './_types';
 
-/** Where a deletion came from. */
-export type AccountDeletionSource = 'email_link' | 'in_product';
+/**
+ * Where a deletion came from. `ever_platform`: Ever Platform asked for it for the
+ * person the account belongs to (Ever Connect, behind its own switch).
+ */
+export type AccountDeletionSource = 'email_link' | 'in_product' | 'ever_platform';
 
 /**
  * Lifecycle of one row.

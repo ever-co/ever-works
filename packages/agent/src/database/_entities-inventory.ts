@@ -236,6 +236,7 @@ import { EverConnectProvisionRecord } from '../entities/ever-connect-provision-r
 import { EverConnectLink } from '../entities/ever-connect-link.entity';
 import { EverConnectEntitlement } from '../entities/ever-connect-entitlement.entity';
 import { EverConnectInstallRequest } from '../entities/ever-connect-install-request.entity';
+import { EverConnectMembershipSync } from '../entities/ever-connect-membership-sync.entity';
 import { OrganizationCompanyImport } from '../entities/organization-company-import.entity';
 
 import {
@@ -627,4 +628,7 @@ export const ENTITIES = [
     // Ever Connect — plugin installs requested from apps.ever.co, each waiting
     // for a platform admin's answer, and the status owed to Ever Platform.
     EverConnectInstallRequest,
+    // Ever Connect — the last membership change Ever Platform sent for a person in
+    // a linked Organization (ordering and idempotency of the membership sync).
+    EverConnectMembershipSync,
 ];

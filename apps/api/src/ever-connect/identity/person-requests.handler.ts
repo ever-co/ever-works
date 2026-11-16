@@ -11,6 +11,7 @@ import {
     ExternalIdentity,
     type EverConnectPersonRequestKind,
 } from '@ever-works/agent/entities';
+import { EverConnectExtensions } from '../ever-connect-extensions';
 import { EVER_CONNECT_PLATFORM, type EverConnectPlatform } from './ever-connect-identity.ports';
 import {
     EVER_PERSON_DATA_PARTICIPANT,
@@ -93,7 +94,16 @@ export class PersonRequestsHandler {
         @Optional()
         @Inject(EVER_PERSON_DATA_PARTICIPANT)
         private readonly participant?: PersonDataParticipant,
+        // A participant from a module switched on separately (the person-data
+        // module) registers here. Appended last and optional: unbound, nothing
+        // changes.
+        @Optional() private readonly extensions?: EverConnectExtensions,
     ) {}
+
+    /** The bound participant: the injected one, else the one a switched-on module registered. */
+    private boundParticipant(): PersonDataParticipant | undefined {
+        return this.participant ?? this.extensions?.personDataParticipant() ?? undefined;
+    }
 
     /** Whether an event of this type is answered here. */
     handles(type: string): boolean {
@@ -177,9 +187,11 @@ export class PersonRequestsHandler {
     }
 
     private async deletionAnswer(request: PersonDataRequest): Promise<Decided> {
-        if (!this.participant) return answer('failed', 'account_deletion_pending');
+        const participant = this.boundParticipant();
+        if (!participant?.deleteAccounts) return answer('failed', 'account_deletion_pending');
         try {
-            const outcome = await this.participant.deleteAccounts(request);
+            const outcome = await participant.deleteAccounts(request);
+            if (outcome.result === 'pending') return answer('failed', 'account_deletion_pending');
             if (outcome.result === 'retained_legal') {
                 const basis = outcome.legalBasis?.trim() ?? '';
                 if (basis.length < 1 || basis.length > 200) {
@@ -198,9 +210,10 @@ export class PersonRequestsHandler {
     }
 
     private async exportAnswer(request: PersonDataRequest): Promise<Decided> {
-        if (!this.participant) return answer('failed', 'export_not_available');
+        const participant = this.boundParticipant();
+        if (!participant?.exportAccounts) return answer('failed', 'export_not_available');
         try {
-            const outcome = await this.participant.exportAccounts(request);
+            const outcome = await participant.exportAccounts(request);
             if (outcome.result === 'exported' && isHttpsUrl(outcome.exportUrl)) {
                 return { ...answer('exported'), exportUrl: outcome.exportUrl };
             }

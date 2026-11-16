@@ -115,6 +115,9 @@ export class TeamsService {
             throw new NotFoundException(`Organization ${orgId} not found`);
         }
 
+        // Checked on its own: with an explicit `slug`, the name never reaches
+        // normalizeSlug, so a blank name used to be saved as ''.
+        const name = this.requireName(input.name);
         const requestedSlug =
             typeof input.slug === 'string' && input.slug.trim() ? input.slug : undefined;
         const slug = this.normalizeSlug(requestedSlug ?? input.name, requestedSlug !== undefined);
@@ -127,7 +130,7 @@ export class TeamsService {
 
         const team = this.teams.create({
             userId,
-            name: input.name.trim(),
+            name,
             slug,
             description: input.description ?? null,
             parentTeamId: input.parentTeamId ?? null,
@@ -170,6 +173,11 @@ export class TeamsService {
             throw new NotFoundException(`Organization ${orgId} not found`);
         }
 
+        // `name` is required on a team, so unlike the nullable fields an explicit
+        // null (which the DTO's @IsOptional lets through) or a blank name cannot
+        // mean "clear it": it used to throw a TypeError (500) or save an empty name.
+        const name = input.name !== undefined ? this.requireName(input.name) : undefined;
+
         if (input.parentTeamId !== undefined && input.parentTeamId !== null) {
             await this.assertValidParent(orgId, teamId, input.parentTeamId);
         }
@@ -184,13 +192,13 @@ export class TeamsService {
         ) => {
             if ((team[field] ?? null) !== (next ?? null)) previous[field] = team[field] ?? null;
         };
-        if (input.name !== undefined) note('name', input.name.trim());
+        if (name !== undefined) note('name', name);
         if (input.description !== undefined) note('description', input.description);
         if (input.parentTeamId !== undefined) note('parentTeamId', input.parentTeamId);
         if (input.managerAgentId !== undefined) note('managerAgentId', input.managerAgentId);
         if (input.avatarIcon !== undefined) note('avatarIcon', input.avatarIcon);
 
-        if (input.name !== undefined) team.name = input.name.trim();
+        if (name !== undefined) team.name = name;
         if (input.description !== undefined) team.description = input.description;
         if (input.parentTeamId !== undefined) team.parentTeamId = input.parentTeamId;
         if (input.managerAgentId !== undefined) team.managerAgentId = input.managerAgentId;
@@ -660,6 +668,19 @@ export class TeamsService {
             throw new NotFoundException(`Agent ${agentId} not found`);
         }
         return agent;
+    }
+
+    /**
+     * A team's name, trimmed. Create and update share it so they cannot drift:
+     * null, a non-string or a blank name is a 422, never a TypeError (500) or a
+     * team saved with an empty name.
+     */
+    private requireName(raw: unknown): string {
+        const name = typeof raw === 'string' ? raw.trim() : '';
+        if (!name) {
+            throw new UnprocessableEntityException('Team name cannot be empty');
+        }
+        return name;
     }
 
     /**

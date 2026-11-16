@@ -32,6 +32,20 @@
  *   of the install it is for, and it is kept on that App. Off, an install id
  *   in a create request is ignored and nothing is stored. (The web app has a
  *   switch of the same name for reading the address that carries it.)
+ * - `EVER_CONNECT_PERSON_EXPORT_ENABLED`: Ever Platform's export request for a
+ *   person is answered `exported` with an address where the person, signed in
+ *   here, downloads what Ever Works holds about their own account. Off, the
+ *   answer stays `failed` with `export_not_available` and the download route
+ *   answers 404.
+ * - `EVER_CONNECT_PERSON_DELETION_ENABLED`: Ever Platform's deletion request for
+ *   a person deletes the matching accounts through the account deletion of
+ *   Settings → Danger Zone, when that is safe for everyone else. Off, nothing is
+ *   deleted beyond the connected identities, and the answer stays `failed` with
+ *   `account_deletion_pending`.
+ * - `EVER_CONNECT_MEMBERSHIP_SYNC_ENABLED`: the membership changes Ever Platform
+ *   sends on the feed for an organization linked to an Organization here (a person
+ *   added, their role changed, removed) are applied to that Organization's
+ *   members. Off, those events are read past and nothing changes.
  */
 import { parseTrustedClientIds } from '../auth/ever-id-trusted-clients';
 
@@ -84,6 +98,18 @@ export function isAppsWriteEnabled(env: Env = process.env): boolean {
 
 export function isBlueprintHandoffEnabled(env: Env = process.env): boolean {
     return withConnect(env, 'EVER_CONNECT_BLUEPRINT_HANDOFF_ENABLED');
+}
+
+export function isPersonExportEnabled(env: Env = process.env): boolean {
+    return withConnect(env, 'EVER_CONNECT_PERSON_EXPORT_ENABLED');
+}
+
+export function isPersonDeletionEnabled(env: Env = process.env): boolean {
+    return withConnect(env, 'EVER_CONNECT_PERSON_DELETION_ENABLED');
+}
+
+export function isMembershipSyncEnabled(env: Env = process.env): boolean {
+    return withConnect(env, 'EVER_CONNECT_MEMBERSHIP_SYNC_ENABLED');
 }
 
 /** Which of the switched parts this installation runs (shown to the operator). */

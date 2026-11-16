@@ -71,7 +71,13 @@ export interface AccountDeletionResult {
 
 export type AccountDeletionTrigger =
     | { source: 'in_product' }
-    | { source: 'email_link'; requestId: string };
+    | { source: 'email_link'; requestId: string }
+    /**
+     * Ever Platform's deletion request for the person the account belongs to
+     * (Ever Connect, `EVER_CONNECT_PERSON_DELETION_ENABLED`). Recorded as its own
+     * source; everything else is the same deletion.
+     */
+    | { source: 'ever_platform' };
 
 /** A deletion that could not run to the end. The code is safe to show and to store. */
 export class AccountDeletionFailedError extends Error {
@@ -657,7 +663,7 @@ export class AccountDeletionService {
                 return;
             }
             await this.store.insert({
-                source: 'in_product',
+                source: trigger.source,
                 emailHash: email ? hashDeletionEmail(email) : 'anonymous',
                 tokenHash: null,
                 userId: null,
@@ -687,7 +693,7 @@ export class AccountDeletionService {
             return;
         }
         await this.store.insert({
-            source: 'in_product',
+            source: trigger.source,
             emailHash: email ? hashDeletionEmail(email) : 'anonymous',
             tokenHash: null,
             userId: null,
