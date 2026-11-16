@@ -147,6 +147,28 @@ describe('TeamsService', () => {
             expect(slugOf(first)).not.toBe(slugOf(third));
         });
 
+        it.each([null, '', '   ', '\t\n'])(
+            'rejects the name %j with 422 even with an explicit slug, and writes nothing',
+            async (name) => {
+                const { service, teams } = build();
+                await expect(
+                    service.create('u1', 'org-1', {
+                        name: name as unknown as string,
+                        slug: 'ops',
+                    }),
+                ).rejects.toThrow(UnprocessableEntityException);
+                expect(teams.save).not.toHaveBeenCalled();
+            },
+        );
+
+        it('saves the trimmed name when an explicit slug is given', async () => {
+            const { service, teams } = build();
+            await service.create('u1', 'org-1', { name: '  Ops  ', slug: 'ops' });
+            expect(teams.create).toHaveBeenCalledWith(
+                expect.objectContaining({ name: 'Ops', slug: 'ops' }),
+            );
+        });
+
         it('still rejects an explicit slug that reduces to nothing', async () => {
             const { service } = build();
             await expect(
@@ -193,6 +215,42 @@ describe('TeamsService', () => {
             await expect(
                 service.update('org-1', 'team-1', { parentTeamId: 'team-2' }),
             ).rejects.toThrow(ConflictException);
+        });
+
+        it.each([null, '', '   ', '\t\n'])(
+            'rejects the name %j with 422 and writes nothing (it used to 500 or save a blank name)',
+            async (name) => {
+                const { service, teams } = build();
+                teams.findOne.mockResolvedValue(makeTeam());
+                await expect(
+                    service.update('org-1', 'team-1', { name: name as unknown as string }),
+                ).rejects.toThrow(UnprocessableEntityException);
+                expect(teams.save).not.toHaveBeenCalled();
+            },
+        );
+
+        it('still trims and saves a valid new name', async () => {
+            const { service, teams } = build();
+            teams.findOne.mockResolvedValue(makeTeam());
+            const saved = await service.update('org-1', 'team-1', { name: '  Platform  ' });
+            expect(saved.name).toBe('Platform');
+            expect(teams.save).toHaveBeenCalledTimes(1);
+        });
+
+        it('leaves the name alone when it is not in the patch, and still clears nullable fields', async () => {
+            const { service, teams } = build();
+            teams.findOne.mockResolvedValue(
+                makeTeam({ description: 'old', managerAgentId: 'ag-1', avatarIcon: 'users' }),
+            );
+            const saved = await service.update('org-1', 'team-1', {
+                description: null,
+                managerAgentId: null,
+                avatarIcon: null,
+            });
+            expect(saved.name).toBe('Engineering');
+            expect(saved.description).toBeNull();
+            expect(saved.managerAgentId).toBeNull();
+            expect(saved.avatarIcon).toBeNull();
         });
     });
 
