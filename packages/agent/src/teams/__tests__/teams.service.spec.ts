@@ -147,6 +147,28 @@ describe('TeamsService', () => {
             expect(slugOf(first)).not.toBe(slugOf(third));
         });
 
+        it.each([null, '', '   ', '\t\n'])(
+            'rejects the name %j with 422 even with an explicit slug, and writes nothing',
+            async (name) => {
+                const { service, teams } = build();
+                await expect(
+                    service.create('u1', 'org-1', {
+                        name: name as unknown as string,
+                        slug: 'ops',
+                    }),
+                ).rejects.toThrow(UnprocessableEntityException);
+                expect(teams.save).not.toHaveBeenCalled();
+            },
+        );
+
+        it('saves the trimmed name when an explicit slug is given', async () => {
+            const { service, teams } = build();
+            await service.create('u1', 'org-1', { name: '  Ops  ', slug: 'ops' });
+            expect(teams.create).toHaveBeenCalledWith(
+                expect.objectContaining({ name: 'Ops', slug: 'ops' }),
+            );
+        });
+
         it('still rejects an explicit slug that reduces to nothing', async () => {
             const { service } = build();
             await expect(
