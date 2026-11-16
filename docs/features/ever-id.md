@@ -59,4 +59,6 @@ Ever ID is provided by the built-in `oidc-identity` plugin, an OpenID Connect re
 3. **Turn off** at any time: the button disappears and the sign-in routes answer "not found" within seconds, while people can still list and disconnect connected identities.
 4. **Settings** on the same page change the values an administrator manages: the label, the **Manage in Ever ID** address, the terminal clients allowed to sign in with a code, and the names shown for apps that read App Works. The issuer, the client and its secret stay operator configuration. Each change is recorded in Activity, naming the fields but never their values.
 
+A link from another Ever app can begin the sign-in at once, without showing the sign-in page: `/api/auth/ever-id/start` on the web app. It is off by default (`EVER_ID_START_ROUTE_ENABLED=true` on the web app turns it on) and answers only while Ever ID is turned on. See [A link that starts the sign-in](../ever-platform/connection.md#a-link-that-starts-the-sign-in).
+
 While Ever ID is off, the installation makes no request to the provider.

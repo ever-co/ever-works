@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import type { EverPlatformAppSyncStatusView } from '@ever-works/contracts';
 import { EVER_CONNECT_LEASE_HELD, type EverConnectRoundLease } from './ever-connect-lease.service';
+import type { PersonDataParticipant } from './identity/person-data-participant.port';
 
 /** One event of the installation's feed, as a handler receives it. */
 export interface EverConnectFeedEvent {
@@ -52,6 +53,7 @@ export class EverConnectExtensions {
     private readonly feedHandlers: EverConnectFeedHandler[] = [];
     private readonly participants: EverConnectRoundParticipant[] = [];
     private appSync: EverConnectAppSyncReader | null = null;
+    private readonly personData: PersonDataParticipant = {};
 
     addFeedHandler(handler: EverConnectFeedHandler): void {
         if (!this.feedHandlers.includes(handler)) this.feedHandlers.push(handler);
@@ -64,6 +66,24 @@ export class EverConnectExtensions {
     /** The apps mirror says where it stands and which Organizations it runs for. */
     provideAppSync(reader: EverConnectAppSyncReader): void {
         this.appSync = reader;
+    }
+
+    /**
+     * A person-data module answers people's export or deletion requests for the
+     * accounts (each part only while its own switch is on). Parts provided by
+     * different modules are combined; a part provided again replaces the earlier
+     * one.
+     */
+    providePersonData(participant: PersonDataParticipant): void {
+        if (participant.exportAccounts) this.personData.exportAccounts = participant.exportAccounts;
+        if (participant.deleteAccounts) this.personData.deleteAccounts = participant.deleteAccounts;
+    }
+
+    /** The registered person-data parts, or `null` when none is switched on. */
+    personDataParticipant(): PersonDataParticipant | null {
+        return this.personData.exportAccounts || this.personData.deleteAccounts
+            ? this.personData
+            : null;
     }
 
     /** Where the apps mirror stands, or `null` when it is switched off. */

@@ -27,6 +27,7 @@ import type {
     OrganizationInvitation,
     OrganizationInvitationRole,
     OrganizationMember,
+    OrganizationRosterRole,
 } from '@ever-works/agent/entities';
 // Token + interface only. Importing `SeatsService` itself would pull the whole
 // `@ever-works/agent/subscriptions` barrel — and through it NotificationsModule
@@ -80,6 +81,26 @@ export type OrganizationMemberView = {
 export type IntegrationInviteOutcome =
     | { status: 'invited' | 'pending'; invitation: OrganizationInvitation; userId: null }
     | { status: 'already_member' | 'added'; invitation: null; userId: string };
+
+/**
+ * What a membership change from Ever Platform did to a linked Organization (Ever
+ * Connect membership sync): `added`, `role_set`, `removed` or `unchanged` when it
+ * applied; otherwise why it changed nothing (`owner_unchanged` / `owner_kept`:
+ * the Tenant owner is never changed or removed; `other_account`: homed in another
+ * Tenant; `no_seat`; `not_a_member`; `account_missing`; `organization_missing`).
+ */
+export type PlatformMembershipOutcome =
+    | 'added'
+    | 'role_set'
+    | 'removed'
+    | 'unchanged'
+    | 'owner_unchanged'
+    | 'owner_kept'
+    | 'other_account'
+    | 'no_seat'
+    | 'not_a_member'
+    | 'account_missing'
+    | 'organization_missing';
 
 export type AcceptOutcome = {
     organizationId: string;
@@ -729,11 +750,173 @@ export class OrganizationInvitationFlowService {
         return tenant?.ownerUserId === userId;
     }
 
+    // ─── Ever Connect membership sync ──────────────────────────────────
+
+    /**
+     * Ever Connect membership sync (`EVER_CONNECT_MEMBERSHIP_SYNC_ENABLED`):
+     * make an account a member of an Organization linked to Ever Platform, with a
+     * roster role, because Ever Platform says the person is a member of the
+     * linked organization there. There is no actor: the caller decided that the
+     * change applies.
+     *
+     * The rules of the methods above still hold, and nothing else is changed:
+     *
+     * - the Tenant owner is left as they are (the owner role is the Tenant
+     *   owner's alone and is never granted);
+     * - an account homed in another Tenant is never moved
+     *   (`TenantBootstrapService.joinTenant` refuses it): `other_account`;
+     * - joining needs a free seat, charged to the Tenant owner: `no_seat`;
+     * - roster row first, then the grant, as in {@link accept}; the same
+     *   domain events.
+     *
+     * Answers what it did, a machine code. Idempotent: the same call twice
+     * changes nothing more.
+     */
+    async addMemberForPlatform(
+        orgId: string,
+        userId: string,
+        role: OrganizationRosterRole,
+    ): Promise<PlatformMembershipOutcome> {
+        const organization = await this.organizations.findById(orgId);
+        if (!organization?.tenantId) return 'organization_missing';
+        if (await this.isTenantOwner(userId, organization.tenantId)) return 'owner_unchanged';
+        const user = await this.users.findById(userId);
+        if (!user) return 'account_missing';
+        if (user.tenantId && user.tenantId !== organization.tenantId) return 'other_account';
+
+        const existing = await this.members.findByOrgAndUser(orgId, userId);
+        if (existing && user.tenantId === organization.tenantId) {
+            return existing.role === role
+                ? 'unchanged'
+                : this.setMemberRoleForPlatform(orgId, userId, role);
+        }
+
+        if (!user.tenantId) {
+            try {
+                await this.assertSeatForTenant(organization.tenantId);
+            } catch (error) {
+                if (error instanceof Error && error.name === 'SeatLimitExceededError') {
+                    return 'no_seat';
+                }
+                throw error;
+            }
+        }
+        if (existing) {
+            // A roster row without the grant (an earlier run stopped between the
+            // two): bring its role up to date, then grant.
+            if (existing.role !== role) await this.members.updateRole(orgId, userId, role);
+        } else {
+            await this.recordMembership(orgId, organization.tenantId, userId, { role });
+        }
+        try {
+            await this.tenantBootstrap.joinTenant(userId, organization.tenantId, orgId);
+        } catch (error) {
+            if (error instanceof ConflictException) {
+                // Homed in another Tenant meanwhile: the roster row grants nothing
+                // without the Tenant, and is visible and removable.
+                return 'other_account';
+            }
+            throw error;
+        }
+        return 'added';
+    }
+
+    /**
+     * Ever Connect membership sync: the roster role of a member of a linked
+     * Organization changed on Ever Platform. Never the Tenant owner; never
+     * someone who is not on the roster (that is an addition, which only
+     * {@link addMemberForPlatform} makes). Records `organization.member.updated`.
+     */
+    async setMemberRoleForPlatform(
+        orgId: string,
+        userId: string,
+        role: OrganizationRosterRole,
+    ): Promise<PlatformMembershipOutcome> {
+        const organization = await this.organizations.findById(orgId);
+        if (!organization?.tenantId) return 'organization_missing';
+        if (await this.isTenantOwner(userId, organization.tenantId)) return 'owner_unchanged';
+        const existing = await this.members.findByOrgAndUser(orgId, userId);
+        if (!existing) return 'not_a_member';
+        if (existing.role === role) return 'unchanged';
+        await this.members.updateRole(orgId, userId, role);
+        await recordAfterWrite(
+            this.domainEvents,
+            async (publisher, manager) => {
+                const member = await buildMemberSnapshot(manager, { ...existing, role });
+                if (!member) return;
+                await publisher.child(
+                    manager,
+                    'organization',
+                    orgId,
+                    'organization.member.updated',
+                    member as unknown as Record<string, unknown>,
+                    { changedFields: ['members'], previous: { role: existing.role } },
+                );
+            },
+            (message) => this.logger.warn(message),
+            `organization.member.updated for ${orgId}`,
+        );
+        return 'role_set';
+    }
+
+    /**
+     * Ever Connect membership sync: a member left the linked organization on
+     * Ever Platform. As {@link removeMember}: the roster row goes, and the
+     * account's Tenant is cleared once it holds no other membership there;
+     * nothing they made is deleted. **The Tenant owner is never removed**, so an
+     * Organization never loses its owner: `owner_kept`.
+     */
+    async removeMemberForPlatform(
+        orgId: string,
+        userId: string,
+    ): Promise<PlatformMembershipOutcome> {
+        const organization = await this.organizations.findById(orgId);
+        if (!organization?.tenantId) return 'organization_missing';
+        if (await this.isTenantOwner(userId, organization.tenantId)) return 'owner_kept';
+        const leaving = await this.members.findByOrgAndUser(orgId, userId);
+        if (!leaving) return 'not_a_member';
+        const memberBefore = this.domainEvents
+            ? await this.domainEvents
+                  .transaction((manager) => buildMemberSnapshot(manager, leaving))
+                  .catch(() => null)
+            : null;
+        if (!(await this.members.deleteByOrgAndUser(orgId, userId))) return 'not_a_member';
+        if (memberBefore) {
+            await recordAfterWrite(
+                this.domainEvents,
+                (publisher, manager) =>
+                    publisher.child(
+                        manager,
+                        'organization',
+                        orgId,
+                        'organization.member.removed',
+                        { ...memberBefore, deleted: true },
+                        { changedFields: ['members'] },
+                    ),
+                (message) => this.logger.warn(message),
+                `organization.member.removed for ${orgId}`,
+            );
+        }
+        const remaining = await this.members.listForUserInTenant(userId, organization.tenantId);
+        if (remaining.length === 0) {
+            const user = await this.users.findById(userId);
+            if (user?.tenantId === organization.tenantId) {
+                await this.users.update(userId, { tenantId: null });
+            }
+        }
+        return 'removed';
+    }
+
     private async recordMembership(
         organizationId: string,
         tenantId: string,
         userId: string,
-        extra: { invitedById?: string | null; invitationId?: string | null },
+        extra: {
+            invitedById?: string | null;
+            invitationId?: string | null;
+            /** The roster role (default `member`, as every invitation grants). */
+            role?: OrganizationRosterRole;
+        },
     ): Promise<void> {
         const existing = await this.members.findByOrgAndUser(organizationId, userId);
         if (existing) return;
@@ -741,7 +924,7 @@ export class OrganizationInvitationFlowService {
             organizationId,
             tenantId,
             userId,
-            role: 'member',
+            role: extra.role ?? 'member',
             invitedById: extra.invitedById ?? null,
             invitationId: extra.invitationId ?? null,
             joinedAt: new Date(),
