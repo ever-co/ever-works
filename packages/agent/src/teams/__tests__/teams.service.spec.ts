@@ -194,6 +194,42 @@ describe('TeamsService', () => {
                 service.update('org-1', 'team-1', { parentTeamId: 'team-2' }),
             ).rejects.toThrow(ConflictException);
         });
+
+        it.each([null, '', '   ', '\t\n'])(
+            'rejects the name %j with 422 and writes nothing (it used to 500 or save a blank name)',
+            async (name) => {
+                const { service, teams } = build();
+                teams.findOne.mockResolvedValue(makeTeam());
+                await expect(
+                    service.update('org-1', 'team-1', { name: name as unknown as string }),
+                ).rejects.toThrow(UnprocessableEntityException);
+                expect(teams.save).not.toHaveBeenCalled();
+            },
+        );
+
+        it('still trims and saves a valid new name', async () => {
+            const { service, teams } = build();
+            teams.findOne.mockResolvedValue(makeTeam());
+            const saved = await service.update('org-1', 'team-1', { name: '  Platform  ' });
+            expect(saved.name).toBe('Platform');
+            expect(teams.save).toHaveBeenCalledTimes(1);
+        });
+
+        it('leaves the name alone when it is not in the patch, and still clears nullable fields', async () => {
+            const { service, teams } = build();
+            teams.findOne.mockResolvedValue(
+                makeTeam({ description: 'old', managerAgentId: 'ag-1', avatarIcon: 'users' }),
+            );
+            const saved = await service.update('org-1', 'team-1', {
+                description: null,
+                managerAgentId: null,
+                avatarIcon: null,
+            });
+            expect(saved.name).toBe('Engineering');
+            expect(saved.description).toBeNull();
+            expect(saved.managerAgentId).toBeNull();
+            expect(saved.avatarIcon).toBeNull();
+        });
     });
 
     describe('remove', () => {

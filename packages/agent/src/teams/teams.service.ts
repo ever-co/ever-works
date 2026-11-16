@@ -170,6 +170,17 @@ export class TeamsService {
             throw new NotFoundException(`Organization ${orgId} not found`);
         }
 
+        // `name` is required on a team, so unlike the nullable fields an explicit
+        // null (which the DTO's @IsOptional lets through) or a blank name cannot
+        // mean "clear it": it used to throw a TypeError (500) or save an empty name.
+        let name: string | undefined;
+        if (input.name !== undefined) {
+            name = typeof input.name === 'string' ? input.name.trim() : '';
+            if (!name) {
+                throw new UnprocessableEntityException('Team name cannot be empty');
+            }
+        }
+
         if (input.parentTeamId !== undefined && input.parentTeamId !== null) {
             await this.assertValidParent(orgId, teamId, input.parentTeamId);
         }
@@ -184,13 +195,13 @@ export class TeamsService {
         ) => {
             if ((team[field] ?? null) !== (next ?? null)) previous[field] = team[field] ?? null;
         };
-        if (input.name !== undefined) note('name', input.name.trim());
+        if (name !== undefined) note('name', name);
         if (input.description !== undefined) note('description', input.description);
         if (input.parentTeamId !== undefined) note('parentTeamId', input.parentTeamId);
         if (input.managerAgentId !== undefined) note('managerAgentId', input.managerAgentId);
         if (input.avatarIcon !== undefined) note('avatarIcon', input.avatarIcon);
 
-        if (input.name !== undefined) team.name = input.name.trim();
+        if (name !== undefined) team.name = name;
         if (input.description !== undefined) team.description = input.description;
         if (input.parentTeamId !== undefined) team.parentTeamId = input.parentTeamId;
         if (input.managerAgentId !== undefined) team.managerAgentId = input.managerAgentId;
