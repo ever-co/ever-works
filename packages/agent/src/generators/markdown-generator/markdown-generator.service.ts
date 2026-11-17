@@ -2,12 +2,19 @@ import { Injectable, Logger, Optional } from '@nestjs/common';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { GitFacadeService } from '../../facades/git.facade';
-import type { Category, Identifiable, ItemData, Tag } from '@ever-works/contracts';
+import type { Category, ItemData, Tag } from '@ever-works/contracts';
 import { Work, shouldGenerateProviderRepository } from '../../entities/work.entity';
 import { User } from '../../entities/user.entity';
 import { DataRepository, PRUpdate } from '../data-generator/data-repository';
-import { ReadmeBuilder } from './readme-builder';
-import { MarkdownRepository } from './markdown-repository';
+import {
+    README_SPLIT_THRESHOLD_BYTES,
+    ReadmeBuilder,
+    buildSplitReadme,
+    type CategoryPageFile,
+    type ReadmeCategorySection,
+} from './readme-builder';
+import { CATEGORY_PAGES_DIR, MarkdownRepository } from './markdown-repository';
+import { TaxonomyResolver } from './taxonomy-resolver';
 import { GenerationMethod } from '../../items-generator/dto';
 import { WorkOperationsService } from '@src/work-operations';
 import { getWorkOwner } from '../../utils/work.utils';
@@ -22,7 +29,39 @@ type InitializeOptions = {
     pr_update?: PRUpdate;
     remove_details?: string[];
     signal?: AbortSignal;
+    /**
+     * Size (UTF-8 bytes) above which the README is split into a category index
+     * plus `categories/<category>.md` pages. Default
+     * {@link README_SPLIT_THRESHOLD_BYTES}.
+     */
+    readme_split_threshold_bytes?: number;
 };
+
+/** Section for items whose `category` is missing or empty. */
+const UNCATEGORIZED = 'Uncategorized';
+
+/** What {@link MarkdownGeneratorService.generateReadme} produces. */
+type GeneratedReadme = {
+    readme: string;
+    /** Empty when the README fits in one file. */
+    categoryPages: CategoryPageFile[];
+};
+
+type GenerateReadmeOptions = {
+    thresholdBytes?: number;
+    /**
+     * `false` keeps the single-file README even when it is over the threshold.
+     * Used when the markdown and data roles share one repository: a
+     * `categories/` folder there would change where `DataRepository` (and the
+     * website) look for `categories.yml`.
+     */
+    allowSplit?: boolean;
+    /** The directory's website (`Work.website`); falls back to `company_website`. */
+    siteUrl?: string;
+};
+
+/** Anything that can look up a category by id (a `Map` or a {@link TaxonomyResolver}). */
+type CategoryLookup = { get(id: string): Category | undefined };
 
 /**
  * Input for {@link MarkdownGeneratorService.syncFromDataRepo} — the
@@ -280,29 +319,26 @@ export class MarkdownGeneratorService {
                     if (Array.isArray(item.tags)) {
                         item = {
                             ...item,
-                            tags: item.tags.map((tag) => this.populate<Tag>(tag, tags)),
+                            tags: item.tags.map((tag: string | Tag) => tags.resolve(tag)),
                         };
                     }
 
-                    // Normalize category to array of strings
-                    const itemCategories: string[] = Array.isArray(item.category)
-                        ? item.category
-                        : [item.category];
-
-                    // Ensure each category is in the categories map
-                    for (const cat of itemCategories) {
-                        if (!categories.has(cat)) {
-                            categories.set(cat, { id: cat, name: cat });
-                        }
+                    // Resolve every category value (an id, or a display name in
+                    // any case / punctuation) to its canonical category, so one
+                    // category never becomes several README sections.
+                    const categoryIds = new Set<string>();
+                    for (const value of this.categoryValues(item)) {
+                        categoryIds.add(categories.resolve(value).id);
                     }
 
-                    // Group item by each of its categories
-                    for (const cat of itemCategories) {
-                        const group = groups[cat];
+                    // Group item by each of its categories (once per category,
+                    // even when the item names it in two spellings)
+                    for (const categoryId of categoryIds) {
+                        const group = groups[categoryId];
                         if (group) {
                             group.push(item);
                         } else {
-                            groups[cat] = [item];
+                            groups[categoryId] = [item];
                         }
                     }
                 } catch (error) {
@@ -347,11 +383,16 @@ export class MarkdownGeneratorService {
             }
 
             throwIfGenerationCancelled(options.signal);
-            const readme: string = await this.generateReadme(
+            const { readme, categoryPages } = await this.generateReadme(
                 dataRepo,
                 markdowns,
                 groups,
                 categories,
+                {
+                    thresholdBytes: options.readme_split_threshold_bytes,
+                    allowSplit: !sharesOneRepo,
+                    siteUrl: work.website || undefined,
+                },
             );
             // Security (secrets): the README is assembled from item names /
             // descriptions / category data sourced from the same untrusted data
@@ -364,6 +405,29 @@ export class MarkdownGeneratorService {
                 );
             }
             await markdownRepo.writeReadme(cleanedReadme);
+
+            // Category pages of a split README carry the same item lines, so
+            // they get the same redaction.
+            for (const page of categoryPages) {
+                throwIfGenerationCancelled(options.signal);
+                const { cleaned, redactions } = redactSecrets(page.content);
+                if (redactions > 0) {
+                    this.logger.warn(
+                        `Redacted ${redactions} secret-like value(s) from ${CATEGORY_PAGES_DIR}/${page.fileName} before commit.`,
+                    );
+                }
+                await markdownRepo.writeCategoryPage(page.fileName, cleaned);
+            }
+            // Drop generated pages this render did not write: categories that
+            // no longer exist, and every page once the README fits in one file.
+            const removedPages = await markdownRepo.removeStaleCategoryPages(
+                new Set(categoryPages.map((page) => page.fileName)),
+            );
+            if (removedPages > 0) {
+                this.logger.log(
+                    `Removed ${removedPages} stale ${CATEGORY_PAGES_DIR}/ page(s) for ${work.slug}`,
+                );
+            }
 
             throwIfGenerationCancelled(options.signal);
             await this.gitFacade.addAll(provider, markdownPath);
@@ -622,12 +686,19 @@ export class MarkdownGeneratorService {
         return new MarkdownRepository(dataDir).cleanup();
     }
 
+    /**
+     * Render the README. When the single-file README would be larger than the
+     * threshold (GitHub stops rendering long READMEs part-way), return instead
+     * a category index README plus one page per category; otherwise the
+     * single file, unchanged, and no pages.
+     */
     private async generateReadme(
         data: DataRepository,
         markdowns: Set<string>,
         groups: Record<string, Array<ItemData>>,
-        categories: Map<string, Category>,
-    ) {
+        categories: CategoryLookup,
+        options: GenerateReadmeOptions = {},
+    ): Promise<GeneratedReadme> {
         const config = await data.getConfig();
         const { header, footer } = await data.readMarkdownTemplate();
         const builder = new ReadmeBuilder(header, footer);
@@ -638,11 +709,13 @@ export class MarkdownGeneratorService {
 
         // Sort categories by priority, then alphabetically
         const sortedCategoryIds = this.sortCategoriesByPriority(groups, categories);
+        const sections: ReadmeCategorySection[] = [];
 
         for (const categoryId of sortedCategoryIds) {
             const categoryDetails = categories.get(categoryId);
+            const name = categoryDetails?.name ?? categoryId;
             const items = groups[categoryId];
-            builder.addSubHeader(categoryDetails.name, items.length);
+            builder.addSubHeader(name, items.length);
 
             items.sort((a, b) => {
                 const aFeatured = !!a.featured;
@@ -668,9 +741,58 @@ export class MarkdownGeneratorService {
             }
 
             builder.addNewLine();
+            sections.push({ id: categoryId, name, items });
         }
 
-        return builder.build();
+        const readme = builder.build();
+        const thresholdBytes = options.thresholdBytes ?? README_SPLIT_THRESHOLD_BYTES;
+        const readmeBytes = Buffer.byteLength(readme, 'utf8');
+        if (readmeBytes <= thresholdBytes) {
+            return { readme, categoryPages: [] };
+        }
+
+        if (options.allowSplit === false) {
+            this.logger.warn(
+                `README is ${readmeBytes} bytes (over ${thresholdBytes}); GitHub may not render all of it. ` +
+                    `Not splitting it into ${CATEGORY_PAGES_DIR}/ pages because the markdown and data ` +
+                    'repositories are the same repository.',
+            );
+            return { readme, categoryPages: [] };
+        }
+
+        const split = buildSplitReadme({
+            header,
+            footer,
+            sections,
+            hasDetails: (item) => !!item.slug && markdowns.has(item.slug),
+            thresholdBytes,
+            siteUrl: options.siteUrl || config.company_website || undefined,
+        });
+        this.logger.log(
+            `README is ${readmeBytes} bytes (over ${thresholdBytes}): wrote a category index ` +
+                `(${Buffer.byteLength(split.readme, 'utf8')} bytes) and ${split.pages.length} ` +
+                `${CATEGORY_PAGES_DIR}/ page(s) for ${sections.length} categories.`,
+        );
+        return { readme: split.readme, categoryPages: split.pages };
+    }
+
+    /**
+     * The raw category values of an item, without empty ones; an item with no
+     * category at all goes to {@link UNCATEGORIZED}.
+     */
+    private categoryValues(item: ItemData): Array<string | Category> {
+        const raw: readonly unknown[] = Array.isArray(item.category)
+            ? item.category
+            : [item.category];
+        const values = raw.filter(
+            (value): value is string | Category =>
+                (typeof value === 'string' && value.trim() !== '') ||
+                (!!value &&
+                    typeof value === 'object' &&
+                    typeof (value as Category).id === 'string' &&
+                    (value as Category).id !== ''),
+        );
+        return values.length > 0 ? values : [UNCATEGORIZED];
     }
 
     /**
@@ -680,7 +802,7 @@ export class MarkdownGeneratorService {
      */
     private sortCategoriesByPriority(
         groups: Record<string, ItemData[]>,
-        categories: Map<string, Category>,
+        categories: CategoryLookup,
     ): string[] {
         const categoryIds = Object.keys(groups);
 
@@ -721,44 +843,13 @@ export class MarkdownGeneratorService {
         });
     }
 
-    private async loadCategories(data: DataRepository): Promise<Map<string, Category>> {
-        const list = await data.getCategories();
-        const categories = new Map<string, Category>();
-
-        for (const category of list) {
-            categories.set(category.id, category);
-        }
-
-        return categories;
+    /** Categories of `categories.yml`, resolvable by id or (loosely) by name. */
+    private async loadCategories(data: DataRepository): Promise<TaxonomyResolver<Category>> {
+        return new TaxonomyResolver<Category>(await data.getCategories());
     }
 
-    private async loadTags(data: DataRepository): Promise<Map<string, Category>> {
-        const list = await data.getTags();
-        const tags = new Map<string, Category>();
-
-        for (const tag of list) {
-            tags.set(tag.id, tag);
-        }
-
-        return tags;
-    }
-
-    /* Works with both tags and categories */
-    private populate<T extends Identifiable>(value: string | T, collection: Map<string, T>): T {
-        const id = typeof value === 'string' ? value : value.id;
-        const populated = collection.get(id);
-
-        if (populated) {
-            return populated;
-        }
-
-        if (typeof value === 'string') {
-            const result = { id, name: value } as T;
-            collection.set(id, result);
-            return result;
-        }
-
-        collection.set(value.id, value);
-        return value;
+    /** Tags of `tags.yml`, resolvable by id or (loosely) by name. */
+    private async loadTags(data: DataRepository): Promise<TaxonomyResolver<Tag>> {
+        return new TaxonomyResolver<Tag>(await data.getTags());
     }
 }

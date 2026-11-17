@@ -30,8 +30,9 @@ jest.mock('../../utils/fresh-repository-clone.utils', () => ({
 
 import { GenerationMethod } from '@ever-works/contracts/api';
 import { MarkdownGeneratorService } from './markdown-generator.service';
-import { MarkdownRepository } from './markdown-repository';
+import { CATEGORY_PAGE_MARKER, MarkdownRepository } from './markdown-repository';
 import { ReadmeBuilder } from './readme-builder';
+import { TaxonomyResolver, normalizeTaxonomyKey } from './taxonomy-resolver';
 import { DataRepository } from '../data-generator/data-repository';
 import { cloneFreshRepository } from '../../utils/fresh-repository-clone.utils';
 import { createGenerationCancelledError } from '../../utils/generation-cancellation.utils';
@@ -108,6 +109,8 @@ describe('MarkdownGeneratorService', () => {
     let resetFilesSpy: jest.SpyInstance;
     let ensureWorksExistSpy: jest.SpyInstance;
     let cleanupSpy: jest.SpyInstance;
+    let writeCategoryPageSpy: jest.SpyInstance;
+    let removeStaleCategoryPagesSpy: jest.SpyInstance;
 
     const mountDataRepoMock = (overrides: Partial<Record<string, unknown>> = {}) => {
         const dataRepo = {
@@ -153,6 +156,12 @@ describe('MarkdownGeneratorService', () => {
         cleanupSpy = jest
             .spyOn(MarkdownRepository.prototype, 'cleanup')
             .mockResolvedValue(undefined);
+        writeCategoryPageSpy = jest
+            .spyOn(MarkdownRepository.prototype, 'writeCategoryPage')
+            .mockResolvedValue(undefined);
+        removeStaleCategoryPagesSpy = jest
+            .spyOn(MarkdownRepository.prototype, 'removeStaleCategoryPages')
+            .mockResolvedValue(0);
     });
 
     afterEach(() => {
@@ -557,6 +566,382 @@ describe('MarkdownGeneratorService', () => {
             await service.initialize(createWork(), createUser());
 
             expect(writeLicenseSpy).not.toHaveBeenCalled();
+        });
+    });
+
+    describe('initialize — category resolution', () => {
+        const CLOUD = { id: 'cloud-devops-mcp-servers', name: 'Cloud & DevOps MCP Servers' };
+        const DATA = {
+            id: 'data-access-integration-mcp-servers',
+            name: 'Data Access Integration MCP Servers',
+        };
+
+        const mountItems = (
+            byslug: Record<string, Partial<Record<string, unknown>>>,
+            extra: Partial<Record<string, unknown>> = {},
+        ) => {
+            fsMock.readdir.mockResolvedValueOnce(Object.keys(byslug));
+            return mountDataRepoMock({
+                getMarkdown: jest.fn().mockResolvedValue(undefined),
+                getItem: jest.fn().mockImplementation((slug: string) => ({
+                    slug,
+                    name: slug,
+                    description: '',
+                    source_url: 'https://e.x',
+                    ...byslug[slug],
+                })),
+                getCategories: jest.fn().mockResolvedValue([CLOUD, DATA]),
+                ...extra,
+            });
+        };
+
+        it('resolves the id and display-name spellings of a category to ONE section', async () => {
+            const subHeaderSpy = jest.spyOn(ReadmeBuilder.prototype, 'addSubHeader');
+            mountItems({
+                a: { category: 'cloud-devops-mcp-servers' },
+                b: { category: 'Cloud & DevOps MCP Servers' },
+                c: { category: 'Cloud Devops Mcp Servers' },
+                d: { category: '  cloud &  devops mcp servers ' },
+                e: { category: 'Data Access Integration MCP Servers' },
+            });
+
+            const service = new MarkdownGeneratorService(
+                createGitFacadeMock(),
+                createWorkOpsMock(),
+            );
+            await service.initialize(createWork(), createUser());
+
+            expect(subHeaderSpy.mock.calls).toEqual([
+                ['Cloud & DevOps MCP Servers', 4],
+                ['Data Access Integration MCP Servers', 1],
+            ]);
+        });
+
+        it('lists an item once per category even when it names that category twice', async () => {
+            const builderSpy = jest.spyOn(ReadmeBuilder.prototype, 'addItem');
+            const subHeaderSpy = jest.spyOn(ReadmeBuilder.prototype, 'addSubHeader');
+            mountItems({
+                multi: {
+                    category: [
+                        'cloud-devops-mcp-servers',
+                        'Cloud & DevOps MCP Servers',
+                        'data-access-integration-mcp-servers',
+                    ],
+                },
+            });
+
+            const service = new MarkdownGeneratorService(
+                createGitFacadeMock(),
+                createWorkOpsMock(),
+            );
+            await service.initialize(createWork(), createUser());
+
+            expect(builderSpy).toHaveBeenCalledTimes(2);
+            expect(subHeaderSpy.mock.calls.map((c) => c[0]).sort()).toEqual([
+                'Cloud & DevOps MCP Servers',
+                'Data Access Integration MCP Servers',
+            ]);
+        });
+
+        it('only falls back to an ad-hoc category when nothing matches, and merges its spellings', async () => {
+            const subHeaderSpy = jest.spyOn(ReadmeBuilder.prototype, 'addSubHeader');
+            mountItems({
+                a: { category: 'Brand New Things' },
+                b: { category: 'brand-new-things' },
+                c: { category: 'cloud-devops-mcp-servers' },
+            });
+
+            const service = new MarkdownGeneratorService(
+                createGitFacadeMock(),
+                createWorkOpsMock(),
+            );
+            await service.initialize(createWork(), createUser());
+
+            expect(subHeaderSpy.mock.calls.sort()).toEqual([
+                ['Brand New Things', 2],
+                ['Cloud & DevOps MCP Servers', 1],
+            ]);
+        });
+
+        it('puts items with a missing or empty category under Uncategorized', async () => {
+            const subHeaderSpy = jest.spyOn(ReadmeBuilder.prototype, 'addSubHeader');
+            mountItems({
+                a: { category: undefined },
+                b: { category: '' },
+                c: { category: [] },
+                d: { category: ['  ', null] },
+            });
+
+            const service = new MarkdownGeneratorService(
+                createGitFacadeMock(),
+                createWorkOpsMock(),
+            );
+            await service.initialize(createWork(), createUser());
+
+            expect(subHeaderSpy.mock.calls).toEqual([['Uncategorized', 4]]);
+        });
+
+        it('resolves tag display names to the canonical tags of tags.yml', async () => {
+            const builderSpy = jest.spyOn(ReadmeBuilder.prototype, 'addItem');
+            mountItems(
+                { x: { category: 'cloud-devops-mcp-servers', tags: ['Hot Stuff', 'hot-stuff'] } },
+                { getTags: jest.fn().mockResolvedValue([{ id: 'hot-stuff', name: 'Hot Stuff' }]) },
+            );
+
+            const service = new MarkdownGeneratorService(
+                createGitFacadeMock(),
+                createWorkOpsMock(),
+            );
+            await service.initialize(createWork(), createUser());
+
+            const passedItem = builderSpy.mock.calls[0][0] as { tags?: any };
+            expect(passedItem.tags).toEqual([
+                { id: 'hot-stuff', name: 'Hot Stuff' },
+                { id: 'hot-stuff', name: 'Hot Stuff' },
+            ]);
+        });
+    });
+
+    describe('initialize — README split into category pages', () => {
+        const mountDirectory = (extra: Partial<Record<string, unknown>> = {}) => {
+            fsMock.readdir.mockResolvedValueOnce(['alpha', 'beta', 'gamma']);
+            return mountDataRepoMock({
+                getMarkdown: jest
+                    .fn()
+                    .mockImplementation((slug: string) =>
+                        slug === 'beta' ? undefined : `# ${slug}`,
+                    ),
+                getItem: jest.fn().mockImplementation((slug: string) => ({
+                    slug,
+                    name: slug.toUpperCase(),
+                    // ~300 bytes per line: the 3-item single-file README is
+                    // ~1.2 KB, the split index (with one featured item) ~0.7 KB
+                    description: `About ${slug}. ${'Lorem ipsum '.repeat(25)}`,
+                    source_url: `https://${slug}.test`,
+                    category: slug === 'gamma' ? 'Second Category' : 'first',
+                    featured: slug === 'alpha',
+                })),
+                getCategories: jest.fn().mockResolvedValue([
+                    { id: 'first', name: 'First Category' },
+                    { id: 'second', name: 'Second Category' },
+                ]),
+                readMarkdownTemplate: jest
+                    .fn()
+                    .mockResolvedValue({ header: '# Awesome', footer: '## Footer' }),
+                ...extra,
+            });
+        };
+
+        it('keeps the single-file README when it fits, writes no pages, and sweeps every old page', async () => {
+            mountDirectory();
+
+            const service = new MarkdownGeneratorService(
+                createGitFacadeMock(),
+                createWorkOpsMock(),
+            );
+            await service.initialize(createWork(), createUser());
+
+            const readme = writeReadmeSpy.mock.calls[0][0] as string;
+            expect(readme).toContain('## First Category');
+            expect(readme).toContain('- [BETA](https://beta.test) - About beta');
+            expect(readme).not.toContain('categories/');
+            expect(Buffer.byteLength(readme, 'utf8')).toBeGreaterThan(900);
+            expect(writeCategoryPageSpy).not.toHaveBeenCalled();
+            expect(removeStaleCategoryPagesSpy).toHaveBeenCalledTimes(1);
+            expect([...(removeStaleCategoryPagesSpy.mock.calls[0][0] as Set<string>)]).toEqual([]);
+        });
+
+        it('over the threshold: README becomes an index and each category gets a page', async () => {
+            const gitFacade = createGitFacadeMock();
+            mountDirectory();
+
+            const service = new MarkdownGeneratorService(gitFacade, createWorkOpsMock());
+            await service.initialize(createWork(), createUser(), {
+                readme_split_threshold_bytes: 900,
+            });
+
+            const readme = writeReadmeSpy.mock.calls[0][0] as string;
+            expect(Buffer.byteLength(readme, 'utf8')).toBeLessThanOrEqual(900);
+            expect(readme.startsWith('# Awesome\n')).toBe(true);
+            expect(readme.endsWith('## Footer')).toBe(true);
+            expect(readme).toContain('- [First Category](categories/first.md) (2)');
+            expect(readme).toContain('- [Second Category](categories/second.md) (1)');
+            expect(readme).not.toContain('About beta');
+            // featured item is shown on the front page
+            expect(readme).toContain('## ⭐ Featured');
+            expect(readme).toContain('- [ALPHA](https://alpha.test) - About alpha.');
+            expect(readme).toContain('([Read more](/details/alpha.md))');
+
+            const pages = writeCategoryPageSpy.mock.calls.map((c) => c[0]);
+            expect(pages.length).toBeGreaterThanOrEqual(2);
+            expect(pages[0]).toBe('first.md');
+            expect(pages).toContain('second.md');
+            for (const [, content] of writeCategoryPageSpy.mock.calls) {
+                expect(String(content).startsWith(CATEGORY_PAGE_MARKER)).toBe(true);
+                expect(Buffer.byteLength(String(content), 'utf8')).toBeLessThanOrEqual(900);
+            }
+            const firstPage = writeCategoryPageSpy.mock.calls
+                .filter((c) => String(c[0]).startsWith('first'))
+                .map((c) => c[1] as string)
+                .join('');
+            expect(firstPage).toContain('([Read more](../details/alpha.md))');
+            expect(firstPage).toContain('- [BETA](https://beta.test) - About beta.');
+            expect(firstPage).not.toContain('details/beta.md');
+
+            // the sweep keeps exactly the pages written by this run …
+            const keep = removeStaleCategoryPagesSpy.mock.calls[0][0] as Set<string>;
+            expect([...keep].sort()).toEqual([...pages].sort());
+            // … and runs after the writes, before the commit
+            const lastWrite = Math.max(...writeCategoryPageSpy.mock.invocationCallOrder);
+            const sweep = removeStaleCategoryPagesSpy.mock.invocationCallOrder[0];
+            expect(lastWrite).toBeLessThan(sweep);
+            expect(sweep).toBeLessThan(gitFacade.addAll.mock.invocationCallOrder[0]);
+        });
+
+        it('never splits when the markdown and data roles are one repository', async () => {
+            mountDirectory({ dir: '/tmp/markdown-repo' });
+
+            const service = new MarkdownGeneratorService(
+                createGitFacadeMock(),
+                createWorkOpsMock(),
+            );
+            await service.initialize(createWork(), createUser(), {
+                readme_split_threshold_bytes: 200,
+            });
+
+            const readme = writeReadmeSpy.mock.calls[0][0] as string;
+            expect(readme).toContain('## First Category');
+            expect(readme).toContain('About beta');
+            expect(writeCategoryPageSpy).not.toHaveBeenCalled();
+        });
+
+        it('links Work.website from the split README, falling back to company_website', async () => {
+            mountDirectory({
+                getConfig: jest.fn().mockResolvedValue({
+                    content_table: false,
+                    company_website: 'https://company.test',
+                }),
+            });
+            const service = new MarkdownGeneratorService(
+                createGitFacadeMock(),
+                createWorkOpsMock(),
+            );
+            await service.initialize(createWork({ website: 'https://site.test' }), createUser(), {
+                readme_split_threshold_bytes: 200,
+            });
+            expect(writeReadmeSpy.mock.calls[0][0]).toContain('[site.test](https://site.test)');
+
+            writeReadmeSpy.mockClear();
+            mountDirectory({
+                getConfig: jest.fn().mockResolvedValue({
+                    content_table: false,
+                    company_website: 'https://company.test',
+                }),
+            });
+            await service.initialize(createWork(), createUser(), {
+                readme_split_threshold_bytes: 200,
+            });
+            expect(writeReadmeSpy.mock.calls[0][0]).toContain(
+                '[company.test](https://company.test)',
+            );
+        });
+
+        it('redacts secret-like values from category pages before writing them', async () => {
+            const token = `ghp_${'a1B2'.repeat(9)}`;
+            fsMock.readdir.mockResolvedValueOnce(['leaky']);
+            mountDataRepoMock({
+                getItem: jest.fn().mockResolvedValue({
+                    slug: 'leaky',
+                    name: 'Leaky',
+                    description: `token ${token}`,
+                    source_url: 'https://leaky.test',
+                    category: 'misc',
+                }),
+            });
+
+            const service = new MarkdownGeneratorService(
+                createGitFacadeMock(),
+                createWorkOpsMock(),
+            );
+            await service.initialize(createWork(), createUser(), {
+                readme_split_threshold_bytes: 10,
+            });
+
+            expect(writeCategoryPageSpy).toHaveBeenCalled();
+            for (const [, content] of writeCategoryPageSpy.mock.calls) {
+                expect(content).not.toContain(token);
+            }
+        });
+    });
+
+    describe('TaxonomyResolver', () => {
+        const entries = [
+            { id: 'cloud-devops-mcp-servers', name: 'Cloud & DevOps MCP Servers' },
+            { id: 'monitoring', name: 'Monitoring' },
+        ];
+
+        it('normalizeTaxonomyKey folds case, accents, & and punctuation into hyphens', () => {
+            expect(normalizeTaxonomyKey('Cloud & DevOps MCP Servers')).toBe(
+                'cloud-devops-mcp-servers',
+            );
+            expect(normalizeTaxonomyKey('  Cloud  DevOps, MCP-Servers! ')).toBe(
+                'cloud-devops-mcp-servers',
+            );
+            expect(normalizeTaxonomyKey('Café Tools')).toBe('cafe-tools');
+            expect(normalizeTaxonomyKey('数据库 工具')).toBe('数据库-工具');
+            expect(normalizeTaxonomyKey(undefined)).toBe('');
+        });
+
+        it('matches an exact id first', () => {
+            const resolver = new TaxonomyResolver(entries);
+            expect(resolver.resolve('monitoring')).toBe(entries[1]);
+        });
+
+        it('matches names and ids loosely', () => {
+            const resolver = new TaxonomyResolver(entries);
+            expect(resolver.resolve('Cloud & Devops Mcp Servers')).toBe(entries[0]);
+            expect(resolver.resolve('Cloud DevOps MCP Servers')).toBe(entries[0]);
+            expect(resolver.resolve('CLOUD-DEVOPS-MCP-SERVERS')).toBe(entries[0]);
+            expect(resolver.resolve('MONITORING')).toBe(entries[1]);
+        });
+
+        it('prefers a loose name match over a loose id match of another entry', () => {
+            const a = { id: 'x1', name: 'Tools' };
+            const b = { id: 'tools', name: 'Utilities' };
+            const resolver = new TaxonomyResolver([b, a]);
+            // `Tools` (not an exact id) reads like a display name → entry `a`
+            expect(resolver.resolve('Tools')).toBe(a);
+            // the exact id still wins
+            expect(resolver.resolve('tools')).toBe(b);
+        });
+
+        it('registers an ad-hoc entry for an unknown value and reuses it for its spellings', () => {
+            const resolver = new TaxonomyResolver(entries);
+            const first = resolver.resolve('Brand New');
+            expect(first).toEqual({ id: 'Brand New', name: 'Brand New' });
+            expect(resolver.resolve('brand-new')).toBe(first);
+            expect(resolver.resolve('Brand New')).toBe(first);
+            expect(resolver.get('Brand New')).toBe(first);
+        });
+
+        it('resolves inline objects by id or name, and registers unknown ones as-is', () => {
+            const resolver = new TaxonomyResolver(entries);
+            expect(resolver.resolve({ id: 'monitoring', name: 'Stale' })).toBe(entries[1]);
+            expect(resolver.resolve({ id: 'Monitoring', name: 'Other' })).toBe(entries[1]);
+            const inline = { id: 'new', name: 'New One' };
+            expect(resolver.resolve(inline)).toBe(inline);
+            expect(resolver.resolve('New One')).toBe(inline);
+        });
+
+        it('ignores malformed entries (missing / empty id) from the yml file', () => {
+            const resolver = new TaxonomyResolver([
+                null,
+                { name: 'No Id' },
+                { id: '', name: 'Empty' },
+                entries[1],
+            ] as never);
+            expect(resolver.resolve('monitoring')).toBe(entries[1]);
+            expect(resolver.resolve('No Id')).toEqual({ id: 'No Id', name: 'No Id' });
         });
     });
 
