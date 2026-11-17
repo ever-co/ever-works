@@ -332,6 +332,9 @@ describe('buildSplitReadme', () => {
         // non-featured items live only on the category pages
         expect(readme).not.toContain('About terraform');
         expect(readme).not.toContain('About pg');
+        // no siteUrl → no website link at all
+        expect(readme).not.toContain('browse and search');
+        expect(readme).not.toContain('undefined');
     });
 
     it('README lists featured items once each, with root-relative details links', () => {

@@ -313,6 +313,14 @@ describe('MarkdownRepository', () => {
                 expect(fsMock.writeFile).not.toHaveBeenCalled();
             });
 
+            it('refuses to write when categories/ is a regular file', async () => {
+                fsMock.lstat.mockResolvedValue(statOf('file'));
+                await expect(
+                    new MarkdownRepository(dir).writeCategoryPage('a.md', 'x'),
+                ).rejects.toThrow(/not a folder/);
+                expect(fsMock.writeFile).not.toHaveBeenCalled();
+            });
+
             it('replaces a page file that is a link instead of writing through it', async () => {
                 mountCategoriesDir({ 'a.md': 'link' });
                 await new MarkdownRepository(dir).writeCategoryPage('a.md', 'x');

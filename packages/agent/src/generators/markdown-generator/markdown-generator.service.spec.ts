@@ -681,10 +681,15 @@ describe('MarkdownGeneratorService', () => {
             expect(subHeaderSpy.mock.calls).toEqual([['Uncategorized', 4]]);
         });
 
-        it('resolves tag display names to the canonical tags of tags.yml', async () => {
+        it('resolves tag spellings to the canonical tags of tags.yml, each tag once', async () => {
             const builderSpy = jest.spyOn(ReadmeBuilder.prototype, 'addItem');
             mountItems(
-                { x: { category: 'cloud-devops-mcp-servers', tags: ['Hot Stuff', 'hot-stuff'] } },
+                {
+                    x: {
+                        category: 'cloud-devops-mcp-servers',
+                        tags: ['Hot Stuff', 'hot-stuff', 'HOT  stuff', 'Other'],
+                    },
+                },
                 { getTags: jest.fn().mockResolvedValue([{ id: 'hot-stuff', name: 'Hot Stuff' }]) },
             );
 
@@ -697,7 +702,7 @@ describe('MarkdownGeneratorService', () => {
             const passedItem = builderSpy.mock.calls[0][0] as { tags?: any };
             expect(passedItem.tags).toEqual([
                 { id: 'hot-stuff', name: 'Hot Stuff' },
-                { id: 'hot-stuff', name: 'Hot Stuff' },
+                { id: 'Other', name: 'Other' },
             ]);
         });
     });
@@ -797,6 +802,24 @@ describe('MarkdownGeneratorService', () => {
             expect(lastWrite).toBeLessThan(sweep);
             expect(sweep).toBeLessThan(gitFacade.addAll.mock.invocationCallOrder[0]);
         });
+
+        it.each([0, -5, Number.NaN])(
+            'treats readme_split_threshold_bytes=%p as "use the default" (no split)',
+            async (threshold) => {
+                mountDirectory();
+
+                const service = new MarkdownGeneratorService(
+                    createGitFacadeMock(),
+                    createWorkOpsMock(),
+                );
+                await service.initialize(createWork(), createUser(), {
+                    readme_split_threshold_bytes: threshold,
+                });
+
+                expect(writeReadmeSpy.mock.calls[0][0]).toContain('## First Category');
+                expect(writeCategoryPageSpy).not.toHaveBeenCalled();
+            },
+        );
 
         it('never splits when the markdown and data roles are one repository', async () => {
             mountDirectory({ dir: '/tmp/markdown-repo' });

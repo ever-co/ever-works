@@ -317,10 +317,16 @@ export class MarkdownGeneratorService {
                     }
 
                     if (Array.isArray(item.tags)) {
-                        item = {
-                            ...item,
-                            tags: item.tags.map((tag: string | Tag) => tags.resolve(tag)),
-                        };
+                        // Canonical tags, each once (two spellings of one tag
+                        // resolve to the same entry).
+                        const resolvedTags = new Map<string, Tag>();
+                        for (const tag of item.tags as Array<string | Tag>) {
+                            const resolved = tags.resolve(tag);
+                            if (!resolvedTags.has(resolved.id)) {
+                                resolvedTags.set(resolved.id, resolved);
+                            }
+                        }
+                        item = { ...item, tags: [...resolvedTags.values()] };
                     }
 
                     // Resolve every category value (an id, or a display name in
@@ -745,7 +751,11 @@ export class MarkdownGeneratorService {
         }
 
         const readme = builder.build();
-        const thresholdBytes = options.thresholdBytes ?? README_SPLIT_THRESHOLD_BYTES;
+        // A missing, zero, negative or non-numeric override means the default.
+        const thresholdBytes =
+            Number.isFinite(options.thresholdBytes) && options.thresholdBytes > 0
+                ? options.thresholdBytes
+                : README_SPLIT_THRESHOLD_BYTES;
         const readmeBytes = Buffer.byteLength(readme, 'utf8');
         if (readmeBytes <= thresholdBytes) {
             return { readme, categoryPages: [] };
@@ -769,7 +779,7 @@ export class MarkdownGeneratorService {
             siteUrl: options.siteUrl || config.company_website || undefined,
         });
         this.logger.log(
-            `README is ${readmeBytes} bytes (over ${thresholdBytes}): wrote a category index ` +
+            `README is ${readmeBytes} bytes (over ${thresholdBytes}): splitting it into a category index ` +
                 `(${Buffer.byteLength(split.readme, 'utf8')} bytes) and ${split.pages.length} ` +
                 `${CATEGORY_PAGES_DIR}/ page(s) for ${sections.length} categories.`,
         );
