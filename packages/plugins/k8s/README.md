@@ -135,6 +135,12 @@ kind get kubeconfig --name ever-works-test > /tmp/kubeconfig
 # 4. Save & verify — you should see "kind-ever-works-test (vX.Y.Z)" with nginx detected
 ```
 
+## Site capacity
+
+- **Defaults:** 1 replica; cpu request `100m`, limit `2`; memory limit `3Gi`. The memory request is `512Mi` on the platform clusters (an admission floor) and `256Mi` elsewhere. Change them per Work with the `replicas`, `cpuRequest`, `cpuLimit`, `memoryRequest` and `memoryLimit` settings.
+- **Rollout:** surge-first (`maxSurge: 1`, `maxUnavailable: 0`) at every replica count. The new pod has to be Ready before an old one stops, so a deploy never takes a site offline. If the extra pod cannot be scheduled, the rollout waits and the old pod keeps serving.
+- **A deploy never lowers capacity.** Before it applies the Deployment, `deploy()` reads the live one. Where the live object has more replicas, or a larger cpu/memory request or limit on the `app` container, it keeps that value. So `kubectl scale` / `kubectl patch` fixes made during an incident survive the next deploy. To shrink a site, lower the live object; the next deploy then keeps the larger of that and the settings.
+
 ## Constraints (v1)
 
 - One cluster per user (plugin-settings store is `x-scope: 'user'`, mirroring Vercel).

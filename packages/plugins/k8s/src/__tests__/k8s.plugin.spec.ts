@@ -204,7 +204,7 @@ describe('KubernetesPlugin metadata', () => {
 	it('publishes measured memory defaults without narrowing Kubernetes quantity syntax', () => {
 		const props = plugin.settingsSchema.properties as Record<string, Record<string, unknown>>;
 		expect(props.memoryRequest?.default).toBeUndefined();
-		expect(props.memoryLimit?.default).toBe('2Gi');
+		expect(props.memoryLimit?.default).toBe('3Gi');
 		expect(props.memoryRequest?.pattern).toBeUndefined();
 		expect(props.memoryLimit?.pattern).toBeUndefined();
 	});
@@ -684,6 +684,115 @@ describe('KubernetesPlugin.deploy (mocked api)', () => {
 
 		const manifest = vi.mocked(api.applyDeployment).mock.calls[0]?.[1] as Record<string, any>;
 		expect(manifest.spec.template.spec.containers[0].resources.requests.memory).toBe('256Mi');
+	});
+
+	describe('keeps capacity raised on the live Deployment', () => {
+		const managedDeploy = (settingsOverride: Record<string, unknown> = {}) =>
+			plugin.deploy(
+				{
+					projectName: 'work-1',
+					sourceDir: '.',
+					options: {
+						githubOwner: 'acme',
+						websiteRepoIsPrivate: false,
+						settingsOverride: { clusterSource: 'k8s-works', ...settingsOverride }
+					}
+				},
+				VALID
+			);
+		const liveDeployment = (
+			replicas: number,
+			resources: { requests?: Record<string, string>; limits?: Record<string, string> },
+			containerName = 'app'
+		) => ({
+			metadata: { name: 'work-1', namespace: 'ever-works' },
+			spec: { replicas, template: { spec: { containers: [{ name: containerName, resources }] } } },
+			status: { conditions: [{ type: 'Available', status: 'True' }] }
+		});
+		const appliedDeployment = () => vi.mocked(api.applyDeployment).mock.calls[0]?.[1] as Record<string, any>;
+
+		it('keeps replicas, requests and limits an operator raised by hand', async () => {
+			vi.mocked(api.getDeployment).mockResolvedValue(
+				liveDeployment(2, {
+					requests: { cpu: '100m', memory: '1792Mi' },
+					limits: { cpu: '2', memory: '4Gi' }
+				})
+			);
+
+			const result = await managedDeploy();
+
+			expect(result.status).toBe('deploying');
+			expect(api.getDeployment).toHaveBeenCalledWith(VALID, 'ever-works', 'work-1', undefined);
+			const manifest = appliedDeployment();
+			expect(manifest.spec.replicas).toBe(2);
+			expect(manifest.spec.strategy.rollingUpdate).toEqual({ maxSurge: 1, maxUnavailable: 0 });
+			expect(manifest.spec.template.spec.containers[0].resources).toEqual({
+				requests: { cpu: '100m', memory: '1792Mi' },
+				limits: { cpu: '2', memory: '4Gi' }
+			});
+		});
+
+		it('compares quantities by value, not by text', async () => {
+			// 3221225472 bytes is exactly 3Gi and 1.5G is less than 1.5Gi: neither may replace the rendered value.
+			vi.mocked(api.getDeployment).mockResolvedValue(
+				liveDeployment(1, { requests: { memory: '1.5G' }, limits: { memory: '3221225472' } })
+			);
+
+			await managedDeploy({ memoryRequest: '1.5Gi', memoryLimit: '3Gi' });
+
+			const resources = appliedDeployment().spec.template.spec.containers[0].resources;
+			expect(resources.requests.memory).toBe('1.5Gi');
+			expect(resources.limits.memory).toBe('3Gi');
+		});
+
+		it('lets larger configured values win over the live object', async () => {
+			vi.mocked(api.getDeployment).mockResolvedValue(
+				liveDeployment(1, { requests: { memory: '512Mi' }, limits: { memory: '2Gi' } })
+			);
+
+			await managedDeploy({ replicas: 3, memoryRequest: '1Gi', memoryLimit: '5Gi' });
+
+			const manifest = appliedDeployment();
+			expect(manifest.spec.replicas).toBe(3);
+			expect(manifest.spec.template.spec.containers[0].resources.requests.memory).toBe('1Gi');
+			expect(manifest.spec.template.spec.containers[0].resources.limits.memory).toBe('5Gi');
+		});
+
+		it('renders the configured defaults on a first deploy', async () => {
+			vi.mocked(api.getDeployment).mockResolvedValue(null);
+
+			await managedDeploy();
+
+			const manifest = appliedDeployment();
+			expect(manifest.spec.replicas).toBe(1);
+			expect(manifest.spec.strategy.rollingUpdate).toEqual({ maxSurge: 1, maxUnavailable: 0 });
+			expect(manifest.spec.template.spec.containers[0].resources).toEqual({
+				requests: { cpu: '100m', memory: '512Mi' },
+				limits: { cpu: '2', memory: '3Gi' }
+			});
+		});
+
+		it('ignores another container and values it cannot read', async () => {
+			vi.mocked(api.getDeployment).mockResolvedValueOnce(
+				liveDeployment(1, { limits: { memory: '8Gi' } }, 'sidecar')
+			);
+			await managedDeploy();
+			expect(appliedDeployment().spec.template.spec.containers[0].resources.limits.memory).toBe('3Gi');
+
+			vi.mocked(api.applyDeployment).mockClear();
+			vi.mocked(api.getDeployment).mockResolvedValueOnce(liveDeployment(1, { limits: { memory: 'lots' } }));
+			await managedDeploy();
+			expect(appliedDeployment().spec.template.spec.containers[0].resources.limits.memory).toBe('3Gi');
+		});
+
+		it('fails the deploy instead of applying blind when the live Deployment cannot be read', async () => {
+			vi.mocked(api.getDeployment).mockRejectedValue(new Error('503 Service Unavailable'));
+
+			const result = await managedDeploy();
+
+			expect(result.status).toBe('error');
+			expect(api.applyDeployment).not.toHaveBeenCalled();
+		});
 	});
 
 	it('preserves the historical 256Mi fallback for a custom cluster without an override', async () => {
@@ -1536,8 +1645,8 @@ describe('KubernetesPlugin.deploy() manifest snapshot (ACC-06-43)', () => {
 			      },
 			      "strategy": {
 			        "rollingUpdate": {
-			          "maxSurge": 0,
-			          "maxUnavailable": 1,
+			          "maxSurge": 1,
+			          "maxUnavailable": 0,
 			        },
 			        "type": "RollingUpdate",
 			      },
@@ -1587,7 +1696,7 @@ describe('KubernetesPlugin.deploy() manifest snapshot (ACC-06-43)', () => {
 			              "resources": {
 			                "limits": {
 			                  "cpu": "2",
-			                  "memory": "2Gi",
+			                  "memory": "3Gi",
 			                },
 			                "requests": {
 			                  "cpu": "100m",

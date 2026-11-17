@@ -47,9 +47,12 @@ describe('buildDeployment', () => {
 		expect(explicit.spec.template.spec.containers[0].resources.requests.memory).toBe('768Mi');
 	});
 
-	it('trades one-replica availability for no temporary surge and keeps multi-replica availability', () => {
+	it('rolls out surge-first at every replica count, so a one-pod site has no deploy downtime', () => {
 		const single = buildDeployment({ ...baseInput, replicas: 1 }) as Record<string, any>;
-		expect(single.spec.strategy.rollingUpdate).toEqual({ maxSurge: 0, maxUnavailable: 1 });
+		expect(single.spec.strategy).toEqual({
+			type: 'RollingUpdate',
+			rollingUpdate: { maxSurge: 1, maxUnavailable: 0 }
+		});
 
 		const multiple = buildDeployment(baseInput) as Record<string, any>;
 		expect(multiple.spec.strategy.rollingUpdate).toEqual({ maxSurge: 1, maxUnavailable: 0 });

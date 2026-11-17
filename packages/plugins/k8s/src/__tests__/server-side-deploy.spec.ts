@@ -55,6 +55,8 @@ function makeMockApi(): KubernetesApiService {
 				hasStrategy: true
 			}
 		]),
+		// First deploy: nothing live yet, so the configured capacity is rendered as-is.
+		getDeployment: vi.fn(async () => null),
 		applyDeployment: vi.fn(async () => undefined),
 		applyService: vi.fn(async () => undefined),
 		applyIngress: vi.fn(async () => undefined),
