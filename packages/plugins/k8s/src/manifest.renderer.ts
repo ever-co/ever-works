@@ -114,13 +114,14 @@ export function buildDeployment(input: ManifestRenderInputs): Record<string, unk
 				// 4x and never served. Measured usage of the seven live Works:
 				// 441Mi / 487 / 567 / 586 / 616 / 1557, and mcp-servers at 3980Mi.
 				//
-				// 2Gi covers six of the seven with headroom and — critically — FITS.
-				// k8s-works and k8s-works-shared workers have only ~3.72Gi allocatable
-				// EACH, so a larger default would be a limit no node could ever honour:
-				// requests are small enough that such a pod schedules happily and then
-				// gets OOM-killed climbing toward a ceiling that does not physically
-				// exist. A Work genuinely needing more (mcp-servers) needs a bigger
-				// node or a smaller footprint, not a bigger number here.
+				// The limit must FIT a node: requests are small enough that a pod with
+				// a larger limit schedules happily and then gets OOM-killed climbing
+				// toward a ceiling that does not physically exist. 2Gi was chosen when
+				// the k8s-works workers had ~3.72Gi allocatable. They now have ~7Gi
+				// (k8s-works-shared ~7.6Gi). On 2026-11-17 a 2Gi site OOM-looped and
+				// six more were raised to 3Gi by hand, so the default is now 3Gi
+				// (DEFAULT_MEMORY_LIMIT in k8s.plugin.ts). A deploy also keeps a
+				// larger value it finds on the live Deployment (keepLiveCapacity).
 				//
 				// A 512Mi admission floor stops several roughly 500Mi processes from
 				// being advertised as 256Mi pods. It is NOT a sufficiency claim for
@@ -136,7 +137,7 @@ export function buildDeployment(input: ManifestRenderInputs): Record<string, unk
 					},
 					limits: {
 						cpu: input.cpuLimit ?? '2',
-						memory: input.memoryLimit ?? '2Gi'
+						memory: input.memoryLimit ?? '3Gi'
 					}
 				},
 				// Server-side deploys (EW — platform-managed clusters) mount the
@@ -164,15 +165,19 @@ export function buildDeployment(input: ManifestRenderInputs): Record<string, unk
 		spec: {
 			replicas: input.replicas,
 			selector: { matchLabels: selector },
-			// A single-replica rollout must not briefly double the site's memory
-			// footprint on a constrained node. The explicit tradeoff is a brief
-			// outage while the old pod stops and the replacement becomes Ready;
-			// this is NOT a zero-downtime strategy. Multi-replica Works retain
-			// their availability-first rollout.
+			// Surge first, at every replica count: start the new pod, wait until it
+			// is Ready, and only then stop an old one. The site never drops below
+			// its replica count during a deploy.
+			//
+			// This used to be { maxSurge: 0, maxUnavailable: 1 } for one replica, to
+			// avoid briefly holding two pods' memory on a 3.72Gi worker. That made
+			// every deploy of a one-pod site an outage (the old pod stopped first and
+			// a Next.js catalogue takes a while to warm), and the workers now have
+			// ~7Gi allocatable. If the extra pod cannot be scheduled, the rollout
+			// waits with the old pod still serving instead of going dark.
 			strategy: {
 				type: 'RollingUpdate',
-				rollingUpdate:
-					input.replicas === 1 ? { maxSurge: 0, maxUnavailable: 1 } : { maxSurge: 1, maxUnavailable: 0 }
+				rollingUpdate: { maxSurge: 1, maxUnavailable: 0 }
 			},
 			template: {
 				// Without a per-deploy annotation the rendered Deployment is
