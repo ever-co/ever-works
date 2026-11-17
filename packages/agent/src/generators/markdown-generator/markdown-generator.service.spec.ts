@@ -777,10 +777,10 @@ describe('MarkdownGeneratorService', () => {
             expect(readme).toContain('- [ALPHA](https://alpha.test) - About alpha.');
             expect(readme).toContain('([Read more](/details/alpha.md))');
 
+            // "First Category" (2 long items) does not fit one 900-byte page,
+            // so it continues on a second page; "Second Category" fits one.
             const pages = writeCategoryPageSpy.mock.calls.map((c) => c[0]);
-            expect(pages.length).toBeGreaterThanOrEqual(2);
-            expect(pages[0]).toBe('first.md');
-            expect(pages).toContain('second.md');
+            expect(pages).toEqual(['first.md', 'first--page-2.md', 'second.md']);
             for (const [, content] of writeCategoryPageSpy.mock.calls) {
                 expect(String(content).startsWith(CATEGORY_PAGE_MARKER)).toBe(true);
                 expect(Buffer.byteLength(String(content), 'utf8')).toBeLessThanOrEqual(900);

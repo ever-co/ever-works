@@ -429,6 +429,27 @@ describe('MarkdownRepository', () => {
                 ).resolves.toBe(1);
             });
 
+            it('keeps a page it cannot read and carries on with the rest', async () => {
+                mountCategoriesDir();
+                fsMock.readdir.mockResolvedValueOnce([dirent('locked.md'), dirent('old.md')]);
+                fsMock.readFile.mockImplementation(async (target: string) => {
+                    if (path.basename(target) === 'locked.md') {
+                        throw Object.assign(new Error('EACCES'), { code: 'EACCES' });
+                    }
+                    return generated;
+                });
+
+                await expect(
+                    new MarkdownRepository(dir).removeStaleCategoryPages(new Set()),
+                ).resolves.toBe(1);
+
+                expect(fsMock.rm.mock.calls).toEqual([
+                    [path.join(categoriesDir, 'old.md'), { force: true }],
+                ]);
+                // the unreadable page is still there, so the folder stays
+                expect(fsMock.rmdir).not.toHaveBeenCalled();
+            });
+
             it('propagates an lstat error other than ENOENT', async () => {
                 fsMock.lstat.mockRejectedValue(
                     Object.assign(new Error('EACCES'), { code: 'EACCES' }),

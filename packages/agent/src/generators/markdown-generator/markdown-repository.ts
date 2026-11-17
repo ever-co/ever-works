@@ -234,8 +234,10 @@ export class MarkdownRepository {
             }
 
             const filename = this.categoryPageFilePath(entry.name);
-            const content = await fs.readFile(filename, 'utf-8');
-            if (!content.startsWith(CATEGORY_PAGE_MARKER)) {
+            // A file we cannot read cannot be proven generated: keep it and
+            // carry on with the rest rather than failing the whole render.
+            const content = await fs.readFile(filename, 'utf-8').catch(() => null);
+            if (content === null || !content.startsWith(CATEGORY_PAGE_MARKER)) {
                 continue;
             }
 
