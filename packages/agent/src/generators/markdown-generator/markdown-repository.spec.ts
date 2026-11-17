@@ -1,4 +1,4 @@
-import { MarkdownRepository } from './markdown-repository';
+import { CATEGORY_PAGE_MARKER, MarkdownRepository } from './markdown-repository';
 import * as path from 'node:path';
 
 jest.mock('node:fs/promises', () => ({
@@ -6,6 +6,9 @@ jest.mock('node:fs/promises', () => ({
     readdir: jest.fn().mockResolvedValue([]),
     mkdir: jest.fn().mockResolvedValue(undefined),
     writeFile: jest.fn().mockResolvedValue(undefined),
+    lstat: jest.fn(),
+    readFile: jest.fn(),
+    rmdir: jest.fn().mockResolvedValue(undefined),
 }));
 
 const fsMock = jest.requireMock('node:fs/promises') as {
@@ -13,7 +16,21 @@ const fsMock = jest.requireMock('node:fs/promises') as {
     readdir: jest.Mock;
     mkdir: jest.Mock;
     writeFile: jest.Mock;
+    lstat: jest.Mock;
+    readFile: jest.Mock;
+    rmdir: jest.Mock;
 };
+
+const statOf = (kind: 'dir' | 'file' | 'link') => ({
+    isDirectory: () => kind === 'dir',
+    isFile: () => kind === 'file',
+    isSymbolicLink: () => kind === 'link',
+});
+const enoent = () => Object.assign(new Error('ENOENT: no such file'), { code: 'ENOENT' });
+const dirent = (name: string, kind: 'dir' | 'file' | 'link' = 'file') => ({
+    name,
+    ...statOf(kind),
+});
 
 describe('MarkdownRepository', () => {
     const dir = path.join('/tmp', 'work');
@@ -25,6 +42,9 @@ describe('MarkdownRepository', () => {
         fsMock.readdir.mockResolvedValue([]);
         fsMock.mkdir.mockResolvedValue(undefined);
         fsMock.writeFile.mockResolvedValue(undefined);
+        fsMock.lstat.mockRejectedValue(enoent());
+        fsMock.readFile.mockResolvedValue('');
+        fsMock.rmdir.mockResolvedValue(undefined);
     });
 
     describe('cleanup', () => {
@@ -219,6 +239,225 @@ describe('MarkdownRepository', () => {
                 'MIT',
                 'utf-8',
             );
+        });
+    });
+
+    describe('category pages (split README)', () => {
+        const categoriesDir = path.join(dir, 'categories');
+
+        /** `categories/` is a real folder; files listed in `files` exist with the given kind. */
+        const mountCategoriesDir = (files: Record<string, 'dir' | 'file' | 'link'> = {}) => {
+            fsMock.lstat.mockImplementation(async (target: string) => {
+                if (target === categoriesDir) {
+                    return statOf('dir');
+                }
+                const kind = files[path.basename(target)];
+                if (kind) {
+                    return statOf(kind);
+                }
+                throw enoent();
+            });
+        };
+
+        describe('writeCategoryPage', () => {
+            it('creates categories/ and writes the page with utf-8', async () => {
+                mountCategoriesDir();
+                const repo = new MarkdownRepository(dir);
+                await repo.writeCategoryPage('cloud-devops.md', '# Cloud');
+
+                expect(fsMock.mkdir).toHaveBeenCalledWith(categoriesDir, { recursive: true });
+                expect(fsMock.writeFile).toHaveBeenCalledWith(
+                    path.join(categoriesDir, 'cloud-devops.md'),
+                    '# Cloud',
+                    'utf-8',
+                );
+                expect(fsMock.rm).not.toHaveBeenCalled();
+                expect(repo.getWriteCount()).toBe(1);
+            });
+
+            it('accepts later pages named <slug>--page-N.md', async () => {
+                mountCategoriesDir();
+                await new MarkdownRepository(dir).writeCategoryPage('big--page-2.md', 'x');
+                expect(fsMock.writeFile).toHaveBeenCalledWith(
+                    path.join(categoriesDir, 'big--page-2.md'),
+                    'x',
+                    'utf-8',
+                );
+            });
+
+            it.each([
+                '../README.md',
+                '../../evil.md',
+                'a/b.md',
+                'Upper.md',
+                'no-extension',
+                '.md',
+                '-leading.md',
+                'name.txt',
+                '',
+            ])('rejects page name %p before touching the filesystem', async (name) => {
+                const repo = new MarkdownRepository(dir);
+                await expect(repo.writeCategoryPage(name, 'x')).rejects.toThrow(
+                    /Invalid category page name/,
+                );
+                expect(fsMock.mkdir).not.toHaveBeenCalled();
+                expect(fsMock.writeFile).not.toHaveBeenCalled();
+                expect(repo.getWriteCount()).toBe(0);
+            });
+
+            it('refuses to write through a categories/ folder that is a link', async () => {
+                fsMock.lstat.mockResolvedValue(statOf('link'));
+                await expect(
+                    new MarkdownRepository(dir).writeCategoryPage('a.md', 'x'),
+                ).rejects.toThrow(/not a folder/);
+                expect(fsMock.writeFile).not.toHaveBeenCalled();
+            });
+
+            it('refuses to write when categories/ is a regular file', async () => {
+                fsMock.lstat.mockResolvedValue(statOf('file'));
+                await expect(
+                    new MarkdownRepository(dir).writeCategoryPage('a.md', 'x'),
+                ).rejects.toThrow(/not a folder/);
+                expect(fsMock.writeFile).not.toHaveBeenCalled();
+            });
+
+            it('replaces a page file that is a link instead of writing through it', async () => {
+                mountCategoriesDir({ 'a.md': 'link' });
+                await new MarkdownRepository(dir).writeCategoryPage('a.md', 'x');
+
+                const file = path.join(categoriesDir, 'a.md');
+                expect(fsMock.rm).toHaveBeenCalledWith(file, { force: true });
+                expect(fsMock.rm.mock.invocationCallOrder[0]).toBeLessThan(
+                    fsMock.writeFile.mock.invocationCallOrder[0],
+                );
+                expect(fsMock.writeFile).toHaveBeenCalledWith(file, 'x', 'utf-8');
+            });
+
+            it('overwrites an existing plain page in place', async () => {
+                mountCategoriesDir({ 'a.md': 'file' });
+                await new MarkdownRepository(dir).writeCategoryPage('a.md', 'x');
+                expect(fsMock.rm).not.toHaveBeenCalled();
+                expect(fsMock.writeFile).toHaveBeenCalledTimes(1);
+            });
+        });
+
+        describe('removeStaleCategoryPages', () => {
+            const generated = `${CATEGORY_PAGE_MARKER}\n# Old\n`;
+
+            it('returns 0 and touches nothing when categories/ does not exist', async () => {
+                const repo = new MarkdownRepository(dir);
+                await expect(repo.removeStaleCategoryPages(new Set())).resolves.toBe(0);
+                expect(fsMock.readdir).not.toHaveBeenCalled();
+                expect(fsMock.rm).not.toHaveBeenCalled();
+                expect(fsMock.rmdir).not.toHaveBeenCalled();
+            });
+
+            it('returns 0 without listing when categories/ is a link', async () => {
+                fsMock.lstat.mockResolvedValue(statOf('link'));
+                await expect(
+                    new MarkdownRepository(dir).removeStaleCategoryPages(new Set()),
+                ).resolves.toBe(0);
+                expect(fsMock.readdir).not.toHaveBeenCalled();
+            });
+
+            it('removes generated pages not in keep, and keeps the ones written this run', async () => {
+                mountCategoriesDir();
+                fsMock.readdir.mockResolvedValueOnce([
+                    dirent('kept.md'),
+                    dirent('gone.md'),
+                    dirent('gone--page-2.md'),
+                ]);
+                fsMock.readFile.mockResolvedValue(generated);
+                const repo = new MarkdownRepository(dir);
+
+                await expect(repo.removeStaleCategoryPages(new Set(['kept.md']))).resolves.toBe(2);
+
+                expect(fsMock.readdir).toHaveBeenCalledWith(categoriesDir, { withFileTypes: true });
+                expect(fsMock.rm.mock.calls).toEqual([
+                    [path.join(categoriesDir, 'gone.md'), { force: true }],
+                    [path.join(categoriesDir, 'gone--page-2.md'), { force: true }],
+                ]);
+                expect(fsMock.rmdir).not.toHaveBeenCalled();
+                expect(repo.getWriteCount()).toBe(2);
+            });
+
+            it('never removes a file without the generated marker, a non-file, or a non-page name', async () => {
+                mountCategoriesDir();
+                fsMock.readdir.mockResolvedValueOnce([
+                    dirent('hand-written.md'),
+                    dirent('nested', 'dir'),
+                    dirent('linked.md', 'link'),
+                    dirent('categories.yml'),
+                    dirent('Notes.md'),
+                ]);
+                fsMock.readFile.mockResolvedValue('# My own notes\n');
+
+                await expect(
+                    new MarkdownRepository(dir).removeStaleCategoryPages(new Set()),
+                ).resolves.toBe(0);
+
+                expect(fsMock.readFile).toHaveBeenCalledTimes(1);
+                expect(fsMock.readFile).toHaveBeenCalledWith(
+                    path.join(categoriesDir, 'hand-written.md'),
+                    'utf-8',
+                );
+                expect(fsMock.rm).not.toHaveBeenCalled();
+                expect(fsMock.rmdir).not.toHaveBeenCalled();
+            });
+
+            it('removes every generated page and then the empty folder when keep is empty', async () => {
+                mountCategoriesDir();
+                fsMock.readdir.mockResolvedValueOnce([dirent('a.md'), dirent('b.md')]);
+                fsMock.readFile.mockResolvedValue(generated);
+
+                await expect(new MarkdownRepository(dir).removeStaleCategoryPages()).resolves.toBe(
+                    2,
+                );
+
+                expect(fsMock.rm).toHaveBeenCalledTimes(2);
+                expect(fsMock.rmdir).toHaveBeenCalledWith(categoriesDir);
+            });
+
+            it('ignores a failing rmdir of the emptied folder', async () => {
+                mountCategoriesDir();
+                fsMock.readdir.mockResolvedValueOnce([dirent('a.md')]);
+                fsMock.readFile.mockResolvedValue(generated);
+                fsMock.rmdir.mockRejectedValueOnce(new Error('ENOTEMPTY'));
+
+                await expect(
+                    new MarkdownRepository(dir).removeStaleCategoryPages(new Set()),
+                ).resolves.toBe(1);
+            });
+
+            it('keeps a page it cannot read and carries on with the rest', async () => {
+                mountCategoriesDir();
+                fsMock.readdir.mockResolvedValueOnce([dirent('locked.md'), dirent('old.md')]);
+                fsMock.readFile.mockImplementation(async (target: string) => {
+                    if (path.basename(target) === 'locked.md') {
+                        throw Object.assign(new Error('EACCES'), { code: 'EACCES' });
+                    }
+                    return generated;
+                });
+
+                await expect(
+                    new MarkdownRepository(dir).removeStaleCategoryPages(new Set()),
+                ).resolves.toBe(1);
+
+                expect(fsMock.rm.mock.calls).toEqual([
+                    [path.join(categoriesDir, 'old.md'), { force: true }],
+                ]);
+                // the unreadable page is still there, so the folder stays
+                expect(fsMock.rmdir).not.toHaveBeenCalled();
+            });
+
+            it('propagates an lstat error other than ENOENT', async () => {
+                fsMock.lstat.mockRejectedValue(
+                    Object.assign(new Error('EACCES'), { code: 'EACCES' }),
+                );
+                await expect(
+                    new MarkdownRepository(dir).removeStaleCategoryPages(new Set()),
+                ).rejects.toThrow('EACCES');
+            });
         });
     });
 
