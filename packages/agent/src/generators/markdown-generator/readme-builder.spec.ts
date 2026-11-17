@@ -19,15 +19,18 @@ jest.mock('github-slugger', () => {
 });
 
 import type { ItemData } from '@ever-works/plugin';
+import { CATEGORY_PAGE_MARKER } from './markdown-repository';
 
 // `readme-builder` instantiates the slugger at module load and never resets
 // it. Across tests, identical headers would otherwise drift to `tools-1`,
 // `tools-2`, etc. Reload the module per test so each scenario starts with a
 // pristine slugger.
 let ReadmeBuilder: typeof import('./readme-builder').ReadmeBuilder;
+let builderModule: typeof import('./readme-builder');
 beforeEach(() => {
     jest.isolateModules(() => {
-        ReadmeBuilder = require('./readme-builder').ReadmeBuilder;
+        builderModule = require('./readme-builder');
+        ReadmeBuilder = builderModule.ReadmeBuilder;
     });
 });
 
@@ -225,5 +228,226 @@ describe('ReadmeBuilder', () => {
             expect(out).toContain('- [B](https://foo.test) - A B ([Read more](/details/b.md)) `t`');
             expect(out.endsWith('## License\n\nMIT')).toBe(true);
         });
+    });
+
+    describe('details link base path', () => {
+        it('defaults to /details/ (repository root)', () => {
+            const out = new ReadmeBuilder('', '')
+                .addItem(makeItem({ slug: 'x' }), { hasDetails: true })
+                .build();
+            expect(out).toContain('([Read more](/details/x.md))');
+        });
+
+        it('uses the configured detailsBasePath for every Read more link', () => {
+            const out = new ReadmeBuilder('', '', { detailsBasePath: '../details/' })
+                .addItem(makeItem({ slug: 'x' }), { hasDetails: true })
+                .build();
+            expect(out).toContain('([Read more](../details/x.md))');
+        });
+
+        it('formatReadmeItem returns the same line addItem writes, without the newline', () => {
+            const item = makeItem({ slug: 's', tags: [{ name: 'a' }] as any });
+            const line = builderModule.formatReadmeItem(item, { hasDetails: true });
+            expect(line).toBe('- [Foo](https://foo.test) - A foo ([Read more](/details/s.md)) `a`');
+            expect(new ReadmeBuilder('', '').addItem(item, { hasDetails: true }).build()).toContain(
+                `${line}\n`,
+            );
+        });
+    });
+});
+
+describe('category page file names', () => {
+    it('toCategoryFileSlug keeps a plain id and slugifies anything else', () => {
+        const { toCategoryFileSlug } = builderModule;
+        expect(toCategoryFileSlug('cloud-devops-mcp-servers')).toBe('cloud-devops-mcp-servers');
+        expect(toCategoryFileSlug('Cloud & DevOps MCP Servers')).toBe('cloud-devops-mcp-servers');
+        expect(toCategoryFileSlug('Café_Tools')).toBe('cafe-tools');
+        expect(toCategoryFileSlug('../../etc/passwd')).toBe('etc-passwd');
+        // never two hyphens in a row, so `--page-N` stays unambiguous
+        expect(toCategoryFileSlug('a -- b')).toBe('a-b');
+    });
+
+    it('toCategoryFileSlug caps the length at 80 characters without a trailing hyphen', () => {
+        const slug = builderModule.toCategoryFileSlug(`${'a'.repeat(79)} b`);
+        expect(slug.length).toBeLessThanOrEqual(80);
+        expect(slug.endsWith('-')).toBe(false);
+    });
+
+    it('toCategoryFileSlug falls back to a stable hash when nothing usable is left', () => {
+        const { toCategoryFileSlug } = builderModule;
+        const slug = toCategoryFileSlug('数据库');
+        expect(slug).toMatch(/^category-[0-9a-f]{8}$/);
+        expect(toCategoryFileSlug('数据库')).toBe(slug);
+        expect(toCategoryFileSlug('工具')).not.toBe(slug);
+    });
+
+    it('assignCategoryFileSlugs gives clashing ids distinct slugs, independent of input order', () => {
+        const { assignCategoryFileSlugs } = builderModule;
+        const a = assignCategoryFileSlugs(['foo-bar', 'Foo_Bar', 'other']);
+        const b = assignCategoryFileSlugs(['other', 'Foo_Bar', 'foo-bar']);
+        expect(new Set(a.values()).size).toBe(3);
+        expect([...a.entries()].sort()).toEqual([...b.entries()].sort());
+        expect(a.get('other')).toBe('other');
+    });
+
+    it('categoryPageFileName names page 1 after the slug and later pages with --page-N', () => {
+        expect(builderModule.categoryPageFileName('tools')).toBe('tools.md');
+        expect(builderModule.categoryPageFileName('tools', 1)).toBe('tools.md');
+        expect(builderModule.categoryPageFileName('tools', 3)).toBe('tools--page-3.md');
+    });
+});
+
+describe('buildSplitReadme', () => {
+    const item = (slug: string, overrides: Partial<ItemData> = {}) =>
+        makeItem({ slug, name: slug.toUpperCase(), description: `About ${slug}`, ...overrides });
+
+    const baseInput = () => ({
+        header: '# Awesome Things\n\nIntro.',
+        footer: '## License\n\nMIT',
+        sections: [
+            {
+                id: 'cloud-devops',
+                name: 'Cloud & DevOps',
+                items: [item('k8s', { featured: true }), item('terraform')],
+            },
+            {
+                id: 'databases',
+                name: 'Databases',
+                items: [item('pg'), item('k8s', { featured: true })],
+            },
+        ],
+        hasDetails: (i: ItemData) => i.slug !== 'terraform',
+    });
+
+    it('README keeps header and footer and lists every category with its count and page link', () => {
+        const { readme } = builderModule.buildSplitReadme(baseInput());
+
+        expect(readme.startsWith('# Awesome Things\n\nIntro.\n')).toBe(true);
+        expect(readme.endsWith('## License\n\nMIT')).toBe(true);
+        expect(readme).toContain('## 📑 Categories\n\n');
+        expect(readme).toContain('- [Cloud & DevOps](categories/cloud-devops.md) (2)');
+        expect(readme).toContain('- [Databases](categories/databases.md) (2)');
+        // unique items, not item/category pairs
+        expect(readme).toContain('> **3 items in 2 categories.**');
+        // non-featured items live only on the category pages
+        expect(readme).not.toContain('About terraform');
+        expect(readme).not.toContain('About pg');
+        // no siteUrl → no website link at all
+        expect(readme).not.toContain('browse and search');
+        expect(readme).not.toContain('undefined');
+    });
+
+    it('README lists featured items once each, with root-relative details links', () => {
+        const { readme } = builderModule.buildSplitReadme(baseInput());
+
+        expect(readme).toContain('## ⭐ Featured\n\n');
+        expect(readme.match(/About k8s/g)).toHaveLength(1);
+        expect(readme).toContain(
+            '- [K8S](https://foo.test) - About k8s ([Read more](/details/k8s.md))',
+        );
+    });
+
+    it('omits the Featured section when no item is featured', () => {
+        const input = baseInput();
+        input.sections = [{ id: 'x', name: 'X', items: [item('a')] }];
+        const { readme } = builderModule.buildSplitReadme(input);
+        expect(readme).not.toContain('Featured');
+        expect(readme).toContain('> **1 item in 1 category.**');
+    });
+
+    it('writes one page per category with the marker, a title, back links and ../details/ links', () => {
+        const { pages } = builderModule.buildSplitReadme(baseInput());
+
+        expect(pages.map((p) => p.fileName)).toEqual(['cloud-devops.md', 'databases.md']);
+        const cloud = pages[0].content;
+        expect(cloud.startsWith(`${CATEGORY_PAGE_MARKER}\n# Cloud & DevOps\n\n`)).toBe(true);
+        expect(cloud.match(/\[⬅ Back to the full list\]\(\.\.\/README\.md\)/g)).toHaveLength(2);
+        expect(cloud).toContain('2 items');
+        expect(cloud).toContain(
+            '- [K8S](https://foo.test) - About k8s ([Read more](../details/k8s.md))\n',
+        );
+        // no details file → no Read more link
+        expect(cloud).toContain('- [TERRAFORM](https://foo.test) - About terraform\n');
+        expect(cloud).not.toContain('](/details/');
+        // featured item stays in every category it belongs to
+        expect(pages[1].content).toContain('About k8s');
+    });
+
+    it('links the website from the README and every page when siteUrl is an http(s) URL', () => {
+        const { readme, pages } = builderModule.buildSplitReadme({
+            ...baseInput(),
+            siteUrl: 'https://mcpserver.ever.works',
+        });
+        expect(readme).toContain(
+            'You can also browse and search everything on [mcpserver.ever.works](https://mcpserver.ever.works).',
+        );
+        for (const page of pages) {
+            expect(page.content).toContain('[Browse on the website](https://mcpserver.ever.works)');
+        }
+    });
+
+    it('drops a non-http(s) siteUrl instead of linking it', () => {
+        const { readme, pages } = builderModule.buildSplitReadme({
+            ...baseInput(),
+            siteUrl: 'javascript:alert(1)',
+        });
+        expect(readme).not.toContain('javascript:');
+        expect(readme).not.toContain('browse and search');
+        expect(pages[0].content).not.toContain('Browse on the website');
+    });
+
+    it('escapes Markdown control characters of category names in the index', () => {
+        const input = baseInput();
+        input.sections = [{ id: 'evil', name: 'Evil](https://x.test) [', items: [item('a')] }];
+        const { readme } = builderModule.buildSplitReadme(input);
+        expect(readme).toContain('- [Evil\\](https://x.test) \\[](categories/evil.md) (1)');
+    });
+
+    it('splits a category that is too large for one page into --page-N files, each within the threshold', () => {
+        const many = Array.from({ length: 60 }, (_, n) =>
+            item(`item-${String(n).padStart(2, '0')}`, { description: 'x'.repeat(80) }),
+        );
+        const thresholdBytes = 2048;
+        const { readme, pages } = builderModule.buildSplitReadme({
+            header: '# H',
+            footer: 'F',
+            sections: [{ id: 'big', name: 'Big', items: many }],
+            hasDetails: () => true,
+            thresholdBytes,
+        });
+
+        expect(pages.length).toBeGreaterThan(1);
+        expect(pages[0].fileName).toBe('big.md');
+        expect(pages[1].fileName).toBe('big--page-2.md');
+        for (const [index, page] of pages.entries()) {
+            expect(Buffer.byteLength(page.content, 'utf8')).toBeLessThanOrEqual(thresholdBytes);
+            expect(page.content).toContain(`Page ${index + 1} of ${pages.length}: `);
+            expect(page.content).toContain(`**${index + 1}**`);
+        }
+        expect(pages[0].content).toContain('[2](big--page-2.md)');
+        // every item appears exactly once across the pages
+        const all = pages.map((p) => p.content).join('');
+        for (const it of many) {
+            expect(all.match(new RegExp(`\\[${it.slug.toUpperCase()}\\]`, 'g'))).toHaveLength(1);
+        }
+        // the index points at the first page
+        expect(readme).toContain('- [Big](categories/big.md) (60)');
+    });
+
+    it('caps the Featured section so the README stays within the threshold', () => {
+        const featured = Array.from({ length: 40 }, (_, n) =>
+            item(`f-${n}`, { featured: true, description: 'y'.repeat(100) }),
+        );
+        const thresholdBytes = 2048;
+        const { readme } = builderModule.buildSplitReadme({
+            header: '# H',
+            footer: 'F',
+            sections: [{ id: 'a', name: 'A', items: featured }],
+            hasDetails: () => false,
+            thresholdBytes,
+        });
+        expect(Buffer.byteLength(readme, 'utf8')).toBeLessThanOrEqual(thresholdBytes);
+        expect(readme).toMatch(/- …and \d+ more featured items on the category pages\.\n/);
+        expect(readme.endsWith('\nF')).toBe(true);
     });
 });
