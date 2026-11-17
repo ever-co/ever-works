@@ -821,6 +821,29 @@ describe('MarkdownGeneratorService', () => {
             },
         );
 
+        it('when cancelled mid-way: stops writing pages, skips the sweep and never commits', async () => {
+            const gitFacade = createGitFacadeMock();
+            mountDirectory();
+            const ac = new AbortController();
+            writeCategoryPageSpy.mockImplementation(async () => {
+                ac.abort(new Error('cancelled by test'));
+            });
+
+            const service = new MarkdownGeneratorService(gitFacade, createWorkOpsMock());
+            await expect(
+                service.initialize(createWork(), createUser(), {
+                    readme_split_threshold_bytes: 900,
+                    signal: ac.signal,
+                }),
+            ).rejects.toThrow('cancelled by test');
+
+            expect(writeCategoryPageSpy).toHaveBeenCalledTimes(1);
+            expect(removeStaleCategoryPagesSpy).not.toHaveBeenCalled();
+            expect(gitFacade.addAll).not.toHaveBeenCalled();
+            expect(gitFacade.commit).not.toHaveBeenCalled();
+            expect(gitFacade.push).not.toHaveBeenCalled();
+        });
+
         it('never splits when the markdown and data roles are one repository', async () => {
             mountDirectory({ dir: '/tmp/markdown-repo' });
 

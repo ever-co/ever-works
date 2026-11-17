@@ -31,8 +31,10 @@ type InitializeOptions = {
     signal?: AbortSignal;
     /**
      * Size (UTF-8 bytes) above which the README is split into a category index
-     * plus `categories/<category>.md` pages. Default
-     * {@link README_SPLIT_THRESHOLD_BYTES}.
+     * plus `categories/<category>.md` pages; also the size limit of each of
+     * those files. Default {@link README_SPLIT_THRESHOLD_BYTES} (300 KB, kept
+     * under the ~366 KB at which GitHub stopped rendering a README). A missing,
+     * zero, negative or non-numeric value means the default.
      */
     readme_split_threshold_bytes?: number;
 };
