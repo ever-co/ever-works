@@ -892,17 +892,30 @@ describe('MarkdownGeneratorService', () => {
             );
         });
 
-        it('redacts secret-like values from category pages before writing them', async () => {
+        it('redacts secret-like values from the index README and the category pages, README first', async () => {
             const token = `ghp_${'a1B2'.repeat(9)}`;
-            fsMock.readdir.mockResolvedValueOnce(['leaky']);
+            // a featured item carrying a token (so it is on the index README
+            // too) plus long fillers that push the single file over 1000 bytes
+            fsMock.readdir.mockResolvedValueOnce(['leaky', 'f1', 'f2', 'f3']);
             mountDataRepoMock({
-                getItem: jest.fn().mockResolvedValue({
-                    slug: 'leaky',
-                    name: 'Leaky',
-                    description: `token ${token}`,
-                    source_url: 'https://leaky.test',
-                    category: 'misc',
-                }),
+                getItem: jest.fn().mockImplementation((slug: string) =>
+                    slug === 'leaky'
+                        ? {
+                              slug,
+                              name: 'Leaky',
+                              description: `token ${token}`,
+                              source_url: 'https://leaky.test',
+                              category: 'misc',
+                              featured: true,
+                          }
+                        : {
+                              slug,
+                              name: slug,
+                              description: 'filler '.repeat(60),
+                              source_url: 'https://filler.test',
+                              category: 'other',
+                          },
+                ),
             });
 
             const service = new MarkdownGeneratorService(
@@ -910,13 +923,20 @@ describe('MarkdownGeneratorService', () => {
                 createWorkOpsMock(),
             );
             await service.initialize(createWork(), createUser(), {
-                readme_split_threshold_bytes: 10,
+                readme_split_threshold_bytes: 1000,
             });
 
+            const readme = writeReadmeSpy.mock.calls[0][0] as string;
+            expect(readme).toContain('## ⭐ Featured');
+            expect(readme).toContain('[redacted secret]');
+            expect(readme).not.toContain(token);
             expect(writeCategoryPageSpy).toHaveBeenCalled();
             for (const [, content] of writeCategoryPageSpy.mock.calls) {
                 expect(content).not.toContain(token);
             }
+            expect(writeReadmeSpy.mock.invocationCallOrder[0]).toBeLessThan(
+                Math.min(...writeCategoryPageSpy.mock.invocationCallOrder),
+            );
         });
     });
 
