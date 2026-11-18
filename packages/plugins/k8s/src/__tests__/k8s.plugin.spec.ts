@@ -1709,7 +1709,7 @@ describe('KubernetesPlugin.deploy() manifest snapshot (ACC-06-43)', () => {
 			              "startupProbe": {
 			                "failureThreshold": 30,
 			                "httpGet": {
-			                  "path": "/",
+			                  "path": "/api/health",
 			                  "port": "http",
 			                },
 			                "periodSeconds": 10,

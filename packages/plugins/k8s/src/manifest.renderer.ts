@@ -91,9 +91,13 @@ export function buildDeployment(input: ManifestRenderInputs): Record<string, unk
 				// gets a realistic timeout; a startupProbe absorbs the cold start so
 				// liveness never kills a warming container and loses its cache.
 				startupProbe: {
-					// Keep startup on the homepage: its successful render is what warms
-					// the catalogue cache before ongoing cheap health checks begin.
-					httpGet: { path: '/', port: 'http' },
+					// The cheap health route, not the homepage: a cold homepage renders the
+					// whole catalogue, and on a busy node that render (with the template's
+					// start-up content sync) outlasted the 10 s timeout for minutes, so pods
+					// were restarted while only warming up (mcpserver.ever.works, Nov 2026).
+					// The template warms its content in the background at start-up instead
+					// (directory-web-template Spec 061 R15).
+					httpGet: { path: '/api/health', port: 'http' },
 					periodSeconds: 10,
 					timeoutSeconds: 10,
 					failureThreshold: input.startupFailureThreshold ?? 30
