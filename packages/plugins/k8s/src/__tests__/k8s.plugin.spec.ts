@@ -551,6 +551,90 @@ describe('KubernetesPlugin.deploy (mocked api)', () => {
 		expect(api.applyService).toHaveBeenCalledTimes(1);
 	});
 
+	describe('pinImageDigest', () => {
+		const DIGEST = `sha256:${'b'.repeat(64)}`;
+		const deployedContainer = () => {
+			const manifest = vi.mocked(api.applyDeployment).mock.calls[0][1] as Record<string, any>;
+			return manifest.spec.template.spec.containers[0];
+		};
+
+		it('deploys the digest the tag points at, with IfNotPresent', async () => {
+			const resolver = vi.fn(async () => DIGEST);
+			const pinned = new KubernetesPlugin({ api, imageDigestResolver: resolver });
+			await pinned.onLoad(ctx);
+			await pinned.deploy(
+				{
+					projectName: 'work-1',
+					sourceDir: '.',
+					options: { gitSha: 'prod', githubOwner: 'acme', websiteRepoIsPrivate: false, pinImageDigest: true }
+				},
+				VALID
+			);
+			expect(resolver).toHaveBeenCalledWith('ghcr.io/acme/work-1:prod', undefined);
+			expect(deployedContainer().image).toBe(`ghcr.io/acme/work-1@${DIGEST}`);
+			expect(deployedContainer().imagePullPolicy).toBe('IfNotPresent');
+		});
+
+		it('passes the read:packages token for a private image', async () => {
+			const resolver = vi.fn(async () => DIGEST);
+			const pinned = new KubernetesPlugin({ api, imageDigestResolver: resolver });
+			await pinned.onLoad(ctx);
+			await pinned.deploy(
+				{
+					projectName: 'work-1',
+					sourceDir: '.',
+					options: {
+						gitSha: 'prod',
+						githubOwner: 'acme',
+						websiteRepoIsPrivate: true,
+						githubReadPackagesToken: 'ghp_read',
+						pinImageDigest: true
+					}
+				},
+				VALID
+			);
+			expect(resolver).toHaveBeenCalledWith('ghcr.io/acme/work-1:prod', {
+				username: expect.any(String),
+				password: 'ghp_read'
+			});
+			expect(deployedContainer().image).toBe(`ghcr.io/acme/work-1@${DIGEST}`);
+		});
+
+		it('keeps the tag and Always when the digest cannot be resolved', async () => {
+			const pinned = new KubernetesPlugin({ api, imageDigestResolver: async () => null });
+			await pinned.onLoad(ctx);
+			await pinned.deploy(
+				{
+					projectName: 'work-1',
+					sourceDir: '.',
+					options: { gitSha: 'prod', githubOwner: 'acme', websiteRepoIsPrivate: false, pinImageDigest: true }
+				},
+				VALID
+			);
+			expect(deployedContainer().image).toBe('ghcr.io/acme/work-1:prod');
+			expect(deployedContainer().imagePullPolicy).toBe('Always');
+		});
+
+		it('is opt-in, and an explicit imagePullPolicy wins', async () => {
+			const resolver = vi.fn(async () => DIGEST);
+			const pinned = new KubernetesPlugin({ api, imageDigestResolver: resolver });
+			await pinned.onLoad(ctx);
+			await pinned.deploy(
+				{ projectName: 'work-1', sourceDir: '.', options: { gitSha: 'prod', githubOwner: 'acme' } },
+				VALID
+			);
+			await pinned.deploy(
+				{
+					projectName: 'work-1',
+					sourceDir: '.',
+					options: { gitSha: 'prod', githubOwner: 'acme', pinImageDigest: true, imagePullPolicy: 'Never' }
+				},
+				VALID
+			);
+			expect(resolver).not.toHaveBeenCalled();
+		});
+	});
+
 	it('uses the managed kubeconfig current context instead of a stale singleton context', async () => {
 		await plugin.onLoad(
 			createMockContext({
@@ -1669,13 +1753,13 @@ describe('KubernetesPlugin.deploy() manifest snapshot (ACC-06-43)', () => {
 			              "image": "ghcr.io/acme/work-1:abc1234",
 			              "imagePullPolicy": "Always",
 			              "livenessProbe": {
-			                "failureThreshold": 6,
+			                "failureThreshold": 15,
 			                "httpGet": {
 			                  "path": "/api/health",
 			                  "port": "http",
 			                },
 			                "periodSeconds": 20,
-			                "timeoutSeconds": 10,
+			                "timeoutSeconds": 30,
 			              },
 			              "name": "app",
 			              "ports": [
@@ -1691,7 +1775,7 @@ describe('KubernetesPlugin.deploy() manifest snapshot (ACC-06-43)', () => {
 			                  "port": "http",
 			                },
 			                "periodSeconds": 10,
-			                "timeoutSeconds": 5,
+			                "timeoutSeconds": 15,
 			              },
 			              "resources": {
 			                "limits": {

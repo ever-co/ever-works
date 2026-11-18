@@ -102,17 +102,22 @@ export function buildDeployment(input: ManifestRenderInputs): Record<string, unk
 					timeoutSeconds: 10,
 					failureThreshold: input.startupFailureThreshold ?? 30
 				},
+				// A busy site (a cold catalogue read, a content sync) can hold its event loop for
+				// seconds; liveness restarting it then loses its warm caches and, with a mutable
+				// image tag, needs the registry to come back (timetrack.ever.works, 2026-11-18). So
+				// liveness waits 30 s per check and ~5 minutes in all; readiness, which only takes a
+				// pod out of the Service, stays quicker.
 				readinessProbe: {
 					httpGet: { path: '/api/health', port: 'http' },
 					periodSeconds: 10,
-					timeoutSeconds: 5,
+					timeoutSeconds: 15,
 					failureThreshold: 3
 				},
 				livenessProbe: {
 					httpGet: { path: '/api/health', port: 'http' },
 					periodSeconds: 20,
-					timeoutSeconds: 10,
-					failureThreshold: 6
+					timeoutSeconds: 30,
+					failureThreshold: 15
 				},
 				// 512Mi OOM-killed a real catalogue — the mcp-servers Work restarted
 				// 4x and never served. Measured usage of the seven live Works:

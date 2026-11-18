@@ -1,3 +1,4 @@
+import { resolveImageDigest, type ImageDigestResolver } from './image-digest';
 import type {
 	AddDomainResult,
 	AppClusterCheckRequest,
@@ -382,6 +383,13 @@ interface DeployOptions {
 	settingsOverride?: Record<string, unknown>;
 	/** Escape hatch for side-loaded images (kind e2e). Production leaves this unset -> 'Always'. */
 	imagePullPolicy?: 'Always' | 'IfNotPresent' | 'Never';
+	/**
+	 * Resolve the GHCR tag to its current digest and deploy `name@sha256:...` with
+	 * `IfNotPresent`, so a restart never has to reach the registry (`image-digest.ts`).
+	 * Falls back to the tag with `Always` when the digest cannot be resolved. Ignored when
+	 * `imagePullPolicy` is set or the registry is not GitHub.
+	 */
+	pinImageDigest?: boolean;
 	/** Full commit SHA — used only as a pod annotation to force a rollout, never as the image tag. */
 	revision?: string;
 }
@@ -677,6 +685,7 @@ function memberKubeconfigRefusal(finding: KubeconfigLocalCredentialFinding): K8s
 }
 
 export class KubernetesPlugin implements IPlugin, IDeploymentPlugin {
+	private readonly imageDigestResolver: ImageDigestResolver;
 	// `string`, not the literal: APW-10 lite's `k8s-apps-tier` plugin extends this class with its own id.
 	readonly id: string = 'k8s';
 	readonly name: string = 'Kubernetes';
@@ -960,8 +969,11 @@ export class KubernetesPlugin implements IPlugin, IDeploymentPlugin {
 			dnsResolver?: DnsResolver;
 			/** Test seam for §6.1: the resolver `pinKubeconfigServer` resolves the cluster host with. */
 			clusterAddressResolver?: KubeconfigDnsResolver;
+			/** Test seam: resolves a tagged image to its digest for `pinImageDigest`. */
+			imageDigestResolver?: ImageDigestResolver;
 		} = {}
 	) {
+		this.imageDigestResolver = opts.imageDigestResolver ?? resolveImageDigest;
 		this.api = opts.api ?? new KubernetesApiService();
 		this.registries = opts.registries ?? defaultRegistryProviderRegistry;
 		this.ingressStrategies = opts.ingressStrategies ?? defaultIngressStrategyRegistry;
@@ -1252,6 +1264,22 @@ export class KubernetesPlugin implements IPlugin, IDeploymentPlugin {
 		const pullCreds = provider.pullSecretCredentials(registry, registryCtx, visibility);
 		let pullSecretName: string | undefined;
 
+		// Pin the image to the digest its tag points at now (opt-in): restarts then use the
+		// image already on the node. A failed lookup keeps the tag and `Always`.
+		let deployImage = image;
+		let imagePullPolicy = opts.imagePullPolicy;
+		if (opts.pinImageDigest && !opts.imagePullPolicy && registry.kind === 'github') {
+			const password = pullCreds ? (opts.githubReadPackagesToken ?? '') : '';
+			const digest = await this.imageDigestResolver(
+				image,
+				pullCreds && password ? { username: pullCreds.username, password } : undefined
+			);
+			if (digest) {
+				deployImage = `${imageBase}/${imageName}@${digest}`;
+				imagePullPolicy = 'IfNotPresent';
+			}
+		}
+
 		try {
 			// Resolve request and limit as a pair before the first write. A legacy
 			// managed Work may combine a sub-floor request with an even lower
@@ -1305,12 +1333,12 @@ export class KubernetesPlugin implements IPlugin, IDeploymentPlugin {
 				workId: config.projectName,
 				workSlug: slug,
 				namespace,
-				image,
+				image: deployImage,
 				replicas,
 				containerPort: CONTAINER_PORT,
 				pullSecretName,
 				envFromSecretName: runtimeEnvSecretName,
-				imagePullPolicy: opts.imagePullPolicy,
+				imagePullPolicy,
 				// Per-Work sizing, resolved through the same settings merge as the
 				// rest (settingsOverride layers the work tier over the plugin's own).
 				cpuRequest: settings.cpuRequest,
