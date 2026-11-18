@@ -1385,6 +1385,9 @@ export class DeployService {
                         // workflow path had secrets.GITHUB_TOKEN as a last resort;
                         // this is the server-side equivalent.
                         githubReadPackagesToken: ghcrReadToken,
+                        // Deploy `name@sha256:...` with IfNotPresent: an OOM or
+                        // liveness restart then never depends on reaching GHCR.
+                        pinImageDigest: true,
                         // Annotation only — NEVER the image tag. CI publishes
                         // `sha-<full>`, and the plugin truncates a gitSha to 12
                         // chars, so a SHA can't address the image; it can still
