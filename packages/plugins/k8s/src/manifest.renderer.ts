@@ -105,8 +105,9 @@ export function buildDeployment(input: ManifestRenderInputs): Record<string, unk
 				// A busy site (a cold catalogue read, a content sync) can hold its event loop for
 				// seconds; liveness restarting it then loses its warm caches and, with a mutable
 				// image tag, needs the registry to come back (timetrack.ever.works, 2026-11-18). So
-				// liveness waits 30 s per check and ~5 minutes in all; readiness, which only takes a
-				// pod out of the Service, stays quicker.
+				// liveness waits 30 s per check, 15 times: a hung app is restarted after up to ~7.5
+				// minutes (each check runs its full timeout). Readiness, which only takes a pod out of
+				// the Service, stays quicker.
 				readinessProbe: {
 					httpGet: { path: '/api/health', port: 'http' },
 					periodSeconds: 10,
