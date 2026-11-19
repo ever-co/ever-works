@@ -196,9 +196,16 @@ guard makes a stale id fail closed rather than fall through to a paid model.
      names forced to start with `DEMO_REPO_PREFIX` + the sandbox's short id (e.g.
      `demo-3f9a1c-awesome-ai-coding-tools-data`), `deployProvider` forced to an inert value so generation never
      deploys, `DEMO_MAX_WORKS_PER_SANDBOX` enforced on create.
-   - **Repo ledger**: every repo the platform creates for a demo Work (data, website, copies) is written to a
-     `demo_github_repos` ledger row (`sandboxUserId`, `owner`, `name`, GitHub repo id, createdAt) at creation,
-     and tagged with the GitHub topic `ever-works-demo`.
+     The prefix comes almost for free: with `ever-works-git` storage the repo is created **at Work creation**,
+     before any generation (`work-lifecycle.service.ts:735-770`), named by `EverWorksGitProvider.buildRepoName`
+     from the user's slug, which is why production's anonymous visitors produce `anon-<hex>-<prompt>-<suffix>`
+     repos in `ever-works-cloud`. Demo usernames `demo-<hex>` therefore yield `demo-<hex>-…` repos; the guard
+     still asserts the prefix on every create.
+   - **Repo ledger**: every repo the platform creates for a demo Work (the create-time repo above, plus any
+     data/website/copy repos generation creates) is written to a `demo_github_repos` ledger row
+     (`sandboxUserId`, `owner`, `name`, GitHub repo id, createdAt) at creation, and tagged with the GitHub topic
+     `ever-works-demo`. Hook point: `EverWorksGitProvider.createRepository` and `GitFacadeService`'s
+     `createRepository` / `createRepositoryFromTemplate` / `createRepositoryCopy`.
    - **Registration**: `POST /api/auth/register`, magic link and social callbacks answer 403 `DEMO_DISABLED`
      when `DEMO` is on (platform operators log in normally).
 5. **Sweeper** (`DemoSandboxSweeperService`, Nest `@Cron` every 15 min, `DistributedTaskLockService.runExclusive`,
