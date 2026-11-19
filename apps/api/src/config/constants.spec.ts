@@ -451,6 +451,11 @@ describe('config/constants', () => {
             expect(config.work.staleTimeoutHours()).toBe(24);
         });
 
+        it('accepts a positive decimal (0.5 -> 0.5)', () => {
+            process.env.WORK_STALE_TIMEOUT_HOURS = '0.5';
+            expect(config.work.staleTimeoutHours()).toBe(0.5);
+        });
+
         it.each(['abc', '', '0', '-1'])('falls back to 2 for %p', (value) => {
             process.env.WORK_STALE_TIMEOUT_HOURS = value;
             expect(config.work.staleTimeoutHours()).toBe(2);

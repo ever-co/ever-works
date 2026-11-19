@@ -12,13 +12,15 @@ import { config } from '@ever-works/agent/config';
 export function assertDemoConfig(): void {
 	if (!config.demo.isEnabled()) return;
 
-	const demoOrg = config.demo.githubOrg();
-	if (!demoOrg) {
-		throw new Error('DEMO=true requires DEMO_GITHUB_ORG to be set to the GitHub org that holds demo repositories.');
-	}
-
+	// Only generation (the git provider) needs the demo org; a local demo runs with git off.
 	if (config.everWorks.git.isEnabled()) {
+		const demoOrg = config.demo.githubOrg();
 		const gitOrg = config.everWorks.git.getOrg();
+		if (!demoOrg) {
+			throw new Error(
+				'DEMO=true with STORAGE_EVER_WORKS_GIT_ENABLED requires DEMO_GITHUB_ORG (the org that holds demo repositories).'
+			);
+		}
 		if (demoOrg !== gitOrg) {
 			throw new Error(
 				`DEMO_GITHUB_ORG ("${demoOrg}") must equal EVER_WORKS_CUSTOMERS_GITHUB_ORG ("${gitOrg}") ` +

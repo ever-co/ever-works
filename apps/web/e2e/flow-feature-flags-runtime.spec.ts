@@ -33,10 +33,12 @@ import { loadSeededTestUser } from './helpers/seeded-test-user';
  *        anonymousAuthEnabled: boolean,        // env ANONYMOUS_AUTH_ENABLED
  *        emailVerificationRequired: boolean,   // env REQUIRE_EMAIL_VERIFICATION !== 'false'
  *        appLauncherEnabled: boolean           // env EVER_WORKS_APP_LAUNCHER_ENABLED === 'true'
- *                                              // (APW-11; `config.appLauncher.isEnabled()`)
+ *                                              // (APW-11; `config.appLauncher.isEnabled()`),
+ *        demoMode: boolean                     // env DEMO truthy (`config.demo.isEnabled()`)
  *      },
  *      auth:     { providers: { github: boolean, google: boolean, facebook: boolean } },
- *      limits:   { bodyLimit: string }         // env BODY_LIMIT || '1mb'
+ *      limits:   { bodyLimit: string },        // env BODY_LIMIT || '1mb'
+ *      demo:     { signUpUrl: string, sandboxTtlHours: number } | null  // null unless DEMO is on
  *    }
  *    Live values in this env: features.magicLinkEnabled=true,
  *      subscriptionsEnabled=true, anonymousAuthEnabled=false,
@@ -86,9 +88,11 @@ type PublicConfig = {
         anonymousAuthEnabled: boolean;
         emailVerificationRequired: boolean;
         appLauncherEnabled: boolean;
+        demoMode: boolean;
     };
     auth: { providers: { github: boolean; google: boolean; facebook: boolean } };
     limits: { bodyLimit: string };
+    demo: { signUpUrl: string; sandboxTtlHours: number } | null;
 };
 
 async function getConfig(request: APIRequestContext, token?: string): Promise<PublicConfig> {
@@ -106,7 +110,7 @@ test.describe('Feature flags — runtime config contract & consistency', () => {
     }) => {
         const cfg = await getConfig(request);
 
-        // Top-level shape is a strict allow-list of exactly four sections.
+        // Top-level shape is a strict allow-list of exactly five sections.
         expect(Object.keys(cfg).sort()).toEqual(['app', 'auth', 'demo', 'features', 'limits']);
 
         // app.* — branding strings, always present and non-empty.
@@ -122,13 +126,14 @@ test.describe('Feature flags — runtime config contract & consistency', () => {
         // installation switch, read through the same accessor as its route guard).
         // The exact-key assertion below is what made that addition visible here — e2e run
         // 35455975352, job 105940305971 — so the key is added, not the check loosened.
-        // `flow-config-public-contract.spec.ts` pins the same five keys.
+        // `flow-config-public-contract.spec.ts` pins the same six keys.
         const FLAG_KEYS = [
             'subscriptionsEnabled',
             'magicLinkEnabled',
             'anonymousAuthEnabled',
             'emailVerificationRequired',
             'appLauncherEnabled',
+            'demoMode',
         ] as const;
         expect(Object.keys(cfg.features).sort()).toEqual([...FLAG_KEYS].sort());
         for (const k of FLAG_KEYS) {

@@ -12,8 +12,8 @@ describe('assertDemoConfig', () => {
 		delete process.env.EVER_WORKS_CUSTOMERS_GITHUB_ORG;
 	});
 
-	afterAll(() => {
-		process.env = saved;
+	afterEach(() => {
+		process.env = { ...saved };
 	});
 
 	it('does not throw when the demo is off, whatever the org', () => {
@@ -38,9 +38,9 @@ describe('assertDemoConfig', () => {
 		expect(() => assertDemoConfig()).toThrow(/DEMO_GITHUB_ORG/);
 	});
 
-	it('throws when on and DEMO_GITHUB_ORG is empty even with git disabled', () => {
+	it('does not throw when on with git disabled and DEMO_GITHUB_ORG unset', () => {
 		process.env.DEMO = 'true';
-		expect(() => assertDemoConfig()).toThrow(/DEMO_GITHUB_ORG/);
+		expect(() => assertDemoConfig()).not.toThrow();
 	});
 
 	it('passes when on, git disabled and DEMO_GITHUB_ORG is set', () => {
