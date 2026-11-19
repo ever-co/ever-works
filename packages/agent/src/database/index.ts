@@ -91,6 +91,8 @@ export * from './repositories/tenant-email-address.repository';
 export * from './repositories/agent-email-assignment.repository';
 export * from './repositories/email-conversation.repository';
 export * from './repositories/email-message.repository';
+export * from './repositories/demo-github-repo.repository';
+export * from './repositories/demo-usage-counter.repository';
 export * from './repositories/external-identity.repository';
 // Agent email (AW-05) — per-Agent approval mode + send ceilings
 export * from './repositories/agent-inbox.repository';

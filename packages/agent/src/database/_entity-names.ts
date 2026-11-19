@@ -320,6 +320,9 @@ export const AGENT_ENTITY_NAMES: ReadonlyArray<string> = [
     'OrganizationInvitation',
     'OrganizationMember',
     'WorkKnowledgeChunk',
+    // Demo mode (DEMO=true) — AI quota counters and the GitHub repo ledger.
+    'DemoGithubRepo',
+    'DemoUsageCounter',
     'WorkKnowledgeChunkCoordinate',
     'WorkKnowledgeCitation',
     'WorkKnowledgeDocument',
