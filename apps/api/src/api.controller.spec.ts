@@ -27,6 +27,11 @@ jest.mock('./config/constants', () => {
             appLauncher: {
                 isEnabled: () => agentConfig.appLauncher.isEnabled(),
             },
+            demo: {
+                isEnabled: () => agentConfig.demo.isEnabled(),
+                signUpUrl: () => agentConfig.demo.signUpUrl(),
+                sandboxTtlHours: () => agentConfig.demo.sandboxTtlHours(),
+            },
         },
     };
 });
@@ -106,6 +111,9 @@ describe('APIController', () => {
             'MAGIC_LINK_ENABLED',
             'ANONYMOUS_AUTH_ENABLED',
             'EVER_WORKS_APP_LAUNCHER_ENABLED',
+            'DEMO',
+            'DEMO_SIGN_UP_URL',
+            'DEMO_SANDBOX_TTL_HOURS',
             'REQUIRE_EMAIL_VERIFICATION',
             'GH_CLIENT_ID',
             'GOOGLE_CLIENT_ID',
@@ -131,8 +139,22 @@ describe('APIController', () => {
 
         it('returns a stable shape with the expected top-level keys', () => {
             const r = controller.getConfig();
-            expect(Object.keys(r).sort()).toEqual(['app', 'auth', 'features', 'limits']);
+            expect(Object.keys(r).sort()).toEqual(['app', 'auth', 'demo', 'features', 'limits']);
             expect(r.app.name).toBe('Ever Works');
+        });
+
+        it('publishes features.demoMode = false and demo = null when DEMO is unset', () => {
+            const r = controller.getConfig();
+            expect(r.features.demoMode).toBe(false);
+            expect(r.demo).toBeNull();
+        });
+
+        it('publishes features.demoMode = true and the public demo block when DEMO=true', () => {
+            process.env.DEMO = 'true';
+            process.env.DEMO_SANDBOX_TTL_HOURS = '6';
+            const r = controller.getConfig();
+            expect(r.features.demoMode).toBe(true);
+            expect(r.demo).toEqual({ signUpUrl: 'https://app.ever.works/register', sandboxTtlHours: 6 });
         });
 
         it('honors NEXT_PUBLIC_SITE_DESCRIPTION before APP_DESCRIPTION', () => {

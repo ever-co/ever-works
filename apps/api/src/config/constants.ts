@@ -365,7 +365,8 @@ export const config = {
     },
 
     work: {
-        staleTimeoutHours: () => parseInt(process.env.WORK_STALE_TIMEOUT_HOURS || '2', 10),
+        // parseFloat: a demo instance may set a fractional value (0.5 = 30 minutes).
+        staleTimeoutHours: () => parseFloat(process.env.WORK_STALE_TIMEOUT_HOURS || '2'),
     },
 
     /**
@@ -638,5 +639,12 @@ export const config = {
      */
     appLauncher: {
         isEnabled: () => agentConfig.appLauncher.isEnabled(),
+    },
+
+    /** Platform demo mode: delegates to the agent accessors (one implementation). */
+    demo: {
+        isEnabled: () => agentConfig.demo.isEnabled(),
+        signUpUrl: () => agentConfig.demo.signUpUrl(),
+        sandboxTtlHours: () => agentConfig.demo.sandboxTtlHours(),
     },
 };

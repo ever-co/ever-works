@@ -109,6 +109,8 @@ export class APIController {
                 // That accessor is deliberately stricter than `truthy()`; the
                 // reasoning is in `config.appLauncher.isEnabled()`.
                 appLauncherEnabled: config.appLauncher.isEnabled(),
+                // Platform demo mode. Public-safe: a boolean only.
+                demoMode: config.demo.isEnabled(),
             },
             auth: {
                 providers: {
@@ -120,6 +122,11 @@ export class APIController {
             limits: {
                 bodyLimit: process.env.BODY_LIMIT || '1mb',
             },
+            // Public-safe: an https sign-up link and a number of hours. `null`
+            // when the demo is off, so the key set never changes.
+            demo: config.demo.isEnabled()
+                ? { signUpUrl: config.demo.signUpUrl(), sandboxTtlHours: config.demo.sandboxTtlHours() }
+                : null,
         };
     }
 }

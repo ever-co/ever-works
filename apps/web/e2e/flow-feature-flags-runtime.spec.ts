@@ -107,7 +107,7 @@ test.describe('Feature flags — runtime config contract & consistency', () => {
         const cfg = await getConfig(request);
 
         // Top-level shape is a strict allow-list of exactly four sections.
-        expect(Object.keys(cfg).sort()).toEqual(['app', 'auth', 'features', 'limits']);
+        expect(Object.keys(cfg).sort()).toEqual(['app', 'auth', 'demo', 'features', 'limits']);
 
         // app.* — branding strings, always present and non-empty.
         expect(typeof cfg.app).toBe('object');
