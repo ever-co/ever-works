@@ -365,8 +365,11 @@ export const config = {
     },
 
     work: {
-        // parseFloat: a demo instance may set a fractional value (0.5 = 30 minutes).
-        staleTimeoutHours: () => parseFloat(process.env.WORK_STALE_TIMEOUT_HOURS || '2'),
+        // Fractional hours allowed (0.5 = 30 minutes); unset, garbage or <= 0 falls back to 2.
+        staleTimeoutHours: () => {
+            const hours = parseFloat(process.env.WORK_STALE_TIMEOUT_HOURS || '');
+            return Number.isFinite(hours) && hours > 0 ? hours : 2;
+        },
     },
 
     /**
