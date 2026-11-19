@@ -335,6 +335,27 @@ const DEFAULT_CLASS_ANNOTATION = 'ingressclass.kubernetes.io/is-default-class';
 const CRD_API_VERSION = 'apiextensions.k8s.io/v1';
 
 /**
+ * The parts of a live Deployment the plugin reads back: its status (deploy
+ * verification) and its capacity (`deploy()` keeps replicas, requests and
+ * limits an operator raised on the live object).
+ */
+export interface LiveDeployment {
+	metadata?: { name?: string; namespace?: string };
+	spec?: {
+		replicas?: number;
+		template?: {
+			spec?: {
+				containers?: Array<{
+					name?: string;
+					resources?: { requests?: Record<string, string>; limits?: Record<string, string> };
+				}>;
+			};
+		};
+	};
+	status?: DeploymentStatusInput;
+}
+
+/**
  * The annotations that mark a `StorageClass` as the cluster default: the GA
  * one, and the beta one it replaced. kubelet's own `IsDefaultAnnotation`
  * accepts both, so a cluster that still carries only the beta annotation must
@@ -464,7 +485,7 @@ export class KubernetesApiService {
 		namespace: string,
 		name: string,
 		contextOverride?: string
-	): Promise<{ metadata?: { name?: string; namespace?: string }; status?: DeploymentStatusInput } | null> {
+	): Promise<LiveDeployment | null> {
 		const client = this.factory.createKubeConfig(kubeconfigYaml, contextOverride);
 		const appsApi = this.factory.appsV1Api(client);
 		try {

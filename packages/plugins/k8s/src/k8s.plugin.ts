@@ -1,3 +1,4 @@
+import { resolveImageDigest, type ImageDigestResolver } from './image-digest';
 import type {
 	AddDomainResult,
 	AppClusterCheckRequest,
@@ -47,6 +48,7 @@ import { readFileSync } from 'node:fs';
 import { K8sPluginError, buildSecretPattern, scrubError } from './errors.js';
 import type { K8sPluginErrorCode } from './errors.js';
 import { KubernetesApiService } from './k8s-api.service.js';
+import type { LiveDeployment } from './k8s-api.service.js';
 import { defaultIngressStrategyRegistry, IngressStrategyRegistry } from './ingress/strategy.registry.js';
 import { defaultRegistryProviderRegistry, RegistryProviderRegistry } from './registries/provider.registry.js';
 import { mapDeploymentToStatus } from './status.mapper.js';
@@ -162,7 +164,12 @@ const DEFAULT_NAMESPACE = 'ever-works';
 const DEFAULT_REPLICAS = 1;
 const CONTAINER_PORT = 3000;
 const DEFAULT_MEMORY_REQUEST = '512Mi';
-const DEFAULT_MEMORY_LIMIT = '2Gi';
+// A Next.js directory site holds its catalogue and rendered pages in memory. On
+// 2026-11-17 timetrack OOM-looped at 2Gi (1,057 restarts) and six more of the
+// thirteen k8s-works sites were raised to 3Gi by hand. 3Gi fits a worker (~7Gi
+// allocatable on k8s-works, ~7.6Gi on k8s-works-shared) with room for a second
+// pod during a surge-first rollout.
+const DEFAULT_MEMORY_LIMIT = '3Gi';
 
 interface ParsedQuantity {
 	numerator: bigint;
@@ -269,6 +276,68 @@ function effectiveMemorySizing(settings: KubernetesSettings): {
 	return { memoryRequest, memoryLimit: limited };
 }
 
+interface RenderedAppDeployment {
+	spec: {
+		replicas: number;
+		template: {
+			spec: {
+				containers: Array<{
+					name: string;
+					resources: { requests: Record<string, string>; limits: Record<string, string> };
+				}>;
+			};
+		};
+	};
+}
+
+/**
+ * A deploy never lowers the capacity a site is running with.
+ *
+ * The Deployment is server-side applied with `force`, so every field it renders
+ * (replicas, requests, limits) is taken back from whoever set it last. Capacity an
+ * operator raised by hand (`kubectl scale`, `kubectl patch` during an incident, an
+ * HPA) was therefore reset to the configured value on the next deploy, which
+ * brought the OOM loop or the overload straight back.
+ *
+ * So the configured values are a floor: where the live Deployment has MORE
+ * replicas, or a larger cpu/memory request or limit on the `app` container, that
+ * value is kept. Each pair stays valid (request <= limit) because both the live
+ * and the rendered pair are valid and each side takes the larger value. To lower a
+ * site, lower the live object (or its settings and the live object); a deploy
+ * then keeps whichever is higher.
+ *
+ * Mutates and returns `manifest`, the object `buildDeployment` just rendered.
+ */
+export function keepLiveCapacity(
+	manifest: Record<string, unknown>,
+	live: LiveDeployment | null | undefined
+): Record<string, unknown> {
+	const liveSpec = live?.spec;
+	if (!liveSpec) return manifest;
+	const rendered = manifest as unknown as RenderedAppDeployment;
+
+	const liveReplicas = liveSpec.replicas;
+	if (typeof liveReplicas === 'number' && Number.isInteger(liveReplicas) && liveReplicas > rendered.spec.replicas) {
+		rendered.spec.replicas = liveReplicas;
+	}
+
+	const liveApp = liveSpec.template?.spec?.containers?.find((container) => container?.name === 'app');
+	const app = rendered.spec.template.spec.containers.find((container) => container.name === 'app');
+	if (!liveApp?.resources || !app) return manifest;
+
+	for (const bucket of ['requests', 'limits'] as const) {
+		for (const resource of ['cpu', 'memory'] as const) {
+			const liveValue = liveApp.resources[bucket]?.[resource];
+			const liveQuantity = parseKubernetesQuantity(liveValue);
+			const renderedQuantity = parseKubernetesQuantity(app.resources[bucket]?.[resource]);
+			if (liveQuantity && renderedQuantity && compareQuantities(liveQuantity, renderedQuantity) > 0) {
+				app.resources[bucket][resource] = liveValue as string;
+			}
+		}
+	}
+	return manifest;
+}
+
 interface DeployOptions {
 	/** Short git SHA (or any deterministic version tag). */
 	gitSha?: string;
@@ -314,6 +383,13 @@ interface DeployOptions {
 	settingsOverride?: Record<string, unknown>;
 	/** Escape hatch for side-loaded images (kind e2e). Production leaves this unset -> 'Always'. */
 	imagePullPolicy?: 'Always' | 'IfNotPresent' | 'Never';
+	/**
+	 * Resolve the GHCR tag to its current digest and deploy `name@sha256:...` with
+	 * `IfNotPresent`, so a restart never has to reach the registry (`image-digest.ts`).
+	 * Falls back to the tag with `Always` when the digest cannot be resolved. Ignored when
+	 * `imagePullPolicy` is set or the registry is not GitHub.
+	 */
+	pinImageDigest?: boolean;
 	/** Full commit SHA — used only as a pod annotation to force a rollout, never as the image tag. */
 	revision?: string;
 }
@@ -609,6 +685,7 @@ function memberKubeconfigRefusal(finding: KubeconfigLocalCredentialFinding): K8s
 }
 
 export class KubernetesPlugin implements IPlugin, IDeploymentPlugin {
+	private readonly imageDigestResolver: ImageDigestResolver;
 	// `string`, not the literal: APW-10 lite's `k8s-apps-tier` plugin extends this class with its own id.
 	readonly id: string = 'k8s';
 	readonly name: string = 'Kubernetes';
@@ -731,6 +808,8 @@ export class KubernetesPlugin implements IPlugin, IDeploymentPlugin {
 			replicas: {
 				type: 'integer',
 				title: 'Replicas',
+				description:
+					'Pods serving the site. A deploy never scales a running site down: if the live Deployment has more replicas (raised by hand or by an autoscaler), it keeps them.',
 				default: DEFAULT_REPLICAS,
 				minimum: 1,
 				maximum: 10
@@ -762,7 +841,7 @@ export class KubernetesPlugin implements IPlugin, IDeploymentPlugin {
 				title: 'Memory limit',
 				default: DEFAULT_MEMORY_LIMIT,
 				description:
-					"Kubernetes quantity, e.g. '2Gi'. Must fit the target node: a limit larger than a node's allocatable memory schedules fine (requests are small) and then OOM-kills the pod climbing toward a ceiling that does not exist."
+					"Kubernetes quantity, e.g. '3Gi'. Must fit the target node: a limit larger than a node's allocatable memory schedules fine (requests are small) and then OOM-kills the pod climbing toward a ceiling that does not exist. A deploy keeps a larger limit found on the live Deployment."
 			},
 			// APW-07 T19 (plan §4.9:630-633). Declared here because `PluginSettingsService` resolves settings by
 			// iterating THIS schema's keys — a setting the schema does not declare is silently dropped before a
@@ -890,8 +969,11 @@ export class KubernetesPlugin implements IPlugin, IDeploymentPlugin {
 			dnsResolver?: DnsResolver;
 			/** Test seam for §6.1: the resolver `pinKubeconfigServer` resolves the cluster host with. */
 			clusterAddressResolver?: KubeconfigDnsResolver;
+			/** Test seam: resolves a tagged image to its digest for `pinImageDigest`. */
+			imageDigestResolver?: ImageDigestResolver;
 		} = {}
 	) {
+		this.imageDigestResolver = opts.imageDigestResolver ?? resolveImageDigest;
 		this.api = opts.api ?? new KubernetesApiService();
 		this.registries = opts.registries ?? defaultRegistryProviderRegistry;
 		this.ingressStrategies = opts.ingressStrategies ?? defaultIngressStrategyRegistry;
@@ -1182,6 +1264,22 @@ export class KubernetesPlugin implements IPlugin, IDeploymentPlugin {
 		const pullCreds = provider.pullSecretCredentials(registry, registryCtx, visibility);
 		let pullSecretName: string | undefined;
 
+		// Pin the image to the digest its tag points at now (opt-in): restarts then use the
+		// image already on the node. A failed lookup keeps the tag and `Always`.
+		let deployImage = image;
+		let imagePullPolicy = opts.imagePullPolicy;
+		if (opts.pinImageDigest && !opts.imagePullPolicy && registry.kind === 'github') {
+			const password = pullCreds ? (opts.githubReadPackagesToken ?? '') : '';
+			const digest = await this.imageDigestResolver(
+				image,
+				pullCreds && password ? { username: pullCreds.username, password } : undefined
+			);
+			if (digest) {
+				deployImage = `${imageBase}/${imageName}@${digest}`;
+				imagePullPolicy = 'IfNotPresent';
+			}
+		}
+
 		try {
 			// Resolve request and limit as a pair before the first write. A legacy
 			// managed Work may combine a sub-floor request with an even lower
@@ -1235,12 +1333,12 @@ export class KubernetesPlugin implements IPlugin, IDeploymentPlugin {
 				workId: config.projectName,
 				workSlug: slug,
 				namespace,
-				image,
+				image: deployImage,
 				replicas,
 				containerPort: CONTAINER_PORT,
 				pullSecretName,
 				envFromSecretName: runtimeEnvSecretName,
-				imagePullPolicy: opts.imagePullPolicy,
+				imagePullPolicy,
 				// Per-Work sizing, resolved through the same settings merge as the
 				// rest (settingsOverride layers the work tier over the plugin's own).
 				cpuRequest: settings.cpuRequest,
@@ -1267,7 +1365,10 @@ export class KubernetesPlugin implements IPlugin, IDeploymentPlugin {
 				tlsIssuer: settings.tlsIssuer,
 				ingressController: controller
 			};
-			const deploymentManifest = buildDeployment(renderInputs);
+			// Read before writing: an error here fails the deploy rather than
+			// applying configured values blind over capacity raised by hand.
+			const liveDeployment = await this.api.getDeployment(kubeconfig, namespace, slug, settings.kubeContext);
+			const deploymentManifest = keepLiveCapacity(buildDeployment(renderInputs), liveDeployment);
 			const serviceManifest = buildService(renderInputs);
 			const ingressManifest = buildIngress(renderInputs, strategy);
 
