@@ -1,0 +1,53 @@
+import { DemoModelNotAllowedError } from './demo-errors';
+
+/**
+ * Platform demo mode — the free-model rule `AiFacadeService` applies to every
+ * call on a demo instance: the provider is always OpenRouter and the model id
+ * always ends in `:free`. A stale or missing free id fails closed; it never
+ * falls through to a paid model.
+ */
+
+/** The only AI provider a demo instance calls. */
+export const DEMO_AI_PROVIDER_ID = 'openrouter';
+
+const FREE_SUFFIX = ':free';
+
+/** A model id is free iff it ends with `:free` (and names something before it). Nothing else counts. */
+export function isFreeModelId(id: string | undefined): boolean {
+    return typeof id === 'string' && id.length > FREE_SUFFIX.length && id.endsWith(FREE_SUFFIX);
+}
+
+/**
+ * The model a demo call may send: `requested` when it is free, else the
+ * `tier`'s configured model, else `defaultModel` — each only when free.
+ * Throws {@link DemoModelNotAllowedError} when none of them is.
+ */
+export function pickFreeModel(
+    requested: string | undefined,
+    settings: Record<string, unknown>,
+    tier?: 'simple' | 'medium' | 'complex',
+): string {
+    const candidates = [
+        requested,
+        tier ? settings[`${tier}Model`] : undefined,
+        settings.defaultModel,
+    ];
+    for (const candidate of candidates) {
+        if (typeof candidate === 'string' && isFreeModelId(candidate)) return candidate;
+    }
+    throw new DemoModelNotAllowedError(requested ?? '');
+}
+
+/**
+ * The provider answered that the model does not exist or has no endpoint —
+ * how OpenRouter reports a free model it has withdrawn.
+ */
+const MODEL_UNAVAILABLE = /model.*(not found|does not exist)|No endpoints found|not a valid model/i;
+
+/** True when `error` (or the error it wraps) is a provider's "model not found" answer. */
+export function isModelUnavailableError(error: unknown): boolean {
+    if (!(error instanceof Error)) return false;
+    if (MODEL_UNAVAILABLE.test(error.message)) return true;
+    const cause = (error as { cause?: unknown }).cause;
+    return cause instanceof Error && MODEL_UNAVAILABLE.test(cause.message);
+}
