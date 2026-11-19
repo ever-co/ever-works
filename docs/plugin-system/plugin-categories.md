@@ -64,7 +64,7 @@ Ordered the way the dashboard orders them at `/plugins`.
 | `ai-provider`           | Provides AI model access for content generation                          | OpenAI, Anthropic, Google, Grok, Groq, Mistral, Ollama, LM Studio, vLLM, OpenRouter, Vercel AI Gateway (11)                                                                                               |
 | `search`                | Web search for discovering work items                                    | Tavily, Exa, SerpAPI, Brave, Perplexity, Bright Data, Firecrawl, Valyu, Linkup (9)                                                                                                                        |
 | `content-extractor`     | Extracts structured content from URLs                                    | Local Content Extractor, Jina, Notion Extractor, PDF Extractor, OfficeCLI Extractor, Scrapfly (6)                                                                                                         |
-| `screenshot`            | Captures website screenshots                                             | ScreenshotOne, Urlbox (2). Scrapfly also serves this capability from the `content-extractor` category                                                                                                     |
+| `screenshot`            | Captures website screenshots                                             | Gotenberg (default, self-hosted), ScreenshotOne, Urlbox (3). Scrapfly also serves this capability from the `content-extractor` category                                                                   |
 | `git-provider`          | Git hosting API operations and local git                                 | GitHub (1)                                                                                                                                                                                                |
 | `deployment`            | Deploys generated works to hosting platforms                             | Vercel, Kubernetes (2)                                                                                                                                                                                    |
 | `data-source`           | Imports items from external data APIs                                    | Apify (1)                                                                                                                                                                                                 |
@@ -101,28 +101,28 @@ They are all valid manifest values — `isPluginCategory('theme')` returns `true
 
 Every category that ships a plugin has a user-facing page describing what it does in the product, not just in the manifest.
 
-| Category                | Read next                                                                                                               |
-| ----------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| `ai-provider`           | [AI Provider Plugins](./ai-provider-plugins.md) · [Bring your own AI provider](../guides/bring-your-own-ai-provider.md) |
-| `search`                | [Search Plugins](./search-plugins.md)                                                                                   |
-| `content-extractor`     | [Content Extraction Plugins](./content-extraction-plugins.md)                                                           |
-| `screenshot`            | [ScreenshotOne](./screenshotone-plugin.md) · [Urlbox](./urlbox-plugin.md)                                               |
-| `git-provider`          | [GitHub Plugin](./github-plugin.md) · [Git Operations](../features/git-operations.md)                                   |
-| `deployment`            | [Deployment Plugins](./deployment-plugins.md) · [Kubernetes Deployment](../features/k8s-deployment.md)                  |
-| `data-source`           | [Data Source Plugins](./data-source-plugins.md)                                                                         |
-| `pipeline`              | [Pipeline Plugins](./pipeline-plugins.md)                                                                               |
-| `storage`               | [Storage Backends](../features/storage-backends.md)                                                                     |
-| `database`              | [Managed Hosting](../features/managed-hosting.md)                                                                       |
-| `vector-store`          | [Knowledge Base](../features/knowledge-base.md)                                                                         |
-| `dns`                   | [Custom Domains](../features/custom-domains.md) · [Managed Hosting](../features/managed-hosting.md)                     |
-| `email-provider`        | [Agent Email & Inboxes](../features/agent-email.md) · [Notifications](../features/notifications.md)                     |
-| `notification-channel`  | [Notifications](../features/notifications.md)                                                                           |
-| `connector`             | [Connectors](../features/connectors.md) · [Integrations](../features/integrations.md)                                   |
-| `job-runtime`           | [Job Runtimes](../features/job-runtimes.md) · [Workers](../features/workers.md)                                         |
-| `secret-store-resolver` | [Secret Stores](../features/secret-stores.md)                                                                           |
-| `metrics`               | [Goals](../features/goals.md)                                                                                           |
-| `utility`               | [Built-in Plugins](./built-in-plugins.md)                                                                               |
-| Everything else         | [Plugins](../features/plugins.md) — the dashboard view of all twenty-seven                                              |
+| Category                | Read next                                                                                                                |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `ai-provider`           | [AI Provider Plugins](./ai-provider-plugins.md) · [Bring your own AI provider](../guides/bring-your-own-ai-provider.md)  |
+| `search`                | [Search Plugins](./search-plugins.md)                                                                                    |
+| `content-extractor`     | [Content Extraction Plugins](./content-extraction-plugins.md)                                                            |
+| `screenshot`            | [Gotenberg](./gotenberg-plugin.md) (default) · [ScreenshotOne](./screenshotone-plugin.md) · [Urlbox](./urlbox-plugin.md) |
+| `git-provider`          | [GitHub Plugin](./github-plugin.md) · [Git Operations](../features/git-operations.md)                                    |
+| `deployment`            | [Deployment Plugins](./deployment-plugins.md) · [Kubernetes Deployment](../features/k8s-deployment.md)                   |
+| `data-source`           | [Data Source Plugins](./data-source-plugins.md)                                                                          |
+| `pipeline`              | [Pipeline Plugins](./pipeline-plugins.md)                                                                                |
+| `storage`               | [Storage Backends](../features/storage-backends.md)                                                                      |
+| `database`              | [Managed Hosting](../features/managed-hosting.md)                                                                        |
+| `vector-store`          | [Knowledge Base](../features/knowledge-base.md)                                                                          |
+| `dns`                   | [Custom Domains](../features/custom-domains.md) · [Managed Hosting](../features/managed-hosting.md)                      |
+| `email-provider`        | [Agent Email & Inboxes](../features/agent-email.md) · [Notifications](../features/notifications.md)                      |
+| `notification-channel`  | [Notifications](../features/notifications.md)                                                                            |
+| `connector`             | [Connectors](../features/connectors.md) · [Integrations](../features/integrations.md)                                    |
+| `job-runtime`           | [Job Runtimes](../features/job-runtimes.md) · [Workers](../features/workers.md)                                          |
+| `secret-store-resolver` | [Secret Stores](../features/secret-stores.md)                                                                            |
+| `metrics`               | [Goals](../features/goals.md)                                                                                            |
+| `utility`               | [Built-in Plugins](./built-in-plugins.md)                                                                                |
+| Everything else         | [Plugins](../features/plugins.md) — the dashboard view of all twenty-seven                                               |
 
 ### Dashboard grouping and display order
 

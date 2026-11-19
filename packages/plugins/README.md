@@ -69,11 +69,12 @@ Turn URLs and documents into structured text for downstream generation.
 
 Capture page screenshots for items and previews.
 
-| Plugin                                   | Description                         |
-| ---------------------------------------- | ----------------------------------- |
-| [screenshotone](screenshotone/README.md) | ScreenshotOne                       |
-| [urlbox](urlbox/README.md)               | Urlbox                              |
-| [scrapfly](scrapfly/README.md)           | Scrapfly (also a content-extractor) |
+| Plugin                                   | Description                                    |
+| ---------------------------------------- | ---------------------------------------------- |
+| [gotenberg](gotenberg/README.md)         | Gotenberg — self-hosted, open source (default) |
+| [screenshotone](screenshotone/README.md) | ScreenshotOne (paid, opt-in)                   |
+| [urlbox](urlbox/README.md)               | Urlbox                                         |
+| [scrapfly](scrapfly/README.md)           | Scrapfly (also a content-extractor)            |
 
 ### Git providers (`git-provider`)
 

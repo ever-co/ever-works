@@ -128,7 +128,7 @@ Plugins are standalone ESM packages in `packages/plugins/`. Each plugin:
 - **ai-gateway**: openrouter (default), vercel-ai-gateway
 - **search**: tavily (default), brave, exa, serpapi, perplexity, brightdata, firecrawl, jina, valyu, linkup
 - **content-extractor**: local-content-extractor (default), notion-extractor, pdf-extractor, scrapfly
-- **screenshot**: screenshotone, urlbox, scrapfly
+- **screenshot**: gotenberg (default, self-hosted), screenshotone, urlbox, scrapfly
 - **git-provider**: github (default + OAuth)
 - **deployment**: vercel (default)
 - **data-source**: apify

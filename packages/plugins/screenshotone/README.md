@@ -14,6 +14,12 @@ ScreenshotOne screenshot plugin for Ever Works - capture website screenshots usi
 | Built-in     | no              |
 | Auto-enable  | no              |
 
+> **Optional and paid.** The default screenshot provider is the self-hosted, open-source
+> [Gotenberg plugin](../gotenberg/README.md). ScreenshotOne is an opt-in alternative for users who
+> want its hosted extras (ad, tracker and cookie-banner blocking, provider-side caching) and pay for
+> them: enable it under Settings → Plugins with your own keys and pick it as a Work's screenshot
+> provider. Nothing in the platform needs `PLUGIN_SCREENSHOTONE_*` to be set.
+
 ## What does ScreenshotOne do?
 
 ScreenshotOne is a screenshot capture API. When work items include source URLs, this plugin automatically generates preview images by capturing a screenshot of each page.
