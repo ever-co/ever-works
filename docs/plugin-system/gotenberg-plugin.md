@@ -61,6 +61,12 @@ sequenceDiagram
 
 Without `SCREENSHOT_IMAGE_BASE_URL` the capture still happens but items get no image, as before. The API's own capture endpoint (`POST /api/screenshot/capture`) returns the image as base64 either way.
 
+Good to know:
+
+- **Snapshots.** A URL always means the same capture, so it is cached as immutable. When the CDN evicts it, the next request renders the page as it is _then_; there is no way to refresh one sooner (the same holds for ScreenshotOne's cached render URLs).
+- **Abuse.** The route is public but renders only signed URLs, never a private or non-HTTP(S) target (checked when minting and again when rendering). A query string bypasses the CDN, so each API process also caches renders for 10 minutes (failures for 1), shares one render among concurrent requests, and the route is throttled per client. Gotenberg itself caps concurrent renders per pod (`--chromium-max-concurrency`).
+- **Key rotation.** Changing `SCREENSHOT_IMAGE_SIGNING_SECRET` (or `PLATFORM_ENCRYPTION_KEY`, its fallback) invalidates every signed URL already stored in Work items: they answer 404 until the items are regenerated.
+
 ## Configuration
 
 Settings are operator configuration. The base URL is an `x-envVar` field without `x-secret`, which the settings service never accepts from a user or Work write, so nobody can point the API's server-side requests at another host.

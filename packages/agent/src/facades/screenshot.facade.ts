@@ -46,6 +46,22 @@ export interface SignedScreenshotImageResult {
     readonly contentType: string;
 }
 
+/**
+ * The public image route sits behind a CDN, but a query string makes every
+ * request a CDN miss, so the same signed URL could be made to re-render over
+ * and over. Each API process keeps recent renders (and recent failures, for
+ * less time) and shares one render among concurrent requests for a URL.
+ */
+const RENDER_CACHE_TTL_MS = 10 * 60_000;
+const RENDER_FAILURE_TTL_MS = 60_000;
+const RENDER_CACHE_MAX_ENTRIES = 64;
+const RENDER_CACHE_MAX_BYTES = 32 * 1024 * 1024;
+
+interface CachedRender {
+    readonly result: SignedScreenshotImageResult | null;
+    readonly expiresAt: number;
+}
+
 @Injectable()
 export class ScreenshotFacadeService extends BaseFacadeService implements IScreenshotFacade {
     protected readonly logger = new Logger(ScreenshotFacadeService.name);
@@ -58,6 +74,14 @@ export class ScreenshotFacadeService extends BaseFacadeService implements IScree
      */
     private readonly imageUrls: ScreenshotImageUrlSigner;
     private warnedSigningDisabled = false;
+
+    /** Recent signed renders by segment, oldest first (see RENDER_CACHE_*). */
+    private readonly renderCache = new Map<string, CachedRender>();
+    private renderCacheBytes = 0;
+    private readonly rendersInFlight = new Map<
+        string,
+        Promise<SignedScreenshotImageResult | null>
+    >();
 
     constructor(
         registry: PluginRegistryService,
@@ -134,11 +158,7 @@ export class ScreenshotFacadeService extends BaseFacadeService implements IScree
         }
 
         // A bytes-only provider has no URL of its own: hand out a signed URL
-        // that renders on first request. The target is checked here too, so
-        // no URL is ever minted for a private or non-HTTP(S) target.
-        if (!isSafeWebhookUrl(options.url)) {
-            return null;
-        }
+        // that renders on first request (never for an unsafe target).
         return this.signedImageUrl(plugin.id, options);
     }
 
@@ -151,11 +171,42 @@ export class ScreenshotFacadeService extends BaseFacadeService implements IScree
      * There is no user or Work here: the provider runs with its global
      * (operator) settings, and nothing is charged to anyone. Only a provider
      * enabled without a user — a system plugin such as Gotenberg — resolves.
+     *
+     * The target is checked again (`isSafeWebhookUrl`) whatever the provider
+     * does, so a signing bug alone cannot open a private address. Renders are
+     * cached per process for 10 minutes (failures for 1), and concurrent
+     * requests for one URL share a render: a query string defeats the CDN,
+     * not this.
      */
     async renderSignedImage(segment: string): Promise<SignedScreenshotImageResult | null> {
         const signed = this.imageUrls.verify(segment);
-        if (!signed) return null;
+        if (!signed || !isSafeWebhookUrl(signed.url)) return null;
 
+        const cached = this.renderCache.get(segment);
+        if (cached && cached.expiresAt > Date.now()) {
+            // Most recently used last.
+            this.renderCache.delete(segment);
+            this.renderCache.set(segment, cached);
+            return cached.result;
+        }
+
+        const inFlight = this.rendersInFlight.get(segment);
+        if (inFlight) return inFlight;
+
+        const render = this.renderVerified(signed)
+            .catch(() => null)
+            .then((result) => {
+                this.rememberRender(segment, result);
+                return result;
+            })
+            .finally(() => this.rendersInFlight.delete(segment));
+        this.rendersInFlight.set(segment, render);
+        return render;
+    }
+
+    private async renderVerified(
+        signed: NonNullable<ReturnType<ScreenshotImageUrlSigner['verify']>>,
+    ): Promise<SignedScreenshotImageResult | null> {
         let plugin: IScreenshotPlugin;
         try {
             plugin = await this.resolvePlugin<IScreenshotPlugin>(signed.pluginId);
@@ -198,6 +249,34 @@ export class ScreenshotFacadeService extends BaseFacadeService implements IScree
             image: result.imageBuffer,
             contentType: screenshotContentType(signed.format),
         };
+    }
+
+    /** Keep a render (or a failure, briefly) within the entry and byte limits. */
+    private rememberRender(segment: string, result: SignedScreenshotImageResult | null): void {
+        this.forgetRender(segment);
+        const size = result?.image.length ?? 0;
+        if (size > RENDER_CACHE_MAX_BYTES) return;
+
+        const ttl = result ? RENDER_CACHE_TTL_MS : RENDER_FAILURE_TTL_MS;
+        this.renderCache.set(segment, { result, expiresAt: Date.now() + ttl });
+        this.renderCacheBytes += size;
+
+        for (const oldest of this.renderCache.keys()) {
+            if (
+                this.renderCache.size <= RENDER_CACHE_MAX_ENTRIES &&
+                this.renderCacheBytes <= RENDER_CACHE_MAX_BYTES
+            ) {
+                break;
+            }
+            this.forgetRender(oldest);
+        }
+    }
+
+    private forgetRender(segment: string): void {
+        const entry = this.renderCache.get(segment);
+        if (!entry) return;
+        this.renderCacheBytes -= entry.result?.image.length ?? 0;
+        this.renderCache.delete(segment);
     }
 
     isAvailable(): boolean {
@@ -291,7 +370,16 @@ export class ScreenshotFacadeService extends BaseFacadeService implements IScree
         return { pluginId: plugin.id, result };
     }
 
+    /**
+     * A signed public URL for this capture, or `null` when signing is off or
+     * the target is not a public HTTP(S) URL: no URL is ever minted for a
+     * private, loopback, link-local or non-HTTP(S) target, whatever the
+     * provider did with it.
+     */
     private signedImageUrl(pluginId: string, options: ScreenshotCaptureOptions): string | null {
+        if (!isSafeWebhookUrl(options.url)) {
+            return null;
+        }
         if (!this.imageUrls.isEnabled()) {
             if (!this.warnedSigningDisabled) {
                 this.warnedSigningDisabled = true;

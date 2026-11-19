@@ -70,5 +70,8 @@ describe('ScreenshotImageController', () => {
             controller.serve('x'.repeat(4097), res as unknown as Response),
         ).rejects.toBeInstanceOf(NotFoundException);
         expect(screenshotFacade.renderSignedImage).not.toHaveBeenCalled();
+        // Short-circuits before any response header is committed.
+        expect(res.status).not.toHaveBeenCalled();
+        expect(res.set).not.toHaveBeenCalled();
     });
 });

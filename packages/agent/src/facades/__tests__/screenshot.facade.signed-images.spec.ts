@@ -148,6 +148,15 @@ describe('ScreenshotFacadeService — signed images for bytes-only providers', (
             expect(result.primaryImage).toBeUndefined();
         });
 
+        it('never mints a URL for an unsafe target, even when a provider returned bytes for it', async () => {
+            const result = await makeService().getSmartImage(
+                { url: 'http://169.254.169.254/latest/meta-data/' },
+                facadeOptions,
+            );
+
+            expect(result.primaryImage).toBeUndefined();
+        });
+
         it('gives no image, as before, when signing is not configured', async () => {
             const service = makeService(new ScreenshotImageUrlSigner(undefined, undefined));
 
@@ -269,6 +278,117 @@ describe('ScreenshotFacadeService — signed images for bytes-only providers', (
             })!;
 
             expect(await makeService().renderSignedImage(segmentOf(minted))).toBeNull();
+        });
+
+        it('refuses a correctly signed unsafe target before any provider sees it', async () => {
+            const minted = signer.createUrl({
+                pluginId: 'gotenberg',
+                url: 'http://169.254.169.254/latest/meta-data/',
+                viewportWidth: 1280,
+                viewportHeight: 800,
+                format: 'png',
+                fullPage: false,
+            })!;
+
+            expect(await makeService().renderSignedImage(segmentOf(minted))).toBeNull();
+            expect(plugin.capture).not.toHaveBeenCalled();
+        });
+
+        describe('render cache', () => {
+            const mint = (url: string) =>
+                segmentOf(
+                    signer.createUrl({
+                        pluginId: 'gotenberg',
+                        url,
+                        viewportWidth: 1280,
+                        viewportHeight: 800,
+                        format: 'png',
+                        fullPage: false,
+                    })!,
+                );
+
+            afterEach(() => jest.restoreAllMocks());
+
+            it('serves a repeated request from the cache, so a cache-busting query cannot force renders', async () => {
+                const service = makeService();
+                const segment = mint('https://example.com');
+
+                const first = await service.renderSignedImage(segment);
+                const second = await service.renderSignedImage(segment);
+
+                expect(second).toEqual(first);
+                expect(plugin.capture).toHaveBeenCalledTimes(1);
+            });
+
+            it('shares one render among concurrent requests', async () => {
+                let finish!: (r: ScreenshotResult) => void;
+                plugin.capture.mockReturnValueOnce(new Promise((resolve) => (finish = resolve)));
+                const service = makeService();
+                const segment = mint('https://example.com');
+
+                const both = Promise.all([
+                    service.renderSignedImage(segment),
+                    service.renderSignedImage(segment),
+                ]);
+                // Let both requests reach the in-flight render before it ends.
+                await new Promise((resolve) => setImmediate(resolve));
+                finish({ success: true, imageBuffer: PNG });
+
+                const [a, b] = await both;
+                expect(a).toEqual({ image: PNG, contentType: 'image/png' });
+                expect(b).toBe(a);
+                expect(plugin.capture).toHaveBeenCalledTimes(1);
+            });
+
+            it('remembers a failure for a minute, then tries again', async () => {
+                const now = jest.spyOn(Date, 'now').mockReturnValue(1_000_000);
+                plugin.capture.mockResolvedValue({ success: false, error: 'site down' });
+                const service = makeService();
+                const segment = mint('https://example.com');
+
+                expect(await service.renderSignedImage(segment)).toBeNull();
+                expect(await service.renderSignedImage(segment)).toBeNull();
+                expect(plugin.capture).toHaveBeenCalledTimes(1);
+
+                now.mockReturnValue(1_000_000 + 61_000);
+                plugin.capture.mockResolvedValue({ success: true, imageBuffer: PNG });
+                expect(await service.renderSignedImage(segment)).toEqual({
+                    image: PNG,
+                    contentType: 'image/png',
+                });
+                expect(plugin.capture).toHaveBeenCalledTimes(2);
+            });
+
+            it('re-renders after ten minutes', async () => {
+                const now = jest.spyOn(Date, 'now').mockReturnValue(5_000_000);
+                const service = makeService();
+                const segment = mint('https://example.com');
+
+                await service.renderSignedImage(segment);
+                now.mockReturnValue(5_000_000 + 9 * 60_000);
+                await service.renderSignedImage(segment);
+                expect(plugin.capture).toHaveBeenCalledTimes(1);
+
+                now.mockReturnValue(5_000_000 + 11 * 60_000);
+                await service.renderSignedImage(segment);
+                expect(plugin.capture).toHaveBeenCalledTimes(2);
+            });
+
+            it('keeps at most 64 renders, dropping the least recently used', async () => {
+                const service = makeService();
+                const segments = Array.from({ length: 65 }, (_, i) =>
+                    mint(`https://example.com/${i}`),
+                );
+
+                for (const segment of segments) await service.renderSignedImage(segment);
+                expect(plugin.capture).toHaveBeenCalledTimes(65);
+
+                // The newest is still cached; the oldest was dropped.
+                await service.renderSignedImage(segments[64]);
+                expect(plugin.capture).toHaveBeenCalledTimes(65);
+                await service.renderSignedImage(segments[0]);
+                expect(plugin.capture).toHaveBeenCalledTimes(66);
+            });
         });
 
         it('renders nothing when the capture fails or throws', async () => {
