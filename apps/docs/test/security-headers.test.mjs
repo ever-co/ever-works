@@ -50,33 +50,31 @@ function stripComment(line) {
 }
 
 /**
- * The server block's own directives and each location's directives, comments dropped. Only one
- * nesting level of locations is expected (the file has no nested locations).
+ * The `server` block's own directives and the directives of each location directly inside it,
+ * comments dropped. Blocks are tracked on a stack, so an enclosing `http { }` or a block nested in
+ * a location (`if`, `limit_except`) does not shift what counts as the server block.
  */
 function parseBlocks(source) {
 	const server = [];
 	const locations = [];
-	let depth = 0;
-	let current;
+	const stack = [];
 	for (const raw of source.split('\n')) {
 		const line = stripComment(raw).trim().replace(/\s+/g, ' ');
 		if (!line) continue;
-		if (line.startsWith('location ') && line.endsWith('{')) {
-			current = { name: line.slice(0, -1).trim(), lines: [] };
-			locations.push(current);
-			depth++;
-			continue;
-		}
 		if (line.endsWith('{')) {
-			depth++;
+			const name = line.slice(0, -1).trim();
+			const block = { name, lines: [] };
+			if (name.startsWith('location ') && stack.at(-1)?.name === 'server') locations.push(block);
+			stack.push(block);
 			continue;
 		}
 		if (line === '}') {
-			depth--;
-			if (depth === 1) current = undefined;
+			stack.pop();
 			continue;
 		}
-		(current ? current.lines : server).push(line);
+		const top = stack.at(-1);
+		if (top?.name === 'server') server.push(line);
+		else if (top) top.lines.push(line);
 	}
 	return { server, locations };
 }
