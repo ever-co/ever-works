@@ -314,6 +314,15 @@ export class PipelineFacadeService {
                     userId: ctx.userId,
                     providerOverride: ctx.providerOverrides?.screenshot,
                 }),
+            // Which provider resolves for THIS Work (null: none). `isAvailable` only
+            // says a screenshot plugin is loaded somewhere on the instance; the
+            // image-capture step skips when none resolves here.
+            getActiveProviderName: (_facadeOptions: FacadeOptions): Promise<string | null> =>
+                facade.getActiveProviderName({
+                    workId: ctx.workId,
+                    userId: ctx.userId,
+                    providerOverride: ctx.providerOverrides?.screenshot,
+                }),
             isAvailable: () => facade.isAvailable(),
             isConfigured: () => facade.isConfigured(),
         };

@@ -445,6 +445,26 @@ describe('PipelineFacadeService', () => {
             expect(ctx.screenshotFacade.isAvailable()).toBe(true);
             expect(ctx.screenshotFacade.isConfigured()).toBe(true);
         });
+
+        // The image-capture step asks it whether a provider resolves for THIS Work
+        // (`isAvailable` only says one is loaded somewhere on the instance) and skips
+        // the step when none does, rather than failing one capture per item.
+        it('getActiveProviderName answers for the bound {workId, userId, providerOverride}', async () => {
+            screenshotFacade.getActiveProviderName = jest.fn().mockResolvedValue(null);
+            const ctx = service.createStepExecutionContext(
+                makeWork() as any,
+                { screenshot: 'urlbox' } as any,
+            );
+
+            await expect(
+                ctx.screenshotFacade.getActiveProviderName!({} as any),
+            ).resolves.toBeNull();
+            expect(screenshotFacade.getActiveProviderName).toHaveBeenCalledWith({
+                workId: 'w1',
+                userId: 'u1',
+                providerOverride: 'urlbox',
+            });
+        });
     });
 
     describe('bound content-extractor facade', () => {

@@ -84,6 +84,13 @@ import {
 } from '@src/ever-works-providers';
 import { config } from '@src/config';
 import {
+    DEMO_WORK_PROVIDERS,
+    assertDemoWorkCapacity,
+    demoWebsiteRepositoryName,
+    isDemoSandboxUser,
+    needsDemoRepositoryAtGeneration,
+} from '../demo';
+import {
     getWorkCapabilities,
     isRepositoryWorkKind,
     normalizeWorkRepoDeclaredCommandPolicy,
@@ -397,11 +404,22 @@ export class WorkLifecycleService {
      *     value, since repository operations still read `work.gitProvider`.
      *     Without this, picking `ever-works-git` in the wizard had no
      *     runtime effect.
+     *
+     * A demo sandbox (platform demo mode) gets `DEMO_WORK_PROVIDERS` whatever
+     * the DTO or its onboarding state says: Ever Works Git storage (so a
+     * `demo-` repository in the customer org) and no deploy provider.
      */
     private async resolveProviderDefaults(
         dto: Pick<CreateWorkDto, 'storageProvider' | 'deployProvider' | 'gitProvider'>,
-        userId: string,
-    ): Promise<{ storageProvider: string; deployProvider: string; gitProvider: string }> {
+        creator: User,
+    ): Promise<{ storageProvider: string; deployProvider: string | null; gitProvider: string }> {
+        if (isDemoSandboxUser(creator)) {
+            const { storageProvider, deployProvider } = DEMO_WORK_PROVIDERS;
+            const gitProvider = gitProviderFromStorageChoice(storageProvider) ?? 'github';
+            return { storageProvider, deployProvider, gitProvider };
+        }
+
+        const userId = creator.id;
         let onboardingState: OnboardingWizardStateV2 | null | undefined;
         try {
             const user = await this.userRepository.findById(userId);
@@ -635,7 +653,7 @@ export class WorkLifecycleService {
 
         const { storageProvider, deployProvider, gitProvider } = await this.resolveProviderDefaults(
             createWorkDto,
-            user.id,
+            user,
         );
         // `k8s-apps-tier` ("Ever Works Apps (managed)") deploys App Works only
         // (an App Work returned above, through its own create path). Stored on
@@ -653,6 +671,15 @@ export class WorkLifecycleService {
         // create-work side-effects (repo creation etc.) kick in.
         if (deployProvider === 'ever-works' && !repositorySource) {
             await this.everWorksDeployQuota.assertWithinQuota(user.id);
+        }
+
+        // Platform demo mode — a sandbox has at most DEMO_MAX_WORKS_PER_SANDBOX
+        // Works with a repository. Refused before the repository is made.
+        const createsRepository =
+            !!repositorySource ||
+            (storageProvider === 'ever-works-git' && this.everWorksGit.isEnabled());
+        if (createsRepository && isDemoSandboxUser(user)) {
+            await this.assertDemoRepositoryCapacity(user.id);
         }
 
         // The shape we hand to `workRepository.create()` is a subset of
@@ -754,19 +781,7 @@ export class WorkLifecycleService {
             }
 
             workData.id = workId;
-            workData.owner = everWorksRepo!.owner;
-            workData.organization = true;
-            workData.sourceRepository = {
-                url: everWorksRepo!.htmlUrl,
-                owner: everWorksRepo!.owner,
-                repo: everWorksRepo!.repo,
-                type: 'data_repo',
-                importedAt: new Date(),
-                relatedRepositories: {
-                    work: { owner: everWorksRepo!.owner, repo: everWorksRepo!.repo },
-                    data: { owner: everWorksRepo!.owner, repo: everWorksRepo!.repo },
-                },
-            };
+            Object.assign(workData, this.managedRepositoryFields(everWorksRepo!));
         }
 
         try {
@@ -1551,6 +1566,49 @@ export class WorkLifecycleService {
     }
 
     /**
+     * Platform demo mode — Generate on a Work with Ever Works Git storage and no
+     * repository yet (the draft directory Work the sandbox seeder creates without
+     * one) provisions the repository first, exactly as `createWork` does at create
+     * time: `EverWorksGitProvider` names it from the owner's username (so
+     * `demo-<hex>-<slug>`, the prefix asserted) in the customer org, and the Work
+     * stores it under the same roles. Without this the data generator would make
+     * `<slug>-data` through the git facade under whatever account the platform
+     * token belongs to. A demo sandbox's cap is checked first.
+     *
+     * Returns the Work as stored now, or `work` itself when it needs nothing (the
+     * demo off, other storage, or a repository already there).
+     */
+    async provisionDemoRepositoryForGeneration(work: Work, user: User): Promise<Work> {
+        if (!needsDemoRepositoryAtGeneration(work)) {
+            return work;
+        }
+        if (isDemoSandboxUser(user)) {
+            await this.assertDemoRepositoryCapacity(work.userId);
+        }
+
+        const owner = work.userId === user.id ? user : work.user;
+        let repo: EverWorksGitRepoRef;
+        try {
+            repo = await this.everWorksGit.createRepository({
+                work: {
+                    id: work.id,
+                    slug: work.slug,
+                    userId: work.userId,
+                    userSlug: owner?.username,
+                    description: work.description,
+                },
+            });
+        } catch (error) {
+            this.rethrowEverWorksGitError(error);
+        }
+
+        const fields = this.managedRepositoryFields(repo);
+        const stored = await this.workRepository.update(work.id, fields);
+        this.logger.log(`Provisioned ${repo.fullName} for demo Work ${work.id} at generation`);
+        return stored ?? Object.assign(work, fields);
+    }
+
+    /**
      * EW-665 (Tenants & Organizations Phase 13) — transition a Work's
      * lifecycle `status` and emit `work.status.changed` when (and only
      * when) the status actually changes.
@@ -1594,6 +1652,47 @@ export class WorkLifecycleService {
         );
 
         return updated;
+    }
+
+    /**
+     * What a Work provisioned through Ever Works Git stores (EW-614): the org as
+     * its owner, and the ONE repository under both the `work` and `data` roles
+     * (managed storage is a single-repository model — see the EW-028 note in
+     * `createWork`). On a demo instance the `website` role is recorded too, as
+     * `<repo>-website` beside it: the derived `<slug>-website` would be one shared
+     * repository for every sandbox (they all seed the same slug) and would carry
+     * no demo prefix for the sweeper.
+     */
+    private managedRepositoryFields(
+        repo: EverWorksGitRepoRef,
+    ): Pick<Work, 'owner' | 'organization' | 'sourceRepository'> {
+        const relatedRepositories: NonNullable<Work['sourceRepository']>['relatedRepositories'] = {
+            work: { owner: repo.owner, repo: repo.repo },
+            data: { owner: repo.owner, repo: repo.repo },
+        };
+        if (config.demo.isEnabled()) {
+            relatedRepositories.website = {
+                owner: repo.owner,
+                repo: demoWebsiteRepositoryName(repo.repo),
+            };
+        }
+        return {
+            owner: repo.owner,
+            organization: true,
+            sourceRepository: {
+                url: repo.htmlUrl,
+                owner: repo.owner,
+                repo: repo.repo,
+                type: 'data_repo',
+                importedAt: new Date(),
+                relatedRepositories,
+            },
+        };
+    }
+
+    /** Platform demo mode — refuses a sandbox's next repository at DEMO_MAX_WORKS_PER_SANDBOX. */
+    private async assertDemoRepositoryCapacity(userId: string): Promise<void> {
+        assertDemoWorkCapacity(await this.workRepository.countRepositoryBackedWorks(userId));
     }
 
     /**

@@ -103,6 +103,42 @@ describe('ImageCaptureStep', () => {
 			expect(result).toBe(mockContext);
 		});
 
+		// The service is available on the instance (a screenshot plugin is loaded) but none
+		// resolves for this Work: nothing enabled for the user, no key — the demo's case.
+		// Every capture would fail, one 500 ms pause each, so the step skips instead.
+		it('should skip, capturing nothing, when no screenshot provider resolves for the Work', async () => {
+			mockExecContext.screenshotFacade.getActiveProviderName = vi.fn().mockResolvedValue(null);
+
+			const result = await step.run(mockContext, mockExecContext);
+
+			expect(mockExecContext.screenshotFacade.getActiveProviderName).toHaveBeenCalledWith(expectedFacadeOptions);
+			expect(mockExecContext.screenshotFacade.getSmartImage).not.toHaveBeenCalled();
+			expect(result).toBe(mockContext);
+			expect(result.finalItems[0].images).toBeUndefined();
+			expect(result.warnings).toEqual([
+				'Screenshot provider is not configured. Enable a screenshot plugin to capture item images.'
+			]);
+		});
+
+		it('should capture as before when the facade cannot name its provider', async () => {
+			delete (mockExecContext.screenshotFacade as { getActiveProviderName?: unknown }).getActiveProviderName;
+
+			await step.run(mockContext, mockExecContext);
+
+			expect(mockExecContext.screenshotFacade.getSmartImage).toHaveBeenCalledTimes(1);
+		});
+
+		it('should capture as before when resolving the provider fails', async () => {
+			mockExecContext.screenshotFacade.getActiveProviderName = vi
+				.fn()
+				.mockRejectedValueOnce(new Error('db blip'))
+				.mockResolvedValue('ScreenshotOne');
+
+			await step.run(mockContext, mockExecContext);
+
+			expect(mockExecContext.screenshotFacade.getSmartImage).toHaveBeenCalledTimes(1);
+		});
+
 		it('should skip when no domain analysis is available', async () => {
 			mockContext.domainAnalysis = undefined;
 

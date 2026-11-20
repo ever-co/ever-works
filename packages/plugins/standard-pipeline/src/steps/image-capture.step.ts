@@ -34,7 +34,7 @@ export class ImageCaptureStep extends BasePipelineStep {
 			return context;
 		}
 
-		if (!screenshotFacade.isAvailable()) {
+		if (!screenshotFacade.isAvailable() || !(await this.providerResolves(execContext, facadeOptions))) {
 			logger.warn(`[${work.slug}] Screenshot service not configured, skipping image capture`);
 			this.addWarning(
 				context,
@@ -111,6 +111,22 @@ export class ImageCaptureStep extends BasePipelineStep {
 		logger.log(`[${work.slug}] Image capture complete for ${itemsNeedingImages.length} items`);
 
 		return context;
+	}
+
+	/**
+	 * Whether a screenshot provider resolves for this Work. `isAvailable()` only says
+	 * one is loaded on the instance; with none enabled for the Work (the demo sets
+	 * none) every capture would fail, a pause each. A facade that cannot name its
+	 * provider, or a lookup that fails, is taken as "resolves": capture as before.
+	 */
+	private async providerResolves(execContext: StepExecutionContext, facadeOptions: FacadeOptions): Promise<boolean> {
+		const { screenshotFacade } = execContext;
+		if (typeof screenshotFacade.getActiveProviderName !== 'function') return true;
+		try {
+			return (await screenshotFacade.getActiveProviderName(facadeOptions)) !== null;
+		} catch {
+			return true;
+		}
 	}
 
 	private delay(ms: number): Promise<void> {

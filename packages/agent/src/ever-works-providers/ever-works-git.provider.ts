@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { config } from '../config';
+import { assertDemoRepositoryName } from '../demo/demo-work-policy';
 import { trimEdgeChars } from '../utils/text.utils';
 import {
     EverWorksGitDisabledError,
@@ -94,6 +95,8 @@ export class EverWorksGitProvider {
      *  - On `422 name already exists`, retries once with a `-{shortId}` suffix.
      *  - Any other non-2xx response throws `EverWorksGitRequestError` so the
      *    caller can map it to a typed API error.
+     *  - On a demo instance (`DEMO`), throws `DemoFeatureDisabledError` before
+     *    calling GitHub when a name does not start with `DEMO_REPO_PREFIX`.
      */
     async createRepository(options: CreateRepositoryOptions): Promise<EverWorksGitRepoRef> {
         if (!this.isEnabled() && !options.orgOverride) {
@@ -158,6 +161,11 @@ export class EverWorksGitProvider {
         | { kind: 'name_taken' }
         | { kind: 'error'; error: EverWorksGitRequestError }
     > {
+        // Platform demo mode: every repository this creates must carry the demo
+        // prefix, the one the sweeper deletes by. Checked here, on every name
+        // before it is sent, so the collision retry is held to it too.
+        assertDemoRepositoryName(args.name);
+
         const url = `${GITHUB_API_BASE}/orgs/${encodeURIComponent(args.org)}/repos`;
         const response = await args.fetchImpl(url, {
             method: 'POST',
