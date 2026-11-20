@@ -25,10 +25,7 @@ const MANIFEST_TYPES = [
 	'application/vnd.docker.distribution.manifest.v2+json'
 ].join(', ');
 
-export function createImageDigestResolver(
-	fetchImpl: typeof fetch = fetch,
-	timeoutMs = 10_000
-): ImageDigestResolver {
+export function createImageDigestResolver(fetchImpl: typeof fetch = fetch, timeoutMs = 10_000): ImageDigestResolver {
 	return async (image, credentials) => {
 		const match = IMAGE_REF.exec(image);
 		if (!match) return null;

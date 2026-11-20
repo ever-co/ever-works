@@ -115,7 +115,7 @@ export class EverConnectRunner implements OnApplicationBootstrap, OnModuleDestro
         if (longpoll || now - this.lastFeedReadAt >= FEED_INTERVAL_MS) {
             this.lastFeedReadAt = now;
             try {
-                let pass = await this.feed.pollOnce(longpoll ? FEED_LONGPOLL_WAIT_S : 0);
+                let pass = await this.feed.pollOnce(longpoll ? FEED_LONGPOLL_WAIT_S : 0, lease);
                 // A long backlog is read over several rounds, so the lease is
                 // renewed and the outbox sent on schedule.
                 for (
@@ -126,7 +126,7 @@ export class EverConnectRunner implements OnApplicationBootstrap, OnModuleDestro
                     (await lease.keep());
                     page += 1
                 ) {
-                    pass = await this.feed.pollOnce(0);
+                    pass = await this.feed.pollOnce(0, lease);
                 }
             } catch (error) {
                 this.logger.warn(`Reading the Ever Platform feed failed: ${errorName(error)}`);
