@@ -290,7 +290,14 @@ export class DataGeneratorService {
                 success: false,
                 error: {
                     code: 'GENERATION_FAILED' as const,
-                    message: pipelineResult.error?.toString() || 'Pipeline execution failed',
+                    // The error's own message, not `toString()`: that prefixes the name
+                    // ("AI_APICallError: …"), and the generation orchestrator then appends the
+                    // cause's message again, so the Work read the provider's text twice behind it.
+                    // An Error without a message is still named by `toString()` (its name).
+                    message:
+                        (pipelineResult.error instanceof Error
+                            ? pipelineResult.error.message || pipelineResult.error.toString()
+                            : pipelineResult.error?.toString()) || 'Pipeline execution failed',
                     cause:
                         pipelineResult.error instanceof Error
                             ? pipelineResult.error

@@ -37,14 +37,50 @@ function getStepNumber(currentStepNumber: number): number {
 	return currentStepNumber > 0 ? currentStepNumber : 1;
 }
 
-function formatError(error: unknown): string {
-	return error instanceof Error ? error.message : String(error);
+/** The error's own text, or `undefined` when it carries none. */
+function describeError(error: unknown): string | undefined {
+	if (error === undefined || error === null) return undefined;
+	if (error instanceof Error) return error.message || undefined;
+	if (typeof error === 'object') {
+		const { message } = error as { message?: unknown };
+		return typeof message === 'string' && message ? message : undefined;
+	}
+	return String(error) || undefined;
 }
 
+function formatError(error: unknown): string {
+	return describeError(error) ?? String(error);
+}
+
+function toError(error: unknown, scope: string): Error {
+	const message = describeError(error);
+	if (error instanceof Error && message) return error;
+	if (message) return new Error(message);
+	const fallback: Error & { cause?: unknown } = new Error(
+		`${scope}: the AI provider stream failed without an error message`
+	);
+	if (error !== undefined && error !== null) fallback.cause = error;
+	return fallback;
+}
+
+/**
+ * Reads the whole `streamText` stream, mirroring it as realtime log entries.
+ *
+ * A provider refusal (an exhausted account, an invalid key, an unknown model) reaches us only as an
+ * `error` part. When that happens before any model step finished, every result field the caller
+ * awaits next rejects with the SDK's generic `NoOutputGeneratedError` ("No output generated. Check
+ * the stream for errors."), and the provider's own message is lost. In exactly that case this throws
+ * the stream's error instead, so the run fails with what the provider said (e.g. "Insufficient
+ * credits. Add more using …"). When a step did finish, the SDK keeps that partial output, so
+ * nothing is thrown and the caller reads the result as before.
+ */
 export async function consumeStreamWithLogging<TOOLS extends ToolSet>(
 	result: StreamTextResultLike<TOOLS>,
 	options: StreamLoggingOptions
 ): Promise<void> {
+	let finishedSteps = 0;
+	let streamFailed = false;
+	let streamError: unknown;
 	let currentStepNumber = 0;
 	const reasoningLoggedForStep = new Set<number>();
 	const textLoggedForStep = new Set<number>();
@@ -158,6 +194,7 @@ export async function consumeStreamWithLogging<TOOLS extends ToolSet>(
 			}
 
 			case 'finish-step': {
+				finishedSteps += 1;
 				emitRealtimeLog(
 					options.onLogEntry,
 					`${options.scope}: model step ${getStepNumber(currentStepNumber)} finished (${part.finishReason}; ${part.usage.totalTokens} tokens)`,
@@ -180,6 +217,8 @@ export async function consumeStreamWithLogging<TOOLS extends ToolSet>(
 			}
 
 			case 'error': {
+				streamFailed = true;
+				streamError = part.error;
 				emitRealtimeLog(
 					options.onLogEntry,
 					`${options.scope}: stream error - ${formatError(part.error)}`,
@@ -193,5 +232,9 @@ export async function consumeStreamWithLogging<TOOLS extends ToolSet>(
 			default:
 				break;
 		}
+	}
+
+	if (streamFailed && finishedSteps === 0) {
+		throw toError(streamError, options.scope);
 	}
 }

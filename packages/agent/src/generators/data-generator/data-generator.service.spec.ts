@@ -170,6 +170,107 @@ describe('DataGeneratorService runtime YAML certification', () => {
         expect(pipelineOrchestrator.execute).toHaveBeenCalledTimes(1);
     });
 
+    it("reports a failed pipeline by its error's own message, without the error name in front", async () => {
+        // The agent pipeline fails with the provider's refusal (an `AI_APICallError`). The Work must
+        // read "Insufficient credits. Add more using …", not "AI_APICallError: Insufficient credits…",
+        // which the generation orchestrator would then repeat once more from the cause.
+        const refusal = Object.assign(
+            new Error(
+                'Insufficient credits. Add more using https://openrouter.ai/settings/credits',
+            ),
+            { name: 'AI_APICallError' },
+        );
+        jest.spyOn(DataRepository, 'create').mockResolvedValue({
+            assertRuntimeCompatible: jest.fn(),
+            getCategories: jest.fn().mockResolvedValue([]),
+            getTags: jest.fn().mockResolvedValue([]),
+            getCollections: jest.fn().mockResolvedValue([]),
+            getReferences: jest.fn().mockResolvedValue([]),
+            getItems: jest.fn().mockResolvedValue([]),
+            getConfig: jest.fn().mockResolvedValue(null),
+        } as unknown as DataRepository);
+        pipelineOrchestrator.execute.mockResolvedValue({
+            success: false,
+            error: refusal,
+            outputs: { items: [] },
+            warnings: [],
+        });
+
+        await expect(
+            service.initialize(work, user, {
+                name: work.name,
+                prompt: 'A directory of AI robot companies',
+                generation_method: GenerationMethod.RECREATE,
+            } as any),
+        ).resolves.toMatchObject({
+            success: false,
+            error: {
+                code: 'GENERATION_FAILED',
+                message:
+                    'Insufficient credits. Add more using https://openrouter.ai/settings/credits',
+                cause: refusal,
+            },
+        });
+    });
+
+    it('names an Error that has no message by its error name', async () => {
+        jest.spyOn(DataRepository, 'create').mockResolvedValue({
+            assertRuntimeCompatible: jest.fn(),
+            getCategories: jest.fn().mockResolvedValue([]),
+            getTags: jest.fn().mockResolvedValue([]),
+            getCollections: jest.fn().mockResolvedValue([]),
+            getReferences: jest.fn().mockResolvedValue([]),
+            getItems: jest.fn().mockResolvedValue([]),
+            getConfig: jest.fn().mockResolvedValue(null),
+        } as unknown as DataRepository);
+        pipelineOrchestrator.execute.mockResolvedValue({
+            success: false,
+            error: Object.assign(new Error(''), { name: 'AI_RetryError' }),
+            outputs: { items: [] },
+            warnings: [],
+        });
+
+        await expect(
+            service.initialize(work, user, {
+                name: work.name,
+                prompt: 'A directory of AI robot companies',
+                generation_method: GenerationMethod.RECREATE,
+            } as any),
+        ).resolves.toMatchObject({
+            success: false,
+            error: { code: 'GENERATION_FAILED', message: 'AI_RetryError' },
+        });
+    });
+
+    it('keeps a string pipeline error as it is', async () => {
+        jest.spyOn(DataRepository, 'create').mockResolvedValue({
+            assertRuntimeCompatible: jest.fn(),
+            getCategories: jest.fn().mockResolvedValue([]),
+            getTags: jest.fn().mockResolvedValue([]),
+            getCollections: jest.fn().mockResolvedValue([]),
+            getReferences: jest.fn().mockResolvedValue([]),
+            getItems: jest.fn().mockResolvedValue([]),
+            getConfig: jest.fn().mockResolvedValue(null),
+        } as unknown as DataRepository);
+        pipelineOrchestrator.execute.mockResolvedValue({
+            success: false,
+            error: 'Pipeline cancelled',
+            outputs: { items: [] },
+            warnings: [],
+        });
+
+        await expect(
+            service.initialize(work, user, {
+                name: work.name,
+                prompt: 'A directory of AI robot companies',
+                generation_method: GenerationMethod.RECREATE,
+            } as any),
+        ).resolves.toMatchObject({
+            success: false,
+            error: { code: 'GENERATION_FAILED', message: 'Pipeline cancelled' },
+        });
+    });
+
     it('stops imported-data updates before reading or writing an incompatible corpus', async () => {
         const compatibilityError = new RuntimeYamlCompatibilityError(
             'data/broken/broken.yml',
