@@ -222,6 +222,14 @@ export class DataSyncService {
         const startedAt = Date.now();
         try {
             const stats = await this.markdownGenerator.syncFromDataRepo(work, work.user, {});
+            if (stats.skipped) {
+                // The data repository holds no items yet (no `data/`
+                // directory) — typical of a managed single-repo Work whose
+                // generation never wrote one. Nothing was rendered or pushed;
+                // that is not a failure, and retrying will not change it
+                // until items arrive.
+                return this.skipUntilNextPoll(work.id, source, 'data-repo-empty');
+            }
             const successStats: DataSyncSuccessStats = {
                 beforeSha: stats.beforeSha,
                 afterSha: stats.afterSha,
@@ -242,8 +250,30 @@ export class DataSyncService {
             await this.emitSuccess(workId, source, successStats);
             return { status: 'success', stats: successStats };
         } catch (err) {
+            if (isMissingGitCredentials(err)) {
+                // The owner has no connected account for the Work's git
+                // provider (and the platform has no token to use instead), so
+                // the sync cannot run until they connect one. Logged, and one
+                // skip row per noise window rather than a failure row on
+                // every poll.
+                this.logger.warn(
+                    `Data sync skipped for work=${workId} (source=${source}): ${extractErrorMessage(err)}`,
+                );
+                return this.skipUntilNextPoll(
+                    workId,
+                    source,
+                    'app-not-installed-and-no-credentials',
+                );
+            }
+
             const errorClass = classifyError(err);
             const errorTail = tailString(extractErrorMessage(err));
+            // The activity row keeps only the class in its summary; log the
+            // message too, so the cause is in the API logs and not just in
+            // the row's details.
+            this.logger.warn(
+                `Data sync failed for work=${workId} (source=${source}, class=${errorClass}): ${errorTail}`,
+            );
 
             await this.emitFailed(workId, source, errorClass, errorTail);
 
@@ -257,6 +287,53 @@ export class DataSyncService {
 
             return { status: 'failed', errorClass, errorTail };
         }
+    }
+
+    /**
+     * End a run that cannot do anything until the Work itself changes (no
+     * items yet, no git credentials): clear the webhook request and stamp the
+     * poll time, so neither dispatcher path picks the Work up again before
+     * its next regular poll, and write at most one skip row per
+     * `skipNoiseWindowMs` (1 h by default) — the same rate limit `no-changes`
+     * uses — instead of a row every poll.
+     */
+    private async skipUntilNextPoll(
+        workId: string,
+        source: SyncSource,
+        reason: SyncReason,
+    ): Promise<DataSyncOutcome> {
+        // Never throws (runGates' contract): a bookkeeping failure costs at
+        // most an extra skip row or an earlier retry.
+        try {
+            await this.workRepository.update(workId, {
+                pendingSyncRequestedAt: null,
+                lastPolledAt: new Date(),
+            });
+        } catch (err) {
+            this.logger.warn(
+                `Failed to clear the sync request of work=${workId} after a '${reason}' skip: ${
+                    (err as Error)?.message ?? err
+                }`,
+            );
+        }
+
+        const noiseKey = `data-sync:skip-noise:${reason}:${workId}`;
+        try {
+            if (await this.cache.get<string>(noiseKey)) {
+                return { status: 'skipped', reason };
+            }
+            await this.cache.set(
+                noiseKey,
+                '1',
+                config.subscriptions.dataSync.getSkipNoiseWindowMs(),
+            );
+        } catch (err) {
+            this.logger.warn(
+                `Skip-noise window unavailable for work=${workId} (${reason}): ${(err as Error)?.message ?? err}`,
+            );
+        }
+        await this.emitSkipped(workId, source, reason);
+        return { status: 'skipped', reason };
     }
 
     /**
@@ -413,6 +490,15 @@ function classifyError(err: unknown): SyncEventErrorClass {
         return 'timeout';
     }
     return 'unknown';
+}
+
+/**
+ * `NoGitCredentialsError` from the git facade: the owner has no connected
+ * account for the provider. Matched on `name` (as `FacadeExceptionFilter`
+ * does) so a second copy of the agent package's class still matches.
+ */
+function isMissingGitCredentials(err: unknown): boolean {
+    return err instanceof Error && err.name === 'NoGitCredentialsError';
 }
 
 /**
