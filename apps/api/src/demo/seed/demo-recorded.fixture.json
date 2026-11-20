@@ -222,13 +222,13 @@
                 "title": "Set up redirects from the old site's URLs",
                 "description": "Map the old acme.example URLs to the new pages with permanent (301) redirects, so existing links and search rankings carry over.",
                 "agentSlug": "seo-auditor",
-                "status": "todo"
+                "status": "backlog"
             },
             {
                 "title": "Compare our launch page with two competitors",
                 "description": "Note how two competitors present pricing, customer proof and the call to action on their launch pages, and list what we could borrow.",
                 "agentSlug": "competitive-analyst",
-                "status": "todo"
+                "status": "backlog"
             }
         ]
     },

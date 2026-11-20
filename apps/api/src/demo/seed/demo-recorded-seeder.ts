@@ -89,12 +89,17 @@ export interface DemoRecordedIteration {
     readonly run: DemoRecordedRun;
 }
 
-/** A Task the Mission's planner filed. Only a `done` one has a run. */
+/**
+ * A Task the Mission's planner filed for approval (`backlog`, as `MissionTickService` files
+ * them when the Mission requires approval). Only a `done` one, approved and run, has a run.
+ * Never `todo`: a never-run `todo` Task with no Goal is what the Task fan-out driver
+ * (`TaskRepository.findFanoutCandidates`) starts once it is switched on.
+ */
 export interface DemoRecordedPlannedTask {
     readonly title: string;
     readonly description: string;
     readonly agentSlug: string | null;
-    readonly status: 'todo' | 'done';
+    readonly status: 'backlog' | 'done';
     readonly run: DemoRecordedRun | null;
 }
 
@@ -277,7 +282,7 @@ function readIteration(raw: unknown, path: string): DemoRecordedIteration {
 
 function readPlannedTask(raw: unknown, path: string): DemoRecordedPlannedTask {
     const task = object(raw, path);
-    const status = oneOf(task.status, ['todo', 'done'] as const, `${path}.status`);
+    const status = oneOf(task.status, ['backlog', 'done'] as const, `${path}.status`);
     const run =
         task.run === undefined || task.run === null ? null : readRun(task.run, `${path}.run`);
     const agentSlug = optionalText(task.agentSlug, `${path}.agentSlug`);
@@ -586,7 +591,10 @@ class RecordedExamplesWriter {
         );
     }
 
-    /** The Tasks the Mission's planner filed, the way `MissionTickService` files them. */
+    /**
+     * The Tasks the Mission's planner filed, the way `MissionTickService` files them when the
+     * Mission requires approval: in `backlog`. The run one was approved and walked to `done`.
+     */
     private async writeMissionPlan(mission: Mission): Promise<void> {
         const { plan, plannedAtMinutes } = this.fixture.mission;
         for (const [index, planned] of plan.entries()) {
@@ -602,7 +610,8 @@ class RecordedExamplesWriter {
                     derivedFromPrivate: mission.visibility === 'private',
                     derivedFrom: { aggregate: 'mission', id: mission.id },
                 },
-                planned.status === 'done' ? TaskStatus.DONE : TaskStatus.TODO,
+                planned.status === 'done' ? TaskStatus.DONE : TaskStatus.BACKLOG,
+                TaskStatus.BACKLOG,
             );
             // Filed one after another, a second apart, in the plan's order.
             const filedAt = plannedAtMinutes + index / 60;
@@ -786,21 +795,22 @@ class RecordedExamplesWriter {
     }
 
     /**
-     * A Task through `TasksService`, filed in `todo` by the visitor (as a Goal or a Mission
+     * A Task through `TasksService`, filed in `filedAs` by the visitor (as a Goal or a Mission
      * files on its owner's behalf) and walked to `status` by the sync transition, which starts
-     * no agent run.
+     * no agent run (`TaskTransitionService.transitionSync` passes `suppressAgentDispatch`).
      */
     private async fileTask(
         input: Omit<CreateTaskInput, 'status' | 'createdByType' | 'createdById'>,
         status: TaskStatus,
+        filedAs: TaskStatus = TaskStatus.TODO,
     ): Promise<Task> {
         const { ownerId, scope } = this.input;
         const task = await this.deps.tasks.create(
             ownerId,
-            { ...input, status: TaskStatus.TODO, createdByType: 'user', createdById: ownerId },
+            { ...input, status: filedAs, createdByType: 'user', createdById: ownerId },
             scope,
         );
-        if (status !== TaskStatus.TODO) {
+        if (status !== filedAs) {
             await this.deps.tasks.syncTransition(ownerId, task.id, status, {}, scope);
         }
         return task;

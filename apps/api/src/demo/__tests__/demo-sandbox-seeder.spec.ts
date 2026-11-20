@@ -26,6 +26,7 @@ import {
     ActivityActionType,
     ActivityLog,
     Agent,
+    AgentStatus,
     AgentRun,
     AgentRunLog,
     Conversation,
@@ -39,10 +40,13 @@ import {
     GoalStatus,
     Mission,
     MissionGoal,
+    MissionStatus,
+    MissionType,
     MissionWork,
     Organization,
     Task,
     TaskChatMessage,
+    TaskPriority,
     TaskStatus,
     Team,
     TeamMember,
@@ -71,7 +75,11 @@ import {
     GoalOrchestratorService,
     GoalsService,
 } from '@ever-works/agent/goals';
-import { MISSION_TASK_LABEL, MissionsService } from '@ever-works/agent/missions';
+import {
+    MISSION_TASK_LABEL,
+    MissionsService,
+    MissionTickService,
+} from '@ever-works/agent/missions';
 import { NotificationService } from '@ever-works/agent/notifications';
 import { RecordAccessPolicy, RecordVisibilityService } from '@ever-works/agent/record-visibility';
 import {
@@ -618,8 +626,9 @@ describe('DemoSandboxSeederService', () => {
             // 8 hand-filed Tasks, 2 Goal iterations, 3 planned by the Mission.
             expect(created).toBe(13);
             // Hand-filed: todo → in_progress (×5), in_progress → done (×4). Recorded: both
-            // iterations and one planned Task walk todo → in_progress → done (×3 each way).
-            expect(moved).toBe(15);
+            // iterations walk todo → in_progress → done (×4), the approved planned Task
+            // backlog → todo → in_progress → done (×3); the other two stay in backlog.
+            expect(moved).toBe(16);
         });
 
         it('writes three short knowledge notes to the Organization', async () => {
@@ -922,7 +931,7 @@ describe('DemoSandboxSeederService', () => {
             // each through `TasksService` (the recorded runs, logs, Goal events, chat and
             // activity entries are plain rows and record no event).
             'task.created': 13,
-            'task.transitioned': 15,
+            'task.transitioned': 16,
             'task.comment.created': 11,
             'kb.document.created': 3,
         });
@@ -1080,10 +1089,28 @@ describe('DemoSandboxSeederService', () => {
                 rows(Task),
                 rows(AgentRun),
             );
-            const advanced = await orchestrator.advanceDue(1000);
-            // Only a `running` loop is advanced; the recorded loops are `done`.
-            expect(advanced.dueCount).toBe(0);
-            expect(advanced.results).toEqual([]);
+            // Positive control: a Goal whose loop is `running`, so an empty answer for the
+            // recorded Goals is not a selector that selects nothing.
+            const running = await rows(Goal).save(
+                rows(Goal).create({
+                    userId: first.user.id,
+                    title: 'Control: a running Goal loop',
+                    window: 'total',
+                    status: GoalStatus.ACTIVE,
+                    loopStatus: 'running',
+                    dodCriteria: [{ id: 'open', text: 'Still open', status: 'open' }],
+                }),
+            );
+            try {
+                const advanced = await orchestrator.advanceDue(1000);
+                // Only a `running` loop is advanced: the control is, the recorded `done` loops
+                // are not.
+                expect(advanced.dueCount).toBe(1);
+                expect(advanced.results.map((result) => result.goalId)).toEqual([running.id]);
+            } finally {
+                await rows(GoalEvent).delete({ goalId: running.id });
+                await rows(Goal).delete({ id: running.id });
+            }
 
             const refusingMetrics = new Proxy(
                 {},
@@ -1115,6 +1142,143 @@ describe('DemoSandboxSeederService', () => {
                     'done',
                     2,
                 ]);
+            }
+        });
+
+        it('no Task scan, Mission tick or heartbeat selects a seeded Task, Mission or Agent', async () => {
+            const tasks = moduleRef.get(TaskRepository);
+            const agents = moduleRef.get(AgentRepository);
+            const sandboxTaskIds = new Set(
+                (await rows(Task).findBy({ userId: In([first.user.id, second.user.id]) })).map(
+                    (task) => task.id,
+                ),
+            );
+            // The planned Tasks not yet run wait for approval in `backlog`, never in `todo`.
+            for (const sandbox of recorded) {
+                expect(
+                    sandbox.planTasks
+                        .filter((task) => task.status !== TaskStatus.DONE)
+                        .map((task) => task.status),
+                ).toEqual([TaskStatus.BACKLOG, TaskStatus.BACKLOG]);
+            }
+            const old = new Date(Date.now() - 200 * DAY);
+            const farFuture = new Date(Date.now() + 365 * DAY);
+            const controlTask = (slug: string, extra: Partial<Task>) =>
+                rows(Task).create({
+                    userId: first.user.id,
+                    slug: `${slug}-${randomBytes(4).toString('hex')}`,
+                    title: `Control: ${slug}`,
+                    status: TaskStatus.TODO,
+                    priority: TaskPriority.P2,
+                    agentId: recorded[0].runs[0].agentId,
+                    createdByType: 'user',
+                    createdById: first.user.id,
+                    ...extra,
+                });
+            // Positive controls, one per scan: a never-run `todo` Task (the fan-out's), a
+            // one-shot whose time has come (the schedule scan's), a due recurring template.
+            const [fanout, scheduled, recurring] = await rows(Task).save([
+                controlTask('control-fanout', {}),
+                controlTask('control-scheduled', { scheduledAt: old }),
+                controlTask('control-recurring', {
+                    isRecurring: true,
+                    recurrenceCron: '0 9 * * *',
+                    nextOccurrenceAt: old,
+                }),
+            ]);
+            const controlMission = await rows(Mission).save(
+                rows(Mission).create({
+                    userId: first.user.id,
+                    title: 'Control: a scheduled Mission',
+                    description: 'Control',
+                    type: MissionType.SCHEDULED,
+                    status: MissionStatus.ACTIVE,
+                    schedule: null,
+                }),
+            );
+            const sandboxAgents = await rows(Agent).findBy({
+                userId: In([first.user.id, second.user.id]),
+            });
+            const heartbeatAgent = sandboxAgents[0];
+            const ids = (selected: Array<{ id: string }>) => selected.map((row) => row.id);
+            try {
+                // `TaskGraphFanoutService.dispatchUnblocked` (off by default; this is what it
+                // would start), `TaskRecurrenceDispatcherService`'s schedule and recurrence
+                // scans: each selects its control and no Task of either sandbox.
+                expect(ids(await tasks.findFanoutCandidates(1000))).toEqual([fanout.id]);
+                expect(ids(await tasks.findDueScheduledTasks(1000, farFuture))).toEqual([
+                    scheduled.id,
+                ]);
+                expect(ids(await tasks.findDueRecurringTemplates(1000, farFuture))).toEqual([
+                    recurring.id,
+                ]);
+                for (const id of [fanout.id, scheduled.id, recurring.id]) {
+                    expect(sandboxTaskIds.has(id)).toBe(false);
+                }
+
+                // `MissionTickService.tickDue` (the Mission cron): ACTIVE + SCHEDULED Missions
+                // only. The seeded Missions are one-shot; the control (no cron set) is
+                // evaluated and stops at the cron check, before anything is generated.
+                const refusing = new Proxy(
+                    {},
+                    {
+                        get: (_target, prop) =>
+                            prop === 'then'
+                                ? undefined
+                                : () => {
+                                      throw new Error(`mission tick called ${String(prop)}`);
+                                  },
+                    },
+                ) as never;
+                const tick = await new MissionTickService(
+                    rows(Mission),
+                    refusing,
+                    refusing,
+                    refusing,
+                ).tickDue();
+                expect(tick.entries.map((entry) => [entry.missionId, entry.outcome])).toEqual([
+                    [controlMission.id, 'cron-no-match'],
+                ]);
+
+                // `AgentScheduleDispatcherService.dispatchDue` (heartbeats): no seeded Agent
+                // has a heartbeat scheduled (the starter kit leaves them `draft`, with no
+                // cadence and no next beat), however far ahead the tick looks...
+                expect(sandboxAgents.length).toBeGreaterThanOrEqual(8);
+                for (const agent of sandboxAgents) {
+                    expect([agent.heartbeatCadence ?? null, agent.nextHeartbeatAt ?? null]).toEqual(
+                        [null, null],
+                    );
+                }
+                const dueAgents = ids(await agents.findDueForHeartbeat(1000, farFuture));
+                for (const agent of sandboxAgents) {
+                    expect(dueAgents).not.toContain(agent.id);
+                }
+                // ...and an active one with a cadence and a due beat would be selected
+                // (positive control on a copy of a seeded Agent's columns, put back after).
+                await rows(Agent).update(
+                    { id: heartbeatAgent.id },
+                    {
+                        status: AgentStatus.ACTIVE,
+                        heartbeatPausedAt: null,
+                        heartbeatCadence: 'hourly',
+                        nextHeartbeatAt: old,
+                    },
+                );
+                expect(ids(await agents.findDueForHeartbeat(1000, farFuture))).toEqual([
+                    heartbeatAgent.id,
+                ]);
+            } finally {
+                await rows(Agent).update(
+                    { id: heartbeatAgent.id },
+                    {
+                        status: heartbeatAgent.status,
+                        heartbeatPausedAt: heartbeatAgent.heartbeatPausedAt ?? null,
+                        heartbeatCadence: heartbeatAgent.heartbeatCadence ?? null,
+                        nextHeartbeatAt: heartbeatAgent.nextHeartbeatAt ?? null,
+                    },
+                );
+                await rows(Mission).delete({ id: controlMission.id });
+                await rows(Task).delete([fanout.id, scheduled.id, recurring.id]);
             }
         });
 

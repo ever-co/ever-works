@@ -77,6 +77,12 @@ describe('demo recorded fixture', () => {
         expect(() => parseDemoRecordedFixture(noRun)).toThrow(
             'mission.plan[0] has a run exactly when it is done',
         );
+        // A never-run `todo` Task with no Goal is what the Task fan-out driver starts.
+        const todo = rawFixture();
+        todo.mission.plan[1].status = 'todo';
+        expect(() => parseDemoRecordedFixture(todo)).toThrow(
+            'mission.plan[1].status must be one of backlog, done',
+        );
         const agentFirst = rawFixture();
         agentFirst.conversation.messages[0].by = 'agent';
         expect(() => parseDemoRecordedFixture(agentFirst)).toThrow(
