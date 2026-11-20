@@ -244,6 +244,10 @@ describe('DemoRestrictionsGuard', () => {
             ['POST', '/api/account/import/preview', 'account import'],
             ['POST', '/api/account/import/apply', 'account import'],
             ['POST', '/api/organizations/import-company', 'company import'],
+            // R41: screenshots are off on a demo; each of these captures through a provider.
+            ['POST', '/api/screenshot/capture', 'screenshots'],
+            ['POST', '/api/screenshot/get-url', 'screenshots'],
+            ['POST', '/api/works/w-1/bulk-capture-images', 'screenshots'],
         ])('refuses %s %s (%s)', async (method, path, feature) => {
             const { guard } = guardWith();
 
@@ -490,6 +494,9 @@ describe('DemoRestrictionsGuard', () => {
                 ['POST', '/api/organizations/org-1/shared-view'],
                 ['POST', '/api/organizations/org-1/shared-view/regenerate'],
                 ['POST', '/api/v1/chat/completions'],
+                ['POST', '/api/screenshot/capture'],
+                ['POST', '/api/screenshot/get-url'],
+                ['POST', '/api/works/w-1/bulk-capture-images'],
                 ['POST', '/api/auth/login'],
             ]) {
                 await expect(

@@ -25,6 +25,14 @@ export class ImageCaptureStep extends BasePipelineStep {
 		const { logger, screenshotFacade } = execContext;
 		const config = request.config || {};
 
+		// Platform demo mode: screenshots are off on a demo (design §5.2.4), so the step skips
+		// whatever the request asks and whatever provider would resolve: an auto-enabled system
+		// default (Gotenberg) always does. Items keep their placeholders; nothing to configure.
+		if (isDemoMode()) {
+			logger.log(`[${work.slug}] Demo mode: screenshots are off, skipping image capture`);
+			return context;
+		}
+
 		const facadeOptions: FacadeOptions = {
 			userId: execContext.user!.id,
 			workId: execContext.work.id
@@ -35,10 +43,7 @@ export class ImageCaptureStep extends BasePipelineStep {
 			return context;
 		}
 
-		if (
-			!screenshotFacade.isAvailable() ||
-			(isDemoMode() && !(await this.providerResolves(execContext, facadeOptions)))
-		) {
+		if (!screenshotFacade.isAvailable()) {
 			logger.warn(`[${work.slug}] Screenshot service not configured, skipping image capture`);
 			this.addWarning(
 				context,
@@ -115,23 +120,6 @@ export class ImageCaptureStep extends BasePipelineStep {
 		logger.log(`[${work.slug}] Image capture complete for ${itemsNeedingImages.length} items`);
 
 		return context;
-	}
-
-	/**
-	 * Platform demo mode only: whether a screenshot provider resolves for this Work.
-	 * `isAvailable()` only says one is loaded on the instance; with none enabled for the
-	 * Work (the demo sets none) every capture would fail, a pause each. A facade that
-	 * cannot name its provider, or a lookup that fails, is taken as "resolves": capture
-	 * as before. With `DEMO` unset the step never asks.
-	 */
-	private async providerResolves(execContext: StepExecutionContext, facadeOptions: FacadeOptions): Promise<boolean> {
-		const { screenshotFacade } = execContext;
-		if (typeof screenshotFacade.getActiveProviderName !== 'function') return true;
-		try {
-			return (await screenshotFacade.getActiveProviderName(facadeOptions)) !== null;
-		} catch {
-			return true;
-		}
 	}
 
 	private delay(ms: number): Promise<void> {

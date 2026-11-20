@@ -170,6 +170,11 @@ export const DEMO_BLOCKED_ROUTES: ReadonlyArray<DemoBlockedRoute> = [
     { method: 'PUT', path: /^\/api\/deploy\/works\/[^/]+\/subdomain$/i, feature: 'subdomains', scope: 'demo-users' },
     { method: 'PUT', path: /^\/api\/works\/[^/]+\/repositories\/visibility$/i, feature: 'repository visibility', scope: 'demo-users' },
     { method: 'POST', path: /^\/api\/deploy\/works\/[^/]+\/db\/test$/i, feature: 'custom databases', scope: 'demo-users' },
+    // Screenshots are off on a demo (R41): each of these has a screenshot provider fetch a URL the
+    // caller names. The image proxy (`GET /api/screenshot/image/:file`) and the availability
+    // check stay open; generation's image step skips on its own (`image-capture.step.ts`).
+    { method: 'POST', path: /^\/api\/screenshot\/(capture|get-url)$/i, feature: 'screenshots', scope: 'demo-users' },
+    { method: 'POST', path: /^\/api\/works\/[^/]+\/bulk-capture-images$/i, feature: 'screenshots', scope: 'demo-users' },
     { method: 'POST', path: /^\/api\/works(\/quick-create)?$/i, feature: 'App Works', scope: 'demo-users', when: createsAppWork },
     { method: 'PUT', path: /^\/api\/works\/[^/]+$/i, feature: 'Work repository owner', scope: 'demo-users', when: namesRepositoryOwner },
     { method: 'PATCH', path: /^\/api\/works\/[^/]+$/i, feature: 'Work repository owner', scope: 'demo-users', when: namesRepositoryOwner },

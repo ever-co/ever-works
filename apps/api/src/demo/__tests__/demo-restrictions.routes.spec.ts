@@ -228,6 +228,10 @@ const MUST_STAY_OPEN: { method: string; path: string; body?: unknown }[] = [
         path: '/api/v1/chat/completions',
         body: { model: 'auto', stream: true, messages: [{ role: 'user', content: 'Hi' }] },
     },
+    // R41 blocks capturing a screenshot; asking whether a provider exists, and the image proxy
+    // that serves an already-captured one, are not captures.
+    { method: 'GET', path: '/api/screenshot/check-availability' },
+    { method: 'GET', path: '/api/screenshot/image/sample.png' },
 ];
 
 if (process.env[CHILD_FLAG] === undefined) {
@@ -304,6 +308,14 @@ if (process.env[CHILD_FLAG] === undefined) {
                     (route) => `${route.method} ${route.path} ${route.controller}.${route.handler}`,
                 )
                 .sort();
+
+        it('R41: the screenshot rows reach exactly the capture handlers', () => {
+            expect(handlersOf('screenshots')).toEqual([
+                'POST /api/screenshot/capture ScreenshotController.capture',
+                'POST /api/screenshot/get-url ScreenshotController.getScreenshotUrl',
+                'POST /api/works/:id/bulk-capture-images WorksController.bulkCaptureImages',
+            ]);
+        });
 
         it('R37 and R38: the transfer and share-link rows reach exactly those handlers', () => {
             // Creating an owner-claim link (and any Work invitation): the step a demo user reaches.

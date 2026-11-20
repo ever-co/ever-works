@@ -103,51 +103,65 @@ describe('ImageCaptureStep', () => {
 			expect(result).toBe(mockContext);
 		});
 
-		// Platform demo mode (`DEMO`): a screenshot plugin is loaded on the instance (so the
-		// service is "available") but none resolves for the Work — nothing enabled, no key, the
-		// demo sets none. Every capture would fail, one 500 ms pause each, so the step skips.
-		describe('platform demo mode, no screenshot provider resolving for the Work', () => {
+		// Platform demo mode (`DEMO`): screenshots are off on a demo (design §5.2.4, ruling R41).
+		// A screenshot provider always resolves now (Gotenberg is an auto-enabled system default),
+		// and quick create sends `capture_screenshots: true` from the form's defaults, so the step
+		// must skip on its own — whatever provider resolves, without asking the facade anything.
+		describe('platform demo mode: screenshots are off', () => {
 			afterEach(() => {
 				vi.unstubAllEnvs();
 			});
 
-			it('with DEMO on, skips, capturing nothing', async () => {
+			it.each([['true'], ['1'], [' YES ']])(
+				'with DEMO on (%s), skips even though a provider resolves (the Gotenberg default)',
+				async (demo) => {
+					vi.stubEnv('DEMO', demo);
+					mockExecContext.screenshotFacade.getActiveProviderName = vi.fn().mockResolvedValue('Gotenberg');
+
+					const result = await step.run(mockContext, mockExecContext);
+
+					expect(mockExecContext.screenshotFacade.getSmartImage).not.toHaveBeenCalled();
+					expect(mockExecContext.screenshotFacade.isAvailable).not.toHaveBeenCalled();
+					expect(mockExecContext.screenshotFacade.getActiveProviderName).not.toHaveBeenCalled();
+					expect(result).toBe(mockContext);
+					expect(result.finalItems[0].images).toBeUndefined();
+					// Placeholders are shown; there is nothing for the visitor to configure.
+					expect(result.warnings).toEqual([]);
+					expect(mockExecContext.logger.log).toHaveBeenCalledWith(
+						'[test-work] Demo mode: screenshots are off, skipping image capture'
+					);
+				}
+			);
+
+			it('with DEMO on, skips when no provider resolves for the Work either', async () => {
 				vi.stubEnv('DEMO', 'true');
 				mockExecContext.screenshotFacade.getActiveProviderName = vi.fn().mockResolvedValue(null);
 
 				const result = await step.run(mockContext, mockExecContext);
 
-				expect(mockExecContext.screenshotFacade.getActiveProviderName).toHaveBeenCalledWith(
-					expectedFacadeOptions
-				);
 				expect(mockExecContext.screenshotFacade.getSmartImage).not.toHaveBeenCalled();
-				expect(result).toBe(mockContext);
-				expect(result.finalItems[0].images).toBeUndefined();
-				expect(result.warnings).toEqual([
-					'Screenshot provider is not configured. Enable a screenshot plugin to capture item images.'
-				]);
+				expect(result.warnings).toEqual([]);
 			});
 
-			it('with DEMO on, captures as before when the facade cannot name its provider', async () => {
-				vi.stubEnv('DEMO', 'true');
-				delete (mockExecContext.screenshotFacade as { getActiveProviderName?: unknown }).getActiveProviderName;
+			it.each([[undefined], ['false'], ['']])(
+				'with DEMO unset (%s), captures with the provider that resolves, as before',
+				async (demo) => {
+					if (demo === undefined) vi.stubEnv('DEMO', undefined);
+					else vi.stubEnv('DEMO', demo);
+					mockExecContext.screenshotFacade.getActiveProviderName = vi.fn().mockResolvedValue('Gotenberg');
 
-				await step.run(mockContext, mockExecContext);
+					const result = await step.run(mockContext, mockExecContext);
 
-				expect(mockExecContext.screenshotFacade.getSmartImage).toHaveBeenCalledTimes(1);
-			});
-
-			it('with DEMO on, captures as before when resolving the provider fails', async () => {
-				vi.stubEnv('DEMO', 'true');
-				mockExecContext.screenshotFacade.getActiveProviderName = vi
-					.fn()
-					.mockRejectedValueOnce(new Error('db blip'))
-					.mockResolvedValue('ScreenshotOne');
-
-				await step.run(mockContext, mockExecContext);
-
-				expect(mockExecContext.screenshotFacade.getSmartImage).toHaveBeenCalledTimes(1);
-			});
+					expect(mockExecContext.screenshotFacade.getSmartImage).toHaveBeenCalledWith(
+						{ url: 'https://example.com', domainType: 'software', itemName: 'Test Item' },
+						expectedFacadeOptions
+					);
+					expect(result.finalItems[0].images).toEqual(['https://screenshots.example.com/image.png']);
+					// The provider name is asked for only to label a failure, as before.
+					expect(mockExecContext.screenshotFacade.getActiveProviderName).not.toHaveBeenCalled();
+					expect(result.warnings).toEqual([]);
+				}
+			);
 
 			it.each([[undefined], ['false'], ['']])(
 				'with DEMO unset (%s), behaves exactly as before: tries every capture',
