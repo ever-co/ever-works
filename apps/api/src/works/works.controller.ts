@@ -129,6 +129,7 @@ import {
 import { fleetRunOrganizationPin } from '../auth/fleet-run-scope';
 import { ZeroFrictionFunnelService } from '@ever-works/agent/services';
 import { ZERO_FRICTION_FUNNEL_EVENTS } from '@ever-works/contracts/telemetry';
+import { buildSelectedProviders } from '@ever-works/plugin';
 // EW-P2-4 — validates the works-list `kind` filter.
 import { getWorkCapabilities, WORK_KINDS } from '@ever-works/contracts';
 import { AuthenticatedUser } from '@src/auth/types/auth.types';
@@ -141,6 +142,7 @@ import { WorkScheduleStatus } from '@ever-works/agent/entities';
 import { SubscriptionService } from '@ever-works/agent/subscriptions';
 import { ActivityLogService, workDeletedActivity } from '@ever-works/agent/activity-log';
 import { ActivityActionType, ActivityStatus } from '@ever-works/agent/entities';
+import type { User } from '@ever-works/agent/entities';
 import {
     WORK_CACHE_TTL_MS,
     getWorkCategoriesTagsCacheKey,
@@ -493,14 +495,76 @@ export class WorksController {
 
         const user = await this.authService.getUser(auth.userId);
 
-        // 1. Create the Work via the existing pipeline. Provider defaults
-        //    (storage/deploy/git) are resolved from the user's
-        //    onboardingState inside createWork — no special handling here.
+        // 0. A retry of the same funnel — another "Generate now" click after a
+        //    start was refused — reuses the Work that funnel already created
+        //    while its generation never started. Every click sends a fresh
+        //    slug, so creating again left one more Work AND one more managed
+        //    repository behind per click, and after three the visitor hit the
+        //    Ever Works Deploy quota (3 active Works) and could not go on. A
+        //    Work whose generation started (or finished) is not reused.
+        const earlier = dto.correlationId
+            ? await this.workRepository.findLatestByUserAndCorrelationId(user.id, dto.correlationId)
+            : null;
+        let work: { id: string; slug: string; name: string };
+        if (earlier && !earlier.generateStatus?.status) {
+            work = earlier;
+        } else {
+            work = await this.createQuickCreateWork(dto, user);
+        }
+
+        // 2. Kick off generation async — the standard generation pipeline
+        //    handles persistence + dispatch.  awaitCompletion=false means
+        //    we return immediately with the historyId for status polling.
         //
-        // EW-617 G8: thread the funnel correlationId all the way through so
-        // `WorkLifecycleService.createWork` emits the REPOS_PUSHED event with
-        // the same id and persists it on `work.lastDeployCorrelationId` for
-        // the async DEPLOY_READY poller.
+        // TODO(EW-617 G8): the downstream generation flow eventually calls
+        // `DeployService.deploy(workId, userId, options)` from a different
+        // entry point (deploy.controller / workflow listener). Threading the
+        // correlationId through `workGenerationService.generateItems` and on
+        // into deploy options is non-trivial and out of scope for this PR.
+        // For now, DEPLOY_STARTED is only emitted when callers explicitly
+        // pass `options.correlationId`. The DEPLOY_READY poller still emits
+        // with `work.lastDeployCorrelationId`, which we persisted above.
+        const generatorDto = Object.assign(new CreateItemsGeneratorDto(), {
+            name: dto.name,
+            prompt: dto.prompt,
+            ...(dto.model ? { model: dto.model } : {}),
+        });
+        const selection = await this.resolveGenerateFormProviders(work.id, user.id);
+        if (selection) {
+            generatorDto.providers = selection.providers;
+            generatorDto.pluginConfig = selection.pluginConfig;
+        }
+        const generation = await this.workGenerationService.generateItems(
+            work.id,
+            generatorDto,
+            user,
+            false,
+        );
+
+        return {
+            status: 'pending',
+            work: { id: work.id, slug: work.slug, name: work.name },
+            generation: {
+                historyId: generation.historyId ?? '',
+                message: generation.message ?? 'Generation started',
+            },
+        };
+    }
+
+    /**
+     * 1. Create the Work via the existing pipeline. Provider defaults
+     *    (storage/deploy/git) are resolved from the user's onboardingState
+     *    inside createWork — no special handling here.
+     *
+     * EW-617 G8: thread the funnel correlationId all the way through so
+     * `WorkLifecycleService.createWork` emits the REPOS_PUSHED event with the
+     * same id and persists it on `work.lastDeployCorrelationId` for the async
+     * DEPLOY_READY poller (and for a retry of the same funnel to find it).
+     */
+    private async createQuickCreateWork(
+        dto: QuickCreateWorkDto,
+        user: User,
+    ): Promise<{ id: string; slug: string; name: string }> {
         const createDto: CreateWorkDto = Object.assign(new CreateWorkDto(), {
             slug: dto.slug,
             name: dto.name,
@@ -549,38 +613,57 @@ export class WorksController {
             });
         }
 
-        // 2. Kick off generation async — the standard generation pipeline
-        //    handles persistence + dispatch.  awaitCompletion=false means
-        //    we return immediately with the historyId for status polling.
-        //
-        // TODO(EW-617 G8): the downstream generation flow eventually calls
-        // `DeployService.deploy(workId, userId, options)` from a different
-        // entry point (deploy.controller / workflow listener). Threading the
-        // correlationId through `workGenerationService.generateItems` and on
-        // into deploy options is non-trivial and out of scope for this PR.
-        // For now, DEPLOY_STARTED is only emitted when callers explicitly
-        // pass `options.correlationId`. The DEPLOY_READY poller still emits
-        // with `work.lastDeployCorrelationId`, which we persisted above.
-        const generatorDto = Object.assign(new CreateItemsGeneratorDto(), {
-            name: dto.name,
-            prompt: dto.prompt,
-            ...(dto.model ? { model: dto.model } : {}),
-        });
-        const generation = await this.workGenerationService.generateItems(
-            work.id,
-            generatorDto,
-            user,
-            false,
-        );
+        return work;
+    }
 
-        return {
-            status: 'pending',
-            work: { id: work.id, slug: work.slug, name: work.name },
-            generation: {
-                historyId: generation.historyId ?? '',
-                message: generation.message ?? 'Generation started',
-            },
-        };
+    /**
+     * The provider selection the Generate form and the chat tool send for this
+     * Work: `buildSelectedProviders` over its generator form schema — the
+     * resolved default pipeline (the user's enforced one first, as the form
+     * pre-selects it) plus each category's default — and the schema's default
+     * values as `pluginConfig`.
+     *
+     * Quick-create used to send no `providers` at all. Then
+     * `GeneratorFormSchemaService.validateSelectedProviders` demands that the
+     * default provider of EVERY category be configured, so one empty optional
+     * platform key (production's `PLUGIN_TAVILY_API_KEY`) refused every
+     * quick-create with "Default provider \"Tavily\" is not configured" — after
+     * the Work and its managed repository had been created. With a pipeline
+     * selected, only the pipeline is validated, exactly as for a Work started
+     * from the form.
+     *
+     * `null` (start with the defaults, as before) when the schema cannot be
+     * read: a missing selection must not stop a start that may still succeed.
+     */
+    private async resolveGenerateFormProviders(
+        workId: string,
+        userId: string,
+    ): Promise<{
+        providers: CreateItemsGeneratorDto['providers'];
+        pluginConfig: CreateItemsGeneratorDto['pluginConfig'];
+    } | null> {
+        try {
+            const schema = await this.generatorFormSchemaService.getFormSchema(undefined, {
+                workId,
+                userId,
+            });
+            const providers = buildSelectedProviders(
+                schema.enforcedPipelineId ? { pipeline: schema.enforcedPipelineId } : {},
+                schema,
+            );
+            return {
+                providers: providers as CreateItemsGeneratorDto['providers'],
+                pluginConfig: schema.defaultValues,
+            };
+        } catch (error) {
+            this.logger.warn(
+                `quick-create: the generator form schema of work ${workId} could not be read; ` +
+                    `starting its generation with the default providers: ${
+                        error instanceof Error ? error.message : String(error)
+                    }`,
+            );
+            return null;
+        }
     }
 
     @Get('works/:id')

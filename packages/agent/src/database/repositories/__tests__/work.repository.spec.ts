@@ -165,6 +165,31 @@ describe('WorkRepository', () => {
         });
     });
 
+    describe('findLatestByUserAndCorrelationId', () => {
+        it("answers the user's newest Work carrying that zero-friction correlation id", async () => {
+            const row = { id: 'w1' } as Work;
+            repository.findOne.mockResolvedValueOnce(row);
+
+            await expect(service.findLatestByUserAndCorrelationId('u1', 'corr-1')).resolves.toBe(
+                row,
+            );
+
+            expect(repository.findOne).toHaveBeenCalledWith({
+                where: { userId: 'u1', lastDeployCorrelationId: 'corr-1' },
+                order: { createdAt: 'DESC' },
+            });
+        });
+
+        it('never queries without a user or a correlation id (a blank id would match every Work without one)', async () => {
+            await expect(service.findLatestByUserAndCorrelationId('u1', '')).resolves.toBeNull();
+            await expect(
+                service.findLatestByUserAndCorrelationId('', 'corr-1'),
+            ).resolves.toBeNull();
+
+            expect(repository.findOne).not.toHaveBeenCalled();
+        });
+    });
+
     describe('findByOwnerAndSlug', () => {
         it('queries by (userId, owner, slug) when owner is truthy, joining user', async () => {
             const row = { id: 'w1' } as Work;
