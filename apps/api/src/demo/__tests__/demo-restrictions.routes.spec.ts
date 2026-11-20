@@ -1,7 +1,10 @@
-import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import {
+    API_SRC,
+    readApiGraphChildRequest,
+    runApiGraphChild,
+} from '../../__tests__/api-graph-child.helper-spec';
 // Types only at the top: the child `require`s this file before it imports `ApiModule`, and
 // must load the API graph in the API's own order. The spec side loads the values itself.
 import type { DemoBlockedRoute } from '../demo-restrictions';
@@ -16,12 +19,10 @@ import type { DemoBlockedRoute } from '../demo-restrictions';
  *
  * ## How the routes are collected, and why a child process
  *
- * Importing `ApiModule` under this app's jest does not work (ts-jest type-checks the whole
- * program; api jest's `@src/` mapper hands agent files the API's same-named files; better-auth
- * ships ESM) — `app-works-di-reachability.spec.ts` explains each. So, as that spec does, a
- * child `node` process compiles `.ts` with `@swc/core` and `nest build -b swc`'s options,
- * resolves each package's `paths` aliases against that package's tsconfig and the rest with
- * api jest's `moduleNameMapper`, and imports the real `ApiModule` with `DEMO=true`.
+ * Importing `ApiModule` under this app's jest does not work (`api-graph-child.helper-spec.ts`
+ * explains why), so the spec runs itself in a child `node` process with that helper's loader
+ * — the one `app-works-di-reachability.spec.ts` uses — which imports the real `ApiModule`
+ * with `DEMO=true`.
  *
  * There it runs Nest's own `DependenciesScanner.scan(ApiModule)` — the scan `NestFactory.create`
  * runs, without instantiating anything — and reads, for every module the scan registered, its
@@ -52,116 +53,14 @@ interface RouteReport {
     readonly guards: RegisteredGuard[];
 }
 
-interface ChildRequest {
-    readonly repo: string;
-    readonly apiRoot: string;
-    readonly spec: string;
-    readonly out: string;
-    /** api jest's `moduleNameMapper`, minus its `@src/` rules, `<rootDir>` made absolute. */
-    readonly mapper: [string, string[]][];
-}
-
 const CHILD_FLAG = 'EW_DEMO_RESTRICTIONS_ROUTES_CHILD';
-const API_ROOT = resolve(__dirname, '..', '..', '..');
-const API_SRC = join(API_ROOT, 'src');
-const REPO = resolve(API_ROOT, '..', '..');
-
-/**
- * The child's loader, plain CommonJS so nothing has to be compiled to start it — the loader of
- * `app-works-di-reachability.spec.ts`, minus its Trigger-task branch.
- */
-const CHILD_BOOTSTRAP = [
-    "'use strict';",
-    "const Module = require('node:module');",
-    "const fs = require('node:fs');",
-    "const path = require('node:path');",
-    `const request = JSON.parse(process.env.${CHILD_FLAG});`,
-    "const fromApi = Module.createRequire(path.join(request.apiRoot, 'package.json'));",
-    "const swc = fromApi('@swc/core');",
-    "const ts = fromApi('typescript');",
-    'const swcOptions = {',
-    "    module: { type: 'commonjs' },",
-    '    jsc: {',
-    "        target: 'es2021',",
-    "        parser: { syntax: 'typescript', decorators: true, dynamicImport: true },",
-    '        transform: { legacyDecorator: true, decoratorMetadata: true, useDefineForClassFields: false },',
-    '        keepClassNames: true,',
-    '    },',
-    '    minify: false,',
-    '    swcrc: false,',
-    '};',
-    'const tsconfigs = new Map();',
-    'function compilerOptionsOf(root) {',
-    '    if (!tsconfigs.has(root)) {',
-    "        const read = ts.readConfigFile(path.join(root, 'tsconfig.json'), ts.sys.readFile);",
-    '        tsconfigs.set(root, ts.convertCompilerOptionsFromJson((read.config && read.config.compilerOptions) || {}, root).options);',
-    '    }',
-    '    return tsconfigs.get(root);',
-    '}',
-    "Module._extensions['.ts'] = function (module, filename) {",
-    "    const source = fs.readFileSync(filename, 'utf8');",
-    '    module._compile(swc.transformSync(source, { ...swcOptions, filename }).code, filename);',
-    '};',
-    'function packageRootOf(file) {',
-    '    let dir = path.dirname(file);',
-    '    while (dir.startsWith(request.repo) && dir !== request.repo) {',
-    "        if (fs.existsSync(path.join(dir, 'package.json')) && fs.existsSync(path.join(dir, 'tsconfig.json'))) return dir;",
-    '        dir = path.dirname(dir);',
-    '    }',
-    '    return null;',
-    '}',
-    'function candidates(spec, parent) {',
-    '    const from = parent && parent.filename;',
-    "    if (from && !from.includes(path.sep + 'node_modules' + path.sep)) {",
-    '        const root = packageRootOf(from);',
-    '        if (root) {',
-    '            const options = compilerOptionsOf(root);',
-    '            const baseUrl = options.baseUrl || root;',
-    '            for (const [pattern, targets] of Object.entries(options.paths || {})) {',
-    "                const star = pattern.indexOf('*');",
-    '                const prefix = star < 0 ? pattern : pattern.slice(0, star);',
-    "                const suffix = star < 0 ? '' : pattern.slice(star + 1);",
-    '                const hit = star < 0 ? spec === pattern : spec.startsWith(prefix) && spec.endsWith(suffix) && spec.length >= prefix.length + suffix.length;',
-    '                if (!hit) continue;',
-    "                const middle = star < 0 ? '' : spec.slice(prefix.length, spec.length - suffix.length);",
-    "                return targets.map((target) => path.resolve(baseUrl, target.replace('*', middle)));",
-    '            }',
-    '        }',
-    '    }',
-    '    for (const [source, targets] of request.mapper) {',
-    '        const match = new RegExp(source).exec(spec);',
-    "        if (match) return targets.map((target) => target.replace(/\\$(\\d+)/g, (_, i) => match[Number(i)] || ''));",
-    '    }',
-    '    return null;',
-    '}',
-    'const resolveFilename = Module._resolveFilename;',
-    'Module._resolveFilename = function (spec, parent, isMain, options) {',
-    '    const mapped = candidates(spec, parent);',
-    '    if (mapped) {',
-    '        for (const candidate of mapped) {',
-    '            try { return resolveFilename.call(this, candidate, parent, isMain, options); } catch (error) { /* next */ }',
-    '        }',
-    '    }',
-    '    try {',
-    '        return resolveFilename.call(this, spec, parent, isMain, options);',
-    '    } catch (error) {',
-    "        if (spec.startsWith('.') && spec.endsWith('.js')) return resolveFilename.call(this, spec.slice(0, -3), parent, isMain, options);",
-    '        throw error;',
-    '    }',
-    '};',
-    "fromApi('reflect-metadata');",
-    'require(request.spec).runDemoRoutesChild().then(',
-    '    () => process.exit(0),',
-    '    (error) => { console.error((error && error.stack) || error); process.exit(1); },',
-    ');',
-].join('\n');
 
 /* -------------------------------------------------------------------------- *
  * The child: Nest's own scan of the real ApiModule
  * -------------------------------------------------------------------------- */
 
 export async function runDemoRoutesChild(): Promise<void> {
-    const request = JSON.parse(process.env[CHILD_FLAG] ?? '{}') as ChildRequest;
+    const request = readApiGraphChildRequest(CHILD_FLAG);
     writeFileSync(request.out, JSON.stringify(await collectRoutes()));
 }
 
@@ -262,41 +161,13 @@ async function collectRoutes(): Promise<RouteReport> {
  * -------------------------------------------------------------------------- */
 
 function runChild(): RouteReport {
-    const config = jest.requireActual<{ moduleNameMapper: Record<string, string | string[]> }>(
-        join(API_ROOT, 'jest.config.js'),
-    );
-    const mapper: [string, string[]][] = Object.entries(config.moduleNameMapper)
-        .filter(([source]) => !source.startsWith('^@src/'))
-        .map(([source, target]) => [
-            source,
-            (Array.isArray(target) ? target : [target]).map((path) =>
-                path.replace('<rootDir>', API_SRC),
-            ),
-        ]);
-    const out = join(tmpdir(), `demo-restrictions-routes-${process.pid}-${Date.now()}.json`);
-    const request: ChildRequest = { repo: REPO, apiRoot: API_ROOT, spec: __filename, out, mapper };
-    try {
-        const child = spawnSync(
-            process.execPath,
-            ['--max-old-space-size=4096', '-e', CHILD_BOOTSTRAP],
-            {
-                cwd: API_ROOT,
-                env: { ...process.env, DEMO: 'true', [CHILD_FLAG]: JSON.stringify(request) },
-                encoding: 'utf8',
-                maxBuffer: 64 * 1024 * 1024,
-                timeout: 10 * 60 * 1000,
-            },
-        );
-        if (child.status !== 0 || !existsSync(out)) {
-            throw new Error(
-                `The route child failed (status ${String(child.status)}, signal ${String(child.signal)}):\n` +
-                    `${child.stderr}\n${String(child.stdout).slice(-4000)}`,
-            );
-        }
-        return JSON.parse(readFileSync(out, 'utf8')) as RouteReport;
-    } finally {
-        rmSync(out, { force: true });
-    }
+    return runApiGraphChild<RouteReport>({
+        childFlag: CHILD_FLAG,
+        entry: 'runDemoRoutesChild',
+        spec: __filename,
+        label: 'demo-restrictions-routes',
+        env: { DEMO: 'true' },
+    });
 }
 
 /** A concrete path Express would route to the template: every parameter filled in. */
@@ -341,6 +212,10 @@ const MUST_STAY_OPEN: { method: string; path: string; body?: unknown }[] = [
     { method: 'POST', path: '/api/works/w-1/generate' },
     { method: 'GET', path: '/api/plugins/openrouter/models' },
     { method: 'GET', path: '/api/plugins' },
+    { method: 'POST', path: '/api/plugins/openrouter/enable', body: {} },
+    { method: 'POST', path: '/api/works/w-1/plugins/openrouter/enable', body: { priority: 1 } },
+    { method: 'PUT', path: '/api/auth/profile', body: { displayName: 'Demo visitor' } },
+    { method: 'POST', path: '/api/works/w-1/invitations', body: { role: 'owner-claim' } },
     { method: 'POST', path: '/api/uploads/file' },
     { method: 'GET', path: '/api/oauth/github/connection' },
 ];
