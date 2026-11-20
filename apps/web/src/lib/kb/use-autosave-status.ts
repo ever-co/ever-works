@@ -1,6 +1,7 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useLatestRef } from '@/lib/hooks/use-latest-ref';
 
 /**
  * EW-641 slice B — shared autosave status/banner helper.
@@ -86,59 +87,65 @@ export function useAutosaveStatus({
     // Capture `save` in a ref so memoised callers don't have to also
     // memoise the save closure — the editor re-creates it per render
     // because it closes over the editor instance.
-    const saveRef = useRef(save);
-    saveRef.current = save;
+    const saveRef = useLatestRef(save);
 
-    const flush = useCallback(() => {
-        if (savingRef.current) return;
-        const candidate = pendingBodyRef.current;
-        if (candidate === lastSavedBodyRef.current) {
-            setStatus('idle');
-            return;
-        }
-
-        savingRef.current = true;
-        setStatus('saving');
-        setErrorKind(null);
-
-        void (async () => {
-            const result = await saveRef.current({ candidate });
-            savingRef.current = false;
-
-            if (result.success) {
-                const confirmedBody = result.confirmedBody ?? candidate;
-                lastSavedBodyRef.current = confirmedBody;
-                setStatus('saved');
-                setSavedAt(Date.now());
-                // If the user typed more during the save, schedule a
-                // follow-up flush so the latest content actually lands.
-                if (pendingBodyRef.current !== confirmedBody) {
-                    armDebounce();
-                }
-            } else {
-                setErrorKind(classifyServerError(result.error));
-                setStatus('error');
+    // `flush` and `arm` call each other — a save that lands while the user
+    // kept typing re-arms the debounce — so they are built together. Both
+    // are function declarations, hoisted, so neither reads the other before
+    // it exists.
+    const armDebounce = useMemo(() => {
+        function arm(): void {
+            if (debounceRef.current !== null) {
+                clearTimeout(debounceRef.current);
             }
-        })();
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, []);
+            if (debounceMs <= 0) {
+                // Tests use 0 so the autosave path runs synchronously
+                // after the next microtask.
+                debounceRef.current = null;
+                flush();
+                return;
+            }
+            debounceRef.current = setTimeout(() => {
+                debounceRef.current = null;
+                flush();
+            }, debounceMs);
+        }
 
-    const armDebounce = useCallback(() => {
-        if (debounceRef.current !== null) {
-            clearTimeout(debounceRef.current);
+        function flush(): void {
+            if (savingRef.current) return;
+            const candidate = pendingBodyRef.current;
+            if (candidate === lastSavedBodyRef.current) {
+                setStatus('idle');
+                return;
+            }
+
+            savingRef.current = true;
+            setStatus('saving');
+            setErrorKind(null);
+
+            void (async () => {
+                const result = await saveRef.current({ candidate });
+                savingRef.current = false;
+
+                if (result.success) {
+                    const confirmedBody = result.confirmedBody ?? candidate;
+                    lastSavedBodyRef.current = confirmedBody;
+                    setStatus('saved');
+                    setSavedAt(Date.now());
+                    // If the user typed more during the save, schedule a
+                    // follow-up flush so the latest content actually lands.
+                    if (pendingBodyRef.current !== confirmedBody) {
+                        arm();
+                    }
+                } else {
+                    setErrorKind(classifyServerError(result.error));
+                    setStatus('error');
+                }
+            })();
         }
-        if (debounceMs <= 0) {
-            // Tests use 0 so the autosave path runs synchronously
-            // after the next microtask.
-            debounceRef.current = null;
-            flush();
-            return;
-        }
-        debounceRef.current = setTimeout(() => {
-            debounceRef.current = null;
-            flush();
-        }, debounceMs);
-    }, [debounceMs, flush]);
+
+        return arm;
+    }, [debounceMs, saveRef]);
 
     const schedule = useCallback(
         (next: string) => {

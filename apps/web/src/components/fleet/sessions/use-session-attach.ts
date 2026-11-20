@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useLatestRef } from '@/lib/hooks/use-latest-ref';
 import type { FleetSessionAttachRole, FleetSessionNotice } from '@ever-works/contracts';
 import { browserApiFetch } from '@/lib/api/browser-api';
 import {
@@ -106,12 +107,9 @@ export function useSessionAttach(
     const [nonce, setNonce] = useState(0);
 
     const socketRef = useRef<FleetSessionSocket | null>(null);
-    const callbacksRef = useRef(callbacks);
-    callbacksRef.current = callbacks;
-    const sizeRef = useRef(options.size);
-    sizeRef.current = options.size;
-    const heldRef = useRef('');
-    heldRef.current = held;
+    const callbacksRef = useLatestRef(callbacks);
+    const sizeRef = useLatestRef(options.size);
+    const heldRef = useLatestRef(held);
     const droppedRef = useRef(false);
 
     useEffect(() => {
@@ -275,7 +273,7 @@ export function useSessionAttach(
             setHeld('');
             setHeldOffered(false);
         }
-    }, []);
+    }, [heldRef]);
 
     const discardHeld = useCallback(() => {
         setHeld('');

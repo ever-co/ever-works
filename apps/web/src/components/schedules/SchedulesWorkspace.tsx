@@ -7,6 +7,7 @@ import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { getSchedulePage, getScheduleHealth } from '@/app/actions/dashboard/schedules';
 import type { ScheduleEntry, ScheduleHealthSummary, SchedulePage } from '@/lib/api/schedules';
 import { ActivityViewHeader } from '@/components/activity-log/ActivityViewHeader';
+import { useLatestRef } from '@/lib/hooks/use-latest-ref';
 import { ScheduleHealthBanner } from './ScheduleHealthBanner';
 import { ScheduleWorkspaceRow } from './ScheduleWorkspaceRow';
 import { SchedulesCreateMenu } from './SchedulesCreateMenu';
@@ -27,6 +28,24 @@ import {
 const REFRESH_MS = 60_000;
 /** Never re-read more pages than this on a background refresh. */
 const MAX_REFRESH_PAGES = 10;
+
+/**
+ * `known` plus every agent named on `rows` (the latest name wins). Answers
+ * `known` itself when nothing is new, so the state update is a no-op.
+ */
+function withAgentsFrom(
+    known: ReadonlyMap<string, string>,
+    rows: readonly ScheduleEntry[],
+): ReadonlyMap<string, string> {
+    let next: Map<string, string> | null = null;
+    for (const row of rows) {
+        if (!row.agentId || !row.agentName) continue;
+        if ((next ?? known).get(row.agentId) === row.agentName) continue;
+        next ??= new Map(known);
+        next.set(row.agentId, row.agentName);
+    }
+    return next ?? known;
+}
 
 function offsetFrom(page: SchedulePage | null): number {
     if (!page?.generatedAt) return 0;
@@ -97,7 +116,12 @@ export function SchedulesWorkspace({
     const [health, setHealth] = useState<ScheduleHealthSummary | null>(initialHealth);
     const [healthFailed, setHealthFailed] = useState(initialHealthFailed);
     const [serverOffsetMs, setServerOffsetMs] = useState(() => offsetFrom(initialPage));
-    const knownAgents = useRef(new Map<string, string>());
+    // Every agent any loaded row has named, so the agent filter keeps offering
+    // an agent after a filter narrows the rows down to none of its schedules.
+    // Grown wherever rows arrive (the setItems calls below), never in render.
+    const [knownAgents, setKnownAgents] = useState(() =>
+        withAgentsFrom(new Map(), initialPage?.items ?? []),
+    );
     /**
      * Did the server hand this instance a result — a page, or a recorded
      * failure to retry? See the mount effect below for why the answer decides
@@ -112,12 +136,13 @@ export function SchedulesWorkspace({
      */
     const generation = useRef(0);
 
-    for (const row of items) {
-        if (row.agentId && row.agentName) knownAgents.current.set(row.agentId, row.agentName);
-    }
-    const agents = [...knownAgents.current.entries()]
-        .map(([id, name]) => ({ id, name }))
-        .sort((a, b) => a.name.localeCompare(b.name));
+    const agents = useMemo(
+        () =>
+            [...knownAgents.entries()]
+                .map(([id, name]) => ({ id, name }))
+                .sort((a, b) => a.name.localeCompare(b.name)),
+        [knownAgents],
+    );
 
     const load = useCallback(
         async (pageCount: number, showSpinner: boolean) => {
@@ -143,6 +168,7 @@ export function SchedulesWorkspace({
                 } while (cursor && loaded < Math.min(pageCount, MAX_REFRESH_PAGES));
                 setFailed(false);
                 setItems(collected);
+                setKnownAgents((known) => withAgentsFrom(known, collected));
                 setPage(last);
                 setPagesLoaded(Math.max(1, loaded));
                 setServerOffsetMs(offsetFrom(last));
@@ -190,8 +216,7 @@ export function SchedulesWorkspace({
     }, [load]);
 
     // Background refresh: every minute, and as soon as the tab is visible again.
-    const pagesRef = useRef(pagesLoaded);
-    pagesRef.current = pagesLoaded;
+    const pagesRef = useLatestRef(pagesLoaded);
     useEffect(() => {
         const refresh = () => {
             if (document.visibilityState !== 'visible') return;
@@ -204,7 +229,7 @@ export function SchedulesWorkspace({
             window.clearInterval(timer);
             document.removeEventListener('visibilitychange', refresh);
         };
-    }, [load, loadHealth]);
+    }, [load, loadHealth, pagesRef]);
 
     const setFilters = useCallback(
         (next: SchedulesFilterState) => {
@@ -234,6 +259,7 @@ export function SchedulesWorkspace({
             if (request !== generation.current) return;
             if (response.ok) {
                 setItems((current) => [...current, ...response.page.items]);
+                setKnownAgents((known) => withAgentsFrom(known, response.page.items));
                 setPage(response.page);
                 setPagesLoaded((count) => count + 1);
             }
@@ -245,6 +271,7 @@ export function SchedulesWorkspace({
     const onRowChanged = (updated?: ScheduleEntry) => {
         if (updated) {
             setItems((current) => current.map((row) => (row.id === updated.id ? updated : row)));
+            setKnownAgents((known) => withAgentsFrom(known, [updated]));
         }
         void load(pagesRef.current, false);
         void loadHealth();

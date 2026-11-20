@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useLatestRef } from '@/lib/hooks/use-latest-ref';
 import {
     FLEET_PORT_LIST_REFRESH_MS,
     FLEET_PORT_WATCH_MAX,
@@ -26,8 +27,9 @@ export function usePortsLive(nodeId: string, enabled = true) {
     const [slow, setSlow] = useState(false);
     const [watch, setWatch] = useState<number[]>([]);
     const inFlight = useRef(false);
-    const watchRef = useRef<number[]>(watch);
-    watchRef.current = watch;
+    // The handlers below also write it ahead of `setWatch`, so a reload they
+    // start reads the new list before the commit lands.
+    const watchRef = useLatestRef<number[]>(watch);
 
     const reload = useCallback(async () => {
         if (inFlight.current) return;
@@ -44,7 +46,7 @@ export function usePortsLive(nodeId: string, enabled = true) {
             inFlight.current = false;
             setLoading(false);
         }
-    }, [nodeId]);
+    }, [nodeId, watchRef]);
 
     useEffect(() => {
         if (!enabled) return;
@@ -79,15 +81,18 @@ export function usePortsLive(nodeId: string, enabled = true) {
             // Read now, with the new watch list, rather than in up to 5 s.
             setTimeout(() => void reload(), 0);
         },
-        [reload],
+        [reload, watchRef],
     );
-    const removeWatch = useCallback((port: number) => {
-        setWatch((current) => {
-            const next = current.filter((value) => value !== port);
-            watchRef.current = next;
-            return next;
-        });
-    }, []);
+    const removeWatch = useCallback(
+        (port: number) => {
+            setWatch((current) => {
+                const next = current.filter((value) => value !== port);
+                watchRef.current = next;
+                return next;
+            });
+        },
+        [watchRef],
+    );
 
     return { list, error, loading, slow, watch, addWatch, removeWatch, reload };
 }

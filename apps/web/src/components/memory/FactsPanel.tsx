@@ -8,6 +8,7 @@ import { Link } from '@/i18n/navigation';
 import { browserApiFetch } from '@/lib/api/browser-api';
 import { ROUTES } from '@/lib/constants';
 import { cn } from '@/lib/utils/cn';
+import { useLatestRef } from '@/lib/hooks/use-latest-ref';
 import {
     MEMORY_FACT_ACTIVE_MAX,
     MEMORY_FACT_FORGET_ALL_CONFIRMATION,
@@ -134,10 +135,10 @@ export function FactsPanel({ initial, initialLoadFailed, onTidyUp }: FactsPanelP
     // the owner switched views must refetch the view they are looking at, not
     // the one that was showing when they clicked — a closure over `view` would
     // reload "All" into the Forgotten view.
-    const viewRef = useRef(view);
-    const queryRef = useRef(query);
-    viewRef.current = view;
-    queryRef.current = query;
+    // `selectView` also writes `viewRef` itself, ahead of the commit, so the
+    // fetch it starts and a write that lands before the commit agree.
+    const viewRef = useLatestRef(view);
+    const queryRef = useLatestRef(query);
     // Bumped whenever the list is replaced wholesale (a page from the server,
     // or a view switch clearing it). An optimistic change that fails rolls
     // back only while the list is still the one it changed — once a newer
@@ -206,7 +207,7 @@ export function FactsPanel({ initial, initialLoadFailed, onTidyUp }: FactsPanelP
 
     const refresh = useCallback(
         () => runFetch({ view: viewRef.current, query: queryRef.current }),
-        [runFetch],
+        [runFetch, viewRef, queryRef],
     );
 
     // Debounced refetch on typing; the server already rendered the first page.
@@ -496,7 +497,6 @@ export function FactsPanel({ initial, initialLoadFailed, onTidyUp }: FactsPanelP
     // A failed load knows nothing about the workspace: never call it empty.
     const workspaceEmpty =
         !loadFailed && !searching && view === 'all' && facts.length === 0 && liveCount === 0;
-    rowRefs.current = [];
 
     return (
         <section
@@ -706,6 +706,9 @@ export function FactsPanel({ initial, initialLoadFailed, onTidyUp }: FactsPanelP
                             {facts.map((fact, index) => (
                                 <li key={fact.id}>
                                     <FactRow
+                                        // A fresh callback each render: React detaches every
+                                        // old one (null at its old index) before attaching the
+                                        // new ones, so a shorter list leaves only nulls behind.
                                         ref={(element) => {
                                             rowRefs.current[index] = element;
                                         }}
