@@ -18,17 +18,20 @@ export default async function RegisterPage({
 }: {
     searchParams: Promise<RegisterSearchParams>;
 }) {
+    // One read of `/auth/providers` gives both the social providers (exactly what
+    // `getConfiguredAuthProviders` returns, offline fallback included) and the
+    // additive Ever ID availability (APW-12). Asked for at once with the demo
+    // config, an independent read of the API.
+    const [demo, { socialProviders: availableSocialProviders, everId }] = await Promise.all([
+        getDemoConfig(),
+        getAuthProvidersConfig(),
+    ]);
+
     // Demo instance: registration is closed (403 from the API). Show where accounts
     // are really created plus the one-click demo, and skip the form entirely.
-    const demo = await getDemoConfig();
     if (demo.enabled) {
         return <DemoRegisterPanel signUpUrl={demo.signUpUrl} ttlHours={demo.sandboxTtlHours} />;
     }
-
-    // One read of `/auth/providers` gives both the social providers (exactly what
-    // `getConfiguredAuthProviders` returns, offline fallback included) and the
-    // additive Ever ID availability (APW-12).
-    const { socialProviders: availableSocialProviders, everId } = await getAuthProvidersConfig();
     // APW-12 — the flag is evaluated only when an administrator enabled Ever ID.
     const everIdEnabled = await isEverIdOffered(everId, EVER_ID_ANONYMOUS_DISTINCT_ID);
     // Identity carried over from Stripe Checkout — see `register-prefill.ts`.

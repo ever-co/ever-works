@@ -1,4 +1,5 @@
 import 'server-only';
+import { cache } from 'react';
 import { API_URL } from '@/lib/constants';
 
 /**
@@ -31,7 +32,14 @@ const DISABLED: DemoConfig = {
     sandboxTtlHours: DEFAULT_DEMO_SANDBOX_TTL_HOURS,
 };
 
-export async function getDemoConfig(): Promise<DemoConfig> {
+/**
+ * Read once per server request (`React.cache`): the login page, the session check, the dashboard
+ * strip and the expiry redirect may each ask during one render. Outside a render (a server action,
+ * a route handler) every call reads the API, as before.
+ */
+export const getDemoConfig = cache(readDemoConfig);
+
+async function readDemoConfig(): Promise<DemoConfig> {
     try {
         const response = await fetch(`${API_URL}/config`, {
             cache: 'no-store',

@@ -17,9 +17,12 @@ export async function generateMetadata(): Promise<Metadata> {
 
 export default async function LoginPage() {
     const locale = await getLocale();
-    const { socialProviders, magicLinkEnabled, everId } = await getAuthProvidersConfig();
+    // Two independent reads of the API, asked for at once.
+    const [{ socialProviders, magicLinkEnabled, everId }, demo] = await Promise.all([
+        getAuthProvidersConfig(),
+        getDemoConfig(),
+    ]);
     const user = await getAuthFromCookieOnSignIn();
-    const demo = await getDemoConfig();
     if (user) {
         return redirect({ locale, href: ROUTES.DASHBOARD });
     }

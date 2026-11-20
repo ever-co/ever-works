@@ -52,4 +52,20 @@ describe('RegisterPage', () => {
         expect(el.props).toEqual({ signUpUrl: 'https://example.test/register', ttlHours: 12 });
         expect(mocks.getRequiredTerms).not.toHaveBeenCalled();
     });
+
+    // R42 b: two independent reads of the API, asked for at once instead of one after the other.
+    it('asks for the auth providers while the demo config is still loading', async () => {
+        let releaseDemo: (value: unknown) => void = () => undefined;
+        mocks.getDemoConfig.mockReturnValue(
+            new Promise((resolve) => {
+                releaseDemo = resolve;
+            }),
+        );
+
+        const page = RegisterPage({ searchParams: Promise.resolve({}) });
+        await vi.waitFor(() => expect(mocks.getAuthProvidersConfig).toHaveBeenCalledTimes(1));
+        releaseDemo({ enabled: false });
+
+        expect(((await page) as ReactElement).type).toBe(RegisterForm);
+    });
 });

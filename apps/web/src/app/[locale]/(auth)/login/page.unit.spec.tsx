@@ -100,6 +100,33 @@ describe('LoginPage — Ever ID props', () => {
         expect((await renderedClientProps()).demo).toEqual({ ttlHours: 12 });
     });
 
+    // R42 b: the demo config and the auth providers are two independent reads of the API; the
+    // page asks for both at once instead of one after the other. The props are the same.
+    it('asks for the demo config while the auth providers are still loading', async () => {
+        let releaseProviders: (value: unknown) => void = () => undefined;
+        mocks.getAuthProvidersConfig.mockReturnValue(
+            new Promise((resolve) => {
+                releaseProviders = resolve;
+            }),
+        );
+
+        const page = LoginPage();
+        await vi.waitFor(() => expect(mocks.getDemoConfig).toHaveBeenCalledTimes(1));
+        releaseProviders({
+            socialProviders: ['github'],
+            magicLinkEnabled: true,
+            everId: EVER_ID_OFF,
+        });
+
+        const client = ((await page) as ReactElement<{ children: ReactElement<LoginClientProps> }>)
+            .props.children;
+        expect(client.props).toMatchObject({
+            availableSocialProviders: ['github'],
+            magicLinkEnabled: true,
+            demo: null,
+        });
+    });
+
     it('offers the button when the switch and the flag allow it', async () => {
         mocks.isEverIdOffered.mockResolvedValue(true);
 
