@@ -213,6 +213,35 @@ describe('DataGeneratorService runtime YAML certification', () => {
         });
     });
 
+    it('names an Error that has no message by its error name', async () => {
+        jest.spyOn(DataRepository, 'create').mockResolvedValue({
+            assertRuntimeCompatible: jest.fn(),
+            getCategories: jest.fn().mockResolvedValue([]),
+            getTags: jest.fn().mockResolvedValue([]),
+            getCollections: jest.fn().mockResolvedValue([]),
+            getReferences: jest.fn().mockResolvedValue([]),
+            getItems: jest.fn().mockResolvedValue([]),
+            getConfig: jest.fn().mockResolvedValue(null),
+        } as unknown as DataRepository);
+        pipelineOrchestrator.execute.mockResolvedValue({
+            success: false,
+            error: Object.assign(new Error(''), { name: 'AI_RetryError' }),
+            outputs: { items: [] },
+            warnings: [],
+        });
+
+        await expect(
+            service.initialize(work, user, {
+                name: work.name,
+                prompt: 'A directory of AI robot companies',
+                generation_method: GenerationMethod.RECREATE,
+            } as any),
+        ).resolves.toMatchObject({
+            success: false,
+            error: { code: 'GENERATION_FAILED', message: 'AI_RetryError' },
+        });
+    });
+
     it('keeps a string pipeline error as it is', async () => {
         jest.spyOn(DataRepository, 'create').mockResolvedValue({
             assertRuntimeCompatible: jest.fn(),

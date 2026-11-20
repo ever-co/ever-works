@@ -77,6 +77,17 @@ describe('consumeStreamWithLogging: a stream that fails before any step finished
 		).rejects.toThrow('upstream refused the request');
 	});
 
+	it('names the failure even when the stream error carries no value', async () => {
+		for (const error of [undefined, null, '', {}]) {
+			await expect(
+				consumeStreamWithLogging(
+					{ fullStream: streamOf({ type: 'error', error }) },
+					{ scope: 'Parent agent', stepIndex: 1 }
+				)
+			).rejects.toThrow('Parent agent: the AI provider stream failed without an error message');
+		}
+	});
+
 	it('logs an object error by its message, not as [object Object]', async () => {
 		const onLogEntry = vi.fn();
 		await consumeStreamWithLogging(

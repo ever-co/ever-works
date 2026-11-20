@@ -37,17 +37,30 @@ function getStepNumber(currentStepNumber: number): number {
 	return currentStepNumber > 0 ? currentStepNumber : 1;
 }
 
-function formatError(error: unknown): string {
-	if (error instanceof Error) return error.message;
-	if (typeof error === 'object' && error !== null) {
+/** The error's own text, or `undefined` when it carries none. */
+function describeError(error: unknown): string | undefined {
+	if (error === undefined || error === null) return undefined;
+	if (error instanceof Error) return error.message || undefined;
+	if (typeof error === 'object') {
 		const { message } = error as { message?: unknown };
-		if (typeof message === 'string' && message) return message;
+		return typeof message === 'string' && message ? message : undefined;
 	}
-	return String(error);
+	return String(error) || undefined;
 }
 
-function toError(error: unknown): Error {
-	return error instanceof Error ? error : new Error(formatError(error));
+function formatError(error: unknown): string {
+	return describeError(error) ?? String(error);
+}
+
+function toError(error: unknown, scope: string): Error {
+	const message = describeError(error);
+	if (error instanceof Error && message) return error;
+	if (message) return new Error(message);
+	const fallback: Error & { cause?: unknown } = new Error(
+		`${scope}: the AI provider stream failed without an error message`
+	);
+	if (error !== undefined && error !== null) fallback.cause = error;
+	return fallback;
 }
 
 /**
@@ -222,6 +235,6 @@ export async function consumeStreamWithLogging<TOOLS extends ToolSet>(
 	}
 
 	if (streamFailed && finishedSteps === 0) {
-		throw toError(streamError);
+		throw toError(streamError, options.scope);
 	}
 }
