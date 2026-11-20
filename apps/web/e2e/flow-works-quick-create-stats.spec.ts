@@ -277,6 +277,12 @@ test.describe('Works quick-create — DTO + provider gate (keyless CI)', () => {
         if (status === 400) {
             // Refused before anything was created: no Work, so no repository either.
             expect(after.total, 'a refused quick-create persists no work').toBe(0);
+            const check = await request.get(`${API_BASE}/api/works/check-slug?slug=${slug}`, {
+                headers: authHeaders(token),
+            });
+            expect(check.status(), 'check-slug -> 200').toBe(200);
+            const checkBody = (await check.json()) as { available?: boolean };
+            expect(checkBody.available, 'a refused quick-create leaves its slug free').toBe(true);
             return;
         }
         expect(status, 'a started quick-create answers 2xx').toBeLessThan(300);

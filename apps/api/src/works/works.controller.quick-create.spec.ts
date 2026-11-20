@@ -497,13 +497,18 @@ describe("WorksController.quickCreateWork — the pipeline's required providers 
             requiredProvidersThrows: refusal(),
         });
 
-        const call = (controller as any).quickCreateWork(auth, {
-            ...baseDto,
-            correlationId: 'corr-1',
-        });
+        const refused = await (controller as any)
+            .quickCreateWork(auth, {
+                ...baseDto,
+                correlationId: 'corr-1',
+            })
+            .then(
+                () => undefined,
+                (error: unknown) => error,
+            );
 
-        await expect(call).rejects.toBeInstanceOf(BadRequestException);
-        await expect(call).rejects.toMatchObject({
+        expect(refused).toBeInstanceOf(BadRequestException);
+        expect(refused).toMatchObject({
             response: {
                 message: 'One or more selected providers are not available.',
                 providerErrors: {
