@@ -142,10 +142,12 @@ jobs:
             'API — version JSON|https://api.ever.works/api/version|gitSha'
             'Docs (Docusaurus)|https://docs.ever.works/|Ever Works Platform'
             'Demo directory|https://dir.ever.works/|Discover | Awesome Directories'
-            # Secondary surface, NOT in CRITICAL_URLS. Until the platform-demo rollout
-            # demo.ever.works still serves the old directory template, so this row is
-            # expected to be red for a few runs. Accepted.
-            'Platform demo|https://demo.ever.works/login|Sign In | Ever Works'
+            # Platform demo (docs/guides/demo-mode.md): uncomment in the rollout PR,
+            # once demo.ever.works serves the platform login. Until then it serves
+            # the old directory template, and ANY failing row (critical or not)
+            # opens/updates the shared "Uptime:" alert issue, which would keep a
+            # false outage open. When enabled it stays out of CRITICAL_URLS.
+            # 'Platform demo|https://demo.ever.works/login|Sign In | Ever Works'
             'MCP server — health JSON|https://mcp.ever.works/health|"status":"ok"'
           )
 

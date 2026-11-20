@@ -109,7 +109,7 @@ The Ever Works git provider creates every repository in `EVER_WORKS_CUSTOMERS_GI
 7. **Trigger.dev.** A project for the demo with `DEMO=true`, the demo API's internal URL and secret, and the plugin keys and model ids. Cap it to a small concurrency so demo runs never crowd out production runs on shared workers.
 8. **Switch off** on the demo: billing and subscriptions, credits enforcement, deploys, fleet, terminal sessions, Ever Connect, statistics, scheduled updates, template auto-update, magic links, OAuth client ids and the mailer. Switch on: project Works, git storage, the customers' org, and Trigger.dev where Works must run.
 9. **Check it.** `GET /api/config` shows `features.demoMode: true`. "Start the demo" lands in a sandbox. After the TTL the sandbox and its repositories are gone. Search the org for the `ever-works-demo` topic and expect no leftovers.
-10. **Monitoring.** `external-uptime-monitor.yml` probes `https://demo.ever.works/login` ("Platform demo") and `https://dir.ever.works/` ("Demo directory").
+10. **Monitoring.** `external-uptime-monitor.yml` probes `https://dir.ever.works/` ("Demo directory"). Its "Platform demo" row for `https://demo.ever.works/login` ships commented out: uncomment it once the demo host serves the platform login, because any failing row opens the shared uptime alert issue.
 
 ## Local try-out
 
