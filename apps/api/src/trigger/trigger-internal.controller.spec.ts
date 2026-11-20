@@ -186,6 +186,11 @@ jest.mock('../work-proposals/work-proposals.service', () => ({
 jest.mock('../demo/demo-ai-quota.service', () => ({
     DemoAiQuotaService: class DemoAiQuotaService {},
 }));
+// Platform demo mode — the repository ledger is an injection token here; its storing is
+// asserted in `src/demo/__tests__/demo-repo-ledger.service.spec.ts`.
+jest.mock('../demo/demo-repo-ledger.service', () => ({
+    DemoRepoLedgerService: class DemoRepoLedgerService {},
+}));
 
 const getInternalSecretMock = jest.fn<string | undefined, []>();
 jest.mock('@ever-works/agent/config', () => ({
@@ -2015,6 +2020,91 @@ describe('TriggerInternalController', () => {
             for (let index = at; index < paramTypes.length; index += 1) {
                 expect(optionalIndices).toContain(index);
             }
+        });
+    });
+
+    // -------------------------------------------------------------------
+    // Platform demo mode — the workers' repository ledger (`DEMO_REPO_LEDGER` in
+    // `trigger-facades.module.ts` is a proxy of this name)
+    // -------------------------------------------------------------------
+
+    describe('the DemoRepoLedgerService remote target (platform demo mode)', () => {
+        const ENTRY = {
+            sandboxUserId: '9f1c2d3e-4b5a-4c6d-8e7f-0a1b2c3d4e5f',
+            owner: 'ever-works-cloud',
+            name: 'demo-0a1b2c3d-awesome-ai-coding-tools-website',
+            githubId: null,
+        };
+        const recordBody = (args: unknown[]) => ({
+            name: 'DemoRepoLedgerService',
+            method: 'record',
+            args: superjson.serialize(args) as any,
+        });
+
+        let ledger: { record: jest.Mock; markDeleted: jest.Mock };
+
+        beforeEach(() => {
+            ledger = {
+                record: jest.fn().mockResolvedValue(undefined),
+                markDeleted: jest.fn().mockResolvedValue(undefined),
+            };
+        });
+
+        it("reaches record over the hop with the worker's entry", async () => {
+            (controller as any).demoRepoLedgerService = ledger;
+            controller.onModuleInit();
+
+            const response = await controller.callRemote(VALID_SECRET, recordBody([ENTRY]));
+
+            expect(ledger.record).toHaveBeenCalledTimes(1);
+            expect(ledger.record).toHaveBeenCalledWith(ENTRY);
+            expect(superjson.deserialize(response.result as any)).toBeUndefined();
+        });
+
+        it('passes the entry alone: a second argument is dropped', async () => {
+            (controller as any).demoRepoLedgerService = ledger;
+            controller.onModuleInit();
+
+            await controller.callRemote(VALID_SECRET, recordBody([ENTRY, { extra: true }]));
+
+            expect(ledger.record).toHaveBeenCalledWith(ENTRY);
+            expect(ledger.record.mock.calls[0]).toHaveLength(1);
+        });
+
+        it('exposes record ONLY (a worker can never close or delete a row)', async () => {
+            (controller as any).demoRepoLedgerService = ledger;
+            controller.onModuleInit();
+
+            await expect(
+                controller.callRemote(VALID_SECRET, {
+                    name: 'DemoRepoLedgerService',
+                    method: 'markDeleted',
+                    args: superjson.serialize(['row-1', new Date()]) as any,
+                }),
+            ).rejects.toThrow('Method not in allow-list for DemoRepoLedgerService: markDeleted');
+            expect(ledger.markDeleted).not.toHaveBeenCalled();
+        });
+
+        it('is an unknown target when the demo is off (the service is not bound)', async () => {
+            (controller as any).demoRepoLedgerService = undefined;
+            controller.onModuleInit();
+
+            await expect(controller.callRemote(VALID_SECRET, recordBody([ENTRY]))).rejects.toThrow(
+                'Unknown remote target: DemoRepoLedgerService',
+            );
+        });
+
+        it('appends the service in the @Optional() tail', () => {
+            const paramTypes: unknown[] =
+                Reflect.getMetadata('design:paramtypes', TriggerInternalController) ?? [];
+            const optionalIndices: number[] =
+                Reflect.getMetadata('optional:paramtypes', TriggerInternalController) ?? [];
+            const at = paramTypes.findIndex(
+                (type) => (type as { name?: string })?.name === 'DemoRepoLedgerService',
+            );
+
+            expect(at).toBe(paramTypes.length - 1);
+            expect(optionalIndices).toContain(at);
         });
     });
 });

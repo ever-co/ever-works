@@ -13,6 +13,11 @@ const SANDBOX_WINDOW_CACHE_MS = 60_000;
 /** Bound on that per-user cache; the least recently read entry goes first. */
 const SANDBOX_WINDOW_CACHE_MAX = 1_000;
 
+/** The usage-counter key of one sandbox's AI requests (the demo sweeper removes it with the sandbox). */
+export function sandboxQuotaKey(userId: string | undefined): string {
+    return `ai:sandbox:${userId}`;
+}
+
 /**
  * Platform demo mode (`DEMO=true`) — the AI quota behind `DEMO_AI_QUOTA`, kept in
  * `demo_usage_counters` so every API pod and (through the remote proxy) every Trigger
@@ -53,7 +58,7 @@ export class DemoAiQuotaService implements DemoAiQuotaPort {
         const perSandbox = config.demo.aiRequestsPerSandbox();
         const dayKey = dayKeyOf(now);
         const sandboxEndsAt = userId ? await this.sandboxWindowEnd(userId) : null;
-        const sandboxKey = `ai:sandbox:${userId}`;
+        const sandboxKey = sandboxQuotaKey(userId);
 
         // 1. Read the day and the sandbox: a used-up one refuses with nothing counted.
         const [usedToday, usedInSandbox] = await Promise.all([

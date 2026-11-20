@@ -11,6 +11,9 @@ import type { EverWorksProviderWorkRef } from '../types';
 
 const ORG = 'ever-works-cloud';
 
+/** A demo instance with no repository ledger bound refuses every create (ruling R22). */
+const ledger = { record: jest.fn().mockResolvedValue(undefined) };
+
 function work(userSlug: string): EverWorksProviderWorkRef {
     return {
         id: 'b8a4f8e0-1234-4def-aaaa-bbbbbbbbbbbb',
@@ -66,7 +69,7 @@ describe('EverWorksGitProvider.createRepository — demo repository prefix', () 
 
         it('refuses anon-x-foo before calling GitHub', async () => {
             const fetchImpl = jest.fn();
-            const provider = new EverWorksGitProvider();
+            const provider = new EverWorksGitProvider(ledger);
 
             const result = provider.createRepository({ work: work('anon-x'), fetchImpl });
 
@@ -80,7 +83,7 @@ describe('EverWorksGitProvider.createRepository — demo repository prefix', () 
 
         it('creates demo-1a2b3c4d-foo', async () => {
             const fetchImpl = jest.fn().mockResolvedValueOnce(created('demo-1a2b3c4d-foo'));
-            const provider = new EverWorksGitProvider();
+            const provider = new EverWorksGitProvider(ledger);
 
             const repo = await provider.createRepository({
                 work: work('demo-1a2b3c4d'),
@@ -98,7 +101,7 @@ describe('EverWorksGitProvider.createRepository — demo repository prefix', () 
                 .fn()
                 .mockResolvedValueOnce(nameTaken())
                 .mockResolvedValueOnce(created('demo-1a2b3c4d-foo-b8a4f8e'));
-            const provider = new EverWorksGitProvider();
+            const provider = new EverWorksGitProvider(ledger);
 
             await provider.createRepository({ work: work('demo-1a2b3c4d'), fetchImpl });
 
@@ -110,7 +113,7 @@ describe('EverWorksGitProvider.createRepository — demo repository prefix', () 
         it('follows DEMO_REPO_PREFIX', async () => {
             process.env.DEMO_REPO_PREFIX = 'ewdemo-';
             const fetchImpl = jest.fn();
-            const provider = new EverWorksGitProvider();
+            const provider = new EverWorksGitProvider(ledger);
 
             await expect(
                 provider.createRepository({ work: work('demo-1a2b3c4d'), fetchImpl }),

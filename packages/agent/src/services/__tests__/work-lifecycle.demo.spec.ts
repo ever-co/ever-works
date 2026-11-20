@@ -52,10 +52,13 @@ const otherUser = {
     registrationProvider: 'local',
 } as User;
 
-/** The real provider, its GitHub calls going to `fetchImpl`. */
+/**
+ * The real provider, its GitHub calls going to `fetchImpl`. It records into a ledger double:
+ * on a demo instance with no repository ledger bound it refuses every create (ruling R22).
+ */
 class FetchInjectedEverWorksGit extends EverWorksGitProvider {
     constructor(private readonly fetchImpl: EverWorksGitHttpFetch) {
-        super();
+        super({ record: jest.fn().mockResolvedValue(undefined) });
     }
 
     override createRepository(options: Parameters<EverWorksGitProvider['createRepository']>[0]) {

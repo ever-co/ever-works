@@ -21,6 +21,7 @@ jest.mock('@ever-works/agent/services', () => ({
     KnowledgeBaseModule: class KnowledgeBaseModule {},
     WorkLifecycleService: class WorkLifecycleService {},
     KnowledgeBaseService: class KnowledgeBaseService {},
+    AnonymousUserCleanupService: class AnonymousUserCleanupService {},
 }));
 jest.mock('@ever-works/agent/missions', () => ({
     MissionsModule: class MissionsModule {},
@@ -38,23 +39,33 @@ jest.mock('@ever-works/agent/tasks-domain', () => ({
 
 import { Inject, Injectable, Module, Optional } from '@nestjs/common';
 import { APP_FILTER, APP_GUARD } from '@nestjs/core';
+import { ScheduleModule, SchedulerRegistry } from '@nestjs/schedule';
 import { Test, type TestingModule } from '@nestjs/testing';
 import { TypeOrmModule, getRepositoryToken } from '@nestjs/typeorm';
 import type { Repository } from 'typeorm';
 import {
     DatabaseModule,
+    DemoGithubRepoRepository,
     DemoUsageCounterRepository,
     ENTITIES,
     UserRepository,
 } from '@ever-works/agent/database';
-import { DemoUsageCounter, User } from '@ever-works/agent/entities';
-import { DEMO_AI_QUOTA, type DemoAiQuotaPort } from '@ever-works/agent/demo';
+import { CacheEntry, DemoGithubRepo, DemoUsageCounter, User } from '@ever-works/agent/entities';
+import {
+    DEMO_AI_QUOTA,
+    DEMO_REPO_LEDGER,
+    type DemoAiQuotaPort,
+    type DemoRepoLedgerPort,
+} from '@ever-works/agent/demo';
 import { DemoModule } from '../demo.module';
 import { DemoSandboxSeederService } from '../seed/demo-sandbox-seeder.service';
 import { DemoAiQuotaService } from '../demo-ai-quota.service';
 import { DemoController } from '../demo.controller';
 import { DemoErrorFilter } from '../demo-error.filter';
 import { DemoRestrictionsGuard } from '../demo-restrictions.guard';
+import { DemoRepoLedgerService } from '../demo-repo-ledger.service';
+import { DemoSandboxPurgeService } from '../demo-sandbox-purge.service';
+import { DemoSandboxSweeperService } from '../demo-sandbox-sweeper.service';
 
 /**
  * Platform demo mode — `DemoModule.register()` against a REAL Nest container.
@@ -72,11 +83,20 @@ class QuotaConsumer {
     constructor(@Optional() @Inject(DEMO_AI_QUOTA) readonly quota?: DemoAiQuotaPort) {}
 }
 
+/**
+ * Injects the ledger the way `EverWorksGitProvider` (agent `WorkModule`) and
+ * `GitFacadeService` (agent `FacadesModule`) do: from modules that import nothing from the demo.
+ */
+@Injectable()
+class LedgerConsumer {
+    constructor(@Optional() @Inject(DEMO_REPO_LEDGER) readonly ledger?: DemoRepoLedgerPort) {}
+}
+
 /** A module that imports nothing from the demo, like the agent `FacadesModule`. */
-@Module({ providers: [QuotaConsumer] })
+@Module({ providers: [QuotaConsumer, LedgerConsumer] })
 class UnrelatedModule {}
 
-/** `DatabaseModule`, reduced to the two repositories the quota reads, on in-memory SQLite. */
+/** `DatabaseModule`, reduced to the repositories the demo's own providers read, on in-memory SQLite. */
 @Module({
     imports: [
         TypeOrmModule.forRoot({
@@ -85,10 +105,10 @@ class UnrelatedModule {}
             entities: ENTITIES,
             synchronize: true,
         }),
-        TypeOrmModule.forFeature([DemoUsageCounter, User]),
+        TypeOrmModule.forFeature([DemoUsageCounter, User, DemoGithubRepo, CacheEntry]),
     ],
-    providers: [DemoUsageCounterRepository, UserRepository],
-    exports: [DemoUsageCounterRepository, UserRepository],
+    providers: [DemoUsageCounterRepository, UserRepository, DemoGithubRepoRepository],
+    exports: [TypeOrmModule, DemoUsageCounterRepository, UserRepository, DemoGithubRepoRepository],
 })
 class InMemoryDatabaseModule {}
 
@@ -122,12 +142,16 @@ describe('DemoModule', () => {
 
     async function compile(): Promise<TestingModule> {
         moduleRef = await Test.createTestingModule({
-            imports: [DemoModule.register(), UnrelatedModule],
+            imports: [ScheduleModule.forRoot(), DemoModule.register(), UnrelatedModule],
         })
             .overrideModule(DatabaseModule)
             .useModule(InMemoryDatabaseModule)
             .overrideProvider(DemoSandboxSeederService)
             .useValue({ seed: jest.fn() })
+            // The purge drives the Work and anonymous-user services of the agent `WorkModule`
+            // (stubbed above); `demo.module.wiring.spec.ts` resolves it against the real one.
+            .overrideProvider(DemoSandboxPurgeService)
+            .useValue({ purge: jest.fn(), hasGenerationInFlight: jest.fn() })
             .compile();
         return moduleRef;
     }
@@ -149,6 +173,22 @@ describe('DemoModule', () => {
             await ref.init();
 
             expect(ref.get(QuotaConsumer, { strict: false }).quota).toBeUndefined();
+        });
+
+        it('leaves DEMO_REPO_LEDGER unbound for every consumer', async () => {
+            const ref = await compile();
+            await ref.init();
+
+            expect(ref.get(LedgerConsumer, { strict: false }).ledger).toBeUndefined();
+        });
+
+        it('registers no sweeper and no cron job', async () => {
+            const ref = await compile();
+            await ref.init();
+
+            expect(DemoModule.register().providers ?? []).not.toContain(DemoSandboxSweeperService);
+            expect(ref.get(SchedulerRegistry).getCronJobs().size).toBe(0);
+            expect(() => ref.get(DemoSandboxSweeperService, { strict: false })).toThrow();
         });
     });
 
@@ -198,6 +238,57 @@ describe('DemoModule', () => {
                 ['ai:min:2026-11-20T08:30', 1],
                 [`ai:sandbox:${sandbox.id}`, 1],
             ]);
+        });
+
+        it('binds DEMO_REPO_LEDGER globally to the DB-backed ledger (ruling R22)', async () => {
+            const ref = await compile();
+            await ref.init();
+
+            const service = ref.get(DemoRepoLedgerService, { strict: false });
+            expect(service).toBeInstanceOf(DemoRepoLedgerService);
+            expect(ref.get(DEMO_REPO_LEDGER, { strict: false })).toBe(service);
+            // A module that imports nothing from the demo still receives it.
+            expect(ref.get(LedgerConsumer, { strict: false }).ledger).toBe(service);
+        });
+
+        it('records a repository in the real demo_github_repos table', async () => {
+            const ref = await compile();
+            await ref.init();
+
+            await ref.get(LedgerConsumer, { strict: false }).ledger!.record({
+                sandboxUserId: '9f1c2d3e-4b5a-4c6d-8e7f-0a1b2c3d4e5f',
+                owner: 'ever-works-cloud',
+                name: 'demo-0a1b2c3d-awesome-ai-coding-tools',
+                githubId: 812345678,
+            });
+
+            const rows = await ref
+                .get<Repository<DemoGithubRepo>>(getRepositoryToken(DemoGithubRepo), {
+                    strict: false,
+                })
+                .find();
+            expect(rows).toEqual([
+                expect.objectContaining({
+                    sandboxUserId: '9f1c2d3e-4b5a-4c6d-8e7f-0a1b2c3d4e5f',
+                    owner: 'ever-works-cloud',
+                    name: 'demo-0a1b2c3d-awesome-ai-coding-tools',
+                    githubId: 812345678,
+                    deletedAt: null,
+                    attempts: 0,
+                }),
+            ]);
+        });
+
+        it('schedules the sweeper every 15 minutes', async () => {
+            const ref = await compile();
+            await ref.init();
+
+            expect(ref.get(DemoSandboxSweeperService, { strict: false })).toBeInstanceOf(
+                DemoSandboxSweeperService,
+            );
+            const job = ref.get(SchedulerRegistry).getCronJob('demo-sandbox-sweeper');
+            expect(String(job.cronTime.source)).toBe('*/15 * * * *');
+            expect(ref.get(SchedulerRegistry).getCronJobs().size).toBe(1);
         });
 
         it('registers DemoErrorFilter as a global filter', () => {

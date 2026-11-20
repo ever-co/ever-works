@@ -12,10 +12,18 @@ import { MailerService as MailerLibraryService } from '@nestjs-modules/mailer';
 import { Test, type TestingModule } from '@nestjs/testing';
 import { DataSource } from 'typeorm';
 import { OnboardingRoleSeedingService } from '@ever-works/agent/agents';
-import { UserRepository, WorkRepository } from '@ever-works/agent/database';
+import { DistributedTaskLockService } from '@ever-works/agent/cache';
+import {
+    DemoGithubRepoRepository,
+    UserRepository,
+    WorkRepository,
+} from '@ever-works/agent/database';
+import { DEMO_REPO_LEDGER } from '@ever-works/agent/demo';
+import { EverWorksGitProvider } from '@ever-works/agent/ever-works-providers';
 import { GoalsService } from '@ever-works/agent/goals';
 import { MissionsService } from '@ever-works/agent/missions';
 import {
+    AnonymousUserCleanupService,
     KnowledgeBaseBufferExtractorService,
     KnowledgeBaseService,
     WorkLifecycleService,
@@ -26,6 +34,9 @@ import { OrganizationService } from '../../organizations/organization.service';
 import { ScopeContextService } from '../../scope/scope-context.service';
 import { ScopeModule } from '../../scope/scope.module';
 import { DemoModule } from '../demo.module';
+import { DemoRepoLedgerService } from '../demo-repo-ledger.service';
+import { DemoSandboxPurgeService } from '../demo-sandbox-purge.service';
+import { DemoSandboxSweeperService } from '../demo-sandbox-sweeper.service';
 import { DemoSandboxSeederService } from '../seed/demo-sandbox-seeder.service';
 
 /**
@@ -63,7 +74,27 @@ const SEEDER_DEPENDENCIES = [
     ['dataSource', DataSource],
 ] as const;
 
-const REFUSED = new Set<unknown>(SEEDER_DEPENDENCIES.map(([, type]) => type));
+/** The sandbox purge's: the Work delete path and the anonymous-user purge of `WorkModule`. */
+const PURGE_DEPENDENCIES = [
+    ['dataSource', DataSource],
+    ['workLifecycle', WorkLifecycleService],
+    ['anonymousCleanup', AnonymousUserCleanupService],
+] as const;
+
+/** The sweeper's: the expired sandboxes, the ledger, GitHub, the purge, the run lock. */
+const SWEEPER_DEPENDENCIES = [
+    ['users', UserRepository],
+    ['ledger', DemoGithubRepoRepository],
+    ['everWorksGit', EverWorksGitProvider],
+    ['purger', DemoSandboxPurgeService],
+    ['taskLock', DistributedTaskLockService],
+] as const;
+
+const REFUSED = new Set<unknown>(
+    [...SEEDER_DEPENDENCIES, ...PURGE_DEPENDENCIES, ...SWEEPER_DEPENDENCIES].map(
+        ([, type]) => type,
+    ),
+);
 
 /** An object that answers every method with `undefined` (never thenable, no lifecycle hooks). */
 function inertStub(): object {
@@ -127,5 +158,37 @@ describe('DemoModule wiring (DEMO on, real domain modules)', () => {
         for (const [field, type] of SEEDER_DEPENDENCIES) {
             expect([field, fields[field] instanceof type]).toEqual([field, true]);
         }
+    });
+
+    it('names every constructor dependency of the sandbox purge and the sweeper', () => {
+        expect(Reflect.getMetadata('design:paramtypes', DemoSandboxPurgeService)).toEqual(
+            PURGE_DEPENDENCIES.map(([, type]) => type),
+        );
+        expect(Reflect.getMetadata('design:paramtypes', DemoSandboxSweeperService)).toEqual(
+            SWEEPER_DEPENDENCIES.map(([, type]) => type),
+        );
+    });
+
+    it("resolves the purge and the sweeper from DemoModule's own imports, every dependency the real service", () => {
+        expect(moduleRef).toBeDefined();
+        const purge = moduleRef!.get(DemoSandboxPurgeService, { strict: false });
+        const sweeper = moduleRef!.get(DemoSandboxSweeperService, { strict: false });
+        expect(purge).toBeInstanceOf(DemoSandboxPurgeService);
+        expect(sweeper).toBeInstanceOf(DemoSandboxSweeperService);
+        for (const [service, dependencies] of [
+            [purge, PURGE_DEPENDENCIES],
+            [sweeper, SWEEPER_DEPENDENCIES],
+        ] as const) {
+            const fields = service as unknown as Record<string, unknown>;
+            for (const [field, type] of dependencies) {
+                expect([field, fields[field] instanceof type]).toEqual([field, true]);
+            }
+        }
+        // The sweeper's own provider records into the same ledger the module exports.
+        const ledger = moduleRef!.get(DEMO_REPO_LEDGER, { strict: false });
+        expect(ledger).toBeInstanceOf(DemoRepoLedgerService);
+        expect(
+            (sweeper as unknown as { everWorksGit: { ledger?: unknown } }).everWorksGit.ledger,
+        ).toBe(ledger);
     });
 });

@@ -15,7 +15,7 @@ import {
     GitHubAppInstallationRepository,
 } from '@ever-works/agent/database';
 import { config } from '@ever-works/agent/config';
-import { DEMO_AI_QUOTA } from '@ever-works/agent/demo';
+import { DEMO_AI_QUOTA, DEMO_REPO_LEDGER } from '@ever-works/agent/demo';
 import { TriggerInternalModule } from './trigger-internal.module';
 import { TriggerInternalApiClient } from '../services/trigger-internal-api.client';
 import { createRemoteProxy } from '../remote-proxy';
@@ -82,6 +82,19 @@ const FACADES = [
             useFactory: (apiClient: TriggerInternalApiClient) =>
                 config.demo.isEnabled()
                     ? createRemoteProxy(apiClient, 'DemoAiQuotaService')
+                    : undefined,
+            inject: [TriggerInternalApiClient],
+        },
+        // Platform demo mode — `GitFacadeService` (above) records every repository it creates
+        // on a demo instance in the demo repository ledger (the website repository generation
+        // makes here), and refuses to create one while this token is unbound: an unledgered
+        // repository could never be swept. The ledger is the API's `DemoRepoLedgerService`,
+        // reached by name (its `record` only). With `DEMO` off the factory binds nothing.
+        {
+            provide: DEMO_REPO_LEDGER,
+            useFactory: (apiClient: TriggerInternalApiClient) =>
+                config.demo.isEnabled()
+                    ? createRemoteProxy(apiClient, 'DemoRepoLedgerService')
                     : undefined,
             inject: [TriggerInternalApiClient],
         },

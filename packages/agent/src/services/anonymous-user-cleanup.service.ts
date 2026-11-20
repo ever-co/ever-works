@@ -5,6 +5,7 @@ import {
     TenantRepository,
     UserRepository,
 } from '../database';
+import type { User } from '../entities/user.entity';
 
 /**
  * Injection token for the active storage backend (an `IStoragePlugin`).
@@ -33,6 +34,18 @@ export interface AnonymousUserCleanupSummary {
     storageDeleted: number;
     /** Number of users whose storage-GC step errored (separate from row-delete failures). */
     storageFailed: number;
+}
+
+/** What {@link AnonymousUserCleanupService.purgeUser} did for one user. */
+export interface AnonymousUserPurgeOutcome {
+    /** The user row is gone. */
+    deleted: boolean;
+    /** Storage objects removed. */
+    storageDeleted: number;
+    /** The storage GC step errored (the row is still deleted). */
+    storageFailed: boolean;
+    /** Why the user was kept, when `deleted` is false. */
+    error?: string;
 }
 
 /**
@@ -91,55 +104,21 @@ export class AnonymousUserCleanupService {
         }
 
         this.logger.log(`anonymous-user-cleanup found ${expired.length} expired user(s)`);
-        const storageGcAvailable = typeof this.storage?.deleteAllByOwner === 'function';
-        if (!storageGcAvailable) {
+        if (!this.storageGcAvailable()) {
             this.logger.warn(
                 `anonymous-user-cleanup: no storage plugin wired (or plugin lacks deleteAllByOwner) — user rows will be deleted but uploaded files will not be GC'd. Wire ANON_CLEANUP_STORAGE_PLUGIN to fix.`,
             );
         }
 
         for (const user of expired) {
-            // Step 0: hand the user's shared folders to another member of
-            // each Organization. A failure skips this user for the run —
-            // deleting the row anyway would cascade the folders away — and
-            // the next nightly run retries.
-            try {
-                await this.handOverSharedFolders(user.id);
-            } catch (cause) {
-                summary.failed += 1;
-                const error = cause instanceof Error ? cause.message : String(cause);
-                summary.failures.push({ userId: user.id, error });
-                this.logger.error(
-                    `anonymous-user-cleanup: shared-folder hand-over failed for ${user.id} (user kept for the next run): ${error}`,
-                );
-                continue;
-            }
-
-            // Step 1: GC the user's uploaded files. Best-effort — we log
-            // and count failures but still delete the user row so the
-            // TTL contract holds.
-            if (storageGcAvailable) {
-                try {
-                    const out = await this.storage!.deleteAllByOwner!(user.id);
-                    summary.storageDeleted += out.deleted;
-                } catch (cause) {
-                    summary.storageFailed += 1;
-                    const error = cause instanceof Error ? cause.message : String(cause);
-                    this.logger.error(
-                        `anonymous-user-cleanup: storage GC failed for ${user.id} (will still delete user row): ${error}`,
-                    );
-                }
-            }
-
-            // Step 2: delete the user row (cascades work / refresh tokens / etc).
-            try {
-                await this.userRepository.deleteAnonymous(user.id);
+            const outcome = await this.purgeUser(user);
+            summary.storageDeleted += outcome.storageDeleted;
+            if (outcome.storageFailed) summary.storageFailed += 1;
+            if (outcome.deleted) {
                 summary.deleted += 1;
-            } catch (cause) {
+            } else {
                 summary.failed += 1;
-                const error = cause instanceof Error ? cause.message : String(cause);
-                summary.failures.push({ userId: user.id, error });
-                this.logger.error(`Failed to delete expired anonymous user ${user.id}: ${error}`);
+                summary.failures.push({ userId: user.id, error: outcome.error ?? 'unknown' });
             }
         }
 
@@ -148,6 +127,64 @@ export class AnonymousUserCleanupService {
         );
 
         return summary;
+    }
+
+    /**
+     * Purge ONE anonymous user — the per-user body of {@link purgeExpired}, public for the
+     * platform demo sweeper, which removes an expired demo sandbox's Works, content,
+     * Organization and Tenant first and then the user through here. Never throws: a failure
+     * is answered (and logged) so a batch carries on.
+     *
+     *   0. Hand the user's shared folders to another member of each Organization. A failure
+     *      keeps the user (deleting the row would cascade the folders away) for the next run.
+     *   1. GC the user's uploaded files, best effort: a failure is counted, and the row still
+     *      goes so the TTL contract holds. Skipped when no storage plugin is wired.
+     *   2. Delete the user row (cascades work / refresh tokens / etc).
+     */
+    async purgeUser(user: Pick<User, 'id'>): Promise<AnonymousUserPurgeOutcome> {
+        const outcome: AnonymousUserPurgeOutcome = {
+            deleted: false,
+            storageDeleted: 0,
+            storageFailed: false,
+        };
+
+        try {
+            await this.handOverSharedFolders(user.id);
+        } catch (cause) {
+            outcome.error = cause instanceof Error ? cause.message : String(cause);
+            this.logger.error(
+                `anonymous-user-cleanup: shared-folder hand-over failed for ${user.id} (user kept for the next run): ${outcome.error}`,
+            );
+            return outcome;
+        }
+
+        if (this.storageGcAvailable()) {
+            try {
+                const out = await this.storage!.deleteAllByOwner!(user.id);
+                outcome.storageDeleted = out.deleted;
+            } catch (cause) {
+                outcome.storageFailed = true;
+                const error = cause instanceof Error ? cause.message : String(cause);
+                this.logger.error(
+                    `anonymous-user-cleanup: storage GC failed for ${user.id} (will still delete user row): ${error}`,
+                );
+            }
+        }
+
+        try {
+            await this.userRepository.deleteAnonymous(user.id);
+            outcome.deleted = true;
+        } catch (cause) {
+            outcome.error = cause instanceof Error ? cause.message : String(cause);
+            this.logger.error(
+                `Failed to delete expired anonymous user ${user.id}: ${outcome.error}`,
+            );
+        }
+        return outcome;
+    }
+
+    private storageGcAvailable(): boolean {
+        return typeof this.storage?.deleteAllByOwner === 'function';
     }
 
     /**
