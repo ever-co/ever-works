@@ -565,7 +565,7 @@ describe('Ever Connect — membership resync', () => {
             order.length = 0;
             jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
             client.call.mockResolvedValueOnce(pages([member('sub-cara')])[0]);
-            const lost = { keep: async () => false, held: false };
+            const lost = { keep: async () => false, held: true };
             expect(await feed.pollOnce(0, lost)).toEqual({ handled: 0, more: false });
             expect(order).toEqual([]);
             expect(resync.isOwed()).toBe(true);
