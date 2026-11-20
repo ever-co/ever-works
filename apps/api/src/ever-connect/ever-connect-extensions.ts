@@ -21,6 +21,20 @@ export interface EverConnectFeedHandler {
 }
 
 /**
+ * A part of Ever Connect that keeps a copy of some state Ever Platform sends on
+ * the feed, and so must read that state again when the feed answers `410
+ * resync_required` (the installation was away longer than the feed keeps its
+ * events, and the events in between are gone). The feed waits for it before
+ * its position moves on: it answers `false` when the lease was lost on the
+ * way, and the position then stays where it was, so the replica that holds the
+ * lease next is answered `410` again and reads the state itself.
+ */
+export interface EverConnectResyncListener {
+    readonly name: string;
+    resyncAfterFeedGap(lease: EverConnectRoundLease): Promise<boolean>;
+}
+
+/**
  * A part of Ever Connect that has work to do on every round of the worker (on
  * the replica holding the Ever Connect lease, while the installation is
  * connected). `round` should not throw; one that does is logged by name and the
@@ -52,6 +66,7 @@ export class EverConnectExtensions {
     private readonly logger = new Logger(EverConnectExtensions.name);
     private readonly feedHandlers: EverConnectFeedHandler[] = [];
     private readonly participants: EverConnectRoundParticipant[] = [];
+    private readonly resyncListeners: EverConnectResyncListener[] = [];
     private appSync: EverConnectAppSyncReader | null = null;
     private readonly personData: PersonDataParticipant = {};
 
@@ -61,6 +76,35 @@ export class EverConnectExtensions {
 
     addRoundParticipant(participant: EverConnectRoundParticipant): void {
         if (!this.participants.includes(participant)) this.participants.push(participant);
+    }
+
+    addResyncListener(listener: EverConnectResyncListener): void {
+        if (!this.resyncListeners.includes(listener)) this.resyncListeners.push(listener);
+    }
+
+    /**
+     * The feed answered `410 resync_required`: every registered part reads its
+     * state again, one after the other. `false` when one lost the lease on the
+     * way (the feed's position must not move on); a part that throws is logged
+     * by name and the others still run.
+     */
+    async resyncAfterFeedGap(
+        lease: EverConnectRoundLease = EVER_CONNECT_LEASE_HELD,
+    ): Promise<boolean> {
+        // The lease already lost: nothing is read, and the position must not move.
+        if (!lease.held) return false;
+        for (const listener of this.resyncListeners) {
+            try {
+                if (!(await listener.resyncAfterFeedGap(lease))) return false;
+            } catch (error) {
+                this.logger.warn(
+                    `Ever Connect ${listener.name} resync failed: ${
+                        error instanceof Error ? error.name : 'unknown'
+                    }`,
+                );
+            }
+        }
+        return true;
     }
 
     /** The apps mirror says where it stands and which Organizations it runs for. */

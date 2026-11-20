@@ -63,7 +63,7 @@ Ever Works ships with a first-class plugin system. Plugins are standalone ESM pa
 | **AI gateways**        | OpenRouter _(default)_, Vercel AI Gateway                                                                                      |
 | **Search**             | Tavily _(default)_, Brave, Exa, SerpAPI, Perplexity, Bright Data, Firecrawl, Jina, Valyu, Linkup                               |
 | **Content extractors** | Local extractor _(default)_, Notion, PDF, Scrapfly                                                                             |
-| **Screenshots**        | ScreenshotOne, Urlbox, Scrapfly                                                                                                |
+| **Screenshots**        | Gotenberg (self-hosted, default), ScreenshotOne, Urlbox, Scrapfly                                                              |
 | **Git providers**      | GitHub _(default, with OAuth)_                                                                                                 |
 | **Deployment**         | Vercel _(default)_                                                                                                             |
 | **Data sources**       | Apify                                                                                                                          |

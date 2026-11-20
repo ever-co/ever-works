@@ -22,6 +22,7 @@ import { Link } from '@/i18n/navigation';
 import { ROUTES } from '@/lib/constants';
 import { cn } from '@/lib/utils/cn';
 import { useWorkspaceScope } from '@/lib/hooks/use-workspace-scope';
+import { useIsomorphicLayoutEffect } from '@/lib/hooks/use-latest-ref';
 import {
     formatFolderPath,
     type KbLibraryDocumentDto,
@@ -381,7 +382,11 @@ export function LibraryPanel({ initial, works = [] }: LibraryPanelProps) {
         },
         [refresh, restore, t],
     );
-    archiveRef.current = archive;
+    // `restore`'s Undo calls back into `archive`, declared after it — the ref
+    // breaks the cycle. Synced after commit, never during render.
+    useIsomorphicLayoutEffect(() => {
+        archiveRef.current = archive;
+    }, [archive]);
 
     const exportDoc = useCallback(
         async (doc: KbLibraryDocumentDto) => {

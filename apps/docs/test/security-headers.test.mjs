@@ -1,0 +1,155 @@
+/**
+ * docs.ever.works sends the security headers every Ever website sends (the ever.co baseline) and
+ * answers /.well-known/security.txt (RFC 9116), both from the docs image's nginx.conf.
+ *
+ * nginx drops every server-level `add_header` in a location that sets an `add_header` of its own,
+ * so a new Cache-Control location silently strips the security headers from the files it serves.
+ * These checks keep the set on the server block AND on every location that adds a header, keep the
+ * nginx version out of the Server header, and fail once security.txt's Expires date has passed.
+ *
+ * This reads the config; it does not start nginx. The image build and the live checks after a
+ * deploy (curl -I) cover the served responses.
+ *
+ * Run: `pnpm --filter ever-works-docs test` (node's built-in runner, no dependencies).
+ */
+import { describe, it } from 'node:test';
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const appDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const repoRoot = path.resolve(appDir, '../..');
+const nginxPath = '.deploy/docker/docs/nginx.conf';
+const nginx = readFileSync(path.join(repoRoot, nginxPath), 'utf8');
+
+/** Header name (lower case) -> the value every response must carry. All are sent with `always`. */
+const SECURITY_HEADERS = {
+	'x-content-type-options': 'nosniff',
+	'referrer-policy': 'strict-origin-when-cross-origin',
+	'x-frame-options': 'SAMEORIGIN',
+	'content-security-policy': "base-uri 'self'; object-src 'none'; frame-ancestors 'self'",
+	'permissions-policy': 'camera=(), geolocation=(), microphone=()'
+};
+
+/** A quoted nginx string body: anything but an unescaped quote. */
+const QUOTED = String.raw`"((?:[^"\\]|\\.)*)"`;
+
+/** `line` without its `#` comment; a `#` inside a quoted string is not a comment. */
+function stripComment(line) {
+	let quote;
+	for (let i = 0; i < line.length; i++) {
+		const ch = line[i];
+		if (ch === '\\') i++;
+		else if (quote) {
+			if (ch === quote) quote = undefined;
+		} else if (ch === '"' || ch === "'") quote = ch;
+		else if (ch === '#') return line.slice(0, i);
+	}
+	return line;
+}
+
+/**
+ * The `server` block's own directives and the directives of each location directly inside it,
+ * comments dropped. Blocks are tracked on a stack, so an enclosing `http { }` or a block nested in
+ * a location (`if`, `limit_except`) does not shift what counts as the server block.
+ */
+function parseBlocks(source) {
+	const server = [];
+	const locations = [];
+	const stack = [];
+	// A `{` on a line of its own belongs to the directive on the line before it.
+	for (const raw of source.replace(/\s*\n\s*\{/g, ' {').split('\n')) {
+		const line = stripComment(raw).trim().replace(/\s+/g, ' ');
+		if (!line) continue;
+		if (line.endsWith('{')) {
+			const name = line.slice(0, -1).trim();
+			const block = { name, lines: [] };
+			if (name.startsWith('location ') && stack.at(-1)?.name === 'server') locations.push(block);
+			stack.push(block);
+			continue;
+		}
+		if (line === '}') {
+			stack.pop();
+			continue;
+		}
+		const top = stack.at(-1);
+		if (top?.name === 'server') server.push(line);
+		else if (top) top.lines.push(line);
+	}
+	return { server, locations };
+}
+
+/** The `add_header` directives of a block: lower-case name -> { value, always }. */
+function addHeaders(lines) {
+	const headers = new Map();
+	const re = new RegExp(String.raw`^add_header (\S+) ${QUOTED}( always)? ?;$`);
+	for (const line of lines) {
+		const m = re.exec(line);
+		if (m) headers.set(m[1].toLowerCase(), { value: m[2], always: Boolean(m[3]) });
+	}
+	return headers;
+}
+
+function assertSecurityHeaders(lines, where) {
+	const headers = addHeaders(lines);
+	for (const [name, value] of Object.entries(SECURITY_HEADERS)) {
+		const got = headers.get(name);
+		assert.ok(got, `${where} must add_header ${name}`);
+		assert.equal(got.value, value, `${where}: ${name}`);
+		assert.ok(got.always, `${where}: add_header ${name} needs \`always\` (else 3xx/4xx responses lack it)`);
+	}
+}
+
+const { server, locations } = parseBlocks(nginx);
+
+describe('docs.ever.works nginx.conf sends the security headers', () => {
+	it('sets the full set at server level', () => {
+		assertSecurityHeaders(server, `${nginxPath} server block`);
+	});
+
+	it('repeats the full set in every location that adds a header of its own', () => {
+		const adding = locations.filter((l) => l.lines.some((line) => line.startsWith('add_header ')));
+		for (const location of adding) {
+			assertSecurityHeaders(location.lines, `\`${location.name}\` (sets its own add_header)`);
+		}
+	});
+
+	it('turns server_tokens off', () => {
+		assert.ok(server.includes('server_tokens off;'), `${nginxPath} must contain \`server_tokens off;\``);
+	});
+});
+
+describe('docs.ever.works serves /.well-known/security.txt', () => {
+	const location = locations.find((l) => l.name === 'location = /.well-known/security.txt');
+	/** The fields of the `return 200 "..."` body. nginx turns each `\n` in a quoted string into a newline. */
+	const fields = () => {
+		assert.ok(location, `${nginxPath} must have \`location = /.well-known/security.txt\``);
+		const re = new RegExp(String.raw`^return 200 ${QUOTED};$`);
+		const m = location.lines.map((line) => re.exec(line)).find(Boolean);
+		assert.ok(m, 'the security.txt location must `return 200 "<body>";`');
+		return m[1].split('\\n');
+	};
+
+	it('has an exact-match location answered as text/plain', () => {
+		assert.ok(location, `${nginxPath} must have \`location = /.well-known/security.txt\``);
+		assert.ok(location.lines.includes('default_type text/plain;'));
+		assert.ok(location.lines.includes('charset utf-8;'), 'security.txt must be text/plain; charset=utf-8');
+	});
+
+	// No Policy field is required (optional in RFC 9116): ever-co/ever-works has no SECURITY.md yet.
+	it('lists Contact, Preferred-Languages and Canonical', () => {
+		const body = fields();
+		assert.ok(body.includes('Contact: mailto:security@ever.co'));
+		assert.ok(body.includes('Preferred-Languages: en'));
+		assert.ok(body.includes('Canonical: https://docs.ever.works/.well-known/security.txt'));
+	});
+
+	it('has an Expires date in the future (RFC 9116: renew it before it passes)', () => {
+		const expires = fields().find((field) => field.startsWith('Expires: '));
+		assert.ok(expires, 'security.txt must have an Expires field');
+		const when = new Date(expires.slice('Expires: '.length));
+		assert.ok(!Number.isNaN(when.getTime()), `unparseable ${expires}`);
+		assert.ok(when.getTime() > Date.now(), `${expires} has passed: renew it in ${nginxPath}`);
+	});
+});

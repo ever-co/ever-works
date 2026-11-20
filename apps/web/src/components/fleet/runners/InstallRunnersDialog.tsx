@@ -1,6 +1,7 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState, useTransition } from 'react';
+import { useEffect, useMemo, useState, useTransition } from 'react';
+import { useLatestRef } from '@/lib/hooks/use-latest-ref';
 import { useTranslations } from 'next-intl';
 import { toast } from 'sonner';
 import { Check, Copy } from 'lucide-react';
@@ -195,8 +196,7 @@ export function InstallRunnersDialog({
     const [checkingPermission, setCheckingPermission] = useState(false);
     const [permissionKey, setPermissionKey] = useState(0);
     // Read when the options arrive, without re-reading them each time the list refreshes.
-    const existingNamesRef = useRef(existingNames);
-    existingNamesRef.current = existingNames;
+    const existingNamesRef = useLatestRef(existingNames);
 
     // The options, once per opening (and on "Check again").
     useEffect(() => {
@@ -219,7 +219,7 @@ export function InstallRunnersDialog({
         return () => {
             live = false;
         };
-    }, [open, nodeId, reloadKey]);
+    }, [open, nodeId, reloadKey, existingNamesRef]);
 
     const name = options?.nodeName ?? computer;
     const fit = options ? runnersThatFit(options) : 0;

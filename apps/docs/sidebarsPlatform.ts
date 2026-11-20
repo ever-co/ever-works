@@ -507,6 +507,7 @@ const sidebars: SidebarsConfig = {
 				'plugin-system/fireworks-plugin',
 				'plugin-system/cohere-plugin',
 				'plugin-system/serpapi-plugin',
+				'plugin-system/gotenberg-plugin',
 				'plugin-system/urlbox-plugin',
 				'plugin-system/screenshotone-plugin',
 				'plugin-system/valyu-plugin',

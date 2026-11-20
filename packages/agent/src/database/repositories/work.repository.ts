@@ -123,6 +123,29 @@ export class WorkRepository {
     }
 
     /**
+     * The user's newest Work created under a zero-friction funnel correlation id
+     * (`POST /api/works/quick-create` persists it on `lastDeployCorrelationId`),
+     * or `null`. Quick-create uses it so a retry of the same funnel — another
+     * "Generate now" click after a refused start — reuses that Work instead of
+     * creating another one with another managed repository.
+     *
+     * Both ids are required: a blank correlation id must never match the many
+     * Works that have none.
+     */
+    async findLatestByUserAndCorrelationId(
+        userId: string,
+        correlationId: string,
+    ): Promise<Work | null> {
+        if (!userId || !correlationId) {
+            return null;
+        }
+        return this.repository.findOne({
+            where: { userId, lastDeployCorrelationId: correlationId },
+            order: { createdAt: 'DESC' },
+        });
+    }
+
+    /**
      * Read one Work with its `user` relation, or `null` when the id is unknown.
      *
      * `manager` (see {@link create}) scopes the read to the transaction that is

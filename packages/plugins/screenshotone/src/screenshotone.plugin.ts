@@ -522,7 +522,9 @@ export class ScreenshotOnePlugin implements IPlugin, IScreenshotPlugin {
 			readme: [
 				'## What does ScreenshotOne do?',
 				'',
-				'ScreenshotOne is a screenshot capture API. When work items include source URLs, this plugin automatically generates preview images by capturing a screenshot of each page.',
+				'ScreenshotOne is a paid screenshot capture API. When work items include source URLs, this plugin automatically generates preview images by capturing a screenshot of each page.',
+				'',
+				'It is optional: the default screenshot provider is the self-hosted Gotenberg plugin, which costs nothing per screenshot. Enable ScreenshotOne only if you want its hosted extras and have a ScreenshotOne account.',
 				'',
 				'## Why use it?',
 				'',
