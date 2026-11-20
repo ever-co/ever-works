@@ -655,11 +655,11 @@ test.describe('Work generation lifecycle (Trigger-gated)', () => {
         request,
     }) => {
         // quick-create is the one-call create+generate path (wizard "Generate now").
-        // It sends the Generate form's provider selection (pipeline included, #3252), so
-        // only the pipeline is validated: keyless CI now usually answers 202 and the run
-        // starts. A refusal is still a truthful 4xx. Either way it answers from the
-        // enqueue family and never crashes; a 202 must carry the declared
-        // {work, generation} shape and a recorded run.
+        // It resolves the Generate form's provider selection and, BEFORE creating anything,
+        // requires the providers its pipeline needs: keyless CI is refused upfront (a
+        // truthful provider 400 naming them, no Work created). A keyed environment answers
+        // 202 and the run starts. Either way it answers from the enqueue family and never
+        // crashes; a 202 must carry the declared {work, generation} shape and a recorded run.
         const suffix = uniqueSuffix();
         const res = await request.post(`${API_BASE}/api/works/quick-create`, {
             data: {

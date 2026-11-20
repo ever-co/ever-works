@@ -469,15 +469,14 @@ test.describe('Work generation pipeline (multistep, Trigger-gated)', () => {
         }
     });
 
-    test('quick-create sends the Generate form providers (only the pipeline is validated) and PERSISTS the work first (non-atomic on a refusal)', async ({
+    test('quick-create checks the REQUIRED providers of its pipeline before creating anything (atomic refusal)', async ({
         request,
     }) => {
-        // Until #3252 quick-create sent no providers and so hit the SAME per-category default
-        // gate as a provider-less /generate: one empty optional key (Tavily) refused every
-        // quick-create in production after the Work and its repository were created. It now
-        // sends the Generate form's selection (pipeline included), so only the pipeline is
-        // validated. Keyless CI usually answers 202 and the run starts; a refusal is a
-        // provider-envelope 400 that names the pipeline, with the Work already persisted.
+        // Quick-create resolves the Generate form's provider selection and, BEFORE the Work
+        // or its managed repository exists, requires the providers the pipeline needs
+        // (validateRequiredProvidersForPipeline: AI, search, content extractor). Keyless CI is
+        // refused upfront with the Generate form's envelope naming the missing providers, and
+        // nothing is created. A keyed environment starts the run.
         const suffix = uniqueSuffix();
         const slug = `wgp-qc-${suffix}`;
         const res = await request.post(`${API_BASE}/api/works/quick-create`, {
@@ -501,41 +500,34 @@ test.describe('Work generation pipeline (multistep, Trigger-gated)', () => {
         expect(res.status(), 'quick-create must not 5xx').toBeLessThan(500);
 
         if (res.status() === 400 && body.providerErrors) {
-            expect(body.message, 'quick-create refusal is the provider envelope').toBe(
+            expect(body.message, 'quick-create refusal is the Generate form envelope').toBe(
                 PROVIDER_GATE_MESSAGE,
             );
-            expect(
-                Object.keys(body.providerErrors),
-                'with the form selection only the pipeline can refuse the start',
-            ).toEqual(['pipeline']);
-            // Create-FIRST: the Work was persisted before the generation step threw, so the
-            // slug is now TAKEN even though the combined call returned an error.
+            const categories = Object.keys(body.providerErrors);
+            expect(categories.length, 'the refusal names at least one provider').toBeGreaterThan(0);
+            for (const category of categories) {
+                expect(
+                    ['pipeline', 'ai', 'search', 'contentExtractor'],
+                    `${category}: only the pipeline and the providers it requires can refuse`,
+                ).toContain(category);
+            }
+
+            // ATOMIC: refused before anything was created, so the slug is still free and the
+            // user owns no such Work (and so no managed repository).
             const check = await request.get(`${API_BASE}/api/works/check-slug?slug=${slug}`, {
                 headers,
             });
             expect(check.status(), 'check-slug -> 200').toBe(200);
-            const checkBody = (await check.json()) as {
-                available?: boolean;
-                suggestion?: string;
-            };
-            expect(checkBody.available, 'quick-create persisted the work -> slug taken').toBe(
-                false,
+            const checkBody = (await check.json()) as { available?: boolean };
+            expect(checkBody.available, 'a refused quick-create created no work -> slug free').toBe(
+                true,
             );
-            expect(checkBody.suggestion, 'a free -N suggestion is offered').toBeTruthy();
-
-            // And the persisted work is listable + lifecycle-parked (generation never ran).
             const list = await request.get(`${API_BASE}/api/works?limit=100&search=${suffix}`, {
                 headers,
             });
             expect(list.status()).toBe(200);
             const match = ((await list.json()).works as WorkRecord[]).find((w) => w.slug === slug);
-            expect(match, 'persisted quick-create work is listed').toBeTruthy();
-            if (match) {
-                expectParkedLifecycle(
-                    await readWork(request, token, match.id),
-                    'quick-create persisted work',
-                );
-            }
+            expect(match, 'no work was persisted by the refused quick-create').toBeUndefined();
         } else if (res.status() === 202 && body.work?.id) {
             expect(body.status, 'quick-create happy path is pending').toBe('pending');
             await expectStartedLifecycle(request, token, body.work.id, 'quick-created');
