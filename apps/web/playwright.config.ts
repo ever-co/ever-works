@@ -95,8 +95,13 @@ export default defineConfig({
             // The unauth-specific tests must NOT run with stored auth state —
             // they assert things like "/works redirects to login" which is
             // only true when the user is signed out.
-            testIgnore:
+            testIgnore: [
                 /\/(auth|navigation|password-reset|user-journey|works-public|works-api|api-public-contract|notifications|accessibility|seo-meta|error-pages|error-page-contract|website-templates|subscriptions|conversations|git-providers|forms-validation|i18n-locales|i18n-fallback|internationalization-rtl|screenshot-and-deploy|health-meta|performance-budget|responsive-viewports|error-recovery-unauth|keyboard-navigation|print-styles|public-pages-cache|screenshots-visual|chat-api|chat-api-streaming|chat-api-events|csp-strict|web-vitals|pwa-offline|accessibility-axe-deep|sentry-error-reporting|mobile-touch|webrtc-permissions|bundle-size-budget|service-worker-update|polyfill-presence|xss-html-encoding|device-fingerprinting-opt-out|redirect-prevention|tls-version-header|referrer-policy-redirects|static-asset-fingerprint|feature-detect-storage|feature-detect-cookies-blocked|feature-detect-fetch-throws|geo-redirect-respect-pref|password-paste-allowed|iframe-sandbox|magic-link-ui)\.spec\.ts$/,
+                // Platform demo mode runs only in the two `demo*` projects below,
+                // against its own server (a demo instance refuses registration, so
+                // the `setup` project could not run there).
+                /[\\/]demo-mode\.spec\.ts$/,
+            ],
             use: {
                 ...devices['Desktop Chrome'],
                 storageState: './e2e/.auth/user.json',
@@ -108,6 +113,28 @@ export default defineConfig({
             name: 'chromium-no-auth',
             testMatch:
                 /\/(auth|navigation|password-reset|user-journey|works-public|works-api|api-public-contract|notifications|accessibility|seo-meta|error-pages|error-page-contract|website-templates|subscriptions|conversations|git-providers|forms-validation|i18n-locales|i18n-fallback|internationalization-rtl|screenshot-and-deploy|health-meta|performance-budget|responsive-viewports|error-recovery-unauth|keyboard-navigation|print-styles|public-pages-cache|screenshots-visual|chat-api|chat-api-streaming|chat-api-events|csp-strict|web-vitals|pwa-offline|accessibility-axe-deep|sentry-error-reporting|mobile-touch|webrtc-permissions|bundle-size-budget|service-worker-update|polyfill-presence|xss-html-encoding|device-fingerprinting-opt-out|redirect-prevention|tls-version-header|referrer-policy-redirects|static-asset-fingerprint|feature-detect-storage|feature-detect-cookies-blocked|feature-detect-fetch-throws|geo-redirect-respect-pref|password-paste-allowed|iframe-sandbox|magic-link-ui)\.spec\.ts$/,
+            use: {
+                ...devices['Desktop Chrome'],
+            },
+        },
+        // Platform demo mode (`e2e/demo-mode.spec.ts`). Inert unless E2E_DEMO is
+        // set: `demo` runs with E2E_DEMO=1 against an API booted with DEMO=true
+        // (`scripts/dev/demo-local.env.example`); `demo-off` runs with E2E_DEMO=0
+        // against one with DEMO unset. With E2E_DEMO unset every test skips, so
+        // the PR suite (no demo server) is unaffected. No auth state: a demo
+        // visitor signs in with "Start the demo".
+        {
+            name: 'demo',
+            testMatch: /[\\/]demo-mode\.spec\.ts$/,
+            grep: /@demo-on/,
+            use: {
+                ...devices['Desktop Chrome'],
+            },
+        },
+        {
+            name: 'demo-off',
+            testMatch: /[\\/]demo-mode\.spec\.ts$/,
+            grep: /@demo-off/,
             use: {
                 ...devices['Desktop Chrome'],
             },
