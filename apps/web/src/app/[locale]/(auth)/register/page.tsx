@@ -4,6 +4,8 @@ import RegisterForm from './register-form';
 import { prefillFromSearchParams, type RegisterSearchParams } from './register-prefill';
 import { getAuthProvidersConfig } from '@/lib/auth/providers';
 import { authAPI, type TermsAcceptanceDocument } from '@/lib/api';
+import { getDemoConfig } from '@/lib/feature-flags/demo';
+import { DemoRegisterPanel } from '@/components/demo/DemoRegisterPanel';
 import { EVER_ID_ANONYMOUS_DISTINCT_ID, isEverIdOffered } from '@/lib/feature-flags/ever-id';
 
 export async function generateMetadata(): Promise<Metadata> {
@@ -16,6 +18,13 @@ export default async function RegisterPage({
 }: {
     searchParams: Promise<RegisterSearchParams>;
 }) {
+    // Demo instance: registration is closed (403 from the API). Show where accounts
+    // are really created plus the one-click demo, and skip the form entirely.
+    const demo = await getDemoConfig();
+    if (demo.enabled) {
+        return <DemoRegisterPanel signUpUrl={demo.signUpUrl} ttlHours={demo.sandboxTtlHours} />;
+    }
+
     // One read of `/auth/providers` gives both the social providers (exactly what
     // `getConfiguredAuthProviders` returns, offline fallback included) and the
     // additive Ever ID availability (APW-12).

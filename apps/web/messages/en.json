@@ -13499,6 +13499,29 @@
             "opensInNewTab": "(opens in a new tab)"
         }
     },
+    "demo": {
+        "login": {
+            "title": "Try Ever Works — no sign-up needed",
+            "start": "Start the demo",
+            "starting": "Starting your demo…",
+            "note": "Your private demo workspace is deleted after {hours} hours. AI runs on free models and may be slower.",
+            "sample": "See a site Ever Works generated",
+            "expired": "Your demo workspace expired — start a new one",
+            "operatorLogin": "Operator login",
+            "errors": {
+                "full": "The demo is full right now — please try again in a few minutes.",
+                "throttled": "Too many attempts — please try again shortly.",
+                "captcha": "We could not verify your browser. Please try again.",
+                "generic": "Could not start the demo. Please try again."
+            }
+        },
+        "register": {
+            "title": "Create an account",
+            "body": "Accounts are created on the main Ever Works app. You can try this demo without one.",
+            "signUp": "Sign up on Ever Works",
+            "orTry": "Or just look around"
+        }
+    },
     "layout": {
         "auth": {
             "backToHome": "Back to home",

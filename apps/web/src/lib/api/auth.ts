@@ -107,6 +107,16 @@ export interface CreateAnonymousDto {
     correlationId?: string;
 }
 
+// Demo mode — `POST /auth/demo` mints a private sandbox account. 201 carries the
+// session token and the moment the sandbox is deleted.
+export interface StartDemoDto {
+    captchaToken?: string;
+}
+
+export interface StartDemoResponse extends AuthResponse {
+    expiresAt: string;
+}
+
 // Response Types
 export interface AuthResponse {
     access_token: string;
@@ -361,6 +371,15 @@ export const authAPI = {
     createAnonymous: async (data: CreateAnonymousDto) => {
         return serverMutation<AuthResponse>({
             endpoint: '/auth/anonymous',
+            data,
+            method: 'POST',
+            wrapInData: false,
+        });
+    },
+    // Demo mode — mint a private sandbox account. 404 when the instance is not a demo.
+    startDemo: async (data: StartDemoDto) => {
+        return serverMutation<StartDemoResponse>({
+            endpoint: '/auth/demo',
             data,
             method: 'POST',
             wrapInData: false,

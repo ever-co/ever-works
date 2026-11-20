@@ -46,6 +46,10 @@ vi.mock('react', async (importOriginal) => {
     };
 });
 
+vi.mock('../feature-flags/demo', () => ({
+    getDemoConfig: async () => ({ enabled: false, signUpUrl: '', sandboxTtlHours: 24 }),
+}));
+
 vi.mock('../api', () => ({
     authAPI: { getProfile: getProfileMock, getFreshProfile: vi.fn() },
 }));

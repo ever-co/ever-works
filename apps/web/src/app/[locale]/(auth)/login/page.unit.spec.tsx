@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
     getAuthFromCookie: vi.fn(),
+    getDemoConfig: vi.fn(),
     wasSignedOutByEverId: vi.fn(),
     hasEverIdSignOutMarker: vi.fn(),
     getAuthProvidersConfig: vi.fn(),
@@ -18,7 +19,7 @@ vi.mock('next-intl/server', () => ({
 }));
 vi.mock('@/i18n/navigation', () => ({ redirect: mocks.redirect }));
 vi.mock('@/lib/auth', () => ({
-    getAuthFromCookie: mocks.getAuthFromCookie,
+    getAuthFromCookieOnSignIn: mocks.getAuthFromCookie,
     wasSignedOutByEverId: mocks.wasSignedOutByEverId,
 }));
 vi.mock('@/lib/auth/ever-id-signed-out', () => ({
@@ -29,6 +30,7 @@ vi.mock('@/lib/feature-flags/ever-id', () => ({
     EVER_ID_ANONYMOUS_DISTINCT_ID: 'anonymous',
     isEverIdOffered: mocks.isEverIdOffered,
 }));
+vi.mock('@/lib/feature-flags/demo', () => ({ getDemoConfig: mocks.getDemoConfig }));
 vi.mock('./login-client', () => ({ LoginClient: () => null }));
 
 import { ROUTES } from '@/lib/constants';
@@ -58,6 +60,11 @@ describe('LoginPage — Ever ID props', () => {
     beforeEach(() => {
         vi.clearAllMocks();
         mocks.getAuthFromCookie.mockResolvedValue(null);
+        mocks.getDemoConfig.mockResolvedValue({
+            enabled: false,
+            signUpUrl: 'u',
+            sandboxTtlHours: 24,
+        });
         mocks.wasSignedOutByEverId.mockReturnValue(false);
         mocks.hasEverIdSignOutMarker.mockResolvedValue(false);
         mocks.isEverIdOffered.mockResolvedValue(false);
@@ -78,6 +85,19 @@ describe('LoginPage — Ever ID props', () => {
             signedOutByEverId: false,
         });
         expect(mocks.isEverIdOffered).toHaveBeenCalledWith(EVER_ID_OFF, 'anonymous');
+    });
+
+    it('hands the client no demo block when demo is off', async () => {
+        expect((await renderedClientProps()).demo).toBeNull();
+    });
+
+    it('hands the client the demo block (TTL) when demo is on', async () => {
+        mocks.getDemoConfig.mockResolvedValue({
+            enabled: true,
+            signUpUrl: 'u',
+            sandboxTtlHours: 12,
+        });
+        expect((await renderedClientProps()).demo).toEqual({ ttlHours: 12 });
     });
 
     it('offers the button when the switch and the flag allow it', async () => {
