@@ -72,6 +72,35 @@ function toEpochMs(value: unknown): number {
     throw new Error(`Not a timestamp: ${String(value)}`);
 }
 
+/**
+ * Spends a sandbox's live AI: its `demo_usage_counters` row (`ai:sandbox:<userId>`,
+ * `DemoAiQuotaService`) at far more than `DEMO_AI_REQUESTS_PER_SANDBOX`, its window open for
+ * years. The next AI call of that sandbox is refused (`DEMO_AI_QUOTA`) before anything upstream.
+ */
+function spendSandboxAi(userId: string): void {
+    const db = openDb();
+    try {
+        const key = `ai:sandbox:${userId}`;
+        db.prepare(
+            `INSERT INTO demo_usage_counters ("key", "count", "windowEndsAt", "updatedAt")
+             VALUES (?, ?, ?, ?)
+             ON CONFLICT ("key") DO UPDATE SET "count" = excluded."count",
+                 "windowEndsAt" = excluded."windowEndsAt", "updatedAt" = excluded."updatedAt"`,
+        ).run(
+            key,
+            1_000_000,
+            '2999-01-01 00:00:00.000',
+            new Date().toISOString().replace('T', ' ').replace('Z', ''),
+        );
+        const row = db
+            .prepare('SELECT "count" FROM demo_usage_counters WHERE "key" = ?')
+            .get(key) as { count: number } | undefined;
+        expect(Number(row?.count), `the AI quota of ${userId} is spent`).toBe(1_000_000);
+    } finally {
+        db.close();
+    }
+}
+
 function demoUserIds(): Set<string> {
     const db = openDb();
     try {
@@ -348,6 +377,89 @@ test.describe('platform demo mode: DEMO on', { tag: '@demo-on' }, () => {
         );
         expect(ownerClaim.status()).toBe(403);
         expect((await ownerClaim.json()).code).toBe('DEMO_DISABLED');
+        // R42 d: nor join another account's Work through a claim link (refused before the token
+        // is even looked at).
+        const accept = await request.post(`${API_ORIGIN}/api/claim/accept`, {
+            headers: auth,
+            data: { token: 'a'.repeat(64) },
+        });
+        expect(accept.status()).toBe(403);
+        expect((await accept.json()).code).toBe('DEMO_DISABLED');
+    });
+
+    test('screenshots are off: capture and get-url answer 403 DEMO_DISABLED (R41)', async ({
+        request,
+    }) => {
+        expect(secondSandboxToken).toBeTruthy();
+        for (const path of ['/api/screenshot/capture', '/api/screenshot/get-url']) {
+            const res = await request.post(`${API_ORIGIN}${path}`, {
+                headers: { Authorization: `Bearer ${secondSandboxToken}` },
+                data: { url: 'https://example.com' },
+            });
+            expect([path, res.status()]).toEqual([path, 403]);
+            expect((await res.json()).code).toBe('DEMO_DISABLED');
+        }
+    });
+
+    /**
+     * R39: the assistant chat calls `POST /api/v1/chat/completions`. A sandbox's call must get past
+     * the demo's route guard to the AI facade, and the facade's demo refusal must come back with its
+     * code, through the API and through the web's own chat route (which the chat panel reads).
+     * There is no OpenRouter key locally, so the sandbox's live AI is spent first, the way its own
+     * calls would spend it (its quota counter at the cap): the facade then refuses before any
+     * upstream call.
+     */
+    test('the assistant chat reaches the AI facade and gets its coded quota refusal back', async ({
+        page,
+        request,
+    }) => {
+        test.skip(!DB_PATH, 'needs DEMO_E2E_DATABASE_PATH');
+        expect(sandbox.userId).toBeTruthy();
+        expect(secondSandboxToken).toBeTruthy();
+        const bearer = { Authorization: `Bearer ${secondSandboxToken}` };
+        const second = (await (
+            await request.get(`${API_ORIGIN}/api/auth/profile/fresh`, { headers: bearer })
+        ).json()) as { id: string; username: string };
+        spendSandboxAi(sandbox.userId as string);
+        spendSandboxAi(second.id);
+
+        // The API route, as the web's provider calls it (bearer + JSON body).
+        for (const stream of [false, true]) {
+            const res = await request.post(`${API_ORIGIN}/api/v1/chat/completions`, {
+                headers: { ...bearer, 'x-scope-slug': `acme-labs-${second.username}` },
+                data: { model: 'auto', stream, messages: [{ role: 'user', content: 'Hello' }] },
+            });
+            expect([stream, res.status()]).toEqual([stream, 429]);
+            expect(await res.json()).toMatchObject({
+                statusCode: 429,
+                code: 'DEMO_AI_QUOTA',
+                quotaScope: 'sandbox',
+            });
+        }
+
+        // The web's chat route, as the chat panel calls it (the visitor's session cookie): the
+        // stream's error carries the code, which the panel turns into the friendly message.
+        await asVisitor(page.context());
+        await page.goto(`${sandbox.home}/dashboard`);
+        const chat = await page.request.post('/api/chat', {
+            headers: { 'x-ever-workspace': `org:${sandbox.home.split('/')[2]}` },
+            data: {
+                messages: [{ id: 'm1', role: 'user', parts: [{ type: 'text', text: 'Hello' }] }],
+                providerOverride: 'openrouter',
+            },
+            timeout: 60_000,
+        });
+        expect(chat.status()).toBe(200);
+        const errorText = (await chat.text())
+            .split('\n')
+            .filter((line) => line.startsWith('data: {'))
+            .map((line) => JSON.parse(line.slice(6)) as { type: string; errorText?: string })
+            .find((part) => part.type === 'error')?.errorText;
+        expect(JSON.parse(errorText as string)).toEqual({
+            statusCode: 429,
+            code: 'DEMO_AI_QUOTA',
+            quotaScope: 'sandbox',
+        });
     });
 
     test('an expired sandbox sends the visitor to /login?demo=expired', async ({ page }) => {
