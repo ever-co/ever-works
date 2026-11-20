@@ -68,7 +68,7 @@ jobs:
     # Keeps forks that enable Actions from probing our hosts and filing issues.
     if: github.repository == 'ever-co/ever-works'
     # Budget for a TOTAL outage, when every target burns its full retry budget:
-    # 10 targets x (3 attempts x 20s max-time + 2 x 15s spacing) = ~15 min
+    # 9 targets x (3 attempts x 20s max-time + 2 x 15s spacing) = ~13.5 min
     # absolute worst case; a realistic all-down run (TCP timeouts) is ~8 min.
     # This MUST exceed that worst case — if the job is killed by its own
     # timeout it never reaches the "file an issue" step, i.e. the monitor would
@@ -280,8 +280,8 @@ jobs:
           done
 
           # --- Control: is the VANTAGE POINT itself healthy? -----------------
-          # All 10 targets share one apex domain, one DNS provider and one CDN, so a correlated
-          # fault at any of those -- or a degraded GitHub egress region -- produces a 10/10 red
+          # All 9 targets share one apex domain, one DNS provider and one CDN, so a correlated
+          # fault at any of those -- or a degraded GitHub egress region -- produces a 9/9 red
           # report and files an issue saying "Ever Works is unreachable". That is this monitor
           # reproducing the very false alarm it was built to eliminate, just from the other side.
           #
