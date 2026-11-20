@@ -133,6 +133,13 @@ import { buildSelectedProviders } from '@ever-works/plugin';
 import { GenerateStatusType } from '@ever-works/contracts/api';
 
 /**
+ * The wording of the Generate form's provider refusal
+ * (`GeneratorFormSchemaService.validateSelectedProviders`), reused by quick-create's upfront
+ * gate so the onboarding wizard shows the same message for the same cause.
+ */
+const QUICK_CREATE_PROVIDER_GATE_MESSAGE = 'One or more selected providers are not available.';
+
+/**
  * Whether a quick-create retry of the same funnel may reuse an earlier Work
  * with this generation status: one whose generation never started (no status)
  * or ended without content being generated (error, cancelled).
@@ -507,7 +514,19 @@ export class WorksController {
 
         const user = await this.authService.getUser(auth.userId);
 
-        // 0. A retry of the same funnel — another "Generate now" click after a
+        // 0a. Refuse BEFORE anything is created when the pipeline's REQUIRED providers
+        //     have no usable keys (no Work, no managed repository, no activity row, no
+        //     funnel step). Checked at user scope on the same form selection the run uses;
+        //     platform-level keys (environment values) count, so the home-page prompt on a
+        //     configured install passes. A keyless install gets the Generate form's provider
+        //     envelope naming each missing provider, instead of a run that fails later
+        //     without saying what is missing.
+        const gateSelection = await this.resolveGenerateFormProviders(undefined, user.id);
+        if (gateSelection) {
+            await this.assertQuickCreateRequiredProviders(gateSelection.providers, user.id);
+        }
+
+        // 0b. A retry of the same funnel — another "Generate now" click after a
         //    start was refused or a run failed — reuses the Work that funnel
         //    already created. Every click sends a fresh slug, so creating again
         //    left one more Work AND one more managed repository behind per
@@ -650,17 +669,19 @@ export class WorksController {
      * read: a missing selection must not stop a start that may still succeed.
      */
     private async resolveGenerateFormProviders(
-        workId: string,
+        workId: string | undefined,
         userId: string,
     ): Promise<{
         providers: CreateItemsGeneratorDto['providers'];
         pluginConfig: CreateItemsGeneratorDto['pluginConfig'];
     } | null> {
         try {
-            const schema = await this.generatorFormSchemaService.getFormSchema(undefined, {
-                workId,
-                userId,
-            });
+            // Without a Work (the quick-create gate runs before one exists) the schema is
+            // resolved at user scope.
+            const schema = await this.generatorFormSchemaService.getFormSchema(
+                undefined,
+                workId ? { workId, userId } : { userId },
+            );
             const providers = buildSelectedProviders(
                 schema.enforcedPipelineId ? { pipeline: schema.enforcedPipelineId } : {},
                 schema,
@@ -671,12 +692,42 @@ export class WorksController {
             };
         } catch (error) {
             this.logger.warn(
-                `quick-create: the generator form schema of work ${workId} could not be read; ` +
+                `quick-create: the generator form schema of ${workId ? `work ${workId}` : `user ${userId}`} could not be read; ` +
                     `starting its generation with the default providers: ${
                         error instanceof Error ? error.message : String(error)
                     }`,
             );
             return null;
+        }
+    }
+
+    /**
+     * Quick-create's upfront gate: the providers the selected pipeline REQUIRES must be
+     * usable for this user (`GeneratorFormSchemaService.validateRequiredProvidersForPipeline`,
+     * the rule works-config imports apply). A refusal is answered with the same envelope the
+     * Generate form gets for an unavailable provider (`message` + `providerErrors`), so the
+     * onboarding wizard names each missing provider. Anything other than that refusal is
+     * rethrown as it is.
+     */
+    private async assertQuickCreateRequiredProviders(
+        providers: CreateItemsGeneratorDto['providers'],
+        userId: string,
+    ): Promise<void> {
+        try {
+            await this.generatorFormSchemaService.validateRequiredProvidersForPipeline(
+                providers?.pipeline,
+                providers,
+                { userId },
+            );
+        } catch (error) {
+            if (!(error instanceof BadRequestException)) {
+                throw error;
+            }
+            const refused = error.getResponse() as { providerErrors?: Record<string, string> };
+            throw new BadRequestException({
+                message: QUICK_CREATE_PROVIDER_GATE_MESSAGE,
+                providerErrors: refused?.providerErrors ?? {},
+            });
         }
     }
 
