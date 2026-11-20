@@ -232,7 +232,7 @@ test.describe('platform demo mode: DEMO on', { tag: '@demo-on' }, () => {
         }
     });
 
-    test('PATCH /api/plugins/openrouter/settings from the page answers 403 DEMO_DISABLED', async ({
+    test('PATCH /api/plugins/openrouter/settings and a share link from the page answer 403 DEMO_DISABLED', async ({
         page,
     }) => {
         await asVisitor(page.context());
@@ -253,6 +253,25 @@ test.describe('platform demo mode: DEMO on', { tag: '@demo-on' }, () => {
         expect(patched.status()).toBe(403);
         expect((await patched.json()).code).toBe('DEMO_DISABLED');
         secondSandboxToken = token;
+
+        // R38: a share link would publish the sandbox's board on a public page of the demo host.
+        const scope = (await (
+            await page.request.get(`${API_ORIGIN}/api/users/me/scope`, {
+                headers: { Authorization: `Bearer ${token}` },
+            })
+        ).json()) as { organizationId: string; organizationSlug: string };
+        const shared = await page.request.post(
+            `${API_ORIGIN}/api/organizations/${scope.organizationId}/shared-view`,
+            {
+                headers: {
+                    Authorization: `Bearer ${token}`,
+                    'x-scope-slug': scope.organizationSlug,
+                },
+                data: {},
+            },
+        );
+        expect(shared.status()).toBe(403);
+        expect((await shared.json()).code).toBe('DEMO_DISABLED');
     });
 
     test('one sandbox cannot reach or share into another', async ({ request }) => {
@@ -319,6 +338,16 @@ test.describe('platform demo mode: DEMO on', { tag: '@demo-on' }, () => {
         );
         expect(invite.status()).toBe(403);
         expect((await invite.json()).code).toBe('DEMO_DISABLED');
+        // R37: nor an owner-claim link, whose redemption moves a Work's repositories away.
+        const ownerClaim = await request.post(
+            `${API_ORIGIN}/api/works/${sandbox.projectWorkId}/invitations`,
+            {
+                headers: auth,
+                data: { role: 'owner-claim', metadata: { expectedProviderUsername: 'someone' } },
+            },
+        );
+        expect(ownerClaim.status()).toBe(403);
+        expect((await ownerClaim.json()).code).toBe('DEMO_DISABLED');
     });
 
     test('an expired sandbox sends the visitor to /login?demo=expired', async ({ page }) => {

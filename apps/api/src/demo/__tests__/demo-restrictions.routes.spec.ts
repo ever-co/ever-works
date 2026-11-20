@@ -215,8 +215,12 @@ const MUST_STAY_OPEN: { method: string; path: string; body?: unknown }[] = [
     { method: 'POST', path: '/api/plugins/openrouter/enable', body: {} },
     { method: 'POST', path: '/api/works/w-1/plugins/openrouter/enable', body: { priority: 1 } },
     { method: 'PUT', path: '/api/auth/profile', body: { displayName: 'Demo visitor' } },
-    { method: 'POST', path: '/api/works/w-1/invitations', body: { role: 'owner-claim' } },
     { method: 'POST', path: '/api/uploads/file' },
+    // A share link is refused (R38); reading, turning it off and deleting it are not.
+    { method: 'GET', path: '/api/organizations/o-1/shared-view' },
+    { method: 'GET', path: '/api/organizations/o-1/shared-view/preview' },
+    { method: 'PATCH', path: '/api/organizations/o-1/shared-view', body: { status: 'paused' } },
+    { method: 'DELETE', path: '/api/organizations/o-1/shared-view' },
     { method: 'GET', path: '/api/oauth/github/connection' },
 ];
 
@@ -278,6 +282,42 @@ if (process.env[CHILD_FLAG] === undefined) {
                 );
                 expect([entryLabel(entry), reached.length <= 3]).toEqual([entryLabel(entry), true]);
             }
+        });
+
+        it('R37 and R38: the transfer and share-link rows reach exactly those handlers', () => {
+            const handlersOf = (feature: string): string[] =>
+                DEMO_BLOCKED_ROUTES.filter((entry) => entry.feature === feature)
+                    .flatMap((entry) =>
+                        report.routes.filter(
+                            (route) =>
+                                (entry.method === '*' || methodServes(route, entry.method)) &&
+                                entry.path.test(samplePathOf(route.path)),
+                        ),
+                    )
+                    .map(
+                        (route) =>
+                            `${route.method} ${route.path} ${route.controller}.${route.handler}`,
+                    )
+                    .sort();
+
+            // Creating an owner-claim link (and any Work invitation): the step a demo user reaches.
+            expect(handlersOf('Work invitations and transfer')).toEqual([
+                'POST /api/works/:workId/invitations InvitationsController.create',
+            ]);
+            // Turning sharing on, minting a new link, and a settings change that publishes.
+            expect(handlersOf('public share link')).toEqual([
+                'PATCH /api/organizations/:orgId/shared-view SharedViewsController.update',
+                'POST /api/organizations/:orgId/shared-view SharedViewsController.enable',
+                'POST /api/organizations/:orgId/shared-view/regenerate SharedViewsController.regenerate',
+            ]);
+            expect(
+                findDemoBlockedRoutes({
+                    method: 'PATCH',
+                    path: '/api/organizations/o-1/shared-view',
+                    body: { status: 'active' },
+                    headers: {},
+                }).map((entry) => entry.feature),
+            ).toEqual(['public share link']);
         });
 
         it('keeps the way in, and the everyday routes, open', () => {

@@ -37,10 +37,24 @@ jest.mock('@ever-works/agent/tasks-domain', () => ({
     TaskChatService: class TaskChatService {},
 }));
 
-import { Inject, Injectable, Module, Optional } from '@nestjs/common';
+import {
+    Controller,
+    Delete,
+    Get,
+    HttpCode,
+    Inject,
+    Injectable,
+    Module,
+    Optional,
+    Patch,
+    Post,
+    type INestApplication,
+    type Type,
+} from '@nestjs/common';
 import { APP_FILTER, APP_GUARD } from '@nestjs/core';
 import { ScheduleModule, SchedulerRegistry } from '@nestjs/schedule';
 import { Test, type TestingModule } from '@nestjs/testing';
+import * as request from 'supertest';
 import { TypeOrmModule, getRepositoryToken } from '@nestjs/typeorm';
 import type { Repository } from 'typeorm';
 import {
@@ -112,6 +126,52 @@ class UnrelatedModule {}
 })
 class InMemoryDatabaseModule {}
 
+/**
+ * Stand-ins at the real paths of the routes rulings R37 and R38 block: they only answer, so a
+ * request that reaches one went through every global guard. `demo-restrictions.routes.spec.ts`
+ * pins the paths against the real controllers.
+ */
+@Controller('api/works/:workId/invitations')
+class WorkInvitationsStandIn {
+    @Post()
+    create() {
+        return { invited: true };
+    }
+}
+
+@Controller('api/organizations/:orgId/shared-view')
+class SharedViewStandIn {
+    @Get()
+    read() {
+        return { exists: true };
+    }
+
+    @Post()
+    enable() {
+        return { status: 'active' };
+    }
+
+    @Post('regenerate')
+    @HttpCode(200)
+    regenerate() {
+        return { rotated: true };
+    }
+
+    @Patch()
+    update() {
+        return { updated: true };
+    }
+
+    @Delete()
+    @HttpCode(204)
+    remove() {
+        return undefined;
+    }
+}
+
+@Module({ controllers: [WorkInvitationsStandIn, SharedViewStandIn] })
+class TransferAndShareRoutesModule {}
+
 const ENV_KEYS = [
     'DEMO',
     'DEMO_GITHUB_ORG',
@@ -140,9 +200,9 @@ describe('DemoModule', () => {
         }
     });
 
-    async function compile(): Promise<TestingModule> {
+    async function compile(extra: Type[] = []): Promise<TestingModule> {
         moduleRef = await Test.createTestingModule({
-            imports: [ScheduleModule.forRoot(), DemoModule.register(), UnrelatedModule],
+            imports: [ScheduleModule.forRoot(), DemoModule.register(), UnrelatedModule, ...extra],
         })
             .overrideModule(DatabaseModule)
             .useModule(InMemoryDatabaseModule)
@@ -320,6 +380,185 @@ describe('DemoModule', () => {
             // `close()` awaits the failed initialisation and rethrows it; that is expected here.
             moduleRef = undefined;
             await ref.close().catch(() => undefined);
+        });
+    });
+
+    /**
+     * Rulings R37 (no Work ownership transfer) and R38 (no public share link) end to end over
+     * HTTP: the module's real global guard and filter in front of stand-ins at the real paths.
+     * As in the API, the caller is on the request before any global guard runs (here a
+     * middleware stands in for `AuthSessionGuard`).
+     */
+    describe('over HTTP, the routes R37 and R38 block', () => {
+        const DEMO_ID = '00000000-0000-4000-8000-0000000000d1';
+        const OPERATOR_ID = '00000000-0000-4000-8000-0000000000a1';
+        const BLOCKED = [
+            {
+                method: 'post',
+                path: '/api/works/w-1/invitations',
+                body: { role: 'owner-claim', metadata: { expectedProviderUsername: 'someone' } },
+                status: 201,
+                feature: 'Work invitations and transfer',
+            },
+            {
+                method: 'post',
+                path: '/api/organizations/o-1/shared-view',
+                body: {},
+                status: 201,
+                feature: 'public share link',
+            },
+            {
+                method: 'post',
+                path: '/api/organizations/o-1/shared-view/regenerate',
+                body: {},
+                status: 200,
+                feature: 'public share link',
+            },
+            {
+                method: 'patch',
+                path: '/api/organizations/o-1/shared-view',
+                body: { status: 'active', searchIndexable: true },
+                status: 200,
+                feature: 'public share link',
+            },
+        ];
+        const STAYS_OPEN = [
+            {
+                method: 'patch',
+                path: '/api/organizations/o-1/shared-view',
+                body: { status: 'paused' },
+                status: 200,
+            },
+            {
+                method: 'delete',
+                path: '/api/organizations/o-1/shared-view',
+                body: undefined,
+                status: 204,
+            },
+            {
+                method: 'get',
+                path: '/api/organizations/o-1/shared-view',
+                body: undefined,
+                status: 200,
+            },
+        ];
+        let app: INestApplication | undefined;
+
+        afterEach(async () => {
+            await app?.close();
+            app = undefined;
+        });
+
+        async function serve(): Promise<INestApplication> {
+            const ref = await compile([TransferAndShareRoutesModule]);
+            moduleRef = undefined; // the application closes it
+            app = ref.createNestApplication();
+            app.use(
+                (
+                    req: { headers: Record<string, unknown>; user?: unknown },
+                    _res: unknown,
+                    next: () => void,
+                ) => {
+                    const userId = req.headers['x-test-user'];
+                    if (typeof userId === 'string') req.user = { userId };
+                    next();
+                },
+            );
+            await app.init();
+            return app;
+        }
+
+        function send(
+            server: INestApplication,
+            call: { method: string; path: string; body?: unknown },
+            userId: string,
+        ): request.Test {
+            const agent = request(server.getHttpServer()) as unknown as Record<
+                string,
+                (path: string) => request.Test
+            >;
+            const pending = agent[call.method](call.path).set('x-test-user', userId);
+            return call.body === undefined ? pending : pending.send(call.body as object);
+        }
+
+        async function seedAccounts(server: INestApplication): Promise<void> {
+            const users = server.get<Repository<User>>(getRepositoryToken(User));
+            await users.save(
+                users.create({
+                    id: DEMO_ID,
+                    username: 'demo-0a1b2c3d',
+                    registrationProvider: 'demo',
+                    isAnonymous: true,
+                }),
+            );
+            await users.save(
+                users.create({
+                    id: OPERATOR_ID,
+                    username: 'operator',
+                    registrationProvider: 'local',
+                }),
+            );
+        }
+
+        function demoOn(): void {
+            process.env.DEMO = 'true';
+            process.env.EVER_WORKS_PROJECT_WORKS_ENABLED = 'true';
+        }
+
+        it('with DEMO on, a demo sandbox gets 403 DEMO_DISABLED, and can still turn sharing off', async () => {
+            demoOn();
+            const server = await serve();
+            await seedAccounts(server);
+
+            for (const call of BLOCKED) {
+                const response = await send(server, call, DEMO_ID);
+                expect([call.method, call.path, response.status, response.body]).toEqual([
+                    call.method,
+                    call.path,
+                    403,
+                    {
+                        statusCode: 403,
+                        code: 'DEMO_DISABLED',
+                        message: `Not available in the demo: ${call.feature}`,
+                    },
+                ]);
+            }
+            for (const call of STAYS_OPEN) {
+                const response = await send(server, call, DEMO_ID);
+                expect([call.method, call.path, response.status]).toEqual([
+                    call.method,
+                    call.path,
+                    call.status,
+                ]);
+            }
+        });
+
+        it("with DEMO on, an operator's identical requests reach the routes unchanged", async () => {
+            demoOn();
+            const server = await serve();
+            await seedAccounts(server);
+
+            for (const call of [...BLOCKED, ...STAYS_OPEN]) {
+                const response = await send(server, call, OPERATOR_ID);
+                expect([call.method, call.path, response.status]).toEqual([
+                    call.method,
+                    call.path,
+                    call.status,
+                ]);
+            }
+        });
+
+        it('with DEMO off, the same requests from the same sandbox account reach the routes unchanged', async () => {
+            const server = await serve();
+
+            for (const call of [...BLOCKED, ...STAYS_OPEN]) {
+                const response = await send(server, call, DEMO_ID);
+                expect([call.method, call.path, response.status]).toEqual([
+                    call.method,
+                    call.path,
+                    call.status,
+                ]);
+            }
         });
     });
 });

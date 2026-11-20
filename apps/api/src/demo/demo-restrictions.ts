@@ -58,9 +58,23 @@ function writesPluginSettings(request: DemoRouteRequest): boolean {
     return isGiven(settings) || isGiven(secretSettings);
 }
 
-/** A Work invitation addressed to an email (`CreateInvitationDto.email`) is mailed to it. */
-function mailsAnInvitation(request: DemoRouteRequest): boolean {
-    return isGiven(bodyOf(request).email);
+/**
+ * A shared-view settings change (`UpdateSharedViewDto`) that publishes something: turning
+ * sharing on (any `status` but `paused`), publishing a section or knowledge classes, or letting
+ * crawlers index the page. Turning sharing off and narrowing what is published stay open. A value
+ * the change does not spell out as "off" counts as publishing (fail closed).
+ */
+function publishesSharedView(request: DemoRouteRequest): boolean {
+    const { status, sections, knowledgeClasses, searchIndexable } = bodyOf(request);
+    if (status !== undefined && status !== 'paused') return true;
+    if (sections !== undefined) {
+        if (!sections || typeof sections !== 'object') return true;
+        if (Object.values(sections).some((published) => published !== false)) return true;
+    }
+    if (knowledgeClasses !== undefined) {
+        if (!Array.isArray(knowledgeClasses) || knowledgeClasses.length > 0) return true;
+    }
+    return searchIndexable !== undefined && searchIndexable !== false;
 }
 
 /**
@@ -157,8 +171,16 @@ export const DEMO_BLOCKED_ROUTES: ReadonlyArray<DemoBlockedRoute> = [
     { method: 'PUT', path: /^\/api\/works\/[^/]+$/i, feature: 'Work repository owner', scope: 'demo-users', when: namesRepositoryOwner },
     { method: 'PATCH', path: /^\/api\/works\/[^/]+$/i, feature: 'Work repository owner', scope: 'demo-users', when: namesRepositoryOwner },
     { method: 'POST', path: /^\/api\/organizations\/[^/]+\/invitations$/i, feature: 'invitations by email', scope: 'demo-users' },
-    { method: 'POST', path: /^\/api\/works\/[^/]+\/invitations$/i, feature: 'invitations by email', scope: 'demo-users', when: mailsAnInvitation },
+    // Every Work invitation: a member invitation is mailed (the API requires the email), and an
+    // `owner-claim` link hands the Work to whoever redeems it, whose acceptance moves the Work's
+    // repositories out of the demo org to their git login (`ClaimController`), beyond the sweeper.
+    { method: 'POST', path: /^\/api\/works\/[^/]+\/invitations$/i, feature: 'Work invitations and transfer', scope: 'demo-users' },
     { method: 'POST', path: /^\/api\/works\/[^/]+\/members$/i, feature: 'invitations by email', scope: 'demo-users' },
+
+    // Public pages: a share link publishes the workspace's board on the demo host (R38). Turning
+    // sharing off, deleting the share and the owner's own preview stay open.
+    { method: 'POST', path: /^\/api\/organizations\/[^/]+\/shared-view(\/regenerate)?$/i, feature: 'public share link', scope: 'demo-users' },
+    { method: 'PATCH', path: /^\/api\/organizations\/[^/]+\/shared-view$/i, feature: 'public share link', scope: 'demo-users', when: publishesSharedView },
 
     // Repositories brought in from elsewhere — demo users. A demo Work's only repository is the
     // `demo-` one the platform provisions (create / Generate), within the sandbox's Works cap and

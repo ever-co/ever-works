@@ -23,7 +23,7 @@ import {
     EnableUserPluginDto,
     EnableWorkPluginDto,
 } from '../../plugins/dto/update-plugin-settings.dto';
-import { CreateInvitationDto } from '../../works/dto/create-invitation.dto';
+import { UpdateSharedViewDto } from '../../shared-views/dto/shared-view.dto';
 import { AuthSessionGuard } from '../../auth/guards/auth-session.guard';
 import { AUTH_PROVIDER, AUTH_RUNTIME_INSTANCE } from '../../auth/providers/auth-provider.constants';
 import { AuthProviderService, hashSessionToken } from '../../auth/providers/auth-provider.service';
@@ -135,7 +135,10 @@ describe('DemoRestrictionsGuard', () => {
                 [UpdateWorkDto, ['owner', 'organization']],
                 [EnableUserPluginDto, ['settings', 'secretSettings']],
                 [EnableWorkPluginDto, ['settings']],
-                [CreateInvitationDto, ['email']],
+                [
+                    UpdateSharedViewDto,
+                    ['status', 'sections', 'knowledgeClasses', 'searchIndexable'],
+                ],
                 [UpdateProfileDto, ['username']],
             ];
             for (const [dto, fields] of reads) {
@@ -201,6 +204,9 @@ describe('DemoRestrictionsGuard', () => {
             ['POST', '/api/account-deletion/me', 'account deletion'],
             ['POST', '/api/organizations/org-1/invitations', 'invitations by email'],
             ['POST', '/api/works/w-1/members', 'invitations by email'],
+            ['POST', '/api/works/w-1/invitations', 'Work invitations and transfer'],
+            ['POST', '/api/organizations/org-1/shared-view', 'public share link'],
+            ['POST', '/api/organizations/org-1/shared-view/regenerate', 'public share link'],
             ['GET', '/api/account/export', 'data export'],
             ['PUT', '/api/fleet/runners/jobs/watched', 'plugin settings'],
             ['PUT', '/api/deploy/works/w-1/runtime-env', 'runtime environment'],
@@ -302,25 +308,73 @@ describe('DemoRestrictionsGuard', () => {
             }
         });
 
-        it('refuses a Work invitation that is mailed, not an owner-claim link', async () => {
+        it('refuses every Work invitation: a mailed one, and an owner-claim link (R37)', async () => {
             const { guard } = guardWith();
-            const invite = (body: unknown) =>
+            const invite = (body: unknown, user = demoUser) =>
                 guard.canActivate(
-                    http({
-                        method: 'POST',
-                        path: '/api/works/w-1/invitations',
-                        body,
-                        user: demoUser,
-                    }),
+                    http({ method: 'POST', path: '/api/works/w-1/invitations', body, user }),
                 );
+            const ownerClaim = { role: 'owner-claim', metadata: { expectedProviderUsername: 'x' } };
 
+            // Redeeming an owner-claim link moves the Work's repositories to the redeemer's git
+            // login: out of the demo org and out of the sweeper's reach.
+            await expectDisabled(invite(ownerClaim), 'Work invitations and transfer');
+            await expectDisabled(
+                invite({ ...ownerClaim, expectedProviderUsername: 'x', email: 'a@example.com' }),
+                'Work invitations and transfer',
+            );
             await expectDisabled(
                 invite({ email: 'someone@example.com', role: 'editor' }),
-                'invitations by email',
+                'Work invitations and transfer',
             );
+            // An operator issues both as before.
+            await expect(invite(ownerClaim, operator)).resolves.toBe(true);
             await expect(
-                invite({ role: 'owner-claim', metadata: { expectedProviderUsername: 'x' } }),
+                invite({ email: 'someone@example.com', role: 'editor' }, operator),
             ).resolves.toBe(true);
+        });
+
+        it('refuses publishing a share link, not turning it off, deleting or reading it (R38)', async () => {
+            const { guard } = guardWith();
+            const call = (method: string, path: string, body?: unknown, user = demoUser) =>
+                guard.canActivate(http({ method, path, body, user }));
+            const view = '/api/organizations/org-1/shared-view';
+
+            await expectDisabled(call('POST', view, {}), 'public share link');
+            await expectDisabled(call('POST', `${view}/regenerate`, {}), 'public share link');
+            for (const publishes of [
+                { status: 'active' },
+                { status: 'paused', sections: { board: true } },
+                { sections: { knowledge: true } },
+                { knowledgeClasses: ['guide'] },
+                { searchIndexable: true },
+                // Not spelled out as "off": fail closed.
+                { status: null },
+                { sections: null },
+                { knowledgeClasses: 'guide' },
+                { searchIndexable: 'yes' },
+            ]) {
+                await expectDisabled(call('PATCH', view, publishes), 'public share link');
+            }
+
+            for (const unpublishes of [
+                { status: 'paused' },
+                { sections: { board: false, knowledge: false } },
+                { knowledgeClasses: [] },
+                { searchIndexable: false },
+                { status: 'paused', sections: { board: false }, searchIndexable: false },
+                {},
+            ]) {
+                await expect(call('PATCH', view, unpublishes)).resolves.toBe(true);
+            }
+            await expect(call('DELETE', view)).resolves.toBe(true);
+            await expect(call('GET', view)).resolves.toBe(true);
+            await expect(call('GET', `${view}/preview`)).resolves.toBe(true);
+
+            // An operator publishes as before.
+            await expect(call('POST', view, {}, operator)).resolves.toBe(true);
+            await expect(call('POST', `${view}/regenerate`, {}, operator)).resolves.toBe(true);
+            await expect(call('PATCH', view, { status: 'active' }, operator)).resolves.toBe(true);
         });
 
         it('refuses a profile save that changes the username, not one that keeps it', async () => {
@@ -413,6 +467,9 @@ describe('DemoRestrictionsGuard', () => {
                 ['POST', '/api/templates/fork'],
                 ['POST', '/api/account/import/apply'],
                 ['POST', '/api/organizations/import-company'],
+                ['POST', '/api/works/w-1/invitations'],
+                ['POST', '/api/organizations/org-1/shared-view'],
+                ['POST', '/api/organizations/org-1/shared-view/regenerate'],
                 ['POST', '/api/auth/login'],
             ]) {
                 await expect(
