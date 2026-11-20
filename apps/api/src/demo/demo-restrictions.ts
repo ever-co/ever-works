@@ -176,7 +176,8 @@ export const DEMO_BLOCKED_ROUTES: ReadonlyArray<DemoBlockedRoute> = [
     { method: 'GET', path: /^\/api\/account\/export$/i, feature: 'data export', scope: 'demo-users' },
     { method: 'POST', path: /^\/api\/account\/backups$/i, feature: 'data export', scope: 'demo-users' },
     { method: 'POST', path: /^\/api\/account\/sync\/(configure|push)$/i, feature: 'data export', scope: 'demo-users' },
-    // A backup import makes Works outside the create path: outside the sandbox's Works cap and the
-    // shape the seeder gives it.
+    // A backup import, or a company package import, makes Works outside the create path: outside
+    // the sandbox's Works cap, its forced storage and the shape the seeder gives it.
     { method: 'POST', path: /^\/api\/account\/import\/(preview|apply)$/i, feature: 'account import', scope: 'demo-users' },
+    { method: 'POST', path: /^\/api\/organizations\/import-company$/i, feature: 'company import', scope: 'demo-users' },
 ];

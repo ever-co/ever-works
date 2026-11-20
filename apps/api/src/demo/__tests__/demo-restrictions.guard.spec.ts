@@ -218,6 +218,7 @@ describe('DemoRestrictionsGuard', () => {
             ['POST', '/api/templates/custom-from-base', 'copying a template repository'],
             ['POST', '/api/account/import/preview', 'account import'],
             ['POST', '/api/account/import/apply', 'account import'],
+            ['POST', '/api/organizations/import-company', 'company import'],
         ])('refuses %s %s (%s)', async (method, path, feature) => {
             const { guard } = guardWith();
 
@@ -411,6 +412,7 @@ describe('DemoRestrictionsGuard', () => {
                 ['POST', '/api/works/import'],
                 ['POST', '/api/templates/fork'],
                 ['POST', '/api/account/import/apply'],
+                ['POST', '/api/organizations/import-company'],
                 ['POST', '/api/auth/login'],
             ]) {
                 await expect(

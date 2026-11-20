@@ -301,6 +301,35 @@ describe('WorkLifecycleService — demo Works', () => {
             expect(result!.status).toBe('success');
         });
 
+        // The demo API is one replica (SQLite): the count, the GitHub create and the insert
+        // of one sandbox run one at a time, so parallel creates cannot all see room.
+        it.each([2, 5])(
+            'lets exactly one of %i parallel creates through at 2 repository-backed Works',
+            async (parallel) => {
+                const { service, fetchImpl } = makeService();
+                await storeRepositoryWork(demoUser, 'one');
+                await storeRepositoryWork(demoUser, 'two');
+
+                const results = await Promise.allSettled(
+                    Array.from({ length: parallel }, (_, i) =>
+                        service.createWork(dto(`parallel-${i}`), demoUser),
+                    ),
+                );
+
+                expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+                const refused = results.filter(
+                    (r): r is PromiseRejectedResult => r.status === 'rejected',
+                );
+                expect(refused).toHaveLength(parallel - 1);
+                for (const r of refused) {
+                    expect(r.reason).toBeInstanceOf(DemoFeatureDisabledError);
+                    expect(r.reason).toMatchObject({ feature: 'more than 3 generated Works' });
+                }
+                expect(fetchImpl).toHaveBeenCalledTimes(1);
+                expect(await works.countRepositoryBackedWorks(demoUser.id)).toBe(3);
+            },
+        );
+
         it('follows DEMO_MAX_WORKS_PER_SANDBOX', async () => {
             process.env.DEMO_MAX_WORKS_PER_SANDBOX = '1';
             const { service } = makeService();

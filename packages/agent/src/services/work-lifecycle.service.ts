@@ -89,6 +89,7 @@ import {
     demoWebsiteRepositoryName,
     isDemoSandboxUser,
     needsDemoRepositoryAtGeneration,
+    withDemoSandboxLock,
 } from '../demo';
 import {
     getWorkCapabilities,
@@ -584,8 +585,25 @@ export class WorkLifecycleService {
      * created for (`AppWorkCreateOptions.marketplaceInstallId`), which only the
      * routes that checked the claim pass. Every other caller passes nothing,
      * and nothing of it is stored.
+     *
+     * Platform demo mode: a demo sandbox's creates run one at a time
+     * (`withDemoSandboxLock`, keyed by the sandbox, which owns the Work), so
+     * the Works cap's count, the repository create and the insert are one step.
      */
     async createWork(createWorkDto: CreateWorkDto, user: User, options?: AppWorkCreateOptions) {
+        if (isDemoSandboxUser(user)) {
+            return withDemoSandboxLock(user.id, () =>
+                this.createWorkUnlocked(createWorkDto, user, options),
+            );
+        }
+        return this.createWorkUnlocked(createWorkDto, user, options);
+    }
+
+    private async createWorkUnlocked(
+        createWorkDto: CreateWorkDto,
+        user: User,
+        options?: AppWorkCreateOptions,
+    ) {
         const { slug, name, description, owner, readmeConfig, organization, websiteTemplateId } =
             createWorkDto;
 
@@ -1573,7 +1591,13 @@ export class WorkLifecycleService {
      * `demo-<hex>-<slug>`, the prefix asserted) in the customer org, and the Work
      * stores it under the same roles. Without this the data generator would make
      * `<slug>-data` through the git facade under whatever account the platform
-     * token belongs to. A demo sandbox's cap is checked first.
+     * token belongs to.
+     *
+     * The cap is the Work OWNER's (a demo sandbox's), whoever pressed Generate.
+     * The owner's count, the repository create and the write run under the
+     * owner's `withDemoSandboxLock`, as `createWork` does, and the Work is read
+     * again inside it: a parallel create cannot slip past the cap, and a second
+     * Generate finds the repository the first one made.
      *
      * Returns the Work as stored now, or `work` itself when it needs nothing (the
      * demo off, other storage, or a repository already there).
@@ -1582,30 +1606,42 @@ export class WorkLifecycleService {
         if (!needsDemoRepositoryAtGeneration(work)) {
             return work;
         }
-        if (isDemoSandboxUser(user)) {
-            await this.assertDemoRepositoryCapacity(work.userId);
-        }
+        return withDemoSandboxLock(work.userId, async () => {
+            const current = (await this.workRepository.findById(work.id)) ?? work;
+            if (!needsDemoRepositoryAtGeneration(current)) {
+                return current;
+            }
 
-        const owner = work.userId === user.id ? user : work.user;
-        let repo: EverWorksGitRepoRef;
-        try {
-            repo = await this.everWorksGit.createRepository({
-                work: {
-                    id: work.id,
-                    slug: work.slug,
-                    userId: work.userId,
-                    userSlug: owner?.username,
-                    description: work.description,
-                },
-            });
-        } catch (error) {
-            this.rethrowEverWorksGitError(error);
-        }
+            const owner =
+                current.userId === user.id
+                    ? user
+                    : await this.userRepository.findById(current.userId);
+            if (isDemoSandboxUser(owner)) {
+                await this.assertDemoRepositoryCapacity(current.userId);
+            }
 
-        const fields = this.managedRepositoryFields(repo);
-        const stored = await this.workRepository.update(work.id, fields);
-        this.logger.log(`Provisioned ${repo.fullName} for demo Work ${work.id} at generation`);
-        return stored ?? Object.assign(work, fields);
+            let repo: EverWorksGitRepoRef;
+            try {
+                repo = await this.everWorksGit.createRepository({
+                    work: {
+                        id: current.id,
+                        slug: current.slug,
+                        userId: current.userId,
+                        userSlug: owner?.username,
+                        description: current.description,
+                    },
+                });
+            } catch (error) {
+                this.rethrowEverWorksGitError(error);
+            }
+
+            const fields = this.managedRepositoryFields(repo);
+            const stored = await this.workRepository.update(current.id, fields);
+            this.logger.log(
+                `Provisioned ${repo.fullName} for demo Work ${current.id} at generation`,
+            );
+            return stored ?? Object.assign(current, fields);
+        });
     }
 
     /**

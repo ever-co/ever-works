@@ -1314,13 +1314,11 @@ Only include image URLs that are absolute URLs (starting with http).`;
         scopeOptions: { userId: string; workId: string },
     ): Promise<void> {
         // Platform demo mode runs `standard-pipeline` only (the orchestrator holds
-        // to it as well); the request names it, so the run is enabled, validated
-        // and recorded as the pipeline it really is.
-        if (dto.providers) {
-            const pipeline = demoPipelineId(dto.providers.pipeline);
-            if (pipeline !== dto.providers.pipeline) {
-                dto.providers.pipeline = pipeline;
-            }
+        // to it as well); the request names it — also when it named no providers —
+        // so the run is enabled, validated and recorded as the pipeline it really is.
+        const demoPipeline = demoPipelineId();
+        if (demoPipeline) {
+            dto.providers = { ...dto.providers, pipeline: demoPipeline };
         }
         await this.ensureProvidersEnabledForWork(
             dto.providers,

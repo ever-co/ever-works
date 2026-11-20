@@ -18,6 +18,7 @@ import { Work } from '../../entities/work.entity';
 import { GenerateStatusType } from '../../entities/types';
 import type { User } from '../../entities/user.entity';
 import type { CreateItemsGeneratorDto } from '../../items-generator/dto/create-items-generator.dto';
+import type { CreateWorkDto } from '../../dto/create-work.dto';
 import { DemoFeatureDisabledError } from '../../demo';
 import { EverWorksGitProvider } from '../../ever-works-providers/ever-works-git.provider';
 import type { EverWorksGitHttpFetch } from '../../ever-works-providers/ever-works-git.provider';
@@ -50,6 +51,14 @@ const demoUser = {
     username: 'demo-1a2b3c4d',
     email: 'demo-1a2b3c4d@demo.ever.works',
     registrationProvider: 'demo',
+} as User;
+
+/** An operator account (not a sandbox) acting on the sandbox's Work. */
+const operator = {
+    id: '33333333-3333-4333-8333-333333333333',
+    username: 'operator',
+    email: 'operator@ever.works',
+    registrationProvider: 'local',
 } as User;
 
 class FetchInjectedEverWorksGit extends EverWorksGitProvider {
@@ -118,24 +127,20 @@ describe('WorkGenerationService.generateItems — the seeded demo draft Work (R2
 
     function build() {
         const fetchImpl = githubCreates();
-        const deployFacade = {
-            isHiddenProvider: jest.fn().mockReturnValue(false),
-            deploy: jest.fn(),
-        };
-        const gitFacade = {
-            createRepository: jest.fn(),
-            createRepositoryFromTemplate: jest.fn(),
-            createRepositoryCopy: jest.fn(),
+        // The Work owner's account, read when the requester is someone else (the cap is the
+        // owner's, not the requester's).
+        const users = {
+            findById: jest.fn(async (id: string) => (id === demoUser.id ? demoUser : null)),
         };
         const lifecycle = new WorkLifecycleService(
             works,
-            { findById: jest.fn().mockResolvedValue({ onboardingState: null }) } as never,
+            users as never,
             { getItems: jest.fn().mockResolvedValue([]) } as never,
             {} as never,
             {} as never,
             {} as never,
             {} as never,
-            deployFacade as never,
+            { isHiddenProvider: jest.fn().mockReturnValue(false) } as never, // deployFacade
             { getWebsiteTemplateIdForNewWork: jest.fn().mockResolvedValue(null) } as never,
             {} as never,
             { assertWithinQuota: jest.fn() } as never,
@@ -144,7 +149,7 @@ describe('WorkGenerationService.generateItems — the seeded demo draft Work (R2
             { emit: jest.fn() } as never,
             { emit: jest.fn(), emitAsync: jest.fn().mockResolvedValue([]) } as never,
             {} as never,
-            gitFacade as never,
+            {} as never, // gitFacade: only the Repository Work create path reads it
         );
 
         /** What each generator was handed, as the Work it would write the repositories of. */
@@ -207,8 +212,6 @@ describe('WorkGenerationService.generateItems — the seeded demo draft Work (R2
         return {
             service,
             fetchImpl,
-            deployFacade,
-            gitFacade,
             dataGenerator,
             websiteGenerator,
             history,
@@ -289,7 +292,7 @@ describe('WorkGenerationService.generateItems — the seeded demo draft Work (R2
     });
 
     it('hands the generators the org repository, not the user-GitHub <slug>-data path', async () => {
-        const { service, lifecycle, seen, gitFacade } = build();
+        const { service, lifecycle, seen } = build();
         const workId = await seedDraft(lifecycle);
 
         await generate(service, workId);
@@ -304,14 +307,14 @@ describe('WorkGenerationService.generateItems — the seeded demo draft Work (R2
         expect(seen.data!.storageProvider).toBe('ever-works-git');
         expect(seen.website!.getRepoOwner('website')).toBe(ORG);
         expect(seen.website!.getWebsiteRepo()).toBe(`${DEMO_REPO}-website`);
-        // Nothing on the generation path went through the git facade to make a repo.
-        expect(gitFacade.createRepository).not.toHaveBeenCalled();
-        expect(gitFacade.createRepositoryFromTemplate).not.toHaveBeenCalled();
-        expect(gitFacade.createRepositoryCopy).not.toHaveBeenCalled();
+        expect(seen.website!.organization).toBe(true);
     });
 
-    it('completes without any deploy', async () => {
-        const { service, lifecycle, deployFacade, history } = build();
+    // No deploy facade sits on the generation path (data → markdown → website); what keeps a
+    // demo Work from deploying is that it stores no deploy provider and that the deploy
+    // routes are refused to demo users (Task 7).
+    it('completes, leaving the Work with no deploy provider', async () => {
+        const { service, lifecycle, history } = build();
         const workId = await seedDraft(lifecycle);
 
         await generate(service, workId);
@@ -323,8 +326,6 @@ describe('WorkGenerationService.generateItems — the seeded demo draft Work (R2
             expect.objectContaining({ status: GenerateStatusType.GENERATED }),
         );
         expect(stored.deployProvider).toBeNull();
-        expect(deployFacade.deploy).not.toHaveBeenCalled();
-        expect(deployFacade.isHiddenProvider).not.toHaveBeenCalled();
     });
 
     it('does not provision again on the next Generate', async () => {
@@ -357,6 +358,78 @@ describe('WorkGenerationService.generateItems — the seeded demo draft Work (R2
         expect(dto.providers!.pipeline).toBe('standard-pipeline');
     });
 
+    it('names the standard pipeline on a request that names no providers at all', async () => {
+        const { service, lifecycle, dataGenerator } = build();
+        const workId = await seedDraft(lifecycle);
+
+        await generate(service, workId);
+
+        const dto = dataGenerator.initialize.mock.calls[0][2] as CreateItemsGeneratorDto;
+        expect(dto.providers).toEqual({ pipeline: 'standard-pipeline' });
+    });
+
+    it('holds the owner to the cap when someone else presses Generate', async () => {
+        const { service, fetchImpl, lifecycle } = build();
+        const workId = await seedDraft(lifecycle);
+        for (const slug of ['one', 'two', 'three']) {
+            await storeRepositoryWork(slug);
+        }
+
+        const result = service.generateItems(
+            workId,
+            {
+                name: 'Awesome AI Coding Tools',
+                prompt: 'AI coding tools',
+            } as CreateItemsGeneratorDto,
+            operator,
+            true,
+        );
+
+        await expect(result).rejects.toMatchObject({ feature: 'more than 3 generated Works' });
+        expect(fetchImpl).not.toHaveBeenCalled();
+    });
+
+    describe('concurrent requests of one sandbox (one API replica)', () => {
+        it('a create and a Generate at 2 repository-backed Works: one wins, one GitHub create', async () => {
+            const { service, fetchImpl, lifecycle } = build();
+            const workId = await seedDraft(lifecycle);
+            await storeRepositoryWork('one');
+            await storeRepositoryWork('two');
+
+            const results = await Promise.allSettled([
+                lifecycle.createWork(
+                    {
+                        slug: 'tools',
+                        name: 'Tools',
+                        description: 'Tools',
+                        organization: false,
+                    } as CreateWorkDto,
+                    demoUser,
+                ),
+                generate(service, workId),
+            ]);
+
+            expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+            const refused = results.filter((r) => r.status === 'rejected');
+            expect(refused).toHaveLength(1);
+            expect((refused[0] as PromiseRejectedResult).reason).toBeInstanceOf(
+                DemoFeatureDisabledError,
+            );
+            expect(fetchImpl).toHaveBeenCalledTimes(1);
+            expect(await works.countRepositoryBackedWorks(demoUser.id)).toBe(3);
+        });
+
+        it('two Generates of the same draft: one repository', async () => {
+            const { service, fetchImpl, lifecycle } = build();
+            const workId = await seedDraft(lifecycle);
+
+            await Promise.all([generate(service, workId), generate(service, workId)]);
+
+            expect(fetchImpl).toHaveBeenCalledTimes(1);
+            expect((await works.findById(workId))!.getDataRepo()).toBe(DEMO_REPO);
+        });
+    });
+
     it('refuses Generate once the sandbox has 3 repository-backed Works, before any repo or run', async () => {
         const { service, fetchImpl, lifecycle, dataGenerator, history } = build();
         const workId = await seedDraft(lifecycle);
@@ -376,12 +449,15 @@ describe('WorkGenerationService.generateItems — the seeded demo draft Work (R2
 
     it('generates as before with the demo off: no provisioning', async () => {
         delete process.env.DEMO;
-        const { service, fetchImpl, lifecycle, seen } = build();
+        const { service, fetchImpl, lifecycle, seen, dataGenerator } = build();
         const workId = await seedDraft(lifecycle);
 
         await generate(service, workId);
 
         expect(fetchImpl).not.toHaveBeenCalled();
         expect(seen.data!.sourceRepository).toBeFalsy();
+        // ...and the request is left as sent: no providers named, none added.
+        const dto = dataGenerator.initialize.mock.calls[0][2] as CreateItemsGeneratorDto;
+        expect(dto.providers).toBeUndefined();
     });
 });
