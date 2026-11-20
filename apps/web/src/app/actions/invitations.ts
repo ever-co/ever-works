@@ -7,6 +7,7 @@ import {
     type CreateInvitationResponse,
     type WorkInvitation,
 } from '@/lib/api/invitations';
+import { demoErrorMessageOf } from '@/lib/demo/demo-errors';
 
 export type ActionResult<T> = { ok: true; data: T } | { ok: false; error: string };
 
@@ -33,11 +34,12 @@ export async function createInvitation(
         revalidatePath(`/works/${workId}/settings/members`);
         return { ok: true, data: res as unknown as CreateInvitationResponse };
     } catch (err) {
-        // Security: log full error server-side only; return generic message to avoid info-leak
+        // Security: log full error server-side only; return generic message to avoid info-leak.
+        // A demo refusal keeps the demo's own friendly text (`serverFetch` translated it).
         console.error('[invitations] createInvitation error:', err);
         return {
             ok: false,
-            error: 'Failed to send invitation. Please try again.',
+            error: demoErrorMessageOf(err) ?? 'Failed to send invitation. Please try again.',
         };
     }
 }

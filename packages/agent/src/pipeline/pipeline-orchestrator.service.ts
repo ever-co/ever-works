@@ -22,6 +22,7 @@ import {
     type RegisteredPlugin,
 } from '../plugins/services/plugin-registry.service';
 import { materializeUsablePlugin } from '../plugins/services/plugin-operation.util';
+import { demoPipelineId } from '../demo/demo-work-policy';
 
 export type PipelineExecutionMode = 'step' | 'full';
 
@@ -78,7 +79,9 @@ export class PipelineOrchestratorService {
     ): Promise<PipelineResult> {
         this.logger.log(`Executing pipeline for work "${work.id}" in forced ${mode} mode`);
 
-        if (mode === 'full') {
+        // Platform demo mode runs `standard-pipeline` only (see resolvePipelinePlugin),
+        // so a self-managed pipeline is never picked here either.
+        if (mode === 'full' && !demoPipelineId()) {
             // Find a self-managed (non-step-orchestratable) pipeline plugin
             const fullPlugin = (await this.getMaterializedPipelinePlugins()).find(
                 (p) => !isStepOrchestratablePipeline(p),
@@ -250,23 +253,30 @@ export class PipelineOrchestratorService {
      * 1. Explicit pipelineId from request
      * 2. First enabled pipeline with defaultForCapabilities: ['pipeline']
      * 3. First loaded+enabled pipeline plugin
+     *
+     * Platform demo mode (`DEMO`): `standard-pipeline` and nothing else, whatever
+     * was requested or is the default. The others bring their own model client
+     * (`agent-pipeline`) or CLI keys, around the AI facade's free-model rule and
+     * the demo quota; when `standard-pipeline` cannot be used the run fails
+     * rather than fall back to one of them.
      */
     private async resolvePipelinePlugin(
         pipelineId?: string | null,
         workId?: string,
         userId?: string,
     ): Promise<IPipelinePlugin> {
+        const demoPipeline = demoPipelineId();
+        if (demoPipeline) {
+            const usable = await this.resolveNamedPipeline(demoPipeline, workId, userId);
+            if (usable) return usable;
+            throw new Error(
+                `The demo runs only the "${demoPipeline}" pipeline, which is not available.`,
+            );
+        }
+
         if (typeof pipelineId === 'string') {
-            const registered = this.registry.get(pipelineId);
-            if (registered?.state === 'loaded' && isPipelinePlugin(registered.plugin)) {
-                const isEnabled = await this.registry.isPluginEnabledForScope(
-                    registered.plugin.id,
-                    workId,
-                    userId,
-                );
-                const usable = isEnabled ? await this.materialize(registered) : null;
-                if (usable) return usable;
-            }
+            const usable = await this.resolveNamedPipeline(pipelineId, workId, userId);
+            if (usable) return usable;
             this.logger.warn(
                 `Pipeline plugin "${pipelineId}" not available, falling back to auto-detect`,
             );
@@ -307,5 +317,23 @@ export class PipelineOrchestratorService {
         throw new Error(
             'No pipeline plugin available. Ensure at least one pipeline plugin is loaded.',
         );
+    }
+
+    /** The pipeline `pipelineId` names when it is loaded, enabled for the scope and usable; else null. */
+    private async resolveNamedPipeline(
+        pipelineId: string,
+        workId?: string,
+        userId?: string,
+    ): Promise<IPipelinePlugin | null> {
+        const registered = this.registry.get(pipelineId);
+        if (registered?.state !== 'loaded' || !isPipelinePlugin(registered.plugin)) {
+            return null;
+        }
+        const isEnabled = await this.registry.isPluginEnabledForScope(
+            registered.plugin.id,
+            workId,
+            userId,
+        );
+        return isEnabled ? this.materialize(registered) : null;
     }
 }

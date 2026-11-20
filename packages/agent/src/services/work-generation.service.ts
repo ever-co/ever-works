@@ -7,6 +7,7 @@ import {
     Logger,
     NotFoundException,
     Optional,
+    ServiceUnavailableException,
 } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import {
@@ -58,6 +59,8 @@ import {
 import { assertNotAppWork } from '@src/works/app-work-guard';
 import { WorkOwnershipService } from './work-ownership.service';
 import { WorkMemoryService } from './work-memory.service';
+import { WorkLifecycleService } from './work-lifecycle.service';
+import { demoPipelineId, needsDemoRepositoryAtGeneration } from '../demo';
 import { normalizeGeneratorError } from './utils/error.utils';
 import {
     classifyGenerationError,
@@ -172,6 +175,14 @@ export class WorkGenerationService {
         // simply record no memory (the previous behaviour).
         @Optional()
         private readonly workMemory?: WorkMemoryService,
+        // Appended LAST, `@Optional()` and self-declared for the positional-arity
+        // rule above (platform demo mode): Generate on a demo draft Work provisions
+        // its Ever Works Git repository through it first. `WorkModule` provides
+        // it; absent, such a Work's Generate is refused, never sent down the
+        // user-GitHub repository path.
+        @Optional()
+        @Inject(WorkLifecycleService)
+        private readonly workLifecycle?: WorkLifecycleService,
     ) {}
 
     async generateItems(
@@ -182,14 +193,16 @@ export class WorkGenerationService {
         context: GenerationTriggerContext = DEFAULT_TRIGGER_CONTEXT,
     ): Promise<ItemsGeneratorResponseDto> {
         // Require editor role to generate/update items
-        const { work } = await this.ownershipService.ensureCanEdit(workId, user.id);
-        this.ensureNotRepositoryWork(work);
-        this.ensureNotAlreadyGenerating(work);
+        const access = await this.ownershipService.ensureCanEdit(workId, user.id);
+        this.ensureNotRepositoryWork(access.work);
+        this.ensureNotAlreadyGenerating(access.work);
         const triggerContext = this.resolveContext(context);
 
         const scopeOptions = { userId: user.id, workId };
 
         await this.prepareProviders(dto, scopeOptions);
+
+        const work = await this.provisionDemoRepository(access.work, user);
 
         const history = await this.createGenerationHistoryRecord(work, user, dto, triggerContext);
 
@@ -1278,10 +1291,35 @@ Only include image URLs that are absolute URLs (starting with http).`;
         ]);
     }
 
+    /**
+     * Platform demo mode — the seeded draft Work has Ever Works Git storage but no
+     * repository yet; provision it before the run (see
+     * `WorkLifecycleService.provisionDemoRepositoryForGeneration`). Every other
+     * Work comes back as it is.
+     */
+    private async provisionDemoRepository(work: Work, user: User): Promise<Work> {
+        if (!needsDemoRepositoryAtGeneration(work)) {
+            return work;
+        }
+        if (!this.workLifecycle) {
+            throw new ServiceUnavailableException(
+                'Cannot provision the Work repository: WorkLifecycleService is not wired.',
+            );
+        }
+        return this.workLifecycle.provisionDemoRepositoryForGeneration(work, user);
+    }
+
     private async prepareProviders(
         dto: CreateItemsGeneratorDto,
         scopeOptions: { userId: string; workId: string },
     ): Promise<void> {
+        // Platform demo mode runs `standard-pipeline` only (the orchestrator holds
+        // to it as well); the request names it — also when it named no providers —
+        // so the run is enabled, validated and recorded as the pipeline it really is.
+        const demoPipeline = demoPipelineId();
+        if (demoPipeline) {
+            dto.providers = { ...dto.providers, pipeline: demoPipeline };
+        }
         await this.ensureProvidersEnabledForWork(
             dto.providers,
             scopeOptions.workId,

@@ -8,7 +8,8 @@ import { WorkKnowledgeUploadRepository } from '../database/repositories/work-kno
 import { WorkKnowledgeDocumentRepository } from '../database/repositories/work-knowledge-document.repository';
 import { KnowledgeBaseService, KB_STORAGE_PLUGIN } from './knowledge-base.service';
 import type { IStoragePlugin } from '@ever-works/plugin';
-import { KbDocumentClass, KbDocumentSource } from '../entities/kb-types';
+import { KbDocumentClass, KbDocumentSource, KbUploadExtractionStatus } from '../entities/kb-types';
+import { DemoFeatureDisabledError } from '../demo';
 
 /**
  * EW-643 Phase 3 — speech-to-text service backing the `kb-transcribe`
@@ -36,6 +37,8 @@ import { KbDocumentClass, KbDocumentSource } from '../entities/kb-types';
  *     the task body and surfaced as the upload's `extractionError`
  *     (slice 2c wiring).
  *   - Provider HTTP error — bubbles to Trigger.dev for retry.
+ *   - `DemoFeatureDisabledError` (a demo instance) — the upload is
+ *     marked `skipped` and the error rethrown; the task acks it.
  */
 
 export interface KbTranscribeResult {
@@ -108,18 +111,31 @@ export class KnowledgeBaseTranscribeService {
         const fetched = await this.storage.getObject(payload.sourceStoragePath);
         const filename = friendlyFilename(upload.originalFilename, payload.sourceMimeType);
 
-        const response = await this.aiFacade.transcribe(
-            {
-                file: fetched.buffer,
-                filename,
-                language: payload.language ?? config.kb.getTranscriptionLanguage(),
-            },
-            {
-                userId: upload.uploadedById,
-                workId: payload.workId,
-                providerOverride: config.kb.getTranscriptionProviderId(),
-            },
-        );
+        const response = await this.aiFacade
+            .transcribe(
+                {
+                    file: fetched.buffer,
+                    filename,
+                    language: payload.language ?? config.kb.getTranscriptionLanguage(),
+                },
+                {
+                    userId: upload.uploadedById,
+                    workId: payload.workId,
+                    providerOverride: config.kb.getTranscriptionProviderId(),
+                },
+            )
+            .catch(async (error: unknown) => {
+                // Platform demo mode: no transcription. Settle the upload as
+                // skipped (it would otherwise stay "running"); the task acks.
+                if (error instanceof DemoFeatureDisabledError) {
+                    await this.uploads.updateById(payload.workId, payload.uploadId, {
+                        extractionStatus: KbUploadExtractionStatus.SKIPPED,
+                        extractionFinishedAt: new Date(),
+                        extractionError: 'Transcription is not available in the demo',
+                    });
+                }
+                throw error;
+            });
 
         const targetClass = resolveTargetClass(config.kb.getTranscriptionTargetClass());
         const docPath = `${targetClass}/transcripts/${upload.id}.md`;

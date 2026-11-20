@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { FindOneOptions, LessThan, Repository, EntityManager } from 'typeorm';
+import { FindOneOptions, LessThan, MoreThan, Not, Repository, EntityManager } from 'typeorm';
 import { User } from '../../entities/user.entity';
 import { config } from '../../config';
 import { randomUUID } from 'node:crypto';
@@ -265,11 +265,56 @@ export class UserRepository {
         });
     }
 
+    /**
+     * Expired anonymous users for the nightly cleanup. Demo sandboxes
+     * (`registrationProvider = 'demo'`) are excluded: the demo sweeper deletes
+     * them itself, after their GitHub repos, so this cleanup must not race it.
+     */
     async findExpiredAnonymous(now: Date = new Date()): Promise<User[]> {
         return await this.repository.find({
             where: {
                 isAnonymous: true,
                 anonymousExpiresAt: LessThan(now),
+                registrationProvider: Not('demo'),
+            },
+        });
+    }
+
+    /**
+     * Platform demo mode: expired demo sandboxes, oldest first (`anonymousExpiresAt`, then
+     * `id`), for the demo sweeper. `after` continues from a sandbox the previous page ended
+     * on: only sandboxes strictly after it in that order — a stable cursor, unaffected by the
+     * sandboxes the sweeper deleted in between.
+     */
+    async findExpiredDemo(
+        now: Date,
+        limit: number,
+        after?: { expiresAt: Date; id: string },
+    ): Promise<User[]> {
+        const query = this.repository
+            .createQueryBuilder('user')
+            .where({ isAnonymous: true, registrationProvider: 'demo' })
+            // `anonymousExpiresAt` is stored as epoch milliseconds (`TimestampColumn`).
+            .andWhere('user.anonymousExpiresAt < :now', { now: now.getTime() })
+            .orderBy('user.anonymousExpiresAt', 'ASC')
+            .addOrderBy('user.id', 'ASC')
+            .take(limit);
+        if (after) {
+            query.andWhere(
+                '(user.anonymousExpiresAt > :afterAt OR (user.anonymousExpiresAt = :afterAt AND user.id > :afterId))',
+                { afterAt: after.expiresAt.getTime(), afterId: after.id },
+            );
+        }
+        return await query.getMany();
+    }
+
+    /** Platform demo mode: demo sandboxes that have not expired yet (capacity check). */
+    async countActiveDemo(now: Date): Promise<number> {
+        return await this.repository.count({
+            where: {
+                isAnonymous: true,
+                registrationProvider: 'demo',
+                anonymousExpiresAt: MoreThan(now),
             },
         });
     }

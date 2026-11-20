@@ -1522,6 +1522,7 @@ describe('agent/config', () => {
                 'billing',
                 'branding',
                 'database',
+                'demo',
                 // Agent email (AW-05) — `email.*` group adds the send-ceiling
                 // operator knobs (EMAIL_SEND_CAPS_ENFORCEMENT,
                 // EMAIL_SEND_CAP_* per limit, `0` = no ceiling) and

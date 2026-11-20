@@ -141,7 +141,13 @@ jobs:
             'API — health JSON|https://api.ever.works/|API is up and running'
             'API — version JSON|https://api.ever.works/api/version|gitSha'
             'Docs (Docusaurus)|https://docs.ever.works/|Ever Works Platform'
-            'Demo directory|https://demo.ever.works/|Discover | Ever Works'
+            'Demo directory|https://dir.ever.works/|Discover | Awesome Directories'
+            # Platform demo (docs/guides/demo-mode.md): uncomment in the rollout PR,
+            # once demo.ever.works serves the platform login. Until then it serves
+            # the old directory template, and ANY failing row (critical or not)
+            # opens/updates the shared "Uptime:" alert issue, which would keep a
+            # false outage open. When enabled it stays out of CRITICAL_URLS.
+            # 'Platform demo|https://demo.ever.works/login|Sign In | Ever Works'
             'MCP server — health JSON|https://mcp.ever.works/health|"status":"ok"'
           )
 

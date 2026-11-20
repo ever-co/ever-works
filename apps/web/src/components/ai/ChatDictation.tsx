@@ -4,6 +4,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslations } from 'next-intl';
 import { Loader2, Mic, Square } from 'lucide-react';
 import { cn } from '@/lib/utils/cn';
+import { reportDemoErrorResponse } from '@/lib/demo/demo-client-errors';
+import { demoErrorKeyFromText } from '@/lib/demo/demo-errors';
 
 /**
  * Push-to-talk dictation for the chat composer.
@@ -37,6 +39,17 @@ import { cn } from '@/lib/utils/cn';
  */
 
 type State = 'idle' | 'recording' | 'transcribing';
+
+async function isDemoErrorResponse(res: Response): Promise<boolean> {
+    return (
+        demoErrorKeyFromText(
+            await res
+                .clone()
+                .text()
+                .catch(() => null),
+        ) !== null
+    );
+}
 
 export function ChatDictation({
     onText,
@@ -78,7 +91,9 @@ export function ChatDictation({
                 // account's own Settings choice.
                 // eslint-disable-next-line no-restricted-syntax -- EW-790 ok
                 const res = await fetch('/api/transcription', { method: 'POST', body: form });
-                if (res.status === 503) {
+                // Demo mode: a demo error code toasts (and never retires the control).
+                reportDemoErrorResponse(res);
+                if (res.status === 503 && !(await isDemoErrorResponse(res))) {
                     // No provider configured in this deployment — retire
                     // the control instead of offering a dead button.
                     setUnsupported(true);

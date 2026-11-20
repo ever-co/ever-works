@@ -41,6 +41,8 @@ import { ConversationRepository } from './repositories/conversation.repository';
 import { CreditLedgerRepository } from './repositories/credit-ledger.repository';
 import { EmailConversationRepository } from './repositories/email-conversation.repository';
 import { EmailMessageRepository } from './repositories/email-message.repository';
+import { DemoGithubRepoRepository } from './repositories/demo-github-repo.repository';
+import { DemoUsageCounterRepository } from './repositories/demo-usage-counter.repository';
 import { ExternalIdentityRepository } from './repositories/external-identity.repository';
 import { AgentInboxRepository } from './repositories/agent-inbox.repository';
 import { ModelAccountRepository } from './repositories/model-account.repository';
@@ -107,6 +109,8 @@ export const REPOSITORY_PROVIDERS: ReadonlyArray<Type<unknown>> = [
     ConversationParticipantRepository,
     ConversationRepository,
     CreditLedgerRepository,
+    DemoGithubRepoRepository,
+    DemoUsageCounterRepository,
     EmailConversationRepository,
     EmailMessageRepository,
     ExternalIdentityRepository,

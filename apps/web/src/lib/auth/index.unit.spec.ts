@@ -8,6 +8,10 @@ const { getAuthFromRequestMock, getProfileMock, getFreshProfileMock, removeAuthA
         removeAuthAccessCookiesMock: vi.fn(),
     }));
 
+vi.mock('../feature-flags/demo', () => ({
+    getDemoConfig: async () => ({ enabled: false, signUpUrl: '', sandboxTtlHours: 24 }),
+}));
+
 vi.mock('../api', () => ({
     authAPI: {
         getProfile: getProfileMock,

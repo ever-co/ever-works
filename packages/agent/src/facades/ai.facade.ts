@@ -43,6 +43,23 @@ import {
     type ModelRoutePlan,
     type ModelRoutePlanner,
 } from '../model-routing/model-route-planner.port';
+import { config } from '../config';
+import {
+    DEMO_AI_PROVIDER_ID,
+    DEMO_AI_QUOTA,
+    DEMO_AI_QUOTA_UNBOUND_MESSAGE,
+    DemoFeatureDisabledError,
+    DemoModelUnavailableError,
+    consumeDemoAiQuota,
+    demoAiQuotaUnboundError,
+    demoProviderConfigSettings,
+    freeModelSettings,
+    isFreeModelId,
+    isModelUnavailableError,
+    pickFreeModel,
+    type DemoAiCallMode,
+    type DemoAiQuotaPort,
+} from '../demo';
 
 export class AiFacadeError extends FacadeError {
     constructor(message: string, operation: string, provider?: string, cause?: Error) {
@@ -123,8 +140,45 @@ export class AiFacadeService extends BaseFacadeService implements IAiFacade {
         @Optional()
         @Inject(MODEL_ROUTE_PLANNER)
         private readonly modelRoutePlanner?: ModelRoutePlanner,
+        // Platform demo mode — counts each AI call on a demo instance.
+        @Optional() @Inject(DEMO_AI_QUOTA) private readonly demoQuota?: DemoAiQuotaPort,
     ) {
         super(registry, settingsService, workPluginRepository);
+    }
+
+    private demoQuotaUnboundLogged = false;
+
+    /**
+     * Platform demo mode — count this call against the demo's AI quota.
+     * `background` calls wait out a busy minute (bounded); `interactive` ones
+     * get `DemoRateLimitedError` at once. With no quota bound the call is
+     * refused (fail closed): an uncounted call must not go out.
+     */
+    private async consumeDemoQuota(
+        facadeOptions: FacadeOptions,
+        mode: DemoAiCallMode,
+    ): Promise<void> {
+        if (!this.demoQuota) {
+            if (!this.demoQuotaUnboundLogged) {
+                this.demoQuotaUnboundLogged = true;
+                this.logger.error(DEMO_AI_QUOTA_UNBOUND_MESSAGE);
+            }
+            throw demoAiQuotaUnboundError();
+        }
+        await consumeDemoAiQuota(this.demoQuota, facadeOptions.userId, mode);
+    }
+
+    /**
+     * Platform demo mode — a provider's "model not found" becomes
+     * `DemoModelUnavailableError` (the visitor sees a plain message, the
+     * operator a log line naming the model). Anything else is unchanged.
+     */
+    private demoUpstreamError(error: unknown, modelId: string | undefined): unknown {
+        if (!isModelUnavailableError(error)) return error;
+        this.logger.error(
+            `Demo AI model unavailable upstream: ${modelId} (${(error as Error).message})`,
+        );
+        return new DemoModelUnavailableError(modelId ?? '');
     }
 
     /**
@@ -368,8 +422,10 @@ export class AiFacadeService extends BaseFacadeService implements IAiFacade {
             scheduleId: options?.routing?.scheduleId,
         });
 
+        // Platform demo mode: always OpenRouter with a `:free` model, counted.
+        const demo = config.demo.isEnabled();
         const plugin = await this.resolvePlugin<IAiProviderPlugin>(
-            route?.providerPluginId ?? requestedProvider,
+            demo ? DEMO_AI_PROVIDER_ID : (route?.providerPluginId ?? requestedProvider),
             facadeOptions.userId,
             facadeOptions.workId,
         );
@@ -388,18 +444,29 @@ export class AiFacadeService extends BaseFacadeService implements IAiFacade {
             route?.modelId !== undefined
                 ? { ...options?.routing, modelOverride: route.modelId }
                 : options?.routing;
-        const model = this.resolveModel(plugin, settings, routing);
+        const resolvedModel = this.resolveModel(plugin, settings, routing);
+        const model = demo
+            ? pickFreeModel(resolvedModel, settings, routing?.complexity)
+            : resolvedModel;
 
+        if (demo) await this.consumeDemoQuota(facadeOptions, 'background');
         await this.enforceBudget(facadeOptions, plugin, model, settings);
 
         const prompt = substituteVariables(promptTemplate, options?.variables);
 
-        const call = (callModel?: string) =>
-            this.callAskJson(plugin, prompt, schema, {
-                model: callModel ?? model,
+        let attemptedModel = model;
+        const call = async (callModel?: string) => {
+            // An escalation is one more upstream call: count it too.
+            if (demo && callModel !== undefined) {
+                await this.consumeDemoQuota(facadeOptions, 'background');
+            }
+            attemptedModel = callModel ?? model;
+            return this.callAskJson(plugin, prompt, schema, {
+                model: attemptedModel,
                 temperature: options?.temperature ?? 0.7,
                 settings,
             });
+        };
 
         const startedAt = Date.now();
         let response: AskJsonCompletionResponse;
@@ -407,7 +474,7 @@ export class AiFacadeService extends BaseFacadeService implements IAiFacade {
             response = await this.withEscalation(call, settings, model, routing);
         } catch (error) {
             await this.reportModelAccountFailure(account, error);
-            throw error;
+            throw demo ? this.demoUpstreamError(error, attemptedModel) : error;
         }
         await this.recordModelAnswer(
             route,
@@ -533,7 +600,9 @@ export class AiFacadeService extends BaseFacadeService implements IAiFacade {
             return await call();
         } catch (error) {
             if (routing?.autoEscalate !== false && routing?.complexity) {
-                const escalated = this.escalateModel(settings, routing.complexity);
+                let escalated = this.escalateModel(settings, routing.complexity);
+                // Platform demo mode: never escalate to a model that is not free.
+                if (config.demo.isEnabled() && !isFreeModelId(escalated)) escalated = currentModel;
                 if (escalated && escalated !== currentModel) {
                     this.logger.warn(
                         `Escalating from ${currentModel ?? 'default'} to ${escalated}`,
@@ -598,8 +667,12 @@ export class AiFacadeService extends BaseFacadeService implements IAiFacade {
             scheduleId: routingHints.scheduleId,
         });
 
+        // Platform demo mode: always OpenRouter with a `:free` model, counted.
+        const demo = config.demo.isEnabled();
         const plugin = await this.resolvePlugin<IAiProviderPlugin>(
-            route?.providerPluginId ?? facadeOptions.providerOverride,
+            demo
+                ? DEMO_AI_PROVIDER_ID
+                : (route?.providerPluginId ?? facadeOptions.providerOverride),
             facadeOptions.userId,
             facadeOptions.workId,
         );
@@ -615,8 +688,12 @@ export class AiFacadeService extends BaseFacadeService implements IAiFacade {
         );
 
         const model = this.resolveModel(plugin, settings, routingHints);
-        const effectiveModel = route?.modelId ?? options.model ?? model;
+        const requestedModel = route?.modelId ?? options.model ?? model;
+        const effectiveModel = demo
+            ? pickFreeModel(requestedModel, settings, routingHints.complexity)
+            : requestedModel;
 
+        if (demo) await this.consumeDemoQuota(facadeOptions, 'interactive');
         await this.enforceBudget(
             facadeOptions,
             plugin,
@@ -637,7 +714,7 @@ export class AiFacadeService extends BaseFacadeService implements IAiFacade {
             response = await plugin.createChatCompletion(mergedOptions);
         } catch (error) {
             await this.reportModelAccountFailure(account, error);
-            throw error;
+            throw demo ? this.demoUpstreamError(error, effectiveModel) : error;
         }
         await this.recordModelAnswer(
             route,
@@ -692,8 +769,12 @@ export class AiFacadeService extends BaseFacadeService implements IAiFacade {
             scheduleId: routingHints.scheduleId,
         });
 
+        // Platform demo mode: always OpenRouter with a `:free` model, counted.
+        const demo = config.demo.isEnabled();
         const plugin = await this.resolvePlugin<IAiProviderPlugin>(
-            route?.providerPluginId ?? facadeOptions.providerOverride,
+            demo
+                ? DEMO_AI_PROVIDER_ID
+                : (route?.providerPluginId ?? facadeOptions.providerOverride),
             facadeOptions.userId,
             facadeOptions.workId,
         );
@@ -709,8 +790,12 @@ export class AiFacadeService extends BaseFacadeService implements IAiFacade {
         );
 
         const model = this.resolveModel(plugin, settings, routingHints);
-        const effectiveModel = route?.modelId ?? options.model ?? model;
+        const requestedModel = route?.modelId ?? options.model ?? model;
+        const effectiveModel = demo
+            ? pickFreeModel(requestedModel, settings, routingHints.complexity)
+            : requestedModel;
 
+        if (demo) await this.consumeDemoQuota(facadeOptions, 'interactive');
         await this.enforceBudget(
             facadeOptions,
             plugin,
@@ -747,7 +832,7 @@ export class AiFacadeService extends BaseFacadeService implements IAiFacade {
             }
         } catch (error) {
             await this.reportModelAccountFailure(account, error);
-            throw error;
+            throw demo ? this.demoUpstreamError(error, effectiveModel) : error;
         } finally {
             if (chunkCount > 0) {
                 // Awaited, so what answered is on the Run before the stream
@@ -817,6 +902,10 @@ export class AiFacadeService extends BaseFacadeService implements IAiFacade {
         options: EmbeddingOptions,
         facadeOptions: FacadeOptions,
     ): Promise<EmbeddingResponse> {
+        // Platform demo mode: no embeddings (no upstream call, no quota);
+        // knowledge features fall back to lexical search.
+        if (config.demo.isEnabled()) throw new DemoFeatureDisabledError('embeddings');
+
         const plugin = await this.resolvePlugin<IAiProviderPlugin>(
             facadeOptions.providerOverride,
             facadeOptions.userId,
@@ -911,6 +1000,9 @@ export class AiFacadeService extends BaseFacadeService implements IAiFacade {
         facadeOptions: FacadeOptions,
         selection: TranscribeSelectionOptions = {},
     ): Promise<TranscriptionResponse> {
+        // Platform demo mode: no free transcription route exists.
+        if (config.demo.isEnabled()) throw new DemoFeatureDisabledError('transcription');
+
         const plugin = await this.resolveTranscribePlugin(facadeOptions, selection);
 
         const settings = await this.getResolvedSettings(plugin.id, {
@@ -991,6 +1083,9 @@ export class AiFacadeService extends BaseFacadeService implements IAiFacade {
     async listTranscriptionProviders(
         facadeOptions: FacadeOptions,
     ): Promise<Array<{ id: string; name: string; isActive: boolean }>> {
+        // Platform demo mode: no transcription, so offer no voice provider.
+        if (config.demo.isEnabled()) return [];
+
         const activeId = await this.resolvePlugin<IAiProviderPlugin>(
             undefined,
             facadeOptions.userId,
@@ -1120,13 +1215,20 @@ export class AiFacadeService extends BaseFacadeService implements IAiFacade {
         const startTime = Date.now();
 
         try {
+            // Platform demo mode: OpenRouter only, and `isAvailable` (a
+            // one-line completion with `defaultModel`) only sees free models.
+            const demo = config.demo.isEnabled();
             const plugin = await this.resolvePlugin<IAiProviderPlugin>(
-                facadeOptions.providerOverride,
+                demo ? DEMO_AI_PROVIDER_ID : facadeOptions.providerOverride,
                 facadeOptions.userId,
                 facadeOptions.workId,
             );
 
-            const settings = await this.getResolvedSettings(plugin.id, facadeOptions);
+            let settings = await this.getResolvedSettings(plugin.id, facadeOptions);
+            if (demo) {
+                settings = freeModelSettings(settings).settings;
+                await this.consumeDemoQuota(facadeOptions, 'interactive');
+            }
             const isAvailable = await plugin.isAvailable(settings);
 
             return {
@@ -1163,16 +1265,21 @@ export class AiFacadeService extends BaseFacadeService implements IAiFacade {
     }
 
     async getProviderConfig(facadeOptions: FacadeOptions): Promise<AiProviderConfig> {
+        // Platform demo mode: callers build their own model client from this
+        // config, outside the facade and its quota. Report openrouter with no
+        // API key (they treat that as "no provider") and free models only.
+        const demo = config.demo.isEnabled();
         const plugin = await this.resolvePlugin<IAiProviderPlugin>(
-            facadeOptions.providerOverride,
+            demo ? DEMO_AI_PROVIDER_ID : facadeOptions.providerOverride,
             facadeOptions.userId,
             facadeOptions.workId,
         );
 
-        const settings = await this.getResolvedSettings(plugin.id, {
+        let settings = await this.getResolvedSettings(plugin.id, {
             userId: facadeOptions.userId,
             workId: facadeOptions.workId,
         });
+        if (demo) settings = demoProviderConfigSettings(settings);
 
         const apiKey = this.getSettingTyped<string>(settings, 'apiKey', 'string');
 

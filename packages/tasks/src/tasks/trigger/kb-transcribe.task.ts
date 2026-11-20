@@ -1,6 +1,7 @@
 import { logger, task } from '@trigger.dev/sdk';
 import { KbTranscribePayload } from '@ever-works/agent/tasks';
 import { KnowledgeBaseTranscribeService } from '@ever-works/agent/services';
+import { DemoFeatureDisabledError } from '@ever-works/agent/demo';
 import { TriggerPluginHydratorService } from '../../trigger/worker/services/trigger-plugin-hydrator.service';
 import { TenantRuntimeBindingResolverService } from '../../trigger/worker/services/tenant-runtime-binding-resolver.service';
 import { withWorkerContext } from '../../trigger/worker/utils/worker-context.utils';
@@ -24,6 +25,10 @@ import { withWorkerContext } from '../../trigger/worker/utils/worker-context.uti
  *     `transcribe()` AND no operator pin set
  *   - downstream provider HTTP error after the configured retry budget
  *   - input byte size exceeds the resolved provider's per-call cap
+ *
+ * Skipped and acked (not failed): a demo instance (`DEMO=true`), where
+ * the facade refuses with `DemoFeatureDisabledError` and the service
+ * marks the upload `skipped`.
  *
  * Concurrency: keyed on `workId` so per-Work transcribe runs serialize
  * but different Works parallelise up to the queue limit.
@@ -61,7 +66,24 @@ export const kbTranscribeTask = task<'kb-transcribe', KbTranscribePayload>({
                 uploadId: payload.uploadId,
                 sourceMimeType: payload.sourceMimeType,
             });
-            const result = await svc.transcribeUpload(payload);
+            let result: Awaited<ReturnType<KnowledgeBaseTranscribeService['transcribeUpload']>>;
+            try {
+                result = await svc.transcribeUpload(payload);
+            } catch (error) {
+                // Platform demo mode: no transcription (the service has
+                // marked the upload skipped). Skip and ack, not fail and retry.
+                if (!(error instanceof DemoFeatureDisabledError)) throw error;
+                logger.info('kb-transcribe: transcription disabled in the demo, skipping', {
+                    workId: payload.workId,
+                    uploadId: payload.uploadId,
+                });
+                return {
+                    status: 'skipped' as const,
+                    reason: 'transcription-disabled' as const,
+                    workId: payload.workId,
+                    uploadId: payload.uploadId,
+                };
+            }
             return {
                 status: 'completed' as const,
                 workId: payload.workId,

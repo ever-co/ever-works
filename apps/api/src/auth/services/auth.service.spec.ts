@@ -1130,6 +1130,74 @@ describe('AuthService', () => {
             ]);
         });
 
+        describe('demo block', () => {
+            const demoBlock = {
+                expiresAt: '2026-11-21T08:00:00.000Z',
+                aiQuotaExhausted: false,
+                recordedGoalId: 'g1',
+            };
+            const sandbox = { id: 'u', registrationProvider: 'demo' };
+
+            beforeEach(() => {
+                authAccountRepo.findProviderAccountsByUserId.mockResolvedValue([] as any);
+            });
+
+            function withDemoProvider(getDemoProfile: jest.Mock) {
+                const moduleRef = { get: jest.fn().mockReturnValue({ getDemoProfile }) };
+                return new AuthService(
+                    userRepo as unknown as UserRepository,
+                    authAccountRepo as unknown as AuthAccountRepository,
+                    emitter as unknown as EventEmitter2,
+                    moduleRef as any,
+                );
+            }
+
+            it('carries the demo block for a demo sandbox', async () => {
+                userRepo.findById.mockResolvedValue(sandbox as any);
+                const getDemoProfile = jest.fn().mockResolvedValue(demoBlock);
+
+                const result = await withDemoProvider(getDemoProfile).getUserProfile('u');
+
+                expect(result.demo).toEqual(demoBlock);
+                expect(getDemoProfile).toHaveBeenCalledWith(expect.objectContaining({ id: 'u' }));
+            });
+
+            it('is null for a normal user', async () => {
+                userRepo.findById.mockResolvedValue({
+                    id: 'u',
+                    registrationProvider: 'email',
+                } as any);
+
+                const result = await withDemoProvider(
+                    jest.fn().mockResolvedValue(null),
+                ).getUserProfile('u');
+
+                expect(result.demo).toBeNull();
+            });
+
+            it('is null when the demo is off (no DEMO_PROFILE is provided)', async () => {
+                userRepo.findById.mockResolvedValue(sandbox as any);
+                const { UnknownElementException } = jest.requireActual(
+                    '@nestjs/core/errors/exceptions',
+                );
+                const moduleRef = {
+                    get: jest.fn(() => {
+                        throw new UnknownElementException('DEMO_PROFILE');
+                    }),
+                };
+                const noDemo = new AuthService(
+                    userRepo as unknown as UserRepository,
+                    authAccountRepo as unknown as AuthAccountRepository,
+                    emitter as unknown as EventEmitter2,
+                    moduleRef as any,
+                );
+
+                const result = await noDemo.getUserProfile('u');
+
+                expect(result.demo).toBeNull();
+            });
+        });
+
         it('excludes github provider when missing repo scope', async () => {
             userRepo.findById.mockResolvedValue({ id: 'u' } as any);
             authAccountRepo.findProviderAccountsByUserId.mockResolvedValue([

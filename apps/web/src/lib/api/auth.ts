@@ -1,4 +1,5 @@
 import 'server-only';
+import { clientIpHeaders } from './client-ip';
 import { serverFetch, serverMutation } from './server-api';
 import { MessageResponse } from './types';
 import { OAuthProvider } from './enums';
@@ -107,6 +108,16 @@ export interface CreateAnonymousDto {
     correlationId?: string;
 }
 
+// Demo mode — `POST /auth/demo` mints a private sandbox account. 201 carries the
+// session token and the moment the sandbox is deleted.
+export interface StartDemoDto {
+    captchaToken?: string;
+}
+
+export interface StartDemoResponse extends AuthResponse {
+    expiresAt: string;
+}
+
 // Response Types
 export interface AuthResponse {
     access_token: string;
@@ -125,6 +136,15 @@ export interface UserProfile {
     emailBudgetAlerts?: boolean;
     /** EW-602: self-hosted platform admin flag (gates /admin/usage). */
     isPlatformAdmin?: boolean;
+    /**
+     * Platform demo mode: set on a demo sandbox account of a demo instance (the strip's data);
+     * null for everyone else and whenever the demo is off.
+     */
+    demo?: {
+        expiresAt: string;
+        aiQuotaExhausted: boolean;
+        recordedGoalId: string | null;
+    } | null;
     oauthTokens?: Array<{
         provider: string;
         createdAt?: string;
@@ -364,6 +384,18 @@ export const authAPI = {
             data,
             method: 'POST',
             wrapInData: false,
+        });
+    },
+    // Demo mode — mint a private sandbox account. 404 when the instance is not a demo. A server
+    // action makes the call, so the visitor's address is passed on: the API's per-IP limit,
+    // the captcha's `remoteIp` and the session's `ipAddress` are the visitor's, not the web's.
+    startDemo: async (data: StartDemoDto) => {
+        return serverMutation<StartDemoResponse>({
+            endpoint: '/auth/demo',
+            data,
+            method: 'POST',
+            wrapInData: false,
+            headers: await clientIpHeaders(),
         });
     },
 };

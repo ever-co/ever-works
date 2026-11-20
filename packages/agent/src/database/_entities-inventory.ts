@@ -67,6 +67,8 @@ import { WorkKnowledgeUpload } from '../entities/work-knowledge-upload.entity';
 import { WorkKnowledgeTag } from '../entities/work-knowledge-tag.entity';
 import { WorkKnowledgeCitation } from '../entities/work-knowledge-citation.entity';
 import { KbRetrievalLog } from '../entities/kb-retrieval-log.entity';
+import { DemoGithubRepo } from '../entities/demo-github-repo.entity';
+import { DemoUsageCounter } from '../entities/demo-usage-counter.entity';
 import { WorkKnowledgeChunk } from '../entities/work-knowledge-chunk.entity';
 import { VectorNamespaceChunk } from '../entities/vector-namespace-chunk.entity';
 import { WorkKnowledgeChunkCoordinate } from '../entities/work-knowledge-chunk-coordinate.entity';
@@ -363,6 +365,8 @@ export const ENTITIES = [
     WorkKnowledgeTag,
     WorkKnowledgeCitation,
     WorkKnowledgeChunk,
+    DemoGithubRepo,
+    DemoUsageCounter,
     WorkKnowledgeChunkCoordinate,
     // AW-07 — pgvector chunks for vector namespaces that are not a Work
     // (a workspace's memory facts); `work_knowledge_chunks` FKs to works.

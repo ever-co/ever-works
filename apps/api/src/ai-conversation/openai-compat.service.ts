@@ -1,4 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { config } from '@ever-works/agent/config';
+import { DemoError } from '@ever-works/agent/demo';
 import { AiFacadeService, type FacadeOptions } from '@ever-works/agent/facades';
 import { WorkRepository } from '@ever-works/agent/database';
 import {
@@ -68,6 +70,18 @@ export const KB_DATA_PREAMBLE = `${untrustedPreamble(
     'knowledge-base documents the user referenced with @kb: mentions',
 )} It is the kb-tagged block that follows; use it as reference material for the answer.`;
 
+/**
+ * Platform demo mode (R39): a refusal of the demo's AI policy — `DemoError` from the AI facade
+ * (`DEMO_AI_QUOTA`, `DEMO_AI_BUSY`, `DEMO_MODEL_NOT_ALLOWED`, `DEMO_MODEL_UNAVAILABLE`, …) — on
+ * a demo instance. Before a byte of the answer is written it is rethrown, so the global
+ * `DemoErrorFilter` (registered only when `DEMO` is on) answers with the error's own status and
+ * `code`, which the web's chat turns into a friendly message. With `DEMO` unset this is never
+ * true, and every error keeps this route's own 422 / 502 envelope.
+ */
+export function isDemoRefusal(error: unknown): error is DemoError {
+    return config.demo.isEnabled() && error instanceof DemoError;
+}
+
 /** Per-call switches for {@link OpenAiCompatService.handleCompletion}. */
 export interface CompletionContextOptions {
     /**
@@ -123,6 +137,8 @@ export class OpenAiCompatService {
         const baseOptions = this.mapToInternalOptions(dto);
         const options = await this.injectKbContext(baseOptions, resolved);
 
+        // Platform demo mode: a refusal before the first byte, rethrown for `DemoErrorFilter`.
+        let demoRefusal: DemoError | undefined;
         try {
             const stream = this.aiFacade.createStreamingChatCompletion(
                 { ...options, stream: true },
@@ -136,6 +152,25 @@ export class OpenAiCompatService {
 
             res.write('data: [DONE]\n\n');
         } catch (error) {
+            if (isDemoRefusal(error)) {
+                if (!res.headersSent) {
+                    // Nothing is written yet: the filter answers with the status and `code`.
+                    demoRefusal = error;
+                    throw error;
+                }
+                // The demo's refusals all come before the first chunk; one that comes later (an
+                // upstream "model not found" mid-stream) can no longer change the status, so the
+                // stream carries it as an OpenAI stream error event with its `code`, which the AI
+                // SDK reads as an error part, and ends (in `finally`).
+                this.logger.warn(`Demo refusal after the stream started: ${error.code}`);
+                res.write(
+                    `data: ${JSON.stringify({
+                        error: { message: error.message, type: 'demo_error', code: error.code },
+                    })}\n\n`,
+                );
+                return;
+            }
+
             this.logger.error('Streaming completion error', error);
 
             const message = this.sanitizeErrorMessage(error);
@@ -156,7 +191,8 @@ export class OpenAiCompatService {
 
             res.destroy(error instanceof Error ? error : new Error(message));
         } finally {
-            if (!res.destroyed && !res.writableEnded) {
+            // A refusal left for the filter leaves the response to it, unended.
+            if (!demoRefusal && !res.destroyed && !res.writableEnded) {
                 res.end();
             }
         }

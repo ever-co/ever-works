@@ -2913,7 +2913,47 @@ export const config = {
             return process.env.EVER_WORKS_APP_LAUNCHER_ENABLED === 'true';
         },
     },
+
+    /**
+     * Platform demo mode (`DEMO=true`). Every demo behaviour is inert unless
+     * `isEnabled()` is true. Numeric knobs fall back to their default on any
+     * value that is not a positive integer; `signUpUrl` falls back unless it
+     * is an absolute `https:` URL. See docs/specs/features/platform-demo-mode.
+     */
+    demo: {
+        isEnabled(): boolean {
+            return ['true', '1', 'yes'].includes((process.env.DEMO ?? '').trim().toLowerCase());
+        },
+        sandboxTtlHours: (): number => demoPositiveInt('DEMO_SANDBOX_TTL_HOURS', 24),
+        signUpUrl(): string {
+            const raw = (process.env.DEMO_SIGN_UP_URL ?? '').trim();
+            try {
+                if (new URL(raw).protocol === 'https:') return raw;
+            } catch {
+                // not an absolute URL: use the default
+            }
+            return DEMO_DEFAULT_SIGN_UP_URL;
+        },
+        githubOrg: (): string => (process.env.DEMO_GITHUB_ORG ?? '').trim(),
+        repoPrefix: (): string => (process.env.DEMO_REPO_PREFIX ?? '').trim() || 'demo-',
+        aiRequestsPerSandbox: (): number => demoPositiveInt('DEMO_AI_REQUESTS_PER_SANDBOX', 120),
+        aiRequestsPerDay: (): number => demoPositiveInt('DEMO_AI_REQUESTS_PER_DAY', 900),
+        aiRequestsPerMinute: (): number => demoPositiveInt('DEMO_AI_REQUESTS_PER_MINUTE', 18),
+        maxWorksPerSandbox: (): number => demoPositiveInt('DEMO_MAX_WORKS_PER_SANDBOX', 3),
+        maxActiveSandboxes: (): number => demoPositiveInt('DEMO_MAX_ACTIVE_SANDBOXES', 300),
+        createPerIpPerHour: (): number => demoPositiveInt('DEMO_CREATE_PER_IP_PER_HOUR', 5)
+    }
 };
+
+const DEMO_DEFAULT_SIGN_UP_URL = 'https://app.ever.works/register';
+
+/** Demo env var: a positive integer, else the default. */
+function demoPositiveInt(name: string, fallback: number): number {
+    const raw = (process.env[name] ?? '').trim();
+    if (!/^\d+$/.test(raw)) return fallback;
+    const parsed = Number(raw);
+    return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
 
 /** AW-05 — the operator env var that turns on each send ceiling platform-wide. */
 const EMAIL_SEND_CAP_ENV: ReadonlyArray<readonly [EmailSendCapField, string]> = [

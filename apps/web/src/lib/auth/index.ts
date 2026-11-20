@@ -7,6 +7,12 @@ import { getAuthFromRequest } from './middleware';
 import type { AuthUser, JwtPayload } from './middleware';
 import { removeAuthAccessCookies } from './cookies';
 import { rememberEverIdSignOut } from './ever-id-signed-out';
+import { getDemoConfig } from '../feature-flags/demo';
+import { redirect } from 'next/navigation';
+import { ROUTES } from '../constants';
+
+/** Where a visitor whose demo sandbox expired (or was swept) mid-session lands. */
+export const DEMO_EXPIRED_HREF = `${ROUTES.AUTH_LOGIN}?demo=expired`;
 
 /**
  * APW-12 (Ever ID) S6 — the API answers `401 { code: 'ever_id_signed_out' }`
@@ -55,7 +61,10 @@ function normalizeProfileUser(user: UserProfile): AuthUser {
     };
 }
 
-async function clearAuthCookieOnUnauthorized(error: unknown): Promise<boolean> {
+async function clearAuthCookieOnUnauthorized(
+    error: unknown,
+    redirectOnDemoExpiry = true,
+): Promise<boolean> {
     if (error instanceof ApiResponseError && error.statusCode === 401) {
         const endedByEverId = error.code === EVER_ID_SIGNED_OUT_CODE;
         if (endedByEverId) {
@@ -85,6 +94,15 @@ async function clearAuthCookieOnUnauthorized(error: unknown): Promise<boolean> {
         if (endedByEverId) {
             await rememberEverIdSignOut();
         }
+        // Demo instance: the sandbox is deleted with its session, so a 401 means it
+        // expired (or the sweeper took it). Say so instead of leaving a generic
+        // sign-in page. The sign-in page itself opts out (`redirectOnDemoExpiry:
+        // false`) — redirecting from there would loop, since the stale cookie
+        // cannot be cleared during a render. Demo off: nothing changes.
+        if (redirectOnDemoExpiry && !endedByEverId && (await getDemoConfig()).enabled) {
+            // `localePrefix: 'never'` — the plain path is the whole URL.
+            redirect(DEMO_EXPIRED_HREF);
+        }
         return true;
     }
     return false;
@@ -98,7 +116,7 @@ function isNetworkError(error: unknown): boolean {
     return error instanceof TypeError && error.message === 'fetch failed';
 }
 
-const getAuthFromCookieImpl = async (): Promise<AuthUser | null> => {
+const getAuthFromCookieImpl = async (redirectOnDemoExpiry: boolean): Promise<AuthUser | null> => {
     const auth = await getAuthFromRequest();
     if (!auth.isAuthenticated || auth.isExpired) {
         return null;
@@ -113,7 +131,7 @@ const getAuthFromCookieImpl = async (): Promise<AuthUser | null> => {
                 isActive: auth.user.isActive,
             };
         } catch (error) {
-            if (await clearAuthCookieOnUnauthorized(error)) return null;
+            if (await clearAuthCookieOnUnauthorized(error, redirectOnDemoExpiry)) return null;
             if (isNetworkError(error)) {
                 console.warn('API unreachable; keeping session from JWT cookie data.');
                 return normalizeJwtUser(auth.user);
@@ -126,7 +144,7 @@ const getAuthFromCookieImpl = async (): Promise<AuthUser | null> => {
     try {
         return normalizeProfileUser(await authAPI.getProfile());
     } catch (error) {
-        if (await clearAuthCookieOnUnauthorized(error)) return null;
+        if (await clearAuthCookieOnUnauthorized(error, redirectOnDemoExpiry)) return null;
         if (isNetworkError(error)) {
             console.warn(
                 'API unreachable during auth validation (opaque token); treating session as unauthenticated.',
@@ -155,7 +173,13 @@ const getAuthFromAPIImpl = async (): Promise<AuthUser | null> => {
     }
 };
 
-export const getAuthFromCookie = cache(getAuthFromCookieImpl);
+export const getAuthFromCookie = cache(() => getAuthFromCookieImpl(true));
+
+/**
+ * {@link getAuthFromCookie} for the sign-in page: identical, except a rejected
+ * session never redirects to `/login?demo=expired` (it is already there).
+ */
+export const getAuthFromCookieOnSignIn = cache(() => getAuthFromCookieImpl(false));
 
 export const getAuthFromAPI = cache(getAuthFromAPIImpl);
 

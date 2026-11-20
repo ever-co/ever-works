@@ -316,6 +316,10 @@
         "./ever-instance": {
             "types": "./dist/ever-instance/index.d.ts",
             "default": "./dist/ever-instance/index.js"
+        },
+        "./demo": {
+            "types": "./dist/demo/index.d.ts",
+            "default": "./dist/demo/index.js"
         }
     },
     "scripts": {

@@ -1,6 +1,4 @@
-import { spawnSync } from 'node:child_process';
-import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 import {
     Global,
@@ -27,6 +25,10 @@ import {
     SELF_DECLARED_DEPS_METADATA,
 } from '@nestjs/common/constants';
 import { Test } from '@nestjs/testing';
+import {
+    readApiGraphChildRequest,
+    runApiGraphChild,
+} from './__tests__/api-graph-child.helper-spec';
 
 /**
  * # Can Nest actually hand every App Works class what it asks for — in the API that ships?
@@ -264,6 +266,16 @@ const EXPECTED_UNBOUND: readonly Expected[] = [
         reason: 'C43, closed 2026-10-17 (lane aw-deploy-2): FacadesModule cannot import the module that provides `AppDomainsService` without a cycle, so in the API the facade reaches it through a non-strict `ModuleRef` lookup (`AppDeployRequestModule` provides it); the constructor parameter stays for the worker, which binds it directly.',
         source: 'packages/agent/src/facades/deploy.facade.ts:137-152,543-551; packages/agent/src/app-runtime/app-deploy-request.module.ts',
     },
+    {
+        key: 'TriggerInternalModule | TriggerInternalController (controller) | DemoAiQuotaService',
+        reason: 'Platform demo mode only: `DemoModule.register()` provides `DemoAiQuotaService` when `DEMO` is on and is an empty module otherwise, and this spec walks the graph with `DEMO` unset — so the `remoteMap` entry answers "Unknown remote target", which is the demo-off contract.',
+        source: 'docs/specs/features/platform-demo-mode/design.md:136 (§5.2: the demo module is registered only when DEMO is on); apps/api/src/demo/demo.module.ts:28',
+    },
+    {
+        key: 'TriggerInternalModule | TriggerInternalController (controller) | DemoRepoLedgerService',
+        reason: 'Platform demo mode only: `DemoModule.register()` provides the repository ledger `DemoRepoLedgerService` when `DEMO` is on and is an empty module otherwise, and this spec walks the graph with `DEMO` unset — so the `remoteMap` entry answers "Unknown remote target", which is the demo-off contract.',
+        source: 'docs/specs/features/platform-demo-mode/design.md:136 (§5.2: the demo module is registered only when DEMO is on); docs/specs/features/platform-demo-mode/design.md:204-208 (§5.2.4 "Repo ledger", plan Task 10)',
+    },
     // `WorkModule | WorkLifecycleService | APP_WORK_DELETION_PORT` left this list on 2026-10-26
     // (lane aw-safety): the `@Global()` `AppRuntimePortsModule` (`apps/api/src/app-works/`) binds it
     // to `AppRuntimeDeletionService`, so deleting an App Work removes its workloads, dependencies and
@@ -284,9 +296,64 @@ const EXPECTED_LAZY_MISSES: readonly Expected[] = [];
 
 /**
  * Remote proxies of an App Works worker context whose name deliberately lands on nothing in
- * the API (`Root :: remote 'Name'`). None today.
+ * the API (`Root :: remote 'Name'`).
+ *
+ * Only the demo's today: `TriggerFacadesModule` (in every context below) declares
+ * `createRemoteProxy(apiClient, 'DemoAiQuotaService')` and
+ * `createRemoteProxy(apiClient, 'DemoRepoLedgerService')`, built only when `DEMO` is on, and the
+ * API binds those names only when `DEMO` is on (`DemoModule.register()`). This spec runs with
+ * `DEMO` unset, where the name answering "Unknown remote target" is the intended contract.
  */
-const EXPECTED_REMOTE_MISSES: readonly Expected[] = [];
+const DEMO_AI_QUOTA_REMOTE_MISS = {
+    reason: 'Platform demo mode only: the worker builds this proxy and the API binds `DemoAiQuotaService` only when `DEMO` is on; this spec runs with `DEMO` unset, so the miss is the demo-off contract.',
+    source: 'docs/specs/features/platform-demo-mode/design.md:174-176 (§5.2.4: workers reach the counters by remote proxy); docs/specs/features/platform-demo-mode/design.md:136 (registered only when DEMO is on)',
+} as const;
+const DEMO_REPO_LEDGER_REMOTE_MISS = {
+    reason: 'Platform demo mode only: the worker builds this proxy and the API binds the repository ledger `DemoRepoLedgerService` only when `DEMO` is on; this spec runs with `DEMO` unset, so the miss is the demo-off contract.',
+    source: 'docs/specs/features/platform-demo-mode/design.md:204-208 (§5.2.4 "Repo ledger": every repository the platform creates for a demo Work is ledgered, the workers\' too, plan Task 10); docs/specs/features/platform-demo-mode/design.md:136 (registered only when DEMO is on)',
+} as const;
+const EXPECTED_REMOTE_MISSES: readonly Expected[] = [
+    {
+        key: "AppBlueprintApplyWorkerModule :: remote 'DemoAiQuotaService'",
+        ...DEMO_AI_QUOTA_REMOTE_MISS,
+    },
+    {
+        key: "AppBlueprintApplyWorkerModule :: remote 'DemoRepoLedgerService'",
+        ...DEMO_REPO_LEDGER_REMOTE_MISS,
+    },
+    {
+        key: "AppDependencyProvisionWorkerModule :: remote 'DemoAiQuotaService'",
+        ...DEMO_AI_QUOTA_REMOTE_MISS,
+    },
+    {
+        key: "AppDependencyProvisionWorkerModule :: remote 'DemoRepoLedgerService'",
+        ...DEMO_REPO_LEDGER_REMOTE_MISS,
+    },
+    {
+        key: "AppSpecEvaluateWorkerModule :: remote 'DemoAiQuotaService'",
+        ...DEMO_AI_QUOTA_REMOTE_MISS,
+    },
+    {
+        key: "AppSpecEvaluateWorkerModule :: remote 'DemoRepoLedgerService'",
+        ...DEMO_REPO_LEDGER_REMOTE_MISS,
+    },
+    {
+        key: "AppUpstreamSyncWorkerModule :: remote 'DemoAiQuotaService'",
+        ...DEMO_AI_QUOTA_REMOTE_MISS,
+    },
+    {
+        key: "AppUpstreamSyncWorkerModule :: remote 'DemoRepoLedgerService'",
+        ...DEMO_REPO_LEDGER_REMOTE_MISS,
+    },
+    {
+        key: "TriggerAppRuntimeModule :: remote 'DemoAiQuotaService'",
+        ...DEMO_AI_QUOTA_REMOTE_MISS,
+    },
+    {
+        key: "TriggerAppRuntimeModule :: remote 'DemoRepoLedgerService'",
+        ...DEMO_REPO_LEDGER_REMOTE_MISS,
+    },
+];
 
 /**
  * The worker contexts' deliberate gaps, keyed `Root :: TOKEN` — per TOKEN rather than per
@@ -473,119 +540,13 @@ interface ReachabilityReport {
     readonly limitations: string[];
 }
 
-interface ChildRequest {
-    readonly repo: string;
-    readonly apiRoot: string;
-    readonly tasksRoot: string;
-    readonly spec: string;
-    readonly out: string;
-    /** api jest's `moduleNameMapper`, minus its `@src/` rules, `<rootDir>` made absolute. */
-    readonly mapper: [string, string[]][];
-}
-
-/* -------------------------------------------------------------------------- *
- * The child's loader
- * -------------------------------------------------------------------------- */
-
-/**
- * The child's loader, as plain CommonJS so nothing has to be compiled to start it.
- *
- * `.ts` under `packages/tasks` is compiled as the Trigger bundle compiles it
- * (`ts.transpileModule` with the tasks tsconfig — `@trigger.dev/build`'s
- * `emitDecoratorMetadata`); every other `.ts` by `@swc/core` with `nest build -b swc`'s
- * options (`@nestjs/cli/lib/compiler/defaults/swc-defaults.js`). A `paths` alias
- * (`@src/*`, `@/*`) resolves against the tsconfig of the package that WRITES the import;
- * anything else goes through api jest's own mapper.
+/*
+ * The child's loader, and the spawn that runs it, live in
+ * `__tests__/api-graph-child.helper-spec.ts` (shared with the demo routes spec): `.ts` under
+ * `packages/tasks` compiled as the Trigger bundle compiles it, every other `.ts` by `@swc/core`
+ * with `nest build -b swc`'s options, `paths` aliases per package, the rest through api
+ * jest's own mapper.
  */
-const CHILD_BOOTSTRAP = [
-    "'use strict';",
-    "const Module = require('node:module');",
-    "const fs = require('node:fs');",
-    "const path = require('node:path');",
-    `const request = JSON.parse(process.env.${CHILD_FLAG});`,
-    "const fromApi = Module.createRequire(path.join(request.apiRoot, 'package.json'));",
-    "const swc = fromApi('@swc/core');",
-    "const ts = fromApi('typescript');",
-    'const swcOptions = {',
-    "    module: { type: 'commonjs' },",
-    '    jsc: {',
-    "        target: 'es2021',",
-    "        parser: { syntax: 'typescript', decorators: true, dynamicImport: true },",
-    '        transform: { legacyDecorator: true, decoratorMetadata: true, useDefineForClassFields: false },',
-    '        keepClassNames: true,',
-    '    },',
-    '    minify: false,',
-    '    swcrc: false,',
-    '};',
-    'const tsconfigs = new Map();',
-    'function compilerOptionsOf(root) {',
-    '    if (!tsconfigs.has(root)) {',
-    "        const read = ts.readConfigFile(path.join(root, 'tsconfig.json'), ts.sys.readFile);",
-    '        tsconfigs.set(root, ts.convertCompilerOptionsFromJson((read.config && read.config.compilerOptions) || {}, root).options);',
-    '    }',
-    '    return tsconfigs.get(root);',
-    '}',
-    "Module._extensions['.ts'] = function (module, filename) {",
-    "    const source = fs.readFileSync(filename, 'utf8');",
-    '    if (filename.startsWith(request.tasksRoot + path.sep)) {',
-    '        const options = { ...compilerOptionsOf(request.tasksRoot), module: ts.ModuleKind.CommonJS, sourceMap: false, inlineSourceMap: false, declaration: false };',
-    '        module._compile(ts.transpileModule(source, { fileName: filename, compilerOptions: options }).outputText, filename);',
-    '        return;',
-    '    }',
-    '    module._compile(swc.transformSync(source, { ...swcOptions, filename }).code, filename);',
-    '};',
-    'function packageRootOf(file) {',
-    '    let dir = path.dirname(file);',
-    '    while (dir.startsWith(request.repo) && dir !== request.repo) {',
-    "        if (fs.existsSync(path.join(dir, 'package.json')) && fs.existsSync(path.join(dir, 'tsconfig.json'))) return dir;",
-    '        dir = path.dirname(dir);',
-    '    }',
-    '    return null;',
-    '}',
-    'function candidates(spec, parent) {',
-    '    const from = parent && parent.filename;',
-    "    if (from && !from.includes(path.sep + 'node_modules' + path.sep)) {",
-    '        const root = packageRootOf(from);',
-    '        if (root) {',
-    '            const options = compilerOptionsOf(root);',
-    '            const baseUrl = options.baseUrl || root;',
-    '            for (const [pattern, targets] of Object.entries(options.paths || {})) {',
-    "                const star = pattern.indexOf('*');",
-    '                const prefix = star < 0 ? pattern : pattern.slice(0, star);',
-    "                const suffix = star < 0 ? '' : pattern.slice(star + 1);",
-    '                const hit = star < 0 ? spec === pattern : spec.startsWith(prefix) && spec.endsWith(suffix) && spec.length >= prefix.length + suffix.length;',
-    '                if (!hit) continue;',
-    "                const middle = star < 0 ? '' : spec.slice(prefix.length, spec.length - suffix.length);",
-    "                return targets.map((target) => path.resolve(baseUrl, target.replace('*', middle)));",
-    '            }',
-    '        }',
-    '    }',
-    '    for (const [source, targets] of request.mapper) {',
-    '        const match = new RegExp(source).exec(spec);',
-    "        if (match) return targets.map((target) => target.replace(/\\$(\\d+)/g, (_, i) => match[Number(i)] || ''));",
-    '    }',
-    '    return null;',
-    '}',
-    'const resolveFilename = Module._resolveFilename;',
-    'Module._resolveFilename = function (spec, parent, isMain, options) {',
-    '    const mapped = candidates(spec, parent);',
-    '    if (mapped) {',
-    '        for (const candidate of mapped) {',
-    '            try { return resolveFilename.call(this, candidate, parent, isMain, options); } catch (error) { /* next */ }',
-    '        }',
-    '    }',
-    '    try {',
-    '        return resolveFilename.call(this, spec, parent, isMain, options);',
-    '    } catch (error) {',
-    "        if (spec.startsWith('.') && spec.endsWith('.js')) return resolveFilename.call(this, spec.slice(0, -3), parent, isMain, options);",
-    '        throw error;',
-    '    }',
-    '};',
-    'require(request.spec).runReachabilityChild().then(',
-    '    () => process.exit(0),',
-    '    (error) => { console.error((error && error.stack) || error); process.exit(1); },',
-    ');',
-].join('\n');
 
 /* -------------------------------------------------------------------------- *
  * The walker — Nest's scanner and injector, reduced to metadata reads
@@ -1200,9 +1161,9 @@ function disambiguate(nodes: ModuleNode[], location: Map<unknown, string>): void
     }
 }
 
-/** The child's entry point — `CHILD_BOOTSTRAP` calls it once the loader is installed. */
+/** The child's entry point — the shared loader calls it once it is installed. */
 export async function runReachabilityChild(): Promise<void> {
-    const request = JSON.parse(process.env[CHILD_FLAG] ?? '{}') as ChildRequest;
+    const request = readApiGraphChildRequest(CHILD_FLAG);
     writeFileSync(request.out, JSON.stringify(await computeReport()));
 }
 
@@ -1706,50 +1667,12 @@ async function workerRoots(
  * -------------------------------------------------------------------------- */
 
 function runChild(): ReachabilityReport {
-    const config = jest.requireActual<{ moduleNameMapper: Record<string, string | string[]> }>(
-        join(API_ROOT, 'jest.config.js'),
-    );
-    // Api jest's `@src/` rules are the ambiguous ones (see the header); the child resolves
-    // `@src/` per package instead.
-    const mapper: [string, string[]][] = Object.entries(config.moduleNameMapper)
-        .filter(([source]) => !source.startsWith('^@src/'))
-        .map(([source, target]) => [
-            source,
-            (Array.isArray(target) ? target : [target]).map((path) =>
-                path.replace('<rootDir>', API_SRC),
-            ),
-        ]);
-    const out = join(tmpdir(), `app-works-di-reachability-${process.pid}-${Date.now()}.json`);
-    const request: ChildRequest = {
-        repo: REPO,
-        apiRoot: API_ROOT,
-        tasksRoot: join(REPO, 'packages', 'tasks'),
+    return runApiGraphChild<ReachabilityReport>({
+        childFlag: CHILD_FLAG,
+        entry: 'runReachabilityChild',
         spec: __filename,
-        out,
-        mapper,
-    };
-    try {
-        const child = spawnSync(
-            process.execPath,
-            ['--max-old-space-size=4096', '-e', CHILD_BOOTSTRAP],
-            {
-                cwd: API_ROOT,
-                env: { ...process.env, [CHILD_FLAG]: JSON.stringify(request) },
-                encoding: 'utf8',
-                maxBuffer: 64 * 1024 * 1024,
-                timeout: 10 * 60 * 1000,
-            },
-        );
-        if (child.status !== 0 || !existsSync(out)) {
-            throw new Error(
-                `The graph child failed (status ${String(child.status)}, signal ${String(child.signal)}):\n` +
-                    `${child.stderr}\n${String(child.stdout).slice(-4000)}`,
-            );
-        }
-        return JSON.parse(readFileSync(out, 'utf8')) as ReachabilityReport;
-    } finally {
-        rmSync(out, { force: true });
-    }
+        label: 'app-works-di-reachability',
+    });
 }
 
 /** One RED row: what is missing, where it is asked for, and why Nest cannot reach it. */

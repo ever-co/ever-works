@@ -248,6 +248,41 @@ describe('AgentPipelinePlugin', () => {
 			expect(String(result.error)).toContain('User ID');
 		});
 
+		it('fails cleanly, without throwing, when the provider config has no API key (a demo instance)', async () => {
+			// On DEMO=true the AI facade reports the forced openrouter provider
+			// with `apiKey` omitted, so this pipeline never builds its own
+			// model client outside the facade and its quota.
+			const logger = { log: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
+			const context = {
+				logger,
+				getSettings: vi.fn().mockResolvedValue({})
+			} as unknown as PluginContext;
+			await plugin.onLoad(context);
+			const getProviderConfig = vi.fn().mockResolvedValue({
+				providerId: 'openrouter',
+				providerName: 'OpenRouter',
+				baseUrl: 'https://openrouter.ai/api/v1',
+				apiKey: undefined,
+				defaultModel: 'google/gemma-4-31b-it:free',
+				routing: { complexModel: 'deepseek/deepseek-r3:free' }
+			});
+
+			const result = await plugin.execute(work, request, existing, {
+				execContext: {
+					aiFacade: { getProviderConfig } as never,
+					searchFacade: {} as never,
+					screenshotFacade: {} as never,
+					contentExtractorFacade: {} as never,
+					logger,
+					work
+				}
+			});
+
+			expect(getProviderConfig).toHaveBeenCalledTimes(1);
+			expect(result.success).toBe(false);
+			expect(String(result.error)).toContain('missing baseUrl or apiKey');
+		});
+
 		it('passes processed per-plugin config to data sources', async () => {
 			const queryAll = vi.fn().mockResolvedValue({ items: [], errors: [] });
 			const logger = { log: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };

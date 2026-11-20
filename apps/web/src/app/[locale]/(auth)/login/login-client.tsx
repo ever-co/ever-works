@@ -13,6 +13,7 @@ import { Button } from '@/components/ui/button';
 import { REDIRECT_SEARCH_PARAM, ROUTES } from '@/lib/constants';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { OAuthProvider } from '@/lib/api/enums';
+import { DemoLoginCard } from '@/components/demo/DemoLoginCard';
 import { EVER_ID_SIGNED_OUT_PARAM, EVER_ID_SIGNED_OUT_VALUE } from '@/lib/auth/ever-id';
 
 interface LoginClientProps {
@@ -25,6 +26,11 @@ interface LoginClientProps {
     everIdEnabled?: boolean;
     /** APW-12 S6 — the session this visitor arrived with was ended by Ever ID. */
     signedOutByEverId?: boolean;
+    /**
+     * Demo mode — the one-click card goes above the form and the form collapses
+     * under "Operator login". `null` (the default) leaves the page exactly as it was.
+     */
+    demo?: { ttlHours: number } | null;
 }
 
 /** APW-12 — S6 / S7 notices: informational, announced politely, never colour alone. */
@@ -104,10 +110,12 @@ export function LoginClient({
     magicLinkEnabled,
     everIdEnabled = false,
     signedOutByEverId = false,
+    demo = null,
 }: LoginClientProps) {
     const searchParams = useSearchParams();
     const t = useTranslations('auth.login');
     const tEverId = useTranslations('auth.everId');
+    const tDemo = useTranslations('demo.login');
     const [isPending, startTransition] = useTransition();
 
     // APW-12 — S7 ("Also sign out of Ever ID" came back) takes precedence over S6.
@@ -119,6 +127,7 @@ export function LoginClient({
               : null;
     const showAlternativeSignIn = availableSocialProviders.length > 0 || everIdEnabled;
 
+    const demoExpired = searchParams.get('demo') === 'expired';
     const isPasswordReset = searchParams.get('reset') === 'true';
     const redirectUrl = searchParams.get(REDIRECT_SEARCH_PARAM);
     const initialTab: LoginTab =
@@ -183,22 +192,8 @@ export function LoginClient({
         setMagicLinkSentTo(null);
     };
 
-    return (
-        <AuthLayout title={t('title')} subtitle={t('subtitle')}>
-            <ThemeToggle variant="fixed" />
-
-            {everIdNotice && <EverIdSignedOutNotice message={everIdNotice} />}
-
-            {searchParams.get('accountDeleted') === '1' && (
-                <div
-                    className="mb-4 rounded-lg border border-success/20 bg-success/10 px-4 py-3 text-sm text-text dark:text-text-dark"
-                    data-testid="login-account-deleted-notice"
-                    role="status"
-                >
-                    {t('accountDeleted')}
-                </div>
-            )}
-
+    const signInBody = (
+        <>
             {magicLinkEnabled && (
                 <div
                     role="tablist"
@@ -418,6 +413,40 @@ export function LoginClient({
                         </Link>
                     </p>
                 </form>
+            )}
+        </>
+    );
+
+    return (
+        <AuthLayout title={t('title')} subtitle={t('subtitle')}>
+            <ThemeToggle variant="fixed" />
+
+            {demo && <DemoLoginCard ttlHours={demo.ttlHours} expired={demoExpired} />}
+
+            {everIdNotice && <EverIdSignedOutNotice message={everIdNotice} />}
+
+            {searchParams.get('accountDeleted') === '1' && (
+                <div
+                    className="mb-4 rounded-lg border border-success/20 bg-success/10 px-4 py-3 text-sm text-text dark:text-text-dark"
+                    data-testid="login-account-deleted-notice"
+                    role="status"
+                >
+                    {t('accountDeleted')}
+                </div>
+            )}
+
+            {demo ? (
+                <details
+                    data-testid="demo-operator-login"
+                    className="rounded-lg border border-border dark:border-border-dark p-4"
+                >
+                    <summary className="cursor-pointer text-sm font-medium text-text dark:text-text-dark">
+                        {tDemo('operatorLogin')}
+                    </summary>
+                    <div className="mt-4">{signInBody}</div>
+                </details>
+            ) : (
+                signInBody
             )}
 
             {/* Self-serve deletion for someone who cannot (or would rather not) sign in.

@@ -365,7 +365,11 @@ export const config = {
     },
 
     work: {
-        staleTimeoutHours: () => parseInt(process.env.WORK_STALE_TIMEOUT_HOURS || '2', 10),
+        // Fractional hours allowed (0.5 = 30 minutes); unset, garbage or <= 0 falls back to 2.
+        staleTimeoutHours: () => {
+            const hours = parseFloat(process.env.WORK_STALE_TIMEOUT_HOURS || '');
+            return Number.isFinite(hours) && hours > 0 ? hours : 2;
+        },
     },
 
     /**
@@ -638,5 +642,12 @@ export const config = {
      */
     appLauncher: {
         isEnabled: () => agentConfig.appLauncher.isEnabled(),
+    },
+
+    /** Platform demo mode: delegates to the agent accessors (one implementation). */
+    demo: {
+        isEnabled: () => agentConfig.demo.isEnabled(),
+        signUpUrl: () => agentConfig.demo.signUpUrl(),
+        sandboxTtlHours: () => agentConfig.demo.sandboxTtlHours(),
     },
 };

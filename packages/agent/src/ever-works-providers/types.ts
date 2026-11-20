@@ -19,6 +19,8 @@ export interface EverWorksProviderWorkRef {
 
 /** Repo coordinates returned after creating a repo in the customers org. */
 export interface EverWorksGitRepoRef {
+    /** GitHub's numeric repository id, from the create response. */
+    readonly id: number;
     readonly owner: string;
     readonly repo: string;
     readonly fullName: string;
@@ -90,6 +92,21 @@ export class EverWorksGitRequestError extends EverWorksProviderError {
         this.status = status;
         this.responseBody = responseBody;
         this.name = 'EverWorksGitRequestError';
+    }
+}
+
+/**
+ * Platform demo mode — `EverWorksGitProvider.deleteRepository` refused a target before any
+ * GitHub call: it deletes only on a demo instance, only in `DEMO_GITHUB_ORG`, and only a name
+ * that starts with `DEMO_REPO_PREFIX`.
+ */
+export class EverWorksGitDeletionRefusedError extends EverWorksProviderError {
+    constructor(owner: string, name: string, reason: string) {
+        super(
+            'storage_provider_deletion_refused',
+            `Refusing to delete ${owner}/${name}: ${reason}`,
+        );
+        this.name = 'EverWorksGitDeletionRefusedError';
     }
 }
 

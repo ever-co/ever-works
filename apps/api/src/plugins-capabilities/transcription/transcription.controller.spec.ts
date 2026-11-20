@@ -8,6 +8,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { TranscriptionController } from './transcription.controller';
 import { AiFacadeService, TranscriptionNotConfiguredError } from '@ever-works/agent/facades';
 import { PluginOperationsService } from '@ever-works/agent/plugins';
+import { DemoFeatureDisabledError } from '@ever-works/agent/demo';
 import { AuthSessionGuard } from '../../auth';
 import type { AuthenticatedUser } from '../../auth/types/auth.types';
 
@@ -102,6 +103,15 @@ describe('TranscriptionController', () => {
         await expect(controller.transcribe(auth, clip('audio/webm'), {})).rejects.toBeInstanceOf(
             ServiceUnavailableException,
         );
+    });
+
+    it('lets a demo refusal through untouched, so it answers 403 DEMO_DISABLED', async () => {
+        const refusal = new DemoFeatureDisabledError('transcription');
+        aiFacade.transcribe.mockRejectedValue(refusal);
+        const warn = jest.spyOn(controller['logger'], 'warn').mockImplementation(() => undefined);
+
+        await expect(controller.transcribe(auth, clip('audio/webm'), {})).rejects.toBe(refusal);
+        expect(warn).not.toHaveBeenCalled();
     });
 
     it('does not leak a raw provider error to the client', async () => {
