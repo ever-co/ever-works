@@ -11,11 +11,19 @@ import type { ExecutionContext } from '@nestjs/common';
 import { UnknownElementException } from '@nestjs/core/errors/exceptions/unknown-element.exception';
 import { Test, type TestingModule } from '@nestjs/testing';
 import { TypeOrmModule, getDataSourceToken } from '@nestjs/typeorm';
+import { getMetadataStorage } from 'class-validator';
 import { randomBytes, randomUUID } from 'node:crypto';
 import type { DataSource } from 'typeorm';
 import { ENTITIES, UserRepository } from '@ever-works/agent/database';
 import { DemoFeatureDisabledError } from '@ever-works/agent/demo';
+import { CreateWorkDto, QuickCreateWorkDto, UpdateWorkDto } from '@ever-works/agent/dto';
 import { AuthSession, User } from '@ever-works/agent/entities';
+import { UpdateProfileDto } from '../../auth/dto/update-profile.dto';
+import {
+    EnableUserPluginDto,
+    EnableWorkPluginDto,
+} from '../../plugins/dto/update-plugin-settings.dto';
+import { CreateInvitationDto } from '../../works/dto/create-invitation.dto';
 import { AuthSessionGuard } from '../../auth/guards/auth-session.guard';
 import { AUTH_PROVIDER, AUTH_RUNTIME_INSTANCE } from '../../auth/providers/auth-provider.constants';
 import { AuthProviderService, hashSessionToken } from '../../auth/providers/auth-provider.service';
@@ -39,7 +47,7 @@ type Request = {
     originalUrl?: string;
     headers?: Record<string, string>;
     body?: unknown;
-    user?: { userId: string };
+    user?: { userId: string; username?: string };
 };
 
 function http(request: Request): ExecutionContext {
@@ -111,6 +119,33 @@ describe('DemoRestrictionsGuard', () => {
             }
         });
 
+        it('reads only body fields the DTOs behind those routes still declare', () => {
+            // The validation pipe whitelists DTO fields: a `when` reading a field its DTO no
+            // longer declares would watch for a request the API refuses anyway, and miss the new
+            // field. Each pair is a field a `when` in `demo-restrictions.ts` reads.
+            const declared = (dto: Function): Set<string> =>
+                new Set(
+                    getMetadataStorage()
+                        .getTargetValidationMetadatas(dto, '', true, false)
+                        .map((metadata) => metadata.propertyName),
+                );
+            const reads: [Function, string[]][] = [
+                [CreateWorkDto, ['kind']],
+                [QuickCreateWorkDto, ['kind']],
+                [UpdateWorkDto, ['owner', 'organization']],
+                [EnableUserPluginDto, ['settings', 'secretSettings']],
+                [EnableWorkPluginDto, ['settings']],
+                [CreateInvitationDto, ['email']],
+                [UpdateProfileDto, ['username']],
+            ];
+            for (const [dto, fields] of reads) {
+                const names = declared(dto);
+                for (const field of fields) {
+                    expect([dto.name, field, names.has(field)]).toEqual([dto.name, field, true]);
+                }
+            }
+        });
+
         it('blocks registration, magic link, social sign-in and anonymous users for everyone', () => {
             const everyone = DEMO_BLOCKED_ROUTES.filter((entry) => entry.scope === 'everyone');
             expect(new Set(everyone.map((entry) => entry.feature))).toEqual(
@@ -165,7 +200,14 @@ describe('DemoRestrictionsGuard', () => {
             ['POST', '/api/auth/update-password', 'password change'],
             ['POST', '/api/account-deletion/me', 'account deletion'],
             ['POST', '/api/organizations/org-1/invitations', 'invitations by email'],
+            ['POST', '/api/works/w-1/members', 'invitations by email'],
             ['GET', '/api/account/export', 'data export'],
+            ['PUT', '/api/fleet/runners/jobs/watched', 'plugin settings'],
+            ['PUT', '/api/deploy/works/w-1/runtime-env', 'runtime environment'],
+            ['PUT', '/api/deploy/works/w-1/subdomain', 'subdomains'],
+            ['PUT', '/api/works/w-1/repositories/visibility', 'repository visibility'],
+            ['POST', '/api/device-auth/codex/start', 'device sign-in'],
+            ['GET', '/api/device-auth/codex/status', 'device sign-in'],
         ])('refuses %s %s (%s)', async (method, path, feature) => {
             const { guard } = guardWith();
 
@@ -225,6 +267,67 @@ describe('DemoRestrictionsGuard', () => {
             await expect(save('PATCH', { description: 'x', owner: '  ' })).resolves.toBe(true);
         });
 
+        it('refuses an enable that writes settings (BYOK), not a plain enable', async () => {
+            const { guard } = guardWith();
+            const enable = (path: string, body: unknown, user = demoUser) =>
+                guard.canActivate(http({ method: 'POST', path, body, user }));
+
+            for (const path of [
+                '/api/plugins/openrouter/enable',
+                '/api/works/w-1/plugins/openrouter/enable',
+            ]) {
+                await expectDisabled(
+                    enable(path, { secretSettings: { apiKey: 'sk-own' } }),
+                    'plugin settings',
+                );
+                await expectDisabled(enable(path, { settings: { model: 'x' } }), 'plugin settings');
+                await expect(enable(path, {})).resolves.toBe(true);
+                await expect(
+                    enable(path, { settings: {}, autoEnableForWorks: true }),
+                ).resolves.toBe(true);
+                await expect(
+                    enable(path, { secretSettings: { apiKey: 'sk-own' } }, operator),
+                ).resolves.toBe(true);
+            }
+        });
+
+        it('refuses a Work invitation that is mailed, not an owner-claim link', async () => {
+            const { guard } = guardWith();
+            const invite = (body: unknown) =>
+                guard.canActivate(
+                    http({
+                        method: 'POST',
+                        path: '/api/works/w-1/invitations',
+                        body,
+                        user: demoUser,
+                    }),
+                );
+
+            await expectDisabled(
+                invite({ email: 'someone@example.com', role: 'editor' }),
+                'invitations by email',
+            );
+            await expect(
+                invite({ role: 'owner-claim', metadata: { expectedProviderUsername: 'x' } }),
+            ).resolves.toBe(true);
+        });
+
+        it('refuses a profile save that changes the username, not one that keeps it', async () => {
+            const { guard } = guardWith();
+            const save = (body: unknown, user: Request['user']) =>
+                guard.canActivate(http({ method: 'PUT', path: '/api/auth/profile', body, user }));
+            const signedIn = { ...demoUser, username: 'demo-0a1b2c3d' };
+
+            await expectDisabled(save({ username: 'renamed' }, signedIn), 'username change');
+            await expect(
+                save({ username: 'demo-0a1b2c3d', displayName: 'Me' }, signedIn),
+            ).resolves.toBe(true);
+            await expect(save({ displayName: 'Me' }, signedIn)).resolves.toBe(true);
+            await expect(
+                save({ username: 'renamed' }, { ...operator, username: 'operator' }),
+            ).resolves.toBe(true);
+        });
+
         it('reads the account once a minute, and only for a route the table names', async () => {
             const { guard, users } = guardWith();
             const now = jest.spyOn(Date, 'now').mockReturnValue(1_000_000);
@@ -250,6 +353,25 @@ describe('DemoRestrictionsGuard', () => {
             } finally {
                 now.mockRestore();
             }
+        });
+
+        it('keeps 1,000 accounts at most, dropping the one written longest ago', async () => {
+            const { guard, users } = guardWith();
+            const write = (userId: string) =>
+                guard.canActivate(
+                    http({ method: 'POST', path: '/api/webhooks', user: { userId } }),
+                );
+
+            await expectDisabled(write(DEMO_USER_ID), 'webhooks');
+            for (let index = 0; index < 999; index += 1) await write(`other-${index}`);
+            // Read from the cache: a hit does not move an entry.
+            await expectDisabled(write(DEMO_USER_ID), 'webhooks');
+            expect(users.findById).toHaveBeenCalledTimes(1_000);
+
+            await write('one-more'); // 1,001st account: the first one written goes.
+            await expectDisabled(write(DEMO_USER_ID), 'webhooks');
+            expect(users.findById).toHaveBeenCalledTimes(1_002);
+            expect(users.findById).toHaveBeenLastCalledWith(DEMO_USER_ID);
         });
     });
 
@@ -304,6 +426,8 @@ describe('DemoRestrictionsGuard', () => {
         });
 
         it.each([
+            // Zero-friction registration: an account (`registrationProvider: 'github'`) + a Work.
+            ['POST', '/api/register-work', 'registration'],
             ['POST', '/api/auth/anonymous', 'anonymous sign-in'],
             ['POST', '/api/auth/magic-link', 'magic link sign-in'],
             ['POST', '/api/auth/magic-link/redeem', 'magic link sign-in'],
@@ -313,6 +437,8 @@ describe('DemoRestrictionsGuard', () => {
             ['GET', '/api/github-app/callback', 'GitHub App sign-in'],
             ['POST', '/api/auth/ever-id/authorize', 'Ever ID sign-in'],
             ['POST', '/api/auth/ever-id/sign-up/confirm', 'Ever ID sign-in'],
+            // A device token exchanged for a session.
+            ['POST', '/api/auth/ever-id/session', 'Ever ID sign-in'],
             ['POST', '/api/uploads/anonymous', 'anonymous uploads'],
             ['POST', '/api/uploads/anonymous/file', 'anonymous uploads'],
         ])('refuses %s %s (%s)', async (method, path, feature) => {

@@ -14,16 +14,18 @@ import {
 
 /** How long a user's "is a demo sandbox" answer is reused before the row is read again. */
 const DEMO_USER_CACHE_MS = 60_000;
-/** Bound on that per-user cache; the least recently read entry goes first. */
+/**
+ * Bound on that per-user cache. Entries keep the order they were written in (a row read from the
+ * database is written again, at the end); the one written longest ago goes first.
+ */
 const DEMO_USER_CACHE_MAX = 1_000;
 
-/** The parts of an Express request the guard reads. */
+/** The parts of an Express request the guard reads (`user` is in `DemoRouteRequest`). */
 export interface DemoGuardedRequest extends DemoRouteRequest {
     readonly method?: unknown;
     readonly path?: unknown;
     readonly originalUrl?: unknown;
     readonly url?: unknown;
-    readonly user?: { readonly userId?: unknown } | null;
 }
 
 /**
