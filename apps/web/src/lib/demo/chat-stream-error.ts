@@ -1,6 +1,6 @@
 import 'server-only';
 import { APICallError, RetryError } from 'ai';
-import { demoErrorKeyFromText } from './demo-errors';
+import { demoErrorKey, demoErrorKeyFromText } from './demo-errors';
 
 /** What the AI SDK itself puts on the stream for an error `onError` does not translate. */
 export const CHAT_STREAM_DEFAULT_ERROR = 'An error occurred.';
@@ -25,11 +25,26 @@ function apiCallErrorOf(error: unknown): APICallError | null {
 }
 
 /**
+ * The demo `code` of a refusal that came after the stream started. The API can no longer change
+ * the status then, so it sends an OpenAI stream error event (`{ error: { message, type, code } }`,
+ * `openai-compat.service.ts`), which `@ai-sdk/openai-compatible` hands on as the error part's
+ * plain `{ message, type, code }` object, not an `APICallError`. Null for anything else.
+ */
+function streamErrorDemoCode(error: unknown): string | null {
+    if (!error || typeof error !== 'object' || error instanceof Error) return null;
+    const code = (error as { code?: unknown }).code;
+    return demoErrorKey(code) ? (code as string) : null;
+}
+
+/**
  * The text a chat stream carries for a failed model call. The route's `onError` keeps the API's
  * status, `code` and `retryAfterMs` as JSON for a demo code (the client maps it to a friendly
  * message, `useDemoErrorMessage`) and leaves every other error as the SDK's own default.
  */
 export function chatStreamErrorText(error: unknown): string {
+    const streamCode = streamErrorDemoCode(error);
+    if (streamCode) return JSON.stringify({ code: streamCode });
+
     const apiError = apiCallErrorOf(error);
     const responseBody = apiError?.responseBody;
     if (typeof responseBody !== 'string' || !demoErrorKeyFromText(responseBody)) {

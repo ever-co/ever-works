@@ -189,9 +189,28 @@ describe('DemoRestrictionsGuard', () => {
             ).resolves.toBe(true);
         });
 
+        // R39: the web's assistant chat calls this route (`lib/ai/agent.ts`, `${API_URL}/v1`).
+        // The AI facade already forces OpenRouter, a `:free` model and the quota on every call,
+        // and a demo user cannot mint an API key, so the route stays open to the visitor.
+        it('lets a chat completion through: the assistant chat calls it (R39)', async () => {
+            const { guard } = guardWith();
+
+            for (const stream of [true, false]) {
+                await expect(
+                    guard.canActivate(
+                        http({
+                            method: 'POST',
+                            path: '/api/v1/chat/completions',
+                            body: { model: 'auto', stream, messages: [] },
+                            user: demoUser,
+                        }),
+                    ),
+                ).resolves.toBe(true);
+            }
+        });
+
         it.each([
             ['PATCH', '/api/works/w-1/plugins/openrouter/settings', 'plugin settings'],
-            ['POST', '/api/v1/chat/completions', 'OpenAI-compatible API'],
             ['POST', '/api/auth/api-keys', 'API keys'],
             ['POST', '/api/model-accounts/acc-1/credentials', 'model account credentials'],
             ['POST', '/api/webhooks', 'webhooks'],
@@ -470,6 +489,7 @@ describe('DemoRestrictionsGuard', () => {
                 ['POST', '/api/works/w-1/invitations'],
                 ['POST', '/api/organizations/org-1/shared-view'],
                 ['POST', '/api/organizations/org-1/shared-view/regenerate'],
+                ['POST', '/api/v1/chat/completions'],
                 ['POST', '/api/auth/login'],
             ]) {
                 await expect(

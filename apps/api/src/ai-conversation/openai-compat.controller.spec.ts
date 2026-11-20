@@ -9,6 +9,13 @@ jest.mock('@ever-works/agent/services', () => ({
     formatKbContext: jest.fn().mockReturnValue('<kb>\n</kb>'),
 }));
 
+import {
+    DemoError,
+    DemoModelNotAllowedError,
+    DemoModelUnavailableError,
+    DemoQuotaExceededError,
+    DemoRateLimitedError,
+} from '@ever-works/agent/demo';
 import { OpenAiCompatController } from './openai-compat.controller';
 import { OpenAiCompatService } from './openai-compat.service';
 import type { AuthenticatedUser } from '../auth/types/auth.types';
@@ -107,5 +114,123 @@ describe('OpenAiCompatController', () => {
             workId: 'work-99',
             providerOverride: 'override-x',
         });
+    });
+
+    /**
+     * Platform demo mode (R39): the web's assistant chat calls this route, and the AI facade
+     * refuses a demo call with a `DemoError` (`DEMO_AI_QUOTA`, `DEMO_AI_BUSY`,
+     * `DEMO_MODEL_UNAVAILABLE`, …). Before a byte is written it goes on to the global
+     * `DemoErrorFilter`, which answers with the error's own status and `code`. Every other error
+     * keeps the 422 envelope, and with `DEMO` unset nothing changes at all.
+     */
+    describe('errors', () => {
+        const savedDemo = process.env.DEMO;
+        afterEach(() => {
+            if (savedDemo === undefined) delete process.env.DEMO;
+            else process.env.DEMO = savedDemo;
+        });
+
+        const refusals = (): DemoError[] => [
+            new DemoQuotaExceededError('sandbox'),
+            new DemoQuotaExceededError('day'),
+            new DemoRateLimitedError(4_000),
+            new DemoModelNotAllowedError('openai/gpt-4o'),
+            new DemoModelUnavailableError('google/gemma-4-31b-it:free'),
+        ];
+
+        it.each([false, true])(
+            'with DEMO on, hands a demo refusal to DemoErrorFilter (stream: %s)',
+            async (stream) => {
+                process.env.DEMO = 'true';
+                for (const refusal of refusals()) {
+                    jest.clearAllMocks();
+                    service.handleCompletion.mockRejectedValue(refusal);
+                    service.handleStreamingCompletion.mockRejectedValue(refusal);
+
+                    await expect(
+                        controller.chatCompletions(
+                            auth,
+                            undefined,
+                            undefined,
+                            { stream, messages: [] } as any,
+                            res,
+                        ),
+                    ).rejects.toBe(refusal);
+
+                    // The filter's JSON answer, not the event stream a streaming call set up.
+                    expect(res.setHeader).toHaveBeenLastCalledWith(
+                        'Content-Type',
+                        'application/json',
+                    );
+                    expect(res.status).not.toHaveBeenCalled();
+                    expect(res.json).not.toHaveBeenCalled();
+                    expect(res.destroy).not.toHaveBeenCalled();
+                }
+            },
+        );
+
+        it('with DEMO on, keeps the 422 envelope for any other error', async () => {
+            process.env.DEMO = 'true';
+            service.handleCompletion.mockRejectedValue(new Error('no provider configured'));
+
+            await controller.chatCompletions(
+                auth,
+                undefined,
+                undefined,
+                { messages: [] } as any,
+                res,
+            );
+
+            expect(res.status).toHaveBeenCalledWith(422);
+            expect(res.json).toHaveBeenCalledWith({
+                error: { message: 'no provider configured', type: 'provider_unavailable' },
+            });
+        });
+
+        it('with DEMO on, a refusal after the stream started still aborts it, as before', async () => {
+            process.env.DEMO = 'true';
+            const refusal = new DemoModelUnavailableError('m:free');
+            service.handleStreamingCompletion.mockImplementation(async () => {
+                res.headersSent = true;
+                throw refusal;
+            });
+
+            await controller.chatCompletions(
+                auth,
+                undefined,
+                undefined,
+                { stream: true, messages: [] } as any,
+                res,
+            );
+
+            expect(res.destroy).toHaveBeenCalledWith(refusal);
+            expect(res.status).not.toHaveBeenCalled();
+        });
+
+        it.each([undefined, 'false', ''])(
+            'with DEMO unset (%s), every error keeps the 422 envelope exactly as before',
+            async (demo) => {
+                if (demo === undefined) delete process.env.DEMO;
+                else process.env.DEMO = demo;
+                for (const error of [...refusals(), new Error('upstream down')]) {
+                    jest.clearAllMocks();
+                    service.handleCompletion.mockRejectedValue(error);
+
+                    await controller.chatCompletions(
+                        auth,
+                        undefined,
+                        undefined,
+                        { messages: [] } as any,
+                        res,
+                    );
+
+                    expect(res.setHeader).toHaveBeenCalledWith('Content-Type', 'application/json');
+                    expect(res.status).toHaveBeenCalledWith(422);
+                    expect(res.json).toHaveBeenCalledWith({
+                        error: { message: error.message, type: 'provider_unavailable' },
+                    });
+                }
+            },
+        );
     });
 });

@@ -133,14 +133,17 @@ export const DEMO_BLOCKED_ROUTES: ReadonlyArray<DemoBlockedRoute> = [
     { method: 'POST', path: /^\/api\/uploads\/anonymous(\/file)?$/i, feature: 'anonymous uploads', scope: 'everyone' },
     { method: 'POST', path: /^\/api\/uploads\/presign$/i, feature: 'anonymous uploads', scope: 'everyone', when: mintsAnonymousUser },
 
-    // Money: keys of your own, model accounts, the OpenAI-compatible proxy — demo users.
+    // Money: keys of your own, model accounts — demo users. The OpenAI-compatible
+    // `POST /api/v1/chat/completions` stays open (R39): the web's assistant chat calls it, and the
+    // AI facade forces OpenRouter, a `:free` model and the demo quota on every call to it. Without
+    // an API key of its own (minting one is refused below) a sandbox reaches it only with its own
+    // session, inside that quota.
     { method: 'PATCH', path: /^\/api\/plugins\/[^/]+\/settings$/i, feature: 'plugin settings', scope: 'demo-users' },
     { method: 'PATCH', path: /^\/api\/works\/[^/]+\/plugins\/[^/]+\/settings$/i, feature: 'plugin settings', scope: 'demo-users' },
     { method: 'POST', path: /^\/api\/plugins\/[^/]+\/enable$/i, feature: 'plugin settings', scope: 'demo-users', when: writesPluginSettings },
     { method: 'POST', path: /^\/api\/works\/[^/]+\/plugins\/[^/]+\/enable$/i, feature: 'plugin settings', scope: 'demo-users', when: writesPluginSettings },
     { method: 'PUT', path: /^\/api\/fleet\/runners\/jobs\/watched$/i, feature: 'plugin settings', scope: 'demo-users' },
     { method: 'PUT', path: /^\/api\/deploy\/works\/[^/]+\/runtime-env$/i, feature: 'runtime environment', scope: 'demo-users' },
-    { method: 'POST', path: /^\/api\/v1\/chat\/completions$/i, feature: 'OpenAI-compatible API', scope: 'demo-users' },
     { method: 'POST', path: /^\/api\/auth\/api-keys(\/integration)?$/i, feature: 'API keys', scope: 'demo-users' },
     { method: 'POST', path: /^\/api\/auth\/api-keys\/[^/]+\/rotate$/i, feature: 'API keys', scope: 'demo-users' },
     { method: 'POST', path: /^\/api\/model-accounts$/i, feature: 'model accounts', scope: 'demo-users' },

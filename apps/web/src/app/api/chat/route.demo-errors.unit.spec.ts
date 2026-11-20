@@ -191,3 +191,90 @@ describe('chat stream errors through the real streamText', () => {
         expect(await streamFailingWith(error)).toBe('An error occurred.');
     });
 });
+
+/**
+ * The API's real wire output (R39) through the real `@ai-sdk/openai-compatible` provider the chat
+ * uses (`lib/ai/provider.ts`): a refusal before the first byte is a non-2xx JSON answer from
+ * `DemoErrorFilter`; one after the stream started is an OpenAI stream error event carrying the
+ * `code` (`openai-compat.service.ts`), which the provider hands on as an error part.
+ */
+describe('demo refusals in the API wire format, through the real provider', () => {
+    async function chatErrorText(answer: () => Response) {
+        const { createOpenAICompatible } = await import('@ai-sdk/openai-compatible');
+        const { chatStreamErrorText } = await import('@/lib/demo/chat-stream-error');
+        const provider = createOpenAICompatible({
+            name: 'ever-works',
+            baseURL: 'http://api.example/v1',
+            fetch: async () => answer(),
+        });
+        const result = streamText({
+            model: provider.chatModel('auto'),
+            prompt: 'hi',
+            maxRetries: 0,
+            onError: () => undefined,
+        });
+        const body = await result
+            .toUIMessageStreamResponse({ onError: chatStreamErrorText })
+            .text();
+        return body
+            .split(String.fromCharCode(10))
+            .filter((line) => line.startsWith('data: {'))
+            .map((line) => JSON.parse(line.slice(6)) as { type: string; errorText?: string })
+            .find((chunk) => chunk.type === 'error')?.errorText;
+    }
+
+    const sse = (...events: unknown[]) =>
+        new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(''), {
+            status: 200,
+            headers: { 'content-type': 'text/event-stream' },
+        });
+
+    it('a refusal before the first byte keeps its status and code', async () => {
+        const errorText = await chatErrorText(
+            () =>
+                new Response(
+                    JSON.stringify({
+                        statusCode: 429,
+                        code: 'DEMO_AI_QUOTA',
+                        message: 'This demo workspace has used all its live AI requests',
+                    }),
+                    { status: 429, headers: { 'content-type': 'application/json' } },
+                ),
+        );
+
+        expect(JSON.parse(errorText as string)).toEqual({ statusCode: 429, code: 'DEMO_AI_QUOTA' });
+    });
+
+    it('a refusal after the stream started keeps its code', async () => {
+        const errorText = await chatErrorText(() =>
+            sse(
+                {
+                    id: 'c-1',
+                    object: 'chat.completion.chunk',
+                    created: 0,
+                    model: 'm:free',
+                    choices: [{ index: 0, delta: { content: 'Par' }, finish_reason: null }],
+                },
+                {
+                    error: {
+                        message: 'The demo AI model is temporarily unavailable',
+                        type: 'demo_error',
+                        code: 'DEMO_MODEL_UNAVAILABLE',
+                    },
+                },
+            ),
+        );
+
+        expect(JSON.parse(errorText as string)).toEqual({ code: 'DEMO_MODEL_UNAVAILABLE' });
+    });
+
+    it('any other stream error event stays the SDK default text', async () => {
+        const errorText = await chatErrorText(() =>
+            sse({
+                error: { message: 'upstream overloaded', type: 'server_error', code: 'overloaded' },
+            }),
+        );
+
+        expect(errorText).toBe('An error occurred.');
+    });
+});

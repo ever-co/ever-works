@@ -186,12 +186,14 @@ guard makes a stale id fail closed rather than fall through to a paid model.
    - **Model choice surfaces**: `GET /api/plugins/:id/models` returns only `:free` models; chat/agent DTOs with a
      non-free `model` are rewritten by the facade rule (no 4xx; the picker never offers them).
    - **Blocked in demo (403 `{code: 'DEMO_DISABLED'}`)**: plugin settings writes that carry secrets (BYOK) at
-     user/org/work scope, `POST /api/v1/chat/completions` (OpenAI-compatible proxy), API key creation, model
+     user/org/work scope, API key creation, model
      accounts / credentials, outbound webhooks, notification channels, MCP connections, Composio/Zapier and
      other integration connects, OAuth "connect GitHub/Vercel", deploy / add-domain, App Works, account claim,
      password/email change, account deletion request (the sweeper does it), org invites by email, data export,
      changing a Work's repo owner/name. One table in code (route pattern → reason), unit-tested that every
-     pattern matches a real route.
+     pattern matches a real route. `POST /api/v1/chat/completions` (the OpenAI-compatible proxy) stays open
+     (final-review ruling R39): the web's assistant chat calls it, and every call through it gets the AI rule
+     above; its demo refusals keep their status and `code` so the chat can show the friendly message.
    - **Works**: `storageProvider` forced to `ever-works-git` (private repos in `ever-works-cloud`), Work repo
      names forced to start with `DEMO_REPO_PREFIX` + the sandbox's short id (e.g.
      `demo-3f9a1c-awesome-ai-coding-tools-data`), `deployProvider` forced to an inert value so generation never

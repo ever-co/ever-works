@@ -12,7 +12,7 @@ import { ApiBearerAuth, ApiTags, ApiOperation } from '@nestjs/swagger';
 import { CurrentUser } from '../auth/decorators/user.decorator';
 import { AuthenticatedUser } from '../auth/types/auth.types';
 import { OpenAiChatCompletionRequestDto } from './dto/openai-compat.dto';
-import { OpenAiCompatService } from './openai-compat.service';
+import { OpenAiCompatService, isDemoRefusal } from './openai-compat.service';
 
 type OpenAiHttpResponse = {
     setHeader(name: string, value: string): void;
@@ -56,11 +56,12 @@ export class OpenAiCompatController {
             providerOverride,
         };
 
-        // @Res() bypasses NestJS exception filters — a service throw
-        // (e.g. no provider configured in CI/dev) would leak a raw 500.
-        // Map non-HttpException errors into a 503 envelope so the route
+        // With @Res() the handler writes its own answer, and an error it
+        // lets escape reaches the exception filters (Nest's default would
+        // answer a raw 500). A service throw (e.g. no provider configured
+        // in CI/dev) is mapped into a 422 envelope instead, so the route
         // stays well-behaved even when the upstream AI provider is
-        // unreachable. HttpExceptions still bubble unchanged.
+        // unreachable.
         try {
             if (body.stream) {
                 res.setHeader('Content-Type', 'text/event-stream');
@@ -78,6 +79,14 @@ export class OpenAiCompatController {
             if (res.headersSent || res.writableEnded) {
                 res.destroy(error instanceof Error ? error : new Error('streaming aborted'));
                 return;
+            }
+            // Platform demo mode (R39): a refusal of the demo's AI policy goes to the global
+            // `DemoErrorFilter`, which answers JSON with its status and `code` (429 quota/busy,
+            // 503 model unavailable, …) — the web's chat maps the code to a friendly message.
+            // Never true with `DEMO` unset.
+            if (isDemoRefusal(error)) {
+                res.setHeader('Content-Type', 'application/json');
+                throw error;
             }
             const message =
                 error instanceof Error ? error.message : 'AI provider currently unavailable';

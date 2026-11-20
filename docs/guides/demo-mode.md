@@ -62,11 +62,13 @@ The boot check (`assertDemoConfig`) refuses to start the API when `DEMO` is on a
 A blocked request answers `DEMO_DISABLED` (403). Two scopes exist:
 
 - **Everyone** (even a signed-in operator): registration, anonymous sign-in, magic links, social and Ever ID sign-in, GitHub App sign-in, and anonymous uploads. The only way in is `POST /api/auth/demo`.
-- **Demo sandboxes only**: anything that spends money, reaches the outside world or changes the account. By category: plugin and model-account settings and credentials, your own API keys, the OpenAI-compatible endpoint; webhooks, notification channels, MCP connections, Composio and connected accounts; deploy, custom domains, subdomains, runtime environment, custom databases; importing a repository or a company, copying a template repository, changing a Work's repository owner or visibility, Work invitations (mailed, or an owner-claim link that would transfer the Work and its repositories); App Works; invitations by email; public share links of a workspace (turning one on, a new link, or publishing more through it; turning it off stays open); password change, username change, device sign-in, data export, account import, claim and deletion.
+- **Demo sandboxes only**: anything that spends money, reaches the outside world or changes the account. By category: plugin and model-account settings and credentials, your own API keys; webhooks, notification channels, MCP connections, Composio and connected accounts; deploy, custom domains, subdomains, runtime environment, custom databases; importing a repository or a company, copying a template repository, changing a Work's repository owner or visibility, Work invitations (mailed, or an owner-claim link that would transfer the Work and its repositories); App Works; invitations by email; public share links of a workspace (turning one on, a new link, or publishing more through it; turning it off stays open); password change, username change, device sign-in, data export, account import, claim and deletion.
 
 The full list is `DEMO_BLOCKED_ROUTES` in `apps/api/src/demo/demo-restrictions.ts`.
 
 AI is also restricted. Only models whose id ends in `:free` run; paid ids answer `DEMO_MODEL_NOT_ALLOWED` (500, fail closed), and a free model that is down answers `DEMO_MODEL_UNAVAILABLE` (503). Generation uses the standard pipeline.
+
+The assistant chat stays open: it calls the OpenAI-compatible `POST /api/v1/chat/completions`, which runs every call through the same AI policy (OpenRouter, `:free` models, the quotas). A refused chat call answers with its demo code (`DEMO_AI_QUOTA`, `DEMO_AI_BUSY`, `DEMO_MODEL_UNAVAILABLE`) and the chat shows the matching message. A sandbox cannot create an API key, so it reaches that endpoint only with its own session.
 
 **Operators** (normal accounts) can log in on a demo instance. They are not route-blocked, except for the "everyone" rows, but they get free models only.
 

@@ -222,6 +222,12 @@ const MUST_STAY_OPEN: { method: string; path: string; body?: unknown }[] = [
     { method: 'PATCH', path: '/api/organizations/o-1/shared-view', body: { status: 'paused' } },
     { method: 'DELETE', path: '/api/organizations/o-1/shared-view' },
     { method: 'GET', path: '/api/oauth/github/connection' },
+    // R39: the assistant chat (the AI facade forces OpenRouter, `:free` and the quota).
+    {
+        method: 'POST',
+        path: '/api/v1/chat/completions',
+        body: { model: 'auto', stream: true, messages: [{ role: 'user', content: 'Hi' }] },
+    },
 ];
 
 if (process.env[CHILD_FLAG] === undefined) {
@@ -284,22 +290,22 @@ if (process.env[CHILD_FLAG] === undefined) {
             }
         });
 
-        it('R37 and R38: the transfer and share-link rows reach exactly those handlers', () => {
-            const handlersOf = (feature: string): string[] =>
-                DEMO_BLOCKED_ROUTES.filter((entry) => entry.feature === feature)
-                    .flatMap((entry) =>
-                        report.routes.filter(
-                            (route) =>
-                                (entry.method === '*' || methodServes(route, entry.method)) &&
-                                entry.path.test(samplePathOf(route.path)),
-                        ),
-                    )
-                    .map(
+        /** Every real handler the rows of one feature reach, as `METHOD path Controller.handler`. */
+        const handlersOf = (feature: string): string[] =>
+            DEMO_BLOCKED_ROUTES.filter((entry) => entry.feature === feature)
+                .flatMap((entry) =>
+                    report.routes.filter(
                         (route) =>
-                            `${route.method} ${route.path} ${route.controller}.${route.handler}`,
-                    )
-                    .sort();
+                            (entry.method === '*' || methodServes(route, entry.method)) &&
+                            entry.path.test(samplePathOf(route.path)),
+                    ),
+                )
+                .map(
+                    (route) => `${route.method} ${route.path} ${route.controller}.${route.handler}`,
+                )
+                .sort();
 
+        it('R37 and R38: the transfer and share-link rows reach exactly those handlers', () => {
             // Creating an owner-claim link (and any Work invitation): the step a demo user reaches.
             expect(handlersOf('Work invitations and transfer')).toEqual([
                 'POST /api/works/:workId/invitations InvitationsController.create',
