@@ -14,7 +14,7 @@ import {
  * generation specs leave uncovered: the CreateItemsGeneratorDto / UpdateItemsGeneratorDto
  * validation LATTICE, the provider-gate BODY shape (not just its presence), the
  * /update (AI item update) endpoint's ordering + DTO surface, the /history filter +
- * pagination MATRIX, cross-endpoint gate SYMMETRY (generate vs quick-create), and a
+ * pagination MATRIX, quick-create vs generate providers (#3252: quick-create sends the form selection), and a
  * cohesive create→form→generate→history→update→cancel WALK. The CI driver has NO LLM
  * key, NO search provider (Tavily) and NO Trigger.dev worker, so generation NEVER
  * completes — we assert the RECORD / contract at every hop, never pipeline content.
@@ -93,7 +93,7 @@ import {
  *   THIS file is disjoint: the /generate + /update DTO VALIDATION LATTICE (unknown key,
  *   enum, nested providers, sanitize-CLAMP vs MaxLength), the provider-gate BODY shape,
  *   the /update endpoint (ordering + DTO + authz on that surface), the /history filter +
- *   pagination MATRIX, quick-create⇄generate gate SYMMETRY + create-first persistence,
+ *   pagination MATRIX, quick-create providers (form selection) + create-first persistence,
  *   PARALLEL generate, and the cohesive multistep WALK — none asserted elsewhere.
  *
  * ── ISOLATION ────────────────────────────────────────────────────────────────
@@ -230,6 +230,36 @@ function expectParkedLifecycle(work: WorkRecord, ctx: string): void {
         ).not.toContain(work.generateStatus.status);
     }
     expect(work.generationFinishedAt, `${ctx}: no worker -> never finished`).toBeNull();
+}
+
+/**
+ * A started quick-create run (#3252): quick-create sends the Generate form's provider
+ * selection, so even keyless its start is accepted and the run really begins (it may still
+ * be running, or have ended in an error on the missing keys). Assert the record, not a park:
+ * an embedded generateStatus with a known status, and the run in the generation history.
+ */
+async function expectStartedLifecycle(
+    request: APIRequestContext,
+    token: string,
+    id: string,
+    ctx: string,
+): Promise<void> {
+    const work = await readWork(request, token, id);
+    expect(work.generateStatus, `${ctx}: a started run sets generateStatus`).toBeTruthy();
+    expect(typeof work.generateStatus, `${ctx}: generateStatus is an embedded object`).toBe(
+        'object',
+    );
+    expect(
+        ['generating', 'generated', 'error', 'cancelled'],
+        `${ctx}: generateStatus is a known status`,
+    ).toContain(work.generateStatus?.status);
+    const history = await getHistory(request, token, id, '?activityType=generation&limit=10');
+    expect(history.status, `${ctx}: GET /works/${id}/history`).toBe(200);
+    expect(
+        history.body.total ??
+            (Array.isArray(history.body.history) ? history.body.history.length : 0),
+        `${ctx}: the run is recorded in the history`,
+    ).toBeGreaterThan(0);
 }
 
 /**
@@ -439,16 +469,22 @@ test.describe('Work generation pipeline (multistep, Trigger-gated)', () => {
         }
     });
 
-    test('gate SYMMETRY: quick-create hits the SAME provider gate as /generate but PERSISTS the work first (non-atomic)', async ({
+    test('quick-create sends the Generate form providers (only the pipeline is validated) and PERSISTS the work first (non-atomic on a refusal)', async ({
         request,
     }) => {
+        // Until #3252 quick-create sent no providers and so hit the SAME per-category default
+        // gate as a provider-less /generate: one empty optional key (Tavily) refused every
+        // quick-create in production after the Work and its repository were created. It now
+        // sends the Generate form's selection (pipeline included), so only the pipeline is
+        // validated. Keyless CI usually answers 202 and the run starts; a refusal is a
+        // provider-envelope 400 that names the pipeline, with the Work already persisted.
         const suffix = uniqueSuffix();
         const slug = `wgp-qc-${suffix}`;
         const res = await request.post(`${API_BASE}/api/works/quick-create`, {
             data: {
                 name: `QC ${suffix}`,
                 slug,
-                description: `quick-create symmetry ${suffix}`,
+                description: `quick-create providers ${suffix}`,
                 prompt: 'List three open-source developer tools.',
                 organization: false,
             },
@@ -458,9 +494,20 @@ test.describe('Work generation pipeline (multistep, Trigger-gated)', () => {
             status?: string;
             work?: { id?: string };
         };
-        expectProviderGate(res.status(), body, 'quick-create gate');
+        expect(
+            GENERATE_ENQUEUE_OK.has(res.status()),
+            `quick-create status ${res.status()} must be in the accepted-or-truthful enqueue family`,
+        ).toBeTruthy();
+        expect(res.status(), 'quick-create must not 5xx').toBeLessThan(500);
 
         if (res.status() === 400 && body.providerErrors) {
+            expect(body.message, 'quick-create refusal is the provider envelope').toBe(
+                PROVIDER_GATE_MESSAGE,
+            );
+            expect(
+                Object.keys(body.providerErrors),
+                'with the form selection only the pipeline can refuse the start',
+            ).toEqual(['pipeline']);
             // Create-FIRST: the Work was persisted before the generation step threw, so the
             // slug is now TAKEN even though the combined call returned an error.
             const check = await request.get(`${API_BASE}/api/works/check-slug?slug=${slug}`, {
@@ -491,7 +538,7 @@ test.describe('Work generation pipeline (multistep, Trigger-gated)', () => {
             }
         } else if (res.status() === 202 && body.work?.id) {
             expect(body.status, 'quick-create happy path is pending').toBe('pending');
-            expectParkedLifecycle(await readWork(request, token, body.work.id), 'quick-created');
+            await expectStartedLifecycle(request, token, body.work.id, 'quick-created');
         }
     });
 

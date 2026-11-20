@@ -203,6 +203,42 @@ function expectParkedLifecycle(work: WorkRecord, ctx: string): void {
     expect(work.generationFinishedAt, `${ctx}: no worker -> never finished`).toBeNull();
 }
 
+/**
+ * A started quick-create run (#3252). Quick-create sends the Generate form's provider
+ * selection (pipeline included), so even keyless its start is accepted (202) and the run
+ * really begins: in CI it may still be running, or it may have ended in an error on the
+ * missing keys. It is NOT parked, so assert the record instead: an embedded generateStatus
+ * with a known status, and the run recorded in the Work's generation history.
+ */
+async function expectStartedLifecycle(
+    request: APIRequestContext,
+    token: string,
+    id: string,
+    ctx: string,
+): Promise<void> {
+    const work = await readWork(request, token, id);
+    expect(work.generateStatus, `${ctx}: a started run sets generateStatus`).toBeTruthy();
+    expect(typeof work.generateStatus, `${ctx}: generateStatus is an embedded object`).toBe(
+        'object',
+    );
+    expect(
+        ['generating', ...TERMINAL_STATUSES],
+        `${ctx}: generateStatus is a known status`,
+    ).toContain(work.generateStatus?.status);
+    const res = await request.get(
+        `${API_BASE}/api/works/${id}/history?activityType=generation&limit=10`,
+        {
+            headers: authedHeaders(token),
+        },
+    );
+    expect(res.status(), `${ctx}: GET /works/${id}/history`).toBe(200);
+    const body = (await res.json()) as { history?: unknown[]; total?: number };
+    expect(
+        body.total ?? body.history?.length ?? 0,
+        `${ctx}: the run is recorded in the history`,
+    ).toBeGreaterThan(0);
+}
+
 test.describe('Work generation lifecycle (Trigger-gated)', () => {
     let user: RegisteredUser;
     let token: string;
@@ -619,9 +655,11 @@ test.describe('Work generation lifecycle (Trigger-gated)', () => {
         request,
     }) => {
         // quick-create is the one-call create+generate path (wizard "Generate now").
-        // In CI it hits the SAME provider gate as /generate, so the call may 400 —
-        // but it must answer from the enqueue family and never crash. When it DOES
-        // return 202 we additionally assert the declared {work, generation} shape.
+        // It sends the Generate form's provider selection (pipeline included, #3252), so
+        // only the pipeline is validated: keyless CI now usually answers 202 and the run
+        // starts. A refusal is still a truthful 4xx. Either way it answers from the
+        // enqueue family and never crashes; a 202 must carry the declared
+        // {work, generation} shape and a recorded run.
         const suffix = uniqueSuffix();
         const res = await request.post(`${API_BASE}/api/works/quick-create`, {
             data: {
@@ -652,10 +690,10 @@ test.describe('Work generation lifecycle (Trigger-gated)', () => {
             expect(body.work.id, 'quick-create returns a work id').toBeTruthy();
             expect(body.generation, 'quick-create returns a generation block').toBeTruthy();
 
-            // The just-created work is readable and its lifecycle has NOT completed
-            // (no worker in CI) — assert the RECORD, never completion.
-            const detail = await readWork(request, token, body.work.id);
-            expectParkedLifecycle(detail, 'quick-created work');
+            // The just-created work is readable and its run really started (it may still be
+            // running or have ended in an error on the missing keys) — assert the RECORD,
+            // never success.
+            await expectStartedLifecycle(request, token, body.work.id, 'quick-created work');
         } else {
             // CI gate: the provider rejection prevented the combined create+generate.
             // It must be a truthful provider/validation 400 — never an opaque crash.
