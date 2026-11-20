@@ -44,6 +44,7 @@ import type { OAuthConnectionInfo } from '@/lib/api/plugins-capabilities/oauth';
 import type { GitProviderConnectionInfo } from '@/lib/api/plugins-capabilities/git-providers';
 import type { PluginDeviceAuthStatus } from '@/lib/api/plugins-capabilities/device-auth';
 import type { ApiVersion } from '@/lib/api/version';
+import { DemoStrip, type DemoStripProps } from '@/components/demo/DemoStrip';
 import { JobRuntimeDegradedBanner } from '@/components/dashboard/JobRuntimeDegradedBanner';
 import { ScrollTopOnNavigate } from '@/components/dashboard/ScrollTopOnNavigate';
 import { FleetHubFlagProvider } from '@/components/fleet/FleetHubFlagProvider';
@@ -68,6 +69,8 @@ interface DashboardLayoutClientProps {
     /** health `job_runtime.configured` — false = agent runs cannot execute
      *  on this install (loud-degradation banner); null = unknown. */
     jobRuntimeConfigured?: boolean | null;
+    /** Platform demo mode: the demo strip's props for a demo account; null = no strip. */
+    demoStrip?: DemoStripProps | null;
     /** What's new (AW-14) — unread product changelog entries; null = unknown (no badge). */
     changelogUnreadCount?: number | null;
     /**
@@ -134,6 +137,7 @@ export function DashboardLayoutClient({
     initialOnboardingCatalog,
     apiVersion,
     jobRuntimeConfigured = null,
+    demoStrip = null,
     changelogUnreadCount = null,
     appLauncherEnabled = false,
     fleetHubEnabled = false,
@@ -674,6 +678,7 @@ export function DashboardLayoutClient({
                                     style={isChatExpanded ? mainStyle : undefined}
                                     aria-hidden={isChatExpanded}
                                 >
+                                    {demoStrip && <DemoStrip {...demoStrip} />}
                                     <DashboardHeader
                                         user={user}
                                         onMenuClick={() => setSidebarOpen(!sidebarOpen)}

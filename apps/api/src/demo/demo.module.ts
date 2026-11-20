@@ -12,6 +12,8 @@ import { KnowledgeBaseModule, WorkModule } from '@ever-works/agent/services';
 import { TasksDomainModule } from '@ever-works/agent/tasks-domain';
 import { AgentTeamsModule } from '@ever-works/agent/teams';
 import { DemoAiQuotaService } from './demo-ai-quota.service';
+import { DEMO_PROFILE } from './demo-profile.port';
+import { DemoProfileService } from './demo-profile.service';
 import { CaptchaVerifierService } from '../auth/services/captcha-verifier.service';
 import { OrganizationsModule } from '../organizations/organizations.module';
 import { DemoController } from './demo.controller';
@@ -74,6 +76,9 @@ export class DemoModule implements OnModuleInit {
             controllers: [DemoController],
             providers: [
                 DemoAiQuotaService,
+                // The `demo` block of the profile (`AuthService` resolves it optionally).
+                DemoProfileService,
+                { provide: DEMO_PROFILE, useExisting: DemoProfileService },
                 DemoSandboxService,
                 // Stateless (env-driven); provided here so the module need not import AuthModule.
                 CaptchaVerifierService,
@@ -90,7 +95,13 @@ export class DemoModule implements OnModuleInit {
                 // applies global guards in module-scan order, and the root is scanned first.
                 { provide: APP_GUARD, useClass: DemoRestrictionsGuard },
             ],
-            exports: [DemoAiQuotaService, DEMO_AI_QUOTA, DemoRepoLedgerService, DEMO_REPO_LEDGER],
+            exports: [
+                DemoAiQuotaService,
+                DemoProfileService,
+                DEMO_AI_QUOTA,
+                DemoRepoLedgerService,
+                DEMO_REPO_LEDGER,
+            ],
         };
     }
 

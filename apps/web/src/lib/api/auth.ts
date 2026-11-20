@@ -135,6 +135,15 @@ export interface UserProfile {
     emailBudgetAlerts?: boolean;
     /** EW-602: self-hosted platform admin flag (gates /admin/usage). */
     isPlatformAdmin?: boolean;
+    /**
+     * Platform demo mode: set on a demo sandbox account of a demo instance (the strip's data);
+     * null for everyone else and whenever the demo is off.
+     */
+    demo?: {
+        expiresAt: string;
+        aiQuotaExhausted: boolean;
+        recordedGoalId: string | null;
+    } | null;
     oauthTokens?: Array<{
         provider: string;
         createdAt?: string;

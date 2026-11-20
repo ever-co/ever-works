@@ -13515,6 +13515,20 @@
                 "generic": "Could not start the demo. Please try again."
             }
         },
+        "strip": {
+            "message": "You are using a demo account. Finding our software useful?",
+            "signUp": "Click here to Sign Up",
+            "afterSignUp": "and start using for free!",
+            "expires": "Demo workspace expires in {hours} h",
+            "expiresSoon": "Demo workspace expires in less than 1 h",
+            "quotaExhausted": "Live AI is used up for today — explore the recorded examples"
+        },
+        "errors": {
+            "disabled": "Not available in the demo — sign up to use it",
+            "aiQuota": "The free demo AI quota is used up for today — sign up on app.ever.works to keep going",
+            "aiBusy": "The demo AI is busy — try again in a few seconds",
+            "modelUnavailable": "The demo AI model is temporarily unavailable — please try again later"
+        },
         "register": {
             "title": "Create an account",
             "body": "Accounts are created on the main Ever Works app. You can try this demo without one.",
