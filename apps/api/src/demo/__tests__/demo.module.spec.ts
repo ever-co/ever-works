@@ -1,8 +1,9 @@
 /**
  * The sandbox seeder's domain modules pull the whole agent graph (and better-auth's ESM
- * through `OrganizationsModule`). This spec is about the demo's own wiring, so they stand
- * in as empty modules and the seeder is overridden below; `demo-sandbox-seeder.spec.ts`
- * drives the real services.
+ * through `OrganizationsModule`). This spec is about the demo's own providers, so they stand
+ * in as empty modules and the seeder is overridden below. `demo.module.wiring.spec.ts`
+ * resolves the seeder against the real modules; `demo-sandbox-seeder.spec.ts` drives the
+ * real services.
  */
 jest.mock('../../organizations/organizations.module', () => ({
     OrganizationsModule: class OrganizationsModule {},
@@ -48,13 +49,6 @@ import {
 } from '@ever-works/agent/database';
 import { DemoUsageCounter, User } from '@ever-works/agent/entities';
 import { DEMO_AI_QUOTA, type DemoAiQuotaPort } from '@ever-works/agent/demo';
-import { AgentsModule as AgentAgentsModule } from '@ever-works/agent/agents';
-import { GoalsModule as AgentGoalsModule } from '@ever-works/agent/goals';
-import { MissionsModule as AgentMissionsModule } from '@ever-works/agent/missions';
-import { KnowledgeBaseModule, WorkModule } from '@ever-works/agent/services';
-import { TasksDomainModule } from '@ever-works/agent/tasks-domain';
-import { AgentTeamsModule } from '@ever-works/agent/teams';
-import { OrganizationsModule } from '../../organizations/organizations.module';
 import { DemoModule } from '../demo.module';
 import { DemoSandboxSeederService } from '../seed/demo-sandbox-seeder.service';
 import { DemoAiQuotaService } from '../demo-ai-quota.service';
@@ -213,23 +207,6 @@ describe('DemoModule', () => {
 
         it('registers the POST /api/auth/demo controller', () => {
             expect(DemoModule.register().controllers).toEqual([DemoController]);
-        });
-
-        it('imports the modules of every domain service the sandbox seeder drives', () => {
-            expect(DemoModule.register().providers).toContain(DemoSandboxSeederService);
-            expect(DemoModule.register().imports).toEqual(
-                expect.arrayContaining([
-                    DatabaseModule,
-                    OrganizationsModule,
-                    AgentTeamsModule,
-                    AgentAgentsModule,
-                    WorkModule,
-                    AgentMissionsModule,
-                    AgentGoalsModule,
-                    TasksDomainModule,
-                    KnowledgeBaseModule,
-                ]),
-            );
         });
 
         it('refuses to start when the demo org does not match the git org', async () => {

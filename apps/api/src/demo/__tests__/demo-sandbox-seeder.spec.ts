@@ -8,9 +8,9 @@ jest.mock('../../auth/providers/auth-runtime.instance', () => ({
 }));
 
 import { randomBytes } from 'node:crypto';
-import { EventEmitterModule } from '@nestjs/event-emitter';
+import { EventEmitter2, EventEmitterModule } from '@nestjs/event-emitter';
 import { Test, type TestingModule } from '@nestjs/testing';
-import { DataSource, In, IsNull } from 'typeorm';
+import { Between, DataSource, In, IsNull } from 'typeorm';
 import {
     AgentBudgetRepository,
     AgentMembershipRepository,
@@ -26,6 +26,7 @@ import {
     ActivityActionType,
     ActivityLog,
     Agent,
+    DomainEvent,
     Goal,
     GoalOutcome,
     GoalStatus,
@@ -55,6 +56,7 @@ import { EverWorksGitProvider } from '@ever-works/agent/ever-works-providers';
 import { AiFacadeService, GitFacadeService } from '@ever-works/agent/facades';
 import { GoalsService } from '@ever-works/agent/goals';
 import { MissionsService } from '@ever-works/agent/missions';
+import { NotificationService } from '@ever-works/agent/notifications';
 import { RecordAccessPolicy, RecordVisibilityService } from '@ever-works/agent/record-visibility';
 import {
     KnowledgeBaseService,
@@ -68,11 +70,13 @@ import {
     TaskChatMessageRepository,
     TaskChatService,
     TaskKbMentionRepository,
+    TaskNotificationService,
     TaskRelationRepository,
     TaskRepository,
     TaskReviewerRepository,
     TasksService,
     TaskTransitionService,
+    TaskWatcherRepository,
     UserTaskCounterRepository,
 } from '@ever-works/agent/tasks-domain';
 import { TeamsService } from '@ever-works/agent/teams';
@@ -86,7 +90,6 @@ import { ScopeContextService } from '../../scope/scope-context.service';
 import { ScopeStampingSubscriber } from '../../scope/scope-stamping.subscriber';
 import { TenantBootstrapService } from '../../scope/tenant-bootstrap.service';
 import { UsernameAllocatorService } from '../../users/services/username-allocator.service';
-import { DEMO_SANDBOX_FIXTURE } from '../seed/demo-sandbox.fixture';
 import {
     DemoSandboxSeederService,
     type DemoSeedSummary,
@@ -235,6 +238,11 @@ describe('DemoSandboxSeederService', () => {
                 UserTaskCounterRepository,
                 TaskChatMessageRepository,
                 TaskKbMentionRepository,
+                // The in-app notification path a transition takes in production, so its
+                // events (if any) are emitted here too.
+                TaskWatcherRepository,
+                NotificationService,
+                TaskNotificationService,
                 TaskTransitionService,
                 TasksService,
                 TaskChatService,
@@ -301,17 +309,46 @@ describe('DemoSandboxSeederService', () => {
     }
 
     const timings: number[] = [];
+    /** Every in-process event emitted while the two sandboxes were seeded. */
+    const emitted: string[] = [];
+    let probeHeard = false;
+    /** The outbox rows (`domain_events`) the first sandbox's seed wrote: what the relay publishes. */
+    let firstDomainEvents: DomainEvent[];
     let first: { user: User; summary: DemoSeedSummary };
     let second: { user: User; summary: DemoSeedSummary };
 
+    const lastOutboxSeq = async (): Promise<number> =>
+        Number(
+            (await rows(DomainEvent).find({ order: { outboxSeq: 'DESC' }, take: 1 }))[0]
+                ?.outboxSeq ?? 0,
+        );
+
     beforeAll(async () => {
+        const record = (event: string | string[]) =>
+            emitted.push(Array.isArray(event) ? event.join('.') : String(event));
+        const emitter = moduleRef.get(EventEmitter2);
+        emitter.onAny(record);
+        // The recorder hears this module's emitter (the one the services were given).
+        emitter.emit('demo-seeder-spec.probe');
+        probeHeard = emitted.splice(0).includes('demo-seeder-spec.probe');
+
         const firstUser = await createDemoUser();
+        const before = await lastOutboxSeq();
         const a = await seedTimed(firstUser);
+        const after = await lastOutboxSeq();
         const secondUser = await createDemoUser();
         const b = await seedTimed(secondUser);
+        // Fire-and-forget work a seed started (notifications, unblock cascades) lands too.
+        await new Promise((resolve) => setImmediate(resolve));
+        emitter.offAny(record);
+
         timings.push(a.ms, b.ms);
         first = { user: firstUser, summary: a.summary };
         second = { user: secondUser, summary: b.summary };
+        firstDomainEvents = await rows(DomainEvent).find({
+            where: { outboxSeq: Between(before + 1, after) },
+            order: { outboxSeq: 'ASC' },
+        });
     });
 
     const rows = <T extends object>(entity: new () => T) => dataSource.getRepository<T>(entity);
@@ -509,6 +546,47 @@ describe('DemoSandboxSeederService', () => {
         // No repository is provisioned at seed time (ruling R2): Generate does that later.
         expect(calledMethods(everWorksGit.spies)).toEqual([]);
         expect(inertCalls).toEqual([]);
+    });
+
+    it('emits no in-process event while seeding, so no listener runs', () => {
+        // With the production notification path wired: a transition notifies the Task's
+        // watchers, and a seeded Task has none.
+        expect(probeHeard).toBe(true);
+        expect(emitted).toEqual([]);
+    });
+
+    it('records exactly these domain events, all in the sandbox, for the relay to publish', async () => {
+        const counts: Record<string, number> = {};
+        for (const event of firstDomainEvents) {
+            counts[event.type] = (counts[event.type] ?? 0) + 1;
+        }
+        // The relay emits each as `domain.<type>`; only `domain.work.*` has a listener
+        // (Ever Connect's apps mirror, for Organizations linked to Ever Platform).
+        expect(counts).toEqual({
+            'organization.created': 1,
+            'agent.created': 4,
+            'agent.updated': 4,
+            'team.created': 2,
+            'team.member.added': 4,
+            'team.resource.added': 2,
+            'work.created': 2,
+            'mission.created': 2,
+            'mission.work.linked': 2,
+            'mission.goal.linked': 3,
+            'goal.created': 3,
+            'goal.updated': 3,
+            'goal.status_changed': 3,
+            'task.created': 8,
+            'task.transitioned': 9,
+            'task.comment.created': 11,
+            'kb.document.created': 3,
+        });
+        const tenantId = (await users.findById(first.user.id))?.tenantId;
+        expect(
+            firstDomainEvents.map((event) => [event.type, event.tenantId, event.organizationId]),
+        ).toEqual(
+            firstDomainEvents.map((event) => [event.type, tenantId, first.summary.organizationId]),
+        );
     });
 
     it('gives two sandboxes no Organization or Tenant in common', async () => {
