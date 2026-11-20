@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { browserApiFetch } from '@/lib/api/browser-api';
+import { useLatestRef } from '@/lib/hooks/use-latest-ref';
 import {
     FleetSessionSocket,
     sessionCloseVerdict,
@@ -109,8 +110,7 @@ export function useTerminalAttach(
     const socketRef = useRef<WebSocket | null>(null);
     /** The fleet-session source's stream (FL-04 P1b); null for a Run. */
     const fleetSocketRef = useRef<FleetSessionSocket | null>(null);
-    const callbacksRef = useRef(callbacks);
-    callbacksRef.current = callbacks;
+    const callbacksRef = useLatestRef(callbacks);
     /**
      * Highest transcript `seq` already rendered from the persisted
      * replay. Live + relay-replayed frames at or below it are dropped so

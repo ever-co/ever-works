@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { cn } from '@/lib/utils';
 import { useTranslations } from 'next-intl';
 import { AutoResizeTextarea } from '@/components/ui/auto-resize-textarea';
@@ -64,22 +64,6 @@ export function AdvancedPromptsSettings({ workId }: AdvancedPromptsSettingsProps
     const [isComparisonLoaded, setIsComparisonLoaded] = useState(false);
     const [isSavingComparison, setIsSavingComparison] = useState(false);
     const [comparisonPrompt, setComparisonPrompt] = useState('');
-
-    // Load standard pipeline prompts when expanded for the first time
-    useEffect(() => {
-        if (isStandardExpanded && !isStandardLoaded && !isStandardLoading) {
-            loadStandardPrompts();
-        }
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [isStandardExpanded]);
-
-    // Load comparison prompt when expanded for the first time
-    useEffect(() => {
-        if (isComparisonExpanded && !isComparisonLoaded && !isComparisonLoading) {
-            loadComparisonPrompt();
-        }
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [isComparisonExpanded]);
 
     const loadStandardPrompts = async () => {
         setIsStandardLoading(true);
@@ -180,9 +164,17 @@ export function AdvancedPromptsSettings({ workId }: AdvancedPromptsSettingsProps
         const wasComparisonClosed = isComparisonExpanded && !value.includes('comparison');
         const wasComparisonOpened = !isComparisonExpanded && value.includes('comparison');
 
-        if (wasStandardOpened) setIsStandardExpanded(true);
+        // Each section loads its prompts the first time it is opened — here,
+        // in the event, rather than in an effect watching the expanded flag.
+        if (wasStandardOpened) {
+            setIsStandardExpanded(true);
+            if (!isStandardLoaded && !isStandardLoading) void loadStandardPrompts();
+        }
         if (wasStandardClosed) setIsStandardExpanded(false);
-        if (wasComparisonOpened) setIsComparisonExpanded(true);
+        if (wasComparisonOpened) {
+            setIsComparisonExpanded(true);
+            if (!isComparisonLoaded && !isComparisonLoading) void loadComparisonPrompt();
+        }
         if (wasComparisonClosed) setIsComparisonExpanded(false);
     };
 

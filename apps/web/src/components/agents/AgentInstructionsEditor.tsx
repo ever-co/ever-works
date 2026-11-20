@@ -67,18 +67,6 @@ export function AgentInstructionsEditor({
     // upper bound, not a lower one.
     const dirty = activeBody !== (initialMap[active]?.body ?? '');
 
-    useEffect(() => {
-        if (!dirty) return;
-        if (timerRef.current) clearTimeout(timerRef.current);
-        timerRef.current = setTimeout(() => {
-            void persist(active, activeBody);
-        }, AUTOSAVE_DELAY_MS);
-        return () => {
-            if (timerRef.current) clearTimeout(timerRef.current);
-        };
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [activeBody, active]);
-
     async function persist(name: AgentFileName, body: string) {
         setStatus((s) => ({ ...s, [name]: 'saving' }));
         try {
@@ -99,6 +87,18 @@ export function AgentInstructionsEditor({
             setStatus((s) => ({ ...s, [name]: 'error' }));
         }
     }
+
+    useEffect(() => {
+        if (!dirty) return;
+        if (timerRef.current) clearTimeout(timerRef.current);
+        timerRef.current = setTimeout(() => {
+            void persist(active, activeBody);
+        }, AUTOSAVE_DELAY_MS);
+        return () => {
+            if (timerRef.current) clearTimeout(timerRef.current);
+        };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [activeBody, active]);
 
     const FILE_TABS: AgentFileName[] = [
         'SOUL.md',

@@ -63,17 +63,25 @@ export function useAppStatusPoll(
         }
     }, [workId]);
 
-    const tick = useCallback(async () => {
-        if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
-            schedule(APP_STATUS_POLL_IDLE_MS, () => void tick());
-            return;
+    // Each tick re-arms itself. The recursion lives in a hoisted inner
+    // declaration so the callback never names the `tick` binding it is
+    // still being assigned to.
+    const tick = useCallback((): Promise<void> => {
+        async function run(): Promise<void> {
+            if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
+                schedule(APP_STATUS_POLL_IDLE_MS, () => void run());
+                return;
+            }
+            await read();
+            if (!alive.current) return;
+            schedule(
+                isAppStatusBusy(statusRef.current)
+                    ? APP_STATUS_POLL_BUSY_MS
+                    : APP_STATUS_POLL_IDLE_MS,
+                () => void run(),
+            );
         }
-        await read();
-        if (!alive.current) return;
-        schedule(
-            isAppStatusBusy(statusRef.current) ? APP_STATUS_POLL_BUSY_MS : APP_STATUS_POLL_IDLE_MS,
-            () => void tick(),
-        );
+        return run();
     }, [read, schedule]);
 
     useEffect(() => {
