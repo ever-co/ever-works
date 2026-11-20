@@ -39,20 +39,23 @@ import { API_BASE, authedHeaders, createWorkViaAPI, registerUserViaAPI } from '.
  *     DTO requires name + slug + description + prompt. Missing fields ->
  *       400 {message: string[], error:'Bad Request', statusCode:400}
  *       (class-validator array; slug also enforces ^[a-z0-9-]+ lowercase regex).
- *     FULL VALID body (all four fields) -> in keyless CI returns
- *       400 { message:'One or more selected providers are not available.',
- *             providerErrors:{ search:'Default provider "Tavily" is not configured…',
- *                              ai:'Default provider "OpenRouter" is not configured…' } }
- *       i.e. quick-create is GENERATION-gated: it eagerly resolves the default AI
- *       + search providers and fails on GENERATION when they are absent. This is
- *       NOT a class-validator array (no `error`/`statusCode` keys, has
- *       `providerErrors`).
- *       => NON-ATOMIC: the Work row is PERSISTED *before* the gate fires (PROBED:
- *          after a gated 400 the work appears in GET /api/works with status:'active'
- *          and generateStatus:null). So we assert the typed GATE on the response AND
- *          that exactly one work persisted — never a successful GENERATION. (On a
- *          keyed env it would proceed to generate; the keyless CI truth is the 400
- *          provider envelope + a created-but-ungenerated work.)
+ *     FULL VALID body (all four fields) -> quick-create sends the SAME provider
+ *       selection as the Generate form and the chat tool (`buildSelectedProviders`
+ *       over the Work's generator form schema: the default pipeline + each
+ *       category's default), so only the PIPELINE is validated — an unconfigured
+ *       optional default (Tavily search, OpenRouter AI) no longer refuses the
+ *       start. Until 2026-11 it sent no `providers`, every category's default had
+ *       to be configured, and production (empty `PLUGIN_TAVILY_API_KEY`) refused
+ *       EVERY quick-create with `providerErrors.search`.
+ *       Keyless CI: `agent-pipeline` needs no settings, so the start is accepted
+ *       (2xx) and the generation fails later on the missing keys. A refusal is
+ *       still a 400 provider envelope (`providerErrors`, now naming the pipeline),
+ *       NOT a class-validator array (no `error`/`statusCode` keys).
+ *       => NON-ATOMIC on a refusal: the Work row is PERSISTED *before* the gate
+ *          fires (status:'active', generateStatus:null); a retry with the same
+ *          `correlationId` reuses that Work instead of creating another (and
+ *          another managed repository). So we assert the response is the 2xx
+ *          start or the typed gate, AND that exactly one work persisted.
  *
  *   GET /api/works   (auth required; WorkRepository.findAllAccessible — owned OR member)
  *     anon -> 401.
@@ -188,7 +191,7 @@ test.describe('Works quick-create — DTO + provider gate (keyless CI)', () => {
         expect(msg, 'supplied prompt not flagged').not.toContain('prompt should not be empty');
     });
 
-    test('FULL valid body is GENERATION-gated: keyless CI returns the providerErrors 400', async ({
+    test('FULL valid body starts generation with the Generate form providers, or is the typed provider gate', async ({
         request,
     }) => {
         const { token } = await freshUser(request);
@@ -213,17 +216,19 @@ test.describe('Works quick-create — DTO + provider gate (keyless CI)', () => {
         }
 
         if (status >= 200 && status < 300) {
-            // A keyed environment would actually create — accept and sanity-check it.
+            // The start was accepted: quick-create sends the Generate form's
+            // provider selection (pipeline included), so only the pipeline is
+            // validated — even keyless, where the run fails later on the keys.
             test.info().annotations.push({
-                type: 'provider-keyed',
-                description: 'quick-create completed (AI/search providers ARE configured here)',
+                type: 'generation-started',
+                description: 'quick-create started generation (pipeline configured)',
             });
             return;
         }
 
-        // KEYLESS CI (the probed reality): a 400 that is the PROVIDER gate, NOT a
-        // class-validator array. Distinguish them precisely.
-        expect(status, 'keyless quick-create gate is a 400').toBe(400);
+        // A refused start: a 400 that is the PROVIDER gate, NOT a class-validator
+        // array. Distinguish them precisely.
+        expect(status, 'a refused quick-create is a 400').toBe(400);
         const hasProviderEnvelope =
             body.providerErrors !== undefined &&
             typeof body.message === 'string' &&
@@ -232,22 +237,24 @@ test.describe('Works quick-create — DTO + provider gate (keyless CI)', () => {
             hasProviderEnvelope,
             `valid-body 400 must be the provider gate, not validation; got ${JSON.stringify(body).slice(0, 200)}`,
         ).toBe(true);
-        // The gate names the unconfigured default AI + search providers.
+        // The gate names what refused the start: with the Generate form's
+        // selection that is the pipeline (an AI/search default only when a
+        // caller sends no pipeline).
         const pe = (body.providerErrors ?? {}) as AnyObj;
         expect(
-            'ai' in pe || 'search' in pe,
-            'providerErrors enumerates the missing ai/search defaults',
+            'pipeline' in pe || 'ai' in pe || 'search' in pe,
+            'providerErrors names the provider that refused the start',
         ).toBe(true);
     });
 
-    test('quick-create PERSISTS the work first, THEN trips the provider gate (non-atomic 400)', async ({
+    test('quick-create persists exactly one work, whether its generation starts or is refused', async ({
         request,
     }) => {
-        // PROBED REALITY: quick-create creates the Work row BEFORE attempting
-        // generation. In keyless CI the provider gate returns a 400, yet the work
-        // is already persisted (status:'active', generateStatus:null because
-        // generation never started). So the 400 is NOT atomic — assert the row
-        // EXISTS, with no generation kicked off.
+        // Quick-create creates the Work row BEFORE attempting generation. When the
+        // start is refused (a 400 provider gate), the work is still persisted
+        // (status:'active', generateStatus:null because generation never
+        // started) — NOT atomic; a retry under the same correlationId reuses it.
+        // Assert the row EXISTS either way, with no generation on a refusal.
         const { token } = await freshUser(request);
         const before = await listWorks(request, token);
         expect(before.total, 'fresh user starts with 0 works').toBe(0);

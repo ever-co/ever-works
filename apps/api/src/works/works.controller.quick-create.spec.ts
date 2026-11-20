@@ -43,10 +43,42 @@ import type { AuthenticatedUser } from '../auth/types/auth.types';
 
 const auth: AuthenticatedUser = { userId: 'auth-1' } as any;
 
+/**
+ * The Generate form's schema for a fresh Work in the shape production answers
+ * when a platform key is missing: Tavily is the default search provider but not
+ * configured (its key is empty), the rest are set up.
+ */
+const FORM_SCHEMA_WITH_UNCONFIGURED_SEARCH = {
+    resolvedPipelineId: 'agent-pipeline',
+    providers: {
+        pipeline: [
+            { id: 'agent-pipeline', name: 'Agent Pipeline', configured: true, isDefault: true },
+            { id: 'standard-pipeline', name: 'Standard Pipeline', configured: true },
+        ],
+        search: [{ id: 'tavily', name: 'Tavily', configured: false, isDefault: true }],
+        screenshot: [],
+        ai: [{ id: 'openrouter', name: 'OpenRouter', configured: true, isDefault: true }],
+        contentExtractor: [
+            {
+                id: 'local-content-extractor',
+                name: 'Local Content Extractor',
+                configured: true,
+                isDefault: true,
+            },
+        ],
+    },
+    pluginFields: [],
+    handledConfigFields: [],
+    defaultValues: { max_search_queries: 5 },
+};
+
 function makeController(overrides: {
     createWorkResult?: unknown;
     generateResult?: unknown;
     generateThrows?: Error;
+    formSchema?: unknown;
+    formSchemaThrows?: Error;
+    retryTarget?: unknown;
 }) {
     const createWork = jest.fn().mockResolvedValue(
         overrides.createWorkResult ?? {
@@ -66,6 +98,25 @@ function makeController(overrides: {
 
     const activityLog = { log: jest.fn().mockResolvedValue(undefined) };
     const authService = { getUser: jest.fn().mockResolvedValue({ id: 'user-1' }) };
+    const getFormSchema = overrides.formSchemaThrows
+        ? jest.fn().mockRejectedValue(overrides.formSchemaThrows)
+        : jest.fn().mockResolvedValue(
+              overrides.formSchema ?? {
+                  providers: {
+                      pipeline: [],
+                      search: [],
+                      screenshot: [],
+                      ai: [],
+                      contentExtractor: [],
+                  },
+                  pluginFields: [],
+                  handledConfigFields: [],
+              },
+          );
+    const findLatestByUserAndCorrelationId = jest
+        .fn()
+        .mockResolvedValue(overrides.retryTarget ?? null);
+    const funnel = { emit: jest.fn() };
 
     const controller = new WorksController(
         { wrap: jest.fn() } as any,
@@ -81,11 +132,11 @@ function makeController(overrides: {
         {} as any,
         {} as any,
         {} as any,
+        { getFormSchema } as any,
         {} as any,
         {} as any,
         {} as any,
-        {} as any,
-        {} as any,
+        { findLatestByUserAndCorrelationId } as any,
         {} as any,
         {} as any,
         activityLog as any,
@@ -98,10 +149,19 @@ function makeController(overrides: {
             isEnabled: jest.fn().mockReturnValue(false),
             verify: jest.fn().mockResolvedValue({ success: true, skipped: true }),
         } as any,
-        { emit: jest.fn() } as any,
+        funnel as any,
     );
 
-    return { controller, createWork, generateItems, activityLog, authService };
+    return {
+        controller,
+        createWork,
+        generateItems,
+        activityLog,
+        authService,
+        getFormSchema,
+        findLatestByUserAndCorrelationId,
+        funnel,
+    };
 }
 
 const baseDto = {
@@ -221,5 +281,159 @@ describe('WorksController.quickCreateWork (EW-617 G4)', () => {
         await (controller as any).quickCreateWork(auth, dto);
 
         expect(createWork.mock.calls[0][0].organization).toBe(false);
+    });
+});
+
+describe('WorksController.quickCreateWork — providers, the same selection as the Generate form', () => {
+    // Without `providers`, `GeneratorFormSchemaService.validateSelectedProviders`
+    // demands that the default provider of EVERY category be configured, so an
+    // empty optional key (production's `PLUGIN_TAVILY_API_KEY`) refused every
+    // quick-create with "Default provider \"Tavily\" is not configured" — after
+    // the Work and its repository were created. The Generate form and the chat
+    // tool send `buildSelectedProviders(formSchema)` (pipeline included), which
+    // validates the pipeline only. Quick-create must send the same.
+    it('sends the default pipeline and each category default, as the Generate form does', async () => {
+        const { controller, generateItems, getFormSchema } = makeController({
+            formSchema: FORM_SCHEMA_WITH_UNCONFIGURED_SEARCH,
+        });
+
+        await (controller as any).quickCreateWork(auth, baseDto);
+
+        expect(getFormSchema).toHaveBeenCalledWith(undefined, { workId: 'w-1', userId: 'user-1' });
+        const generatorDto = generateItems.mock.calls[0][1];
+        expect(generatorDto.providers).toEqual({
+            pipeline: 'agent-pipeline',
+            search: 'tavily',
+            ai: 'openrouter',
+            contentExtractor: 'local-content-extractor',
+        });
+        expect(generatorDto.pluginConfig).toEqual({ max_search_queries: 5 });
+        expect(generatorDto.prompt).toBe(baseDto.prompt);
+    });
+
+    it("selects the user's enforced default pipeline, as the Generate form does", async () => {
+        const { controller, generateItems } = makeController({
+            formSchema: {
+                ...FORM_SCHEMA_WITH_UNCONFIGURED_SEARCH,
+                enforcedPipelineId: 'standard-pipeline',
+            },
+        });
+
+        await (controller as any).quickCreateWork(auth, baseDto);
+
+        expect(generateItems.mock.calls[0][1].providers.pipeline).toBe('standard-pipeline');
+    });
+
+    it('still starts the generation when the form schema cannot be read', async () => {
+        const { controller, generateItems } = makeController({
+            formSchemaThrows: new Error('plugin registry not ready'),
+        });
+
+        const result = await (controller as any).quickCreateWork(auth, baseDto);
+
+        expect(generateItems).toHaveBeenCalledTimes(1);
+        expect(generateItems.mock.calls[0][1].providers).toBeUndefined();
+        expect(result.status).toBe('pending');
+    });
+});
+
+describe('WorksController.quickCreateWork — a retry reuses the Work instead of creating another', () => {
+    // Every "Generate now" click minted a new slug, so each retry after a
+    // refused start created another Work AND another managed repository; after
+    // three a visitor hit the 3-Works Ever Works Deploy quota and was stuck.
+    const retryDto = { ...baseDto, slug: 'ai-coding-assistants-x7k2p9', correlationId: 'corr-1' };
+
+    it('reuses the Work the same funnel created when its generation never started', async () => {
+        const firstTry = {
+            id: 'w-0',
+            slug: 'ai-coding-assistants-a1b2c3',
+            name: 'AI Coding Assistants',
+        };
+        const {
+            controller,
+            createWork,
+            generateItems,
+            getFormSchema,
+            findLatestByUserAndCorrelationId,
+            funnel,
+        } = makeController({
+            retryTarget: { ...firstTry, userId: 'user-1', generateStatus: null },
+        });
+
+        const result = await (controller as any).quickCreateWork(auth, retryDto);
+
+        expect(findLatestByUserAndCorrelationId).toHaveBeenCalledWith('user-1', 'corr-1');
+        expect(createWork).not.toHaveBeenCalled();
+        expect(generateItems.mock.calls[0][0]).toBe('w-0');
+        expect(getFormSchema).toHaveBeenCalledWith(undefined, { workId: 'w-0', userId: 'user-1' });
+        expect(result.work).toEqual(firstTry);
+        // No second "work created" funnel step for a Work that already existed.
+        expect(funnel.emit).not.toHaveBeenCalled();
+    });
+
+    it.each(['error', 'cancelled'])(
+        'reuses the Work when its earlier generation ended %s (a retry runs it again on the same Work)',
+        async (status) => {
+            const { controller, createWork, generateItems } = makeController({
+                retryTarget: {
+                    id: 'w-0',
+                    slug: 'ai-coding-assistants-a1b2c3',
+                    name: 'AI Coding Assistants',
+                    userId: 'user-1',
+                    generateStatus: { status },
+                },
+            });
+
+            await (controller as any).quickCreateWork(auth, retryDto);
+
+            expect(createWork).not.toHaveBeenCalled();
+            expect(generateItems.mock.calls[0][0]).toBe('w-0');
+        },
+    );
+
+    it.each(['generating', 'generated'])(
+        'creates a new Work when the earlier one is %s',
+        async (status) => {
+            const { controller, createWork, generateItems } = makeController({
+                retryTarget: {
+                    id: 'w-0',
+                    slug: 'ai-coding-assistants-a1b2c3',
+                    name: 'AI Coding Assistants',
+                    userId: 'user-1',
+                    generateStatus: { status },
+                },
+            });
+
+            await (controller as any).quickCreateWork(auth, retryDto);
+
+            expect(createWork).toHaveBeenCalledTimes(1);
+            expect(generateItems.mock.calls[0][0]).toBe('w-1');
+        },
+    );
+
+    it('a fresh create still persists the correlationId and emits the work-created funnel step', async () => {
+        const { controller, createWork, funnel } = makeController({});
+
+        await (controller as any).quickCreateWork(auth, retryDto);
+
+        expect(createWork.mock.calls[0][0].correlationId).toBe('corr-1');
+        expect(funnel.emit).toHaveBeenCalledWith(
+            expect.objectContaining({
+                event: 'zero_friction.work_created',
+                funnelStep: 4,
+                correlationId: 'corr-1',
+                workId: 'w-1',
+                viaQuickCreate: true,
+            }),
+        );
+    });
+
+    it('does not look for an earlier Work without a correlationId', async () => {
+        const { controller, createWork, findLatestByUserAndCorrelationId } = makeController({});
+
+        await (controller as any).quickCreateWork(auth, baseDto);
+
+        expect(findLatestByUserAndCorrelationId).not.toHaveBeenCalled();
+        expect(createWork).toHaveBeenCalledTimes(1);
     });
 });
