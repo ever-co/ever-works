@@ -1,3 +1,9 @@
+// The real seeder pulls the whole agent graph (and better-auth's ESM); this spec hands the
+// service a seeder double (`demo-sandbox-seeder.spec.ts` drives the real one).
+jest.mock('../seed/demo-sandbox-seeder.service', () => ({
+    DemoSandboxSeederService: class DemoSandboxSeederService {},
+}));
+
 import { InternalServerErrorException } from '@nestjs/common';
 import { createHash } from 'node:crypto';
 import { DataSource } from 'typeorm';
@@ -77,13 +83,25 @@ describe('DemoSandboxService', () => {
         expect(arg.username).toMatch(/^demo-/);
     });
 
-    it('deletes the user and its session and throws a generic 500 when seeding fails', async () => {
+    it('expires the sandbox for the sweeper, ends its session and throws a generic 500 when seeding fails', async () => {
+        // The seeder may already have written an Organization, a Tenant and Works: the user
+        // row stays (deleting it would orphan them), expired, so the demo sweeper purges the
+        // whole sandbox through its one path (ruling R13).
         seeder.seed.mockRejectedValue(new Error('boom: secret detail'));
         const err = await service.createSandbox({ ipAddress: null, userAgent: null }).catch((e) => e);
         expect(err).toBeInstanceOf(InternalServerErrorException);
         expect(err.message).toBe('Could not start the demo');
-        expect(await dataSource.getRepository(User).count()).toBe(0);
+
+        const users = await dataSource.getRepository(User).find();
+        expect(users).toHaveLength(1);
+        expect(users[0].registrationProvider).toBe('demo');
+        expect(users[0].anonymousExpiresAt!.getTime()).toBeLessThan(Date.now());
         expect(await dataSource.getRepository(AuthSession).count()).toBe(0);
+        expect((await userRepository.findExpiredDemo(new Date(), 20)).map((u) => u.id)).toEqual([
+            users[0].id,
+        ]);
+        // No longer counted against the active-sandbox cap.
+        expect(await userRepository.countActiveDemo(new Date())).toBe(0);
     });
 
     it('throws DEMO_FULL at the active-sandbox cap and creates nothing', async () => {

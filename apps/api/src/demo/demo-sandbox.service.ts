@@ -86,11 +86,18 @@ export class DemoSandboxService {
         };
     }
 
-    /** The session table has no foreign key to the user, so its rows are removed explicitly. */
+    /**
+     * A failed seed may already have written the sandbox's Organization, Tenant and Works, so
+     * the user is not deleted here (that would orphan them): it is expired, which hands the
+     * whole sandbox to the demo sweeper's one purge path, and its sessions end now. The
+     * session table has no foreign key to the user, so its rows are removed explicitly.
+     */
     private async rollback(userId: string): Promise<void> {
         try {
             await this.dataSource.getRepository(AuthSession).delete({ userId });
-            await this.userRepository.deleteAnonymous(userId);
+            await this.userRepository.update(userId, {
+                anonymousExpiresAt: new Date(Date.now() - 1_000),
+            });
         } catch (error) {
             this.logger.error(
                 `demo sandbox rollback failed for user ${userId}: ${error instanceof Error ? error.message : String(error)}`,

@@ -1,3 +1,9 @@
+// The real seeder pulls the whole agent graph (and better-auth's ESM); this spec hands the
+// controller a sandbox double and never reaches it.
+jest.mock('../seed/demo-sandbox-seeder.service', () => ({
+    DemoSandboxSeederService: class DemoSandboxSeederService {},
+}));
+
 import { BadRequestException } from '@nestjs/common';
 import { DemoController } from '../demo.controller';
 
