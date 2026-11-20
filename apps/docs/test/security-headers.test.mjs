@@ -58,7 +58,8 @@ function parseBlocks(source) {
 	const server = [];
 	const locations = [];
 	const stack = [];
-	for (const raw of source.split('\n')) {
+	// A `{` on a line of its own belongs to the directive on the line before it.
+	for (const raw of source.replace(/\s*\n\s*\{/g, ' {').split('\n')) {
 		const line = stripComment(raw).trim().replace(/\s+/g, ' ');
 		if (!line) continue;
 		if (line.endsWith('{')) {
@@ -132,6 +133,7 @@ describe('docs.ever.works serves /.well-known/security.txt', () => {
 	it('has an exact-match location answered as text/plain', () => {
 		assert.ok(location, `${nginxPath} must have \`location = /.well-known/security.txt\``);
 		assert.ok(location.lines.includes('default_type text/plain;'));
+		assert.ok(location.lines.includes('charset utf-8;'), 'security.txt must be text/plain; charset=utf-8');
 	});
 
 	it('lists Contact, Canonical and Policy', () => {
