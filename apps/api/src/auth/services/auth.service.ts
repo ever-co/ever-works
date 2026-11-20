@@ -25,6 +25,9 @@ import { AuthProvider, config } from '../../config/constants';
 import { getBcryptCost } from '../providers/bcrypt-cost';
 import { User } from '@ever-works/agent/entities';
 import { EventEmitter2 } from '@nestjs/event-emitter';
+import { ModuleRef } from '@nestjs/core';
+import { getOptionalProvider } from '@ever-works/agent/utils';
+import { DEMO_PROFILE, type DemoProfilePort } from '../../demo/demo-profile.port';
 import {
     UserCreatedEvent,
     UserConfirmedEvent,
@@ -56,6 +59,8 @@ export class AuthService {
         private readonly userRepository: UserRepository,
         private readonly authAccountRepository: AuthAccountRepository,
         private eventEmitter: EventEmitter2,
+        // Optional so a hand-built AuthService (specs) still works without a container.
+        private readonly moduleRef?: ModuleRef,
     ) {
         this.webAppUrl = config.webAppUrl();
         // C-04: parse ALLOWED_CALLBACK_HOSTS once at boot. The default always
@@ -709,7 +714,19 @@ export class AuthService {
         return {
             ...userProfile,
             oauthTokens: connectedProviders,
+            demo: await this.getDemoProfile(user),
         };
+    }
+
+    /**
+     * Platform demo mode — the profile's `demo` block. The `DEMO_PROFILE` provider exists only when
+     * `DEMO` is on (it is provided by `DemoModule`), so everywhere else this is `null`.
+     */
+    private async getDemoProfile(user: User) {
+        const demoProfile = this.moduleRef
+            ? getOptionalProvider<DemoProfilePort>(this.moduleRef, DEMO_PROFILE)
+            : undefined;
+        return demoProfile ? demoProfile.getDemoProfile(user) : null;
     }
 
     async updateUserProfile(userId: string, updateData: UpdateProfileDto) {

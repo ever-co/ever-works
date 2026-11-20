@@ -1,6 +1,7 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
+import { useLatestRef } from '@/lib/hooks/use-latest-ref';
 import { useTranslations } from 'next-intl';
 import { CheckCircle2, Loader2, XCircle } from 'lucide-react';
 import { isFleetOperationTerminal, type FleetOperationView } from '@ever-works/contracts';
@@ -41,8 +42,7 @@ export function OperationCard({
     const [operation, setOperation] = useState<FleetOperationView | null>(null);
     const [reconnecting, setReconnecting] = useState(false);
     const [lines, setLines] = useState<string[]>([]);
-    const doneRef = useRef(onDone);
-    doneRef.current = onDone;
+    const doneRef = useLatestRef(onDone);
 
     useEffect(() => {
         let cancelled = false;
@@ -75,7 +75,7 @@ export function OperationCard({
             cancelled = true;
             if (timer) clearTimeout(timer);
         };
-    }, [operationId]);
+    }, [operationId, doneRef]);
 
     const state = operation?.state ?? 'running';
     const percent = operation?.progress?.percent;

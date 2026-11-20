@@ -1,6 +1,12 @@
 import { PipelineFacadeService } from './pipeline-facade.service';
 
 describe('PipelineFacadeService', () => {
+    const ORIGINAL_DEMO = process.env.DEMO;
+    afterEach(() => {
+        if (ORIGINAL_DEMO === undefined) delete process.env.DEMO;
+        else process.env.DEMO = ORIGINAL_DEMO;
+    });
+
     let aiFacade: any;
     let searchFacade: any;
     let screenshotFacade: any;
@@ -444,6 +450,42 @@ describe('PipelineFacadeService', () => {
             const ctx = service.createStepExecutionContext(makeWork() as any);
             expect(ctx.screenshotFacade.isAvailable()).toBe(true);
             expect(ctx.screenshotFacade.isConfigured()).toBe(true);
+        });
+
+        // Platform demo mode: the image-capture step asks it whether a provider resolves
+        // for THIS Work (`isAvailable` only says one is loaded somewhere on the instance)
+        // and skips the step when none does, rather than failing one capture per item.
+        it('getActiveProviderName answers for the bound {workId, userId, providerOverride} with DEMO on', async () => {
+            process.env.DEMO = 'true';
+            screenshotFacade.getActiveProviderName = jest.fn().mockResolvedValue(null);
+            const ctx = service.createStepExecutionContext(
+                makeWork() as any,
+                { screenshot: 'urlbox' } as any,
+            );
+
+            await expect(
+                ctx.screenshotFacade.getActiveProviderName!({} as any),
+            ).resolves.toBeNull();
+            expect(screenshotFacade.getActiveProviderName).toHaveBeenCalledWith({
+                workId: 'w1',
+                userId: 'u1',
+                providerOverride: 'urlbox',
+            });
+        });
+
+        it('has no getActiveProviderName with DEMO unset, exactly as before', () => {
+            delete process.env.DEMO;
+            screenshotFacade.getActiveProviderName = jest.fn().mockResolvedValue('ScreenshotOne');
+            const ctx = service.createStepExecutionContext(makeWork() as any);
+
+            expect(ctx.screenshotFacade.getActiveProviderName).toBeUndefined();
+            expect(Object.keys(ctx.screenshotFacade).sort()).toEqual([
+                'capture',
+                'getScreenshotUrl',
+                'getSmartImage',
+                'isAvailable',
+                'isConfigured',
+            ]);
         });
     });
 

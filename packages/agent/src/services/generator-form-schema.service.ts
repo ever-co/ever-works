@@ -25,6 +25,7 @@ import {
 } from '@ever-works/plugin';
 import type { ProvidersDto } from '@src/items-generator/dto/create-items-generator.dto';
 import { buildProviderModelSummaries } from '@src/plugins/utils/plugin-model-settings.utils';
+import { demoPipelineId, isDemoOfferedPipeline } from '../demo/demo-work-policy';
 
 /**
  * Service for resolving dynamic generator form schema based on selected plugins.
@@ -136,8 +137,10 @@ export class GeneratorFormSchemaService {
         }
 
         // Enforced pipeline ID — set only when enforce is active and the plugin is loaded
+        // (and, in platform demo mode, offered: the form must not switch to a pipeline
+        // the picker hides and the orchestrator would not run)
         let enforcedPipelineId: string | undefined;
-        if (userGlobalDefault?.enforce) {
+        if (userGlobalDefault?.enforce && isDemoOfferedPipeline(userGlobalDefault.pluginId)) {
             const enforced = this.pluginRegistry.get(userGlobalDefault.pluginId);
             if (enforced && enforced.state === 'loaded') {
                 enforcedPipelineId = userGlobalDefault.pluginId;
@@ -321,6 +324,10 @@ export class GeneratorFormSchemaService {
         categories.forEach((cat, i) => {
             providers[cat.uiKey] = results[i];
         });
+        // Platform demo mode: the pipeline picker offers `standard-pipeline` only.
+        if (providers.pipeline) {
+            providers.pipeline = providers.pipeline.filter((p) => isDemoOfferedPipeline(p.id));
+        }
         return providers as GeneratorFormSchema['providers'];
     }
 
@@ -783,6 +790,16 @@ export class GeneratorFormSchemaService {
         pipelineId?: string,
         options?: FormSchemaOptions,
     ): Promise<RegisteredPlugin | undefined> {
+        // Platform demo mode: `standard-pipeline` only, over the request, the
+        // Work's setting and the default (the orchestrator runs nothing else).
+        const demoPipeline = demoPipelineId();
+        if (demoPipeline) {
+            const registered = this.pluginRegistry.get(demoPipeline);
+            return registered && (await this.isUsablePipeline(registered, options))
+                ? registered
+                : undefined;
+        }
+
         // 1. Explicit pipelineId — from .works/works.yml or user click in the form
         if (pipelineId) {
             const registered = this.pluginRegistry.get(pipelineId);

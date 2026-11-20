@@ -9,6 +9,10 @@ import type { GitProviderConnectionInfo } from '@/lib/api/plugins-capabilities/g
 import type { PluginDeviceAuthStatus } from '@/lib/api/plugins-capabilities/device-auth';
 import type { UserPlugin } from '@/lib/api/plugins';
 import { OnboardingPageClient } from './onboarding-page-client';
+import { getDemoConfig } from '@/lib/feature-flags/demo';
+import { redirect } from '@/i18n/navigation';
+import { getLocale } from 'next-intl/server';
+import { ROUTES } from '@/lib/constants';
 import { AnonymousOnboardingBootstrap } from './anonymous-bootstrap';
 
 // EW-617 zero-friction landing target. PUBLIC route: fresh marketing-site
@@ -43,6 +47,11 @@ export default async function OnboardingPage() {
 
     // No valid session → anonymous bootstrap (client-side mint → refresh).
     if (!user) {
+        // Demo instance: `POST /auth/anonymous` answers 403 there, so never mint.
+        // The one-click demo card on the sign-in page is the way in.
+        if ((await getDemoConfig()).enabled) {
+            return redirect({ locale: await getLocale(), href: ROUTES.AUTH_LOGIN });
+        }
         return <AnonymousOnboardingBootstrap />;
     }
 

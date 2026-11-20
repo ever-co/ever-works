@@ -47,6 +47,7 @@ import {
 import { PluginValidationService } from './plugin-validation.service';
 import { ActivityLogService } from '@ever-works/agent/activity-log';
 import { ActivityActionType, ActivityStatus } from '@ever-works/agent/entities';
+import { demoModelChoices, demoPipelineId, isDemoOfferedPipeline } from '@ever-works/agent/demo';
 
 @ApiTags('Plugins')
 @ApiBearerAuth('JWT-auth')
@@ -202,7 +203,16 @@ export class PluginsController {
         @CurrentUser() auth: AuthenticatedUser,
         @Query('category') category?: string,
     ): Promise<PluginListResponseDto> {
-        return this.pluginsService.listPlugins(auth.userId, category);
+        const response = await this.pluginsService.listPlugins(auth.userId, category);
+        // Platform demo mode: the default-pipeline picker and the Agents runtime
+        // list offer `standard-pipeline` only (generation runs nothing else).
+        if (!demoPipelineId()) return response;
+        const plugins = response.plugins.filter(
+            (plugin) =>
+                !(plugin.category === 'pipeline' || plugin.capabilities?.includes('pipeline')) ||
+                isDemoOfferedPipeline(plugin.pluginId),
+        );
+        return { ...response, plugins, total: plugins.length };
     }
 
     @Get('plugins/settings-menu')
@@ -237,7 +247,9 @@ export class PluginsController {
         @CurrentUser() auth: AuthenticatedUser,
         @Param('pluginId') pluginId: string,
     ): Promise<readonly any[]> {
-        return this.pluginsService.listPluginModels(pluginId, auth.userId);
+        // Platform demo mode: `:free` models only — the AI facade would replace
+        // any other with a free one, so the picker never offers it.
+        return demoModelChoices(await this.pluginsService.listPluginModels(pluginId, auth.userId));
     }
 
     @Get('plugins/:pluginId/connection-status')

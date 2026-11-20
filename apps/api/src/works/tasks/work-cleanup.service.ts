@@ -27,9 +27,9 @@ export class WorkCleanupService {
             'works:cleanup',
             async () => {
                 try {
-                    const staleThreshold = new Date();
-                    staleThreshold.setHours(
-                        staleThreshold.getHours() - config.work.staleTimeoutHours(),
+                    // Milliseconds, not setHours(): the timeout may be fractional (0.5 = 30 min).
+                    const staleThreshold = new Date(
+                        Date.now() - config.work.staleTimeoutHours() * 3_600_000,
                     );
 
                     const stalledWorks =

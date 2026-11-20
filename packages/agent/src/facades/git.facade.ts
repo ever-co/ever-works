@@ -83,6 +83,13 @@ import { GitHubAppInstallationRepository } from '../database/repositories/github
 import { MERGE_POLICY_ENFORCER, type MergePolicyEnforcer } from '../policy/merge-policy.enforcer';
 import { MERGE_APPROVAL_VERIFIER, type MergeApprovalVerifier } from '../policy/merge-approval.port';
 import {
+    DEMO_REPO_LEDGER,
+    DEMO_REPO_LEDGER_UNBOUND_MESSAGE,
+    DEMO_REPO_TOPIC,
+    demoRepoLedgerForCreate,
+    type DemoRepoLedgerPort,
+} from '../demo/demo-repo-ledger.port';
+import {
     mergeTargetNeedsFloorApproval,
     normalizeCommitSha,
     sameMergeBranch,
@@ -255,6 +262,13 @@ export type GitFacadeOptions = GitFacadeTokenAuth | GitFacadeUserAuth;
 /** The per-call options a plugin read takes (only when there is something to pass). */
 function requestOptionsOf(options: GitFacadeOptions): { signal: AbortSignal } | undefined {
     return options.signal ? { signal: options.signal } : undefined;
+}
+
+/** A provider repository id (GitHub's numeric id, as a string) as a number; `null` otherwise. */
+function numericRepositoryId(id: string | undefined): number | null {
+    if (typeof id !== 'string' || !/^\d+$/.test(id)) return null;
+    const value = Number(id);
+    return Number.isSafeInteger(value) ? value : null;
 }
 
 /**
@@ -463,7 +477,17 @@ export class GitFacadeService implements IGitFacade {
         @Optional()
         @Inject(MERGE_APPROVAL_VERIFIER)
         private readonly mergeApprovals?: MergeApprovalVerifier,
+        // Platform demo mode — the demo repository ledger: bound by the API's global
+        // `DemoModule` (and, in a Trigger worker, by `TriggerFacadesModule` to a remote
+        // proxy) only when `DEMO` is on. With the demo on and nothing bound,
+        // `createRepository` / `createRepositoryFromTemplate` refuse before any provider
+        // call (ruling R22). Appended LAST + @Optional() per the positional-spec arity rule.
+        @Optional()
+        @Inject(DEMO_REPO_LEDGER)
+        private readonly demoRepoLedger?: DemoRepoLedgerPort,
     ) {}
+
+    private demoRepoLedgerUnboundLogged = false;
 
     private getRequiredOAuthScopes(providerId: string): readonly string[] {
         switch (providerId) {
@@ -861,12 +885,23 @@ export class GitFacadeService implements IGitFacade {
         return [];
     }
 
+    /**
+     * Platform demo mode: a repository this call CREATES is recorded in the demo repository
+     * ledger (see {@link createLedgered}); with the demo on and no ledger bound the call is
+     * refused before any provider call.
+     */
     async createRepository(
         createOptions: CreateRepoOptions,
         options: GitFacadeOptions,
     ): Promise<GitRepository> {
+        const ledger = this.demoRepoLedgerForCreate();
         const { plugin, token } = await this.resolvePluginAndToken(options);
-        return plugin.createRepository(createOptions, token);
+        if (!ledger) {
+            return plugin.createRepository(createOptions, token);
+        }
+        return this.createLedgered(ledger, plugin, token, createOptions, options, () =>
+            plugin.createRepository(createOptions, token),
+        );
     }
 
     async deleteRepository(owner: string, repo: string, options: GitFacadeOptions): Promise<void> {
@@ -938,20 +973,27 @@ export class GitFacadeService implements IGitFacade {
         );
     }
 
+    /** Platform demo mode: ledgered exactly as {@link createRepository}. */
     async createRepositoryFromTemplate(
         templateOwner: string,
         templateRepo: string,
         createOptions: CreateRepoOptions,
         options: GitFacadeOptions,
     ): Promise<GitRepository | null> {
+        const ledger = this.demoRepoLedgerForCreate();
         const { plugin, token } = await this.resolvePluginAndToken(options);
         if (plugin.createRepositoryFromTemplate) {
-            return plugin.createRepositoryFromTemplate(
-                templateOwner,
-                templateRepo,
-                createOptions,
-                token,
-            );
+            const create = () =>
+                plugin.createRepositoryFromTemplate!(
+                    templateOwner,
+                    templateRepo,
+                    createOptions,
+                    token,
+                );
+            if (!ledger) {
+                return create();
+            }
+            return this.createLedgered(ledger, plugin, token, createOptions, options, create);
         }
         throw new GitFacadeError(
             'Create from template not supported by this provider',
@@ -2072,6 +2114,10 @@ export class GitFacadeService implements IGitFacade {
      * caller's authorisation, and the provider refuses a source it cannot show
      * to be within it (`unprocessable` + `too_large`) before any git work. Safe
      * to repeat — a copy already holding the same head is not pushed again.
+     *
+     * Platform demo mode: creates no repository (the target must already exist),
+     * so it records nothing in the demo repository ledger; the create that made
+     * the target did.
      */
     async createRepositoryCopy(
         input: GitRepositoryCopyInput,
@@ -2509,6 +2555,148 @@ export class GitFacadeService implements IGitFacade {
     ): Promise<void> {
         const plugin = await this.getPlugin(providerId);
         return plugin.renameBranch(dir, oldName, newName);
+    }
+
+    /**
+     * Platform demo mode — the ledger a repository create records into: `undefined` with the
+     * demo off; with the demo on and none bound, refuses (logged once) before the caller
+     * resolves a plugin or a token, so no provider call is made (ruling R22).
+     */
+    private demoRepoLedgerForCreate(): DemoRepoLedgerPort | undefined {
+        return demoRepoLedgerForCreate(this.demoRepoLedger, () => {
+            if (this.demoRepoLedgerUnboundLogged) return;
+            this.demoRepoLedgerUnboundLogged = true;
+            this.logger.error(DEMO_REPO_LEDGER_UNBOUND_MESSAGE);
+        });
+    }
+
+    /**
+     * Platform demo mode — runs `create` and records the repository in the demo ledger ONLY
+     * when this call created it (ruling R23). The plugins answer an existing repository
+     * unchanged (GitHub's `createRepository` / `createRepositoryFromTemplate` look it up
+     * first), so existence is read BEFORE the create, where the plugin will look: the
+     * requested organization, else the token's own account. A repository that was already
+     * there — a real customer repository in the shared org, or the Work's repository the
+     * provider made and recorded with its id — never enters the ledger.
+     *
+     * A created repository is tagged with the demo topic ({@link tagDemoRepository}, best
+     * effort) and recorded with GitHub's id: the one the create itself reported
+     * (`GitRepository.id`, from GitHub's create response), else read back from the plugin
+     * ({@link createdRepositoryId}). The id is what pins the sweeper's deletion to the
+     * repository the sandbox created — nothing stops another account of the shared org from
+     * taking a `demo-` name later — and a row without one is never deleted (R28). `null`
+     * only when neither the create nor the plugin can supply it. A create
+     * that answers no repository for one that was not there (GitHub's template create, when the
+     * repository it just made is not readable yet — generation carries on with it) records the
+     * requested coordinates. A call with no `userId` names no sandbox to sweep the repository
+     * for: it is created, unrecorded, with a warning. A failed record fails the call (the
+     * repository would never be swept), after an error naming it.
+     */
+    private async createLedgered<T extends GitRepository | null>(
+        ledger: DemoRepoLedgerPort,
+        plugin: IGitProviderPlugin,
+        token: string,
+        createOptions: CreateRepoOptions,
+        options: GitFacadeOptions,
+        create: () => Promise<T>,
+    ): Promise<T> {
+        const sandboxUserId = options.userId;
+        if (!sandboxUserId) {
+            const created = await create();
+            this.logger.warn(
+                `Demo mode: ${created?.fullName ?? createOptions.name} was created by a call that names no user, so it is not in the demo ledger and will not be swept`,
+            );
+            return created;
+        }
+
+        const targetOwner = createOptions.organization || (await plugin.getUser(token)).login;
+        const existed =
+            (await plugin.getRepository(targetOwner, createOptions.name, token)) !== null;
+        const created = await create();
+        if (existed) {
+            return created;
+        }
+
+        const owner = created?.owner ?? targetOwner;
+        const name = created?.name ?? createOptions.name;
+        // Tagged before the record, so a repository whose record fails is still findable.
+        await this.tagDemoRepository(plugin, token, owner, name);
+        const githubId =
+            numericRepositoryId(created?.id) ??
+            (await this.createdRepositoryId(plugin, token, owner, name));
+        try {
+            await ledger.record({ sandboxUserId, owner, name, githubId });
+        } catch (error) {
+            this.logger.error(
+                `Created demo repository ${owner}/${name} for user ${sandboxUserId} ` +
+                    `but could not record it in the demo ledger; the sweeper will not delete it: ${
+                        error instanceof Error ? error.message : String(error)
+                    }`,
+            );
+            throw error;
+        }
+        return created;
+    }
+
+    /**
+     * Platform demo mode — tags a repository this call created with {@link DEMO_REPO_TOPIC}
+     * through the plugin's optional `addRepositoryTopics`. Best effort: a plugin without it,
+     * or a refusal, is logged at warn level and never fails the create or the record.
+     */
+    private async tagDemoRepository(
+        plugin: IGitProviderPlugin,
+        token: string,
+        owner: string,
+        name: string,
+    ): Promise<void> {
+        const addTopics = plugin.addRepositoryTopics;
+        if (typeof addTopics !== 'function') {
+            this.logger.warn(
+                `Demo repository ${owner}/${name} not tagged ${DEMO_REPO_TOPIC}: provider ${plugin.id} cannot set topics`,
+            );
+            return;
+        }
+        try {
+            await addTopics.call(plugin, owner, name, [DEMO_REPO_TOPIC], token);
+        } catch (error) {
+            this.logger.warn(
+                `Demo repository ${owner}/${name} not tagged ${DEMO_REPO_TOPIC}: ${
+                    error instanceof Error ? error.message : String(error)
+                }`,
+            );
+        }
+    }
+
+    /**
+     * Platform demo mode — GitHub's numeric id of a repository this call just created, read
+     * through the plugin's optional `getRepositoryIdentity`; `null` (with a debug line) when the
+     * plugin cannot supply it: no such read, the repository not readable yet, an answer for
+     * another repository, a non-numeric id, or a failed read. Never fails the create.
+     */
+    private async createdRepositoryId(
+        plugin: IGitProviderPlugin,
+        token: string,
+        owner: string,
+        name: string,
+    ): Promise<number | null> {
+        const unknown = (why: string): null => {
+            this.logger.debug(`Demo ledger: no GitHub id for ${owner}/${name} (${why})`);
+            return null;
+        };
+        const readIdentity = plugin.getRepositoryIdentity;
+        if (typeof readIdentity !== 'function') {
+            return unknown(`provider ${plugin.id} reports no repository id`);
+        }
+        try {
+            const identity = await readIdentity.call(plugin, owner, name, token);
+            if (!identity) return unknown('not readable yet');
+            if (identity.fullName.toLowerCase() !== `${owner}/${name}`.toLowerCase()) {
+                return unknown(`the provider answered for ${identity.fullName}`);
+            }
+            return numericRepositoryId(identity.id) ?? unknown(`id ${identity.id} is not numeric`);
+        } catch (error) {
+            return unknown(error instanceof Error ? error.message : String(error));
+        }
     }
 
     private async resolvePluginAndToken(

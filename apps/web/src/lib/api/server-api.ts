@@ -11,6 +11,8 @@ import {
     toApiScopeHeader,
 } from '../workspace-scope';
 import type { ActiveScopeResponse } from '@ever-works/contracts/api';
+import { demoErrorKey, demoErrorValues } from '../demo/demo-errors';
+import { getDemoConfig } from '../feature-flags/demo';
 
 export class ApiResponseError extends Error {
     constructor(
@@ -184,6 +186,18 @@ export async function serverFetch<T>(
         } catch (e) {
             errorMessage = await response.text().catch(() => null);
             errorMessage = errorMessage?.trim() || null;
+        }
+
+        // Platform demo mode: the API's demo error codes read as a friendly message wherever an
+        // action surfaces `error.message` (a toast), worded by which quota was hit and naming the
+        // instance's sign-up host. Any other code is left exactly as it was.
+        const demoKey = demoErrorKey(errorCode, errorDetails?.quotaScope);
+        if (demoKey) {
+            const { signUpUrl } = await getDemoConfig();
+            errorMessage = (await getTranslations('demo.errors'))(
+                demoKey,
+                demoErrorValues(signUpUrl),
+            );
         }
 
         // Handle authentication errors

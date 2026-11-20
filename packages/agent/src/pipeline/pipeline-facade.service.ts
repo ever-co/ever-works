@@ -51,6 +51,7 @@ import { ContentExtractorFacadeService } from '../facades/content-extractor.faca
 import { DataSourceFacadeService } from '../facades/data-source.facade';
 import { PromptFacadeService } from '../facades/prompt.facade';
 import { AgentMemoryFacadeService } from '../facades/agent-memory.facade';
+import { config } from '../config';
 
 /**
  * Context for binding facades to a specific work/user.
@@ -286,7 +287,7 @@ export class PipelineFacadeService {
 
     private createBoundScreenshotFacade(ctx: FacadeBindingContext): IScreenshotFacade {
         const facade = this.screenshotFacade;
-        return {
+        const bound: IScreenshotFacade = {
             capture: (
                 options: ScreenshotCaptureOptions,
                 _facadeOptions: FacadeOptions,
@@ -317,6 +318,19 @@ export class PipelineFacadeService {
             isAvailable: () => facade.isAvailable(),
             isConfigured: () => facade.isConfigured(),
         };
+        // Platform demo mode only: which provider resolves for THIS Work (null:
+        // none). `isAvailable` only says a screenshot plugin is loaded somewhere on
+        // the instance; the image-capture step skips when none resolves here. With
+        // DEMO unset the bound facade is exactly what it was.
+        if (config.demo.isEnabled()) {
+            bound.getActiveProviderName = (_facadeOptions: FacadeOptions) =>
+                facade.getActiveProviderName({
+                    workId: ctx.workId,
+                    userId: ctx.userId,
+                    providerOverride: ctx.providerOverrides?.screenshot,
+                });
+        }
+        return bound;
     }
 
     private createBoundContentExtractorFacade(ctx: FacadeBindingContext): IContentExtractorFacade {

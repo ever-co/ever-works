@@ -138,18 +138,6 @@ function BodyEditor({ skill }: { skill: Skill }) {
 
     const dirty = body !== skill.instructionsMd;
 
-    useEffect(() => {
-        if (!dirty) return;
-        if (timerRef.current) clearTimeout(timerRef.current);
-        timerRef.current = setTimeout(() => {
-            void persist(body);
-        }, AUTOSAVE_DELAY_MS);
-        return () => {
-            if (timerRef.current) clearTimeout(timerRef.current);
-        };
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [body]);
-
     async function persist(next: string) {
         setStatus('saving');
         setError(null);
@@ -161,6 +149,18 @@ function BodyEditor({ skill }: { skill: Skill }) {
             setStatus('error');
         }
     }
+
+    useEffect(() => {
+        if (!dirty) return;
+        if (timerRef.current) clearTimeout(timerRef.current);
+        timerRef.current = setTimeout(() => {
+            void persist(body);
+        }, AUTOSAVE_DELAY_MS);
+        return () => {
+            if (timerRef.current) clearTimeout(timerRef.current);
+        };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [body]);
 
     return (
         <section className="rounded-xl border border-border/60 dark:border-border-dark/60 bg-card dark:bg-card-primary-dark p-5 space-y-3">

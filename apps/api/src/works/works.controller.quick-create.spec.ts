@@ -79,6 +79,7 @@ function makeController(overrides: {
     formSchema?: unknown;
     formSchemaThrows?: Error;
     retryTarget?: unknown;
+    requiredProvidersThrows?: Error;
 }) {
     const createWork = jest.fn().mockResolvedValue(
         overrides.createWorkResult ?? {
@@ -116,6 +117,9 @@ function makeController(overrides: {
     const findLatestByUserAndCorrelationId = jest
         .fn()
         .mockResolvedValue(overrides.retryTarget ?? null);
+    const validateRequiredProvidersForPipeline = overrides.requiredProvidersThrows
+        ? jest.fn().mockRejectedValue(overrides.requiredProvidersThrows)
+        : jest.fn().mockResolvedValue(undefined);
     const funnel = { emit: jest.fn() };
 
     const controller = new WorksController(
@@ -132,7 +136,7 @@ function makeController(overrides: {
         {} as any,
         {} as any,
         {} as any,
-        { getFormSchema } as any,
+        { getFormSchema, validateRequiredProvidersForPipeline } as any,
         {} as any,
         {} as any,
         {} as any,
@@ -160,6 +164,7 @@ function makeController(overrides: {
         authService,
         getFormSchema,
         findLatestByUserAndCorrelationId,
+        validateRequiredProvidersForPipeline,
         funnel,
     };
 }
@@ -435,5 +440,99 @@ describe('WorksController.quickCreateWork — a retry reuses the Work instead of
 
         expect(findLatestByUserAndCorrelationId).not.toHaveBeenCalled();
         expect(createWork).toHaveBeenCalledTimes(1);
+    });
+});
+
+describe("WorksController.quickCreateWork — the pipeline's required providers are checked before anything is created", () => {
+    // #3252 dropped the upfront refusal for an install with no usable AI/search keys: the run
+    // started and failed later without saying what was missing. The gate is back, on the
+    // providers the selected pipeline REQUIRES (`validateRequiredProvidersForPipeline`, the rule
+    // works-config imports already apply), at USER scope and BEFORE the Work or its managed
+    // repository exists. Platform-level keys count (see the agent spec
+    // `generator-form-schema.required-providers-platform-keys.spec.ts`).
+    const refusal = () =>
+        new BadRequestException({
+            message: 'One or more required providers for the selected pipeline are not available.',
+            providerErrors: {
+                ai: 'Provider "openrouter" is not configured. Visit Settings → Plugins to set it up.',
+                search: 'Provider "tavily" is not configured. Visit Settings → Plugins to set it up.',
+            },
+            resolvedPipelineId: 'agent-pipeline',
+        });
+
+    it('checks the form selection at user scope before creating the Work', async () => {
+        const { controller, getFormSchema, validateRequiredProvidersForPipeline, createWork } =
+            makeController({
+                formSchema: FORM_SCHEMA_WITH_UNCONFIGURED_SEARCH,
+            });
+
+        await (controller as any).quickCreateWork(auth, { ...baseDto, correlationId: 'corr-1' });
+
+        expect(getFormSchema).toHaveBeenCalledWith(undefined, { userId: 'user-1' });
+        expect(validateRequiredProvidersForPipeline).toHaveBeenCalledWith(
+            'agent-pipeline',
+            {
+                pipeline: 'agent-pipeline',
+                search: 'tavily',
+                ai: 'openrouter',
+                contentExtractor: 'local-content-extractor',
+            },
+            { userId: 'user-1' },
+        );
+        expect(validateRequiredProvidersForPipeline.mock.invocationCallOrder[0]).toBeLessThan(
+            createWork.mock.invocationCallOrder[0],
+        );
+    });
+
+    it("a refusal creates nothing and answers with the Generate form's provider envelope", async () => {
+        const {
+            controller,
+            createWork,
+            generateItems,
+            activityLog,
+            funnel,
+            findLatestByUserAndCorrelationId,
+        } = makeController({
+            formSchema: FORM_SCHEMA_WITH_UNCONFIGURED_SEARCH,
+            requiredProvidersThrows: refusal(),
+        });
+
+        const refused = await (controller as any)
+            .quickCreateWork(auth, {
+                ...baseDto,
+                correlationId: 'corr-1',
+            })
+            .then(
+                () => undefined,
+                (error: unknown) => error,
+            );
+
+        expect(refused).toBeInstanceOf(BadRequestException);
+        expect(refused).toMatchObject({
+            response: {
+                message: 'One or more selected providers are not available.',
+                providerErrors: {
+                    ai: expect.stringContaining('openrouter'),
+                    search: expect.stringContaining('tavily'),
+                },
+            },
+        });
+        expect(createWork).not.toHaveBeenCalled();
+        expect(findLatestByUserAndCorrelationId).not.toHaveBeenCalled();
+        expect(generateItems).not.toHaveBeenCalled();
+        expect(activityLog.log).not.toHaveBeenCalled();
+        expect(funnel.emit).not.toHaveBeenCalled();
+    });
+
+    it('starts as before when the required providers are configured', async () => {
+        const { controller, createWork, generateItems } = makeController({
+            formSchema: FORM_SCHEMA_WITH_UNCONFIGURED_SEARCH,
+        });
+
+        const result = await (controller as any).quickCreateWork(auth, baseDto);
+
+        expect(createWork).toHaveBeenCalledTimes(1);
+        expect(generateItems).toHaveBeenCalledTimes(1);
+        expect(result.status).toBe('pending');
     });
 });

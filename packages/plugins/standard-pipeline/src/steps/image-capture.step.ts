@@ -3,6 +3,7 @@ import { isSafeWebhookUrl } from '@ever-works/plugin/helpers/ssrf-guard';
 import type { MutableGenerationContext } from '../context/index.js';
 import { BasePipelineStep } from '../base-pipeline-step.js';
 import { sanitizeErrorForUser } from '../utils/error.utils.js';
+import { isDemoMode } from '../utils/demo.utils.js';
 
 const IMAGE_CAPTURE_DELAY_MS = 500;
 
@@ -23,6 +24,14 @@ export class ImageCaptureStep extends BasePipelineStep {
 		const { work, request, finalItems, domainAnalysis } = context;
 		const { logger, screenshotFacade } = execContext;
 		const config = request.config || {};
+
+		// Platform demo mode: screenshots are off on a demo (design §5.2.4), so the step skips
+		// whatever the request asks and whatever provider would resolve: an auto-enabled system
+		// default (Gotenberg) always does. Items keep their placeholders; nothing to configure.
+		if (isDemoMode()) {
+			logger.log(`[${work.slug}] Demo mode: screenshots are off, skipping image capture`);
+			return context;
+		}
 
 		const facadeOptions: FacadeOptions = {
 			userId: execContext.user!.id,

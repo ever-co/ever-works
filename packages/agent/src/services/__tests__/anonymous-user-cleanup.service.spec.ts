@@ -269,6 +269,49 @@ describe('AnonymousUserCleanupService (EW-617 G2)', () => {
         });
     });
 
+    // Platform demo mode — the demo sweeper purges one expired sandbox at a time, through the
+    // same per-user body `purgeExpired` runs for every expired anonymous user.
+    describe('purgeUser (one user)', () => {
+        it('deletes the row after its files, and reports what it removed', async () => {
+            const storage = { deleteAllByOwner: jest.fn(async () => ({ deleted: 3 })) };
+            const { service, userRepository } = buildService(storage);
+
+            const outcome = await service.purgeUser({ id: 'u-1' } as never);
+
+            expect(outcome).toEqual({ deleted: true, storageDeleted: 3, storageFailed: false });
+            expect(storage.deleteAllByOwner).toHaveBeenCalledWith('u-1');
+            expect(userRepository.deleteAnonymous).toHaveBeenCalledWith('u-1');
+            expect(storage.deleteAllByOwner.mock.invocationCallOrder[0]).toBeLessThan(
+                userRepository.deleteAnonymous.mock.invocationCallOrder[0],
+            );
+            expect(userRepository.findExpiredAnonymous).not.toHaveBeenCalled();
+        });
+
+        it('still deletes the row when the file clean-up fails', async () => {
+            const storage = { deleteAllByOwner: jest.fn().mockRejectedValue(new Error('s3 5xx')) };
+            const { service, userRepository } = buildService(storage);
+
+            const outcome = await service.purgeUser({ id: 'u-1' } as never);
+
+            expect(outcome).toEqual({ deleted: true, storageDeleted: 0, storageFailed: true });
+            expect(userRepository.deleteAnonymous).toHaveBeenCalledWith('u-1');
+        });
+
+        it('answers the failure, without throwing, when the row cannot be deleted', async () => {
+            const { service, userRepository } = buildService(undefined);
+            userRepository.deleteAnonymous.mockRejectedValue(new Error('fk constraint'));
+
+            const outcome = await service.purgeUser({ id: 'u-1' } as never);
+
+            expect(outcome).toEqual({
+                deleted: false,
+                storageDeleted: 0,
+                storageFailed: false,
+                error: 'fk constraint',
+            });
+        });
+    });
+
     describe('shared folder hand-over without the folder repositories wired', () => {
         it('deletes exactly as before', async () => {
             // `buildService` wires no folder repositories and its user

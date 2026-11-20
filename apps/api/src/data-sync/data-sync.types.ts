@@ -36,8 +36,11 @@ export type SyncSource = SyncEventSource;
 /**
  * Why a sync attempt was skipped (logged on the `data-sync.skipped`
  * activity row). The three gate ids in `runDataSync` map to the first
- * three values here; `no-changes` and `app-not-installed-and-no-credentials`
- * are emitted upstream by the dispatcher before the lock attempt.
+ * three values here. The render gate emits `data-repo-empty` (the data
+ * repository has no `data/` directory yet) and
+ * `app-not-installed-and-no-credentials` (the owner has no connected account
+ * for the git provider), each at most once per skip-noise window;
+ * `no-changes` is reserved for a dispatcher HEAD pre-check.
  */
 export type SyncReason = SyncEventSkipReason;
 

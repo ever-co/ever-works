@@ -273,6 +273,11 @@ export class GitHubPlugin implements IPlugin, IGitProviderPlugin, IOAuthPlugin, 
 		return this.apiService.hasRepositoryAccess(owner, repo, token, settings.apiBaseUrl);
 	}
 
+	async addRepositoryTopics(owner: string, repo: string, topics: readonly string[], token: string): Promise<void> {
+		const settings = await this.getSettings();
+		return this.apiService.addRepositoryTopics(owner, repo, topics, token, settings.apiBaseUrl);
+	}
+
 	async getRepositoryIdentity(owner: string, repo: string, token: string): Promise<GitRepositoryIdentity | null> {
 		const settings = await this.getSettings();
 		return this.apiService.getRepositoryIdentity(owner, repo, token, settings.apiBaseUrl);

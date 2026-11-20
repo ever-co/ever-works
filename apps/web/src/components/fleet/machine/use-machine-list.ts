@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useLatestRef } from '@/lib/hooks/use-latest-ref';
 import type { FleetLinkError } from '@ever-works/contracts';
 import type { MachineCallResult } from './use-machine-action';
 
@@ -19,8 +20,7 @@ export function useMachineList<T>(load: () => Promise<MachineCallResult<T>>, int
     const [error, setError] = useState<FleetLinkError | null>(null);
     const [loading, setLoading] = useState(true);
     const [slow, setSlow] = useState(false);
-    const loadRef = useRef(load);
-    loadRef.current = load;
+    const loadRef = useLatestRef(load);
     const inFlight = useRef(false);
 
     const refresh = useCallback(async () => {
@@ -43,7 +43,7 @@ export function useMachineList<T>(load: () => Promise<MachineCallResult<T>>, int
             setLoading(false);
             inFlight.current = false;
         }
-    }, []);
+    }, [loadRef]);
 
     useEffect(() => {
         void refresh();

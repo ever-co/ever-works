@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { useChatContext } from './ChatProvider';
+import { useDemoErrorMessage } from '@/lib/demo/use-demo-error-message';
 import { ChatToolbar } from './ChatToolbar';
 import { ChatMessages } from './ChatMessages';
 import { ChatInput } from './ChatInput';
@@ -43,6 +44,7 @@ function AssistantChatInterface({ onSwitch }: { onSwitch?: () => void }) {
         setSelectedProvider,
     } = useChatContext();
 
+    const demoErrorMessage = useDemoErrorMessage();
     const [showHistory, setShowHistory] = useState(false);
     const isStreaming = status === 'streaming' || status === 'submitted';
 
@@ -71,7 +73,7 @@ function AssistantChatInterface({ onSwitch }: { onSwitch?: () => void }) {
 
                 {error && (
                     <div className="px-4 py-2 text-xs text-danger bg-danger/5 border-t border-danger/10">
-                        {error.message}
+                        {demoErrorMessage(error) ?? error.message}
                     </div>
                 )}
 

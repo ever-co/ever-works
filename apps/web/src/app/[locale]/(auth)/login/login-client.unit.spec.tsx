@@ -160,3 +160,51 @@ describe('LoginClient — signed-out notices (S6, S7)', () => {
         expect(screen.queryByTestId('ever-id-signed-out-notice')).not.toBeInTheDocument();
     });
 });
+
+vi.mock('@/components/demo/DemoLoginCard', () => ({
+    DemoLoginCard: ({ ttlHours, expired }: { ttlHours: number; expired?: boolean }) => (
+        <div data-testid="demo-card">{`ttl=${ttlHours} expired=${String(Boolean(expired))}`}</div>
+    ),
+}));
+
+describe('LoginClient — demo mode', () => {
+    beforeEach(() => {
+        mocks.search = new URLSearchParams();
+    });
+    afterEach(() => cleanup());
+
+    it('shows no demo card and no operator disclosure when demo is off', () => {
+        render(<LoginClient availableSocialProviders={[]} magicLinkEnabled={false} />);
+        expect(screen.queryByTestId('demo-card')).not.toBeInTheDocument();
+        expect(screen.queryByTestId('demo-operator-login')).not.toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Sign in' })).toBeInTheDocument();
+    });
+
+    it('puts the demo card above the form, collapsed under Operator login', () => {
+        render(
+            <LoginClient
+                availableSocialProviders={[]}
+                magicLinkEnabled={false}
+                demo={{ ttlHours: 24 }}
+            />,
+        );
+        expect(screen.getByTestId('demo-card')).toHaveTextContent('ttl=24 expired=false');
+        const details = screen.getByTestId('demo-operator-login');
+        expect(details.tagName).toBe('DETAILS');
+        expect(details).not.toHaveAttribute('open');
+        expect(screen.getByText('Operator login')).toBeInTheDocument();
+        expect(details.contains(screen.getByLabelText(/email/i))).toBe(true);
+    });
+
+    it('passes expired through when the URL says demo=expired', () => {
+        mocks.search = new URLSearchParams('demo=expired');
+        render(
+            <LoginClient
+                availableSocialProviders={[]}
+                magicLinkEnabled={false}
+                demo={{ ttlHours: 24 }}
+            />,
+        );
+        expect(screen.getByTestId('demo-card')).toHaveTextContent('expired=true');
+    });
+});

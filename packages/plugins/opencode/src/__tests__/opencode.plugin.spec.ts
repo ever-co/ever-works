@@ -479,6 +479,39 @@ describe('OpenCodePlugin', () => {
 			expect(result.warnings![0]).toContain('Max turns reached');
 		});
 
+		it('fails cleanly, without throwing, when the provider config has no API key (a demo instance)', async () => {
+			// On DEMO=true the AI facade reports the forced openrouter provider
+			// with `apiKey` omitted, so OpenCode never gets a key to call a
+			// model outside the facade and its quota.
+			const { executeOpenCode } = await import('../utils/process-runner');
+			const demoConfig = {
+				providerId: 'openrouter',
+				providerName: 'OpenRouter',
+				baseUrl: 'https://openrouter.ai/api/v1',
+				apiKey: undefined,
+				defaultModel: 'google/gemma-4-31b-it:free',
+				routing: { complexModel: 'deepseek/deepseek-r3:free' }
+			};
+			const getProviderConfig = vi.fn().mockResolvedValue(demoConfig);
+			await plugin.onLoad(createMockContext());
+
+			const result = await plugin.execute(work, request, existing, {
+				execContext: createExecContext({ aiFacade: { getProviderConfig } })
+			});
+			const edit = await plugin.executeCodeEdit(
+				{ instruction: 'x' } as never,
+				{
+					execContext: { aiFacade: { getProviderConfig }, userId: 'user1', workId: 'dir1' }
+				} as never
+			);
+
+			expect(result.success).toBe(false);
+			expect(String(result.error)).toContain('missing baseUrl or apiKey');
+			expect(edit.success).toBe(false);
+			expect(getProviderConfig).toHaveBeenCalledTimes(2);
+			expect(executeOpenCode).not.toHaveBeenCalled();
+		});
+
 		it('should require execContext and still succeed when screenshot facade throws', async () => {
 			const ctx = createMockContext();
 			await plugin.onLoad(ctx);

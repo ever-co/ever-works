@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import {
     Repository,
     IsNull,
+    Not,
     Brackets,
     Raw,
     LessThanOrEqual,
@@ -312,6 +313,14 @@ export class WorkRepository {
             const status = (w.generateStatus as { status?: string } | null | undefined)?.status;
             return status !== 'DELETED' && status !== 'ARCHIVED';
         }).length;
+    }
+
+    /**
+     * How many of `userId`'s own Works have a repository (`sourceRepository` set).
+     * A draft or Project Work has none. Platform demo mode caps a sandbox on it.
+     */
+    async countRepositoryBackedWorks(userId: string): Promise<number> {
+        return this.repository.count({ where: { userId, sourceRepository: Not(IsNull()) } });
     }
 
     async update(id: string, updateData: Partial<Work>): Promise<Work | null> {

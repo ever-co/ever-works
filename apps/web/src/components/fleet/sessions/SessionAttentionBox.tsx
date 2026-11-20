@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState, type KeyboardEvent, type MutableRefObject } from 'react';
+import { useEffect, useState, type KeyboardEvent, type MutableRefObject } from 'react';
 import { useTranslations } from 'next-intl';
 import type { FleetSessionAttention, FleetSessionView } from '@ever-works/contracts';
 import { Button } from '@/components/ui/button';
@@ -47,7 +47,8 @@ export function SessionAttentionBox({
         key: 'alreadyAnswered' | 'unreachable' | 'killSwitch' | 'other';
         hint: string | null;
     } | null>(null);
-    const lastAnswer = useRef<{ optionId?: string; text?: string } | null>(null);
+    // State, not a ref: it decides whether the Retry button renders.
+    const [lastAnswer, setLastAnswer] = useState<{ optionId?: string; text?: string } | null>(null);
     const disabled = busy || killSwitchOn || problem?.key === 'alreadyAnswered';
     const permission = attention.reason === 'permission';
     const primary = attention.options.find((option) => option.primary) ?? attention.options[0];
@@ -55,7 +56,7 @@ export function SessionAttentionBox({
 
     const send = async (answer: { optionId?: string; text?: string }) => {
         if (disabled) return;
-        lastAnswer.current = answer;
+        setLastAnswer(answer);
         setBusy(true);
         setProblem(null);
         const result = await sessionsClient.answer(session.id, {
@@ -202,12 +203,8 @@ export function SessionAttentionBox({
                                 ? t('killSwitch')
                                 : (problem.hint ?? t('failed'))}
                     </span>
-                    {problem.key === 'unreachable' && lastAnswer.current && (
-                        <Button
-                            size="sm"
-                            variant="ghost"
-                            onClick={() => void send(lastAnswer.current ?? {})}
-                        >
+                    {problem.key === 'unreachable' && lastAnswer && (
+                        <Button size="sm" variant="ghost" onClick={() => void send(lastAnswer)}>
                             {t('retry')}
                         </Button>
                     )}
