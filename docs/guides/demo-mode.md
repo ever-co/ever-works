@@ -111,7 +111,7 @@ The Ever Works git provider creates every repository in `EVER_WORKS_CUSTOMERS_GI
 ## Local try-out
 
 ```bash
-DEMO=true EVER_WORKS_PROJECT_WORKS_ENABLED=true DATABASE_TYPE=sqlite pnpm dev:api
+DEMO=true EVER_WORKS_PROJECT_WORKS_ENABLED=true DATABASE_TYPE=sqlite DATABASE_PATH=./data/demo.sqlite DATABASE_AUTOMIGRATE=true RUN_MIGRATIONS=false pnpm dev:api
 ```
 
 With git storage off, "Start the demo" works but Generate cannot create repositories.
