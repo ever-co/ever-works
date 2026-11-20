@@ -31,15 +31,21 @@ export function deduplicateByField<T extends { [K in F]?: string | null | undefi
  * 2. strip `http://` / `https://`
  * 3. strip leading `www.`
  * 4. strip trailing slash(es)
- * 5. **strip GitHub branch paths** — `/tree/<branch>/...` and
- *    `/blob/<branch>/...` are removed so `github.com/foo/bar`,
- *    `github.com/foo/bar/tree/main`, and
+ * 5. strip fragments (`#...`)
+ * 6. **drop tracking query parameters** (`utm_*`, `fbclid`, `gclid`,
+ *    `msclkid`, `srsltid`) and sort the remaining ones, so
+ *    `example.com/x?utm_source=a` and `example.com/x` are the same
+ *    item and `?b=1&a=2` equals `?a=2&b=1`. Other parameters are kept:
+ *    they can identify a different page (`?id=7`).
+ * 7. strip trailing slash(es)
+ * 8. **strip GitHub branch paths** — `/tree/<branch>/...` and
+ *    `/blob/<branch>/...` are removed (with any query) so
+ *    `github.com/foo/bar`, `github.com/foo/bar/tree/main`, and
  *    `github.com/foo/bar/blob/main/README.md` all collapse to the
  *    same canonical `github.com/foo/bar`. This is intentional —
  *    consumers should treat any deep link into a repo as a duplicate
  *    of the repo itself when ingesting items.
- * 6. strip fragments (`#...`)
- * 7. strip `/index.html|htm|php|asp|aspx` filenames
+ * 9. strip `/index.html|htm|php|asp|aspx` filenames
  *
  * Returns `''` for empty / falsy input.
  */
@@ -50,16 +56,49 @@ export function normalizeUrl(url: string): string {
 		.toLowerCase()
 		.trim()
 		.replace(/^https?:\/\//, '')
-		.replace(/^www\./, '')
-		.replace(/(?<!\/)\/+$/, '')
-		// `/tree/<ref>…` / `/blob/<ref>…` to the end: ONE non-slash after the segment, then
-		// anything, so no two quantifiers share characters (`[^/]+.*` did, and `.` stopping at a
-		// newline made every start retry — CodeQL js/polynomial-redos).
-		.replace(/\/(tree|blob)\/[^/][\s\S]*$/, '');
+		.replace(/^www\./, '');
 	// The fragment by index, not `/#.*$/`, which is retried from every `#` before a newline.
 	const hash = normalized.indexOf('#');
 	if (hash !== -1) normalized = normalized.slice(0, hash);
-	return normalized.replace(/\/index\.(html?|php|aspx?)$/, '');
+
+	let query = '';
+	const queryStart = normalized.indexOf('?');
+	if (queryStart !== -1) {
+		query = cleanQueryString(normalized.slice(queryStart + 1));
+		normalized = normalized.slice(0, queryStart);
+	}
+
+	const trimmed = normalized.replace(/(?<!\/)\/+$/, '');
+	// `/tree/<ref>…` / `/blob/<ref>…` to the end: ONE non-slash after the segment, then
+	// anything, so no two quantifiers share characters (`[^/]+.*` did, and `.` stopping at a
+	// newline made every start retry — CodeQL js/polynomial-redos).
+	const path = trimmed.replace(/\/(tree|blob)\/[^/][\s\S]*$/, '');
+	// A repo deep link is the repo: its query goes with the branch path.
+	if (path !== trimmed) query = '';
+
+	return path.replace(/\/index\.(html?|php|aspx?)$/, '') + (query ? `?${query}` : '');
+}
+
+const TRACKING_PARAM_PREFIXES = ['utm_'];
+const TRACKING_PARAM_NAMES = new Set(['fbclid', 'gclid', 'msclkid', 'srsltid']);
+
+/** True for query parameters that only carry campaign / click tracking, never page identity. */
+export function isTrackingQueryParam(key: string): boolean {
+	const lower = key.toLowerCase();
+	return TRACKING_PARAM_NAMES.has(lower) || TRACKING_PARAM_PREFIXES.some((prefix) => lower.startsWith(prefix));
+}
+
+/** Drop tracking and empty pairs from a raw query string (no leading `?`) and sort the rest. */
+function cleanQueryString(query: string): string {
+	return query
+		.split('&')
+		.filter((pair) => {
+			if (!pair) return false;
+			const eq = pair.indexOf('=');
+			return !isTrackingQueryParam(eq === -1 ? pair : pair.slice(0, eq));
+		})
+		.sort()
+		.join('&');
 }
 
 /**

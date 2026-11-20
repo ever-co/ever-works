@@ -92,7 +92,47 @@ describe('normalizeUrl', () => {
 		expect(normalizeUrl('https://github.com/u/r/tree/main#readme')).toBe('github.com/u/r');
 	});
 
+	it('drops tracking query parameters so a tagged link equals the plain one', () => {
+		expect(normalizeUrl('https://example.com/tool?utm_source=news&utm_medium=email')).toBe('example.com/tool');
+		expect(normalizeUrl('https://example.com/?utm_campaign=x')).toBe('example.com');
+		expect(normalizeUrl('https://example.com/tool/?fbclid=abc#top')).toBe('example.com/tool');
+		expect(normalizeUrl('https://example.com/tool?UTM_Source=x&gclid=1&msclkid=2&srsltid=3')).toBe(
+			'example.com/tool'
+		);
+	});
+
+	it('keeps parameters that identify the page, in a stable order', () => {
+		expect(normalizeUrl('https://example.com/item?id=7&utm_source=x')).toBe('example.com/item?id=7');
+		expect(normalizeUrl('https://example.com/item?id=7')).not.toBe(
+			normalizeUrl('https://example.com/item?id=8')
+		);
+		expect(normalizeUrl('https://example.com/s?b=1&a=2')).toBe(normalizeUrl('https://example.com/s?a=2&b=1'));
+		expect(normalizeUrl('https://example.com/s?&&a=2&')).toBe('example.com/s?a=2');
+	});
+
+	it('does not treat look-alike names as tracking', () => {
+		expect(normalizeUrl('https://example.com/p?utmost=1')).toBe('example.com/p?utmost=1');
+		expect(normalizeUrl('https://example.com/p?ref=home')).toBe('example.com/p?ref=home');
+	});
+
+	it('drops the query with a repo branch path', () => {
+		expect(normalizeUrl('https://github.com/u/r/tree/main?tab=readme')).toBe('github.com/u/r');
+	});
+
+	it('treats a tagged URL as a duplicate of the stored one', () => {
+		const index = createItemLookupIndex([
+			item({ name: 'Tool', slug: 'tool', source_url: 'https://example.com/tool' })
+		]);
+		const tagged = item({
+			name: 'Other',
+			slug: 'other',
+			source_url: 'https://www.example.com/tool/?utm_source=x'
+		});
+		expect(isItemDuplicate(tagged, index)).toBe(true);
+	});
+
 	it('stays linear on hostile input (CodeQL js/polynomial-redos)', () => {
+		normalizeUrl(`x?${'&'.repeat(50_000)}`);
 		const started = Date.now();
 		normalizeUrl(`${'#'.repeat(50_000)}\nx`);
 		// The slash stops `[^/]+` while `.` stops at the newline: the old pattern's worst case.
