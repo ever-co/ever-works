@@ -5,9 +5,11 @@ import { DemoAiQuotaService } from '../demo-ai-quota.service';
 /**
  * Platform demo mode — the DB-backed AI quota behind `DEMO_AI_QUOTA`.
  *
- * Three fixed-window counters, checked in this order: the instance's minute
- * (`ai:min:<YYYY-MM-DDTHH:MM>`, 18), the instance's UTC day (`ai:day:<YYYY-MM-DD>`, 900) and the
- * caller's sandbox (`ai:sandbox:<userId>`, 120 per TTL, window = `anonymousExpiresAt`).
+ * Three fixed-window counters: the instance's minute (`ai:min:<YYYY-MM-DDTHH:MM>`, 18), the
+ * instance's UTC day (`ai:day:<YYYY-MM-DD>`, 900) and the caller's sandbox
+ * (`ai:sandbox:<userId>`, 120 per TTL, window = `anonymousExpiresAt`). Ruling R11: the day and
+ * the sandbox are read first and a used-up one refuses with nothing counted; then the minute is
+ * counted (busy stops there); then the day and the sandbox.
  */
 
 /** `DemoUsageCounterRepository` in memory, with the real one's window rules. */
@@ -152,7 +154,7 @@ describe('DemoAiQuotaService', () => {
         ).resolves.toBeUndefined();
     });
 
-    it('checks the minute first: a busy call is not charged to the day or the sandbox', async () => {
+    it('a busy refusal is charged to neither the day nor the sandbox', async () => {
         const now = new Date('2026-11-20T08:00:00.000Z');
         for (let i = 0; i < 18; i += 1) await service.consume('sandbox-0', now);
         for (let i = 0; i < 5; i += 1) {
@@ -163,6 +165,43 @@ describe('DemoAiQuotaService', () => {
 
         expect(counters.count('ai:day:2026-11-20')).toBe(18);
         expect(counters.count('ai:sandbox:sandbox-0')).toBe(18);
+    });
+
+    it('a spent sandbox retrying 30× in one minute takes no minute slot from anyone else (R11)', async () => {
+        await callN(120, () => 'sandbox-0');
+        const minute = '2026-11-20T09:00';
+        const inMinute = (second: number) =>
+            new Date(`${minute}:${String(second).padStart(2, '0')}.000Z`);
+
+        for (let i = 0; i < 30; i += 1) {
+            const refusal = await service
+                .consume('sandbox-0', inMinute(i))
+                .catch((e: unknown) => e);
+            expect(refusal).toBeInstanceOf(DemoQuotaExceededError);
+            expect((refusal as DemoQuotaExceededError).scope).toBe('sandbox');
+        }
+        expect(counters.count(`ai:min:${minute}`)).toBe(0);
+
+        // Another visitor still has the whole minute: 18 calls go through.
+        for (let i = 0; i < 18; i += 1) {
+            await expect(service.consume('sandbox-1', inMinute(30 + i))).resolves.toBeUndefined();
+        }
+        expect(counters.count(`ai:min:${minute}`)).toBe(18);
+    });
+
+    it('a used-up day refuses without counting the minute either', async () => {
+        await callN(900, (i) => `sandbox-${i % 10}`);
+        const minute = '2026-11-20T10:00';
+
+        for (let i = 0; i < 30; i += 1) {
+            await expect(
+                service.consume(
+                    undefined,
+                    new Date(`${minute}:${String(i).padStart(2, '0')}.000Z`),
+                ),
+            ).rejects.toMatchObject({ scope: 'day' });
+        }
+        expect(counters.count(`ai:min:${minute}`)).toBe(0);
     });
 
     it('a spent sandbox does not use up the instance day with refused calls', async () => {

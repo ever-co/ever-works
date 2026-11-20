@@ -18,21 +18,26 @@ const SANDBOX_WINDOW_CACHE_MAX = 1_000;
  * `demo_usage_counters` so every API pod and (through the remote proxy) every Trigger
  * worker share one count.
  *
- * Three fixed windows, checked in this order:
- *   1. `ai:min:<YYYY-MM-DDTHH:MM>` — the instance's minute (`DEMO_AI_REQUESTS_PER_MINUTE`,
- *      under OpenRouter's 20/min free limit). Over it: `DemoRateLimitedError` carrying the
- *      milliseconds left in the minute. A busy call is charged to nothing else.
- *   2. `ai:day:<YYYY-MM-DD>` — the instance's UTC day (`DEMO_AI_REQUESTS_PER_DAY`); the
- *      window ends at the next UTC midnight. Over it: `DemoQuotaExceededError('day')`.
- *   3. `ai:sandbox:<userId>` — the visitor's sandbox (`DEMO_AI_REQUESTS_PER_SANDBOX`); the
- *      window is the user's `anonymousExpiresAt`. Over it, or past that TTL (fail closed):
- *      `DemoQuotaExceededError('sandbox')`. Skipped for system work (`userId` undefined) and
- *      for a user with no `anonymousExpiresAt` (an operator, or a row already gone).
+ * Three fixed windows:
+ *   - `ai:day:<YYYY-MM-DD>` — the instance's UTC day (`DEMO_AI_REQUESTS_PER_DAY`); the
+ *     window ends at the next UTC midnight. Over it: `DemoQuotaExceededError('day')`.
+ *   - `ai:sandbox:<userId>` — the visitor's sandbox (`DEMO_AI_REQUESTS_PER_SANDBOX`); the
+ *     window is the user's `anonymousExpiresAt`. Over it, or past that TTL (fail closed):
+ *     `DemoQuotaExceededError('sandbox')`. Skipped for system work (`userId` undefined) and
+ *     for a user with no `anonymousExpiresAt` (an operator, or a row already gone).
+ *   - `ai:min:<YYYY-MM-DDTHH:MM>` — the instance's minute (`DEMO_AI_REQUESTS_PER_MINUTE`,
+ *     under OpenRouter's 20/min free limit). Over it: `DemoRateLimitedError` carrying the
+ *     milliseconds left in the minute.
  *
- * The day and the sandbox are both read before either is charged, so a refused call
- * spends nothing: a spent sandbox that keeps retrying must not use up the instance's day.
- * Calls racing past those reads can overshoot a cap by the calls in flight, which the
- * minute limit bounds.
+ * A refused call is charged to nothing (ruling R11):
+ *   1. the day and the sandbox are READ first; a used-up one refuses before anything is
+ *      counted, so a spent sandbox retrying cannot take the minute's slots (everyone else
+ *      would see "busy") nor the instance's day;
+ *   2. then the minute is counted (atomic increment); a busy call stops there, so it costs
+ *      the day and the sandbox nothing;
+ *   3. then the day and the sandbox are counted, each re-checked against its cap.
+ * Calls racing past the reads in step 1 can overshoot a cap by the calls in flight, which the
+ * minute limit bounds; step 3 still refuses the ones that land over it.
  */
 @Injectable()
 export class DemoAiQuotaService implements DemoAiQuotaPort {
@@ -44,18 +49,13 @@ export class DemoAiQuotaService implements DemoAiQuotaPort {
     ) {}
 
     async consume(userId: string | undefined, now: Date = new Date()): Promise<void> {
-        const minuteEndsAt = new Date((Math.floor(now.getTime() / MINUTE_MS) + 1) * MINUTE_MS);
-        const inMinute = await this.counters.increment(minuteKeyOf(now), minuteEndsAt, now);
-        if (inMinute > config.demo.aiRequestsPerMinute()) {
-            throw new DemoRateLimitedError(minuteEndsAt.getTime() - now.getTime());
-        }
-
         const perDay = config.demo.aiRequestsPerDay();
         const perSandbox = config.demo.aiRequestsPerSandbox();
         const dayKey = dayKeyOf(now);
         const sandboxEndsAt = userId ? await this.sandboxWindowEnd(userId) : null;
         const sandboxKey = `ai:sandbox:${userId}`;
 
+        // 1. Read the day and the sandbox: a used-up one refuses with nothing counted.
         const [usedToday, usedInSandbox] = await Promise.all([
             this.counters.peek(dayKey, now),
             sandboxEndsAt ? this.counters.peek(sandboxKey, now) : 0,
@@ -68,6 +68,14 @@ export class DemoAiQuotaService implements DemoAiQuotaPort {
             throw new DemoQuotaExceededError('sandbox');
         }
 
+        // 2. Count the minute: a busy call stops here, charged to neither the day nor the sandbox.
+        const minuteEndsAt = new Date((Math.floor(now.getTime() / MINUTE_MS) + 1) * MINUTE_MS);
+        const inMinute = await this.counters.increment(minuteKeyOf(now), minuteEndsAt, now);
+        if (inMinute > config.demo.aiRequestsPerMinute()) {
+            throw new DemoRateLimitedError(minuteEndsAt.getTime() - now.getTime());
+        }
+
+        // 3. Count the day and the sandbox, each re-checked (a call that lost a race to the cap).
         if ((await this.counters.increment(dayKey, nextUtcMidnight(now), now)) > perDay) {
             throw new DemoQuotaExceededError('day');
         }
