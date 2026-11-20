@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { ImageCaptureStep } from '../steps/image-capture.step';
 import type { StepExecutionContext, WorkReference, GenerationRequest, MutableItemData } from '@ever-works/plugin';
 import type { MutableGenerationContext } from '../context/index.js';
@@ -103,40 +103,72 @@ describe('ImageCaptureStep', () => {
 			expect(result).toBe(mockContext);
 		});
 
-		// The service is available on the instance (a screenshot plugin is loaded) but none
-		// resolves for this Work: nothing enabled for the user, no key — the demo's case.
-		// Every capture would fail, one 500 ms pause each, so the step skips instead.
-		it('should skip, capturing nothing, when no screenshot provider resolves for the Work', async () => {
-			mockExecContext.screenshotFacade.getActiveProviderName = vi.fn().mockResolvedValue(null);
+		// Platform demo mode (`DEMO`): a screenshot plugin is loaded on the instance (so the
+		// service is "available") but none resolves for the Work — nothing enabled, no key, the
+		// demo sets none. Every capture would fail, one 500 ms pause each, so the step skips.
+		describe('platform demo mode, no screenshot provider resolving for the Work', () => {
+			afterEach(() => {
+				vi.unstubAllEnvs();
+			});
 
-			const result = await step.run(mockContext, mockExecContext);
+			it('with DEMO on, skips, capturing nothing', async () => {
+				vi.stubEnv('DEMO', 'true');
+				mockExecContext.screenshotFacade.getActiveProviderName = vi.fn().mockResolvedValue(null);
 
-			expect(mockExecContext.screenshotFacade.getActiveProviderName).toHaveBeenCalledWith(expectedFacadeOptions);
-			expect(mockExecContext.screenshotFacade.getSmartImage).not.toHaveBeenCalled();
-			expect(result).toBe(mockContext);
-			expect(result.finalItems[0].images).toBeUndefined();
-			expect(result.warnings).toEqual([
-				'Screenshot provider is not configured. Enable a screenshot plugin to capture item images.'
-			]);
-		});
+				const result = await step.run(mockContext, mockExecContext);
 
-		it('should capture as before when the facade cannot name its provider', async () => {
-			delete (mockExecContext.screenshotFacade as { getActiveProviderName?: unknown }).getActiveProviderName;
+				expect(mockExecContext.screenshotFacade.getActiveProviderName).toHaveBeenCalledWith(
+					expectedFacadeOptions
+				);
+				expect(mockExecContext.screenshotFacade.getSmartImage).not.toHaveBeenCalled();
+				expect(result).toBe(mockContext);
+				expect(result.finalItems[0].images).toBeUndefined();
+				expect(result.warnings).toEqual([
+					'Screenshot provider is not configured. Enable a screenshot plugin to capture item images.'
+				]);
+			});
 
-			await step.run(mockContext, mockExecContext);
+			it('with DEMO on, captures as before when the facade cannot name its provider', async () => {
+				vi.stubEnv('DEMO', 'true');
+				delete (mockExecContext.screenshotFacade as { getActiveProviderName?: unknown }).getActiveProviderName;
 
-			expect(mockExecContext.screenshotFacade.getSmartImage).toHaveBeenCalledTimes(1);
-		});
+				await step.run(mockContext, mockExecContext);
 
-		it('should capture as before when resolving the provider fails', async () => {
-			mockExecContext.screenshotFacade.getActiveProviderName = vi
-				.fn()
-				.mockRejectedValueOnce(new Error('db blip'))
-				.mockResolvedValue('ScreenshotOne');
+				expect(mockExecContext.screenshotFacade.getSmartImage).toHaveBeenCalledTimes(1);
+			});
 
-			await step.run(mockContext, mockExecContext);
+			it('with DEMO on, captures as before when resolving the provider fails', async () => {
+				vi.stubEnv('DEMO', 'true');
+				mockExecContext.screenshotFacade.getActiveProviderName = vi
+					.fn()
+					.mockRejectedValueOnce(new Error('db blip'))
+					.mockResolvedValue('ScreenshotOne');
 
-			expect(mockExecContext.screenshotFacade.getSmartImage).toHaveBeenCalledTimes(1);
+				await step.run(mockContext, mockExecContext);
+
+				expect(mockExecContext.screenshotFacade.getSmartImage).toHaveBeenCalledTimes(1);
+			});
+
+			it.each([[undefined], ['false'], ['']])(
+				'with DEMO unset (%s), behaves exactly as before: tries every capture',
+				async (demo) => {
+					if (demo === undefined) vi.stubEnv('DEMO', undefined);
+					else vi.stubEnv('DEMO', demo);
+					mockExecContext.screenshotFacade.getActiveProviderName = vi.fn().mockResolvedValue(null);
+					mockExecContext.screenshotFacade.getSmartImage = vi
+						.fn()
+						.mockRejectedValue(new Error('No screenshot provider'));
+
+					const result = await step.run(mockContext, mockExecContext);
+
+					expect(mockExecContext.screenshotFacade.getSmartImage).toHaveBeenCalledTimes(1);
+					// Only the failure label asks for the provider name, as before.
+					expect(mockExecContext.screenshotFacade.getActiveProviderName).toHaveBeenCalledTimes(1);
+					expect(result.warnings).toEqual([
+						'Screenshot capture failed for 1 item(s): No screenshot provider'
+					]);
+				}
+			);
 		});
 
 		it('should skip when no domain analysis is available', async () => {

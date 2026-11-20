@@ -3,6 +3,7 @@ import { isSafeWebhookUrl } from '@ever-works/plugin/helpers/ssrf-guard';
 import type { MutableGenerationContext } from '../context/index.js';
 import { BasePipelineStep } from '../base-pipeline-step.js';
 import { sanitizeErrorForUser } from '../utils/error.utils.js';
+import { isDemoMode } from '../utils/demo.utils.js';
 
 const IMAGE_CAPTURE_DELAY_MS = 500;
 
@@ -34,7 +35,10 @@ export class ImageCaptureStep extends BasePipelineStep {
 			return context;
 		}
 
-		if (!screenshotFacade.isAvailable() || !(await this.providerResolves(execContext, facadeOptions))) {
+		if (
+			!screenshotFacade.isAvailable() ||
+			(isDemoMode() && !(await this.providerResolves(execContext, facadeOptions)))
+		) {
 			logger.warn(`[${work.slug}] Screenshot service not configured, skipping image capture`);
 			this.addWarning(
 				context,
@@ -114,10 +118,11 @@ export class ImageCaptureStep extends BasePipelineStep {
 	}
 
 	/**
-	 * Whether a screenshot provider resolves for this Work. `isAvailable()` only says
-	 * one is loaded on the instance; with none enabled for the Work (the demo sets
-	 * none) every capture would fail, a pause each. A facade that cannot name its
-	 * provider, or a lookup that fails, is taken as "resolves": capture as before.
+	 * Platform demo mode only: whether a screenshot provider resolves for this Work.
+	 * `isAvailable()` only says one is loaded on the instance; with none enabled for the
+	 * Work (the demo sets none) every capture would fail, a pause each. A facade that
+	 * cannot name its provider, or a lookup that fails, is taken as "resolves": capture
+	 * as before. With `DEMO` unset the step never asks.
 	 */
 	private async providerResolves(execContext: StepExecutionContext, facadeOptions: FacadeOptions): Promise<boolean> {
 		const { screenshotFacade } = execContext;

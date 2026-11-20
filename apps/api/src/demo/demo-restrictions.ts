@@ -160,6 +160,14 @@ export const DEMO_BLOCKED_ROUTES: ReadonlyArray<DemoBlockedRoute> = [
     { method: 'POST', path: /^\/api\/works\/[^/]+\/invitations$/i, feature: 'invitations by email', scope: 'demo-users', when: mailsAnInvitation },
     { method: 'POST', path: /^\/api\/works\/[^/]+\/members$/i, feature: 'invitations by email', scope: 'demo-users' },
 
+    // Repositories brought in from elsewhere — demo users. A demo Work's only repository is the
+    // `demo-` one the platform provisions (create / Generate), within the sandbox's Works cap and
+    // the sweeper's reach; an import, onboarding or template copy would make Works or
+    // repositories outside both.
+    { method: 'POST', path: /^\/api\/works\/import$/i, feature: 'importing a repository', scope: 'demo-users' },
+    { method: 'POST', path: /^\/api\/github-app\/installations\/[^/]+\/repositories\/[^/]+\/onboard$/i, feature: 'importing a repository', scope: 'demo-users' },
+    { method: 'POST', path: /^\/api\/templates\/(fork|custom-from-base)$/i, feature: 'copying a template repository', scope: 'demo-users' },
+
     // The account itself (the sweeper deletes a sandbox) and its data — demo users.
     { method: 'POST', path: /^\/api\/auth\/claim$/i, feature: 'account claim', scope: 'demo-users' },
     { method: 'POST', path: /^\/api\/auth\/update-password$/i, feature: 'password change', scope: 'demo-users' },

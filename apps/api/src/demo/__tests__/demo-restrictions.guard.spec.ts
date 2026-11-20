@@ -208,6 +208,14 @@ describe('DemoRestrictionsGuard', () => {
             ['PUT', '/api/works/w-1/repositories/visibility', 'repository visibility'],
             ['POST', '/api/device-auth/codex/start', 'device sign-in'],
             ['GET', '/api/device-auth/codex/status', 'device sign-in'],
+            ['POST', '/api/works/import', 'importing a repository'],
+            [
+                'POST',
+                '/api/github-app/installations/inst-1/repositories/repo-1/onboard',
+                'importing a repository',
+            ],
+            ['POST', '/api/templates/fork', 'copying a template repository'],
+            ['POST', '/api/templates/custom-from-base', 'copying a template repository'],
         ])('refuses %s %s (%s)', async (method, path, feature) => {
             const { guard } = guardWith();
 
@@ -398,6 +406,8 @@ describe('DemoRestrictionsGuard', () => {
                 ['GET', '/api/oauth/github/connect/url'],
                 ['GET', '/api/oauth/github/callback/plugins'],
                 ['POST', '/api/deploy/works/w-1'],
+                ['POST', '/api/works/import'],
+                ['POST', '/api/templates/fork'],
                 ['POST', '/api/auth/login'],
             ]) {
                 await expect(
