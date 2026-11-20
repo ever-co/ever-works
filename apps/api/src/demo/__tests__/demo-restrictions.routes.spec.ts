@@ -232,6 +232,8 @@ const MUST_STAY_OPEN: { method: string; path: string; body?: unknown }[] = [
     // that serves an already-captured one, are not captures.
     { method: 'GET', path: '/api/screenshot/check-availability' },
     { method: 'GET', path: '/api/screenshot/image/sample.png' },
+    // R42 d refuses accepting a claim; the claim landing page's preview stays public.
+    { method: 'GET', path: '/api/claim/preview' },
 ];
 
 if (process.env[CHILD_FLAG] === undefined) {
@@ -314,6 +316,12 @@ if (process.env[CHILD_FLAG] === undefined) {
                 'POST /api/screenshot/capture ScreenshotController.capture',
                 'POST /api/screenshot/get-url ScreenshotController.getScreenshotUrl',
                 'POST /api/works/:id/bulk-capture-images WorksController.bulkCaptureImages',
+            ]);
+        });
+
+        it('R42 d: the claim row reaches exactly the accept handler', () => {
+            expect(handlersOf('accepting a Work invitation')).toEqual([
+                'POST /api/claim/accept ClaimController.accept',
             ]);
         });
 

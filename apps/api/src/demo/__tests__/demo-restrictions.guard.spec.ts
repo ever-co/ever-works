@@ -248,6 +248,8 @@ describe('DemoRestrictionsGuard', () => {
             ['POST', '/api/screenshot/capture', 'screenshots'],
             ['POST', '/api/screenshot/get-url', 'screenshots'],
             ['POST', '/api/works/w-1/bulk-capture-images', 'screenshots'],
+            // R42 d: joining another account's Work (an operator's mailed member invitation).
+            ['POST', '/api/claim/accept', 'accepting a Work invitation'],
         ])('refuses %s %s (%s)', async (method, path, feature) => {
             const { guard } = guardWith();
 
@@ -497,6 +499,7 @@ describe('DemoRestrictionsGuard', () => {
                 ['POST', '/api/screenshot/capture'],
                 ['POST', '/api/screenshot/get-url'],
                 ['POST', '/api/works/w-1/bulk-capture-images'],
+                ['POST', '/api/claim/accept'],
                 ['POST', '/api/auth/login'],
             ]) {
                 await expect(

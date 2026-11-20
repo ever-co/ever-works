@@ -184,6 +184,11 @@ export const DEMO_BLOCKED_ROUTES: ReadonlyArray<DemoBlockedRoute> = [
     // repositories out of the demo org to their git login (`ClaimController`), beyond the sweeper.
     { method: 'POST', path: /^\/api\/works\/[^/]+\/invitations$/i, feature: 'Work invitations and transfer', scope: 'demo-users' },
     { method: 'POST', path: /^\/api\/works\/[^/]+\/members$/i, feature: 'invitations by email', scope: 'demo-users' },
+    // Accepting one (R42 d): a sandbox never joins another account's Work. An operator's mailed
+    // member invitation would make a demo user a member of the operator's Work, and the sandbox
+    // purge deletes rows by the sandbox's `userId` across every table, that membership included.
+    // The claim page's public preview stays open.
+    { method: 'POST', path: /^\/api\/claim\/accept$/i, feature: 'accepting a Work invitation', scope: 'demo-users' },
 
     // Public pages: a share link publishes the workspace's board on the demo host (R38). Turning
     // sharing off, deleting the share and the owner's own preview stay open.
