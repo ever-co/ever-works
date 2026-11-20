@@ -5,7 +5,7 @@ import { WorkOwnershipService } from '@ever-works/agent/services';
 import { PluginRegistryService, PluginSettingsService } from '@ever-works/agent/plugins';
 import { PLUGIN_CAPABILITIES } from '@ever-works/plugin';
 import type { RegisteredPlugin } from '@ever-works/agent/plugins';
-import type { JsonSchema, ProviderOption } from '@ever-works/plugin';
+import type { IScreenshotPlugin, JsonSchema, ProviderOption } from '@ever-works/plugin';
 import { CurrentUser, AuthSessionGuard } from '../../auth';
 import { AuthenticatedUser } from '../../auth/types/auth.types';
 import { CaptureScreenshotDto, GetScreenshotUrlDto } from './dto/screenshot.dto';
@@ -97,6 +97,7 @@ export class ScreenshotController {
         const activePluginId = activeProvider?.plugin.id ?? null;
 
         const providers: ProviderOption[] = [];
+        const systemProviderIds = new Set<string>();
 
         for (const registered of enabledPlugins) {
             const settings = await this.pluginSettings.getSettings(registered.plugin.id, {
@@ -105,10 +106,10 @@ export class ScreenshotController {
                 includeSecrets: true,
             });
 
-            const configured = this.hasAllRequiredSettings(
-                registered.plugin.settingsSchema,
-                settings,
-            );
+            const configured =
+                this.hasAllRequiredSettings(registered.plugin.settingsSchema, settings) &&
+                (await this.isSystemProviderSetUp(registered));
+            if (registered.manifest.systemPlugin) systemProviderIds.add(registered.plugin.id);
             providers.push(this.toProviderOption(registered, activePluginId, configured));
         }
 
@@ -128,13 +129,38 @@ export class ScreenshotController {
             return left.name.localeCompare(right.name);
         });
 
-        return {
-            providers,
-            activeProvider:
-                providers.find((provider) => provider.id === activePluginId) ??
-                providers.find((provider) => provider.isDefault) ??
-                null,
-        };
+        let active: ProviderOption | null =
+            providers.find((provider) => provider.id === activePluginId) ??
+            providers.find((provider) => provider.isDefault) ??
+            null;
+        // Mirrors ScreenshotFacadeService.resolvePlugin: a system default that
+        // is not set up on this instance gives way to the next enabled provider.
+        if (active && !active.configured && systemProviderIds.has(active.id)) {
+            const unusable = active.id;
+            active =
+                providers.find((provider) => provider.id !== unusable && provider.configured) ??
+                active;
+        }
+
+        return { providers, activeProvider: active };
+    }
+
+    /**
+     * A SYSTEM plugin (the self-hosted Gotenberg default) is set up by the
+     * operator, globally, so its own `isAvailable()` is the truth — it answers
+     * false where PLUGIN_GOTENBERG_BASE_URL is unset. Hybrid / bring-your-own-
+     * key plugins keep the settings-based check: their `isAvailable()` reads
+     * only global settings and would hide a user's own key.
+     */
+    private async isSystemProviderSetUp(registered: RegisteredPlugin): Promise<boolean> {
+        if (!registered.manifest.systemPlugin) return true;
+        const isAvailable = (registered.plugin as Partial<IScreenshotPlugin>).isAvailable;
+        if (typeof isAvailable !== 'function') return true;
+        try {
+            return await isAvailable.call(registered.plugin);
+        } catch {
+            return false;
+        }
     }
 
     @Get('/check-availability')

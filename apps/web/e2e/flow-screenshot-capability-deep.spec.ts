@@ -126,15 +126,30 @@ async function checkAvailability(
     };
 }
 
+/**
+ * The auto-enabled system default (self-hosted Gotenberg). It is configured
+ * only where the stack sets PLUGIN_GOTENBERG_BASE_URL.
+ */
+const SYSTEM_DEFAULT_ID = 'gotenberg';
+
+/**
+ * POST a capture / get-url. The user-scope calls here exercise ScreenshotOne's
+ * signed-URL builder, so a call that names no provider and no Work is pinned
+ * to it: otherwise a stack WITH Gotenberg set up would route it there.
+ */
 async function postScreenshot(
     request: APIRequestContext,
     token: string,
     op: 'capture' | 'get-url',
     data: Record<string, unknown>,
 ): Promise<{ status: number; body: Record<string, unknown> }> {
+    const pinned =
+        data.providerOverride === undefined && data.workId === undefined
+            ? { ...data, providerOverride: 'screenshotone' }
+            : data;
     const res = await request.post(`${API_BASE}/api/screenshot/${op}`, {
         headers: authedHeaders(token),
-        data,
+        data: pinned,
     });
     return {
         status: res.status(),
@@ -356,7 +371,20 @@ test.describe('Screenshot capability — deep: URL-security, signed-url matrix, 
 
         const beforeAvail = await checkAvailability(request, token, work.id);
         expect(beforeAvail.status, 'owner can view their own work scope → 200').toBe(200);
-        expect(beforeAvail.body.available, 'work scope has no provider').toBe(false);
+        // The user-scope ScreenshotOne does not leak into the Work scope; only
+        // the system default may be listed there.
+        expect(
+            beforeAvail.body.providers.map((p) => p.id),
+            'the user-scope provider is not in the work scope',
+        ).not.toContain('screenshotone');
+        const systemDefaultSetUp = beforeAvail.body.providers.some(
+            (p) => p.id === SYSTEM_DEFAULT_ID && p.configured,
+        );
+        expect(beforeAvail.body.available, 'work scope has no provider of its own').toBe(
+            systemDefaultSetUp,
+        );
+        // The "no provider" gate below exists only where no provider is set up.
+        if (systemDefaultSetUp) return;
 
         const res = await postScreenshot(request, token, 'get-url', {
             url: 'https://example.com',

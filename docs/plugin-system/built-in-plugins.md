@@ -28,7 +28,7 @@ Counted from each package's `everworks.plugin.category` field.
 | `storage`               | 4     | `aws-s3`, `github-storage`, `local-fs`, `minio`                                                                                                                                                                                         |
 | `metrics`               | 4     | `custom-http-metrics`, `google-analytics-metrics`, `posthog-metrics`, `stripe-metrics`                                                                                                                                                  |
 | `vector-store`          | 2     | `pgvector`, `qdrant`                                                                                                                                                                                                                    |
-| `screenshot`            | 2     | `screenshotone`, `urlbox`                                                                                                                                                                                                               |
+| `screenshot`            | 3     | `gotenberg`, `screenshotone`, `urlbox`                                                                                                                                                                                                  |
 | `deployment`            | 2     | `k8s`, `vercel`                                                                                                                                                                                                                         |
 | `git-provider`          | 1     | `github`                                                                                                                                                                                                                                |
 | `database`              | 1     | `postgres-db`                                                                                                                                                                                                                           |
@@ -664,9 +664,28 @@ Deploy work websites to any Kubernetes cluster you control as an alternative to 
 
 Screenshot plugins capture website images for work item previews.
 
+### Gotenberg (default)
+
+Website screenshots via a self-hosted, open-source [Gotenberg](https://gotenberg.dev) server. The system default for the `screenshot` capability: no third-party account and no per-screenshot cost. See [Gotenberg Plugin](./gotenberg-plugin.md).
+
+| Field              | Value        |
+| ------------------ | ------------ |
+| Plugin ID          | `gotenberg`  |
+| Configuration Mode | `admin-only` |
+| Auto Enable        | Yes (system) |
+
+**Environment Variables:**
+
+| Variable                    | Required | Description                                                     |
+| --------------------------- | -------- | --------------------------------------------------------------- |
+| `PLUGIN_GOTENBERG_BASE_URL` | No       | Gotenberg URL; without it the plugin is unavailable             |
+| `PLUGIN_GOTENBERG_USERNAME` | No       | Basic-auth username (default `gotenberg`)                       |
+| `PLUGIN_GOTENBERG_TOKEN`    | No       | Basic-auth password                                             |
+| `SCREENSHOT_IMAGE_BASE_URL` | No       | Public API origin; gives captured images signed, cacheable URLs |
+
 ### ScreenshotOne
 
-Website screenshots via the ScreenshotOne API.
+Website screenshots via the paid ScreenshotOne API. Optional: enable it with your own keys if you want its hosted extras (ad, tracker and cookie-banner blocking); it is never the default.
 
 | Field              | Value           |
 | ------------------ | --------------- |
