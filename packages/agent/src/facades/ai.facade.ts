@@ -50,6 +50,7 @@ import {
     DemoFeatureDisabledError,
     DemoModelUnavailableError,
     consumeDemoAiQuota,
+    freeModelSettings,
     isFreeModelId,
     isModelUnavailableError,
     pickFreeModel,
@@ -997,6 +998,9 @@ export class AiFacadeService extends BaseFacadeService implements IAiFacade {
         facadeOptions: FacadeOptions,
         selection: TranscribeSelectionOptions = {},
     ): Promise<TranscriptionResponse> {
+        // Platform demo mode: no free transcription route exists.
+        if (config.demo.isEnabled()) throw new DemoFeatureDisabledError('transcription');
+
         const plugin = await this.resolveTranscribePlugin(facadeOptions, selection);
 
         const settings = await this.getResolvedSettings(plugin.id, {
@@ -1077,6 +1081,9 @@ export class AiFacadeService extends BaseFacadeService implements IAiFacade {
     async listTranscriptionProviders(
         facadeOptions: FacadeOptions,
     ): Promise<Array<{ id: string; name: string; isActive: boolean }>> {
+        // Platform demo mode: no transcription, so offer no voice provider.
+        if (config.demo.isEnabled()) return [];
+
         const activeId = await this.resolvePlugin<IAiProviderPlugin>(
             undefined,
             facadeOptions.userId,
@@ -1206,13 +1213,20 @@ export class AiFacadeService extends BaseFacadeService implements IAiFacade {
         const startTime = Date.now();
 
         try {
+            // Platform demo mode: OpenRouter only, and `isAvailable` (a
+            // one-line completion with `defaultModel`) only sees free models.
+            const demo = config.demo.isEnabled();
             const plugin = await this.resolvePlugin<IAiProviderPlugin>(
-                facadeOptions.providerOverride,
+                demo ? DEMO_AI_PROVIDER_ID : facadeOptions.providerOverride,
                 facadeOptions.userId,
                 facadeOptions.workId,
             );
 
-            const settings = await this.getResolvedSettings(plugin.id, facadeOptions);
+            let settings = await this.getResolvedSettings(plugin.id, facadeOptions);
+            if (demo) {
+                settings = freeModelSettings(settings).settings;
+                await this.consumeDemoQuota(facadeOptions, 'interactive');
+            }
             const isAvailable = await plugin.isAvailable(settings);
 
             return {

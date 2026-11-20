@@ -38,6 +38,38 @@ export function pickFreeModel(
     throw new DemoModelNotAllowedError(requested ?? '');
 }
 
+const TIERS = ['simple', 'medium', 'complex'] as const;
+
+/**
+ * Provider settings narrowed to their free models, for a check that sends one
+ * request to each model its settings name instead of taking a model (a
+ * connection test, model validation): every tier model that is not free is
+ * dropped, and `defaultModel` becomes the {@link pickFreeModel} choice.
+ * `models` lists the distinct models left, one upstream request each. Throws
+ * {@link DemoModelNotAllowedError} when no model is free. `settings` is not changed.
+ */
+export function freeModelSettings(settings: Record<string, unknown>): {
+    settings: Record<string, unknown>;
+    models: string[];
+} {
+    const free: Record<string, unknown> = { ...settings };
+    const tierModels: string[] = [];
+    let firstFreeTier: (typeof TIERS)[number] | undefined;
+    for (const tier of TIERS) {
+        const value = settings[`${tier}Model`];
+        if (typeof value === 'string' && isFreeModelId(value)) {
+            tierModels.push(value);
+            firstFreeTier ??= tier;
+        } else {
+            delete free[`${tier}Model`];
+        }
+    }
+    const requested = typeof settings.defaultModel === 'string' ? settings.defaultModel : undefined;
+    const defaultModel = pickFreeModel(requested, settings, firstFreeTier);
+    free.defaultModel = defaultModel;
+    return { settings: free, models: [...new Set([defaultModel, ...tierModels])] };
+}
+
 /**
  * The provider answered that the model does not exist or has no endpoint —
  * how OpenRouter reports a free model it has withdrawn.

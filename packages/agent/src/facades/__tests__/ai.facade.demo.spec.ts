@@ -94,6 +94,7 @@ function provider(id: string): IAiProviderPlugin {
             };
         }),
         createEmbedding: jest.fn().mockResolvedValue({ model: 'e', embeddings: [[0.1]] }),
+        transcribe: jest.fn().mockResolvedValue({ text: 'hi', model: 'whisper-x' }),
         listModels: jest.fn().mockResolvedValue([]),
         getModel: jest.fn().mockResolvedValue(null),
         getCapabilities: jest.fn().mockReturnValue({
@@ -524,6 +525,87 @@ describe('AiFacadeService — demo mode', () => {
         });
     });
 
+    describe('transcription', () => {
+        const audio = { file: Buffer.from('audio'), filename: 'a.webm' };
+
+        it('transcribe → DemoFeatureDisabledError without resolving or calling a plugin', async () => {
+            const error = await build()
+                .transcribe(audio, { ...USER, providerOverride: 'anthropic' })
+                .catch((e) => e);
+
+            expect(error).toBeInstanceOf(DemoFeatureDisabledError);
+            expect(error.feature).toBe('transcription');
+            expect(registry.get).not.toHaveBeenCalled();
+            expect(registry.getByCapability).not.toHaveBeenCalled();
+            expect(openrouter.transcribe).not.toHaveBeenCalled();
+            expect(anthropic.transcribe).not.toHaveBeenCalled();
+            expect(quota.consume).not.toHaveBeenCalled();
+        });
+
+        it('lists no voice provider, so clients hide dictation', async () => {
+            await expect(build().listTranscriptionProviders(USER)).resolves.toEqual([]);
+            expect(registry.getByCapability).not.toHaveBeenCalled();
+        });
+    });
+
+    describe('testConnection', () => {
+        const isAvailableSettings = (plugin: IAiProviderPlugin) =>
+            (plugin.isAvailable as jest.Mock).mock.calls[0][0] as Record<string, unknown>;
+
+        it('tests openrouter with free models only, counted once', async () => {
+            settingsByPlugin.openrouter = {
+                ...FREE_SETTINGS,
+                mediumModel: 'openai/gpt-6.1-sol',
+            };
+
+            const result = await build().testConnection({
+                ...USER,
+                providerOverride: 'anthropic',
+            });
+
+            expect(result).toMatchObject({ success: true, provider: 'openrouter' });
+            expect(anthropic.isAvailable).not.toHaveBeenCalled();
+            const sent = isAvailableSettings(openrouter);
+            expect(sent.defaultModel).toBe(FREE_SETTINGS.defaultModel);
+            expect(sent).not.toHaveProperty('mediumModel');
+            expect(quota.consume).toHaveBeenCalledTimes(1);
+            expect(quota.consume).toHaveBeenCalledWith(USER.userId);
+        });
+
+        it('a paid default model is replaced by a free tier model', async () => {
+            settingsByPlugin.openrouter = {
+                apiKey: 'k',
+                defaultModel: 'openai/gpt-6.1-sol',
+                simpleModel: FREE_SETTINGS.simpleModel,
+            };
+
+            await build().testConnection(USER);
+
+            expect(isAvailableSettings(openrouter).defaultModel).toBe(FREE_SETTINGS.simpleModel);
+        });
+
+        it('fails closed with no free model: nothing sent, nothing counted', async () => {
+            settingsByPlugin.openrouter = { apiKey: 'k', defaultModel: 'openai/gpt-6.1-sol' };
+
+            const result = await build().testConnection(USER);
+
+            expect(result.success).toBe(false);
+            expect(result.error).toBe(new DemoModelNotAllowedError('openai/gpt-6.1-sol').message);
+            expect(openrouter.isAvailable).not.toHaveBeenCalled();
+            expect(quota.consume).not.toHaveBeenCalled();
+        });
+
+        it('a used-up quota means no upstream test', async () => {
+            quota.consume.mockRejectedValue(new DemoQuotaExceededError('day'));
+
+            const result = await build().testConnection(USER);
+
+            expect(result.success).toBe(false);
+            expect(result.error).toBe(new DemoQuotaExceededError('day').message);
+            expect(openrouter.isAvailable).not.toHaveBeenCalled();
+        });
+    });
+
     describe('with DEMO unset', () => {
         beforeEach(() => {
             delete process.env.DEMO;
@@ -551,6 +633,26 @@ describe('AiFacadeService — demo mode', () => {
             );
             expect(embedded.embeddings).toEqual([[0.1]]);
             expect(openrouter.askJson).not.toHaveBeenCalled();
+            expect(quota.consume).not.toHaveBeenCalled();
+        });
+
+        it('transcribe and testConnection use the resolved provider and its own settings', async () => {
+            const service = build();
+
+            const transcript = await service.transcribe(
+                { file: Buffer.from('audio'), filename: 'a.webm' },
+                USER,
+            );
+            const tested = await service.testConnection({
+                ...USER,
+                providerOverride: 'anthropic',
+            });
+
+            expect(transcript.text).toBe('hi');
+            expect(anthropic.transcribe).toHaveBeenCalledTimes(1);
+            expect(tested).toMatchObject({ success: true, provider: 'anthropic' });
+            expect((anthropic.isAvailable as jest.Mock).mock.calls[0][0]).toEqual(PAID_SETTINGS);
+            expect(openrouter.isAvailable).not.toHaveBeenCalled();
             expect(quota.consume).not.toHaveBeenCalled();
         });
 

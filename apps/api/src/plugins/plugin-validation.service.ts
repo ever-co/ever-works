@@ -1,11 +1,27 @@
-import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import {
+    BadRequestException,
+    Inject,
+    Injectable,
+    Logger,
+    NotFoundException,
+    Optional,
+} from '@nestjs/common';
 import {
     PluginRegistryService,
     PluginSettingsService,
     pluginLoadFailure,
 } from '@ever-works/agent/plugins';
 import { GitFacadeService } from '@ever-works/agent/facades';
-import { ConnectionValidationResult } from '@ever-works/plugin';
+import { config } from '@ever-works/agent/config';
+import {
+    DEMO_AI_PROVIDER_ID,
+    DEMO_AI_QUOTA,
+    DemoFeatureDisabledError,
+    consumeDemoAiQuota,
+    freeModelSettings,
+    type DemoAiQuotaPort,
+} from '@ever-works/agent/demo';
+import { ConnectionValidationResult, PLUGIN_CAPABILITIES } from '@ever-works/plugin';
 
 @Injectable()
 export class PluginValidationService {
@@ -15,7 +31,32 @@ export class PluginValidationService {
         private readonly pluginRegistry: PluginRegistryService,
         private readonly pluginSettingsService: PluginSettingsService,
         private readonly gitFacade: GitFacadeService,
+        // Platform demo mode — counts each model an AI connection check calls.
+        @Optional() @Inject(DEMO_AI_QUOTA) private readonly demoQuota?: DemoAiQuotaPort,
     ) {}
+
+    /**
+     * Platform demo mode — an AI provider's connection check sends a one-line
+     * completion to every model its settings name. Only `openrouter` may be
+     * checked, with its `:free` models only (fail closed when it has none),
+     * each counted against the demo AI quota. Returns the settings to check with.
+     */
+    private async demoAiCheckSettings(
+        pluginId: string,
+        settings: Record<string, unknown>,
+        userId: string,
+    ): Promise<Record<string, unknown>> {
+        if (pluginId !== DEMO_AI_PROVIDER_ID) {
+            throw new DemoFeatureDisabledError('ai-provider-connection-check');
+        }
+        const free = freeModelSettings(settings);
+        if (this.demoQuota) {
+            for (const _model of free.models) {
+                await consumeDemoAiQuota(this.demoQuota, userId, 'interactive');
+            }
+        }
+        return free.settings;
+    }
 
     /**
      * Resolve the REAL plugin instance behind a possibly-lazy registry stub.
@@ -144,11 +185,17 @@ export class PluginValidationService {
             throw new NotFoundException(`Plugin not found or not loaded: ${pluginId}`);
         }
 
-        const settings = await this.pluginSettingsService.getSettings(pluginId, {
+        let settings = await this.pluginSettingsService.getSettings(pluginId, {
             userId,
             workId,
             includeSecrets: true,
         });
+        if (
+            config.demo.isEnabled() &&
+            registered.plugin.capabilities.includes(PLUGIN_CAPABILITIES.AI_PROVIDER)
+        ) {
+            settings = await this.demoAiCheckSettings(pluginId, settings, userId);
+        }
 
         // Probe the REAL instance — lazy stubs over-report optional methods
         // (see getRealPlugin). A plugin whose onLoad failed on this first use

@@ -6,6 +6,7 @@ import {
     DemoModelUnavailableError,
     DemoQuotaExceededError,
     DemoRateLimitedError,
+    freeModelSettings,
     isFreeModelId,
     isModelUnavailableError,
     pickFreeModel,
@@ -82,6 +83,53 @@ describe('demo AI policy', () => {
                 ),
             ).toThrow(DemoModelNotAllowedError);
             expect(() => pickFreeModel(undefined, {}, 'simple')).toThrow(DemoModelNotAllowedError);
+        });
+    });
+
+    describe('freeModelSettings', () => {
+        it('keeps free models, drops paid tiers, and lists each distinct model once', () => {
+            const result = freeModelSettings({
+                apiKey: 'k',
+                defaultModel: 'b:free',
+                simpleModel: 'b:free',
+                mediumModel: 'paid/medium',
+                complexModel: 'a:free',
+            });
+
+            expect(result.settings).toEqual({
+                apiKey: 'k',
+                defaultModel: 'b:free',
+                simpleModel: 'b:free',
+                complexModel: 'a:free',
+            });
+            expect(result.models).toEqual(['b:free', 'a:free']);
+        });
+
+        it('replaces a paid default with the first free tier model', () => {
+            const result = freeModelSettings({
+                defaultModel: 'paid/default',
+                simpleModel: 'paid/simple',
+                mediumModel: 'm:free',
+            });
+
+            expect(result.settings.defaultModel).toBe('m:free');
+            expect(result.settings).not.toHaveProperty('simpleModel');
+            expect(result.models).toEqual(['m:free']);
+        });
+
+        it('does not change the settings it was given', () => {
+            const settings = { defaultModel: 'b:free', mediumModel: 'paid/medium' };
+
+            freeModelSettings(settings);
+
+            expect(settings).toEqual({ defaultModel: 'b:free', mediumModel: 'paid/medium' });
+        });
+
+        it('throws DemoModelNotAllowedError when no model is free', () => {
+            expect(() =>
+                freeModelSettings({ defaultModel: 'paid/default', complexModel: 'paid/complex' }),
+            ).toThrow(DemoModelNotAllowedError);
+            expect(() => freeModelSettings({})).toThrow(DemoModelNotAllowedError);
         });
     });
 
