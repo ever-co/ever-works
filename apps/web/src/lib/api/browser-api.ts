@@ -3,6 +3,7 @@ import {
     parseWorkspacePath,
     serializeWorkspaceScope,
 } from '../workspace-scope';
+import { reportDemoErrorResponse } from '../demo/demo-client-errors';
 
 /**
  * Stamp the per-tab workspace selector onto an outgoing header set.
@@ -48,5 +49,12 @@ export function browserApiFetch(
         throw new Error('browserApiFetch requires a browser workspace path');
     }
 
-    return fetch(input, { ...init, headers: applyBrowserWorkspaceScope(init.headers) });
+    return fetch(input, { ...init, headers: applyBrowserWorkspaceScope(init.headers) }).then(
+        (response) => {
+            // Platform demo mode: a demo error code becomes a friendly toast; the caller still
+            // gets the untouched response.
+            reportDemoErrorResponse(response);
+            return response;
+        },
+    );
 }

@@ -7,6 +7,7 @@ import { API_URL } from '@/lib/constants';
 import { getAuthAccessCookie } from '@/lib/auth/cookies';
 import { saveConversationMessages, type MessageUsage } from '@/lib/ai/persistence';
 import { applyBffWorkspaceScope } from '@/lib/api/bff-scope';
+import { chatStreamErrorText } from '@/lib/demo/demo-errors';
 
 export const maxDuration = 60;
 
@@ -231,6 +232,9 @@ export async function POST(request: Request) {
     return result.toUIMessageStreamResponse({
         originalMessages: messages,
         consumeSseStream: consumeStream,
+        // Demo mode: keep the API's demo status/code/retryAfterMs on the stream (the client maps it
+        // to a friendly message); any other error stays the SDK's default text.
+        onError: chatStreamErrorText,
         onFinish: ({ messages: allMessages }) => {
             if (conversationId) {
                 saveConversationMessages({

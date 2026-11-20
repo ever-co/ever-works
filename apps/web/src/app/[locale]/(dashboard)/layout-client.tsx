@@ -44,6 +44,7 @@ import type { OAuthConnectionInfo } from '@/lib/api/plugins-capabilities/oauth';
 import type { GitProviderConnectionInfo } from '@/lib/api/plugins-capabilities/git-providers';
 import type { PluginDeviceAuthStatus } from '@/lib/api/plugins-capabilities/device-auth';
 import type { ApiVersion } from '@/lib/api/version';
+import { DemoErrorToaster } from '@/components/demo/DemoErrorToaster';
 import { DemoStrip, type DemoStripProps } from '@/components/demo/DemoStrip';
 import { JobRuntimeDegradedBanner } from '@/components/dashboard/JobRuntimeDegradedBanner';
 import { ScrollTopOnNavigate } from '@/components/dashboard/ScrollTopOnNavigate';
@@ -678,7 +679,12 @@ export function DashboardLayoutClient({
                                     style={isChatExpanded ? mainStyle : undefined}
                                     aria-hidden={isChatExpanded}
                                 >
-                                    {demoStrip && <DemoStrip {...demoStrip} />}
+                                    {demoStrip && (
+                                        <>
+                                            <DemoErrorToaster />
+                                            <DemoStrip {...demoStrip} />
+                                        </>
+                                    )}
                                     <DashboardHeader
                                         user={user}
                                         onMenuClick={() => setSidebarOpen(!sidebarOpen)}
