@@ -26,8 +26,15 @@ import {
     ActivityActionType,
     ActivityLog,
     Agent,
+    AgentRun,
+    AgentRunLog,
+    Conversation,
+    ConversationMessage,
+    ConversationParticipant,
     DomainEvent,
     Goal,
+    GoalEvent,
+    GoalMetricSample,
     GoalOutcome,
     GoalStatus,
     Mission,
@@ -47,15 +54,24 @@ import {
 import { ActivityLogService } from '@ever-works/agent/activity-log';
 import {
     AgentFileService,
+    AgentRunRepository,
     AgentTemplatesService,
     AgentsService,
     OnboardingRoleSeedingService,
+    QUEUED_REASON_CONCURRENCY,
 } from '@ever-works/agent/agents';
+import { config } from '@ever-works/agent/config';
+import { ConversationRepository } from '@ever-works/agent/database';
 import { DomainEventsModule } from '@ever-works/agent/domain-events';
 import { EverWorksGitProvider } from '@ever-works/agent/ever-works-providers';
 import { AiFacadeService, GitFacadeService } from '@ever-works/agent/facades';
-import { GoalsService } from '@ever-works/agent/goals';
-import { MissionsService } from '@ever-works/agent/missions';
+import {
+    GOAL_ITERATION_LABEL,
+    GoalEvaluationService,
+    GoalOrchestratorService,
+    GoalsService,
+} from '@ever-works/agent/goals';
+import { MISSION_TASK_LABEL, MissionsService } from '@ever-works/agent/missions';
 import { NotificationService } from '@ever-works/agent/notifications';
 import { RecordAccessPolicy, RecordVisibilityService } from '@ever-works/agent/record-visibility';
 import {
@@ -90,6 +106,7 @@ import { ScopeContextService } from '../../scope/scope-context.service';
 import { ScopeStampingSubscriber } from '../../scope/scope-stamping.subscriber';
 import { TenantBootstrapService } from '../../scope/tenant-bootstrap.service';
 import { UsernameAllocatorService } from '../../users/services/username-allocator.service';
+import { loadDemoRecordedFixture } from '../seed/demo-recorded-seeder';
 import {
     DemoSandboxSeederService,
     type DemoSeedSummary,
@@ -182,6 +199,17 @@ function inertDouble(name: string, calls: string[]): object {
 }
 
 const PROJECT_WORKS_ENV = 'EVER_WORKS_PROJECT_WORKS_ENABLED';
+
+/** The only model id the recorded runs and chat replies name (design §5.2.3: a free model). */
+const RECORDED_MODEL = 'google/gemma-4-31b-it:free';
+
+const hasLabel = (task: Task, label: string): boolean => (task.labels ?? []).includes(label);
+
+/** A Task the Task-6 fixture filed by hand: neither a Goal iteration nor a Mission's plan. */
+const isHandFiled = (task: Task): boolean =>
+    !hasLabel(task, GOAL_ITERATION_LABEL) && !hasLabel(task, MISSION_TASK_LABEL);
+
+const MINUTE = 60_000;
 
 describe('DemoSandboxSeederService', () => {
     let moduleRef: TestingModule;
@@ -302,10 +330,15 @@ describe('DemoSandboxSeederService', () => {
         });
     }
 
-    async function seedTimed(user: User): Promise<{ summary: DemoSeedSummary; ms: number }> {
+    /** One seeded sandbox: its user, what the seeder answered, and when the seed ran. */
+    type Seeded = { user: User; summary: DemoSeedSummary; startedAt: Date; endedAt: Date };
+
+    async function seedTimed(user: User): Promise<Seeded & { ms: number }> {
+        const startedAt = new Date();
         const started = performance.now();
         const summary = await seeder.seed(user);
-        return { summary, ms: performance.now() - started };
+        const ms = performance.now() - started;
+        return { user, summary, ms, startedAt, endedAt: new Date() };
     }
 
     const timings: number[] = [];
@@ -314,8 +347,8 @@ describe('DemoSandboxSeederService', () => {
     let probeHeard = false;
     /** The outbox rows (`domain_events`) the first sandbox's seed wrote: what the relay publishes. */
     let firstDomainEvents: DomainEvent[];
-    let first: { user: User; summary: DemoSeedSummary };
-    let second: { user: User; summary: DemoSeedSummary };
+    let first: Seeded;
+    let second: Seeded;
 
     const lastOutboxSeq = async (): Promise<number> =>
         Number(
@@ -343,8 +376,8 @@ describe('DemoSandboxSeederService', () => {
         emitter.offAny(record);
 
         timings.push(a.ms, b.ms);
-        first = { user: firstUser, summary: a.summary };
-        second = { user: secondUser, summary: b.summary };
+        first = a;
+        second = b;
         firstDomainEvents = await rows(DomainEvent).find({
             where: { outboxSeq: Between(before + 1, after) },
             order: { outboxSeq: 'ASC' },
@@ -352,6 +385,69 @@ describe('DemoSandboxSeederService', () => {
     });
 
     const rows = <T extends object>(entity: new () => T) => dataSource.getRepository<T>(entity);
+
+    /** What the recorded-examples seeder left in one sandbox, read back from the database. */
+    async function recordedRows(sandbox: Seeded) {
+        const userId = sandbox.user.id;
+        const goal = await rows(Goal).findOneByOrFail({
+            userId,
+            title: 'Publish the launch blog post',
+        });
+        const mission = await rows(Mission).findOneByOrFail({
+            userId,
+            title: 'Ship the launch site',
+        });
+        const tasks = await rows(Task).find({ where: { userId }, order: { title: 'ASC' } });
+        const runs = await rows(AgentRun).find({ where: { userId }, order: { startedAt: 'ASC' } });
+        const runIds = runs.map((run) => run.id);
+        const logs =
+            runIds.length > 0
+                ? await rows(AgentRunLog).find({
+                      where: { runId: In(runIds) },
+                      order: { createdAt: 'ASC' },
+                  })
+                : [];
+        const conversations = await rows(Conversation).findBy({ userId });
+        const conversationIds = conversations.map((conversation) => conversation.id);
+        const messages =
+            conversationIds.length > 0
+                ? await rows(ConversationMessage).find({
+                      where: { conversationId: In(conversationIds) },
+                      order: { createdAt: 'ASC' },
+                  })
+                : [];
+        const participants =
+            conversationIds.length > 0
+                ? await rows(ConversationParticipant).findBy({
+                      conversationId: In(conversationIds),
+                  })
+                : [];
+        // Recorded entries are dated minutes before the sandbox was created; every row a
+        // domain service wrote while seeding is dated at or after it (to the second on SQLite).
+        const activity = (await rows(ActivityLog).findBy({ userId })).filter(
+            (entry) => entry.createdAt.getTime() < sandbox.startedAt.getTime() - MINUTE,
+        );
+        return {
+            goal,
+            mission,
+            iterationTasks: tasks.filter(
+                (task) => task.goalId === goal.id && hasLabel(task, GOAL_ITERATION_LABEL),
+            ),
+            planTasks: tasks.filter(
+                (task) => task.missionId === mission.id && hasLabel(task, MISSION_TASK_LABEL),
+            ),
+            runs,
+            logs,
+            goalEvents: await rows(GoalEvent).find({
+                where: { goalId: goal.id },
+                order: { createdAt: 'ASC' },
+            }),
+            conversations,
+            messages,
+            participants,
+            activity,
+        };
+    }
 
     describe('one sandbox', () => {
         it('creates one Organization the visitor administers, on its own Tenant, and lands on it', async () => {
@@ -463,8 +559,9 @@ describe('DemoSandboxSeederService', () => {
             expect(links).toHaveLength(3);
         });
 
-        it('creates the eight Tasks across the Goals, each with one or two comments', async () => {
-            const tasks = await rows(Task).findBy({ userId: first.user.id });
+        it('creates the eight hand-filed Tasks across the Goals, each with one or two comments', async () => {
+            // The recorded examples add the Goal's iterations and the Mission's plan (below).
+            const tasks = (await rows(Task).findBy({ userId: first.user.id })).filter(isHandFiled);
             expect(tasks).toHaveLength(8);
             const goals = await rows(Goal).findBy({ userId: first.user.id });
             const goalTitle = new Map(goals.map((goal) => [goal.id, goal.title]));
@@ -518,9 +615,11 @@ describe('DemoSandboxSeederService', () => {
                 userId: first.user.id,
                 actionType: ActivityActionType.TASK_TRANSITIONED,
             });
-            expect(created).toBe(8);
-            // todo → in_progress (×5), in_progress → done (×4).
-            expect(moved).toBe(9);
+            // 8 hand-filed Tasks, 2 Goal iterations, 3 planned by the Mission.
+            expect(created).toBe(13);
+            // Hand-filed: todo → in_progress (×5), in_progress → done (×4). Recorded: both
+            // iterations and one planned Task walk todo → in_progress → done (×3 each way).
+            expect(moved).toBe(15);
         });
 
         it('writes three short knowledge notes to the Organization', async () => {
@@ -534,9 +633,252 @@ describe('DemoSandboxSeederService', () => {
                 'Voice and tone',
             ]);
         });
+    });
 
-        it('leaves the recorded goal to the recorded-examples seeder', () => {
-            expect(first.summary.recordedGoalId).toBeNull();
+    describe('recorded examples', () => {
+        const fixture = loadDemoRecordedFixture();
+
+        it('answers the completed Goal "Publish the launch blog post" as the recorded Goal', async () => {
+            const { goal } = await recordedRows(first);
+            expect(first.summary.recordedGoalId).toBe(goal.id);
+            expect(goal.status).toBe(GoalStatus.COMPLETED);
+        });
+
+        it('gives that Goal two done iterations, each with one completed run on a free model at no cost', async () => {
+            const { goal, iterationTasks, runs } = await recordedRows(first);
+            expect(iterationTasks.map((task) => task.title)).toEqual([
+                '[Goal] Publish the launch blog post — iteration 1',
+                '[Goal] Publish the launch blog post — iteration 2',
+            ]);
+            for (const task of iterationTasks) {
+                expect(task.status).toBe(TaskStatus.DONE);
+                expect(task.completedAt).toBeInstanceOf(Date);
+                expect(task.workId).toBe(first.summary.projectWorkId);
+                expect(task.agentId).toBeTruthy();
+                expect(task.organizationId).toBe(first.summary.organizationId);
+
+                const taskRuns = runs.filter((run) => run.taskId === task.id);
+                expect(taskRuns).toHaveLength(1);
+                const [run] = taskRuns;
+                expect(run.status).toBe('completed');
+                expect(run.triggerKind).toBe('task');
+                expect(run.agentId).toBe(task.agentId);
+                expect(run.workId).toBe(first.summary.projectWorkId);
+                expect(run.modelRouting?.model).toBe(RECORDED_MODEL);
+                expect(run.modelRouting?.model.endsWith(':free')).toBe(true);
+                expect(run.costCents).toBe(0);
+                expect(run.summary?.trim()).toBeTruthy();
+                expect(run.finishedAt!.getTime()).toBeGreaterThan(run.startedAt!.getTime());
+                expect(run.durationMs).toBe(run.finishedAt!.getTime() - run.startedAt!.getTime());
+                expect(run.organizationId).toBe(first.summary.organizationId);
+                // The board's run chip reads the Task's latest-run denorm.
+                expect([task.latestRunId, task.latestRunStatus]).toEqual([run.id, 'completed']);
+            }
+            // The loop that ran them is finished: never `running`, so never advanced again.
+            expect(goal.iteration).toBe(2);
+            expect(goal.loopStatus).toBe('done');
+            expect(goal.spentCents).toBe(0);
+        });
+
+        it('gives every recorded run a transcript of messages and tool calls', async () => {
+            const { runs, logs } = await recordedRows(first);
+            expect(runs).toHaveLength(3);
+            for (const run of runs) {
+                const transcript = logs.filter((log) => log.runId === run.id);
+                expect(transcript.length).toBeGreaterThanOrEqual(4);
+                const steps = new Set(transcript.map((log) => log.step));
+                expect(steps).toEqual(
+                    new Set(['user-message', 'assistant-message', 'tool-invocation']),
+                );
+                for (const log of transcript) {
+                    expect(log.message.trim()).toBeTruthy();
+                    expect(log.organizationId).toBe(first.summary.organizationId);
+                    if (log.step === 'tool-invocation') {
+                        expect(typeof log.metadata?.toolName).toBe('string');
+                        expect(typeof log.metadata?.argsPreview).toBe('string');
+                    }
+                }
+            }
+        });
+
+        it("logs the Goal loop's routing, dispatches, Definition-of-Done ticks and completion", async () => {
+            const { goalEvents, iterationTasks, runs } = await recordedRows(first);
+            expect(goalEvents.map((event) => [event.kind, event.iteration])).toEqual([
+                ['route', 1],
+                ['dispatch', 1],
+                ['dod', 1],
+                ['route', 2],
+                ['dispatch', 2],
+                ['dod', 2],
+                ['complete', 2],
+            ]);
+            const dispatches = goalEvents.filter((event) => event.kind === 'dispatch');
+            expect(dispatches.map((event) => event.taskId)).toEqual(
+                iterationTasks.map((task) => task.id),
+            );
+            expect(dispatches.map((event) => event.metadata?.runId)).toEqual(
+                iterationTasks.map((task) => runs.find((run) => run.taskId === task.id)?.id),
+            );
+            // The lines the orchestrator writes when a person ticks a criterion.
+            expect(
+                goalEvents.filter((event) => event.kind === 'dod').map((e) => e.message),
+            ).toEqual([
+                'Criterion "Draft approved by the team" → done — 1 done, 0 waived, 1 open.',
+                'Criterion "Post is live on the Acme blog" → done — 2 done, 0 waived, 0 open.',
+            ]);
+            for (const event of goalEvents) {
+                expect(event.organizationId).toBe(first.summary.organizationId);
+            }
+        });
+
+        it("files the Mission's plan from the fixture, with one finished run", async () => {
+            const { mission, planTasks, runs } = await recordedRows(first);
+            expect(planTasks.map((task) => [task.title, task.status]).sort()).toEqual(
+                fixture.mission.plan.map((entry) => [entry.title, entry.status]).sort(),
+            );
+            expect(planTasks).toHaveLength(3);
+            for (const task of planTasks) {
+                expect(task.missionId).toBe(mission.id);
+                expect(task.workId).toBe(first.summary.projectWorkId);
+            }
+            const planRuns = runs.filter((run) => planTasks.some((task) => task.id === run.taskId));
+            expect(planRuns).toHaveLength(1);
+            expect(planRuns[0].status).toBe('completed');
+            expect(planRuns[0].modelRouting?.model).toBe(RECORDED_MODEL);
+            expect(planRuns[0].costCents).toBe(0);
+        });
+
+        it('opens one Agent chat with four sent messages, the Agent answering the visitor', async () => {
+            const { conversations, messages, participants } = await recordedRows(first);
+            expect(conversations).toHaveLength(1);
+            const [conversation] = conversations;
+            expect(conversation.kind).toBe('direct');
+            expect(conversation.titleSource).toBe('user');
+            expect(conversation.organizationId).toBe(first.summary.organizationId);
+            const agent = await rows(Agent).findOneByOrFail({ id: conversation.agentId! });
+            expect(agent.userId).toBe(first.user.id);
+
+            expect(messages.map((message) => [message.role, message.authorType])).toEqual([
+                ['user', 'user'],
+                ['assistant', 'agent'],
+                ['user', 'user'],
+                ['assistant', 'agent'],
+            ]);
+            for (const [index, message] of messages.entries()) {
+                expect(message.status).toBe('sent');
+                expect(message.content.trim()).toBeTruthy();
+                if (message.role === 'assistant') {
+                    expect(message.authorId).toBe(agent.id);
+                    expect(message.model).toBe(RECORDED_MODEL);
+                    expect(message.replyToMessageId).toBe(messages[index - 1].id);
+                } else {
+                    expect(message.authorId).toBe(first.user.id);
+                }
+            }
+            expect(conversation.lastMessageAt?.getTime()).toBe(
+                messages[messages.length - 1].createdAt.getTime(),
+            );
+            expect(
+                participants.map((participant) => [
+                    participant.participantType,
+                    participant.participantId,
+                    participant.role,
+                ]),
+            ).toEqual(
+                expect.arrayContaining([
+                    ['user', first.user.id, 'owner'],
+                    ['agent', agent.id, 'member'],
+                ]),
+            );
+            expect(participants).toHaveLength(2);
+        });
+
+        it('writes ten activity-log entries about the recorded work', async () => {
+            const { activity, runs, goal, mission } = await recordedRows(first);
+            expect(activity).toHaveLength(10);
+            expect(activity.map((entry) => entry.actionType).sort()).toEqual(
+                [
+                    ActivityActionType.GOAL_LOOP_STARTED,
+                    ActivityActionType.GOAL_ITERATION_DISPATCHED,
+                    ActivityActionType.GOAL_ITERATION_DISPATCHED,
+                    ActivityActionType.GOAL_DOD_UPDATED,
+                    ActivityActionType.GOAL_DOD_UPDATED,
+                    ActivityActionType.GOAL_LOOP_COMPLETED,
+                    ActivityActionType.AGENT_RUN_COMPLETED,
+                    ActivityActionType.AGENT_RUN_COMPLETED,
+                    ActivityActionType.AGENT_RUN_COMPLETED,
+                    ActivityActionType.MISSION_TICK,
+                ].sort(),
+            );
+            const runIds = new Set(runs.map((run) => run.id));
+            for (const entry of activity) {
+                expect(entry.organizationId).toBe(first.summary.organizationId);
+                expect(entry.summary.trim()).toBeTruthy();
+                if (entry.details?.runId) expect(runIds.has(entry.details.runId)).toBe(true);
+                if (entry.details?.goalId) expect(entry.details.goalId).toBe(goal.id);
+                if (entry.details?.missionId) expect(entry.details.missionId).toBe(mission.id);
+            }
+            // What an Agent did is the Agent's, as the Live Feed derives it in production.
+            const finished = activity.filter(
+                (entry) => entry.actionType === ActivityActionType.AGENT_RUN_COMPLETED,
+            );
+            for (const entry of finished) {
+                expect(entry.actorKind).toBe('agent');
+                expect(entry.actorAgentId).toBe(entry.details?.agentId);
+                expect(entry.actorLabel).toBeTruthy();
+            }
+        });
+
+        it('dates every recorded row before the sandbox was created', async () => {
+            const recorded = await recordedRows(first);
+            const stamps: Array<[string, Date | null | undefined]> = [
+                ...recorded.runs.flatMap((run) => [
+                    ['run.createdAt', run.createdAt] as [string, Date],
+                    ['run.startedAt', run.startedAt] as [string, Date],
+                    ['run.finishedAt', run.finishedAt] as [string, Date],
+                ]),
+                ...recorded.logs.map((log) => ['log', log.createdAt] as [string, Date]),
+                ...recorded.goalEvents.map((e) => ['goalEvent', e.createdAt] as [string, Date]),
+                ...[...recorded.iterationTasks, ...recorded.planTasks].flatMap((task) => [
+                    ['task.createdAt', task.createdAt] as [string, Date],
+                    ...(task.status === TaskStatus.DONE
+                        ? [['task.completedAt', task.completedAt] as [string, Date]]
+                        : []),
+                ]),
+                ...recorded.conversations.flatMap((conversation) => [
+                    ['conversation.createdAt', conversation.createdAt] as [string, Date],
+                    ['conversation.lastMessageAt', conversation.lastMessageAt] as [string, Date],
+                ]),
+                ...recorded.messages.map((m) => ['message', m.createdAt] as [string, Date]),
+                ...recorded.activity.map((a) => ['activity', a.createdAt] as [string, Date]),
+                ['goal.loopStartedAt', recorded.goal.loopStartedAt],
+            ];
+            expect(stamps.length).toBeGreaterThan(40);
+            const createdAt = first.startedAt.getTime();
+            for (const [name, stamp] of stamps) {
+                expect([name, stamp instanceof Date]).toEqual([name, true]);
+                // In the past ("2 hours ago"), relative to the sandbox, and not by days.
+                expect([name, stamp!.getTime() < createdAt]).toEqual([name, true]);
+                expect([name, stamp!.getTime() > createdAt - 24 * 60 * MINUTE]).toEqual([
+                    name,
+                    true,
+                ]);
+            }
+        });
+
+        it('gives each sandbox its own recorded rows, ids generated per sandbox', async () => {
+            const [a, b] = [await recordedRows(first), await recordedRows(second)];
+            expect(second.summary.recordedGoalId).toBe(b.goal.id);
+            expect(first.summary.recordedGoalId).not.toBe(second.summary.recordedGoalId);
+            expect(a.runs).toHaveLength(3);
+            expect(b.runs).toHaveLength(3);
+            const firstRunIds = new Set(a.runs.map((run) => run.id));
+            expect(b.runs.filter((run) => firstRunIds.has(run.id))).toEqual([]);
+            expect(a.conversations[0].id).not.toBe(b.conversations[0].id);
+            for (const run of b.runs) {
+                expect(run.organizationId).toBe(second.summary.organizationId);
+                expect(run.tenantId).toBe((await users.findById(second.user.id))?.tenantId);
+            }
         });
     });
 
@@ -576,8 +918,11 @@ describe('DemoSandboxSeederService', () => {
             'goal.created': 3,
             'goal.updated': 3,
             'goal.status_changed': 3,
-            'task.created': 8,
-            'task.transitioned': 9,
+            // 8 hand-filed + the recorded Goal's 2 iterations + the Mission's 3 planned Tasks,
+            // each through `TasksService` (the recorded runs, logs, Goal events, chat and
+            // activity entries are plain rows and record no event).
+            'task.created': 13,
+            'task.transitioned': 15,
             'task.comment.created': 11,
             'kb.document.created': 3,
         });
@@ -603,7 +948,15 @@ describe('DemoSandboxSeederService', () => {
             [userA!, first.summary],
             [userB!, second.summary],
         ] as const) {
-            for (const entity of [Work, Agent, Mission, Goal, Task] as const) {
+            for (const entity of [
+                Work,
+                Agent,
+                Mission,
+                Goal,
+                Task,
+                AgentRun,
+                Conversation,
+            ] as const) {
                 const owned = await rows<{
                     organizationId?: string | null;
                     tenantId?: string | null;
@@ -615,8 +968,10 @@ describe('DemoSandboxSeederService', () => {
                 }
             }
         }
-        expect(await rows(Task).countBy({ organizationId: first.summary.organizationId })).toBe(8);
-        expect(await rows(Task).countBy({ organizationId: second.summary.organizationId })).toBe(8);
+        expect(await rows(Task).countBy({ organizationId: first.summary.organizationId })).toBe(13);
+        expect(await rows(Task).countBy({ organizationId: second.summary.organizationId })).toBe(
+            13,
+        );
     });
 
     it('seeds a sandbox in under 3 s', () => {
@@ -625,5 +980,168 @@ describe('DemoSandboxSeederService', () => {
         for (const ms of timings) {
             expect(ms).toBeLessThan(3000);
         }
+    });
+
+    /**
+     * Last on purpose: it runs the real selectors over everything both seeds wrote, adds (and
+     * removes) control runs, and lets the Goal evaluator's tick evaluate the ACTIVE fixture Goal.
+     */
+    describe('nothing picks the recorded rows up', () => {
+        let recorded: Array<Awaited<ReturnType<typeof recordedRows>>>;
+        const DAY = 24 * 60 * MINUTE;
+
+        beforeAll(async () => {
+            recorded = [await recordedRows(first), await recordedRows(second)];
+        });
+
+        it('no run sweeper, dispatch-gate drain, retention pass or admission count selects a recorded run', async () => {
+            const runs = new AgentRunRepository(rows(AgentRun));
+            const recordedIds = new Set(
+                recorded.flatMap((sandbox) => sandbox.runs.map((r) => r.id)),
+            );
+            expect(recordedIds.size).toBe(6);
+            const agentId = recorded[0].runs[0].agentId;
+            const old = new Date(Date.now() - 200 * DAY);
+            // Positive controls, so an empty answer below is not a query that selects nothing:
+            // a run parked by the dispatch gate, a live terminal whose heartbeat stopped, and a
+            // finished run past log retention.
+            const controls = await rows(AgentRun).save([
+                rows(AgentRun).create({
+                    agentId,
+                    userId: first.user.id,
+                    triggerKind: 'task',
+                    status: 'queued',
+                    queuedReason: QUEUED_REASON_CONCURRENCY,
+                    workId: first.summary.projectWorkId,
+                    createdAt: old,
+                }),
+                rows(AgentRun).create({
+                    agentId,
+                    userId: first.user.id,
+                    triggerKind: 'manual',
+                    status: 'running',
+                    terminalState: 'attached',
+                    startedAt: old,
+                    lastHeartbeatAt: old,
+                    createdAt: old,
+                }),
+                rows(AgentRun).create({
+                    agentId,
+                    userId: first.user.id,
+                    triggerKind: 'manual',
+                    status: 'completed',
+                    startedAt: old,
+                    finishedAt: old,
+                    createdAt: old,
+                }),
+            ]);
+            const [parked, quiet, expired] = controls.map((run) => run.id);
+            const ids = (selected: Array<{ id: string }>) => selected.map((run) => run.id).sort();
+            try {
+                const farFuture = new Date(Date.now() + 365 * DAY);
+                // `AgentRunSweeperService`: stuck runs, runs queued too long, quiet terminals.
+                expect(ids(await runs.findStuckNonTerminal(farFuture, 1000))).toEqual(
+                    [parked, quiet].sort(),
+                );
+                expect(ids(await runs.findQueuedTooLong(farFuture, 1000))).toEqual([parked]);
+                expect(ids(await runs.findStaleTerminalRuns(farFuture, 1000))).toEqual([quiet]);
+                // `RunDispatchGateService`'s drain of the Work the recorded runs belong to.
+                const drained = await runs.findOldestQueuedForConcurrency(
+                    first.summary.projectWorkId,
+                    QUEUED_REASON_CONCURRENCY,
+                );
+                expect(drained?.id).toBe(parked);
+                // The nightly retention pass deletes the timeline of runs past the window.
+                const cutoff = new Date(Date.now() - config.agents.getRunLogRetentionDays() * DAY);
+                expect(await runs.findLogRetentionCandidates(cutoff, 1000)).toEqual([expired]);
+                // Admission and chat dedup: a recorded run is never "in flight".
+                for (const sandbox of recorded) {
+                    for (const run of sandbox.runs) {
+                        expect(
+                            await runs.findInFlightForTaskAgent(run.taskId!, run.agentId),
+                        ).toBeNull();
+                        const inFlight = await runs.findInFlightForAgent(run.agentId);
+                        expect(recordedIds.has(inFlight?.id ?? '')).toBe(false);
+                    }
+                }
+                expect(await runs.countInFlightForUser(second.user.id)).toBe(0);
+            } finally {
+                await rows(AgentRun).delete(controls.map((run) => run.id));
+            }
+        });
+
+        it('the Goal loop advances no recorded Goal and the Goal evaluator selects none', async () => {
+            const goalIds = recorded.map((sandbox) => sandbox.goal.id);
+            // Required repositories only: with no Tasks runtime bound it could not dispatch
+            // even a Goal it did select (it would log a refusal instead).
+            const orchestrator = new GoalOrchestratorService(
+                rows(Goal),
+                rows(GoalEvent),
+                rows(Task),
+                rows(AgentRun),
+            );
+            const advanced = await orchestrator.advanceDue(1000);
+            // Only a `running` loop is advanced; the recorded loops are `done`.
+            expect(advanced.dueCount).toBe(0);
+            expect(advanced.results).toEqual([]);
+
+            const refusingMetrics = new Proxy(
+                {},
+                {
+                    get: (_target, prop) =>
+                        prop === 'then'
+                            ? undefined
+                            : () => {
+                                  throw new Error(`metrics.${String(prop)} read while evaluating`);
+                              },
+                },
+            );
+            const evaluator = new GoalEvaluationService(
+                rows(Goal),
+                rows(GoalMetricSample),
+                refusingMetrics as never,
+            );
+            const evaluated = await evaluator.evaluateDue(1000);
+            // Positive control: activating the ACTIVE fixture Goal scheduled a check, so the
+            // tick does select something.
+            expect(evaluated.dueCount).toBeGreaterThan(0);
+            const evaluatedIds = evaluated.entries.map((entry) => entry.goalId);
+            for (const goalId of goalIds) {
+                expect(evaluatedIds).not.toContain(goalId);
+            }
+            for (const goal of await rows(Goal).findBy({ id: In(goalIds) })) {
+                expect([goal.status, goal.loopStatus, goal.iteration]).toEqual([
+                    GoalStatus.COMPLETED,
+                    'done',
+                    2,
+                ]);
+            }
+        });
+
+        it('no recorded chat message is waiting for, or getting, an Agent reply', async () => {
+            const conversationRows = moduleRef.get(ConversationRepository);
+            const runs = new AgentRunRepository(rows(AgentRun));
+            // The messages were written as rows, not sent: no reply run was dispatched.
+            expect(await rows(AgentRun).countBy({ triggerKind: 'conversation' })).toBe(0);
+            for (const sandbox of recorded) {
+                const [conversation] = sandbox.conversations;
+                expect(
+                    await conversationRows.findUnsettledMessages(
+                        conversation.id,
+                        ['sending', 'failed'],
+                        [],
+                        50,
+                    ),
+                ).toEqual([]);
+                expect(
+                    await runs.findInFlightForConversationAgent(
+                        conversation.id,
+                        conversation.agentId!,
+                    ),
+                ).toBeNull();
+                // The thread ends on the Agent's answer: nothing the visitor wrote is open.
+                expect(sandbox.messages[sandbox.messages.length - 1].authorType).toBe('agent');
+            }
+        });
     });
 });

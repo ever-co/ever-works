@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { DataSource } from 'typeorm';
 import { OnboardingRoleSeedingService } from '@ever-works/agent/agents';
 import { UserRepository, WorkRepository, type OwnershipScope } from '@ever-works/agent/database';
 import {
@@ -15,6 +16,7 @@ import { TaskChatService, TasksService } from '@ever-works/agent/tasks-domain';
 import { TeamsService } from '@ever-works/agent/teams';
 import { OrganizationService } from '../../organizations/organization.service';
 import { ScopeContextService } from '../../scope/scope-context.service';
+import { seedRecordedExamples } from './demo-recorded-seeder';
 import { DEMO_SANDBOX_FIXTURE, type DemoSandboxFixture } from './demo-sandbox.fixture';
 
 /** What the seeder created for one demo sandbox. */
@@ -38,12 +40,15 @@ const DIRECTORY_WORK_STORAGE = 'ever-works-git';
  * Platform demo mode — seeds a fresh demo sandbox's workspace (design §5.2.3) from
  * {@link DEMO_SANDBOX_FIXTURE}: an Organization the visitor administers, two Teams, the
  * onboarding starter-kit Agents, a Project Work with its Missions, Goals, Tasks and threads,
- * organization knowledge notes, and a draft directory Work ready for Generate.
+ * organization knowledge notes, and a draft directory Work ready for Generate. Then the
+ * recorded examples (`demo-recorded-seeder.ts`): the completed Goal's iterations and runs, the
+ * Mission's plan, an Agent chat and their activity, dated before the sandbox was created.
  *
- * Everything goes through the domain services, so their checks, events and activity rows
- * hold; nothing calls an AI model or GitHub. The services do not share one transaction: when a
- * step fails, `DemoSandboxService` expires the sandbox and the demo sweeper removes what was
- * written.
+ * Everything but the recorded runs, transcripts, Goal log, chat and activity entries goes
+ * through the domain services, so their checks, events and activity rows hold; those are
+ * plain rows that nothing picks up. Nothing calls an AI model or GitHub. The writes do not
+ * share one transaction: when a step fails, `DemoSandboxService` expires the sandbox and the
+ * demo sweeper removes what was written.
  */
 @Injectable()
 export class DemoSandboxSeederService {
@@ -60,9 +65,13 @@ export class DemoSandboxSeederService {
         private readonly tasks: TasksService,
         private readonly taskChat: TaskChatService,
         private readonly knowledge: KnowledgeBaseService,
+        /** The recorded examples' plain rows (runs, transcripts, Goal log, chat, activity). */
+        private readonly dataSource: DataSource,
     ) {}
 
     async seed(user: User): Promise<DemoSeedSummary> {
+        // The recorded examples are dated relative to this ("2 hours ago").
+        const createdAt = new Date();
         const fixture = DEMO_SANDBOX_FIXTURE;
         // Lazily creates the visitor's own Tenant (its owner administers every Organization
         // in it) and makes the Organization the scope the visitor lands on. The slug carries
@@ -83,13 +92,16 @@ export class DemoSandboxSeederService {
         };
         // Services that stamp the ambient scope (Works, Agents) need it set, as the
         // company-template importer does; every service that takes a scope gets it too.
-        return this.scopeContext.runWith(scope, () => this.seedOrganization(owner, scope, fixture));
+        return this.scopeContext.runWith(scope, () =>
+            this.seedOrganization(owner, scope, fixture, createdAt),
+        );
     }
 
     private async seedOrganization(
         owner: User,
         scope: SandboxScope,
         fixture: DemoSandboxFixture,
+        createdAt: Date,
     ): Promise<DemoSeedSummary> {
         const agentIds = await this.seedAgents(owner.id, fixture);
         const teamIds = await this.seedTeams(owner.id, scope.organizationId, fixture, agentIds);
@@ -110,12 +122,24 @@ export class DemoSandboxSeederService {
         await this.seedTasks(owner.id, scope, projectWork.id, goalIds, agentIds, fixture);
         await this.seedKnowledge(owner.id, scope.organizationId, fixture);
         const directoryWorkId = await this.seedDirectoryWork(owner, fixture);
+        const recorded = await seedRecordedExamples(
+            { dataSource: this.dataSource, tasks: this.tasks },
+            {
+                ownerId: owner.id,
+                scope: { tenantId: scope.tenantId as string, organizationId: scope.organizationId },
+                createdAt,
+                projectWorkId: projectWork.id,
+                goalIds: new Map([...goalIds].map(([key, ids]) => [key, ids.goalId])),
+                missionIds,
+                agentIds,
+            },
+        );
 
         return {
             organizationId: scope.organizationId,
             projectWorkId: projectWork.id,
             directoryWorkId,
-            recordedGoalId: null,
+            recordedGoalId: recorded.goalId,
         };
     }
 

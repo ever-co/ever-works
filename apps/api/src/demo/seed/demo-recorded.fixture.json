@@ -1,0 +1,320 @@
+{
+    "$comment": "Platform demo mode, recorded examples (design 5.2.3). Hand-written for now; a capture exported from a real Works-dev run with free models can replace it in this same format. Keys (goalKey, missionKey, agentSlug, run keys) link to demo-sandbox.fixture.ts and to each other; ids are generated per sandbox. Every atMinutes is minutes relative to the sandbox's creation, always negative.",
+    "format": 1,
+    "source": "hand-written",
+    "model": {
+        "provider": "openrouter",
+        "id": "google/gemma-4-31b-it:free"
+    },
+    "goal": {
+        "goalKey": "launch-post",
+        "loopStartedAtMinutes": -150,
+        "iterations": [
+            {
+                "agentSlug": "content-marketer",
+                "reasonCode": "routed-scope-fallback",
+                "routeReasoning": "Routed iteration 1 → Content Marketer: the Goal pins no agent and no agent has worked it yet, so the router round-robins over the 4 eligible agent(s) in the Goal's scope.",
+                "brief": "Iteration 1 of the Goal \"Publish the launch blog post\".\n\nA launch announcement on the Acme blog, shared on the day the site goes live.\n\nDelivery Goal — there is no metric; the checklist below is the whole definition of done.\n\nDefinition of Done — 0 done, 0 waived, 2 open:\n- [ ] Draft approved by the team\n- [ ] Post is live on the Acme blog\n\nWork only on the open criteria above. When one is satisfied, say so explicitly in your\nsummary along with the evidence, so the operator can tick it off.",
+                "closes": { "criterionId": "draft-approved", "atMinutes": -129 },
+                "run": {
+                    "key": "iteration-1",
+                    "queuedAtMinutes": -148.9,
+                    "startedAtMinutes": -148.8,
+                    "finishedAtMinutes": -131,
+                    "totalTokens": 14820,
+                    "summary": "Read the voice guide and the audience notes, looked at how three comparable product launches were announced, and drafted the launch post (about 780 words): the problem small teams have, the three headline features, a customer quote and one call to action. The draft is in the task thread, ready for the team to approve (\"Draft approved by the team\").",
+                    "transcript": [
+                        {
+                            "atMinutes": -148.8,
+                            "kind": "user-message",
+                            "text": "Iteration 1 of the Goal \"Publish the launch blog post\".\n\nA launch announcement on the Acme blog, shared on the day the site goes live.\n\nDefinition of Done — 0 done, 0 waived, 2 open:\n- [ ] Draft approved by the team\n- [ ] Post is live on the Acme blog"
+                        },
+                        {
+                            "atMinutes": -148.6,
+                            "kind": "assistant-message",
+                            "text": "I'll start from the team's voice guide and audience notes, check how similar launches were announced, then write a first draft for the team to approve."
+                        },
+                        {
+                            "atMinutes": -148.4,
+                            "kind": "tool-invocation",
+                            "tool": "getKbDocument",
+                            "args": "{\"path\":\"freeform/voice-and-tone.md\"}",
+                            "result": "# Voice and tone\n\nFriendly, direct and short. Plain words, active voice, no jargon.",
+                            "durationMs": 86
+                        },
+                        {
+                            "atMinutes": -148.2,
+                            "kind": "tool-invocation",
+                            "tool": "getKbDocument",
+                            "args": "{\"path\":\"personas/target-audience.md\"}",
+                            "result": "# Target audience\n\nSmall product teams (2 to 20 people) who want a fast, simple website and a newsletter without hiring an agency.",
+                            "durationMs": 74
+                        },
+                        {
+                            "atMinutes": -147.5,
+                            "kind": "tool-invocation",
+                            "tool": "searchWeb",
+                            "args": "{\"query\":\"how to structure a product website launch announcement blog post\"}",
+                            "result": "5 results. Common pattern across launch posts: open with the problem, show 2-3 concrete improvements with numbers, add one customer quote, end with a single call to action. Typical length 600-900 words.",
+                            "durationMs": 1840
+                        },
+                        {
+                            "atMinutes": -145,
+                            "kind": "assistant-message",
+                            "text": "Plan for the post: open with the problem (slow sites and clunky editors), then the three headline features (pages load twice as fast, a simpler editor, a built-in newsletter form), a short quote from a beta customer, and one call to action: try the new site. Target length about 800 words, in the friendly, direct voice the guide asks for."
+                        },
+                        {
+                            "atMinutes": -133,
+                            "kind": "tool-invocation",
+                            "tool": "commentOnTask",
+                            "args": "{\"body\":\"First draft is ready for review (about 780 words). Title: Meet the new Acme website. Sections: why we rebuilt it, what is new, what our beta customers say, try it today.\"}",
+                            "result": "{\"ok\":true}",
+                            "durationMs": 132
+                        },
+                        {
+                            "atMinutes": -131.2,
+                            "kind": "assistant-message",
+                            "text": "The first draft is posted in the task thread. \"Draft approved by the team\" can be ticked once the team has read it; \"Post is live on the Acme blog\" stays open for the next iteration."
+                        }
+                    ]
+                }
+            },
+            {
+                "agentSlug": "content-marketer",
+                "reasonCode": "routed-round-robin",
+                "routeReasoning": "Routed iteration 2 → Content Marketer: the Goal pins no agent, so the router round-robins over 1 agent(s) that have worked this Goal.",
+                "brief": "Iteration 2 of the Goal \"Publish the launch blog post\".\n\nA launch announcement on the Acme blog, shared on the day the site goes live.\n\nDelivery Goal — there is no metric; the checklist below is the whole definition of done.\n\nDefinition of Done — 1 done, 0 waived, 1 open:\n- [ ] Post is live on the Acme blog\n\nWork only on the open criteria above. When one is satisfied, say so explicitly in your\nsummary along with the evidence, so the operator can tick it off.",
+                "closes": { "criterionId": "post-live", "atMinutes": -111 },
+                "run": {
+                    "key": "iteration-2",
+                    "queuedAtMinutes": -127.9,
+                    "startedAtMinutes": -127.8,
+                    "finishedAtMinutes": -113,
+                    "totalTokens": 11260,
+                    "summary": "Applied the team's feedback to the approved draft, tightened the intro, set the title and a 152-character meta description, added links to the pricing and newsletter pages, and checked the launch checklist. The final post is ready to publish; tick \"Post is live on the Acme blog\" once it is up.",
+                    "transcript": [
+                        {
+                            "atMinutes": -127.8,
+                            "kind": "user-message",
+                            "text": "Iteration 2 of the Goal \"Publish the launch blog post\".\n\nDefinition of Done — 1 done, 0 waived, 1 open:\n- [ ] Post is live on the Acme blog"
+                        },
+                        {
+                            "atMinutes": -127.5,
+                            "kind": "assistant-message",
+                            "text": "The draft was approved. What is left: the final edits from the review, the search basics (title, meta description, links), then hand it over for publishing."
+                        },
+                        {
+                            "atMinutes": -127,
+                            "kind": "tool-invocation",
+                            "tool": "getKbDocument",
+                            "args": "{\"path\":\"freeform/launch-checklist.md\"}",
+                            "result": "# Launch checklist\n\n- Site live on the new domain\n- Launch post published\n- Newsletter form tested\n- Social posts scheduled",
+                            "durationMs": 68
+                        },
+                        {
+                            "atMinutes": -125.5,
+                            "kind": "tool-invocation",
+                            "tool": "searchWeb",
+                            "args": "{\"query\":\"recommended meta description length for blog posts\"}",
+                            "result": "4 results. Search results usually show about 150-160 characters of a meta description; keep the key message in the first 120.",
+                            "durationMs": 1520
+                        },
+                        {
+                            "atMinutes": -120,
+                            "kind": "assistant-message",
+                            "text": "Final edits done: the intro is two sentences, the quote moved up, and each feature has one concrete number. Title: \"Meet the new Acme website: faster pages, simpler editing\" (58 characters). Meta description: 152 characters. Added links to the pricing page and the newsletter signup."
+                        },
+                        {
+                            "atMinutes": -114,
+                            "kind": "tool-invocation",
+                            "tool": "commentOnTask",
+                            "args": "{\"body\":\"Final version ready to publish at /blog/new-acme-website. Title and meta description set, internal links added.\"}",
+                            "result": "{\"ok\":true}",
+                            "durationMs": 118
+                        },
+                        {
+                            "atMinutes": -113.2,
+                            "kind": "assistant-message",
+                            "text": "The post is final and ready to go live. Once it is published, \"Post is live on the Acme blog\" closes the Goal."
+                        }
+                    ]
+                }
+            }
+        ],
+        "completion": {
+            "atMinutes": -110,
+            "message": "Definition of Done satisfied — 2 done, 0 waived, 0 open. Goal loop finished at iteration 2."
+        }
+    },
+    "mission": {
+        "missionKey": "ship-site",
+        "plannedAtMinutes": -95,
+        "plan": [
+            {
+                "title": "Check titles and meta descriptions on the launch pages",
+                "description": "Every page of the new site has a unique title under 60 characters and a meta description under 160 characters.",
+                "agentSlug": "seo-auditor",
+                "status": "done",
+                "run": {
+                    "key": "plan-1",
+                    "queuedAtMinutes": -94,
+                    "startedAtMinutes": -93.8,
+                    "finishedAtMinutes": -81,
+                    "totalTokens": 9430,
+                    "summary": "Checked the home, pricing and launch post pages. The home page had no meta description and the pricing page title was too short; proposed a title and description for each in the task thread. The launch post already met both limits.",
+                    "transcript": [
+                        {
+                            "atMinutes": -93.8,
+                            "kind": "user-message",
+                            "text": "Task: Check titles and meta descriptions on the launch pages\n\nEvery page of the new site has a unique title under 60 characters and a meta description under 160 characters."
+                        },
+                        {
+                            "atMinutes": -93.6,
+                            "kind": "assistant-message",
+                            "text": "I'll read each launch page and check its title and meta description against those limits."
+                        },
+                        {
+                            "atMinutes": -93,
+                            "kind": "tool-invocation",
+                            "tool": "extractContent",
+                            "args": "{\"url\":\"https://acme.example/\"}",
+                            "result": "Title: \"Acme: websites for small teams\" (31 characters). Meta description: missing.",
+                            "durationMs": 2210
+                        },
+                        {
+                            "atMinutes": -91.5,
+                            "kind": "tool-invocation",
+                            "tool": "extractContent",
+                            "args": "{\"url\":\"https://acme.example/pricing\"}",
+                            "result": "Title: \"Pricing\" (7 characters). Meta description: \"Simple plans for small teams.\" (29 characters).",
+                            "durationMs": 1960
+                        },
+                        {
+                            "atMinutes": -90,
+                            "kind": "tool-invocation",
+                            "tool": "extractContent",
+                            "args": "{\"url\":\"https://acme.example/blog/new-acme-website\"}",
+                            "result": "Title: \"Meet the new Acme website: faster pages, simpler editing\" (58 characters). Meta description: 152 characters.",
+                            "durationMs": 2040
+                        },
+                        {
+                            "atMinutes": -86,
+                            "kind": "assistant-message",
+                            "text": "Two pages need work. Home: no meta description. Pricing: the title \"Pricing\" says nothing on its own in search results. The launch post is fine."
+                        },
+                        {
+                            "atMinutes": -82,
+                            "kind": "tool-invocation",
+                            "tool": "commentOnTask",
+                            "args": "{\"body\":\"Home meta description (148 chars): Fast, simple websites for small teams, with a built-in newsletter. Pricing title (41 chars): Acme pricing: simple plans for small teams.\"}",
+                            "result": "{\"ok\":true}",
+                            "durationMs": 104
+                        },
+                        {
+                            "atMinutes": -81.2,
+                            "kind": "assistant-message",
+                            "text": "Done: the proposed home meta description and pricing title are in the task thread. All three pages meet the limits once those two changes are in."
+                        }
+                    ]
+                }
+            },
+            {
+                "title": "Set up redirects from the old site's URLs",
+                "description": "Map the old acme.example URLs to the new pages with permanent (301) redirects, so existing links and search rankings carry over.",
+                "agentSlug": "seo-auditor",
+                "status": "todo"
+            },
+            {
+                "title": "Compare our launch page with two competitors",
+                "description": "Note how two competitors present pricing, customer proof and the call to action on their launch pages, and list what we could borrow.",
+                "agentSlug": "competitive-analyst",
+                "status": "todo"
+            }
+        ]
+    },
+    "conversation": {
+        "agentSlug": "content-marketer",
+        "title": "Launch day checklist",
+        "messages": [
+            {
+                "atMinutes": -45,
+                "by": "user",
+                "body": "Can you put together a checklist for launch day? The new site goes live on Thursday morning."
+            },
+            {
+                "atMinutes": -44,
+                "by": "agent",
+                "body": "Here is a launch-day checklist, in order:\n\n1. Confirm the new domain points to the site and HTTPS works\n2. Check the redirects from the old URLs\n3. Publish the launch blog post\n4. Test the newsletter signup form end to end\n5. Send the announcement email to subscribers\n6. Post the launch thread on social\n7. Watch signups and errors for the first two hours\n\nShould I add owners and times?"
+            },
+            {
+                "atMinutes": -41,
+                "by": "user",
+                "body": "Yes, add owners. And test the signup form before the post goes out."
+            },
+            {
+                "atMinutes": -40,
+                "by": "agent",
+                "body": "Updated, with the signup test moved before the post:\n\n1. 08:00 Domain and HTTPS check (Product team)\n2. 08:15 Redirect check (SEO Auditor)\n3. 08:30 Newsletter signup test (Growth team)\n4. 09:00 Publish the launch blog post (Content Marketer)\n5. 09:15 Announcement email (Content Marketer)\n6. 09:30 Launch thread on social (Social Scheduler)\n7. 09:30 to 11:30 Watch signups and errors (Growth team)"
+            }
+        ]
+    },
+    "activity": [
+        {
+            "atMinutes": -150,
+            "type": "goal_loop_started",
+            "summary": "Started the agent loop for the Goal \"Publish the launch blog post\""
+        },
+        {
+            "atMinutes": -148.9,
+            "type": "goal_iteration_dispatched",
+            "run": "iteration-1",
+            "summary": "Content Marketer picked up iteration 1 of \"Publish the launch blog post\""
+        },
+        {
+            "atMinutes": -131,
+            "type": "agent_run_completed",
+            "run": "iteration-1",
+            "summary": "Content Marketer drafted the launch blog post"
+        },
+        {
+            "atMinutes": -129,
+            "type": "goal_dod_updated",
+            "criterionId": "draft-approved",
+            "summary": "Ticked \"Draft approved by the team\""
+        },
+        {
+            "atMinutes": -127.9,
+            "type": "goal_iteration_dispatched",
+            "run": "iteration-2",
+            "summary": "Content Marketer picked up iteration 2 of \"Publish the launch blog post\""
+        },
+        {
+            "atMinutes": -113,
+            "type": "agent_run_completed",
+            "run": "iteration-2",
+            "summary": "Content Marketer finished the launch blog post"
+        },
+        {
+            "atMinutes": -111,
+            "type": "goal_dod_updated",
+            "criterionId": "post-live",
+            "summary": "Ticked \"Post is live on the Acme blog\""
+        },
+        {
+            "atMinutes": -110,
+            "type": "goal_loop_completed",
+            "summary": "Reached the Goal \"Publish the launch blog post\""
+        },
+        {
+            "atMinutes": -95,
+            "type": "mission_tick",
+            "summary": "Mission \"Ship the launch site\" planned 3 Tasks"
+        },
+        {
+            "atMinutes": -81,
+            "type": "agent_run_completed",
+            "run": "plan-1",
+            "summary": "SEO Auditor checked the titles and meta descriptions of the launch pages"
+        }
+    ]
+}

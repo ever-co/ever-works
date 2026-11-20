@@ -10,6 +10,7 @@ import { GLOBAL_MODULE_METADATA } from '@nestjs/common/constants';
 import { EventEmitterModule } from '@nestjs/event-emitter';
 import { MailerService as MailerLibraryService } from '@nestjs-modules/mailer';
 import { Test, type TestingModule } from '@nestjs/testing';
+import { DataSource } from 'typeorm';
 import { OnboardingRoleSeedingService } from '@ever-works/agent/agents';
 import { UserRepository, WorkRepository } from '@ever-works/agent/database';
 import { GoalsService } from '@ever-works/agent/goals';
@@ -58,6 +59,8 @@ const SEEDER_DEPENDENCIES = [
     ['tasks', TasksService],
     ['taskChat', TaskChatService],
     ['knowledge', KnowledgeBaseService],
+    // The recorded examples' plain rows; from `DatabaseModule`'s TypeORM connection.
+    ['dataSource', DataSource],
 ] as const;
 
 const REFUSED = new Set<unknown>(SEEDER_DEPENDENCIES.map(([, type]) => type));
