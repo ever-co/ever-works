@@ -14,6 +14,8 @@ import {
     WorkRepository,
     GitHubAppInstallationRepository,
 } from '@ever-works/agent/database';
+import { config } from '@ever-works/agent/config';
+import { DEMO_AI_QUOTA } from '@ever-works/agent/demo';
 import { TriggerInternalModule } from './trigger-internal.module';
 import { TriggerInternalApiClient } from '../services/trigger-internal-api.client';
 import { createRemoteProxy } from '../remote-proxy';
@@ -68,6 +70,19 @@ const FACADES = [
             provide: GitHubAppInstallationRepository,
             useFactory: (apiClient: TriggerInternalApiClient) =>
                 createRemoteProxy(apiClient, 'GitHubAppInstallationRepository'),
+            inject: [TriggerInternalApiClient],
+        },
+        // Platform demo mode — `AiFacadeService` (above) counts every AI call against the
+        // demo quota and, on a demo instance, refuses all of them while this token is
+        // unbound. A worker owns no database, so the counters are the API's
+        // `DemoAiQuotaService`, reached by name; its refusals come back as `DemoError`s
+        // (`../demo-remote-error.ts`). With `DEMO` off the factory binds nothing.
+        {
+            provide: DEMO_AI_QUOTA,
+            useFactory: (apiClient: TriggerInternalApiClient) =>
+                config.demo.isEnabled()
+                    ? createRemoteProxy(apiClient, 'DemoAiQuotaService')
+                    : undefined,
             inject: [TriggerInternalApiClient],
         },
     ],

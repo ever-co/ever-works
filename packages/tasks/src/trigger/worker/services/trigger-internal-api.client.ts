@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import superjson from 'superjson';
 import { config } from '@ever-works/agent/config';
 import { WorkContextResponse } from '@ever-works/agent/tasks';
+import { demoErrorFromResponseBody } from '../demo-remote-error';
 
 /**
  * Remote calls that are safe to re-issue after a transport failure.
@@ -280,6 +281,16 @@ export class TriggerInternalApiClient {
                 }
 
                 const text = await response.text();
+
+                // Platform demo mode — a `DemoErrorFilter` answer (`{ code: 'DEMO_…' }`) is the
+                // API's verdict, not a transport failure: rethrow it as the matching
+                // `DemoError` (the facade's busy-wait and `instanceof` checks need the class)
+                // and never re-issue it, whatever its status.
+                const demoError = demoErrorFromResponseBody(text);
+                if (demoError) {
+                    throw demoError;
+                }
+
                 lastError = new Error(
                     `Trigger internal API request failed (${response.status}): ${text}`,
                 );

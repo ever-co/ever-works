@@ -181,6 +181,11 @@ jest.mock('../data-sync/data-sync-dispatcher.service', () => ({
 jest.mock('../work-proposals/work-proposals.service', () => ({
     WorkProposalsApiService: class WorkProposalsApiService {},
 }));
+// Platform demo mode — the quota service is an injection token here; its counting is
+// asserted in `src/demo/__tests__/demo-ai-quota.service.spec.ts`.
+jest.mock('../demo/demo-ai-quota.service', () => ({
+    DemoAiQuotaService: class DemoAiQuotaService {},
+}));
 
 const getInternalSecretMock = jest.fn<string | undefined, []>();
 jest.mock('@ever-works/agent/config', () => ({
@@ -194,6 +199,7 @@ jest.mock('@ever-works/agent/config', () => ({
 import { BadRequestException, ForbiddenException } from '@nestjs/common';
 import superjson from 'superjson';
 import { GitHubAppInstallationRepository } from '@ever-works/agent/database';
+import { DemoRateLimitedError } from '@ever-works/agent/demo';
 import { TriggerInternalController } from './trigger-internal.controller';
 
 describe('TriggerInternalController', () => {
@@ -1905,6 +1911,110 @@ describe('TriggerInternalController', () => {
                     args: superjson.serialize([]) as any,
                 }),
             ).rejects.toBeDefined();
+        });
+    });
+
+    // -------------------------------------------------------------------
+    // Platform demo mode — the workers' AI quota (`DEMO_AI_QUOTA` in
+    // `trigger-facades.module.ts` is a proxy of this name)
+    // -------------------------------------------------------------------
+
+    describe('the DemoAiQuotaService remote target (platform demo mode)', () => {
+        const consumeBody = (args: unknown[]) => ({
+            name: 'DemoAiQuotaService',
+            method: 'consume',
+            args: superjson.serialize(args) as any,
+        });
+
+        let quota: { consume: jest.Mock; isDayExhausted: jest.Mock };
+
+        beforeEach(() => {
+            quota = {
+                consume: jest.fn().mockResolvedValue(undefined),
+                isDayExhausted: jest.fn().mockResolvedValue(false),
+            };
+        });
+
+        it('reaches consume over the hop with the user the worker passed', async () => {
+            (controller as any).demoAiQuotaService = quota;
+            controller.onModuleInit();
+
+            const response = await controller.callRemote(VALID_SECRET, consumeBody(['user-1']));
+
+            expect(quota.consume).toHaveBeenCalledWith('user-1');
+            expect(superjson.deserialize(response.result as any)).toBeUndefined();
+        });
+
+        it('passes no user for system work', async () => {
+            (controller as any).demoAiQuotaService = quota;
+            controller.onModuleInit();
+
+            await controller.callRemote(VALID_SECRET, consumeBody([undefined]));
+
+            expect(quota.consume).toHaveBeenCalledWith(undefined);
+        });
+
+        it('never lets the hop pick the clock: a second argument is dropped', async () => {
+            (controller as any).demoAiQuotaService = quota;
+            controller.onModuleInit();
+
+            await controller.callRemote(
+                VALID_SECRET,
+                consumeBody(['user-1', new Date('2999-01-01T00:00:00.000Z')]),
+            );
+
+            expect(quota.consume).toHaveBeenCalledWith('user-1');
+        });
+
+        it('exposes consume ONLY', async () => {
+            (controller as any).demoAiQuotaService = quota;
+            controller.onModuleInit();
+
+            await expect(
+                controller.callRemote(VALID_SECRET, {
+                    name: 'DemoAiQuotaService',
+                    method: 'isDayExhausted',
+                    args: superjson.serialize([]) as any,
+                }),
+            ).rejects.toThrow('Method not in allow-list for DemoAiQuotaService: isDayExhausted');
+            expect(quota.isDayExhausted).not.toHaveBeenCalled();
+        });
+
+        it('lets a refusal reach the HTTP layer unchanged, for DemoErrorFilter to map', async () => {
+            const busy = new DemoRateLimitedError(12_000);
+            quota.consume.mockRejectedValue(busy);
+            (controller as any).demoAiQuotaService = quota;
+            controller.onModuleInit();
+
+            await expect(controller.callRemote(VALID_SECRET, consumeBody(['user-1']))).rejects.toBe(
+                busy,
+            );
+        });
+
+        it('is an unknown target when the demo is off (the service is not bound)', async () => {
+            (controller as any).demoAiQuotaService = undefined;
+            controller.onModuleInit();
+
+            await expect(
+                controller.callRemote(VALID_SECRET, consumeBody(['user-1'])),
+            ).rejects.toThrow('Unknown remote target: DemoAiQuotaService');
+        });
+
+        it('appends the service in the @Optional() tail', () => {
+            const paramTypes: unknown[] =
+                Reflect.getMetadata('design:paramtypes', TriggerInternalController) ?? [];
+            const optionalIndices: number[] =
+                Reflect.getMetadata('optional:paramtypes', TriggerInternalController) ?? [];
+            const at = paramTypes.findIndex(
+                (type) => (type as { name?: string })?.name === 'DemoAiQuotaService',
+            );
+
+            // Appended at the tail, never mid-list: it and every parameter after it are
+            // `@Optional()`, so no positional construction in this file shifts.
+            expect(at).toBeGreaterThan(0);
+            for (let index = at; index < paramTypes.length; index += 1) {
+                expect(optionalIndices).toContain(index);
+            }
         });
     });
 });

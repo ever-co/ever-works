@@ -264,6 +264,11 @@ const EXPECTED_UNBOUND: readonly Expected[] = [
         reason: 'C43, closed 2026-10-17 (lane aw-deploy-2): FacadesModule cannot import the module that provides `AppDomainsService` without a cycle, so in the API the facade reaches it through a non-strict `ModuleRef` lookup (`AppDeployRequestModule` provides it); the constructor parameter stays for the worker, which binds it directly.',
         source: 'packages/agent/src/facades/deploy.facade.ts:137-152,543-551; packages/agent/src/app-runtime/app-deploy-request.module.ts',
     },
+    {
+        key: 'TriggerInternalModule | TriggerInternalController (controller) | DemoAiQuotaService',
+        reason: 'Platform demo mode only: `DemoModule.register()` provides `DemoAiQuotaService` when `DEMO` is on and is an empty module otherwise, and this spec walks the graph with `DEMO` unset — so the `remoteMap` entry answers "Unknown remote target", which is the demo-off contract.',
+        source: 'docs/specs/features/platform-demo-mode/design.md:136 (§5.2: the demo module is registered only when DEMO is on); apps/api/src/demo/demo.module.ts:28',
+    },
     // `WorkModule | WorkLifecycleService | APP_WORK_DELETION_PORT` left this list on 2026-10-26
     // (lane aw-safety): the `@Global()` `AppRuntimePortsModule` (`apps/api/src/app-works/`) binds it
     // to `AppRuntimeDeletionService`, so deleting an App Work removes its workloads, dependencies and
@@ -284,9 +289,36 @@ const EXPECTED_LAZY_MISSES: readonly Expected[] = [];
 
 /**
  * Remote proxies of an App Works worker context whose name deliberately lands on nothing in
- * the API (`Root :: remote 'Name'`). None today.
+ * the API (`Root :: remote 'Name'`).
+ *
+ * Only the demo's AI quota today: `TriggerFacadesModule` (in every context below) declares
+ * `createRemoteProxy(apiClient, 'DemoAiQuotaService')`, built only when `DEMO` is on, and the
+ * API binds that name only when `DEMO` is on (`DemoModule.register()`). This spec runs with
+ * `DEMO` unset, where the name answering "Unknown remote target" is the intended contract.
  */
-const EXPECTED_REMOTE_MISSES: readonly Expected[] = [];
+const DEMO_AI_QUOTA_REMOTE_MISS = {
+    reason: 'Platform demo mode only: the worker builds this proxy and the API binds `DemoAiQuotaService` only when `DEMO` is on; this spec runs with `DEMO` unset, so the miss is the demo-off contract.',
+    source: 'docs/specs/features/platform-demo-mode/design.md:174-176 (§5.2.4: workers reach the counters by remote proxy); docs/specs/features/platform-demo-mode/design.md:136 (registered only when DEMO is on)',
+} as const;
+const EXPECTED_REMOTE_MISSES: readonly Expected[] = [
+    {
+        key: "AppBlueprintApplyWorkerModule :: remote 'DemoAiQuotaService'",
+        ...DEMO_AI_QUOTA_REMOTE_MISS,
+    },
+    {
+        key: "AppDependencyProvisionWorkerModule :: remote 'DemoAiQuotaService'",
+        ...DEMO_AI_QUOTA_REMOTE_MISS,
+    },
+    {
+        key: "AppSpecEvaluateWorkerModule :: remote 'DemoAiQuotaService'",
+        ...DEMO_AI_QUOTA_REMOTE_MISS,
+    },
+    {
+        key: "AppUpstreamSyncWorkerModule :: remote 'DemoAiQuotaService'",
+        ...DEMO_AI_QUOTA_REMOTE_MISS,
+    },
+    { key: "TriggerAppRuntimeModule :: remote 'DemoAiQuotaService'", ...DEMO_AI_QUOTA_REMOTE_MISS },
+];
 
 /**
  * The worker contexts' deliberate gaps, keyed `Root :: TOKEN` — per TOKEN rather than per

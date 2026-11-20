@@ -164,6 +164,8 @@ import {
     AppDependencyRowsRelay,
     AppDependencySpecSourceAdapter,
 } from '@ever-works/agent/app-dependencies';
+// Platform demo mode — the workers' AI quota (bound only when `DEMO` is on).
+import { DemoAiQuotaService } from '../demo/demo-ai-quota.service';
 
 /**
  * C-05 RPC half — methods that must never be reachable via `POST
@@ -799,6 +801,13 @@ export class TriggerInternalController implements OnModuleInit {
         // agent `TasksDomainModule`. Appended LAST + `@Optional()` per the arity rule above.
         @Optional()
         private readonly appWorkIsolationBackfillRunner?: AppWorkIsolationBackfillRunner,
+        // Platform demo mode — the workers' AI quota: `TriggerFacadesModule` binds
+        // `DEMO_AI_QUOTA` to a proxy of this name, so a worker's AI call is counted in the
+        // same DB counters as the API's. Provided by the global `DemoModule` only when
+        // `DEMO` is on; otherwise unbound, and the name answers "Unknown remote target".
+        // Appended LAST + `@Optional()` per the arity rule above.
+        @Optional()
+        private readonly demoAiQuotaService?: DemoAiQuotaService,
     ) {}
 
     onModuleInit() {
@@ -1192,6 +1201,19 @@ export class TriggerInternalController implements OnModuleInit {
                                       ? opts.workId
                                       : null,
                           }),
+                  }
+                : undefined,
+            // Platform demo mode — a ONE-member facade (the `PluginAllowlistReader` precedent):
+            // a worker may count one AI call and nothing else. The API reads its own clock, so
+            // any argument after the user id is dropped. Maps to `undefined` (a loud "Unknown
+            // remote target") when the demo is off. A refusal (`DemoError`) propagates to
+            // `DemoErrorFilter`, whose `code` the worker's client turns back into the error.
+            DemoAiQuotaService: this.demoAiQuotaService
+                ? {
+                      consume: (userId?: unknown) =>
+                          this.demoAiQuotaService!.consume(
+                              typeof userId === 'string' && userId ? userId : undefined,
+                          ),
                   }
                 : undefined,
             ...(this.workProposalsApiService
