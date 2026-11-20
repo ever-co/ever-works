@@ -102,6 +102,7 @@ const ENV_KEYS = [
     'DEMO_GITHUB_ORG',
     'STORAGE_EVER_WORKS_GIT_ENABLED',
     'EVER_WORKS_CUSTOMERS_GITHUB_ORG',
+    'EVER_WORKS_PROJECT_WORKS_ENABLED',
 ];
 
 describe('DemoModule', () => {
@@ -159,6 +160,8 @@ describe('DemoModule', () => {
     describe('with DEMO on', () => {
         beforeEach(() => {
             process.env.DEMO = 'true';
+            // The boot check requires Project Works on a demo instance (sandbox seed).
+            process.env.EVER_WORKS_PROJECT_WORKS_ENABLED = 'true';
         });
 
         it('binds DEMO_AI_QUOTA globally to the DB-backed service', async () => {

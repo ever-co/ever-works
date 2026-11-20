@@ -7,10 +7,18 @@ import { config } from '@ever-works/agent/config';
  * deletes repos in that org. When the Ever Works git provider is enabled it
  * creates repos in `EVER_WORKS_CUSTOMERS_GITHUB_ORG`, so the two MUST be the
  * same org; otherwise demo repos would be created where cleanup never looks.
+ * Every sandbox is seeded with a Project Work, which only exists when Project Works are
+ * on; without them every "Start the demo" click would fail.
  * Throws an `Error` naming the env vars so a misconfigured instance fails to boot.
  */
 export function assertDemoConfig(): void {
 	if (!config.demo.isEnabled()) return;
+
+	if (!config.everWorks.projectWorks.enabled()) {
+		throw new Error(
+			'DEMO=true requires EVER_WORKS_PROJECT_WORKS_ENABLED=true: every demo sandbox is seeded with a Project Work.'
+		);
+	}
 
 	// Only generation (the git provider) needs the demo org; a local demo runs with git off.
 	if (config.everWorks.git.isEnabled()) {
