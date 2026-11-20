@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useLatestRef } from '@/lib/hooks/use-latest-ref';
 import { useTranslations } from 'next-intl';
 import {
     FLEET_CHECKOUT_REF_MAX_LENGTH,
@@ -82,8 +83,7 @@ export function SessionWhereStep({
     const [mode, setMode] = useState<SessionWhereMode>('existing');
     const [branch, setBranch] = useState('');
     const [edited, setEdited] = useState(false);
-    const editedRef = useRef(false);
-    editedRef.current = edited;
+    const editedRef = useLatestRef(edited);
     const [proposal, setProposal] = useState<FleetSessionBranchProposal | null>(null);
     const [proposing, setProposing] = useState(false);
     const [proposalError, setProposalError] = useState<string | null>(null);
@@ -155,7 +155,7 @@ export function SessionWhereStep({
         return () => {
             if (timer.current) window.clearTimeout(timer.current);
         };
-    }, [checkout, mode, nodeId, kind, agentId, firstMessage, title, taskId, tBranch]);
+    }, [checkout, mode, nodeId, kind, agentId, firstMessage, title, taskId, tBranch, editedRef]);
 
     const branchValid = isFleetCheckoutBranchName(branch);
     useEffect(() => {

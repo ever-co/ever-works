@@ -38,6 +38,7 @@ import { WebsiteTemplateSelector } from '@/components/works/shared/WebsiteTempla
 import { GenerationProgress } from './GenerationProgress';
 import type { WebsiteTemplateOption } from '@/lib/api/work';
 import type { WorkPlugin } from '@/lib/api/plugins';
+import { resolveInitialPrompt } from './initial-prompt';
 import { useWorkDetail } from '../WorkDetailContext';
 
 interface GeneratorFormProps {
@@ -47,6 +48,8 @@ interface GeneratorFormProps {
     websiteTemplates: WebsiteTemplateOption[];
     workPlugins?: WorkPlugin[];
     startInProgressView?: boolean;
+    /** Demo instance — see {@link resolveInitialPrompt}. Absent/false changes nothing. */
+    demoMode?: boolean;
 }
 
 export function GeneratorForm({
@@ -56,6 +59,7 @@ export function GeneratorForm({
     websiteTemplates,
     workPlugins = [],
     startInProgressView = false,
+    demoMode = false,
 }: GeneratorFormProps) {
     const router = useRouter();
     const t = useTranslations('dashboard.workDetail.generator');
@@ -76,7 +80,13 @@ export function GeneratorForm({
     const isWebsiteTemplateLocked = work.websiteRepositoryInitialized ?? false;
     const [templateSwitchModeEnabled, setTemplateSwitchModeEnabled] = useState(false);
     const lastRequestData = config?.metadata?.last_request_data;
-    const initialPrompt = lastRequestData?.prompt || config?.metadata?.initial_prompt || '';
+    const initialPrompt = resolveInitialPrompt({
+        lastPrompt: lastRequestData?.prompt,
+        initialPrompt: config?.metadata?.initial_prompt,
+        workDescription: work.description,
+        isGenerated,
+        demoMode,
+    });
     const [selectedWebsiteTemplateId, setSelectedWebsiteTemplateId] = useState(
         work.websiteTemplateId || '',
     );

@@ -365,7 +365,9 @@ const sidebars: SidebarsConfig = {
 				// env checks, the GHCR images and the .deploy/k8s manifests.
 				// Last in Guides because it is about running the platform
 				// rather than building a Work with it.
-				'guides/self-host-docker-kubernetes'
+				'guides/self-host-docker-kubernetes',
+				// Operating a public demo instance (DEMO=true), like demo.ever.works.
+				'guides/demo-mode'
 			]
 		},
 		{

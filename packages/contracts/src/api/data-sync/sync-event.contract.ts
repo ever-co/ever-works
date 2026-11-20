@@ -30,7 +30,9 @@ export type SyncEventSkipReason =
 	| 'sync-in-progress'
 	| 'generation-in-progress'
 	| 'no-changes'
-	| 'app-not-installed-and-no-credentials';
+	| 'app-not-installed-and-no-credentials'
+	/** The data repository has no `data/` directory: no items to render yet. */
+	| 'data-repo-empty';
 
 /**
  * Failure classes the render gate maps caught errors to. The set is

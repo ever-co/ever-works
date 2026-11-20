@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, type MutableRefObject } from 'react';
+import { useLatestRef } from '@/lib/hooks/use-latest-ref';
 import type { TerminalRenderer } from '@/components/terminal/terminal-renderer';
 import { createTerminalRenderer } from '@/components/terminal/create-terminal-renderer';
 
@@ -34,8 +35,7 @@ export function SessionTerminal({
     createRenderer?: () => Promise<TerminalRenderer>;
 }) {
     const hostRef = useRef<HTMLDivElement | null>(null);
-    const handlers = useRef({ onData, onResize, onRelease });
-    handlers.current = { onData, onResize, onRelease };
+    const handlers = useLatestRef({ onData, onResize, onRelease });
 
     useEffect(() => {
         let disposed = false;
@@ -98,7 +98,7 @@ export function SessionTerminal({
         };
         host.addEventListener('keydown', onKeyDown, true);
         return () => host.removeEventListener('keydown', onKeyDown, true);
-    }, []);
+    }, [handlers]);
 
     return (
         <section

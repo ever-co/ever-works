@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef, useState } from 'react';
+import { useState } from 'react';
 import { ArrowRight, FolderPlus, Sparkles } from 'lucide-react';
 import { desktopNextStep, type OnboardingDesktopChoice } from '@ever-works/contracts/api';
 import { Link } from '@/i18n/navigation';
@@ -62,8 +62,7 @@ export function CreateWorkStep({
     // the prompt hand-off it stays in generate mode for the component's
     // lifetime, so clearing the textarea disables the button rather than
     // collapsing the whole step back to the legacy "create" link.
-    const hasPromptRef = useRef(trimmedPrompt.length > 0 && Boolean(onQuickCreate));
-    const hasPrompt = hasPromptRef.current;
+    const [hasPrompt] = useState(() => trimmedPrompt.length > 0 && Boolean(onQuickCreate));
     const [editablePrompt, setEditablePrompt] = useState(trimmedPrompt);
     const [submitting, setSubmitting] = useState(false);
     const [error, setError] = useState<string | null>(null);
@@ -147,7 +146,7 @@ export function CreateWorkStep({
                         {error ? (
                             <p
                                 role="alert"
-                                className="mt-3 text-sm text-red-600 dark:text-red-400"
+                                className="mt-3 whitespace-pre-line text-sm text-red-600 dark:text-red-400"
                                 data-testid="onboarding-generate-error"
                             >
                                 {error}

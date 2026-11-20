@@ -11,6 +11,7 @@ import { ActivityLogService } from '../activity-log/activity-log.service';
 import { WorkKnowledgeUpload } from '../entities/work-knowledge-upload.entity';
 import { KbUploadExtractionStatus } from '../entities/kb-types';
 import type { KbTranscribePayload } from '../tasks/kb-transcribe.types';
+import { DemoFeatureDisabledError } from '../demo';
 
 const WORK_ID = '00000000-0000-0000-0000-000000000001';
 const UPLOAD_ID = '00000000-0000-0000-0000-000000000002';
@@ -38,7 +39,7 @@ function buildUpload(overrides: Partial<WorkKnowledgeUpload> = {}): WorkKnowledg
 
 describe('KnowledgeBaseTranscribeService', () => {
     let service: KnowledgeBaseTranscribeService;
-    let uploadRepo: jest.Mocked<Pick<WorkKnowledgeUploadRepository, 'findById'>>;
+    let uploadRepo: jest.Mocked<Pick<WorkKnowledgeUploadRepository, 'findById' | 'updateById'>>;
     let docRepo: jest.Mocked<
         Pick<WorkKnowledgeDocumentRepository, 'findByMetadataKey' | 'updateById'>
     >;
@@ -58,6 +59,7 @@ describe('KnowledgeBaseTranscribeService', () => {
     beforeEach(async () => {
         uploadRepo = {
             findById: jest.fn().mockResolvedValue(buildUpload()),
+            updateById: jest.fn().mockResolvedValue(undefined),
         };
         docRepo = {
             findByMetadataKey: jest.fn().mockResolvedValue(null),
@@ -171,6 +173,28 @@ describe('KnowledgeBaseTranscribeService', () => {
         );
 
         expect(kb.createDocument).not.toHaveBeenCalled();
+    });
+
+    it('demo instance: marks the upload skipped (not stuck running) and rethrows the refusal', async () => {
+        const refusal = new DemoFeatureDisabledError('transcription');
+        aiFacade.transcribe.mockRejectedValue(refusal);
+
+        await expect(service.transcribeUpload(payload)).rejects.toBe(refusal);
+
+        expect(uploadRepo.updateById).toHaveBeenCalledWith(WORK_ID, UPLOAD_ID, {
+            extractionStatus: KbUploadExtractionStatus.SKIPPED,
+            extractionFinishedAt: expect.any(Date),
+            extractionError: 'Transcription is not available in the demo',
+        });
+        expect(kb.createDocument).not.toHaveBeenCalled();
+    });
+
+    it('any other facade error leaves the upload row alone', async () => {
+        aiFacade.transcribe.mockRejectedValue(new Error('provider 502'));
+
+        await expect(service.transcribeUpload(payload)).rejects.toThrow('provider 502');
+
+        expect(uploadRepo.updateById).not.toHaveBeenCalled();
     });
 
     it('swallows activity-log failures so the pipeline still succeeds', async () => {

@@ -13499,6 +13499,44 @@
             "opensInNewTab": "(opens in a new tab)"
         }
     },
+    "demo": {
+        "login": {
+            "title": "Try Ever Works — no sign-up needed",
+            "start": "Start the demo",
+            "starting": "Starting your demo…",
+            "note": "Your private demo workspace is deleted after {hours} hours. AI runs on free models and may be slower.",
+            "sample": "See a site Ever Works generated",
+            "expired": "Your demo workspace expired — start a new one",
+            "operatorLogin": "Operator login",
+            "errors": {
+                "full": "The demo is full right now — please try again in a few minutes.",
+                "throttled": "Too many attempts — please try again shortly.",
+                "captcha": "We could not verify your browser. Please try again.",
+                "generic": "Could not start the demo. Please try again."
+            }
+        },
+        "strip": {
+            "message": "You are using a demo account. Finding our software useful?",
+            "signUp": "Click here to Sign Up",
+            "afterSignUp": "and start using for free!",
+            "expires": "Demo workspace expires in {hours} h",
+            "expiresSoon": "Demo workspace expires in less than 1 h",
+            "quotaExhausted": "Live AI is used up for today — explore the recorded examples"
+        },
+        "errors": {
+            "disabled": "Not available in the demo — sign up to use it",
+            "aiQuota": "The free demo AI quota is used up for today — sign up on {signUpHost} to keep going",
+            "aiQuotaSandbox": "This demo workspace has used all its free AI requests — sign up on {signUpHost} to keep going",
+            "aiBusy": "The demo AI is busy — try again in a few seconds",
+            "modelUnavailable": "The demo AI model is temporarily unavailable — please try again later"
+        },
+        "register": {
+            "title": "Create an account",
+            "body": "Accounts are created on the main Ever Works app. You can try this demo without one.",
+            "signUp": "Sign up on Ever Works",
+            "orTry": "Or just look around"
+        }
+    },
     "layout": {
         "auth": {
             "backToHome": "Back to home",

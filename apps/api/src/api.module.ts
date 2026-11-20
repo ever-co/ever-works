@@ -156,6 +156,7 @@ import {
 } from '@ever-works/agent/plugins';
 import { CacheFactory } from '@ever-works/agent/cache';
 import { DatabaseModule } from '@ever-works/agent/database';
+import { DemoModule } from './demo/demo.module';
 
 @Module({
     imports: [
@@ -163,6 +164,9 @@ import { DatabaseModule } from '@ever-works/agent/database';
         CacheFactory.TypeORM({
             isGlobal: true,
         }),
+        // Platform demo mode (`DEMO=true`): the AI quota (`DEMO_AI_QUOTA`, global) and the
+        // `DemoError` → HTTP filter. An empty module when `DEMO` is off. See demo/demo.module.ts.
+        DemoModule.register(),
         ScheduleModule.forRoot(),
         TwentyCrmModule.forRoot(),
         GitHubAppModule,

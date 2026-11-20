@@ -106,6 +106,11 @@ RUN set -e; \
         exit 1; \
     fi
 
+# Packaging gate: the demo sandbox seeder reads its recorded examples from the JSON next to the
+# compiled seeder (`__dirname`, /app/dist/demo/seed at runtime). Without it every demo sandbox
+# seed fails; it ships only through the `demo/seed/*.json` asset in apps/api/nest-cli.json.
+RUN test -f /app/deploy/dist/demo/seed/demo-recorded-seeder.js && test -f /app/deploy/dist/demo/seed/demo-recorded.fixture.json
+
 RUN node scripts/prepare-docker-plugins.js
 
 # EW-693 / T29 — dual-mode image.

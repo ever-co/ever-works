@@ -6,6 +6,6 @@
         "builder": "swc",
         "deleteOutDir": true,
         "typeCheck": true,
-        "assets": ["templates/**/*"]
+        "assets": ["templates/**/*", "demo/seed/*.json"]
     }
 }

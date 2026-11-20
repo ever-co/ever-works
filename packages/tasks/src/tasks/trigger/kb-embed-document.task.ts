@@ -4,6 +4,7 @@ import { KbEmbedDocumentPayload } from '@ever-works/agent/tasks';
 import { KnowledgeBaseService, chunkMarkdown } from '@ever-works/agent/services';
 import { WorkKnowledgeChunkRepository, type ChunkUpsertInput } from '@ever-works/agent/database';
 import { AiFacadeService } from '@ever-works/agent/facades';
+import { DemoFeatureDisabledError } from '@ever-works/agent/demo';
 import { TriggerPluginHydratorService } from '../../trigger/worker/services/trigger-plugin-hydrator.service';
 import { TenantRuntimeBindingResolverService } from '../../trigger/worker/services/tenant-runtime-binding-resolver.service';
 import { withWorkerContext } from '../../trigger/worker/utils/worker-context.utils';
@@ -42,6 +43,9 @@ import { withWorkerContext } from '../../trigger/worker/utils/worker-context.uti
  *  - `empty-body` — `chunkMarkdown` returned `[]` (whitespace-only
  *    body). Calls `replaceForDocument(... [])` so stale chunks from a
  *    previous non-empty version are dropped, then returns.
+ *  - `embeddings-disabled` — a demo instance (`DEMO=true`):
+ *    `AiFacadeService.embed` throws `DemoFeatureDisabledError`. Chunks
+ *    are left as they are; KB retrieval runs lexical-only.
  *  - `embedder-not-configured` — `AiFacadeService.embed` throws
  *    `AiFacadeError` because no AI provider is wired (or the active
  *    one lacks `createEmbedding`). Falls through to the catch in the
@@ -158,10 +162,28 @@ export const kbEmbedDocumentTask = task<'kb-embed-document', KbEmbedDocumentPayl
             // or import-seeded docs where `createdById` is null.
             const embedUserId = doc.createdById ?? 'kb-embed-system';
 
-            const embeddingResponse = await aiFacade.embed(
-                { input: chunks.map((c) => c.content) },
-                { workId: payload.workId, userId: embedUserId },
-            );
+            let embeddingResponse: Awaited<ReturnType<AiFacadeService['embed']>>;
+            try {
+                embeddingResponse = await aiFacade.embed(
+                    { input: chunks.map((c) => c.content) },
+                    { workId: payload.workId, userId: embedUserId },
+                );
+            } catch (error) {
+                // Platform demo mode: no embeddings. The document has no
+                // semantic signal (KB search runs lexical-only) — skip and
+                // ack rather than fail and retry.
+                if (!(error instanceof DemoFeatureDisabledError)) throw error;
+                logger.info('kb-embed-document: embeddings disabled in the demo, skipping', {
+                    workId: payload.workId,
+                    documentId: payload.documentId,
+                });
+                return {
+                    status: 'skipped',
+                    reason: 'embeddings-disabled',
+                    workId: payload.workId,
+                    documentId: payload.documentId,
+                };
+            }
 
             // Lesson #2 — verify runtime API shape before trusting it
             // (`mammoth.convertToMarkdown` taught us). The plugin's

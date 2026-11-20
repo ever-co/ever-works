@@ -13,6 +13,12 @@ jest.mock('@ever-works/agent/services', () => ({
 }));
 
 import {
+    DemoModelNotAllowedError,
+    DemoModelUnavailableError,
+    DemoQuotaExceededError,
+    DemoRateLimitedError,
+} from '@ever-works/agent/demo';
+import {
     OpenAiCompatService,
     KB_CITATION_INSTRUCTION,
     KB_DATA_PREAMBLE,
@@ -656,6 +662,165 @@ describe('OpenAiCompatService', () => {
             const body = JSON.parse(endArg);
             expect(body.error.message).not.toContain('abcdef1234567890ghijk');
             expect(body.error.message).toContain('[redacted]');
+        });
+
+        /**
+         * Platform demo mode (R39): the AI facade refuses a demo call with a `DemoError` before
+         * the first chunk. With nothing written yet it is rethrown, untouched, for the global
+         * `DemoErrorFilter` to answer with its status and `code` (the web's chat maps the code
+         * to a friendly message). Should one arrive after the stream started, the stream carries
+         * it as an OpenAI stream error event with the `code`, then ends. Every other error, and
+         * every error with `DEMO` unset, takes the 502 / abort path exactly as before.
+         */
+        describe('a demo refusal', () => {
+            const savedDemo = process.env.DEMO;
+            afterEach(() => {
+                if (savedDemo === undefined) delete process.env.DEMO;
+                else process.env.DEMO = savedDemo;
+            });
+
+            const chunk = {
+                id: 'c-1',
+                created: 0,
+                model: 'm:free',
+                choices: [{ index: 0, delta: { content: 'partial' }, finishReason: null }],
+            };
+
+            /** A response whose headers go out with the first write, as Node's does. */
+            const streamingRes = () => {
+                const res = makeRes();
+                res.write.mockImplementation(() => {
+                    res.headersSent = true;
+                });
+                return res;
+            };
+
+            it.each([
+                ['DEMO_AI_QUOTA', new DemoQuotaExceededError('sandbox')],
+                ['DEMO_AI_QUOTA', new DemoQuotaExceededError('day')],
+                ['DEMO_AI_BUSY', new DemoRateLimitedError(3_000)],
+                ['DEMO_MODEL_NOT_ALLOWED', new DemoModelNotAllowedError('openai/gpt-4o')],
+                ['DEMO_MODEL_UNAVAILABLE', new DemoModelUnavailableError('m:free')],
+            ])(
+                'with DEMO on, before the first byte, is rethrown for DemoErrorFilter (%s)',
+                async (_code, refusal) => {
+                    process.env.DEMO = 'true';
+                    aiFacade.createStreamingChatCompletion.mockReturnValue(
+                        asyncThrow([], refusal) as any,
+                    );
+                    const res = streamingRes();
+
+                    await expect(
+                        service.handleStreamingCompletion(
+                            { stream: true, messages: [] } as any,
+                            { userId: 'u', workId: 'w' },
+                            res as any,
+                        ),
+                    ).rejects.toBe(refusal);
+
+                    // Nothing written or ended: the filter writes the whole answer.
+                    expect(res.write).not.toHaveBeenCalled();
+                    expect(res.status).not.toHaveBeenCalled();
+                    expect(res.end).not.toHaveBeenCalled();
+                    expect(res.destroy).not.toHaveBeenCalled();
+                },
+            );
+
+            it('with DEMO on, after the stream started, ends it with a coded stream error event', async () => {
+                process.env.DEMO = 'true';
+                const refusal = new DemoModelUnavailableError('m:free');
+                aiFacade.createStreamingChatCompletion.mockReturnValue(
+                    asyncThrow([chunk], refusal) as any,
+                );
+                const res = streamingRes();
+
+                await service.handleStreamingCompletion(
+                    { stream: true, messages: [] } as any,
+                    { userId: 'u', workId: 'w' },
+                    res as any,
+                );
+
+                const writes = res.write.mock.calls.map((call) => call[0] as string);
+                expect(writes).toHaveLength(2);
+                expect(JSON.parse(writes[1].replace(/^data: /, ''))).toEqual({
+                    error: {
+                        message: refusal.message,
+                        type: 'demo_error',
+                        code: 'DEMO_MODEL_UNAVAILABLE',
+                    },
+                });
+                expect(writes[1].endsWith('\n\n')).toBe(true);
+                expect(writes).not.toContain('data: [DONE]\n\n');
+                expect(res.end).toHaveBeenCalledTimes(1);
+                expect(res.destroy).not.toHaveBeenCalled();
+            });
+
+            it('with DEMO on, any other error still answers 502 before the first byte', async () => {
+                process.env.DEMO = 'true';
+                aiFacade.createStreamingChatCompletion.mockReturnValue(
+                    asyncThrow([], new Error('upstream down')) as any,
+                );
+                const res = streamingRes();
+
+                await service.handleStreamingCompletion(
+                    { stream: true, messages: [] } as any,
+                    { userId: 'u', workId: 'w' },
+                    res as any,
+                );
+
+                expect(res.status).toHaveBeenCalledWith(502);
+                expect(JSON.parse(res.end.mock.calls[0][0] as string)).toEqual({
+                    error: {
+                        message: 'upstream down',
+                        type: 'provider_error',
+                        code: 'ai_provider_error',
+                    },
+                });
+            });
+
+            it.each([undefined, 'false', ''])(
+                'with DEMO unset (%s), takes the 502 path and the abort path exactly as before',
+                async (demo) => {
+                    if (demo === undefined) delete process.env.DEMO;
+                    else process.env.DEMO = demo;
+                    const refusal = new DemoQuotaExceededError('day');
+
+                    aiFacade.createStreamingChatCompletion.mockReturnValue(
+                        asyncThrow([], refusal) as any,
+                    );
+                    const before = streamingRes();
+                    await service.handleStreamingCompletion(
+                        { stream: true, messages: [] } as any,
+                        { userId: 'u', workId: 'w' },
+                        before as any,
+                    );
+                    expect(before.status).toHaveBeenCalledWith(502);
+                    expect(before.setHeader).toHaveBeenCalledWith(
+                        'Content-Type',
+                        'application/json',
+                    );
+                    expect(JSON.parse(before.end.mock.calls[0][0] as string)).toEqual({
+                        error: {
+                            message: refusal.message,
+                            type: 'provider_error',
+                            code: 'ai_provider_error',
+                        },
+                    });
+
+                    aiFacade.createStreamingChatCompletion.mockReturnValue(
+                        asyncThrow([chunk], refusal) as any,
+                    );
+                    const after = streamingRes();
+                    await service.handleStreamingCompletion(
+                        { stream: true, messages: [] } as any,
+                        { userId: 'u', workId: 'w' },
+                        after as any,
+                    );
+                    expect(after.write).toHaveBeenCalledTimes(1);
+                    expect(after.destroy).toHaveBeenCalledWith(refusal);
+                    expect(after.status).not.toHaveBeenCalled();
+                },
+            );
         });
     });
 

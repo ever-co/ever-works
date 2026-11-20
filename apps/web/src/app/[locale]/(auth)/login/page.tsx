@@ -1,12 +1,13 @@
 import type { Metadata } from 'next';
 import { Suspense } from 'react';
 import { LoginClient } from './login-client';
-import { getAuthFromCookie, wasSignedOutByEverId } from '@/lib/auth';
+import { getAuthFromCookieOnSignIn, wasSignedOutByEverId } from '@/lib/auth';
 import { redirect } from '@/i18n/navigation';
 import { getLocale, getTranslations } from 'next-intl/server';
 import { ROUTES } from '@/lib/constants';
 import { getAuthProvidersConfig } from '@/lib/auth/providers';
 import { hasEverIdSignOutMarker } from '@/lib/auth/ever-id-signed-out';
+import { getDemoConfig } from '@/lib/feature-flags/demo';
 import { EVER_ID_ANONYMOUS_DISTINCT_ID, isEverIdOffered } from '@/lib/feature-flags/ever-id';
 
 export async function generateMetadata(): Promise<Metadata> {
@@ -16,8 +17,12 @@ export async function generateMetadata(): Promise<Metadata> {
 
 export default async function LoginPage() {
     const locale = await getLocale();
-    const { socialProviders, magicLinkEnabled, everId } = await getAuthProvidersConfig();
-    const user = await getAuthFromCookie();
+    // Two independent reads of the API, asked for at once.
+    const [{ socialProviders, magicLinkEnabled, everId }, demo] = await Promise.all([
+        getAuthProvidersConfig(),
+        getDemoConfig(),
+    ]);
+    const user = await getAuthFromCookieOnSignIn();
     if (user) {
         return redirect({ locale, href: ROUTES.DASHBOARD });
     }
@@ -46,6 +51,7 @@ export default async function LoginPage() {
                 magicLinkEnabled={magicLinkEnabled}
                 everIdEnabled={everIdEnabled}
                 signedOutByEverId={signedOutByEverId}
+                demo={demo.enabled ? { ttlHours: demo.sandboxTtlHours } : null}
             />
         </Suspense>
     );

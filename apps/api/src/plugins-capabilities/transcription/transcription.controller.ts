@@ -26,6 +26,7 @@ import { IsOptional, IsString, Matches, MaxLength } from 'class-validator';
 import { AiFacadeService, TranscriptionNotConfiguredError } from '@ever-works/agent/facades';
 import { PluginOperationsService } from '@ever-works/agent/plugins';
 import { config } from '@ever-works/agent/config';
+import { DemoError } from '@ever-works/agent/demo';
 import { AuthSessionGuard, CurrentUser } from '../../auth';
 import { AuthenticatedUser } from '../../auth/types/auth.types';
 
@@ -224,6 +225,9 @@ export class TranscriptionController {
                 durationSeconds: result.durationSeconds,
             };
         } catch (error) {
+            // A demo instance refuses transcription: the error carries its
+            // own code and status (403 DEMO_DISABLED) and nothing secret.
+            if (error instanceof DemoError) throw error;
             if (error instanceof TranscriptionNotConfiguredError) {
                 // A deployment with no Whisper-capable provider is a
                 // configuration state, not a bug — 503 lets the client

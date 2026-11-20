@@ -14,6 +14,7 @@ import type { OAuthConnectionInfo } from '@/lib/api/plugins-capabilities/oauth';
 import type { GitProviderConnectionInfo } from '@/lib/api/plugins-capabilities/git-providers';
 import type { PluginDeviceAuthStatus } from '@/lib/api/plugins-capabilities/device-auth';
 import type { UserPlugin } from '@/lib/api/plugins';
+import { buildDemoStrip } from '@/lib/demo/demo-strip';
 import { redirect } from '@/i18n/navigation';
 import { getLocale } from 'next-intl/server';
 import { ROUTES } from '@/lib/constants';
@@ -95,6 +96,9 @@ export default async function DashboardLayout({ children }: { children: React.Re
         isAppLauncherEnabled(user.id),
     ]);
 
+    // Platform demo mode: null (and no extra request) unless the profile carries a `demo` block.
+    const demoStrip = await buildDemoStrip(profile?.demo);
+
     const hasGithubConnected =
         profile?.oauthTokens?.some((token) => token.provider === 'github') ?? false;
     const onboardingTotalWorks = statsResponse.success ? statsResponse.totalWorks : 0;
@@ -138,6 +142,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
             initialOnboardingCatalog={onboardingCatalog}
             apiVersion={apiVersion}
             jobRuntimeConfigured={jobRuntimeConfigured}
+            demoStrip={demoStrip}
             changelogUnreadCount={changelogUnreadCount}
             appLauncherEnabled={appLauncherEnabled}
             fleetHubEnabled={isFleetHubEnabled()}

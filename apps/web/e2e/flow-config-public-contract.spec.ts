@@ -17,7 +17,8 @@ import { loadSeededTestUser } from './helpers/seeded-test-user';
  *     features: { subscriptionsEnabled: boolean, magicLinkEnabled: boolean,
  *                 anonymousAuthEnabled: boolean, emailVerificationRequired: boolean },
  *     auth:     { providers: { github: boolean, google: boolean, facebook: boolean } },
- *     limits:   { bodyLimit: string }
+ *     limits:   { bodyLimit: string },
+ *     demo:     { signUpUrl: string, sandboxTtlHours: number } | null   (features.demoMode: boolean)
  *   }
  * PROBED HEADERS:
  *   Cache-Control: public, max-age=60
@@ -103,8 +104,8 @@ test.describe('Public config contract — /api/config deep integration', () => {
         const body = (await res.json()) as Json;
         expect(isPlainObject(body)).toBe(true);
 
-        // Top-level allow-list is closed: exactly these four sections, no more.
-        expect(Object.keys(body).sort()).toEqual(['app', 'auth', 'features', 'limits']);
+        // Top-level allow-list is closed: exactly these five sections, no more.
+        expect(Object.keys(body).sort()).toEqual(['app', 'auth', 'demo', 'features', 'limits']);
 
         // app: branding strings.
         const app = body.app as Json;
@@ -120,6 +121,7 @@ test.describe('Public config contract — /api/config deep integration', () => {
         expect(Object.keys(features).sort()).toEqual([
             'anonymousAuthEnabled',
             'appLauncherEnabled',
+            'demoMode',
             'emailVerificationRequired',
             'magicLinkEnabled',
             'subscriptionsEnabled',
@@ -127,6 +129,10 @@ test.describe('Public config contract — /api/config deep integration', () => {
         for (const [k, v] of Object.entries(features)) {
             expect(typeof v, `features.${k} must be a boolean`).toBe('boolean');
         }
+
+        // demo: null unless the instance runs in demo mode (default test server: off).
+        expect(features.demoMode).toBe(false);
+        expect(body.demo).toBeNull();
 
         // auth.providers: presence booleans only — never the secret itself.
         const providers = (body.auth as Json).providers as Json;
@@ -303,7 +309,7 @@ test.describe('Public config contract — /api/config deep integration', () => {
         });
         expect(stale.status(), 'mismatched If-None-Match must serve the fresh body').toBe(200);
         const staleBody = (await stale.json()) as Json;
-        expect(Object.keys(staleBody).sort()).toEqual(['app', 'auth', 'features', 'limits']);
+        expect(Object.keys(staleBody).sort()).toEqual(['app', 'auth', 'demo', 'features', 'limits']);
     });
 
     test('AUTH-INVARIANT: anon ≡ seeded ≡ fresh-registered (byte-identical body + identical ETag)', async ({

@@ -248,6 +248,8 @@ export * from './workspace-backup.entity';
 // organization id. Written only by the launcher's own save path.
 export * from './app-launcher-preference.entity';
 // APW-12 Ever ID — a connected identity: one (issuer, subject) pair per account.
+export * from './demo-github-repo.entity';
+export * from './demo-usage-counter.entity';
 export * from './external-identity.entity';
 // APW-02 Fork lifecycle — one row per App Work: readiness, Actions hygiene,
 // the sync schedule, the divergence reading and the manual-sync allowance.

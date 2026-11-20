@@ -30,6 +30,16 @@ type InitializeOptions = {
     remove_details?: string[];
     signal?: AbortSignal;
     /**
+     * `true` returns `{ skipped: 'no-data' }` without writing, committing or
+     * pushing anything when the data repository has no `data/` directory
+     * (it holds no items yet). Default `false`: that case throws the
+     * `ENOENT` it always did. Only the render-only data sync sets it — a
+     * Work whose generation never wrote an item (a managed single-repo Work
+     * whose repository holds just `README.md`, say) has nothing to sync, and
+     * rendering it would push an empty README over whatever is there.
+     */
+    skipWhenNoData?: boolean;
+    /**
      * Size (UTF-8 bytes) above which the README is split into a category index
      * plus `categories/<category>.md` pages; also the size limit of each of
      * those files. Default {@link README_SPLIT_THRESHOLD_BYTES} (300 KB, kept
@@ -83,7 +93,15 @@ export type SyncFromDataRepoOptions = {
     signal?: AbortSignal;
 };
 
+/** Why `initialize` / `syncFromDataRepo` returned without rendering. */
+export type MarkdownRenderSkipReason = 'no-data';
+
 export type SyncFromDataRepoResult = {
+    /**
+     * Set when nothing was rendered, committed or pushed: `no-data` means the
+     * data repository has no `data/` directory. `afterSha` is then undefined.
+     */
+    skipped?: MarkdownRenderSkipReason;
     /** Data-repo HEAD SHA before this sync's clone/pull. TODO(EW-628): wire when stats helper lands. */
     beforeSha?: string;
     /** Data-repo HEAD SHA the main repo was rendered against. TODO(EW-628): wire when stats helper lands. */
@@ -111,7 +129,7 @@ export class MarkdownGeneratorService {
         work: Work,
         user: User,
         options: InitializeOptions = {},
-    ): Promise<{ filesChanged: number }> {
+    ): Promise<{ filesChanged: number; skipped?: MarkdownRenderSkipReason }> {
         throwIfGenerationCancelled(options.signal);
 
         // The single gate for the provider repository. `initialize` is called
@@ -218,7 +236,19 @@ export class MarkdownGeneratorService {
         }
 
         try {
-            const slugs = await fs.readdir(dataRepo.dataDir);
+            let slugs: string[];
+            try {
+                slugs = await fs.readdir(dataRepo.dataDir);
+            } catch (err) {
+                if (options.skipWhenNoData && (err as NodeJS.ErrnoException)?.code === 'ENOENT') {
+                    this.logger.log(
+                        `Work ${work.id}: the data repository has no data/ directory (${dataRepo.dataDir}) — ` +
+                            'no items to render yet; nothing written, committed or pushed.',
+                    );
+                    return { filesChanged: 0, skipped: 'no-data' };
+                }
+                throw err;
+            }
             await markdownRepo.ensureWorksExist();
 
             const provider = work.gitProvider;
@@ -523,7 +553,19 @@ export class MarkdownGeneratorService {
             // is backwards compatible.
             return { filesChanged: markdownRepo.getWriteCount() };
         } catch (err) {
-            this.logger.error('Error during markdown generation', err);
+            // Nest's Logger prints a non-string second argument as `{}` or
+            // drops it, which left only "Error during markdown generation" in
+            // the logs. Put the (redacted) message in the line itself and pass
+            // the stack as the stack.
+            const message = `Error during markdown generation for work ${work.id} (${work.slug}): ${
+                redactSecrets(err instanceof Error ? err.message : String(err)).cleaned
+            }`;
+            const stack = err instanceof Error && err.stack ? redactSecrets(err.stack).cleaned : '';
+            if (stack) {
+                this.logger.error(message, stack);
+            } else {
+                this.logger.error(message);
+            }
             throw err;
         }
     }
@@ -565,7 +607,13 @@ export class MarkdownGeneratorService {
         const startedAt = Date.now();
         const beforeSha = work.lastSyncedDataRepoSha ?? undefined;
 
-        const { filesChanged } = await this.initialize(work, user, { signal: options.signal });
+        const { filesChanged, skipped } = await this.initialize(work, user, {
+            signal: options.signal,
+            skipWhenNoData: true,
+        });
+        if (skipped) {
+            return { skipped, beforeSha, filesChanged, durationMs: Date.now() - startedAt };
+        }
 
         const afterSha = await this.captureDataRepoHeadSha(work, user).catch((err) => {
             this.logger.warn(

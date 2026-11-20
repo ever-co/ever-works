@@ -8,6 +8,7 @@ import { GenerationProgress } from '@/components/works/detail/generator/Generati
 import { GenerateStatusType } from '@/lib/api/enums';
 import { canGenerate } from '@/lib/permissions';
 import { isAppWorkKind, isRepositoryWorkKind } from '@ever-works/contracts';
+import { getDemoConfig } from '@/lib/feature-flags/demo';
 import { notFound } from 'next/navigation';
 
 export async function generateMetadata(): Promise<Metadata> {
@@ -59,11 +60,12 @@ export default async function WorkGeneratorPage({ params, searchParams }: Params
     // Work entity (populated by `DataGeneratorService.refreshDataCache`),
     // so the Generator tab opens without a git clone. The remaining
     // two fetches are DB-only / cheap plugin metadata.
-    const [websiteTemplatesRes, pluginsRes] = await Promise.all([
+    const [websiteTemplatesRes, pluginsRes, demo] = await Promise.all([
         workAPI
             .getWebsiteTemplates()
             .catch((): { templates: WebsiteTemplateOption[] } => ({ templates: [] })),
         pluginsAPI.listForWork(id).catch((): { plugins: WorkPlugin[] } => ({ plugins: [] })),
+        getDemoConfig(),
     ]);
 
     return (
@@ -74,6 +76,7 @@ export default async function WorkGeneratorPage({ params, searchParams }: Params
             websiteTemplates={websiteTemplatesRes.templates}
             workPlugins={pluginsRes.plugins}
             startInProgressView={starting === '1'}
+            demoMode={demo.enabled}
         />
     );
 }

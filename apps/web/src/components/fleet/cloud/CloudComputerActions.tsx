@@ -4,9 +4,10 @@ import { useEffect, useRef, useState, useTransition } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { useTranslations } from 'next-intl';
 import { toast } from 'sonner';
-import type { FleetLinkError } from '@ever-works/contracts';
+import type { FleetLinkError, FleetNodeCloudView, FleetNodeView } from '@ever-works/contracts';
 import { useRouter } from '@/i18n/navigation';
 import { ROUTES } from '@/lib/constants';
+import { useLatestRef } from '@/lib/hooks/use-latest-ref';
 import { Button } from '@/components/ui/button';
 import { destroyFleetCloudAction, fleetCloudPowerAction } from '@/app/actions/fleet/cloud';
 import { ConfirmActionDialog } from '../machine/ConfirmActionDialog';
@@ -19,6 +20,54 @@ import {
     hourly,
     money,
 } from './cloud.shared';
+
+type Translate = ReturnType<typeof useTranslations<'fleet.cloud'>>;
+type CloudDialog = { act: 'off' | 'on' | 'destroy'; model: ConfirmDialogModel };
+
+function powerDialog(
+    t: Translate,
+    node: FleetNodeView,
+    cloud: FleetNodeCloudView,
+    act: 'off' | 'on',
+): CloudDialog {
+    return {
+        act,
+        model: {
+            class: 'confirm',
+            title:
+                act === 'off'
+                    ? t('power.offTitle', { name: node.name })
+                    : t('power.onTitle', { name: node.name }),
+            body:
+                act === 'off'
+                    ? cloud.billsWhileOff
+                        ? t('power.offBody', { provider: cloud.providerName })
+                        : t('power.offBodyFree')
+                    : t('power.onBody', {
+                          rate: hourly(cloud.hourlyRateCents, cloud.currency),
+                      }),
+        },
+    };
+}
+
+function destroyDialog(t: Translate, node: FleetNodeView, cloud: FleetNodeCloudView): CloudDialog {
+    // The block's figure is the server's at page load; the 409 carries the
+    // server's again, and the destroy answers with the final figure.
+    const costSoFar = cloud.cost.sinceCreatedCents;
+    return {
+        act: 'destroy',
+        model: {
+            class: 'confirm-destructive',
+            title: t('destroy.title', { name: node.name }),
+            body: t('destroy.body', {
+                cost: money(costSoFar, cloud.currency),
+                date: (cloud.machineCreatedAt ?? cloud.createdAt).slice(0, 10),
+                provider: cloud.providerName,
+            }),
+            typeName: node.name,
+        },
+    };
+}
 
 /**
  * Cloud computers (FL-17, spec §5.3 – §5.5, FR-16 – FR-20, S10) — a cloud
@@ -33,16 +82,21 @@ import {
 export default function CloudComputerActions({ node, allowed = true }: FleetComputerActionProps) {
     const t = useTranslations('fleet.cloud');
     const router = useRouter();
-    const [dialog, setDialog] = useState<{
-        act: 'off' | 'on' | 'destroy';
-        model: ConfirmDialogModel;
-    } | null>(null);
+    const [dialog, setDialog] = useState<CloudDialog | null>(null);
     const [pending, startTransition] = useTransition();
     const params = useSearchParams();
     const opened = useRef(false);
-    const openPowerRef = useRef<((act: 'off' | 'on') => void) | null>(null);
-    const openDestroyRef = useRef<(() => void) | null>(null);
     const cloud = node.cloud;
+    const openPower = (act: 'off' | 'on') => {
+        if (cloud) setDialog(powerDialog(t, node, cloud, act));
+    };
+    const openDestroy = () => {
+        if (cloud) setDialog(destroyDialog(t, node, cloud));
+    };
+    // The deep-link effect below opens a dialog through these, so the act it
+    // takes once is the one this render offers.
+    const openPowerRef = useLatestRef(openPower);
+    const openDestroyRef = useLatestRef(openDestroy);
     // P2: a "needs a look" item links here with `?cloud=power-off|power-on|destroy`
     // (spec §5.7): open that act's confirmation once, when it is offered now.
     const requested = cloudActFromQuery(params?.get('cloud'));
@@ -51,11 +105,11 @@ export default function CloudComputerActions({ node, allowed = true }: FleetComp
         opened.current = true;
         const state = cloudDisplayState(node, cloud);
         if (requested === 'destroy') {
-            if (state !== 'destroying' && state !== 'creating') openDestroyRef.current?.();
+            if (state !== 'destroying' && state !== 'creating') openDestroyRef.current();
             return;
         }
-        if (cloudPowerChoice(state) === requested) openPowerRef.current?.(requested);
-    }, [requested, cloud, allowed, node]);
+        if (cloudPowerChoice(state) === requested) openPowerRef.current(requested);
+    }, [requested, cloud, allowed, node, openDestroyRef, openPowerRef]);
     if (!cloud) return null;
     const state = cloudDisplayState(node, cloud);
     const power = cloudPowerChoice(state);
@@ -95,48 +149,6 @@ export default function CloudComputerActions({ node, allowed = true }: FleetComp
             } else fail(result.error, t('power.failed'));
         });
     };
-
-    const openPower = (act: 'off' | 'on') =>
-        setDialog({
-            act,
-            model: {
-                class: 'confirm',
-                title:
-                    act === 'off'
-                        ? t('power.offTitle', { name: node.name })
-                        : t('power.onTitle', { name: node.name }),
-                body:
-                    act === 'off'
-                        ? cloud.billsWhileOff
-                            ? t('power.offBody', { provider: cloud.providerName })
-                            : t('power.offBodyFree')
-                        : t('power.onBody', {
-                              rate: hourly(cloud.hourlyRateCents, cloud.currency),
-                          }),
-            },
-        });
-
-    const openDestroy = () => {
-        // The block's figure is the server's at page load; the 409 carries the
-        // server's again, and the destroy answers with the final figure.
-        const costSoFar = cloud.cost.sinceCreatedCents;
-        setDialog({
-            act: 'destroy',
-            model: {
-                class: 'confirm-destructive',
-                title: t('destroy.title', { name: node.name }),
-                body: t('destroy.body', {
-                    cost: money(costSoFar, cloud.currency),
-                    date: (cloud.machineCreatedAt ?? cloud.createdAt).slice(0, 10),
-                    provider: cloud.providerName,
-                }),
-                typeName: node.name,
-            },
-        });
-    };
-
-    openPowerRef.current = openPower;
-    openDestroyRef.current = openDestroy;
 
     return (
         <div className="flex items-center gap-2" data-testid="fleet-cloud-actions">

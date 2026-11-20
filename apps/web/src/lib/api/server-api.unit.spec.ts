@@ -1,13 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { API_SCOPE_HEADER, BROWSER_WORKSPACE_SCOPE_HEADER } from '../workspace-scope';
 
-const { getAuthAccessCookieMock, headersMock, translationsMock } = vi.hoisted(() => ({
-    getAuthAccessCookieMock: vi.fn(),
-    headersMock: vi.fn(),
-    translationsMock: vi.fn(async () => (key: string) => key),
-}));
+const { getAuthAccessCookieMock, getDemoConfigMock, headersMock, translationsMock } = vi.hoisted(
+    () => ({
+        getAuthAccessCookieMock: vi.fn(),
+        getDemoConfigMock: vi.fn(),
+        headersMock: vi.fn(),
+        translationsMock: vi.fn(async () => (key: string) => key),
+    }),
+);
 
 vi.mock('next/headers', () => ({ headers: headersMock }));
+vi.mock('../feature-flags/demo', () => ({ getDemoConfig: getDemoConfigMock }));
 vi.mock('../auth/cookies', () => ({ getAuthAccessCookie: getAuthAccessCookieMock }));
 vi.mock('next-intl/server', () => ({ getTranslations: translationsMock }));
 vi.mock('../constants', () => ({
@@ -117,5 +121,91 @@ describe('serverFetch workspace scope transport', () => {
         );
 
         await expect(getLoginDefaultWorkspaceHref()).rejects.toMatchObject({ statusCode: 404 });
+    });
+});
+
+describe('serverFetch demo error codes', () => {
+    beforeEach(() => {
+        vi.clearAllMocks();
+        getAuthAccessCookieMock.mockResolvedValue('access-token');
+        headersMock.mockResolvedValue(
+            new Headers({ host: 'app.example', [BROWSER_WORKSPACE_SCOPE_HEADER]: 'personal' }),
+        );
+        getDemoConfigMock.mockResolvedValue({
+            enabled: true,
+            signUpUrl: 'https://app.ever.works/register',
+            sandboxTtlHours: 24,
+        });
+    });
+
+    function failWith(status: number, body: Record<string, unknown>) {
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(
+                async () =>
+                    new Response(JSON.stringify(body), {
+                        status,
+                        headers: { 'content-type': 'application/json' },
+                    }),
+            ),
+        );
+    }
+
+    it.each([
+        [403, 'DEMO_DISABLED', 'disabled'],
+        [429, 'DEMO_AI_QUOTA', 'aiQuota'],
+        [429, 'DEMO_AI_BUSY', 'aiBusy'],
+        [503, 'DEMO_MODEL_UNAVAILABLE', 'modelUnavailable'],
+    ])('%i %s becomes the friendly demo.errors.%s message', async (status, code, key) => {
+        failWith(status, { statusCode: status, code, message: 'raw api text' });
+
+        await expect(
+            serverFetch('/me/works', { method: 'POST', body: '{}' }),
+        ).rejects.toMatchObject({
+            message: key,
+            statusCode: status,
+            code,
+        });
+        expect(translationsMock).toHaveBeenCalledWith('demo.errors');
+    });
+
+    // R42 f: which quota (the sandbox's own cap or the instance's day) and the configured host.
+    it('words a used-up quota by its quotaScope, with the configured sign-up host', async () => {
+        const t = vi.fn((key: string) => key);
+        translationsMock.mockImplementation(async () => t);
+        getDemoConfigMock.mockResolvedValue({
+            enabled: true,
+            signUpUrl: 'https://join.example.test/register',
+            sandboxTtlHours: 24,
+        });
+
+        failWith(429, { statusCode: 429, code: 'DEMO_AI_QUOTA', quotaScope: 'sandbox' });
+        await expect(
+            serverFetch('/me/works', { method: 'POST', body: '{}' }),
+        ).rejects.toMatchObject({ message: 'aiQuotaSandbox', statusCode: 429 });
+        expect(t).toHaveBeenCalledWith('aiQuotaSandbox', { signUpHost: 'join.example.test' });
+
+        failWith(429, { statusCode: 429, code: 'DEMO_AI_QUOTA', quotaScope: 'day' });
+        await expect(
+            serverFetch('/me/works', { method: 'POST', body: '{}' }),
+        ).rejects.toMatchObject({ message: 'aiQuota' });
+        expect(t).toHaveBeenCalledWith('aiQuota', { signUpHost: 'join.example.test' });
+        translationsMock.mockImplementation(async () => (key: string) => key);
+    });
+
+    it('leaves every other code, and DEMO_FULL (the login card owns it), untouched', async () => {
+        failWith(503, { statusCode: 503, code: 'DEMO_FULL', message: 'The demo is full' });
+        await expect(
+            serverFetch('/auth/demo', { method: 'POST', body: '{}' }),
+        ).rejects.toMatchObject({
+            message: 'The demo is full',
+        });
+
+        failWith(403, { statusCode: 403, code: 'SOMETHING_ELSE', message: 'Nope' });
+        await expect(
+            serverFetch('/me/works', { method: 'POST', body: '{}' }),
+        ).rejects.toMatchObject({
+            message: 'Nope',
+        });
     });
 });

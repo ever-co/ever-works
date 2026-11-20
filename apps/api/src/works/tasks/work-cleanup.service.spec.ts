@@ -117,6 +117,27 @@ describe('WorkCleanupService', () => {
         expect(arg.getTime()).toBeLessThanOrEqual(after - expectedMs + 1000);
     });
 
+    it.each([
+        [0.5, 30 * 60 * 1000],
+        [2, 2 * 60 * 60 * 1000],
+    ])('computes the cutoff exactly %p h before now', async (hours, ms) => {
+        taskLockService.runExclusive.mockImplementation(async (_k, w) => {
+            await w();
+        });
+        const configModule = jest.requireMock('../../config/constants') as any;
+        const original = configModule.config.work.staleTimeoutHours;
+        configModule.config.work.staleTimeoutHours = jest.fn(() => hours);
+        jest.useFakeTimers().setSystemTime(new Date('2026-01-01T12:00:00Z'));
+        try {
+            await service.handleStalledGenerations();
+        } finally {
+            jest.useRealTimers();
+            configModule.config.work.staleTimeoutHours = original;
+        }
+        const arg = workRepository.getUnfinishedGenerations.mock.calls[0][0] as Date;
+        expect(arg.getTime()).toBe(new Date('2026-01-01T12:00:00Z').getTime() - ms);
+    });
+
     it('does not log when there are no stalled works and no orphaned history records', async () => {
         taskLockService.runExclusive.mockImplementation(async (_k, w) => {
             await w();

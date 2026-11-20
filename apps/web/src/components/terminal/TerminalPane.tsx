@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useTranslations } from 'next-intl';
+import { useLatestRef } from '@/lib/hooks/use-latest-ref';
 import { AlertTriangle, Loader2, RotateCw, ShieldOff } from 'lucide-react';
 import type { TerminalRenderer } from './terminal-renderer';
 import { createTerminalRenderer } from './create-terminal-renderer';
@@ -74,6 +75,9 @@ export function TerminalPane({
         source ? { readOnly: readOnly === true, source } : { readOnly: readOnly === true },
     );
 
+    // Latest attach api for the renderer callbacks without re-mounting.
+    const attachRef = useLatestRef(attach);
+
     // Mount the renderer imperatively, once, into the child-free host.
     useEffect(() => {
         let disposed = false;
@@ -96,10 +100,6 @@ export function TerminalPane({
         };
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [runId, source?.kind === 'fleet-session' ? source.sessionId : null]);
-
-    // Latest attach api for the renderer callbacks without re-mounting.
-    const attachRef = useRef(attach);
-    attachRef.current = attach;
 
     // Debounced re-fit on host resize (reflow-corruption guard).
     useEffect(() => {

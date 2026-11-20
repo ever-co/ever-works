@@ -191,6 +191,7 @@ describe('DataSyncController (EW-628 Phase 6)', () => {
             'generation-in-progress',
             'no-changes',
             'app-not-installed-and-no-credentials',
+            'data-repo-empty',
         ] as const;
         it.each(skipReasons)(
             'maps skipped outcome (reason=%s) to { status: "skipped", reason }',

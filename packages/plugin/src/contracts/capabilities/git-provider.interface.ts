@@ -25,6 +25,13 @@ export interface GitCommitter {
 }
 
 export interface GitRepository {
+	/**
+	 * The provider's stable id of the repository (GitHub's numeric `id`, as a string), set by
+	 * `createRepository` / `createRepositoryFromTemplate` from the provider's own create
+	 * response for a repository the call CREATED. Absent on every other read, and on a
+	 * repository a create merely found. Optional.
+	 */
+	readonly id?: string;
 	readonly owner: string;
 	readonly name: string;
 	readonly fullName: string;
@@ -1031,6 +1038,15 @@ export interface IGitProviderPlugin extends IPlugin, IGitOperations {
 	 * calling it (the lazy-plugin proxy over-reports optional methods).
 	 */
 	getRepositoryIdentity?(owner: string, repo: string, token: string): Promise<GitRepositoryIdentity | null>;
+	/**
+	 * Add `topics` to `owner/repo`, keeping the topics it already has. Throws
+	 * when the provider refuses. The platform demo tags every repository a demo
+	 * sandbox creates (`ever-works-demo`) through this.
+	 *
+	 * OPTIONAL. Callers MUST read the method off the materialised plugin before
+	 * calling it (the lazy-plugin proxy over-reports optional methods).
+	 */
+	addRepositoryTopics?(owner: string, repo: string, topics: readonly string[], token: string): Promise<void>;
 	/**
 	 * The access level the provider calculates for `username` on `owner/repo`,
 	 * after every source of grants (the repository, teams, the organization),
