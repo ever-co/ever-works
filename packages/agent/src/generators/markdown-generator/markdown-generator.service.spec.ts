@@ -28,6 +28,7 @@ jest.mock('../../utils/fresh-repository-clone.utils', () => ({
     cloneFreshRepository: jest.fn(),
 }));
 
+import { Logger } from '@nestjs/common';
 import { GenerationMethod } from '@ever-works/contracts/api';
 import { MarkdownGeneratorService } from './markdown-generator.service';
 import { CATEGORY_PAGE_MARKER, MarkdownRepository } from './markdown-repository';
@@ -1665,7 +1666,10 @@ describe('MarkdownGeneratorService', () => {
             const result = await service.syncFromDataRepo(work, user, { signal: ac.signal });
 
             expect(initializeSpy).toHaveBeenCalledTimes(1);
-            expect(initializeSpy).toHaveBeenCalledWith(work, user, { signal: ac.signal });
+            expect(initializeSpy).toHaveBeenCalledWith(work, user, {
+                signal: ac.signal,
+                skipWhenNoData: true,
+            });
             expect(result.durationMs).toBeGreaterThanOrEqual(0);
             expect(result.filesChanged).toBeGreaterThanOrEqual(0);
         });
@@ -1802,6 +1806,93 @@ describe('MarkdownGeneratorService', () => {
 
             expect(result.beforeSha).toBeUndefined();
             expect(result.afterSha).toBe('first');
+        });
+
+        // Prod 2026-11-20: managed single-repo Works whose generation never
+        // wrote an item have a repository with only README.md (no data/).
+        // Every poll threw `ENOENT ... scandir '<repo>/data'` and wrote a
+        // `Sync failed: unknown` row.
+        describe('data repository without a data/ directory', () => {
+            const enoent = (dir: string) =>
+                Object.assign(
+                    new Error(`ENOENT: no such file or directory, scandir '${dir}/data'`),
+                    {
+                        code: 'ENOENT',
+                    },
+                );
+
+            it('single-repo managed storage: returns skipped no-data and writes, commits and pushes nothing', async () => {
+                const gitFacade = createGitFacadeMock();
+                // Both roles resolve to ONE checkout (managed "Ever Works Git" storage).
+                (gitFacade.cloneOrPull as jest.Mock).mockResolvedValue('/tmp/markdown-repo');
+                const workOps = createWorkOpsMock();
+                fsMock.readdir.mockRejectedValueOnce(enoent('/tmp/markdown-repo'));
+                mountDataRepoMock({
+                    dir: '/tmp/markdown-repo',
+                    dataDir: '/tmp/markdown-repo/data',
+                });
+
+                const service = new MarkdownGeneratorService(gitFacade, workOps);
+                const result = await service.syncFromDataRepo(
+                    createWork({ lastSyncedDataRepoSha: 'aaaaaaa' }),
+                    createUser(),
+                );
+
+                expect(result).toEqual({
+                    skipped: 'no-data',
+                    beforeSha: 'aaaaaaa',
+                    filesChanged: 0,
+                    durationMs: expect.any(Number),
+                });
+                expect(ensureWorksExistSpy).not.toHaveBeenCalled();
+                expect(resetFilesSpy).not.toHaveBeenCalled();
+                expect(writeReadmeSpy).not.toHaveBeenCalled();
+                expect(removeStaleCategoryPagesSpy).not.toHaveBeenCalled();
+                expect(gitFacade.addAll).not.toHaveBeenCalled();
+                expect(gitFacade.commit).not.toHaveBeenCalled();
+                expect(gitFacade.push).not.toHaveBeenCalled();
+                // No HEAD lookup either: nothing was rendered against it.
+                expect(gitFacade.getLatestCommit).not.toHaveBeenCalled();
+            });
+
+            it('generation path (no skipWhenNoData): still throws, and logs the real error, not just a bare line', async () => {
+                const errorSpy = jest
+                    .spyOn(Logger.prototype, 'error')
+                    .mockImplementation(() => undefined);
+                const gitFacade = createGitFacadeMock();
+                const workOps = createWorkOpsMock();
+                fsMock.readdir.mockRejectedValueOnce(enoent('/tmp/data-repo'));
+                mountDataRepoMock();
+
+                const service = new MarkdownGeneratorService(gitFacade, workOps);
+                await expect(service.initialize(createWork(), createUser())).rejects.toMatchObject({
+                    code: 'ENOENT',
+                });
+
+                expect(errorSpy).toHaveBeenCalledWith(
+                    expect.stringContaining(
+                        "Error during markdown generation for work dir-1 (test-work): ENOENT: no such file or directory, scandir '/tmp/data-repo/data'",
+                    ),
+                    expect.stringContaining('ENOENT'),
+                );
+                expect(gitFacade.push).not.toHaveBeenCalled();
+                errorSpy.mockRestore();
+            });
+
+            it('other readdir errors are not mistaken for an empty repository', async () => {
+                jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+                const gitFacade = createGitFacadeMock();
+                const workOps = createWorkOpsMock();
+                fsMock.readdir.mockRejectedValueOnce(
+                    Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' }),
+                );
+                mountDataRepoMock();
+
+                const service = new MarkdownGeneratorService(gitFacade, workOps);
+                await expect(service.syncFromDataRepo(createWork(), createUser())).rejects.toThrow(
+                    'EACCES',
+                );
+            });
         });
     });
 });

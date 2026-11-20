@@ -101,6 +101,7 @@ const SKIP_REASONS = [
     'generation-in-progress',
     'no-changes',
     'app-not-installed-and-no-credentials',
+    'data-repo-empty',
 ] as const;
 
 interface DataSyncOutcome {

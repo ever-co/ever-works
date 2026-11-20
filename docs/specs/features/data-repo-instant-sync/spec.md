@@ -131,7 +131,8 @@ A Trigger.dev `task` invoked by the dispatcher:
     2. **Pipeline-running gate.** Read `Work.pipelineStatus`. If `RUNNING`, gated by a noise window: check `cache_entries['data-sync:gen-in-progress-noise:<workId>']`; if absent, emit `data-sync.skipped reason=generation-in-progress` and write the noise-window entry (15-min TTL by default); if present, skip silently (no row). Then return. `pendingSyncRequestedAt` stays set. This mirrors the `no-changes` rate-limit in §5.2 — a 2-hour generation run would otherwise produce ~120 skip rows per Work and drown the activity feed.
     3. **Render.** Call `MarkdownGeneratorService.syncFromDataRepo({ workId, source })`.
         - On success: `UPDATE work SET last_synced_data_repo_sha = :sha, pending_sync_requested_at = NULL, last_polled_at = now() WHERE id = :id`. Clear the noise-window entry (next gen run starts fresh). Emit `data-sync.success`.
-        - On failure: emit `data-sync.failed`; write `cache_entries['data-sync:retry-after:<workId>']` with TTL `retryBackoffSeconds` (default 5 min); `pendingSyncRequestedAt` is **not** cleared so the dispatcher re-enqueues after the backoff expires.
+        - Nothing to sync — the data repository has no `data/` directory yet (`reason=data-repo-empty`; nothing is written, committed or pushed), or the owner has no connected account for the git provider (`NoGitCredentialsError`, `reason=app-not-installed-and-no-credentials`): clear `pending_sync_requested_at`, stamp `last_polled_at`, and emit `data-sync.skipped` at most once per `skipNoiseWindowMs` (key `data-sync:skip-noise:<reason>:<workId>`). No failure row, no retry-backoff.
+        - On failure: log the class and the error text, emit `data-sync.failed`; write `cache_entries['data-sync:retry-after:<workId>']` with TTL `retryBackoffSeconds` (default 5 min); `pendingSyncRequestedAt` is **not** cleared so the dispatcher re-enqueues after the backoff expires.
 3. If `runExclusive` returned `acquired: false` → emit `data-sync.skipped reason=sync-in-progress`, leave `pendingSyncRequestedAt` set, exit cleanly.
 
 ### 5.5 Mutex with the scheduled generation pipeline
@@ -147,11 +148,11 @@ We rely on `DistributedTaskLockService`'s 15-min default TTL (we override to 5 m
 
 Three new event types:
 
-| Event               | Payload                                                                                                                                                |
-| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `data-sync.success` | `{ source, beforeSha, afterSha, filesChanged, durationMs }`                                                                                            |
-| `data-sync.skipped` | `{ source, reason: 'no-changes' \| 'sync-in-progress' \| 'generation-in-progress' \| 'app-not-installed-and-no-credentials' \| 'retry-backoff', sha }` |
-| `data-sync.failed`  | `{ source, sha, errorClass, errorTail: string (last 200 chars of stderr) }`                                                                            |
+| Event               | Payload                                                                                                                                                                     |
+| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `data-sync.success` | `{ source, beforeSha, afterSha, filesChanged, durationMs }`                                                                                                                 |
+| `data-sync.skipped` | `{ source, reason: 'no-changes' \| 'sync-in-progress' \| 'generation-in-progress' \| 'app-not-installed-and-no-credentials' \| 'data-repo-empty' \| 'retry-backoff', sha }` |
+| `data-sync.failed`  | `{ source, sha, errorClass, errorTail: string (last 200 chars of stderr) }`                                                                                                 |
 
 Surfaced on the existing `Works > Activity` page with a `Sync` filter chip and an icon distinct from `Generate`.
 

@@ -23,11 +23,13 @@ jest.mock('@ever-works/agent/config', () => ({
                 getLockTtlSeconds: () => 300,
                 getRetryBackoffSeconds: () => 300,
                 getGenInProgressNoiseWindowMs: () => 900_000,
+                getSkipNoiseWindowMs: () => 3_600_000,
             },
         },
     },
 }));
 
+import { Logger } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { ActivityActionType, CacheEntry, GenerateStatusType } from '@ever-works/agent/entities';
@@ -352,6 +354,145 @@ describe('DataSyncService (EW-628)', () => {
             expect(outcome).toMatchObject({
                 status: 'failed',
                 errorClass: 'main-repo-push-rejected',
+            });
+        });
+
+        it('Gate 3 failed: logs the error class and message, not just the class', async () => {
+            const warnSpy = jest
+                .spyOn(Logger.prototype, 'warn')
+                .mockImplementation(() => undefined);
+            cacheManager.get.mockResolvedValue(null);
+            workRepository.findById.mockResolvedValue({
+                id: 'work-logged',
+                user: { id: 'owner-1' },
+                generateStatus: { status: GenerateStatusType.GENERATED },
+            });
+            markdownGenerator.syncFromDataRepo.mockRejectedValue(
+                new Error(
+                    'something odd happened in https://x-access-token:ghs_secret@github.com/acme/repo',
+                ),
+            );
+
+            const outcome = await service.runDataSync('work-logged', 'poll');
+
+            expect(outcome).toMatchObject({ status: 'failed', errorClass: 'unknown' });
+            const logged = warnSpy.mock.calls.map((call) => String(call[0])).join('\n');
+            expect(logged).toContain('work=work-logged');
+            expect(logged).toContain('class=unknown');
+            expect(logged).toContain('something odd happened');
+            // The credential in the remote URL never reaches the log.
+            expect(logged).not.toContain('ghs_secret');
+            warnSpy.mockRestore();
+        });
+
+        describe('nothing to sync (skipped on purpose, no failure row)', () => {
+            const generatedWork = (id: string) => ({
+                id,
+                user: { id: 'owner-1' },
+                generateStatus: { status: GenerateStatusType.GENERATED },
+            });
+
+            it('data repository without data/: skipped:data-repo-empty, Work stamped, one rate-limited skip row, no backoff', async () => {
+                cacheManager.get.mockResolvedValue(null);
+                workRepository.findById.mockResolvedValue(generatedWork('work-empty'));
+                markdownGenerator.syncFromDataRepo.mockResolvedValue({
+                    skipped: 'no-data',
+                    filesChanged: 0,
+                    durationMs: 12,
+                });
+
+                await expect(service.runDataSync('work-empty', 'poll')).resolves.toEqual({
+                    status: 'skipped',
+                    reason: 'data-repo-empty',
+                });
+
+                expect(workRepository.update).toHaveBeenCalledTimes(1);
+                expect(workRepository.update).toHaveBeenCalledWith('work-empty', {
+                    pendingSyncRequestedAt: null,
+                    lastPolledAt: expect.any(Date),
+                });
+                expect(activityLogService.log).toHaveBeenCalledTimes(1);
+                expect(activityLogService.log).toHaveBeenCalledWith(
+                    expect.objectContaining({
+                        actionType: ActivityActionType.DATA_SYNC_SKIPPED,
+                        details: expect.objectContaining({
+                            reason: 'data-repo-empty',
+                            source: 'poll',
+                        }),
+                    }),
+                );
+                expect(cacheManager.set).toHaveBeenCalledWith(
+                    'data-sync:skip-noise:data-repo-empty:work-empty',
+                    '1',
+                    3_600_000,
+                );
+                expect(cacheManager.set).not.toHaveBeenCalledWith(
+                    'data-sync:retry-after:work-empty',
+                    expect.anything(),
+                    expect.anything(),
+                );
+            });
+
+            it('data repository without data/: no second skip row inside the noise window', async () => {
+                cacheManager.get.mockImplementation(async (key: string) =>
+                    key === 'data-sync:skip-noise:data-repo-empty:work-empty' ? '1' : null,
+                );
+                workRepository.findById.mockResolvedValue(generatedWork('work-empty'));
+                markdownGenerator.syncFromDataRepo.mockResolvedValue({
+                    skipped: 'no-data',
+                    filesChanged: 0,
+                    durationMs: 12,
+                });
+
+                await expect(service.runDataSync('work-empty', 'poll')).resolves.toEqual({
+                    status: 'skipped',
+                    reason: 'data-repo-empty',
+                });
+                expect(activityLogService.log).not.toHaveBeenCalled();
+                expect(workRepository.update).toHaveBeenCalledWith(
+                    'work-empty',
+                    expect.objectContaining({ pendingSyncRequestedAt: null }),
+                );
+            });
+
+            it('owner without a connected git account: skipped:app-not-installed-and-no-credentials, no failure row, no backoff', async () => {
+                const warnSpy = jest
+                    .spyOn(Logger.prototype, 'warn')
+                    .mockImplementation(() => undefined);
+                cacheManager.get.mockResolvedValue(null);
+                workRepository.findById.mockResolvedValue(generatedWork('work-nocreds'));
+                const noCredentials = new Error(
+                    'No connected account found for user owner-1 with provider github',
+                );
+                noCredentials.name = 'NoGitCredentialsError';
+                markdownGenerator.syncFromDataRepo.mockRejectedValue(noCredentials);
+
+                await expect(service.runDataSync('work-nocreds', 'poll')).resolves.toEqual({
+                    status: 'skipped',
+                    reason: 'app-not-installed-and-no-credentials',
+                });
+
+                expect(activityLogService.log).toHaveBeenCalledTimes(1);
+                expect(activityLogService.log).toHaveBeenCalledWith(
+                    expect.objectContaining({
+                        actionType: ActivityActionType.DATA_SYNC_SKIPPED,
+                        details: expect.objectContaining({
+                            reason: 'app-not-installed-and-no-credentials',
+                        }),
+                    }),
+                );
+                expect(activityLogService.log).not.toHaveBeenCalledWith(
+                    expect.objectContaining({ actionType: ActivityActionType.DATA_SYNC_FAILED }),
+                );
+                expect(cacheManager.set).not.toHaveBeenCalledWith(
+                    'data-sync:retry-after:work-nocreds',
+                    expect.anything(),
+                    expect.anything(),
+                );
+                expect(warnSpy.mock.calls.map((call) => String(call[0])).join('\n')).toContain(
+                    'No connected account found for user owner-1 with provider github',
+                );
+                warnSpy.mockRestore();
             });
         });
 
