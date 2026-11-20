@@ -1,6 +1,9 @@
 import 'server-only';
 import { cache } from 'react';
 import { API_URL } from '@/lib/constants';
+import { DEFAULT_DEMO_SIGN_UP_URL } from '@/lib/demo/demo-errors';
+
+export { DEFAULT_DEMO_SIGN_UP_URL };
 
 /**
  * Demo mode — whether this instance is a public demo, and the two numbers the
@@ -17,7 +20,6 @@ import { API_URL } from '@/lib/constants';
 /** Same cap `./app-launcher.ts` uses — a slow API must not hold up a render. */
 const DEMO_CONFIG_BUDGET_MS = 1500;
 
-export const DEFAULT_DEMO_SIGN_UP_URL = 'https://app.ever.works/register';
 export const DEFAULT_DEMO_SANDBOX_TTL_HOURS = 24;
 
 export interface DemoConfig {

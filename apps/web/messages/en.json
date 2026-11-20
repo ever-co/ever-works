@@ -13525,7 +13525,8 @@
         },
         "errors": {
             "disabled": "Not available in the demo — sign up to use it",
-            "aiQuota": "The free demo AI quota is used up for today — sign up on app.ever.works to keep going",
+            "aiQuota": "The free demo AI quota is used up for today — sign up on {signUpHost} to keep going",
+            "aiQuotaSandbox": "This demo workspace has used all its free AI requests — sign up on {signUpHost} to keep going",
             "aiBusy": "The demo AI is busy — try again in a few seconds",
             "modelUnavailable": "The demo AI model is temporarily unavailable — please try again later"
         },

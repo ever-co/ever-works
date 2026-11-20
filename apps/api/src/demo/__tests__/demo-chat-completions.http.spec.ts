@@ -153,6 +153,7 @@ describe('POST /api/v1/chat/completions on a demo instance (R39)', () => {
                     statusCode: 429,
                     code: 'DEMO_AI_QUOTA',
                     message: 'This demo workspace has used all its live AI requests',
+                    quotaScope: 'sandbox',
                 });
             },
         );

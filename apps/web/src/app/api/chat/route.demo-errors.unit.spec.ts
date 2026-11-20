@@ -84,6 +84,24 @@ describe('POST /api/chat: demo error codes on the stream', () => {
         expect(JSON.parse(text)).toEqual({ statusCode: 429, code: 'DEMO_AI_QUOTA' });
     });
 
+    // R42 f: which limit was hit, so the chat words the sandbox's own cap apart from the day.
+    it('keeps the quotaScope of a used-up quota', async () => {
+        apiError.current = apiCallError(429, {
+            statusCode: 429,
+            code: 'DEMO_AI_QUOTA',
+            message: 'x',
+            quotaScope: 'sandbox',
+        });
+
+        const text = await (await POST(chatRequest())).text();
+
+        expect(JSON.parse(text)).toEqual({
+            statusCode: 429,
+            code: 'DEMO_AI_QUOTA',
+            quotaScope: 'sandbox',
+        });
+    });
+
     it('unwraps a RetryError (the shape a retried 429 or 503 really arrives as)', async () => {
         const busy = apiCallError(429, {
             statusCode: 429,

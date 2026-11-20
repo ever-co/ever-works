@@ -69,7 +69,7 @@ The full list is `DEMO_BLOCKED_ROUTES` in `apps/api/src/demo/demo-restrictions.t
 
 AI is also restricted. Only models whose id ends in `:free` run; paid ids answer `DEMO_MODEL_NOT_ALLOWED` (500, fail closed), and a free model that is down answers `DEMO_MODEL_UNAVAILABLE` (503). Generation uses the standard pipeline.
 
-The assistant chat stays open: it calls the OpenAI-compatible `POST /api/v1/chat/completions`, which runs every call through the same AI policy (OpenRouter, `:free` models, the quotas). A refused chat call answers with its demo code (`DEMO_AI_QUOTA`, `DEMO_AI_BUSY`, `DEMO_MODEL_UNAVAILABLE`) and the chat shows the matching message. A sandbox cannot create an API key, so it reaches that endpoint only with its own session.
+The assistant chat stays open: it calls the OpenAI-compatible `POST /api/v1/chat/completions`, which runs every call through the same AI policy (OpenRouter, `:free` models, the quotas). A refused chat call answers with its demo code (`DEMO_AI_QUOTA`, `DEMO_AI_BUSY`, `DEMO_MODEL_UNAVAILABLE`) and the chat shows the matching message. A `DEMO_AI_QUOTA` answer also says which limit was hit (`quotaScope`: `sandbox` for `DEMO_AI_REQUESTS_PER_SANDBOX`, `day` for `DEMO_AI_REQUESTS_PER_DAY`), and the message points visitors to the host of `DEMO_SIGN_UP_URL`. A sandbox cannot create an API key, so it reaches that endpoint only with its own session.
 
 **Operators** (normal accounts) can log in on a demo instance. They are not route-blocked, except for the "everyone" rows, but they get free models only.
 

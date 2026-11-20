@@ -45,6 +45,7 @@ import type { GitProviderConnectionInfo } from '@/lib/api/plugins-capabilities/g
 import type { PluginDeviceAuthStatus } from '@/lib/api/plugins-capabilities/device-auth';
 import type { ApiVersion } from '@/lib/api/version';
 import { DemoErrorToaster } from '@/components/demo/DemoErrorToaster';
+import { DemoSignUpUrlContext } from '@/lib/demo/demo-sign-up-url';
 import { DemoStrip, type DemoStripProps } from '@/components/demo/DemoStrip';
 import { JobRuntimeDegradedBanner } from '@/components/dashboard/JobRuntimeDegradedBanner';
 import { ScrollTopOnNavigate } from '@/components/dashboard/ScrollTopOnNavigate';
@@ -149,6 +150,8 @@ export function DashboardLayoutClient({
     fleetActionsRunnersEnabled = false,
 }: DashboardLayoutClientProps) {
     const tChat = useTranslations('dashboard.aiChat');
+    // Platform demo mode: the sign-up host the chat panel's demo error messages name.
+    const demoSignUpUrl = demoStrip?.signUpUrl ?? null;
     const [sidebarOpen, setSidebarOpen] = useState(true);
     const [helpOpen, setHelpOpen] = useState(false);
     // Tab the Help drawer opens on when a palette command asks for one.
@@ -581,11 +584,13 @@ export function DashboardLayoutClient({
                                             transition: 'width 200ms ease',
                                         }}
                                     >
-                                        <ChatPanel
-                                            open={chatOpen}
-                                            onClose={toggleChat}
-                                            style={{ width: '100%' }}
-                                        />
+                                        <DemoSignUpUrlContext value={demoSignUpUrl}>
+                                            <ChatPanel
+                                                open={chatOpen}
+                                                onClose={toggleChat}
+                                                style={{ width: '100%' }}
+                                            />
+                                        </DemoSignUpUrlContext>
                                     </div>
                                 ) : (
                                     chatOpen && (
@@ -611,14 +616,16 @@ export function DashboardLayoutClient({
                                                         </div>
                                                     </div>
                                                     <div className="h-[calc(100%-48px)]">
-                                                        <ChatPanel
-                                                            open={chatOpen}
-                                                            onClose={toggleChat}
-                                                            style={{
-                                                                width: '100%',
-                                                                height: '100%',
-                                                            }}
-                                                        />
+                                                        <DemoSignUpUrlContext value={demoSignUpUrl}>
+                                                            <ChatPanel
+                                                                open={chatOpen}
+                                                                onClose={toggleChat}
+                                                                style={{
+                                                                    width: '100%',
+                                                                    height: '100%',
+                                                                }}
+                                                            />
+                                                        </DemoSignUpUrlContext>
                                                     </div>
                                                 </div>
                                             </div>
@@ -681,7 +688,7 @@ export function DashboardLayoutClient({
                                 >
                                     {demoStrip && (
                                         <>
-                                            <DemoErrorToaster />
+                                            <DemoErrorToaster signUpUrl={demoStrip.signUpUrl} />
                                             <DemoStrip {...demoStrip} />
                                         </>
                                     )}

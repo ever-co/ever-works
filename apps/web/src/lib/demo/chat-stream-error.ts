@@ -38,8 +38,8 @@ function streamErrorDemoCode(error: unknown): string | null {
 
 /**
  * The text a chat stream carries for a failed model call. The route's `onError` keeps the API's
- * status, `code` and `retryAfterMs` as JSON for a demo code (the client maps it to a friendly
- * message, `useDemoErrorMessage`) and leaves every other error as the SDK's own default.
+ * status, `code`, `retryAfterMs` and `quotaScope` as JSON for a demo code (the client maps it to a
+ * friendly message, `useDemoErrorMessage`) and leaves every other error as the SDK's own default.
  */
 export function chatStreamErrorText(error: unknown): string {
     const streamCode = streamErrorDemoCode(error);
@@ -55,10 +55,14 @@ export function chatStreamErrorText(error: unknown): string {
         code?: unknown;
         error?: { code?: unknown };
         retryAfterMs?: unknown;
+        quotaScope?: unknown;
     };
     return JSON.stringify({
         statusCode: apiError?.statusCode ?? body.statusCode,
         code: body.code ?? body.error?.code,
         ...(typeof body.retryAfterMs === 'number' && { retryAfterMs: body.retryAfterMs }),
+        ...((body.quotaScope === 'sandbox' || body.quotaScope === 'day') && {
+            quotaScope: body.quotaScope,
+        }),
     });
 }

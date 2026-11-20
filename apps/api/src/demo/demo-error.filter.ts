@@ -1,13 +1,14 @@
 import { ArgumentsHost, Catch, ExceptionFilter } from '@nestjs/common';
 import { HttpAdapterHost } from '@nestjs/core';
-import { DemoError } from '@ever-works/agent/demo';
+import { DemoError, DemoQuotaExceededError } from '@ever-works/agent/demo';
 
 /**
  * Platform demo mode — maps every `DemoError` that reaches the HTTP layer to
- * `{ statusCode, code, message, retryAfterMs? }` with the error's own `httpStatus`
+ * `{ statusCode, code, message, retryAfterMs?, quotaScope? }` with the error's own `httpStatus`
  * (`DEMO_DISABLED` 403, `DEMO_AI_QUOTA` / `DEMO_AI_BUSY` 429, `DEMO_FULL` 503, …). When the
  * error carries `retryAfterMs` the response also has a `Retry-After` header, in whole
- * seconds rounded up.
+ * seconds rounded up. A used-up quota names which limit it was (`quotaScope`: `'sandbox'` for
+ * the sandbox's own cap, `'day'` for the instance's UTC day), so the web words it right.
  *
  * Without it a `DemoError` is a plain `Error` to Nest, and its default filter answers 500.
  * The messages are the demo's own caller-facing copy, so they are surfaced as is. The same
@@ -23,11 +24,20 @@ export class DemoErrorFilter implements ExceptionFilter {
     catch(exception: DemoError, host: ArgumentsHost): void {
         const { httpAdapter } = this.httpAdapterHost;
         const response = host.switchToHttp().getResponse();
-        const body: { statusCode: number; code: string; message: string; retryAfterMs?: number } = {
+        const body: {
+            statusCode: number;
+            code: string;
+            message: string;
+            retryAfterMs?: number;
+            quotaScope?: 'sandbox' | 'day';
+        } = {
             statusCode: exception.httpStatus,
             code: exception.code,
             message: exception.message,
         };
+        if (exception instanceof DemoQuotaExceededError) {
+            body.quotaScope = exception.scope;
+        }
         const retryAfterMs = exception.retryAfterMs;
         if (
             typeof retryAfterMs === 'number' &&

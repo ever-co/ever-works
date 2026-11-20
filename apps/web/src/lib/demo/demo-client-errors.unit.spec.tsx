@@ -47,7 +47,7 @@ describe('demo errors on browser fetches', () => {
                 'fetch',
                 vi.fn(async () => json(status, { statusCode: status, code, message: 'raw' })),
             );
-            render(<DemoErrorToaster />);
+            render(<DemoErrorToaster signUpUrl="https://app.ever.works/register" />);
 
             const res = await browserApiFetch('/api/works/w1/kb/search?q=x');
             await flush();
@@ -61,8 +61,27 @@ describe('demo errors on browser fetches', () => {
         },
     );
 
+    // R42 f: the sandbox's own cap is not "for today"; the host is the configured sign-up URL's.
+    it("toasts the sandbox's own cap with the configured sign-up host", async () => {
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(async () =>
+                json(429, { statusCode: 429, code: 'DEMO_AI_QUOTA', quotaScope: 'sandbox' }),
+            ),
+        );
+        render(<DemoErrorToaster signUpUrl="https://join.example.test/register" />);
+
+        await browserApiFetch('/api/works/w1/kb/search?q=x');
+        await flush();
+
+        expect(toastError).toHaveBeenCalledWith(
+            'This demo workspace has used all its free AI requests — sign up on join.example.test to keep going',
+            expect.objectContaining({ id: 'demo-error-aiQuotaSandbox' }),
+        );
+    });
+
     it('demo off: other failures and successes toast nothing', async () => {
-        render(<DemoErrorToaster />);
+        render(<DemoErrorToaster signUpUrl="https://app.ever.works/register" />);
         for (const response of [
             json(429, { code: 'THROTTLED' }),
             json(503, { code: 'DEMO_FULL' }),

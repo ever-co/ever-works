@@ -42,16 +42,38 @@ describe('DemoErrorFilter', () => {
         ]);
     });
 
-    it('answers a used-up quota with 429 DEMO_AI_QUOTA and its message', () => {
-        const error = new DemoQuotaExceededError('day');
-        filter.catch(error, host);
+    // R42 f: which limit was hit rides along as `quotaScope`, so the web can say "for today" only
+    // for the instance's day and "this workspace" for the sandbox's own cap.
+    it.each(['day', 'sandbox'] as const)(
+        'answers a used-up %s quota with 429 DEMO_AI_QUOTA, its message and which limit it was',
+        (scope) => {
+            const error = new DemoQuotaExceededError(scope);
+            filter.catch(error, host);
 
-        expect(reply).toHaveBeenCalledWith(
-            response,
-            { statusCode: 429, code: 'DEMO_AI_QUOTA', message: error.message },
-            429,
-        );
-        expect(setHeader).not.toHaveBeenCalled();
+            expect(reply).toHaveBeenCalledWith(
+                response,
+                {
+                    statusCode: 429,
+                    code: 'DEMO_AI_QUOTA',
+                    message: error.message,
+                    quotaScope: scope,
+                },
+                429,
+            );
+            expect(setHeader).not.toHaveBeenCalled();
+        },
+    );
+
+    it('names a quota scope only for a used-up quota', () => {
+        for (const error of [
+            new DemoFeatureDisabledError('api keys'),
+            new DemoRateLimitedError(1_000),
+            new DemoModelUnavailableError('m:free'),
+        ]) {
+            reply.mockClear();
+            filter.catch(error, host);
+            expect(reply.mock.calls[0][1]).not.toHaveProperty('quotaScope');
+        }
     });
 
     it('answers a disabled feature with 403 DEMO_DISABLED', () => {

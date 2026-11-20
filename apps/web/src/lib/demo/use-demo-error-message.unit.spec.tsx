@@ -1,4 +1,5 @@
 import { renderHook } from '@testing-library/react';
+import { createElement, type ReactNode } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('next-intl', async () => {
@@ -6,10 +7,16 @@ vi.mock('next-intl', async () => {
     return { useTranslations: enUseTranslations };
 });
 
+import { DemoSignUpUrlContext } from './demo-sign-up-url';
 import { useDemoErrorMessage } from './use-demo-error-message';
 
-function messageFor(error: { message?: string } | null | undefined) {
-    return renderHook(() => useDemoErrorMessage()).result.current(error);
+function messageFor(error: { message?: string } | null | undefined, signUpUrl?: string) {
+    const wrapper =
+        signUpUrl === undefined
+            ? undefined
+            : ({ children }: { children: ReactNode }) =>
+                  createElement(DemoSignUpUrlContext, { value: signUpUrl }, children);
+    return renderHook(() => useDemoErrorMessage(), { wrapper }).result.current(error);
 }
 
 describe('useDemoErrorMessage', () => {
@@ -26,6 +33,23 @@ describe('useDemoErrorMessage', () => {
 
         expect(messageFor(error)).toBe(
             'The free demo AI quota is used up for today — sign up on app.ever.works to keep going',
+        );
+    });
+
+    // R42 f: the sandbox's own cap is not "for today", and the host is the configured one.
+    it("words the sandbox's own cap apart and names the configured sign-up host", () => {
+        const sandbox = new Error(
+            JSON.stringify({ statusCode: 429, code: 'DEMO_AI_QUOTA', quotaScope: 'sandbox' }),
+        );
+        const day = new Error(
+            JSON.stringify({ statusCode: 429, code: 'DEMO_AI_QUOTA', quotaScope: 'day' }),
+        );
+
+        expect(messageFor(sandbox, 'https://join.example.test/register')).toBe(
+            'This demo workspace has used all its free AI requests — sign up on join.example.test to keep going',
+        );
+        expect(messageFor(day, 'https://join.example.test/register')).toBe(
+            'The free demo AI quota is used up for today — sign up on join.example.test to keep going',
         );
     });
 
