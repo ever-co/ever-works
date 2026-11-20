@@ -71,6 +71,28 @@ export function freeModelSettings(settings: Record<string, unknown>): {
 }
 
 /**
+ * An AI provider's settings as reported to callers that build their own model
+ * client from them (outside the facade and its quota): no `apiKey`, so they
+ * treat the provider as not configured, and free models only
+ * ({@link freeModelSettings}; no model at all when none is free). Never throws.
+ */
+export function demoProviderConfigSettings(
+    settings: Record<string, unknown>,
+): Record<string, unknown> {
+    const withoutKey: Record<string, unknown> = { ...settings };
+    delete withoutKey.apiKey;
+    try {
+        return freeModelSettings(withoutKey).settings;
+    } catch (error) {
+        if (!(error instanceof DemoModelNotAllowedError)) throw error;
+        for (const key of ['defaultModel', ...TIERS.map((tier) => `${tier}Model`)]) {
+            delete withoutKey[key];
+        }
+        return withoutKey;
+    }
+}
+
+/**
  * The provider answered that the model does not exist or has no endpoint —
  * how OpenRouter reports a free model it has withdrawn.
  */

@@ -47,9 +47,12 @@ import { config } from '../config';
 import {
     DEMO_AI_PROVIDER_ID,
     DEMO_AI_QUOTA,
+    DEMO_AI_QUOTA_UNBOUND_MESSAGE,
     DemoFeatureDisabledError,
     DemoModelUnavailableError,
     consumeDemoAiQuota,
+    demoAiQuotaUnboundError,
+    demoProviderConfigSettings,
     freeModelSettings,
     isFreeModelId,
     isModelUnavailableError,
@@ -143,25 +146,24 @@ export class AiFacadeService extends BaseFacadeService implements IAiFacade {
         super(registry, settingsService, workPluginRepository);
     }
 
-    private demoQuotaUnboundWarned = false;
+    private demoQuotaUnboundLogged = false;
 
     /**
      * Platform demo mode — count this call against the demo's AI quota.
      * `background` calls wait out a busy minute (bounded); `interactive` ones
-     * get `DemoRateLimitedError` at once.
+     * get `DemoRateLimitedError` at once. With no quota bound the call is
+     * refused (fail closed): an uncounted call must not go out.
      */
     private async consumeDemoQuota(
         facadeOptions: FacadeOptions,
         mode: DemoAiCallMode,
     ): Promise<void> {
         if (!this.demoQuota) {
-            if (!this.demoQuotaUnboundWarned) {
-                this.demoQuotaUnboundWarned = true;
-                this.logger.warn(
-                    'Demo mode is on but no DEMO_AI_QUOTA is bound: AI calls are not counted',
-                );
+            if (!this.demoQuotaUnboundLogged) {
+                this.demoQuotaUnboundLogged = true;
+                this.logger.error(DEMO_AI_QUOTA_UNBOUND_MESSAGE);
             }
-            return;
+            throw demoAiQuotaUnboundError();
         }
         await consumeDemoAiQuota(this.demoQuota, facadeOptions.userId, mode);
     }
@@ -1263,16 +1265,21 @@ export class AiFacadeService extends BaseFacadeService implements IAiFacade {
     }
 
     async getProviderConfig(facadeOptions: FacadeOptions): Promise<AiProviderConfig> {
+        // Platform demo mode: callers build their own model client from this
+        // config, outside the facade and its quota. Report openrouter with no
+        // API key (they treat that as "no provider") and free models only.
+        const demo = config.demo.isEnabled();
         const plugin = await this.resolvePlugin<IAiProviderPlugin>(
-            facadeOptions.providerOverride,
+            demo ? DEMO_AI_PROVIDER_ID : facadeOptions.providerOverride,
             facadeOptions.userId,
             facadeOptions.workId,
         );
 
-        const settings = await this.getResolvedSettings(plugin.id, {
+        let settings = await this.getResolvedSettings(plugin.id, {
             userId: facadeOptions.userId,
             workId: facadeOptions.workId,
         });
+        if (demo) settings = demoProviderConfigSettings(settings);
 
         const apiKey = this.getSettingTyped<string>(settings, 'apiKey', 'string');
 

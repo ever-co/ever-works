@@ -119,6 +119,28 @@ describe('PluginValidationService — demo mode', () => {
         expect(validateConnection).not.toHaveBeenCalled();
     });
 
+    it('fails closed when no quota port is bound: nothing is sent, the gap is logged once', async () => {
+        const unbound = new PluginValidationService(
+            pluginRegistry as unknown as PluginRegistryService,
+            pluginSettings as unknown as PluginSettingsService,
+            {} as GitFacadeService,
+        );
+        const errorLog = jest.spyOn(unbound['logger'], 'error').mockImplementation(() => undefined);
+        jest.spyOn(unbound['logger'], 'warn').mockImplementation(() => undefined);
+        pluginRegistry.get.mockReturnValue(registered('openrouter', ['ai-provider']));
+
+        const error = await unbound
+            .validateUserPluginConnection('openrouter', 'u-1')
+            .catch((e) => e);
+        await expect(unbound.tryValidateConnection('openrouter', 'u-1')).resolves.toBeNull();
+
+        expect(error).toBeInstanceOf(DemoFeatureDisabledError);
+        expect(error.feature).toBe('ai (quota not configured)');
+        expect(validateConnection).not.toHaveBeenCalled();
+        expect(errorLog).toHaveBeenCalledTimes(1);
+        expect(errorLog).toHaveBeenCalledWith(expect.stringContaining('DEMO_AI_QUOTA'));
+    });
+
     it('a plugin that is not an AI provider is checked as before', async () => {
         pluginRegistry.get.mockReturnValue(registered('tavily', ['search']));
         pluginSettings.getSettings.mockResolvedValue({ apiKey: 'tv' });

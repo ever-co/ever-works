@@ -1,11 +1,12 @@
-import { DemoRateLimitedError } from './demo-errors';
+import { DemoFeatureDisabledError, DemoRateLimitedError } from './demo-errors';
 
 /**
  * Platform demo mode — injection token + contract for the demo's AI quota.
  *
  * `AiFacadeService` asks it before every upstream AI call on a demo instance.
  * The API binds it to its DB counters; Trigger.dev workers (no DB) bind a
- * remote proxy to the same service. Unbound = nothing is counted.
+ * remote proxy to the same service. Unbound on a demo instance = every AI call
+ * is refused ({@link demoAiQuotaUnboundError}): an uncounted call must not go out.
  */
 export interface DemoAiQuotaPort {
     /**
@@ -17,6 +18,15 @@ export interface DemoAiQuotaPort {
 }
 
 export const DEMO_AI_QUOTA = 'DEMO_AI_QUOTA' as const;
+
+/** Logged (once per consumer) when a demo instance has no `DEMO_AI_QUOTA` bound. */
+export const DEMO_AI_QUOTA_UNBOUND_MESSAGE =
+    'Demo mode is on but DEMO_AI_QUOTA is not bound: refusing every AI call';
+
+/** The refusal for an AI call on a demo instance with no `DEMO_AI_QUOTA` bound. */
+export function demoAiQuotaUnboundError(): DemoFeatureDisabledError {
+    return new DemoFeatureDisabledError('ai (quota not configured)');
+}
 
 /**
  * `background` work (generation steps, agent iterations) waits out a busy

@@ -16,8 +16,10 @@ import { config } from '@ever-works/agent/config';
 import {
     DEMO_AI_PROVIDER_ID,
     DEMO_AI_QUOTA,
+    DEMO_AI_QUOTA_UNBOUND_MESSAGE,
     DemoFeatureDisabledError,
     consumeDemoAiQuota,
+    demoAiQuotaUnboundError,
     freeModelSettings,
     type DemoAiQuotaPort,
 } from '@ever-works/agent/demo';
@@ -26,6 +28,7 @@ import { ConnectionValidationResult, PLUGIN_CAPABILITIES } from '@ever-works/plu
 @Injectable()
 export class PluginValidationService {
     private readonly logger = new Logger(PluginValidationService.name);
+    private demoQuotaUnboundLogged = false;
 
     constructor(
         private readonly pluginRegistry: PluginRegistryService,
@@ -39,7 +42,8 @@ export class PluginValidationService {
      * Platform demo mode — an AI provider's connection check sends a one-line
      * completion to every model its settings name. Only `openrouter` may be
      * checked, with its `:free` models only (fail closed when it has none),
-     * each counted against the demo AI quota. Returns the settings to check with.
+     * each counted against the demo AI quota (refused when no quota is bound).
+     * Returns the settings to check with.
      */
     private async demoAiCheckSettings(
         pluginId: string,
@@ -50,10 +54,16 @@ export class PluginValidationService {
             throw new DemoFeatureDisabledError('ai-provider-connection-check');
         }
         const free = freeModelSettings(settings);
-        if (this.demoQuota) {
-            for (const _model of free.models) {
-                await consumeDemoAiQuota(this.demoQuota, userId, 'interactive');
+        if (!this.demoQuota) {
+            // Fail closed: an uncounted call must not go out.
+            if (!this.demoQuotaUnboundLogged) {
+                this.demoQuotaUnboundLogged = true;
+                this.logger.error(DEMO_AI_QUOTA_UNBOUND_MESSAGE);
             }
+            throw demoAiQuotaUnboundError();
+        }
+        for (const _model of free.models) {
+            await consumeDemoAiQuota(this.demoQuota, userId, 'interactive');
         }
         return free.settings;
     }

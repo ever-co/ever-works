@@ -6,6 +6,7 @@ import {
     DemoModelUnavailableError,
     DemoQuotaExceededError,
     DemoRateLimitedError,
+    demoProviderConfigSettings,
     freeModelSettings,
     isFreeModelId,
     isModelUnavailableError,
@@ -130,6 +131,36 @@ describe('demo AI policy', () => {
                 freeModelSettings({ defaultModel: 'paid/default', complexModel: 'paid/complex' }),
             ).toThrow(DemoModelNotAllowedError);
             expect(() => freeModelSettings({})).toThrow(DemoModelNotAllowedError);
+        });
+    });
+
+    describe('demoProviderConfigSettings', () => {
+        it('drops the API key and every non-free model, leaving the input alone', () => {
+            const settings = {
+                apiKey: 'sk-or',
+                baseUrl: 'https://openrouter.ai/api/v1',
+                defaultModel: 'paid/default',
+                simpleModel: 's:free',
+                complexModel: 'paid/complex',
+            };
+
+            expect(demoProviderConfigSettings(settings)).toEqual({
+                baseUrl: 'https://openrouter.ai/api/v1',
+                defaultModel: 's:free',
+                simpleModel: 's:free',
+            });
+            expect(settings.apiKey).toBe('sk-or');
+        });
+
+        it('reports no model instead of throwing when none is free', () => {
+            expect(
+                demoProviderConfigSettings({
+                    apiKey: 'sk-or',
+                    baseUrl: 'u',
+                    defaultModel: 'paid/default',
+                    mediumModel: 'paid/medium',
+                }),
+            ).toEqual({ baseUrl: 'u' });
         });
     });
 

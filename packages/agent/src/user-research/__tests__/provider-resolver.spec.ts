@@ -312,6 +312,28 @@ describe('resolveAiProviderForResearch', () => {
         });
     });
 
+    it('a demo instance (config reported without an API key) yields no provider, without throwing', async () => {
+        // On DEMO=true AiFacadeService.getProviderConfig always answers the
+        // forced openrouter provider with `apiKey` omitted, so research never
+        // builds its own client outside the facade and its quota.
+        const demoConfig = {
+            providerId: 'openrouter',
+            providerName: 'OpenRouter',
+            baseUrl: 'https://openrouter.ai/api/v1',
+            apiKey: undefined,
+            defaultModel: 'google/gemma-4-31b-it:free',
+            routing: { complexModel: 'deepseek/deepseek-r3:free' },
+        };
+        const getProviderConfig = jest.fn().mockResolvedValue(demoConfig);
+
+        await expect(
+            resolveAiProviderForResearch(makeAiFacade(getProviderConfig), registry, 'u'),
+        ).resolves.toBeNull();
+        await expect(
+            resolveAiProvidersForResearch(makeAiFacade(getProviderConfig), registry, 'u'),
+        ).resolves.toEqual([]);
+    });
+
     it('re-throws auth errors instead of silently masking with the next provider', async () => {
         const getProviderConfig = jest.fn().mockRejectedValue(new Error('401 Unauthorized'));
 

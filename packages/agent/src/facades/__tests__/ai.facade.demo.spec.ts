@@ -422,10 +422,79 @@ describe('AiFacadeService — demo mode', () => {
             expect(openrouter.createStreamingChatCompletion).not.toHaveBeenCalled();
         });
 
-        it('still forces a free model when no quota port is bound', async () => {
-            await chat(build(false), { model: 'openai/gpt-4o' });
+        it('fails closed when no quota port is bound: every call is refused before going out', async () => {
+            const service = build(false);
 
-            expect(modelSentTo(openrouter.createChatCompletion)).toBe(FREE_SETTINGS.defaultModel);
+            for (const call of [
+                () => chat(service, { model: 'openai/gpt-4o' }),
+                () => ask(service),
+                () => stream(service),
+            ]) {
+                const error = await call().catch((e) => e);
+                expect(error).toBeInstanceOf(DemoFeatureDisabledError);
+                expect(error.feature).toBe('ai (quota not configured)');
+            }
+            const tested = await service.testConnection(USER);
+
+            expect(tested.success).toBe(false);
+            expect(tested.error).toBe(
+                new DemoFeatureDisabledError('ai (quota not configured)').message,
+            );
+            expect(openrouter.createChatCompletion).not.toHaveBeenCalled();
+            expect(openrouter.askJson).not.toHaveBeenCalled();
+            expect(openrouter.createStreamingChatCompletion).not.toHaveBeenCalled();
+            expect(openrouter.isAvailable).not.toHaveBeenCalled();
+            // The missing binding is reported once, as an error naming it.
+            expect(errorLog).toHaveBeenCalledTimes(1);
+            expect(errorLog).toHaveBeenCalledWith(expect.stringContaining('DEMO_AI_QUOTA'));
+        });
+    });
+
+    describe('getProviderConfig (callers build their own client from it)', () => {
+        it('reports openrouter with no API key and free models only', async () => {
+            settingsByPlugin.openrouter = {
+                ...FREE_SETTINGS,
+                baseUrl: 'https://openrouter.ai/api/v1',
+                mediumModel: 'openai/gpt-6.1-sol',
+            };
+
+            const cfg = await build().getProviderConfig({
+                ...USER,
+                providerOverride: 'anthropic',
+            });
+
+            expect(cfg).toEqual({
+                providerId: 'openrouter',
+                providerName: 'Provider openrouter',
+                baseUrl: 'https://openrouter.ai/api/v1',
+                apiKey: undefined,
+                defaultModel: FREE_SETTINGS.defaultModel,
+                routing: {
+                    simpleModel: FREE_SETTINGS.simpleModel,
+                    mediumModel: undefined,
+                    complexModel: FREE_SETTINGS.complexModel,
+                },
+            });
+            expect(registry.get).not.toHaveBeenCalledWith('anthropic');
+            expect(quota.consume).not.toHaveBeenCalled();
+        });
+
+        it('reports no model (and does not throw) when none is free', async () => {
+            settingsByPlugin.openrouter = {
+                apiKey: 'sk-or',
+                defaultModel: 'openai/gpt-6.1-sol',
+                complexModel: 'openai/gpt-6.1-sol-pro',
+            };
+
+            const cfg = await build().getProviderConfig(USER);
+
+            expect(cfg.apiKey).toBeUndefined();
+            expect(cfg.defaultModel).toBeUndefined();
+            expect(cfg.routing).toEqual({
+                simpleModel: undefined,
+                mediumModel: undefined,
+                complexModel: undefined,
+            });
         });
     });
 
@@ -654,6 +723,26 @@ describe('AiFacadeService — demo mode', () => {
             expect((anthropic.isAvailable as jest.Mock).mock.calls[0][0]).toEqual(PAID_SETTINGS);
             expect(openrouter.isAvailable).not.toHaveBeenCalled();
             expect(quota.consume).not.toHaveBeenCalled();
+        });
+
+        it('getProviderConfig reports the requested provider with its key and models', async () => {
+            const cfg = await build().getProviderConfig({
+                ...USER,
+                providerOverride: 'anthropic',
+            });
+
+            expect(cfg).toMatchObject({
+                providerId: 'anthropic',
+                apiKey: PAID_SETTINGS.apiKey,
+                defaultModel: PAID_SETTINGS.defaultModel,
+            });
+        });
+
+        it('calls go out uncounted when no quota port is bound', async () => {
+            await chat(build(false), { model: 'openai/gpt-4o' });
+
+            expect(modelSentTo(anthropic.createChatCompletion)).toBe('openai/gpt-4o');
+            expect(errorLog).not.toHaveBeenCalled();
         });
 
         it('a provider "model not found" error is not rewritten', async () => {
