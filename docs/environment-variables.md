@@ -348,7 +348,17 @@ Callback URL: `{WEB_URL}/api/oauth/github/callback/plugins`
 | ----------------------- | --------------------- | -------- | ------- | -------- |
 | `PLUGIN_TAVILY_API_KEY` | Tavily search API key | `string` | --      | No       |
 
-### ScreenshotOne Plugin
+### Gotenberg Plugin (Screenshot, default)
+
+| Variable                          | Description                                                                              | Type     | Default                   | Required |
+| --------------------------------- | ---------------------------------------------------------------------------------------- | -------- | ------------------------- | -------- |
+| `PLUGIN_GOTENBERG_BASE_URL`       | URL of the self-hosted Gotenberg server; without it items get no screenshot              | `string` | --                        | No       |
+| `PLUGIN_GOTENBERG_USERNAME`       | Basic-auth username of the server                                                        | `string` | `gotenberg`               | No       |
+| `PLUGIN_GOTENBERG_TOKEN`          | Basic-auth password of the server                                                        | `string` | --                        | No       |
+| `SCREENSHOT_IMAGE_BASE_URL`       | Public origin of the API; captured images get signed URLs under `/api/screenshot/image/` | `string` | --                        | No       |
+| `SCREENSHOT_IMAGE_SIGNING_SECRET` | HMAC secret of those URLs                                                                | `string` | `PLATFORM_ENCRYPTION_KEY` | No       |
+
+### ScreenshotOne Plugin (optional, paid)
 
 | Variable                          | Description                  | Type     | Default | Required |
 | --------------------------------- | ---------------------------- | -------- | ------- | -------- |

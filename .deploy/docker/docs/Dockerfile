@@ -78,6 +78,8 @@ FROM nginx:1.31-alpine
 
 # Copy nginx config tuned for an SPA with locale subpaths
 COPY .deploy/docker/docs/nginx.conf /etc/nginx/conf.d/default.conf
+# Fail the image build on a config nginx would refuse at start (syntax, unknown directive).
+RUN nginx -t
 
 # Drop the default nginx welcome page and copy in the built site
 RUN rm -rf /usr/share/nginx/html/*
