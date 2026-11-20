@@ -30,7 +30,14 @@ import {
     WorkKnowledgeTagRepository,
     WorkKnowledgeUploadRepository,
 } from '@ever-works/agent/database';
-import { AuthSession, User } from '@ever-works/agent/entities';
+import {
+    Agent,
+    AuthSession,
+    Organization,
+    OrganizationMember,
+    Tenant,
+    User,
+} from '@ever-works/agent/entities';
 import { ActivityLogService } from '@ever-works/agent/activity-log';
 import {
     AgentFileService,
@@ -413,5 +420,73 @@ describe('Demo sandbox purge (real seeded sandbox)', () => {
         expect(deleteAllByOwner).toHaveBeenCalledWith(expired.user.id);
         expect(deleteAllByOwner).not.toHaveBeenCalledWith(kept.user.id);
         expect(git.deleteRepository).not.toHaveBeenCalled();
+    });
+
+    /**
+     * R42 c: the second sole-member check runs right before the row sweep. A member who joined
+     * while the sandbox's Works and files were being removed is seen before step 3 could delete
+     * their `organization_members` row (which carries the sandbox's Organization and Tenant), and
+     * the purge refuses with the workspace and that member intact, for an operator.
+     */
+    it('refuses, keeping the workspace and the member, when someone joins after the first check', async () => {
+        const { user, seed } = await createSandbox();
+        const tenantId = user.tenantId as string;
+        const suffix = randomBytes(4).toString('hex');
+        const operator = await users.create({
+            username: `operator-${suffix}`,
+            displayName: 'Operator',
+            email: `operator-${suffix}@example.test`,
+            password: null,
+            isAnonymous: false,
+            registrationProvider: 'local',
+            emailVerified: true,
+            isActive: true,
+        });
+        // Step 2 (the sandbox's files) runs after the first check and before the row sweep. The
+        // purge swallows a failure there, so the join's own outcome is kept to assert on.
+        let joined: unknown = 'not attempted';
+        deleteAllByOwner.mockImplementationOnce(async () => {
+            try {
+                await dataSource.getRepository(OrganizationMember).insert({
+                    organizationId: seed.organizationId,
+                    tenantId,
+                    userId: operator.id,
+                    role: 'member',
+                    joinedAt: new Date(),
+                });
+                joined = true;
+            } catch (error) {
+                joined = error;
+            }
+            return { deleted: 0 };
+        });
+
+        const outcome = await moduleRef
+            .get(DemoSandboxPurgeService)
+            .purge(user)
+            .then(
+                (summary) => summary,
+                (error: unknown) => error,
+            );
+
+        expect(joined).toBe(true);
+        expect(outcome).toEqual(
+            new Error(`Sandbox ${user.id}'s workspace has another member; left for an operator`),
+        );
+        expect(deleteAllByOwner).toHaveBeenCalledWith(user.id);
+        expect(
+            await dataSource
+                .getRepository(OrganizationMember)
+                .countBy({ organizationId: seed.organizationId, userId: operator.id }),
+        ).toBe(1);
+        expect(
+            await dataSource.getRepository(Organization).countBy({ id: seed.organizationId }),
+        ).toBe(1);
+        expect(await dataSource.getRepository(Tenant).countBy({ id: tenantId })).toBe(1);
+        expect(await users.findById(user.id)).toMatchObject({ id: user.id });
+        // The rows step 3 would have swept are still there (the seeded Agents, for one).
+        expect(await dataSource.getRepository(Agent).countBy({ userId: user.id })).toBeGreaterThan(
+            0,
+        );
     });
 });

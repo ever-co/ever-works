@@ -76,7 +76,8 @@ const MAX_PASSES = 6;
  *
  * Every delete is scoped by the sandbox's own ids, and only a sandbox that owns its
  * workspace alone is purged: a Tenant another account belongs to, or an Organization with
- * another member, is refused and left for an operator.
+ * another member, is refused and left for an operator. That is checked before step 1 and again
+ * right before step 3, which removes the Organizations' membership rows with the rest.
  */
 @Injectable()
 export class DemoSandboxPurgeService {
@@ -116,6 +117,10 @@ export class DemoSandboxPurgeService {
         const worksDeleted = await this.deleteWorks(user);
         const filesDeleted = await this.deleteFiles(user.id);
 
+        // Re-checked right before the row sweep: nobody may have joined the workspace while its
+        // Works and files went. Step 3 deletes every `organization_members` row of the sandbox's
+        // Organizations, so a member who joined would be gone, unseen, by any later check.
+        await this.assertSoleMember(scope.userId, scope.tenantIds, scope.organizationIds);
         const refused = await this.deleteSandboxRows(scope);
         if (refused.length > 0) {
             throw new Error(
@@ -327,8 +332,6 @@ export class DemoSandboxPurgeService {
         scope: SandboxScope,
     ): Promise<{ tenantsDeleted: number; organizationsDeleted: number }> {
         if (scope.tenantIds.length === 0) return { tenantsDeleted: 0, organizationsDeleted: 0 };
-        // Re-checked here: nobody may have joined the workspace while it was emptied.
-        await this.assertSoleMember(scope.userId, scope.tenantIds, scope.organizationIds);
         return this.dataSource.transaction(async (manager) => {
             const organizations = await manager
                 .getRepository(Organization)
