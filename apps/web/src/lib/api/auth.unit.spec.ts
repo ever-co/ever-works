@@ -81,3 +81,65 @@ describe('authAPI.connectOAuthCallback on a top-level provider redirect', () => 
         expect(fetch).not.toHaveBeenCalled();
     });
 });
+
+/**
+ * Platform demo mode (R40): "Start the demo" runs as a server action, so the API sees the web
+ * server's address unless the visitor's is passed on. Its per-IP limit
+ * (`DEMO_CREATE_PER_IP_PER_HOUR`), the captcha's `remoteIp` and the session's `ipAddress` all key
+ * on it, so the call forwards the incoming `X-Forwarded-For` chain whole, exactly as the account
+ * deletion calls do (`account-deletion.ts`; the API's `TRUST_PROXY_HOPS` counts from the right).
+ */
+describe('authAPI.startDemo forwards the visitor address', () => {
+    beforeEach(() => {
+        vi.clearAllMocks();
+        getAuthAccessCookieMock.mockResolvedValue(undefined);
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(
+                async () =>
+                    new Response(
+                        JSON.stringify({
+                            access_token: 'demo-token',
+                            user: { id: 'd1', username: 'demo-0a1b2c3d' },
+                            expiresAt: '2026-11-21T12:00:00.000Z',
+                        }),
+                        { status: 201, headers: { 'content-type': 'application/json' } },
+                    ),
+            ),
+        );
+    });
+
+    /** The login page, as the proxy hands it on: the visitor's chain, the workspace selector. */
+    function incoming(extra: Record<string, string>): Headers {
+        return new Headers({ host: 'app.example', 'x-ever-workspace': 'personal', ...extra });
+    }
+
+    async function sentHeaders(): Promise<Headers> {
+        await authAPI.startDemo({ captchaToken: 'cap' });
+        expect(fetch).toHaveBeenCalledTimes(1);
+        const [url, init] = vi.mocked(fetch).mock.calls[0];
+        expect(url).toBe('https://api.example/auth/demo');
+        expect(JSON.parse(String(init?.body))).toEqual({ captchaToken: 'cap' });
+        return new Headers(init?.headers);
+    }
+
+    it('passes the incoming X-Forwarded-For chain on whole', async () => {
+        headersMock.mockResolvedValue(
+            incoming({ 'x-forwarded-for': '198.51.100.9, 203.0.113.7', 'x-real-ip': '10.0.0.1' }),
+        );
+
+        expect((await sentHeaders()).get('x-forwarded-for')).toBe('198.51.100.9, 203.0.113.7');
+    });
+
+    it('falls back to X-Real-IP when there is no chain', async () => {
+        headersMock.mockResolvedValue(incoming({ 'x-real-ip': '203.0.113.7' }));
+
+        expect((await sentHeaders()).get('x-forwarded-for')).toBe('203.0.113.7');
+    });
+
+    it('sends no address of its own when the request carries none', async () => {
+        headersMock.mockResolvedValue(incoming({}));
+
+        expect((await sentHeaders()).get('x-forwarded-for')).toBeNull();
+    });
+});

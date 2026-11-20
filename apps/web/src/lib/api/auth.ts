@@ -1,4 +1,5 @@
 import 'server-only';
+import { clientIpHeaders } from './client-ip';
 import { serverFetch, serverMutation } from './server-api';
 import { MessageResponse } from './types';
 import { OAuthProvider } from './enums';
@@ -385,13 +386,16 @@ export const authAPI = {
             wrapInData: false,
         });
     },
-    // Demo mode — mint a private sandbox account. 404 when the instance is not a demo.
+    // Demo mode — mint a private sandbox account. 404 when the instance is not a demo. A server
+    // action makes the call, so the visitor's address is passed on: the API's per-IP limit,
+    // the captcha's `remoteIp` and the session's `ipAddress` are the visitor's, not the web's.
     startDemo: async (data: StartDemoDto) => {
         return serverMutation<StartDemoResponse>({
             endpoint: '/auth/demo',
             data,
             method: 'POST',
             wrapInData: false,
+            headers: await clientIpHeaders(),
         });
     },
 };
