@@ -38,9 +38,10 @@ import {
  *       { status:'success', available:boolean,
  *         providers:[{ id, name, description, configured:boolean, isDefault:boolean }],
  *         activeProvider:{…}|null }.
- *       A FRESH user with no enabled screenshot plugin → available:false,
- *       providers:[] (per-user isolation — one user's enablement never leaks).
- *       401 without auth.
+ *       A FRESH user has enabled nothing, so only the system default
+ *       (`gotenberg`, self-hosted) is listed; available is true only where the
+ *       stack sets PLUGIN_GOTENBERG_BASE_URL (per-user isolation — one user's
+ *       enablement never leaks). 401 without auth.
  *   - POST /api/plugins/screenshotone/enable {} (no key) → 200 + plugin object,
  *       and check-availability then reports the provider as configured:true.
  *       This is because the capability "configured" check SKIPS any required
@@ -79,6 +80,14 @@ import {
 
 const SCREENSHOT_PLUGINS = ['screenshotone', 'urlbox'] as const;
 
+/**
+ * The self-hosted Gotenberg plugin is the auto-enabled SYSTEM default for the
+ * screenshot capability, so every user sees it. It counts as configured only
+ * where the stack sets PLUGIN_GOTENBERG_BASE_URL; where it is not, a provider
+ * the user enabled is the active one. The assertions below adapt to both.
+ */
+const SYSTEM_DEFAULT_ID = 'gotenberg';
+
 interface ProviderOption {
     id: string;
     name: string;
@@ -92,6 +101,16 @@ interface AvailabilityResponse {
     available: boolean;
     providers: ProviderOption[];
     activeProvider: ProviderOption | null;
+}
+
+/** Providers the user enabled themselves (everything but the system default). */
+function userProviders(body: AvailabilityResponse): ProviderOption[] {
+    return (body.providers ?? []).filter((provider) => provider.id !== SYSTEM_DEFAULT_ID);
+}
+
+/** The system default's entry, when the registry has it. */
+function systemDefault(body: AvailabilityResponse): ProviderOption | undefined {
+    return (body.providers ?? []).find((provider) => provider.id === SYSTEM_DEFAULT_ID);
 }
 
 /** Register a brand-new isolated user and return its bearer token. */
@@ -152,6 +171,8 @@ test.describe('Screenshot plugin matrix — capability facade', () => {
             expect(row.capabilities, `${row.id} declares the screenshot capability`).toContain(
                 'screenshot',
             );
+            // The system default is on for everyone; the paid providers are opt-in.
+            if (row.id === SYSTEM_DEFAULT_ID) continue;
             expect(row.enabled ?? false, `${row.id} is disabled for a fresh user`).toBe(false);
         }
 
@@ -227,19 +248,30 @@ test.describe('Screenshot plugin matrix — capability facade', () => {
         }
     });
 
-    test('Flow 2: fresh user has NO screenshot provider; unauth is rejected', async ({
+    test('Flow 2: fresh user has only the system default provider; unauth is rejected', async ({
         request,
     }) => {
         const token = await freshToken(request);
 
-        // Per-user isolation: a brand-new account has nothing enabled, so the
-        // capability is unavailable and the provider list is empty.
+        // Per-user isolation: a brand-new account has enabled nothing itself, so
+        // only the system default (Gotenberg) is listed, and the capability is
+        // available exactly when that default is set up on this stack.
         const { status, body } = await checkAvailability(request, token);
         expect(status, 'check-availability is authorised for any user').toBe(200);
         expect(body.status).toBe('success');
-        expect(body.available, 'no provider enabled → unavailable').toBe(false);
-        expect(body.providers, 'no providers listed for a fresh user').toEqual([]);
-        expect(body.activeProvider, 'no active provider for a fresh user').toBeNull();
+        expect(userProviders(body), 'no user-enabled providers for a fresh user').toEqual([]);
+        const fallback = systemDefault(body);
+        if (fallback) {
+            expect(fallback.isDefault, 'the system provider is the default').toBe(true);
+            expect(body.activeProvider?.id, 'the default is the active provider').toBe(
+                SYSTEM_DEFAULT_ID,
+            );
+        } else {
+            expect(body.activeProvider, 'no active provider without any provider').toBeNull();
+        }
+        expect(body.available, 'available only when the system default is set up').toBe(
+            fallback?.configured ?? false,
+        );
 
         // Same endpoint without a bearer is rejected (not 404, not 5xx).
         const anon = await request.get(`${API_BASE}/api/screenshot/check-availability`);
@@ -271,26 +303,36 @@ test.describe('Screenshot plugin matrix — capability facade', () => {
             .toBe(true);
 
         const afterEnable = await checkAvailability(request, token);
-        expect(afterEnable.body.providers.length, 'exactly one provider listed').toBe(1);
-        const provider = afterEnable.body.providers[0];
+        const enabledByUser = userProviders(afterEnable.body);
+        expect(enabledByUser.length, 'exactly one user-enabled provider listed').toBe(1);
+        const provider = enabledByUser[0];
         expect(provider.id, 'the enabled provider is screenshotone').toBe('screenshotone');
         expect(provider.configured, 'env-var fallback ⇒ configured:true').toBe(true);
-        expect(provider.isDefault, 'the sole enabled provider is the default').toBe(true);
+        const fallback = systemDefault(afterEnable.body);
+        // ScreenshotOne is opt-in: the system default stays the default, but
+        // where that default is not set up, the user's own provider is active.
+        expect(provider.isDefault, 'screenshotone is never the default').toBe(!fallback);
         expect(
             afterEnable.body.activeProvider?.id,
-            'activeProvider resolves to screenshotone',
-        ).toBe('screenshotone');
+            'the provider that will be used is active',
+        ).toBe(fallback?.configured ? SYSTEM_DEFAULT_ID : 'screenshotone');
 
         // Disable removes it from the capability surface.
         await disablePluginViaAPI(request, token, 'screenshotone');
         await expect
-            .poll(async () => (await checkAvailability(request, token)).body.providers.length, {
-                timeout: 15_000,
-                message: 'provider drops from availability after disable',
-            })
+            .poll(
+                async () => userProviders((await checkAvailability(request, token)).body).length,
+                {
+                    timeout: 15_000,
+                    message: 'provider drops from availability after disable',
+                },
+            )
             .toBe(0);
         const afterDisable = await checkAvailability(request, token);
-        expect(afterDisable.body.available, 'capability is unavailable post-disable').toBe(false);
+        expect(
+            afterDisable.body.available,
+            'post-disable, only a set-up system default keeps it available',
+        ).toBe(systemDefault(afterDisable.body)?.configured ?? false);
 
         // Disable is idempotent — a second disable on a not-enabled plugin is a
         // clean no-op (200), never a 4xx/5xx.
@@ -312,6 +354,7 @@ test.describe('Screenshot plugin matrix — capability facade', () => {
         // truthfully reports the missing key rather than returning a fake image.
         const noKey = await postScreenshot(request, token, 'capture', {
             url: 'https://example.com',
+            providerOverride: 'screenshotone',
         });
         expect(noKey.status, 'capture without a resolvable key → 400').toBe(400);
         expect(noKey.body.status, 'error envelope').toBe('error');
@@ -326,6 +369,7 @@ test.describe('Screenshot plugin matrix — capability facade', () => {
         });
         const halfKey = await postScreenshot(request, token, 'capture', {
             url: 'https://example.com',
+            providerOverride: 'screenshotone',
         });
         expect(halfKey.status, 'capture with a half-configured key → 400').toBe(400);
         expect(
@@ -354,6 +398,7 @@ test.describe('Screenshot plugin matrix — capability facade', () => {
             format: 'png',
             viewportWidth: 1280,
             viewportHeight: 800,
+            providerOverride: 'screenshotone',
         });
         // PROBED: the controller's POST handler carries no @HttpCode, so NestJS
         // returns its POST default 201 (not 200) on success — no external call.
@@ -375,6 +420,7 @@ test.describe('Screenshot plugin matrix — capability facade', () => {
         // fake image, never an unhandled 5xx.
         const capture = await postScreenshot(request, token, 'capture', {
             url: 'https://example.com',
+            providerOverride: 'screenshotone',
         });
         expect(capture.status, 'capture with bogus keys → truthful 400').toBe(400);
         expect(capture.body.status, 'error envelope').toBe('error');

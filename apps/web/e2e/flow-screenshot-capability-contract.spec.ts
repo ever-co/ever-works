@@ -127,6 +127,22 @@ async function postScreenshot(
     };
 }
 
+/**
+ * The auto-enabled system default (self-hosted Gotenberg): listed for every
+ * user and Work, configured only where the stack sets PLUGIN_GOTENBERG_BASE_URL.
+ */
+const SYSTEM_DEFAULT_ID = 'gotenberg';
+
+/** Providers enabled by the user or for the Work (everything but the system default). */
+function enabledProviders(body: AvailabilityResponse): ProviderOption[] {
+    return (body.providers ?? []).filter((provider) => provider.id !== SYSTEM_DEFAULT_ID);
+}
+
+/** Whether the system default is listed and set up in this scope. */
+function systemDefaultSetUp(body: AvailabilityResponse): boolean {
+    return (body.providers ?? []).some((p) => p.id === SYSTEM_DEFAULT_ID && p.configured);
+}
+
 /** Flatten the class-validator 400 `message` (string | string[]) into one string. */
 function messageText(body: Record<string, unknown>): string {
     const m = body.message;
@@ -237,8 +253,10 @@ test.describe('Screenshot capability contract — facade, scoping & gating', () 
         expect(work.id, 'work was created').toBeTruthy();
 
         const beforeWork = await checkAvailability(request, token, work.id);
-        expect(beforeWork.body.available, 'fresh work has no provider').toBe(false);
-        expect(beforeWork.body.providers, 'fresh work provider list empty').toEqual([]);
+        expect(beforeWork.body.available, 'fresh work has no provider of its own').toBe(
+            systemDefaultSetUp(beforeWork.body),
+        );
+        expect(enabledProviders(beforeWork.body), 'fresh work enabled nothing').toEqual([]);
 
         // Enable screenshotone at the USER level (global scope) with both keys.
         await enablePluginViaAPI(request, token, 'screenshotone', {
@@ -257,7 +275,10 @@ test.describe('Screenshot capability contract — facade, scoping & gating', () 
         const provider = userScope.body.providers.find((p) => p.id === 'screenshotone');
         expect(provider, 'screenshotone present in user scope').toBeTruthy();
         expect(provider!.configured, 'env-var fallback ⇒ configured:true').toBe(true);
-        expect(provider!.isDefault, 'sole provider is the default').toBe(true);
+        // ScreenshotOne is opt-in: it is the default only when no system default is registered.
+        expect(provider!.isDefault, 'screenshotone is not the default').toBe(
+            !userScope.body.providers.some((p) => p.id === SYSTEM_DEFAULT_ID),
+        );
         expect(provider!.name, 'name is surfaced').toBeTruthy();
         expect(provider!.description, 'description is surfaced').toBeTruthy();
         // The icon descriptor is an object exposed verbatim from the manifest.
@@ -269,8 +290,8 @@ test.describe('Screenshot capability contract — facade, scoping & gating', () 
         expect(
             afterUserEnable.body.available,
             'user-level enable does NOT leak into the work scope',
-        ).toBe(false);
-        expect(afterUserEnable.body.providers, 'work scope still empty').toEqual([]);
+        ).toBe(systemDefaultSetUp(afterUserEnable.body));
+        expect(enabledProviders(afterUserEnable.body), 'work scope still empty').toEqual([]);
     });
 
     test('Flow 3: work-scoped enable flips a work independently; ownership gate (403 for non-owner)', async ({
@@ -317,6 +338,7 @@ test.describe('Screenshot capability contract — facade, scoping & gating', () 
         const ownerUrl = await postScreenshot(request, ownerToken, 'get-url', {
             url: 'https://example.com',
             workId: work.id,
+            providerOverride: 'screenshotone',
         });
         expect(ownerUrl.status, 'owner work-scoped get-url → 201').toBe(201);
         expect(String(ownerUrl.body.imageUrl ?? ''), 'a signed screenshotone URL').toContain(
@@ -400,6 +422,7 @@ test.describe('Screenshot capability contract — facade, scoping & gating', () 
         const oUrl = await postScreenshot(request, ownerToken, 'get-url', {
             url: 'https://example.com',
             workId: work.id,
+            providerOverride: 'screenshotone',
         });
         expect(oUrl.status, 'owner can sign for their own work → 201').toBe(201);
         expect(String(oUrl.body.imageUrl ?? '')).toContain('access_key=');
@@ -428,6 +451,7 @@ test.describe('Screenshot capability contract — facade, scoping & gating', () 
             fullPage: true,
             blockAds: false,
             blockTrackers: false,
+            providerOverride: 'screenshotone',
         });
         expect(so.status, 'screenshotone get-url → 201').toBe(201);
         const soUrl = String(so.body.imageUrl ?? '');
@@ -446,6 +470,7 @@ test.describe('Screenshot capability contract — facade, scoping & gating', () 
         // the viewport defaults to 1280x800.
         const soDefault = await postScreenshot(request, token, 'get-url', {
             url: 'https://example.com',
+            providerOverride: 'screenshotone',
         });
         const soDefaultUrl = String(soDefault.body.imageUrl ?? '');
         expect(soDefaultUrl, 'default viewport width 1280').toContain('viewport_width=1280');
@@ -490,10 +515,13 @@ test.describe('Screenshot capability contract — facade, scoping & gating', () 
         request,
     }) => {
         const token = await freshToken(request);
+        // Where the system default (Gotenberg) is set up, a fresh account always
+        // has a provider, so the "no provider" gate cannot trigger.
+        const defaultSetUp = systemDefaultSetUp((await checkAvailability(request, token)).body);
 
-        // With NOTHING enabled, capture/get-url are gated BEFORE any facade call:
+        // With NOTHING usable, capture/get-url are gated BEFORE any facade call:
         // a 400 { status:'error', message:'No screenshot provider configured' }.
-        for (const op of ['capture', 'get-url'] as const) {
+        for (const op of defaultSetUp ? [] : (['capture', 'get-url'] as const)) {
             const gated = await postScreenshot(request, token, op, { url: 'https://example.com' });
             expect(gated.status, `${op}: no provider → 400 gate`).toBe(400);
             expect(gated.body.status, `${op}: error envelope`).toBe('error');
@@ -531,7 +559,8 @@ test.describe('Screenshot capability contract — facade, scoping & gating', () 
             });
         }
 
-        // The default (screenshotone) sorts first and resolves as activeProvider.
+        // The default (the system Gotenberg provider when registered) sorts first,
+        // and an active provider resolves.
         const avail = await checkAvailability(request, token);
         expect(avail.body.providers[0].isDefault, 'default sorts first').toBe(true);
         expect(avail.body.activeProvider?.id, 'an active provider resolves').toBeTruthy();
@@ -559,14 +588,15 @@ test.describe('Screenshot capability contract — facade, scoping & gating', () 
             `unknown override rejected (got ${badOverride.status})`,
         ).toBe(true);
 
-        // Finally, disabling the provider re-arms the gate (idempotent disable).
+        // Finally, disabling the providers re-arms the gate (idempotent disable),
+        // unless the system default is set up on this stack.
         await disablePluginViaAPI(request, token, 'screenshotone');
         if (hasUrlbox) await disablePluginViaAPI(request, token, 'urlbox');
         await expect
             .poll(async () => (await checkAvailability(request, token)).body.available, {
                 timeout: 15_000,
-                message: 'availability returns to false after disabling all providers',
+                message: 'availability returns to the system default alone after disabling',
             })
-            .toBe(false);
+            .toBe(defaultSetUp);
     });
 });

@@ -9,6 +9,7 @@ import type {
     IScreenshotPlugin,
     IScreenshotFacade,
     FacadeOptions,
+    IPlugin,
 } from '@ever-works/plugin';
 import { PLUGIN_CAPABILITIES } from '@ever-works/plugin';
 import { isSafeWebhookUrl } from '@ever-works/plugin/helpers/ssrf-guard';
@@ -277,6 +278,51 @@ export class ScreenshotFacadeService extends BaseFacadeService implements IScree
         if (!entry) return;
         this.renderCacheBytes -= entry.result?.image.length ?? 0;
         this.renderCache.delete(segment);
+    }
+
+    /**
+     * The usual resolution (override > Work's active provider > default >
+     * first enabled), except that an operator's SYSTEM default that is not set
+     * up on this instance — the Gotenberg plugin without
+     * PLUGIN_GOTENBERG_BASE_URL — gives way to the next provider the user
+     * enabled (e.g. their own ScreenshotOne). An explicit provider choice
+     * always stands.
+     */
+    protected override async resolvePlugin<T extends IPlugin>(
+        providerOverride?: string,
+        userId?: string,
+        workId?: string,
+        agentProviderOverride?: string,
+    ): Promise<T> {
+        const plugin = await super.resolvePlugin<T>(
+            providerOverride,
+            userId,
+            workId,
+            agentProviderOverride,
+        );
+        if (providerOverride || agentProviderOverride) return plugin;
+        if (!this.registry.get(plugin.id)?.manifest.systemPlugin) return plugin;
+        if (await this.reportsAvailable(plugin)) return plugin;
+
+        const fallback = (await this.getEnabledPlugins(workId as string, userId as string)).find(
+            (candidate) => candidate.plugin.id !== plugin.id,
+        );
+        if (!fallback) return plugin;
+
+        this.logger.debug(
+            `Screenshot provider "${plugin.id}" is not set up here; using "${fallback.plugin.id}"`,
+        );
+        return super.resolvePlugin<T>(fallback.plugin.id, userId, workId);
+    }
+
+    private async reportsAvailable(plugin: IPlugin): Promise<boolean> {
+        const isAvailable = (plugin as Partial<IScreenshotPlugin>).isAvailable;
+        if (typeof isAvailable !== 'function') return true;
+        try {
+            return await isAvailable.call(plugin);
+        } catch {
+            return false;
+        }
     }
 
     isAvailable(): boolean {

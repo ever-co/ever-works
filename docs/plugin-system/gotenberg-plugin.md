@@ -79,7 +79,7 @@ Settings are operator configuration. The base URL is an `x-envVar` field without
 | `SCREENSHOT_IMAGE_BASE_URL`       | No       | Public origin of the API, e.g. `https://api.ever.works`. Enables signed image URLs for bytes-only providers                |
 | `SCREENSHOT_IMAGE_SIGNING_SECRET` | No       | HMAC secret for those URLs. Defaults to `PLATFORM_ENCRYPTION_KEY`, which the API and its Trigger.dev workers already share |
 
-No setting is `required`, on purpose: an instance that runs no Gotenberg must never see generation refused because "the default screenshot provider is not configured". Set the variables on the API **and** on whatever runs generation (Trigger.dev workers when `TRIGGER_ENABLED=true`).
+No setting is `required`, on purpose: an instance that runs no Gotenberg must never see generation refused because "the default screenshot provider is not configured". Where `PLUGIN_GOTENBERG_BASE_URL` is unset, the plugin's `isAvailable()` answers false: `GET /api/screenshot/check-availability` lists Gotenberg as not configured, and both that `activeProvider` and the screenshot facade fall back to a provider the user enabled themselves (for example their own ScreenshotOne). An explicit provider choice always stands. Set the variables on the API **and** on whatever runs generation (Trigger.dev workers when `TRIGGER_ENABLED=true`).
 
 | Setting             | Type    | Default | Description                                    |
 | ------------------- | ------- | ------- | ---------------------------------------------- |
