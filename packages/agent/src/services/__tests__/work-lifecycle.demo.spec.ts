@@ -57,12 +57,24 @@ const otherUser = {
  * on a demo instance with no repository ledger bound it refuses every create (ruling R22).
  */
 class FetchInjectedEverWorksGit extends EverWorksGitProvider {
+    /** The demo topic calls (`PUT …/topics`, Task 10 R27), kept out of `fetchImpl`'s create count. */
+    readonly topicCalls: string[] = [];
+
     constructor(private readonly fetchImpl: EverWorksGitHttpFetch) {
         super({ record: jest.fn().mockResolvedValue(undefined) });
     }
 
     override createRepository(options: Parameters<EverWorksGitProvider['createRepository']>[0]) {
-        return super.createRepository({ ...options, fetchImpl: this.fetchImpl });
+        const routed = (async (url: string, init?: RequestInit) => {
+            if (init?.method === 'PUT' && url.endsWith('/topics')) {
+                this.topicCalls.push(url);
+                return new Response(JSON.stringify({ names: ['ever-works-demo'] }), {
+                    status: 200,
+                });
+            }
+            return this.fetchImpl(url, init);
+        }) as EverWorksGitHttpFetch;
+        return super.createRepository({ ...options, fetchImpl: routed });
     }
 }
 

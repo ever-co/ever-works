@@ -3,6 +3,7 @@ import { config } from '../config';
 import {
     DEMO_REPO_LEDGER,
     DEMO_REPO_LEDGER_UNBOUND_MESSAGE,
+    DEMO_REPO_TOPIC,
     demoRepoLedgerForCreate,
     type DemoRepoLedgerPort,
 } from '../demo/demo-repo-ledger.port';
@@ -161,7 +162,9 @@ export class EverWorksGitProvider {
             name: firstName,
             description: options.work.description,
         });
-        if (first.kind === 'ok') return this.recordCreated(ledger, options.work, first.repo);
+        if (first.kind === 'ok') {
+            return this.recordCreated(ledger, options.work, first.repo, { pat, fetchImpl });
+        }
         if (first.kind !== 'name_taken') throw first.error;
 
         const fallbackName = this.buildRepoName(options.work, true);
@@ -173,7 +176,9 @@ export class EverWorksGitProvider {
             name: fallbackName,
             description: options.work.description,
         });
-        if (second.kind === 'ok') return this.recordCreated(ledger, options.work, second.repo);
+        if (second.kind === 'ok') {
+            return this.recordCreated(ledger, options.work, second.repo, { pat, fetchImpl });
+        }
         if (second.kind === 'name_taken') {
             throw new EverWorksGitRequestError(
                 422,
@@ -316,16 +321,20 @@ export class EverWorksGitProvider {
     }
 
     /**
-     * Records a repository GitHub just created (201) in the demo ledger; a no-op with the demo
-     * off. A repository that cannot be recorded could never be swept, so the create fails —
-     * after an error naming it, for an operator to remove by hand.
+     * A repository GitHub just created (201), on a demo instance (a ledger bound); a no-op with
+     * the demo off. It is tagged with the demo topic first (best effort, see
+     * {@link tagDemoRepository}), then recorded in the demo ledger. A repository that cannot be
+     * recorded could never be swept, so the create fails — after an error naming it, for an
+     * operator to remove by hand (the topic finds it).
      */
     private async recordCreated(
         ledger: DemoRepoLedgerPort | undefined,
         work: EverWorksProviderWorkRef,
         repo: EverWorksGitRepoRef,
+        github: { pat: string; fetchImpl: EverWorksGitHttpFetch },
     ): Promise<EverWorksGitRepoRef> {
         if (!ledger) return repo;
+        await this.tagDemoRepository(repo, github);
         const githubId = Number.isSafeInteger(repo.id) ? repo.id : null;
         try {
             await ledger.record({
@@ -344,6 +353,41 @@ export class EverWorksGitProvider {
             throw error;
         }
         return repo;
+    }
+
+    /**
+     * Tags a repository this provider just created with {@link DEMO_REPO_TOPIC}
+     * (`PUT /repos/{owner}/{name}/topics`, same PAT and transport as the create). The topics
+     * endpoint replaces the whole list, which is safe here: the repository was created a moment
+     * ago and has none. Best effort: a refusal or a failed call is logged at warn level and
+     * never fails the create or the ledger record.
+     */
+    private async tagDemoRepository(
+        repo: EverWorksGitRepoRef,
+        github: { pat: string; fetchImpl: EverWorksGitHttpFetch },
+    ): Promise<void> {
+        try {
+            const response = await github.fetchImpl(
+                `${repositoryUrl(repo.owner, repo.repo)}/topics`,
+                {
+                    method: 'PUT',
+                    headers: { ...githubHeaders(github.pat), 'content-type': 'application/json' },
+                    body: JSON.stringify({ names: [DEMO_REPO_TOPIC] }),
+                    redirect: 'manual',
+                },
+            );
+            if (response.status >= 200 && response.status < 300) return;
+            const error = await requestError(response, `tagging ${repo.owner}/${repo.repo}`);
+            this.logger.warn(
+                `Demo repository ${repo.fullName} not tagged ${DEMO_REPO_TOPIC}: ${error.message}`,
+            );
+        } catch (error) {
+            this.logger.warn(
+                `Demo repository ${repo.owner}/${repo.repo} not tagged ${DEMO_REPO_TOPIC}: ${
+                    error instanceof Error ? error.message : String(error)
+                }`,
+            );
+        }
     }
 
     private logLedgerUnboundOnce(): void {

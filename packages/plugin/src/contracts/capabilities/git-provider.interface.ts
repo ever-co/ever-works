@@ -1032,6 +1032,15 @@ export interface IGitProviderPlugin extends IPlugin, IGitOperations {
 	 */
 	getRepositoryIdentity?(owner: string, repo: string, token: string): Promise<GitRepositoryIdentity | null>;
 	/**
+	 * Add `topics` to `owner/repo`, keeping the topics it already has. Throws
+	 * when the provider refuses. The platform demo tags every repository a demo
+	 * sandbox creates (`ever-works-demo`) through this.
+	 *
+	 * OPTIONAL. Callers MUST read the method off the materialised plugin before
+	 * calling it (the lazy-plugin proxy over-reports optional methods).
+	 */
+	addRepositoryTopics?(owner: string, repo: string, topics: readonly string[], token: string): Promise<void>;
+	/**
 	 * The access level the provider calculates for `username` on `owner/repo`,
 	 * after every source of grants (the repository, teams, the organization),
 	 * or `null` when the provider does not answer for that user.

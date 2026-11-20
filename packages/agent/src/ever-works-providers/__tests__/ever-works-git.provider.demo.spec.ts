@@ -38,6 +38,14 @@ function created(name: string): Response {
     );
 }
 
+/**
+ * The create calls (`POST /orgs/{org}/repos`) a fetch double received; on a demo instance a
+ * created repository is then tagged with the demo topic (`PUT …/topics`, Task 10 R27).
+ */
+function creates(fetchImpl: jest.Mock): unknown[] {
+    return fetchImpl.mock.calls.filter(([, init]) => (init as RequestInit).method === 'POST');
+}
+
 function nameTaken(): Response {
     return new Response(
         JSON.stringify({
@@ -90,7 +98,7 @@ describe('EverWorksGitProvider.createRepository — demo repository prefix', () 
                 fetchImpl,
             });
 
-            expect(fetchImpl).toHaveBeenCalledTimes(1);
+            expect(creates(fetchImpl)).toHaveLength(1);
             const body = JSON.parse((fetchImpl.mock.calls[0][1] as RequestInit).body as string);
             expect(body.name).toBe('demo-1a2b3c4d-foo');
             expect(repo).toMatchObject({ owner: ORG, repo: 'demo-1a2b3c4d-foo' });
@@ -105,7 +113,7 @@ describe('EverWorksGitProvider.createRepository — demo repository prefix', () 
 
             await provider.createRepository({ work: work('demo-1a2b3c4d'), fetchImpl });
 
-            expect(fetchImpl).toHaveBeenCalledTimes(2);
+            expect(creates(fetchImpl)).toHaveLength(2);
             const retried = JSON.parse((fetchImpl.mock.calls[1][1] as RequestInit).body as string);
             expect(retried.name).toBe('demo-1a2b3c4d-foo-b8a4f8e');
         });

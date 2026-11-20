@@ -35,10 +35,15 @@ function repository(owner: string, name: string) {
     };
 }
 
+/** GitHub's id of the repository the double creates. */
+const GITHUB_ID = 812345678;
+
 type PluginDouble = {
     id: string;
     getUser: jest.Mock;
     getRepository: jest.Mock;
+    getRepositoryIdentity?: jest.Mock;
+    addRepositoryTopics?: jest.Mock;
     createRepository: jest.Mock;
     createRepositoryFromTemplate: jest.Mock;
     createRepositoryCopy: jest.Mock;
@@ -49,6 +54,11 @@ function pluginDouble(existing: ReturnType<typeof repository> | null = null): Pl
         id: 'github',
         getUser: jest.fn().mockResolvedValue({ id: '1', login: 'platform-bot' }),
         getRepository: jest.fn().mockResolvedValue(existing),
+        getRepositoryIdentity: jest.fn(async (owner: string, name: string) => ({
+            id: String(GITHUB_ID),
+            fullName: `${owner}/${name}`,
+        })),
+        addRepositoryTopics: jest.fn().mockResolvedValue(undefined),
         createRepository: jest.fn(async (options: { name: string; organization?: string }) =>
             repository(options.organization ?? 'platform-bot', options.name),
         ),
@@ -100,7 +110,7 @@ describe('GitFacadeService — demo repository ledger', () => {
             process.env.DEMO = 'true';
         });
 
-        it('createRepository records a repository it created, for the Work owner, with no id', async () => {
+        it("createRepository records a repository it created, for the Work owner, with GitHub's id (R26)", async () => {
             const plugin = pluginDouble(null);
             const ledger = ledgerDouble();
             const { facade } = makeFacade(plugin, ledger);
@@ -112,13 +122,152 @@ describe('GitFacadeService — demo repository ledger', () => {
 
             expect(plugin.getRepository).toHaveBeenCalledWith(ORG, WEBSITE, 'tok');
             expect(plugin.createRepository).toHaveBeenCalledTimes(1);
+            expect(plugin.getRepositoryIdentity).toHaveBeenCalledWith(ORG, WEBSITE, 'tok');
             expect(ledger.record).toHaveBeenCalledTimes(1);
             expect(ledger.record).toHaveBeenCalledWith({
                 sandboxUserId: SANDBOX_ID,
                 owner: ORG,
                 name: WEBSITE,
-                githubId: null,
+                githubId: GITHUB_ID,
             });
+        });
+
+        it.each([
+            [
+                'the identity lookup throws',
+                (plugin: PluginDouble) =>
+                    plugin.getRepositoryIdentity!.mockRejectedValue(new Error('rate limited')),
+            ],
+            [
+                'the plugin cannot see the repository yet',
+                (plugin: PluginDouble) => plugin.getRepositoryIdentity!.mockResolvedValue(null),
+            ],
+            [
+                'the plugin answers for another repository',
+                (plugin: PluginDouble) =>
+                    plugin.getRepositoryIdentity!.mockResolvedValue({
+                        id: '5',
+                        fullName: `${ORG}/customer-site`,
+                    }),
+            ],
+            [
+                'the id is not a number',
+                (plugin: PluginDouble) =>
+                    plugin.getRepositoryIdentity!.mockResolvedValue({
+                        id: 'R_kgDOabc',
+                        fullName: `${ORG}/${WEBSITE}`,
+                    }),
+            ],
+            [
+                'the plugin offers no identity read',
+                (plugin: PluginDouble) => {
+                    delete plugin.getRepositoryIdentity;
+                },
+            ],
+        ])(
+            'records a null id, the create still succeeding, when %s (R26)',
+            async (_label, arrange) => {
+                const plugin = pluginDouble(null);
+                arrange(plugin);
+                const ledger = ledgerDouble();
+                const debug = jest
+                    .spyOn(Logger.prototype, 'debug')
+                    .mockImplementation(() => undefined);
+                const { facade } = makeFacade(plugin, ledger);
+
+                await expect(
+                    facade.createRepository({ name: WEBSITE, organization: ORG }, OPTIONS),
+                ).resolves.toMatchObject({ fullName: `${ORG}/${WEBSITE}` });
+
+                expect(ledger.record).toHaveBeenCalledWith({
+                    sandboxUserId: SANDBOX_ID,
+                    owner: ORG,
+                    name: WEBSITE,
+                    githubId: null,
+                });
+                expect(debug).toHaveBeenCalledWith(expect.stringContaining(`${ORG}/${WEBSITE}`));
+            },
+        );
+
+        it('tags a repository it created with the ever-works-demo topic, before recording it (R27)', async () => {
+            const plugin = pluginDouble(null);
+            const ledger = ledgerDouble();
+            const { facade } = makeFacade(plugin, ledger);
+
+            await facade.createRepository({ name: WEBSITE, organization: ORG }, OPTIONS);
+
+            expect(plugin.addRepositoryTopics).toHaveBeenCalledTimes(1);
+            expect(plugin.addRepositoryTopics).toHaveBeenCalledWith(
+                ORG,
+                WEBSITE,
+                ['ever-works-demo'],
+                'tok',
+            );
+            expect(plugin.addRepositoryTopics!.mock.invocationCallOrder[0]).toBeLessThan(
+                ledger.record.mock.invocationCallOrder[0],
+            );
+        });
+
+        it('never tags a repository that already existed (R27)', async () => {
+            const plugin = pluginDouble(repository(ORG, WEBSITE));
+            const { facade } = makeFacade(plugin, ledgerDouble());
+
+            await facade.createRepository({ name: WEBSITE, organization: ORG }, OPTIONS);
+            await facade.createRepositoryFromTemplate(
+                'ever-works',
+                'directory-template',
+                { name: WEBSITE, organization: ORG },
+                OPTIONS,
+            );
+
+            expect(plugin.addRepositoryTopics).not.toHaveBeenCalled();
+        });
+
+        it.each([
+            [
+                'the topic call fails',
+                (plugin: PluginDouble) =>
+                    plugin.addRepositoryTopics!.mockRejectedValue(new Error('403 Forbidden')),
+            ],
+            [
+                'the plugin offers no topic write',
+                (plugin: PluginDouble) => {
+                    delete plugin.addRepositoryTopics;
+                },
+            ],
+        ])(
+            'keeps the create and the record when %s, with a warning (R27)',
+            async (_label, arrange) => {
+                const plugin = pluginDouble(null);
+                arrange(plugin);
+                const ledger = ledgerDouble();
+                const warnings = jest
+                    .spyOn(Logger.prototype, 'warn')
+                    .mockImplementation(() => undefined);
+                const { facade } = makeFacade(plugin, ledger);
+
+                await expect(
+                    facade.createRepository({ name: WEBSITE, organization: ORG }, OPTIONS),
+                ).resolves.toMatchObject({ fullName: `${ORG}/${WEBSITE}` });
+
+                expect(ledger.record).toHaveBeenCalledWith(
+                    expect.objectContaining({ name: WEBSITE, githubId: GITHUB_ID }),
+                );
+                expect(warnings).toHaveBeenCalledWith(expect.stringContaining(`${ORG}/${WEBSITE}`));
+            },
+        );
+
+        it('still tags a repository whose record fails (R27: findable by an operator)', async () => {
+            const plugin = pluginDouble(null);
+            const ledger = ledgerDouble();
+            ledger.record.mockRejectedValue(new Error('remote call failed'));
+            jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+            const { facade } = makeFacade(plugin, ledger);
+
+            await expect(
+                facade.createRepository({ name: WEBSITE, organization: ORG }, OPTIONS),
+            ).rejects.toThrow('remote call failed');
+            expect(plugin.addRepositoryTopics).toHaveBeenCalledTimes(1);
         });
 
         it('createRepository never records a repository that already existed (R23)', async () => {
@@ -181,7 +330,7 @@ describe('GitFacadeService — demo repository ledger', () => {
             expect(errors).toHaveBeenCalledWith(expect.stringContaining(`${ORG}/${WEBSITE}`));
         });
 
-        it('createRepositoryFromTemplate records a repository it created', async () => {
+        it("createRepositoryFromTemplate records a repository it created, with GitHub's id, tagged", async () => {
             const plugin = pluginDouble(null);
             const ledger = ledgerDouble();
             const { facade } = makeFacade(plugin, ledger);
@@ -198,8 +347,14 @@ describe('GitFacadeService — demo repository ledger', () => {
                 sandboxUserId: SANDBOX_ID,
                 owner: ORG,
                 name: WEBSITE,
-                githubId: null,
+                githubId: GITHUB_ID,
             });
+            expect(plugin.addRepositoryTopics).toHaveBeenCalledWith(
+                ORG,
+                WEBSITE,
+                ['ever-works-demo'],
+                'tok',
+            );
         });
 
         it('createRepositoryFromTemplate never records a repository that already existed (R23)', async () => {
@@ -219,9 +374,12 @@ describe('GitFacadeService — demo repository ledger', () => {
 
         it('createRepositoryFromTemplate records the requested repository when GitHub cannot read the new one back yet', async () => {
             // GitHub's template create answers `null` when the repository it just created is
-            // not readable yet; generation carries on with it, so it must be ledgered.
+            // not readable yet; generation carries on with it, so it must be ledgered. Its id
+            // cannot be read yet either.
             const plugin = pluginDouble(null);
             plugin.createRepositoryFromTemplate.mockResolvedValue(null);
+            plugin.getRepositoryIdentity!.mockResolvedValue(null);
+            jest.spyOn(Logger.prototype, 'debug').mockImplementation(() => undefined);
             const ledger = ledgerDouble();
             const { facade } = makeFacade(plugin, ledger);
 
@@ -340,7 +498,7 @@ describe('GitFacadeService — demo repository ledger', () => {
             delete process.env.DEMO;
         });
 
-        it('creates exactly as before: no existence check, no ledger call', async () => {
+        it('creates exactly as before: no existence check, no id read, no topic, no ledger call', async () => {
             const plugin = pluginDouble(null);
             const ledger = ledgerDouble();
             const { facade } = makeFacade(plugin, ledger);
@@ -355,6 +513,8 @@ describe('GitFacadeService — demo repository ledger', () => {
 
             expect(plugin.getRepository).not.toHaveBeenCalled();
             expect(plugin.getUser).not.toHaveBeenCalled();
+            expect(plugin.getRepositoryIdentity).not.toHaveBeenCalled();
+            expect(plugin.addRepositoryTopics).not.toHaveBeenCalled();
             expect(ledger.record).not.toHaveBeenCalled();
         });
 

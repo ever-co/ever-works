@@ -280,17 +280,32 @@ export class UserRepository {
         });
     }
 
-    /** Platform demo mode: expired demo sandboxes, oldest first, for the demo sweeper. */
-    async findExpiredDemo(now: Date, limit: number): Promise<User[]> {
-        return await this.repository.find({
-            where: {
-                isAnonymous: true,
-                registrationProvider: 'demo',
-                anonymousExpiresAt: LessThan(now),
-            },
-            order: { anonymousExpiresAt: 'ASC', id: 'ASC' },
-            take: limit,
-        });
+    /**
+     * Platform demo mode: expired demo sandboxes, oldest first (`anonymousExpiresAt`, then
+     * `id`), for the demo sweeper. `after` continues from a sandbox the previous page ended
+     * on: only sandboxes strictly after it in that order — a stable cursor, unaffected by the
+     * sandboxes the sweeper deleted in between.
+     */
+    async findExpiredDemo(
+        now: Date,
+        limit: number,
+        after?: { expiresAt: Date; id: string },
+    ): Promise<User[]> {
+        const query = this.repository
+            .createQueryBuilder('user')
+            .where({ isAnonymous: true, registrationProvider: 'demo' })
+            // `anonymousExpiresAt` is stored as epoch milliseconds (`TimestampColumn`).
+            .andWhere('user.anonymousExpiresAt < :now', { now: now.getTime() })
+            .orderBy('user.anonymousExpiresAt', 'ASC')
+            .addOrderBy('user.id', 'ASC')
+            .take(limit);
+        if (after) {
+            query.andWhere(
+                '(user.anonymousExpiresAt > :afterAt OR (user.anonymousExpiresAt = :afterAt AND user.id > :afterId))',
+                { afterAt: after.expiresAt.getTime(), afterId: after.id },
+            );
+        }
+        return await query.getMany();
     }
 
     /** Platform demo mode: demo sandboxes that have not expired yet (capacity check). */

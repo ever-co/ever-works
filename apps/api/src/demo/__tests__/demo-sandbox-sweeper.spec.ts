@@ -45,6 +45,7 @@ import type { EverWorksGitProvider } from '@ever-works/agent/ever-works-provider
 import { AnonymousUserCleanupService, type WorkLifecycleService } from '@ever-works/agent/services';
 import { DemoSandboxPurgeService } from '../demo-sandbox-purge.service';
 import {
+    DEMO_GENERATION_DEFERRAL_MAX_MS,
     DEMO_SWEEPER_CRON,
     DEMO_SWEEPER_LOCK_KEY,
     DemoSandboxSweeperService,
@@ -609,6 +610,132 @@ describe('DemoSandboxSweeperService', () => {
         expect(summary.sandboxes).toBe(20);
         expect(await userExists(created[20].id)).toBe(true);
         expect(await userExists(created[0].id)).toBe(false);
+    });
+
+    /** A bare expired demo user (no workspace), for the paging tests' many sandboxes. */
+    async function bareSandbox(expiresAt: Date): Promise<User> {
+        serial += 1;
+        return users.create({
+            username: `demo-${serial.toString(16).padStart(8, '0')}`,
+            isAnonymous: true,
+            anonymousExpiresAt: expiresAt,
+            registrationProvider: 'demo',
+        });
+    }
+
+    /** A sandbox held for an operator: a pending ledger row at 3 attempts. */
+    async function heldSandbox(expiresAt: Date): Promise<User> {
+        const user = await bareSandbox(expiresAt);
+        const repo = await ledgerRow(user.id, `${user.username}-foo`);
+        await dataSource.getRepository(DemoGithubRepo).update({ id: repo.id }, { attempts: 3 });
+        return user;
+    }
+
+    describe('batch slots (R24)', () => {
+        const minutesAgo = (minutes: number) => new Date(EXPIRED.getTime() - minutes * 60_000);
+
+        it('pages past held and deferred sandboxes to the one it can act on, in the same run', async () => {
+            const errors = jest
+                .spyOn(Logger.prototype, 'error')
+                .mockImplementation(() => undefined);
+            const held: User[] = [];
+            for (let index = 0; index < 22; index += 1) {
+                held.push(await heldSandbox(minutesAgo(100 - index)));
+            }
+            const deferred = await sandbox(minutesAgo(50));
+            await dataSource
+                .getRepository(Work)
+                .update({ userId: deferred.user.id }, { generationStartedAt: minutesAgo(55) });
+            const actionable = await sandbox(minutesAgo(10));
+
+            const summary = await sweeper.sweep(NOW);
+
+            expect(await userExists(actionable.user.id)).toBe(false);
+            expect(await userExists(deferred.user.id)).toBe(true);
+            for (const user of held) expect(await userExists(user.id)).toBe(true);
+            expect(git.getRepositoryId).not.toHaveBeenCalled();
+            expect(summary).toEqual({
+                sandboxes: 1,
+                reposDeleted: 0,
+                reposSkipped: 0,
+                failures: held.length,
+            });
+            // Something was actionable: no "only held sandboxes" alarm.
+            expect(errors).not.toHaveBeenCalledWith(expect.stringContaining('nothing else'));
+        });
+
+        it('still acts on at most 20 sandboxes, whatever it pages past', async () => {
+            for (let index = 0; index < 5; index += 1) await heldSandbox(minutesAgo(200 - index));
+            jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+            const actionable: User[] = [];
+            for (let index = 0; index < 21; index += 1) {
+                actionable.push((await sandbox(minutesAgo(100 - index))).user);
+            }
+
+            const summary = await sweeper.sweep(NOW);
+
+            expect(summary.sandboxes).toBe(20);
+            expect(await userExists(actionable[19].id)).toBe(false);
+            expect(await userExists(actionable[20].id)).toBe(true);
+        });
+
+        it('bounds the scan at 10 pages (200 sandboxes) and raises the alarm when only held ones were found', async () => {
+            for (let index = 0; index < 200; index += 1)
+                await heldSandbox(minutesAgo(1_000 - index));
+            const beyond = await sandbox(minutesAgo(1));
+            const findExpired = jest.spyOn(users, 'findExpiredDemo');
+            const errors = jest
+                .spyOn(Logger.prototype, 'error')
+                .mockImplementation(() => undefined);
+
+            const summary = await sweeper.sweep(NOW);
+
+            expect(findExpired).toHaveBeenCalledTimes(10);
+            expect(await userExists(beyond.user.id)).toBe(true);
+            expect(summary).toMatchObject({ sandboxes: 0, failures: 200 });
+            expect(errors).toHaveBeenCalledWith(
+                expect.stringMatching(/200 sandboxes held for an operator.*nothing else/),
+            );
+        });
+    });
+
+    describe('bounded deferral (R25)', () => {
+        it(`defers a sandbox expired up to ${DEMO_GENERATION_DEFERRAL_MAX_MS / 3_600_000} hours ago`, async () => {
+            const { user } = await sandbox(
+                new Date(NOW.getTime() - DEMO_GENERATION_DEFERRAL_MAX_MS),
+            );
+            // Started, never progressed: the stale-generation cleanup never closes this one.
+            await dataSource
+                .getRepository(Work)
+                .update({ userId: user.id }, { generationStartedAt: EXPIRED });
+
+            await sweeper.sweep(NOW);
+
+            expect(await userExists(user.id)).toBe(true);
+        });
+
+        it('purges a sandbox expired more than 2 hours ago despite an open generation, naming the Work', async () => {
+            const { user } = await sandbox(
+                new Date(NOW.getTime() - DEMO_GENERATION_DEFERRAL_MAX_MS - 60_000),
+            );
+            await dataSource
+                .getRepository(Work)
+                .update({ userId: user.id }, { generationStartedAt: EXPIRED });
+            const [open] = await dataSource.getRepository(Work).findBy({ userId: user.id });
+            const warnings = jest
+                .spyOn(Logger.prototype, 'warn')
+                .mockImplementation(() => undefined);
+
+            const summary = await sweeper.sweep(NOW);
+
+            expect(await userExists(user.id)).toBe(false);
+            expect(summary.sandboxes).toBe(1);
+            expect(warnings).toHaveBeenCalledWith(expect.stringContaining(open.id));
+        });
+
+        it('names the bound: 2 hours', () => {
+            expect(DEMO_GENERATION_DEFERRAL_MAX_MS).toBe(2 * 60 * 60 * 1000);
+        });
     });
 
     describe('with the demo off', () => {

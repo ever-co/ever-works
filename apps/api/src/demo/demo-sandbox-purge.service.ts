@@ -80,19 +80,22 @@ export class DemoSandboxPurgeService {
     ) {}
 
     /**
-     * True while one of the sandbox's Works is generating (started, not finished): a Trigger
-     * worker may still be making a repository for it, which must be ledgered — and swept —
-     * before the sandbox goes. A stalled generation is closed by the stale-generation cleanup.
+     * The ids of the sandbox's Works that are generating (started, not finished): a Trigger
+     * worker may still be making a repository for one, which must be ledgered — and swept —
+     * before the sandbox goes. The sweeper bounds how long it waits on them
+     * (`DEMO_GENERATION_DEFERRAL_MAX_MS`): one that started and never progressed is never
+     * closed by the stale-generation cleanup.
      */
-    async hasGenerationInFlight(userId: string): Promise<boolean> {
-        const generating = await this.dataSource.getRepository(Work).count({
+    async generationsInFlight(userId: string): Promise<string[]> {
+        const generating = await this.dataSource.getRepository(Work).find({
             where: {
                 userId,
                 generationStartedAt: Not(IsNull()),
                 generationFinishedAt: IsNull(),
             },
+            select: ['id'],
         });
-        return generating > 0;
+        return generating.map((work) => work.id);
     }
 
     async purge(user: User): Promise<DemoSandboxPurgeSummary> {

@@ -1149,6 +1149,27 @@ export class GitHubApiService {
 		};
 	}
 
+	/**
+	 * Add `topics` to `owner/repo` and keep the ones it has: GitHub's topics
+	 * endpoint replaces the whole list, so the current list is read first
+	 * (`GET`, then `PUT /repos/{owner}/{repo}/topics`). Nothing is written when
+	 * every topic is already there. A refusal throws.
+	 */
+	async addRepositoryTopics(
+		owner: string,
+		repo: string,
+		topics: readonly string[],
+		token: string,
+		baseUrl?: string
+	): Promise<void> {
+		const octokit = this.createOctokit(token, baseUrl);
+		const { data } = await octokit.rest.repos.getAllTopics({ owner, repo });
+		const current = data.names ?? [];
+		const missing = topics.filter((topic) => !current.includes(topic));
+		if (missing.length === 0) return;
+		await octokit.rest.repos.replaceAllTopics({ owner, repo, names: [...current, ...missing] });
+	}
+
 	async deleteRepository(owner: string, repo: string, token: string, baseUrl?: string): Promise<void> {
 		const octokit = this.createOctokit(token, baseUrl);
 		await octokit.rest.repos.delete({ owner, repo });

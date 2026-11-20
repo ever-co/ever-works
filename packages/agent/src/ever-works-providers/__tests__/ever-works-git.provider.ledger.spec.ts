@@ -78,14 +78,30 @@ type FetchCall = { url: string; method: string; init: RequestInit };
 /** Records every request the provider makes, across the whole file. */
 const requests: FetchCall[] = [];
 
+/** How GitHub answers the demo topic (`PUT /repos/{owner}/{name}/topics`); reset per test. */
+let answerTopics: () => Promise<Response>;
+
+function isTopicsCall(url: string, init: RequestInit = {}): boolean {
+    return (init.method ?? 'GET').toUpperCase() === 'PUT' && url.endsWith('/topics');
+}
+
+/** Answers the queued responses in order; the demo topic call is answered by {@link answerTopics}. */
 function recordingFetch(...responses: Response[]): jest.Mock {
     const queue = [...responses];
     return jest.fn(async (url: string, init: RequestInit = {}) => {
         requests.push({ url, method: (init.method ?? 'GET').toUpperCase(), init });
+        if (isTopicsCall(url, init)) return answerTopics();
         const next = queue.shift();
         if (!next) throw new Error(`unexpected request ${init.method ?? 'GET'} ${url}`);
         return next;
     });
+}
+
+/** The topic calls a fetch double received. */
+function topicCalls(fetchImpl: jest.Mock): Array<[string, RequestInit]> {
+    return (fetchImpl.mock.calls as Array<[string, RequestInit]>).filter(([url, init]) =>
+        isTopicsCall(url, init),
+    );
 }
 
 describe('EverWorksGitProvider — demo repository ledger', () => {
@@ -98,6 +114,7 @@ describe('EverWorksGitProvider — demo repository ledger', () => {
         process.env.DEMO_GITHUB_ORG = ORG;
         delete process.env.DEMO_REPO_PREFIX;
         delete process.env.DEMO;
+        answerTopics = async () => json(200, { names: ['ever-works-demo'] });
     });
 
     afterEach(() => {
@@ -136,6 +153,76 @@ describe('EverWorksGitProvider — demo repository ledger', () => {
             });
         });
 
+        it('tags the created repository with the ever-works-demo topic, before recording it', async () => {
+            const ledger = ledgerDouble();
+            const fetchImpl = recordingFetch(created('demo-1a2b3c4d-foo', 812345678));
+            const provider = new EverWorksGitProvider(ledger);
+
+            await provider.createRepository({ work: work(), fetchImpl });
+
+            const topics = topicCalls(fetchImpl);
+            expect(topics).toHaveLength(1);
+            const [url, init] = topics[0];
+            expect(url).toBe(`https://api.github.com/repos/${ORG}/demo-1a2b3c4d-foo/topics`);
+            expect(JSON.parse(init.body as string)).toEqual({ names: ['ever-works-demo'] });
+            expect((init.headers as Record<string, string>).authorization).toBe('Bearer ghp_test');
+            // Tagged first: a repository whose record then fails is still findable by its topic.
+            const topicCallIndex = (fetchImpl.mock.calls as Array<[string, RequestInit]>).findIndex(
+                ([callUrl, callInit]) => isTopicsCall(callUrl, callInit),
+            );
+            expect(fetchImpl.mock.invocationCallOrder[topicCallIndex]).toBeLessThan(
+                ledger.record.mock.invocationCallOrder[0],
+            );
+        });
+
+        it.each([
+            ['GitHub refuses the topic', async () => json(422, { message: 'Validation Failed' })],
+            [
+                'the topic call throws',
+                async (): Promise<Response> => {
+                    throw new Error('socket hang up');
+                },
+            ],
+        ])('keeps the create and the record when %s, with a warning', async (_label, answer) => {
+            answerTopics = answer;
+            const warnings = jest
+                .spyOn(Logger.prototype, 'warn')
+                .mockImplementation(() => undefined);
+            const ledger = ledgerDouble();
+            const fetchImpl = recordingFetch(created('demo-1a2b3c4d-foo', 812345678));
+            const provider = new EverWorksGitProvider(ledger);
+
+            await expect(
+                provider.createRepository({ work: work(), fetchImpl }),
+            ).resolves.toMatchObject({ repo: 'demo-1a2b3c4d-foo' });
+            expect(ledger.record).toHaveBeenCalledWith(
+                expect.objectContaining({ name: 'demo-1a2b3c4d-foo', githubId: 812345678 }),
+            );
+            expect(warnings).toHaveBeenCalledWith(
+                expect.stringContaining(`${ORG}/demo-1a2b3c4d-foo`),
+            );
+        });
+
+        it('still tags a repository whose record fails (so an operator can find it)', async () => {
+            const ledger = ledgerDouble();
+            ledger.record.mockRejectedValue(new Error('database is locked'));
+            jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+            const fetchImpl = recordingFetch(created('demo-1a2b3c4d-foo', 812345678));
+            const provider = new EverWorksGitProvider(ledger);
+
+            await expect(provider.createRepository({ work: work(), fetchImpl })).rejects.toThrow();
+            expect(topicCalls(fetchImpl)).toHaveLength(1);
+        });
+
+        it('tags nothing when no repository was created', async () => {
+            const ledger = ledgerDouble();
+            const fetchImpl = recordingFetch(nameTaken(), nameTaken());
+            const provider = new EverWorksGitProvider(ledger);
+
+            await expect(provider.createRepository({ work: work(), fetchImpl })).rejects.toThrow();
+            expect(topicCalls(fetchImpl)).toHaveLength(0);
+        });
+
         it('records only the name GitHub created on the collision retry', async () => {
             const ledger = ledgerDouble();
             const fetchImpl = recordingFetch(
@@ -153,6 +240,10 @@ describe('EverWorksGitProvider — demo repository ledger', () => {
                 name: 'demo-1a2b3c4d-foo-b8a4f8e',
                 githubId: 812345679,
             });
+            // Only the repository GitHub created is tagged, never the taken name.
+            expect(topicCalls(fetchImpl).map(([url]) => url)).toEqual([
+                `https://api.github.com/repos/${ORG}/demo-1a2b3c4d-foo-b8a4f8e/topics`,
+            ]);
         });
 
         it('records nothing when GitHub refuses the create', async () => {
@@ -258,6 +349,9 @@ describe('EverWorksGitProvider — demo repository ledger', () => {
 
             expect(repo.id).toBe(812345680);
             expect(ledger.record).not.toHaveBeenCalled();
+            // No demo topic either: one call, the create.
+            expect(fetchImpl).toHaveBeenCalledTimes(1);
+            expect(topicCalls(fetchImpl)).toHaveLength(0);
         });
 
         it('creates with no ledger bound', async () => {

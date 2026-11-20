@@ -151,7 +151,7 @@ describe('DemoModule', () => {
             // The purge drives the Work and anonymous-user services of the agent `WorkModule`
             // (stubbed above); `demo.module.wiring.spec.ts` resolves it against the real one.
             .overrideProvider(DemoSandboxPurgeService)
-            .useValue({ purge: jest.fn(), hasGenerationInFlight: jest.fn() })
+            .useValue({ purge: jest.fn(), generationsInFlight: jest.fn() })
             .compile();
         return moduleRef;
     }

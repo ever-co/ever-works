@@ -63,6 +63,38 @@ describe('UserRepository demo sandboxes (SQLite in-memory)', () => {
         expect(limited.map((u) => u.id)).toEqual([oldest.id, older.id]);
     });
 
+    it('findExpiredDemo pages on a stable (expiry, id) cursor, ties included', async () => {
+        const first = await make('demo', hours(-5));
+        // Three sandboxes expiring at the same instant: the id breaks the tie.
+        const tied = [
+            await make('demo', hours(-3)),
+            await make('demo', hours(-3)),
+            await make('demo', hours(-3)),
+        ].sort((a, b) => (a.id < b.id ? -1 : 1));
+        const last = await make('demo', hours(-1));
+        await make('demo', hours(2)); // not expired
+        await make('anonymous', hours(-4)); // not demo
+        const order = [first, ...tied, last].map((u) => u.id);
+
+        const seen: string[] = [];
+        let after: { expiresAt: Date; id: string } | undefined;
+        for (let page = 0; page < 10; page += 1) {
+            const rows = await users.findExpiredDemo(NOW, 2, after);
+            if (rows.length === 0) break;
+            seen.push(...rows.map((u) => u.id));
+            const tail = rows[rows.length - 1];
+            after = { expiresAt: tail.anonymousExpiresAt as Date, id: tail.id };
+        }
+
+        expect(seen).toEqual(order);
+        // From the middle of the tie, exactly the rest of it, then the later sandbox.
+        const fromTie = await users.findExpiredDemo(NOW, 10, {
+            expiresAt: hours(-3),
+            id: tied[0].id,
+        });
+        expect(fromTie.map((u) => u.id)).toEqual([tied[1].id, tied[2].id, last.id]);
+    });
+
     it('countActiveDemo counts only unexpired demo users', async () => {
         await make('demo', hours(2));
         await make('demo', hours(20));

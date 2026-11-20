@@ -32,6 +32,13 @@ export interface DemoRepoLedgerPort {
 
 export const DEMO_REPO_LEDGER = 'DEMO_REPO_LEDGER' as const;
 
+/**
+ * The GitHub topic every repository a demo sandbox creates is tagged with (design §5.2.4), best
+ * effort: it lets an operator find a demo repository the sweeper could not remove (one whose
+ * ledger record failed, say) without guessing at names.
+ */
+export const DEMO_REPO_TOPIC = 'ever-works-demo';
+
 /** Logged (once per consumer) when a demo instance has no `DEMO_REPO_LEDGER` bound. */
 export const DEMO_REPO_LEDGER_UNBOUND_MESSAGE =
     'Demo mode is on but DEMO_REPO_LEDGER is not bound: refusing every repository creation';
