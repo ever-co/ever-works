@@ -137,11 +137,11 @@ describe('docs.ever.works serves /.well-known/security.txt', () => {
 		assert.ok(location.lines.includes('charset utf-8;'), 'security.txt must be text/plain; charset=utf-8');
 	});
 
-	it('lists Contact, Canonical and Policy', () => {
+	// No Policy field is required (optional in RFC 9116): ever-co/ever-works has no SECURITY.md yet.
+	it('lists Contact and Canonical', () => {
 		const body = fields();
 		assert.ok(body.includes('Contact: mailto:security@ever.co'));
 		assert.ok(body.includes('Canonical: https://docs.ever.works/.well-known/security.txt'));
-		assert.ok(body.includes('Policy: https://github.com/ever-co/ever-works/security/policy'));
 	});
 
 	it('has an Expires date in the future (RFC 9116: renew it before it passes)', () => {
