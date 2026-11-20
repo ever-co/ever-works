@@ -138,9 +138,10 @@ describe('docs.ever.works serves /.well-known/security.txt', () => {
 	});
 
 	// No Policy field is required (optional in RFC 9116): ever-co/ever-works has no SECURITY.md yet.
-	it('lists Contact and Canonical', () => {
+	it('lists Contact, Preferred-Languages and Canonical', () => {
 		const body = fields();
 		assert.ok(body.includes('Contact: mailto:security@ever.co'));
+		assert.ok(body.includes('Preferred-Languages: en'));
 		assert.ok(body.includes('Canonical: https://docs.ever.works/.well-known/security.txt'));
 	});
 
