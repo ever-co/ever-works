@@ -54,7 +54,7 @@ describe('DemoLoginCard', () => {
     });
 
     it('two quick clicks start exactly one sandbox, and the button is disabled while pending', async () => {
-        let resolve!: (v: { success: true }) => void;
+        let resolve!: (v: { success: true; href: string }) => void;
         mocks.startDemo.mockReturnValue(new Promise((r) => (resolve = r)));
         render(<DemoLoginCard ttlHours={24} expired={false} />);
         const button = screen.getByRole('button', { name: 'Start the demo' });
@@ -66,9 +66,21 @@ describe('DemoLoginCard', () => {
         await waitFor(() => expect(mocks.startDemo).toHaveBeenCalledTimes(1));
         expect(button).toBeDisabled();
 
-        await act(async () => resolve({ success: true }));
+        await act(async () => resolve({ success: true, href: '/' }));
         await waitFor(() => expect(mocks.push).toHaveBeenCalledWith('/'));
         expect(mocks.startDemo).toHaveBeenCalledTimes(1);
+    });
+
+    it("lands in the sandbox's Organization, where its seeded Goals and Missions live", async () => {
+        mocks.startDemo.mockResolvedValue({
+            success: true,
+            href: '/org/acme-labs-demo-0a1b2c3d/dashboard',
+        });
+        render(<DemoLoginCard ttlHours={24} expired={false} />);
+        fireEvent.click(screen.getByRole('button', { name: 'Start the demo' }));
+        await waitFor(() =>
+            expect(mocks.push).toHaveBeenCalledWith('/org/acme-labs-demo-0a1b2c3d/dashboard'),
+        );
     });
 
     it('passes the turnstile token, and none when there is none', async () => {

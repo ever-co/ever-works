@@ -6,7 +6,6 @@ import { useRouter } from '@/i18n/navigation';
 import { Button } from '@/components/ui/button';
 import { useTurnstile } from '@/components/onboarding/use-turnstile';
 import { startDemo } from '@/app/actions/demo/start-demo';
-import { ROUTES } from '@/lib/constants';
 
 const SAMPLE_SITE_URL = 'https://dir.ever.works';
 
@@ -27,7 +26,7 @@ const FAILURE_KEY = {
 
 /**
  * "Start the demo" — one click mints a private sandbox account and lands the
- * visitor on the dashboard.
+ * visitor on its Organization's dashboard.
  *
  * Re-entrancy: `disabled` alone is not enough (two clicks can land before React
  * re-renders), so an in-flight ref gates the call. A double click creates one
@@ -51,7 +50,8 @@ export function DemoLoginCard({ ttlHours, expired = false }: DemoLoginCardProps)
             const result = await startDemo({ captchaToken: captchaToken || undefined });
             if (result.success) {
                 // Stay "pending" through the navigation so the button cannot fire again.
-                router.push(ROUTES.DASHBOARD);
+                // `href` is the sandbox's Organization dashboard (see `startDemo`).
+                router.push(result.href);
                 return;
             }
             setFailure(result.reason);
