@@ -299,7 +299,8 @@ export class EverConnectMembershipSyncService implements OnModuleInit, EverConne
     async removeAbsentMembers(
         organizationId: string,
         listed: ListedMembers,
-    ): Promise<MembershipSyncOutcome[]> {
+        keep: () => Promise<boolean> = async () => true,
+    ): Promise<MembershipSyncOutcome[] | 'lease_lost'> {
         if (!isMembershipSyncEnabled() || listed.issuers.size === 0) return [];
         const candidates = (
             await this.dataSource
@@ -321,6 +322,8 @@ export class EverConnectMembershipSyncService implements OnModuleInit, EverConne
             if (identities.some((i) => listed.identities.has(identityKey(i.issuer, i.subject)))) {
                 continue;
             }
+            // Written only while this replica holds the lease.
+            if (!(await keep())) return 'lease_lost';
             const outcome = await this.membership.removeMemberForPlatform(
                 organizationId,
                 row.userId,

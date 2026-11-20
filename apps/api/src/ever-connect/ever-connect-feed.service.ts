@@ -1,6 +1,7 @@
 import { Injectable, Logger, Optional } from '@nestjs/common';
 import { EverConnectExtensions } from './ever-connect-extensions';
 import { EverConnectIntegrationService } from './ever-connect-integration.service';
+import { EVER_CONNECT_LEASE_HELD, type EverConnectRoundLease } from './ever-connect-lease.service';
 import { EverConnectService } from './ever-connect.service';
 import { PersonRequestsHandler } from './identity/person-requests.handler';
 import { describeFailure, platformFailure } from './identity/platform-answer';
@@ -44,8 +45,10 @@ export interface FeedPass {
  *
  * `410 resync_required` (the stored position is older than what Ever Platform
  * keeps): the integration states are read again, the parts that keep a copy of
- * other state are told ({@link EverConnectExtensions.feedResyncRequired}), and
- * the feed continues from the position the answer names.
+ * other state read it again ({@link EverConnectExtensions.resyncAfterFeedGap}),
+ * and only then does the feed continue from the position the answer names (a
+ * replica that stops or loses the lease on the way leaves the old position, so
+ * the next one is answered `410` again).
  */
 @Injectable()
 export class EverConnectFeedService {
@@ -59,7 +62,10 @@ export class EverConnectFeedService {
         @Optional() private readonly extensions?: EverConnectExtensions,
     ) {}
 
-    async pollOnce(waitS = 0): Promise<FeedPass> {
+    async pollOnce(
+        waitS = 0,
+        lease: EverConnectRoundLease = EVER_CONNECT_LEASE_HELD,
+    ): Promise<FeedPass> {
         const client = await this.connection.client();
         if (!client) return { handled: 0, more: false };
         const cursor = (await this.connection.connection()).lastFeedCursor;
@@ -70,14 +76,16 @@ export class EverConnectFeedService {
         } catch (error) {
             const failure = platformFailure(error);
             if (failure.kind === 'problem' && failure.status === 410) {
-                // The position is past what Ever Platform keeps: tell the parts
-                // that keep a copy of other state (the membership sync, which
-                // reads it again in its own round), read the integration states
-                // again now, then continue from where it says.
-                this.extensions?.feedResyncRequired();
+                // The position is past what Ever Platform keeps: read the state
+                // again, then continue from where it says.
                 await this.integrations.refresh();
                 const lastId = (error as { lastId?: string }).lastId;
                 if (lastId) {
+                    // The parts that keep a copy of other state (the membership
+                    // sync) read it first: the position moves on only after them.
+                    if (this.extensions && !(await this.extensions.resyncAfterFeedGap(lease))) {
+                        return { handled: 0, more: false };
+                    }
                     await client.instances.ackEvents(lastId);
                     await this.connection.saveFeedCursor(lastId);
                     return { handled: 0, more: true };

@@ -9,7 +9,13 @@ jest.mock('../../../organizations/organization-invitation-flow.service', () => (
 }));
 
 import { Logger } from '@nestjs/common';
-import { ProblemError, type OperationSpec } from '@ever-co/connect-sdk';
+import {
+    createEverPlatformClient,
+    generateInstanceKeyPair,
+    makeNodeSigner,
+    ProblemError,
+    type OperationSpec,
+} from '@ever-co/connect-sdk';
 import type { DataSource } from 'typeorm';
 import { EverConnectMembershipSync } from '@ever-works/agent/entities';
 import { EverConnectExtensions } from '../../ever-connect-extensions';
@@ -346,7 +352,6 @@ describe('Ever Connect — membership resync', () => {
             const { resync } = services(client);
 
             expect(await resync.resync()).toBe('module_disabled');
-            resync.resyncRequired();
             expect(await resync.resync()).toBe('module_disabled');
 
             expect(client.call).toHaveBeenCalledTimes(2);
@@ -410,11 +415,9 @@ describe('Ever Connect — membership resync', () => {
             await extensions.runRound(new Date());
             expect(client.call).toHaveBeenCalledTimes(2);
 
-            // The feed answers 410 again: the next round reads the list from the start.
+            // The feed answers 410 again: the list is read from the start.
             client.call.mockResolvedValueOnce(pages([member('sub-cara')])[0]);
-            extensions.feedResyncRequired();
-            expect(resync.isOwed()).toBe(true);
-            await extensions.runRound(new Date());
+            expect(await extensions.resyncAfterFeedGap()).toBe(true);
             expect(client.call).toHaveBeenCalledTimes(3);
             expect(client.call.mock.calls[2][1]).toEqual({
                 path: { link: LINK },
@@ -443,13 +446,50 @@ describe('Ever Connect — membership resync', () => {
             expect(resync.isOwed()).toBe(true);
         });
 
-        it('a 410 on the feed makes the resync owed', async () => {
-            const extensions = new EverConnectExtensions();
-            const { resync } = services(platform(), extensions);
-            resync.onModuleInit();
-            await resync.resync();
-            expect(resync.isOwed()).toBe(false);
+        it('the lease is checked before each change: lost in the middle of a page, nothing more is written', async () => {
+            const { organization, bob } = await seed();
+            jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+            let renewals = 0;
+            // The page, then Bob; lost before Cara.
+            const lease = { keep: async () => ++renewals <= 2, held: true };
+            const { resync } = services(
+                platform(...pages([member('sub-bob'), member('sub-cara')])),
+            );
 
+            expect(await resync.resync(lease)).toBe('lease_lost');
+            expect(flow.addMemberForPlatform.mock.calls).toEqual([
+                [organization.id, bob.id, 'member'],
+            ]);
+            expect(resync.isOwed()).toBe(true);
+        });
+
+        it('a cursor answered before stops the resync (a cycle), and nobody is removed', async () => {
+            const { organization, bob } = await seed();
+            await keep(organization.id, bob.id);
+            jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+            const client = platform(
+                { items: [], next_cursor: 'A' },
+                { items: [], next_cursor: 'B' },
+                { items: [], next_cursor: 'A' },
+            );
+            const { resync } = services(client);
+
+            expect(await resync.resync()).toBe('failed');
+            expect(client.call).toHaveBeenCalledTimes(3);
+            expect(flow.removeMemberForPlatform).not.toHaveBeenCalled();
+        });
+
+        it('a 410 on the feed: the lists are read before the position moves on; lease lost, it does not move', async () => {
+            const { organization, cara } = await seed();
+            const extensions = new EverConnectExtensions();
+            const client = platform(...pages([member('sub-cara')]));
+            const { resync } = services(client, extensions);
+            resync.onModuleInit();
+            const order: string[] = [];
+            flow.addMemberForPlatform.mockImplementation(async () => {
+                order.push('applied');
+                return 'added';
+            });
             const instances = {
                 events: jest
                     .fn()
@@ -464,13 +504,18 @@ describe('Ever Connect — membership resync', () => {
                             'evt-90',
                         ),
                     ),
-                ackEvents: jest.fn().mockResolvedValue({}),
+                ackEvents: jest.fn(async () => {
+                    order.push('ack');
+                    return {};
+                }),
             };
             const feed = new EverConnectFeedService(
                 {
                     client: jest.fn().mockResolvedValue({ instances }),
                     connection: jest.fn().mockResolvedValue({ lastFeedCursor: 'evt-0' }),
-                    saveFeedCursor: jest.fn().mockResolvedValue(undefined),
+                    saveFeedCursor: jest.fn(async () => {
+                        order.push('save');
+                    }),
                 } as unknown as EverConnectService,
                 {
                     refresh: jest.fn().mockResolvedValue([]),
@@ -481,11 +526,82 @@ describe('Ever Connect — membership resync', () => {
             );
 
             expect(await feed.pollOnce(0)).toEqual({ handled: 0, more: true });
+            expect(order).toEqual(['applied', 'ack', 'save']);
+            expect(flow.addMemberForPlatform).toHaveBeenCalledWith(
+                organization.id,
+                cara.id,
+                'member',
+            );
+            // The resync of the 410 also stands for the one owed since the start.
+            expect(resync.isOwed()).toBe(false);
+
+            // The lease lost on the way: the position stays, for the next replica.
+            order.length = 0;
+            jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+            client.call.mockResolvedValueOnce(pages([member('sub-cara')])[0]);
+            const lost = { keep: async () => false, held: false };
+            expect(await feed.pollOnce(0, lost)).toEqual({ handled: 0, more: false });
+            expect(order).toEqual([]);
             expect(resync.isOwed()).toBe(true);
         });
     });
 
     describe('the call', () => {
+        it('goes through a real SDK client made before the operation was added: the route, the query, the token', async () => {
+            const answer = (body: unknown) => ({
+                type: 'basic',
+                status: 200,
+                headers: { get: () => null },
+                body: null,
+                arrayBuffer: async () => new TextEncoder().encode(JSON.stringify(body)).buffer,
+            });
+            const requests: Array<{ url: string; method?: string; authorization?: string }> = [];
+            const fetch = jest.fn(
+                async (
+                    url: string,
+                    init: { method?: string; headers?: Record<string, string> },
+                ) => {
+                    requests.push({
+                        url,
+                        method: init.method,
+                        authorization: init.headers?.['authorization'],
+                    });
+                    return url.endsWith('/v1/instances/token')
+                        ? answer({
+                              access_token: 'evit_test-token',
+                              token_type: 'Bearer',
+                              expires_in: 3600,
+                          })
+                        : answer({
+                              tenant_link_id: LINK,
+                              items: [member('sub-bob')],
+                              next_cursor: 'c-3',
+                          });
+                },
+            );
+            const client = createEverPlatformClient({
+                baseUrl: 'https://api.platform.example',
+                userAgentProduct: { product: 'works', version: '1.0.0' },
+                signer: makeNodeSigner(generateInstanceKeyPair().privateKeyPkcs8Der),
+                registryInstanceId: () => '01JD00000000000000000000A1',
+                fetch: fetch as never,
+            });
+
+            await expect(readLinkMembershipsPage(client, LINK, 'c-2')).resolves.toEqual({
+                items: [member('sub-bob')],
+                nextCursor: 'c-3',
+            });
+            expect(requests[0]).toMatchObject({
+                url: 'https://api.platform.example/v1/instances/token',
+                method: 'POST',
+            });
+            expect(requests[1]).toEqual({
+                url: `https://api.platform.example/v1/instances/me/tenant-links/${LINK}/memberships?limit=100&cursor=c-2`,
+                method: 'GET',
+                authorization: 'Bearer evit_test-token',
+            });
+        });
+
         it('adds the operation to the SDK table once, and keeps one the SDK has', () => {
             const table: Record<string, OperationSpec> = {};
             ensureLinkMembershipsOperation(table);

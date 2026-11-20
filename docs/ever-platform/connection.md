@@ -695,7 +695,10 @@ Organization here (`ever.registry.membership.created`, `.role_changed` and
   changes) means there is nothing to make up for, logged once. Any other failure
   stops the resync with a warning, and it runs again at the next `410` or
   start. It runs on the replica holding the Ever Connect lease, once the
-  installation is active.
+  installation is active, and checks the lease before each change. After a
+  `410`, the feed moves on only once the resync is over: a replica that stops
+  or loses the lease on the way leaves the old position, so the next one is
+  answered `410` again and runs it.
 
 Each change is logged by a code only, never with an identity or a name (a resync
 logs counts of codes). Apart from the resync's reads, it makes no call to Ever

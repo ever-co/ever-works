@@ -44,16 +44,20 @@ type LinkOutcome = 'read' | 'link_unknown' | 'module_disabled' | 'failed' | 'lea
  * {@link EverConnectMembershipSyncService.removeAbsentMembers} once a link's
  * whole list was read).
  *
- * - **When:** owed at each start and whenever the feed answers `410
- *   resync_required`; run in the next round of the worker on the replica
- *   holding the Ever Connect lease, once the installation is `active`.
+ * - **When:** after the feed answered `410 resync_required`, before its
+ *   position moves on (a replica that stops or loses the lease on the way
+ *   leaves the old position, so the next one is answered `410` again and runs
+ *   it); and once after each start, in the next round of the worker. Both on
+ *   the replica holding the Ever Connect lease, once the installation is
+ *   `active`.
  * - **`404 module_disabled`:** Ever Platform sends no membership events, so
  *   there is nothing to make up for; logged once.
  * - **A link Ever Platform does not know as active** (`404`): skipped.
  * - **Any other failure** (an answer, a page that is not one, the database):
  *   the resync stops with a warning, nobody is removed for the link being read,
- *   and it runs again at the next `410` or start. The lease is renewed between
- *   pages; when it is lost the resync stops and stays owed.
+ *   and it runs again at the next `410` or start. The lease is checked before
+ *   each page and each change; when it is lost the resync stops there, writes
+ *   nothing more and stays owed. A cursor answered before (a cycle) stops it.
  *
  * Logged by counts of outcome codes only, never with an identity or a name.
  */
@@ -79,9 +83,14 @@ export class EverConnectMembershipResyncService
         this.extensions?.addRoundParticipant(this);
     }
 
-    /** The feed answered `410 resync_required`. */
-    resyncRequired(): void {
-        this.owed = true;
+    /**
+     * The feed answered `410 resync_required`: read every list now, before the
+     * feed's position moves on. `false` only when the lease was lost on the way.
+     */
+    async resyncAfterFeedGap(
+        lease: EverConnectRoundLease = EVER_CONNECT_LEASE_HELD,
+    ): Promise<boolean> {
+        return (await this.resync(lease)) !== 'lease_lost';
     }
 
     /** Whether a resync is owed. */
@@ -105,8 +114,7 @@ export class EverConnectMembershipResyncService
         if ((await this.connection.connection()).status !== 'active') return 'not_connected';
         const client = await this.connection.client();
         if (!client) return 'not_connected';
-        // Cleared before the first read: a `410` that arrives while this runs sets
-        // it again, so that resync is not lost.
+        // Cleared before the first read; set again when the lease is lost.
         this.owed = false;
 
         const counts = new Map<string, number>();
@@ -168,6 +176,7 @@ export class EverConnectMembershipResyncService
         const listed = new ListedMembers();
         let complete = true;
         let cursor: string | null = null;
+        const cursors = new Set<string>();
         for (let page = 0; ; page += 1) {
             if (page >= MEMBERSHIP_RESYNC_MAX_PAGES) return 'failed';
             if (!(await lease.keep())) return 'lease_lost';
@@ -191,6 +200,9 @@ export class EverConnectMembershipResyncService
                     count('malformed');
                     continue;
                 }
+                // Written only while this replica holds the lease: another one
+                // may apply newer changes meanwhile.
+                if (!(await lease.keep())) return 'lease_lost';
                 const { outcome, userId } = await this.sync.applyCurrentMember(
                     link.organizationId,
                     member,
@@ -199,16 +211,17 @@ export class EverConnectMembershipResyncService
                 count(outcome);
             }
             if (answer.nextCursor === null) break;
-            if (answer.nextCursor === cursor) return 'failed';
+            // A cursor answered before (a cycle): the list would never end.
+            if (cursors.has(answer.nextCursor)) return 'failed';
+            cursors.add(answer.nextCursor);
             cursor = answer.nextCursor;
         }
         if (complete) {
-            for (const outcome of await this.sync.removeAbsentMembers(
-                link.organizationId,
-                listed,
-            )) {
-                count(`absent_${outcome}`);
-            }
+            const outcomes = await this.sync.removeAbsentMembers(link.organizationId, listed, () =>
+                lease.keep(),
+            );
+            if (outcomes === 'lease_lost') return 'lease_lost';
+            for (const outcome of outcomes) count(`absent_${outcome}`);
         }
         return 'read';
     }

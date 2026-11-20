@@ -24,12 +24,14 @@ export interface EverConnectFeedHandler {
  * A part of Ever Connect that keeps a copy of some state Ever Platform sends on
  * the feed, and so must read that state again when the feed answers `410
  * resync_required` (the installation was away longer than the feed keeps its
- * events, and the events in between are gone). `resyncRequired` only takes
- * note; the part reads again in its own round, where it can keep the lease.
+ * events, and the events in between are gone). The feed waits for it before
+ * its position moves on: it answers `false` when the lease was lost on the
+ * way, and the position then stays where it was, so the replica that holds the
+ * lease next is answered `410` again and reads the state itself.
  */
 export interface EverConnectResyncListener {
     readonly name: string;
-    resyncRequired(): void;
+    resyncAfterFeedGap(lease: EverConnectRoundLease): Promise<boolean>;
 }
 
 /**
@@ -81,21 +83,26 @@ export class EverConnectExtensions {
     }
 
     /**
-     * The feed answered `410 resync_required`: tell every registered part. A
-     * listener that throws is logged by name and the others are still told.
+     * The feed answered `410 resync_required`: every registered part reads its
+     * state again, one after the other. `false` when one lost the lease on the
+     * way (the feed's position must not move on); a part that throws is logged
+     * by name and the others still run.
      */
-    feedResyncRequired(): void {
+    async resyncAfterFeedGap(
+        lease: EverConnectRoundLease = EVER_CONNECT_LEASE_HELD,
+    ): Promise<boolean> {
         for (const listener of this.resyncListeners) {
             try {
-                listener.resyncRequired();
+                if (!(await listener.resyncAfterFeedGap(lease))) return false;
             } catch (error) {
                 this.logger.warn(
-                    `Ever Connect ${listener.name} did not take the resync: ${
+                    `Ever Connect ${listener.name} resync failed: ${
                         error instanceof Error ? error.name : 'unknown'
                     }`,
                 );
             }
         }
+        return true;
     }
 
     /** The apps mirror says where it stands and which Organizations it runs for. */
