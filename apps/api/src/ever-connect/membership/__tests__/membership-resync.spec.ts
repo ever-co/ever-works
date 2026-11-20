@@ -17,7 +17,7 @@ import {
     type OperationSpec,
 } from '@ever-co/connect-sdk';
 import type { DataSource } from 'typeorm';
-import { EverConnectMembershipSync } from '@ever-works/agent/entities';
+import { EverConnectLink, EverConnectMembershipSync } from '@ever-works/agent/entities';
 import { EverConnectExtensions } from '../../ever-connect-extensions';
 import { EverConnectFeedService } from '../../ever-connect-feed.service';
 import type { EverConnectIntegrationService } from '../../ever-connect-integration.service';
@@ -374,7 +374,20 @@ describe('Ever Connect — membership resync', () => {
             const { organization, bob } = await seed();
             const ada2 = await addUser(dataSource, 'ada2');
             const other = await addWorkspace(dataSource, ada2, 'ada2-co');
-            await addLink(dataSource, other.organization, '01JC5M2R4T6V8X0Z2B4D6F8H0M');
+            // A second Ever organization (its own id: one active link per Ever organization).
+            const links = dataSource.getRepository(EverConnectLink);
+            await links.save(
+                links.create({
+                    organizationId: other.organization.id,
+                    tenantId: other.organization.tenantId,
+                    everOrgId: '01JNB79NZW2S85GF4A96MMX6BV',
+                    handle: '',
+                    platformLinkId: '01JC5M2R4T6V8X0Z2B4D6F8H0M',
+                    productOrgRef: other.organization.slug,
+                    createdVia: 'link_code',
+                    status: 'active',
+                }),
+            );
             await keep(organization.id, bob.id);
             const client = jest.fn(async (_id: string, input: { path: { link: string } }) => {
                 if (input.path.link === LINK) throw new ProblemError(404, 'not_found');
