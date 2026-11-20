@@ -19,6 +19,16 @@ export function demoErrorKey(code: unknown): DemoErrorKey | null {
         : null;
 }
 
+/**
+ * The friendly message an API error already carries for a demo code, or null for any other error.
+ * `serverFetch` puts the translated `demo.errors.*` text on the `ApiResponseError` it throws, so a
+ * server action that otherwise answers a generic message can keep the demo's own.
+ */
+export function demoErrorMessageOf(error: unknown): string | null {
+    if (!(error instanceof Error)) return null;
+    return demoErrorKey((error as { code?: unknown }).code) ? error.message : null;
+}
+
 /** The demo `code` in a JSON error body (`{ code }` or `{ error: { code } }`), or null. */
 export function demoErrorKeyFromText(text: string | null | undefined): DemoErrorKey | null {
     if (!text) return null;
