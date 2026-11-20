@@ -314,7 +314,7 @@ describe('MarkdownGeneratorService', () => {
                 service.initialize(createWork(), createUser(), {
                     generation_method: GenerationMethod.RECREATE,
                 }),
-            ).resolves.toEqual({ filesChanged: expect.any(Number) });
+            ).resolves.toEqual({ filesChanged: expect.any(Number), sharesOneRepo: false });
             // The default branch was treated as null → no switchBranch call
             expect(gitFacade.switchBranch).not.toHaveBeenCalled();
             expect(resetFilesSpy).toHaveBeenCalledTimes(1);
@@ -331,7 +331,7 @@ describe('MarkdownGeneratorService', () => {
                 service.initialize(createWork(), createUser(), {
                     generation_method: GenerationMethod.RECREATE,
                 }),
-            ).resolves.toEqual({ filesChanged: expect.any(Number) });
+            ).resolves.toEqual({ filesChanged: expect.any(Number), sharesOneRepo: false });
             expect(resetFilesSpy).toHaveBeenCalledTimes(1);
         });
 
@@ -463,6 +463,7 @@ describe('MarkdownGeneratorService', () => {
             const service = new MarkdownGeneratorService(gitFacade, workOps);
             await expect(service.initialize(createWork(), createUser())).resolves.toEqual({
                 filesChanged: expect.any(Number),
+                sharesOneRepo: false,
             });
             // Push happens at the end — proves iteration completed past the rejection
             expect(gitFacade.push).toHaveBeenCalledTimes(1);
@@ -480,6 +481,7 @@ describe('MarkdownGeneratorService', () => {
             const service = new MarkdownGeneratorService(gitFacade, workOps);
             await expect(service.initialize(createWork(), createUser())).resolves.toEqual({
                 filesChanged: expect.any(Number),
+                sharesOneRepo: false,
             });
             expect(gitFacade.push).toHaveBeenCalledTimes(1);
         });
@@ -1217,7 +1219,7 @@ describe('MarkdownGeneratorService', () => {
                     generation_method: GenerationMethod.CREATE_UPDATE,
                     pr_update: { branch: 'feat', title: 't', body: 'b' },
                 }),
-            ).resolves.toEqual({ filesChanged: expect.any(Number) });
+            ).resolves.toEqual({ filesChanged: expect.any(Number), sharesOneRepo: false });
             expect(workOps.updateLastPullRequest).not.toHaveBeenCalled();
         });
 
@@ -1712,10 +1714,9 @@ describe('MarkdownGeneratorService', () => {
 
         // EW-628 G5 — real SHA capture + filesChanged from MarkdownRepository
         // write counter. The before-sha comes off `work.lastSyncedDataRepoSha`
-        // (so it represents the SHA the previous sync rendered against), and
-        // the after-sha is fetched from the git provider AFTER `initialize`
-        // returns (so we record the SHA we actually rendered, not whatever
-        // races into HEAD mid-flight).
+        // (so it represents the SHA the previous sync rendered against). With
+        // no `expectedSourceSha` from the caller, the after-sha is fetched from
+        // the git provider after `initialize` returns.
         it('G5: returns beforeSha = work.lastSyncedDataRepoSha and afterSha = provider HEAD', async () => {
             const gitFacade = createGitFacadeMock();
             (gitFacade.getRepository as jest.Mock).mockResolvedValue({
@@ -1806,6 +1807,118 @@ describe('MarkdownGeneratorService', () => {
 
             expect(result.beforeSha).toBeUndefined();
             expect(result.afterSha).toBe('first');
+        });
+
+        // The data-sync poller compares the next HEAD with the SHA this
+        // returns, so it must never claim a commit the render did not cover.
+        describe('afterSha — the SHA the render covers', () => {
+            const headCommit = (sha: string) => ({
+                sha,
+                message: 'm',
+                author: { name: 'A', email: 'a@b' },
+                date: '2026-11-20T00:00:00Z',
+            });
+
+            it('separate data repository: reports the HEAD the caller read before the clone, with no second read', async () => {
+                const gitFacade = createGitFacadeMock();
+                // HEAD moved during the render: reading it now would record a
+                // commit that was never rendered.
+                (gitFacade.getLatestCommit as jest.Mock).mockResolvedValue(
+                    headCommit('sha-landed-mid-render'),
+                );
+                const workOps = createWorkOpsMock();
+                fsMock.readdir.mockResolvedValueOnce([]);
+                mountDataRepoMock({
+                    getMarkdown: jest.fn().mockResolvedValue(undefined),
+                    getItem: jest.fn().mockResolvedValue(undefined),
+                });
+
+                const service = new MarkdownGeneratorService(gitFacade, workOps);
+                const result = await service.syncFromDataRepo(
+                    createWork({ lastSyncedDataRepoSha: 'sha-old' }),
+                    createUser(),
+                    { expectedSourceSha: 'sha-read-before' },
+                );
+
+                expect(result.beforeSha).toBe('sha-old');
+                expect(result.afterSha).toBe('sha-read-before');
+                expect(gitFacade.getLatestCommit).not.toHaveBeenCalled();
+            });
+
+            it('single-repo storage: reports HEAD read after the push (it includes the render commit)', async () => {
+                const gitFacade = createGitFacadeMock();
+                // Both roles resolve to ONE checkout (managed "Ever Works Git" storage).
+                (gitFacade.cloneOrPull as jest.Mock).mockResolvedValue('/tmp/markdown-repo');
+                (gitFacade.getLatestCommit as jest.Mock).mockResolvedValue(
+                    headCommit('sha-render-commit'),
+                );
+                const workOps = createWorkOpsMock();
+                fsMock.readdir.mockResolvedValueOnce([]);
+                mountDataRepoMock({
+                    dir: '/tmp/markdown-repo',
+                    dataDir: '/tmp/markdown-repo/data',
+                    getMarkdown: jest.fn().mockResolvedValue(undefined),
+                    getItem: jest.fn().mockResolvedValue(undefined),
+                });
+
+                const service = new MarkdownGeneratorService(gitFacade, workOps);
+                const result = await service.syncFromDataRepo(createWork(), createUser(), {
+                    expectedSourceSha: 'sha-read-before',
+                });
+
+                expect(gitFacade.push).toHaveBeenCalled();
+                expect(result.afterSha).toBe('sha-render-commit');
+                expect(gitFacade.getLatestCommit).toHaveBeenCalledTimes(1);
+            });
+        });
+
+        describe('readDataRepoHeadSha', () => {
+            it("reads the latest commit of the data repository's default branch", async () => {
+                const gitFacade = createGitFacadeMock();
+                (gitFacade.getRepository as jest.Mock).mockResolvedValue({
+                    defaultBranch: 'trunk',
+                });
+                (gitFacade.getLatestCommit as jest.Mock).mockResolvedValue({ sha: 'sha-head' });
+                const service = new MarkdownGeneratorService(gitFacade, createWorkOpsMock());
+
+                await expect(service.readDataRepoHeadSha(createWork())).resolves.toBe('sha-head');
+                expect(gitFacade.getLatestCommit).toHaveBeenCalledWith(
+                    'acme',
+                    'test-work-data',
+                    'trunk',
+                    expect.objectContaining({ workId: 'dir-1', providerId: 'github' }),
+                );
+                // A read, never a clone.
+                expect(gitFacade.cloneOrPull).not.toHaveBeenCalled();
+            });
+
+            it('falls back to main when the repository lookup has no default branch, and answers undefined without a commit', async () => {
+                const gitFacade = createGitFacadeMock();
+                (gitFacade.getRepository as jest.Mock).mockResolvedValue(null);
+                (gitFacade.getLatestCommit as jest.Mock).mockResolvedValue(null);
+                const service = new MarkdownGeneratorService(gitFacade, createWorkOpsMock());
+
+                await expect(service.readDataRepoHeadSha(createWork())).resolves.toBeUndefined();
+                expect(gitFacade.getLatestCommit).toHaveBeenCalledWith(
+                    'acme',
+                    'test-work-data',
+                    'main',
+                    expect.anything(),
+                );
+            });
+
+            it('propagates provider errors (the caller decides whether they matter)', async () => {
+                const gitFacade = createGitFacadeMock();
+                const noCredentials = Object.assign(new Error('No connected account found'), {
+                    name: 'NoGitCredentialsError',
+                });
+                (gitFacade.getRepository as jest.Mock).mockRejectedValue(noCredentials);
+                const service = new MarkdownGeneratorService(gitFacade, createWorkOpsMock());
+
+                await expect(service.readDataRepoHeadSha(createWork())).rejects.toMatchObject({
+                    name: 'NoGitCredentialsError',
+                });
+            });
         });
 
         // Prod 2026-11-20: managed single-repo Works whose generation never
