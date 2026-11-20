@@ -124,6 +124,7 @@ describe('docs.ever.works serves /.well-known/security.txt', () => {
 	const location = locations.find((l) => l.name === 'location = /.well-known/security.txt');
 	/** The fields of the `return 200 "..."` body. nginx turns each `\n` in a quoted string into a newline. */
 	const fields = () => {
+		assert.ok(location, `${nginxPath} must have \`location = /.well-known/security.txt\``);
 		const re = new RegExp(String.raw`^return 200 ${QUOTED};$`);
 		const m = location.lines.map((line) => re.exec(line)).find(Boolean);
 		assert.ok(m, 'the security.txt location must `return 200 "<body>";`');
