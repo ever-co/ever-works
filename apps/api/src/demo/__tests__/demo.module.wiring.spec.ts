@@ -11,7 +11,7 @@ import { EventEmitterModule } from '@nestjs/event-emitter';
 import { MailerService as MailerLibraryService } from '@nestjs-modules/mailer';
 import { Test, type TestingModule } from '@nestjs/testing';
 import { DataSource } from 'typeorm';
-import { OnboardingRoleSeedingService } from '@ever-works/agent/agents';
+import { AgentsService, OnboardingRoleSeedingService } from '@ever-works/agent/agents';
 import { DistributedTaskLockService } from '@ever-works/agent/cache';
 import {
     DemoGithubRepoRepository,
@@ -65,6 +65,7 @@ const SEEDER_DEPENDENCIES = [
     ['works', WorkRepository],
     ['teams', TeamsService],
     ['starterKit', OnboardingRoleSeedingService],
+    ['agents', AgentsService],
     ['workLifecycle', WorkLifecycleService],
     ['missions', MissionsService],
     ['goals', GoalsService],

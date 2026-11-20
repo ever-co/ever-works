@@ -59,6 +59,7 @@ import { ActivityLogService } from '@ever-works/agent/activity-log';
 import {
     AgentFileService,
     AgentRunRepository,
+    AgentScheduleDispatcherService,
     AgentTemplatesService,
     AgentsService,
     OnboardingRoleSeedingService,
@@ -498,6 +499,12 @@ describe('DemoSandboxSeederService', () => {
             );
             for (const agent of agents) {
                 expect(agent.organizationId).toBe(first.summary.organizationId);
+                // R42 a: active, so "Run now" runs them; with no heartbeat, so nothing else does.
+                expect([agent.name, agent.status]).toEqual([agent.name, AgentStatus.ACTIVE]);
+                expect([agent.heartbeatCadence ?? null, agent.nextHeartbeatAt ?? null]).toEqual([
+                    null,
+                    null,
+                ]);
             }
         });
 
@@ -917,6 +924,8 @@ describe('DemoSandboxSeederService', () => {
             'organization.created': 1,
             'agent.created': 4,
             'agent.updated': 4,
+            // R42 a: each starter-kit Agent activated (draft → active).
+            'agent.status_changed': 4,
             'team.created': 2,
             'team.member.added': 4,
             'team.resource.added': 2,
@@ -1241,7 +1250,7 @@ describe('DemoSandboxSeederService', () => {
                 ]);
 
                 // `AgentScheduleDispatcherService.dispatchDue` (heartbeats): no seeded Agent
-                // has a heartbeat scheduled (the starter kit leaves them `draft`, with no
+                // has a heartbeat scheduled (the starter kit's Agents are active, with no
                 // cadence and no next beat), however far ahead the tick looks...
                 expect(sandboxAgents.length).toBeGreaterThanOrEqual(8);
                 for (const agent of sandboxAgents) {
@@ -1307,5 +1316,37 @@ describe('DemoSandboxSeederService', () => {
                 expect(sandbox.messages[sandbox.messages.length - 1].authorType).toBe('agent');
             }
         });
+    });
+
+    /**
+     * R42 a, last: it dispatches a run (put back after). "Run now" on an Agent page goes through
+     * `AgentScheduleDispatcherService.dispatchOne`, which answers `skipped: inactive` for a draft
+     * Agent: a seeded starter-kit Agent must be active for the visitor's click to do anything.
+     */
+    it('"Run now" on a seeded Agent dispatches a run instead of answering skipped: inactive', async () => {
+        const [agent] = await rows(Agent).find({
+            where: { userId: first.user.id },
+            order: { name: 'ASC' },
+            take: 1,
+        });
+        const before = { status: agent.status, nextHeartbeatAt: agent.nextHeartbeatAt ?? null };
+        const enqueue = jest.fn(async () => ({ runId: 'trigger-run-1' }));
+        const dispatcher = new AgentScheduleDispatcherService(
+            moduleRef.get(AgentRepository),
+            new AgentRunRepository(rows(AgentRun)),
+        );
+        let runId: string | undefined;
+        try {
+            const outcome = await dispatcher.dispatchOne({ enqueue } as never, agent.id);
+
+            expect(outcome).toEqual({ outcome: 'dispatched', runId: expect.any(String) });
+            runId = (outcome as { runId: string }).runId;
+            expect(enqueue).toHaveBeenCalledWith(
+                expect.objectContaining({ agentId: agent.id, userId: first.user.id, runId }),
+            );
+        } finally {
+            if (runId) await rows(AgentRun).delete({ id: runId });
+            await rows(Agent).update({ id: agent.id }, before);
+        }
     });
 });

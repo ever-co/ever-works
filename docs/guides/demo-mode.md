@@ -22,6 +22,7 @@ Two sites are easy to confuse:
 
 - `POST /api/auth/demo` mints a sandbox user (`demo-` plus 8 hex characters, `registrationProvider = 'demo'`) that expires after `DEMO_SANDBOX_TTL_HOURS`. On a demo host this is the only way in for a new identity.
 - The sandbox is seeded with a Project Work and a draft directory Work. Pressing Generate on the draft provisions a repository.
+- The seeded starter-kit Agents are active, so "Run now" runs them. None has a heartbeat, so none runs on a schedule or spends AI quota until the visitor asks.
 - A strip on every page reads "You are using a demo account. Finding our software useful? Click here to Sign Up and start using for free!", linking to `DEMO_SIGN_UP_URL`.
 - AI runs on OpenRouter models whose id ends in `:free`, nothing else. Any other model id is refused and fails closed.
 

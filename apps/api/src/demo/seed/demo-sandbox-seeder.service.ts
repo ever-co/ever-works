@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { DataSource } from 'typeorm';
-import { OnboardingRoleSeedingService } from '@ever-works/agent/agents';
+import { AgentsService, OnboardingRoleSeedingService } from '@ever-works/agent/agents';
 import { UserRepository, WorkRepository, type OwnershipScope } from '@ever-works/agent/database';
 import {
     GoalOutcome,
@@ -59,6 +59,7 @@ export class DemoSandboxSeederService {
         private readonly works: WorkRepository,
         private readonly teams: TeamsService,
         private readonly starterKit: OnboardingRoleSeedingService,
+        private readonly agents: AgentsService,
         private readonly workLifecycle: WorkLifecycleService,
         private readonly missions: MissionsService,
         private readonly goals: GoalsService,
@@ -103,7 +104,7 @@ export class DemoSandboxSeederService {
         fixture: DemoSandboxFixture,
         createdAt: Date,
     ): Promise<DemoSeedSummary> {
-        const agentIds = await this.seedAgents(owner.id, fixture);
+        const agentIds = await this.seedAgents(owner.id, scope, fixture);
         const teamIds = await this.seedTeams(owner.id, scope.organizationId, fixture, agentIds);
 
         const projectWork = await this.workLifecycle.createProjectWork(owner, {
@@ -143,9 +144,16 @@ export class DemoSandboxSeederService {
         };
     }
 
-    /** The starter kit, as onboarding activates it. Returns agent id by template slug. */
+    /**
+     * The starter kit, as onboarding activates it, then each Agent made active (R42 a): the kit
+     * leaves them `draft`, and "Run now" answers `skipped: inactive` for a draft Agent. Active is
+     * safe: the templates set no heartbeat cadence, so `findDueForHeartbeat` never selects them
+     * and activation schedules no beat; nothing runs one until the visitor asks. Returns agent
+     * id by template slug.
+     */
     private async seedAgents(
         userId: string,
+        scope: SandboxScope,
         fixture: DemoSandboxFixture,
     ): Promise<Map<string, string>> {
         const kit = await this.starterKit.seed(userId, fixture.starterKit.roles, {
@@ -159,7 +167,11 @@ export class DemoSandboxSeederService {
                 `Starter-kit agents not created: ${missing.map((entry) => entry.slug).join(', ')}`,
             );
         }
-        return new Map(kit.agents.map((entry) => [entry.slug, entry.agentId as string]));
+        const agentIds = new Map(kit.agents.map((entry) => [entry.slug, entry.agentId as string]));
+        for (const agentId of agentIds.values()) {
+            await this.agents.resume(userId, agentId, scope);
+        }
+        return agentIds;
     }
 
     private async seedTeams(
