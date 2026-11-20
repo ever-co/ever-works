@@ -46,12 +46,11 @@ export interface DataSyncDispatchSummary {
  *
  *  - **Path B — poller fallback**: Works without the App installed,
  *    whose `lastPolledAt` is older than `syncIntervalMinutes` minutes.
- *    Dispatcher calls `runDataSync(workId, 'poll')`. The underlying
- *    `syncFromDataRepo` (G5) captures the data-repo HEAD SHA AFTER
- *    render — comparing against `lastSyncedDataRepoSha` happens there.
- *    A future optimisation can pre-check HEAD via `ls-remote` before
- *    fanning out to avoid an unnecessary clone, but the render itself
- *    is idempotent (identical files = empty git diff = no push).
+ *    Dispatcher calls `runDataSync(workId, 'poll')`. Inside the lock,
+ *    `runDataSync` reads the data-repo HEAD (git-provider API, no clone)
+ *    and, when it equals `lastSyncedDataRepoSha`, skips the render with
+ *    `no-changes` (one activity row per `skipNoiseWindowMs`). Only a
+ *    moved HEAD clones, renders and pushes.
  *
  * Both paths gate on `subscriptions.dataSync.dispatcherEnabled` — when
  * `false` the dispatcher returns an empty summary so the cron stays

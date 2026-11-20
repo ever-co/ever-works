@@ -14,6 +14,8 @@
  *   - `MarkdownGeneratorService.syncFromDataRepo` — configurable per
  *     test (throws on data-repo-unreachable; returns stub stats on
  *     happy path).
+ *   - `MarkdownGeneratorService.readDataRepoHeadSha` — the data-repo
+ *     HEAD the poll pre-check compares (`sha-after` unless a test moves it).
  *   - `ActivityLogService.log` — captures emitted rows.
  *   - `CACHE_MANAGER` — in-memory Map<string, string> with no TTL
  *     semantics (we just need set/get/del to observe retry-backoff /
@@ -80,7 +82,7 @@ describe('EW-628 data-sync e2e — orchestration across G3 + G7 + controller', (
     let workStore: Map<string, any>;
     let cache: Map<string, string>;
     let activityRows: any[];
-    let markdownGenerator: { syncFromDataRepo: jest.Mock };
+    let markdownGenerator: { syncFromDataRepo: jest.Mock; readDataRepoHeadSha: jest.Mock };
     let lockResultOverride: 'acquired' | 'contended' | null;
 
     beforeEach(async () => {
@@ -96,6 +98,7 @@ describe('EW-628 data-sync e2e — orchestration across G3 + G7 + controller', (
                 filesChanged: 2,
                 durationMs: 12,
             }),
+            readDataRepoHeadSha: jest.fn().mockResolvedValue('sha-after'),
         };
 
         const workRepository = {
@@ -263,6 +266,61 @@ describe('EW-628 data-sync e2e — orchestration across G3 + G7 + controller', (
                 (r) => r.actionType === ActivityActionType.DATA_SYNC_SUCCESS,
             );
             expect(successRows[0].details).toMatchObject({ source: 'poll' });
+        });
+    });
+
+    describe('AC-2b — poller skips a Work whose data-repo HEAD has not moved', () => {
+        it('renders once, then skips with one no-changes row per noise window, and renders again when HEAD moves', async () => {
+            seedWork('w-steady', { githubAppInstalled: false, syncIntervalMinutes: 5 });
+            const skipRows = () =>
+                activityRows.filter((r) => r.actionType === ActivityActionType.DATA_SYNC_SKIPPED);
+
+            // Poll 1: nothing recorded yet → render, record the HEAD.
+            await dispatcher.dispatchDue();
+            expect(markdownGenerator.syncFromDataRepo).toHaveBeenCalledTimes(1);
+            expect(workStore.get('w-steady').lastSyncedDataRepoSha).toBe('sha-after');
+
+            // Polls 2 and 3: HEAD unchanged → no render; one skip row only.
+            const firstPoll = workStore.get('w-steady').lastPolledAt;
+            const second = await dispatcher.dispatchDue();
+            await dispatcher.dispatchDue();
+            expect(markdownGenerator.syncFromDataRepo).toHaveBeenCalledTimes(1);
+            expect(second).toMatchObject({ dispatched: 0, skipped: 1, failed: 0 });
+            expect(second.entries[0]).toMatchObject({ outcome: 'skipped', message: 'no-changes' });
+            expect(skipRows()).toHaveLength(1);
+            expect(skipRows()[0].details).toEqual({
+                kind: 'skipped',
+                source: 'poll',
+                reason: 'no-changes',
+            });
+            expect(workStore.get('w-steady').lastPolledAt).toBeInstanceOf(Date);
+            expect(workStore.get('w-steady').lastPolledAt).not.toBe(firstPoll);
+            expect(cache.has('data-sync:retry-after:w-steady')).toBe(false);
+
+            // Poll 4: a commit landed → render again, against the new HEAD.
+            markdownGenerator.readDataRepoHeadSha.mockResolvedValue('sha-next');
+            markdownGenerator.syncFromDataRepo.mockResolvedValueOnce({
+                beforeSha: 'sha-after',
+                afterSha: 'sha-next',
+                filesChanged: 1,
+                durationMs: 9,
+            });
+            await dispatcher.dispatchDue();
+            expect(markdownGenerator.syncFromDataRepo).toHaveBeenCalledTimes(2);
+            expect(markdownGenerator.syncFromDataRepo).toHaveBeenLastCalledWith(
+                expect.objectContaining({ id: 'w-steady' }),
+                expect.anything(),
+                { expectedSourceSha: 'sha-next' },
+            );
+            expect(workStore.get('w-steady').lastSyncedDataRepoSha).toBe('sha-next');
+        });
+
+        it('a force-sync of an unchanged Work still renders', async () => {
+            seedWork('w-forced', { lastSyncedDataRepoSha: 'sha-after' });
+
+            await controller.forceSync(stubUser, 'w-forced');
+
+            expect(markdownGenerator.syncFromDataRepo).toHaveBeenCalledTimes(1);
         });
     });
 

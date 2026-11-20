@@ -26,8 +26,9 @@ import type {
  *
  * - `webhook` — GitHub App push handler set `Work.pendingSyncRequestedAt`
  *   and the dispatcher flushed once the row was ≥ 30 s old.
- * - `poll` — App not installed; dispatcher's `ls-remote HEAD` saw a SHA
- *   delta against `Work.lastSyncedDataRepoSha`.
+ * - `poll` — App not installed; the poller's turn came round
+ *   (`syncIntervalMinutes`). The render runs only when the data-repo HEAD
+ *   differs from `Work.lastSyncedDataRepoSha`; otherwise `no-changes`.
  * - `manual` — operator hit the force-sync endpoint
  *   (`POST /api/works/:id/sync`, Phase 6).
  */
@@ -39,8 +40,8 @@ export type SyncSource = SyncEventSource;
  * three values here. The render gate emits `data-repo-empty` (the data
  * repository has no `data/` directory yet) and
  * `app-not-installed-and-no-credentials` (the owner has no connected account
- * for the git provider), each at most once per skip-noise window;
- * `no-changes` is reserved for a dispatcher HEAD pre-check.
+ * for the git provider), and on a poll `no-changes` (the data-repo HEAD equals
+ * `Work.lastSyncedDataRepoSha`), each at most once per skip-noise window.
  */
 export type SyncReason = SyncEventSkipReason;
 

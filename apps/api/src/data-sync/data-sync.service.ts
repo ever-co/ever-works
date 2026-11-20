@@ -4,7 +4,12 @@ import { Repository } from 'typeorm';
 import { CacheEntry } from '@ever-works/agent/entities';
 import { CACHE_MANAGER, Cache, DistributedTaskLockService } from '@ever-works/agent/cache';
 import { ActivityLogService } from '@ever-works/agent/activity-log';
-import { ActivityActionType, ActivityStatus, GenerateStatusType } from '@ever-works/agent/entities';
+import {
+    ActivityActionType,
+    ActivityStatus,
+    GenerateStatusType,
+    type Work,
+} from '@ever-works/agent/entities';
 import { WorkRepository } from '@ever-works/agent/database';
 import { MarkdownGeneratorService } from '@ever-works/agent/generators';
 import { config } from '@ever-works/agent/config';
@@ -43,7 +48,9 @@ import type {
  *        pipeline is mid-flight; rate-limits the `generation-in-progress`
  *        skip row via `data-sync:gen-in-progress-noise:<workId>` so a
  *        long generation run does not drown the activity feed.
- *     3. Render gate — calls
+ *     3. Render gate — reads the data-repo HEAD; on a poll whose HEAD
+ *        equals `lastSyncedDataRepoSha` it skips with `no-changes` (one
+ *        row per `skipNoiseWindowMs`). Otherwise calls
  *        {@link MarkdownGeneratorService.syncFromDataRepo} (Phase 2 entry),
  *        then UPDATEs `lastSyncedDataRepoSha`, clears
  *        `pendingSyncRequestedAt`, stamps `lastPolledAt`, and writes a
@@ -221,7 +228,18 @@ export class DataSyncService {
         // `relations: ['user']` in `WorkRepository.findById`).
         const startedAt = Date.now();
         try {
-            const stats = await this.markdownGenerator.syncFromDataRepo(work, work.user, {});
+            const headSha = await this.readDataRepoHead(work);
+            // A poll whose data-repo HEAD has not moved since the last sync
+            // has nothing to render (spec §5.2): skip the clone, render and
+            // push. Manual and webhook syncs always render — a manual sync is
+            // how a user forces a re-render without a data change.
+            if (source === 'poll' && headSha && headSha === work.lastSyncedDataRepoSha) {
+                return this.skipUntilNextPoll(work.id, source, 'no-changes');
+            }
+
+            const stats = await this.markdownGenerator.syncFromDataRepo(work, work.user, {
+                expectedSourceSha: headSha,
+            });
             if (stats.skipped) {
                 // The data repository holds no items yet (no `data/`
                 // directory) — typical of a managed single-repo Work whose
@@ -290,12 +308,37 @@ export class DataSyncService {
     }
 
     /**
-     * End a run that cannot do anything until the Work itself changes (no
-     * items yet, no git credentials): clear the webhook request and stamp the
-     * poll time, so neither dispatcher path picks the Work up again before
-     * its next regular poll, and write at most one skip row per
-     * `skipNoiseWindowMs` (1 h by default) — the same rate limit `no-changes`
-     * uses — instead of a row every poll.
+     * The data repository's current HEAD SHA, read before the render (two
+     * git-provider API calls, no clone). It gates the poll (`no-changes`) and
+     * is passed to the render as `expectedSourceSha`, so a commit that lands
+     * mid-render is not recorded as synced.
+     *
+     * A failed read only costs the pre-check: answer `undefined` and let the
+     * render run (and surface any real error) as it did before. The one
+     * exception is a missing git account, which the render would hit too:
+     * rethrow it so the caller skips without attempting the render.
+     */
+    private async readDataRepoHead(work: Work): Promise<string | undefined> {
+        try {
+            return await this.markdownGenerator.readDataRepoHeadSha(work);
+        } catch (err) {
+            if (isMissingGitCredentials(err)) {
+                throw err;
+            }
+            this.logger.debug(
+                `Could not read the data-repo HEAD of work=${work.id}; rendering without the pre-check: ${extractErrorMessage(err)}`,
+            );
+            return undefined;
+        }
+    }
+
+    /**
+     * End a run that cannot or need not do anything until the Work itself
+     * changes (no items yet, no git credentials, data-repo HEAD unchanged):
+     * clear the webhook request and stamp the poll time, so neither
+     * dispatcher path picks the Work up again before its next regular poll,
+     * and write at most one skip row per `skipNoiseWindowMs` (1 h by default)
+     * instead of a row every poll.
      */
     private async skipUntilNextPoll(
         workId: string,
