@@ -476,6 +476,19 @@ describe('Ever Connect — membership resync', () => {
             expect(resync.isOwed()).toBe(true);
         });
 
+        it('a lease already lost: the feed gap is not read and the position must not move', async () => {
+            await seed();
+            const extensions = new EverConnectExtensions();
+            const client = platform(...pages([member('sub-bob')]));
+            const { resync } = services(client, extensions);
+            resync.onModuleInit();
+
+            expect(
+                await extensions.resyncAfterFeedGap({ keep: async () => true, held: false }),
+            ).toBe(false);
+            expect(client.call).not.toHaveBeenCalled();
+        });
+
         it('a cursor answered before stops the resync (a cycle), and nobody is removed', async () => {
             const { organization, bob } = await seed();
             await keep(organization.id, bob.id);

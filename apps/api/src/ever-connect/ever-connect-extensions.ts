@@ -91,6 +91,8 @@ export class EverConnectExtensions {
     async resyncAfterFeedGap(
         lease: EverConnectRoundLease = EVER_CONNECT_LEASE_HELD,
     ): Promise<boolean> {
+        // The lease already lost: nothing is read, and the position must not move.
+        if (!lease.held) return false;
         for (const listener of this.resyncListeners) {
             try {
                 if (!(await listener.resyncAfterFeedGap(lease))) return false;
