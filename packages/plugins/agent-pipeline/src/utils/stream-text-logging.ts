@@ -38,13 +38,36 @@ function getStepNumber(currentStepNumber: number): number {
 }
 
 function formatError(error: unknown): string {
-	return error instanceof Error ? error.message : String(error);
+	if (error instanceof Error) return error.message;
+	if (typeof error === 'object' && error !== null) {
+		const { message } = error as { message?: unknown };
+		if (typeof message === 'string' && message) return message;
+	}
+	return String(error);
 }
 
+function toError(error: unknown): Error {
+	return error instanceof Error ? error : new Error(formatError(error));
+}
+
+/**
+ * Reads the whole `streamText` stream, mirroring it as realtime log entries.
+ *
+ * A provider refusal (an exhausted account, an invalid key, an unknown model) reaches us only as an
+ * `error` part. When that happens before any model step finished, every result field the caller
+ * awaits next rejects with the SDK's generic `NoOutputGeneratedError` ("No output generated. Check
+ * the stream for errors."), and the provider's own message is lost. In exactly that case this throws
+ * the stream's error instead, so the run fails with what the provider said (e.g. "Insufficient
+ * credits. Add more using …"). When a step did finish, the SDK keeps that partial output, so
+ * nothing is thrown and the caller reads the result as before.
+ */
 export async function consumeStreamWithLogging<TOOLS extends ToolSet>(
 	result: StreamTextResultLike<TOOLS>,
 	options: StreamLoggingOptions
 ): Promise<void> {
+	let finishedSteps = 0;
+	let streamFailed = false;
+	let streamError: unknown;
 	let currentStepNumber = 0;
 	const reasoningLoggedForStep = new Set<number>();
 	const textLoggedForStep = new Set<number>();
@@ -158,6 +181,7 @@ export async function consumeStreamWithLogging<TOOLS extends ToolSet>(
 			}
 
 			case 'finish-step': {
+				finishedSteps += 1;
 				emitRealtimeLog(
 					options.onLogEntry,
 					`${options.scope}: model step ${getStepNumber(currentStepNumber)} finished (${part.finishReason}; ${part.usage.totalTokens} tokens)`,
@@ -180,6 +204,8 @@ export async function consumeStreamWithLogging<TOOLS extends ToolSet>(
 			}
 
 			case 'error': {
+				streamFailed = true;
+				streamError = part.error;
 				emitRealtimeLog(
 					options.onLogEntry,
 					`${options.scope}: stream error - ${formatError(part.error)}`,
@@ -193,5 +219,9 @@ export async function consumeStreamWithLogging<TOOLS extends ToolSet>(
 			default:
 				break;
 		}
+	}
+
+	if (streamFailed && finishedSteps === 0) {
+		throw toError(streamError);
 	}
 }
