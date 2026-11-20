@@ -21,6 +21,18 @@ export interface EverConnectFeedHandler {
 }
 
 /**
+ * A part of Ever Connect that keeps a copy of some state Ever Platform sends on
+ * the feed, and so must read that state again when the feed answers `410
+ * resync_required` (the installation was away longer than the feed keeps its
+ * events, and the events in between are gone). `resyncRequired` only takes
+ * note; the part reads again in its own round, where it can keep the lease.
+ */
+export interface EverConnectResyncListener {
+    readonly name: string;
+    resyncRequired(): void;
+}
+
+/**
  * A part of Ever Connect that has work to do on every round of the worker (on
  * the replica holding the Ever Connect lease, while the installation is
  * connected). `round` should not throw; one that does is logged by name and the
@@ -52,6 +64,7 @@ export class EverConnectExtensions {
     private readonly logger = new Logger(EverConnectExtensions.name);
     private readonly feedHandlers: EverConnectFeedHandler[] = [];
     private readonly participants: EverConnectRoundParticipant[] = [];
+    private readonly resyncListeners: EverConnectResyncListener[] = [];
     private appSync: EverConnectAppSyncReader | null = null;
     private readonly personData: PersonDataParticipant = {};
 
@@ -61,6 +74,28 @@ export class EverConnectExtensions {
 
     addRoundParticipant(participant: EverConnectRoundParticipant): void {
         if (!this.participants.includes(participant)) this.participants.push(participant);
+    }
+
+    addResyncListener(listener: EverConnectResyncListener): void {
+        if (!this.resyncListeners.includes(listener)) this.resyncListeners.push(listener);
+    }
+
+    /**
+     * The feed answered `410 resync_required`: tell every registered part. A
+     * listener that throws is logged by name and the others are still told.
+     */
+    feedResyncRequired(): void {
+        for (const listener of this.resyncListeners) {
+            try {
+                listener.resyncRequired();
+            } catch (error) {
+                this.logger.warn(
+                    `Ever Connect ${listener.name} did not take the resync: ${
+                        error instanceof Error ? error.name : 'unknown'
+                    }`,
+                );
+            }
+        }
     }
 
     /** The apps mirror says where it stands and which Organizations it runs for. */

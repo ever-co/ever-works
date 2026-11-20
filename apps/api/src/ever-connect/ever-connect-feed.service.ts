@@ -41,6 +41,11 @@ export interface FeedPass {
  *
  * A handler that fails stops the pass at that event: it and the events after it
  * are read again on the next pass. Other event types are acknowledged unread.
+ *
+ * `410 resync_required` (the stored position is older than what Ever Platform
+ * keeps): the integration states are read again, the parts that keep a copy of
+ * other state are told ({@link EverConnectExtensions.feedResyncRequired}), and
+ * the feed continues from the position the answer names.
  */
 @Injectable()
 export class EverConnectFeedService {
@@ -66,7 +71,10 @@ export class EverConnectFeedService {
             const failure = platformFailure(error);
             if (failure.kind === 'problem' && failure.status === 410) {
                 // The position is past what Ever Platform keeps: read the state
-                // again, then continue from where it says.
+                // again (the integration states now; a part that keeps a copy of
+                // other state, such as the membership sync, in its own round),
+                // then continue from where it says.
+                this.extensions?.feedResyncRequired();
                 await this.integrations.refresh();
                 const lastId = (error as { lastId?: string }).lastId;
                 if (lastId) {

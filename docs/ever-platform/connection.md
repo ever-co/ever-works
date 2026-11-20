@@ -680,8 +680,26 @@ Organization here (`ever.registry.membership.created`, `.role_changed` and
   Organization is kept, so the same change delivered again does nothing and a
   change older than it (by its time, then its id) is skipped.
 
-Each change is logged by a code only, never with an identity or a name. It makes
-no call to Ever Platform. Off, these changes are read past and nothing changes.
+- **Resync:** the feed keeps its events for a limited time. When it answers
+  `410 resync_required` (the installation was away longer than that, and the
+  changes in between are gone), and once after each start, the current members
+  of each linked organization are read again
+  (`GET /v1/instances/me/tenant-links/{link}/memberships`, 100 a page) and
+  applied with the same rules: a member is added, or has their role set when
+  the sync already keeps them as a member (someone removed here by hand is not
+  added back). Once a link's whole list was read, the people the sync keeps as
+  members but the list no longer names are removed; nobody else is (not someone
+  who joined here otherwise, not someone whose Ever ID is not known here, never
+  the owner), and an empty list, or one with an entry that cannot be read,
+  removes nobody. `404 module_disabled` (Ever Platform sends no membership
+  changes) means there is nothing to make up for, logged once. Any other failure
+  stops the resync with a warning, and it runs again at the next `410` or
+  start. It runs on the replica holding the Ever Connect lease, once the
+  installation is active.
+
+Each change is logged by a code only, never with an identity or a name (a resync
+logs counts of codes). Apart from the resync's reads, it makes no call to Ever
+Platform. Off, these changes are read past and nothing changes.
 
 ## `/.well-known/ever-connect`
 
@@ -708,8 +726,9 @@ Every request goes to `EVER_PLATFORM_API_URL`, with the installation's token:
 | Heartbeat (when switched on)                                    | `POST /v1/instances/me/heartbeat`, after a start and once a day                                                                                                                                   |
 | Entitlement documents (when switched on)                        | `GET /v1/instances/me/entitlement`, `GET /v1/instances/me/tenant-links/{link}/entitlement`, `GET /.well-known/ever-keys.json` (the key set), every six hours and when a new document is announced |
 | Apps on Ever Platform (when switched on and enabled for a link) | `POST /v1/instances/me/mirror/apps` while Works wait to be sent, `GET /v1/instances/me/mirror/apps` once a day                                                                                    |
+| Membership resync (when switched on)                            | `GET /v1/instances/me/tenant-links/{link}/memberships`, after a start and when the feed answers `410 resync_required`                                                                             |
 
-With none of those four switches on, the calls above the "Linking an Organization"
+With none of those five switches on, the calls above the "Linking an Organization"
 row are all there is. Creating or deploying an App for a person
 (`EVER_CONNECT_APPS_WRITE_ENABLED`) makes no call to Ever Platform: it answers a
 request, and what it creates is told only by the apps mirror.

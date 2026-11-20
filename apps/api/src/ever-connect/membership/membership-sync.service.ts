@@ -53,6 +53,52 @@ export type MembershipSyncOutcome =
     | 'duplicate'
     | 'stale';
 
+/**
+ * `lastChange` of a row the membership resync wrote: what it did came from the
+ * current membership list, not from an envelope.
+ */
+export const RESYNC_CHANGE = 'resync';
+
+/**
+ * The position a row the resync made first is given: before every envelope, so
+ * the next envelope for that person is always applied after it.
+ */
+export const RESYNC_POSITION = '00000000000000000000000000';
+
+/**
+ * The outcomes after which the sync counts the person as a member it keeps in
+ * step with Ever Platform (a member of the linked organization there, on the
+ * roster here). Only such a person is ever removed by a resync.
+ */
+const KEPT_MEMBER_OUTCOMES: ReadonlySet<string> = new Set(['added', 'role_set', 'unchanged']);
+
+/** One member of a linked organization, as the membership list names them. */
+export interface CurrentMember {
+    readonly issuer: string;
+    readonly subject: string;
+    readonly userRef: string | null;
+    readonly role: string;
+}
+
+/**
+ * Who the membership list of a linked organization named, gathered while it is
+ * read page by page: the accounts the members resolved to, their Ever ID
+ * identities and the issuers those come from.
+ */
+export class ListedMembers {
+    readonly userIds = new Set<string>();
+    readonly identities = new Set<string>();
+    readonly issuers = new Set<string>();
+
+    add(member: CurrentMember, userId: string | null): void {
+        const issuer = sameIssuer(member.issuer);
+        this.issuers.add(issuer);
+        this.identities.add(identityKey(issuer, member.subject));
+        if (userId) this.userIds.add(userId);
+        if (member.userRef) this.userIds.add(member.userRef);
+    }
+}
+
 const ULID = /^[0-9A-HJKMNP-TV-Z]{26}$/i;
 const EXTERNAL_ID = /^[A-Za-z0-9._:-]{1,64}$/;
 const PRODUCT_ID = /^[A-Za-z0-9._:*-]{1,64}$/;
@@ -93,6 +139,11 @@ interface MembershipData {
  *
  * Each outcome is logged by its code only. A failure of the database throws, so
  * the feed reads the envelope again.
+ *
+ * **Resync** ({@link applyCurrentMember}, {@link removeAbsentMembers}): after
+ * the feed lost envelopes, the current membership list of each linked
+ * organization is applied with the same rules (see
+ * `EverConnectMembershipResyncService`).
  */
 @Injectable()
 export class EverConnectMembershipSyncService implements OnModuleInit, EverConnectFeedHandler {
@@ -184,6 +235,103 @@ export class EverConnectMembershipSyncService implements OnModuleInit, EverConne
     }
 
     /**
+     * Resync: a person the current membership list names as a member of the
+     * organization the Organization is linked to, with an Ever role. The same
+     * person, role and membership rules as an envelope:
+     *
+     * - someone the sync already keeps as a member (its last outcome for them
+     *   left them on the roster) only has their role set, as `role_changed`
+     *   does: if they are no longer on the roster, someone here removed them,
+     *   and they are not added back;
+     * - anyone else is added, as `created` does (an account is never created,
+     *   never moved from another account; a free seat is needed).
+     *
+     * Answers the outcome (not logged: the resync logs its counts) and the
+     * account the identity resolved to (`null` when none). The last change
+     * kept for the person becomes the resync, at their last envelope's
+     * position, so the next envelope is still applied.
+     */
+    async applyCurrentMember(
+        organizationId: string,
+        member: CurrentMember,
+    ): Promise<{ outcome: MembershipSyncOutcome; userId: string | null }> {
+        if (!isMembershipSyncEnabled()) return { outcome: 'switched_off', userId: null };
+        const identity = await this.identityOf(member.issuer, member.subject);
+        if (!identity) return { outcome: 'person_unknown', userId: null };
+        const userId = identity.userId;
+        if (member.userRef !== null && member.userRef !== userId) {
+            return { outcome: 'person_mismatch', userId };
+        }
+        const role = Object.prototype.hasOwnProperty.call(EVER_ROLE_TO_ROSTER_ROLE, member.role)
+            ? EVER_ROLE_TO_ROSTER_ROLE[member.role]
+            : undefined;
+        if (!role) return { outcome: 'role_unknown', userId };
+
+        const synced = await this.dataSource
+            .getRepository(EverConnectMembershipSync)
+            .findOne({ where: { organizationId, userId } });
+        const kept = synced !== null && KEPT_MEMBER_OUTCOMES.has(synced.outcome);
+        const outcome = kept
+            ? await this.membership.setMemberRoleForPlatform(organizationId, userId, role)
+            : await this.membership.addMemberForPlatform(organizationId, userId, role);
+        // Removed here by hand: the row keeps saying what the sync last did, so
+        // the next resync does not add them back either.
+        if (!(kept && outcome === 'not_a_member')) {
+            await this.rememberResync(organizationId, userId, member.role, outcome, synced);
+        }
+        return { outcome, userId };
+    }
+
+    /**
+     * Resync, once the whole list of a linked organization was read: the people
+     * the sync keeps as members of the Organization but whom the list no longer
+     * names left the organization on Ever Platform, and are removed as
+     * `removed` does (the account owner never; nothing they made is deleted).
+     *
+     * Only a person the sync itself keeps as a member is a candidate (its last
+     * outcome for them is `added`, `role_set` or `unchanged`, as an envelope or
+     * a resync left it): someone the sync never saw as a member of the Ever
+     * organization is never removed. And only when one of their
+     * connected identities comes from an issuer the list names and none of them
+     * is on the list: a person whose Ever ID is not known here is left as they
+     * are. An empty list removes nobody (an organization always has its owner).
+     */
+    async removeAbsentMembers(
+        organizationId: string,
+        listed: ListedMembers,
+    ): Promise<MembershipSyncOutcome[]> {
+        if (!isMembershipSyncEnabled() || listed.issuers.size === 0) return [];
+        const candidates = (
+            await this.dataSource
+                .getRepository(EverConnectMembershipSync)
+                .find({ where: { organizationId } })
+        ).filter((row) => KEPT_MEMBER_OUTCOMES.has(row.outcome) && !listed.userIds.has(row.userId));
+        const outcomes: MembershipSyncOutcome[] = [];
+        for (const row of candidates) {
+            const identities = (
+                await this.dataSource.getRepository(ExternalIdentity).find({
+                    select: { id: true, issuer: true, subject: true },
+                    where: { userId: row.userId },
+                })
+            ).filter((identity) => listed.issuers.has(sameIssuer(identity.issuer)));
+            if (identities.length === 0) {
+                outcomes.push('person_unknown');
+                continue;
+            }
+            if (identities.some((i) => listed.identities.has(identityKey(i.issuer, i.subject)))) {
+                continue;
+            }
+            const outcome = await this.membership.removeMemberForPlatform(
+                organizationId,
+                row.userId,
+            );
+            await this.rememberResync(organizationId, row.userId, row.lastRole, outcome, row);
+            outcomes.push(outcome);
+        }
+        return outcomes;
+    }
+
+    /**
      * The connected identity with this subject and issuer (an issuer spelled with
      * or without a trailing slash is the same issuer). `null` when there is none,
      * or when two accounts would match.
@@ -223,6 +371,40 @@ export class EverConnectMembershipSyncService implements OnModuleInit, EverConne
         }
     }
 
+    /**
+     * Keep a resync as the last change for the person in the Organization. An
+     * existing row keeps its envelope position (an envelope newer than the last
+     * one applied is still applied); a new row is placed before every envelope.
+     * Nothing is written when the row already says the same.
+     */
+    private async rememberResync(
+        organizationId: string,
+        userId: string,
+        lastRole: string,
+        outcome: string,
+        synced: EverConnectMembershipSync | null,
+    ): Promise<void> {
+        const repository = this.dataSource.getRepository(EverConnectMembershipSync);
+        const values = { lastChange: RESYNC_CHANGE, lastRole, outcome };
+        if (synced) {
+            if (synced.lastRole === lastRole && synced.outcome === outcome) return;
+            await repository.update({ organizationId, userId }, values);
+            return;
+        }
+        try {
+            await repository.insert({
+                organizationId,
+                userId,
+                lastEventId: RESYNC_POSITION,
+                lastOccurredAt: null,
+                ...values,
+            });
+        } catch (error) {
+            if (!isUniqueConstraintError(error)) throw error;
+            await repository.update({ organizationId, userId }, values);
+        }
+    }
+
     private done<T extends MembershipSyncOutcome>(outcome: T): T {
         this.logger.log(`ever_connect.membership.${outcome}`);
         return outcome;
@@ -252,9 +434,40 @@ function parseMembership(data: unknown): MembershipData | null {
     };
 }
 
+/**
+ * One item of the membership list (`GET /v1/instances/me/tenant-links/{link}/memberships`),
+ * checked as an envelope's data is; `null` when it is not one.
+ */
+export function parseCurrentMember(item: unknown): CurrentMember | null {
+    if (!item || typeof item !== 'object') return null;
+    const record = item as Record<string, unknown>;
+    const { identity_issuer, identity_subject, product_user_ref, role } = record;
+    if (typeof identity_issuer !== 'string' || !isHttpsUrl(identity_issuer)) return null;
+    if (typeof identity_subject !== 'string' || !EXTERNAL_ID.test(identity_subject)) return null;
+    if (
+        product_user_ref !== undefined &&
+        product_user_ref !== null &&
+        (typeof product_user_ref !== 'string' || !PRODUCT_ID.test(product_user_ref))
+    ) {
+        return null;
+    }
+    if (typeof role !== 'string') return null;
+    return {
+        issuer: identity_issuer,
+        subject: identity_subject,
+        userRef: typeof product_user_ref === 'string' ? product_user_ref : null,
+        role,
+    };
+}
+
 /** An issuer as compared: without trailing slashes. */
 function sameIssuer(issuer: string): string {
     return issuer.replace(/\/+$/, '');
+}
+
+/** An identity as compared: the issuer (as compared) and the subject. */
+function identityKey(issuer: string, subject: string): string {
+    return `${sameIssuer(issuer)}#${subject}`;
 }
 
 function isHttpsUrl(value: string): boolean {
