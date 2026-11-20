@@ -15,6 +15,7 @@ import { OnboardingRoleSeedingService } from '@ever-works/agent/agents';
 import { DistributedTaskLockService } from '@ever-works/agent/cache';
 import {
     DemoGithubRepoRepository,
+    DemoUsageCounterRepository,
     UserRepository,
     WorkRepository,
 } from '@ever-works/agent/database';
@@ -88,6 +89,7 @@ const SWEEPER_DEPENDENCIES = [
     ['everWorksGit', EverWorksGitProvider],
     ['purger', DemoSandboxPurgeService],
     ['taskLock', DistributedTaskLockService],
+    ['counters', DemoUsageCounterRepository],
 ] as const;
 
 const REFUSED = new Set<unknown>(

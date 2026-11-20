@@ -264,6 +264,13 @@ function requestOptionsOf(options: GitFacadeOptions): { signal: AbortSignal } | 
     return options.signal ? { signal: options.signal } : undefined;
 }
 
+/** A provider repository id (GitHub's numeric id, as a string) as a number; `null` otherwise. */
+function numericRepositoryId(id: string | undefined): number | null {
+    if (typeof id !== 'string' || !/^\d+$/.test(id)) return null;
+    const value = Number(id);
+    return Number.isSafeInteger(value) ? value : null;
+}
+
 /**
  * Merge-policy matrix (Wave 3, founder decision D4) — the "who is asking"
  * for {@link GitFacadeService.mergePullRequest}.
@@ -2573,10 +2580,12 @@ export class GitFacadeService implements IGitFacade {
      * provider made and recorded with its id — never enters the ledger.
      *
      * A created repository is tagged with the demo topic ({@link tagDemoRepository}, best
-     * effort) and recorded with GitHub's id, read back from the plugin
-     * ({@link createdRepositoryId}): the id is what pins the sweeper's deletion to the
-     * repository the sandbox created, since nothing stops another account of the shared org
-     * from taking a `demo-` name later. `null` only when the plugin cannot supply it. A create
+     * effort) and recorded with GitHub's id: the one the create itself reported
+     * (`GitRepository.id`, from GitHub's create response), else read back from the plugin
+     * ({@link createdRepositoryId}). The id is what pins the sweeper's deletion to the
+     * repository the sandbox created — nothing stops another account of the shared org from
+     * taking a `demo-` name later — and a row without one is never deleted (R28). `null`
+     * only when neither the create nor the plugin can supply it. A create
      * that answers no repository for one that was not there (GitHub's template create, when the
      * repository it just made is not readable yet — generation carries on with it) records the
      * requested coordinates. A call with no `userId` names no sandbox to sweep the repository
@@ -2612,7 +2621,9 @@ export class GitFacadeService implements IGitFacade {
         const name = created?.name ?? createOptions.name;
         // Tagged before the record, so a repository whose record fails is still findable.
         await this.tagDemoRepository(plugin, token, owner, name);
-        const githubId = await this.createdRepositoryId(plugin, token, owner, name);
+        const githubId =
+            numericRepositoryId(created?.id) ??
+            (await this.createdRepositoryId(plugin, token, owner, name));
         try {
             await ledger.record({ sandboxUserId, owner, name, githubId });
         } catch (error) {
@@ -2682,8 +2693,7 @@ export class GitFacadeService implements IGitFacade {
             if (identity.fullName.toLowerCase() !== `${owner}/${name}`.toLowerCase()) {
                 return unknown(`the provider answered for ${identity.fullName}`);
             }
-            const id = /^\d+$/.test(identity.id) ? Number(identity.id) : Number.NaN;
-            return Number.isSafeInteger(id) ? id : unknown(`id ${identity.id} is not numeric`);
+            return numericRepositoryId(identity.id) ?? unknown(`id ${identity.id} is not numeric`);
         } catch (error) {
             return unknown(error instanceof Error ? error.message : String(error));
         }

@@ -23,6 +23,7 @@ import {
     AgentRepository,
     DatabaseModule,
     DemoGithubRepoRepository,
+    DemoUsageCounterRepository,
     UserRepository,
     WorkKnowledgeCitationRepository,
     WorkKnowledgeDocumentRepository,
@@ -245,6 +246,7 @@ describe('Demo sandbox purge (real seeded sandbox)', () => {
             git as unknown as EverWorksGitProvider,
             moduleRef.get(DemoSandboxPurgeService),
             moduleRef.get(DistributedTaskLockService),
+            moduleRef.get(DemoUsageCounterRepository),
         );
     });
 

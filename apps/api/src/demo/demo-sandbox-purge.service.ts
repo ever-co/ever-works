@@ -13,6 +13,14 @@ import { AnonymousUserCleanupService, WorkLifecycleService } from '@ever-works/a
 import { getActiveStorageBackend } from '../uploads/storage-backend.factory';
 import { sandboxQuotaKey } from './demo-ai-quota.service';
 
+/**
+ * The `demo_usage_counters` key counting a sandbox's failed purges (the demo sweeper holds a
+ * sandbox for an operator at `DEMO_PURGE_MAX_FAILURES`). Removed by the purge that succeeds.
+ */
+export function sandboxPurgeFailureKey(userId: string): string {
+    return `sweep:purge-fail:${userId}`;
+}
+
 /** What one sandbox's purge removed. */
 export interface DemoSandboxPurgeSummary {
     worksDeleted: number;
@@ -61,7 +69,8 @@ const MAX_PASSES = 6;
  *      table refuses (one non-cascading foreign key between two of them only orders the
  *      deletes); a table that still refuses fails the purge, before anything below.
  *   4. Its Organization(s) and Tenant — now empty.
- *   5. The user, through `AnonymousUserCleanupService.purgeUser`.
+ *   5. The user, through `AnonymousUserCleanupService.purgeUser`; then its counters (AI quota,
+ *      failed purges).
  * The Tenant goes before the user: a purge interrupted between the two leaves the expired
  * user, which the next sweep finds and finishes, rather than a Tenant nothing points to.
  *
@@ -113,10 +122,6 @@ export class DemoSandboxPurgeService {
                 `Sandbox ${user.id} still has rows in ${refused.join(', ')}; kept for the next sweep`,
             );
         }
-        await this.dataSource
-            .getRepository(DemoUsageCounter)
-            .delete({ key: sandboxQuotaKey(user.id) });
-
         const { tenantsDeleted, organizationsDeleted } = await this.deleteWorkspace(scope);
 
         const outcome = await this.anonymousCleanup.purgeUser(user);
@@ -124,7 +129,25 @@ export class DemoSandboxPurgeService {
             throw new Error(`Sandbox user ${user.id} could not be deleted: ${outcome.error}`);
         }
 
+        await this.deleteSandboxCounters(user.id);
         return { worksDeleted, filesDeleted, tenantsDeleted, organizationsDeleted };
+    }
+
+    /**
+     * Last, once the sandbox is gone: its AI quota counter and the sweeper's count of its failed
+     * purges (cleared only by a purge that got to the end). The sandbox is already deleted, so a
+     * failure here is only logged.
+     */
+    private async deleteSandboxCounters(userId: string): Promise<void> {
+        try {
+            await this.dataSource.getRepository(DemoUsageCounter).delete({
+                key: In([sandboxQuotaKey(userId), sandboxPurgeFailureKey(userId)]),
+            });
+        } catch (error) {
+            this.logger.warn(
+                `demo purge: counters of the purged sandbox ${userId} stay (${messageOf(error)})`,
+            );
+        }
     }
 
     /**

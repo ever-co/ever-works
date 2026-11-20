@@ -23,6 +23,7 @@ import { CacheEntry } from '@ever-works/agent/entities';
 import { DistributedTaskLockService } from '@ever-works/agent/cache';
 import {
     DemoGithubRepoRepository,
+    DemoUsageCounterRepository,
     ENTITIES,
     MemoryFolderRepository,
     OrganizationRepository,
@@ -85,6 +86,8 @@ describe('DemoSandboxSweeperService', () => {
     let git: GitDouble;
     let deleteWork: jest.Mock;
     let sweeper: DemoSandboxSweeperService;
+    let purge: DemoSandboxPurgeService;
+    let counters: DemoUsageCounterRepository;
     let serial = 0;
 
     beforeAll(async () => {
@@ -99,6 +102,7 @@ describe('DemoSandboxSweeperService', () => {
         users = new UserRepository(dataSource.getRepository(User));
         ledger = new DemoGithubRepoRepository(dataSource.getRepository(DemoGithubRepo));
         lock = new DistributedTaskLockService(dataSource.getRepository(CacheEntry));
+        counters = new DemoUsageCounterRepository(dataSource.getRepository(DemoUsageCounter));
     });
 
     afterAll(async () => {
@@ -143,7 +147,7 @@ describe('DemoSandboxSweeperService', () => {
             new OrganizationRepository(dataSource.getRepository(Organization)),
             new TenantRepository(dataSource.getRepository(Tenant)),
         );
-        const purge = new DemoSandboxPurgeService(
+        purge = new DemoSandboxPurgeService(
             dataSource,
             { deleteWork } as unknown as WorkLifecycleService,
             cleanup,
@@ -154,6 +158,7 @@ describe('DemoSandboxSweeperService', () => {
             git as unknown as EverWorksGitProvider,
             purge,
             lock,
+            counters,
         );
     });
 
@@ -371,14 +376,54 @@ describe('DemoSandboxSweeperService', () => {
         expect(summary).toEqual({ sandboxes: 1, reposDeleted: 1, reposSkipped: 0, failures: 0 });
     });
 
-    it('deletes a row recorded without an id (a git-facade create) on owner and prefix', async () => {
+    it('never deletes a live repository whose row has no recorded id, and keeps the sandbox (R28)', async () => {
         const { user } = await sandbox();
         const repo = await ledgerRow(user.id, 'demo-00000001-foo-website', null);
         git.getRepositoryId.mockResolvedValue(77);
+        const warnings = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+
+        const summary = await sweeper.sweep(NOW);
+
+        expect(git.deleteRepository).not.toHaveBeenCalled();
+        expect(await row(repo.id)).toMatchObject({
+            deletedAt: null,
+            attempts: 1,
+            lastError: 'no recorded id',
+        });
+        expect(warnings).toHaveBeenCalledWith(
+            expect.stringContaining(`${ORG}/demo-00000001-foo-website`),
+        );
+        expect(await userExists(user.id)).toBe(true);
+        expect(summary).toEqual({ sandboxes: 0, reposDeleted: 0, reposSkipped: 1, failures: 0 });
+    });
+
+    it('holds the sandbox for an operator once a no-id row has been refused 3 times (R28)', async () => {
+        const { user } = await sandbox();
+        await ledgerRow(user.id, 'demo-00000001-foo-website', null);
+        git.getRepositoryId.mockResolvedValue(77);
+        jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+        const errors = jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+
+        for (let run = 0; run < 3; run += 1) await sweeper.sweep(NOW);
+        git.getRepositoryId.mockClear();
+        await sweeper.sweep(NOW);
+
+        expect(git.getRepositoryId).not.toHaveBeenCalled();
+        expect(git.deleteRepository).not.toHaveBeenCalled();
+        expect(errors).toHaveBeenCalledWith(
+            expect.stringMatching(new RegExp(`sandbox ${user.id} is held.*no recorded id`)),
+        );
+        expect(await userExists(user.id)).toBe(true);
+    });
+
+    it('closes a no-id row whose repository is already gone, and purges the sandbox', async () => {
+        const { user } = await sandbox();
+        const repo = await ledgerRow(user.id, 'demo-00000001-foo-website', null);
+        git.getRepositoryId.mockResolvedValue(null);
 
         await sweeper.sweep(NOW);
 
-        expect(git.deleteRepository).toHaveBeenCalledWith(ORG, 'demo-00000001-foo-website');
+        expect(git.deleteRepository).not.toHaveBeenCalled();
         expect((await row(repo.id)).deletedAt).toEqual(NOW);
         expect(await userExists(user.id)).toBe(false);
     });
@@ -523,11 +568,8 @@ describe('DemoSandboxSweeperService', () => {
         await sweeper.sweep(NOW);
 
         const expiredRows = rows.map((entry) => `${entry.owner}/${entry.name}`);
-        const deletable = new Set([
-            `${ORG}/demo-00000001-foo`,
-            `${ORG}/demo-00000001-foo-website`,
-            `${ORG}/demo-00000002-bar-2`,
-        ]);
+        // Not `demo-00000001-foo-website`: its row has no recorded id (R28).
+        const deletable = new Set([`${ORG}/demo-00000001-foo`, `${ORG}/demo-00000002-bar-2`]);
         for (const [owner, name] of git.getRepositoryId.mock.calls) {
             expect(expiredRows).toContain(`${owner}/${name}`);
         }
@@ -695,6 +737,115 @@ describe('DemoSandboxSweeperService', () => {
             expect(summary).toMatchObject({ sandboxes: 0, failures: 200 });
             expect(errors).toHaveBeenCalledWith(
                 expect.stringMatching(/200 sandboxes held for an operator.*nothing else/),
+            );
+        });
+    });
+
+    describe('persistent purge failures (R29)', () => {
+        const minutesAgo = (minutes: number) => new Date(EXPIRED.getTime() - minutes * 60_000);
+
+        /** Makes the purge of `failing` sandboxes throw; every other sandbox is purged for real. */
+        function failPurgeOf(failing: Set<string>, message = 'disk I/O error'): jest.SpyInstance {
+            const real = DemoSandboxPurgeService.prototype.purge.bind(purge);
+            return jest.spyOn(purge, 'purge').mockImplementation(async (user: User) => {
+                if (failing.has(user.id)) throw new Error(message);
+                return real(user);
+            });
+        }
+
+        it('holds sandboxes whose purge failed 3 times, so a healthy one behind 20 of them is swept', async () => {
+            const errors = jest
+                .spyOn(Logger.prototype, 'error')
+                .mockImplementation(() => undefined);
+            const failing: User[] = [];
+            for (let index = 0; index < 20; index += 1) {
+                failing.push(await bareSandbox(minutesAgo(100 - index)));
+            }
+            const healthy = await sandbox(minutesAgo(10));
+            const purgeSpy = failPurgeOf(new Set(failing.map((user) => user.id)));
+
+            // Three runs: each takes the 20 failing sandboxes (they still have attempts left).
+            for (let run = 1; run <= 3; run += 1) {
+                const summary = await sweeper.sweep(NOW);
+                expect([run, summary.sandboxes, summary.failures]).toEqual([run, 0, 20]);
+                expect(await userExists(healthy.user.id)).toBe(true);
+            }
+            for (const user of failing) {
+                expect(await counters.peek(`sweep:purge-fail:${user.id}`, NOW)).toBe(3);
+            }
+            // The failure that held each one says so, with the sandbox and its error.
+            expect(errors).toHaveBeenCalledWith(
+                expect.stringMatching(
+                    new RegExp(`sandbox ${failing[0].id} .*3 times.*disk I/O error`),
+                ),
+            );
+
+            purgeSpy.mockClear();
+            errors.mockClear();
+            const summary = await sweeper.sweep(NOW);
+
+            // Now held: no slot, no purge attempt; the healthy sandbox is swept in this run.
+            expect(await userExists(healthy.user.id)).toBe(false);
+            expect(purgeSpy.mock.calls.map(([user]) => (user as User).id)).toEqual([
+                healthy.user.id,
+            ]);
+            expect(summary).toMatchObject({ sandboxes: 1, failures: 20 });
+            for (const user of failing) expect(await userExists(user.id)).toBe(true);
+            expect(errors).toHaveBeenCalledWith(
+                expect.stringMatching(
+                    new RegExp(
+                        `sandbox ${failing[0].id} is held.*purge failed 3 times.*disk I/O error`,
+                    ),
+                ),
+            );
+        });
+
+        it('retries a sandbox under 3 purge failures, and clears its count once it is purged', async () => {
+            jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+            const { user } = await sandbox();
+            const failing = new Set([user.id]);
+            failPurgeOf(failing, 'database is locked');
+
+            const first = await sweeper.sweep(NOW);
+            expect(first).toMatchObject({ sandboxes: 0, failures: 1 });
+            expect(await counters.peek(`sweep:purge-fail:${user.id}`, NOW)).toBe(1);
+            expect(await userExists(user.id)).toBe(true);
+
+            failing.clear();
+            const second = await sweeper.sweep(NOW);
+
+            expect(second).toMatchObject({ sandboxes: 1, failures: 0 });
+            expect(await userExists(user.id)).toBe(false);
+            expect(
+                await dataSource
+                    .getRepository(DemoUsageCounter)
+                    .countBy({ key: `sweep:purge-fail:${user.id}` }),
+            ).toBe(0);
+        });
+
+        it('still holds a sandbox after a restart (the count is persisted)', async () => {
+            const { user } = await sandbox();
+            for (let failure = 0; failure < 3; failure += 1) {
+                await counters.increment(
+                    `sweep:purge-fail:${user.id}`,
+                    new Date(NOW.getTime() + 86_400_000),
+                    NOW,
+                );
+            }
+            const errors = jest
+                .spyOn(Logger.prototype, 'error')
+                .mockImplementation(() => undefined);
+            const purgeSpy = jest.spyOn(purge, 'purge');
+
+            const summary = await sweeper.sweep(NOW);
+
+            expect(purgeSpy).not.toHaveBeenCalled();
+            expect(await userExists(user.id)).toBe(true);
+            expect(summary).toMatchObject({ sandboxes: 0, failures: 1 });
+            expect(errors).toHaveBeenCalledWith(
+                expect.stringMatching(
+                    new RegExp(`sandbox ${user.id} is held.*purge failed 3 times`),
+                ),
             );
         });
     });

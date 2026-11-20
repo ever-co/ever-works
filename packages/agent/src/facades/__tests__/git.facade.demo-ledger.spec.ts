@@ -110,7 +110,80 @@ describe('GitFacadeService — demo repository ledger', () => {
             process.env.DEMO = 'true';
         });
 
-        it("createRepository records a repository it created, for the Work owner, with GitHub's id (R26)", async () => {
+        it.each([
+            [
+                'createRepository',
+                (plugin: PluginDouble) =>
+                    plugin.createRepository.mockImplementation(
+                        async (options: { name: string; organization?: string }) => ({
+                            ...repository(options.organization as string, options.name),
+                            id: '777000111',
+                        }),
+                    ),
+                (facade: GitFacadeService) =>
+                    facade.createRepository({ name: WEBSITE, organization: ORG }, OPTIONS),
+            ],
+            [
+                'createRepositoryFromTemplate',
+                (plugin: PluginDouble) =>
+                    plugin.createRepositoryFromTemplate.mockImplementation(
+                        async (
+                            _owner: string,
+                            _repo: string,
+                            options: { name: string; organization?: string },
+                        ) => ({
+                            ...repository(options.organization as string, options.name),
+                            id: '777000111',
+                        }),
+                    ),
+                (facade: GitFacadeService) =>
+                    facade.createRepositoryFromTemplate(
+                        'ever-works',
+                        'directory-template',
+                        { name: WEBSITE, organization: ORG },
+                        OPTIONS,
+                    ),
+            ],
+        ])(
+            '%s records the id the create itself reported, with no read-back',
+            async (_name, arrange, call) => {
+                const plugin = pluginDouble(null);
+                arrange(plugin);
+                const ledger = ledgerDouble();
+                const { facade } = makeFacade(plugin, ledger);
+
+                await call(facade);
+
+                expect(plugin.getRepositoryIdentity).not.toHaveBeenCalled();
+                expect(ledger.record).toHaveBeenCalledWith({
+                    sandboxUserId: SANDBOX_ID,
+                    owner: ORG,
+                    name: WEBSITE,
+                    githubId: 777000111,
+                });
+            },
+        );
+
+        it('reads the id back when the create reported a non-numeric one', async () => {
+            const plugin = pluginDouble(null);
+            plugin.createRepository.mockImplementation(
+                async (options: { name: string; organization?: string }) => ({
+                    ...repository(options.organization as string, options.name),
+                    id: 'R_kgDOabc',
+                }),
+            );
+            const ledger = ledgerDouble();
+            const { facade } = makeFacade(plugin, ledger);
+
+            await facade.createRepository({ name: WEBSITE, organization: ORG }, OPTIONS);
+
+            expect(plugin.getRepositoryIdentity).toHaveBeenCalledWith(ORG, WEBSITE, 'tok');
+            expect(ledger.record).toHaveBeenCalledWith(
+                expect.objectContaining({ githubId: GITHUB_ID }),
+            );
+        });
+
+        it("createRepository falls back to the plugin's read-back when the create reported no id (R26)", async () => {
             const plugin = pluginDouble(null);
             const ledger = ledgerDouble();
             const { facade } = makeFacade(plugin, ledger);

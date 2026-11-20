@@ -2,7 +2,11 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { DistributedTaskLockService } from '@ever-works/agent/cache';
 import { config } from '@ever-works/agent/config';
-import { DemoGithubRepoRepository, UserRepository } from '@ever-works/agent/database';
+import {
+    DemoGithubRepoRepository,
+    DemoUsageCounterRepository,
+    UserRepository,
+} from '@ever-works/agent/database';
 import { withDemoSandboxLock } from '@ever-works/agent/demo';
 import type { DemoGithubRepo, User } from '@ever-works/agent/entities';
 import { EverWorksGitProvider } from '@ever-works/agent/ever-works-providers';
@@ -12,7 +16,7 @@ import {
     demoRepoTargetRefusal,
     type DemoRepoDeletionRefusal,
 } from './demo-repo-deletion';
-import { DemoSandboxPurgeService } from './demo-sandbox-purge.service';
+import { DemoSandboxPurgeService, sandboxPurgeFailureKey } from './demo-sandbox-purge.service';
 
 /** What one sweep did. */
 export interface DemoSweepSummary {
@@ -37,6 +41,14 @@ export const DEMO_SWEEPER_BATCH = 20;
 export const DEMO_SWEEPER_MAX_PAGES = 10;
 /** A ledger row that failed this many times holds its sandbox for an operator. */
 export const DEMO_LEDGER_MAX_ATTEMPTS = 3;
+/** A sandbox whose purge failed this many times is held for an operator (design §5.2 step 5.3). */
+export const DEMO_PURGE_MAX_FAILURES = 3;
+/**
+ * How long a sandbox's count of failed purges lasts (`demo_usage_counters` window). Long enough
+ * to hold it for an operator; when it lapses the sandbox gets {@link DEMO_PURGE_MAX_FAILURES}
+ * fresh attempts.
+ */
+const PURGE_FAILURE_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
 /**
  * How long past its expiry a sandbox waits for an open generation before it is purged anyway.
  * A generation that started and never progressed is never closed by the stale-generation
@@ -71,14 +83,19 @@ type SandboxOutcome = 'purged' | 'pending' | 'deferred' | 'held';
  *      worker could still make a repository), unless the sandbox expired more than
  *      {@link DEMO_GENERATION_DEFERRAL_MAX_MS} ago — `DemoSandboxPurgeService` removes its
  *      Works, workspace and user;
- *   4. a sandbox with a row at {@link DEMO_LEDGER_MAX_ATTEMPTS} attempts is logged at error
- *      level with its id and left for an operator: no GitHub call is made for it again.
+ *   4. a sandbox with a row at {@link DEMO_LEDGER_MAX_ATTEMPTS} attempts, or whose purge failed
+ *      {@link DEMO_PURGE_MAX_FAILURES} times (counted in `demo_usage_counters`, so across runs
+ *      and restarts, and cleared by the purge that succeeds), is logged at error level with its
+ *      id and its last error and left for an operator: it takes no batch slot, and no GitHub
+ *      call or purge is made for it again.
  * A failure in one sandbox never stops the batch. The org is never listed and nothing is
  * deleted by pattern: GitHub is asked only about ledger rows.
  */
 @Injectable()
 export class DemoSandboxSweeperService {
     private readonly logger = new Logger(DemoSandboxSweeperService.name);
+    /** The last purge error of each sandbox, as this process saw it (for the held log). */
+    private readonly lastPurgeErrors = new Map<string, string>();
 
     constructor(
         private readonly users: UserRepository,
@@ -86,6 +103,7 @@ export class DemoSandboxSweeperService {
         private readonly everWorksGit: EverWorksGitProvider,
         private readonly purger: DemoSandboxPurgeService,
         private readonly taskLock: DistributedTaskLockService,
+        private readonly counters: DemoUsageCounterRepository,
     ) {}
 
     @Cron(DEMO_SWEEPER_CRON, { name: DEMO_SWEEPER_LOCK_KEY })
@@ -178,6 +196,19 @@ export class DemoSandboxSweeperService {
             return 'held';
         }
 
+        const purgeFailures = await this.counters.peek(sandboxPurgeFailureKey(user.id), now);
+        if (purgeFailures >= DEMO_PURGE_MAX_FAILURES) {
+            summary.failures += 1;
+            this.logger.error(
+                `demo sweep: sandbox ${user.id} is held for an operator — its purge failed ` +
+                    `${purgeFailures} times (last error: ${
+                        this.lastPurgeErrors.get(user.id) ??
+                        'logged when it was held; not seen since this process started'
+                    })`,
+            );
+            return 'held';
+        }
+
         for (const row of rows) {
             await this.sweepRepository(user, row, now, summary);
         }
@@ -198,10 +229,41 @@ export class DemoSandboxSweeperService {
             );
         }
 
-        await this.purger.purge(user);
+        try {
+            await this.purger.purge(user);
+        } catch (error) {
+            await this.recordPurgeFailure(user, messageOf(error), now);
+            throw error;
+        }
+        this.lastPurgeErrors.delete(user.id);
         summary.sandboxes += 1;
         this.logger.log(`demo sweep: sandbox ${user.id} (${user.username}) purged`);
         return 'purged';
+    }
+
+    /**
+     * Counts a failed purge of `user` (persisted, so a sandbox whose purge keeps failing is held
+     * for an operator after {@link DEMO_PURGE_MAX_FAILURES} and stops taking a batch slot).
+     */
+    private async recordPurgeFailure(user: User, error: string, now: Date): Promise<void> {
+        this.lastPurgeErrors.set(user.id, error);
+        try {
+            const failures = await this.counters.increment(
+                sandboxPurgeFailureKey(user.id),
+                new Date(now.getTime() + PURGE_FAILURE_WINDOW_MS),
+                now,
+            );
+            if (failures >= DEMO_PURGE_MAX_FAILURES) {
+                this.logger.error(
+                    `demo sweep: sandbox ${user.id} purge failed ${failures} times ` +
+                        `(last error: ${error}); held for an operator`,
+                );
+            }
+        } catch (countError) {
+            this.logger.error(
+                `demo sweep: sandbox ${user.id}: its failed purge could not be counted: ${messageOf(countError)}`,
+            );
+        }
     }
 
     /** Steps 1 and 2 for one ledger row of `user`. */

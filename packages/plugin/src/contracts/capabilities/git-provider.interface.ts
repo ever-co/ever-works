@@ -25,6 +25,13 @@ export interface GitCommitter {
 }
 
 export interface GitRepository {
+	/**
+	 * The provider's stable id of the repository (GitHub's numeric `id`, as a string), set by
+	 * `createRepository` / `createRepositoryFromTemplate` from the provider's own create
+	 * response for a repository the call CREATED. Absent on every other read, and on a
+	 * repository a create merely found. Optional.
+	 */
+	readonly id?: string;
 	readonly owner: string;
 	readonly name: string;
 	readonly fullName: string;

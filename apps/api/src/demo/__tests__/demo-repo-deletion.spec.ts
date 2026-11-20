@@ -10,7 +10,8 @@ import {
  * (design §5.2.5). `ever-works-cloud` also holds real customers' repositories, so a ledger row
  * of the sandbox is deleted only when all of these hold: the owner is exactly
  * `DEMO_GITHUB_ORG` (which must be set), the name starts with `DEMO_REPO_PREFIX`, and the live
- * GitHub id equals the id the ledger recorded when it recorded one. Anything else is refused.
+ * GitHub id equals the id the ledger recorded. A row with no recorded id is never deleted
+ * (design §5.2 step 5.1, ruling R28). Anything else is refused.
  * The "row of this sandbox" condition is structural: the sweeper only ever reads the
  * sandbox's own pending rows.
  */
@@ -23,10 +24,22 @@ describe('canDeleteLedgerRepo', () => {
         expect(canDeleteLedgerRepo(ROW, 812345678, CONFIG)).toEqual({ delete: true });
     });
 
-    it('deletes a row recorded without an id (a git-facade create) on owner and prefix alone', () => {
-        expect(canDeleteLedgerRepo({ ...ROW, githubId: null }, 5, CONFIG)).toEqual({
-            delete: true,
-        });
+    it.each([null, undefined])(
+        'refuses a row recorded without an id (%p): nothing pins the live repository to the one the sandbox created (R28)',
+        (githubId) => {
+            expect(
+                canDeleteLedgerRepo({ ...ROW, githubId: githubId as null }, 812345678, CONFIG),
+            ).toEqual({ delete: false, reason: 'no recorded id' });
+        },
+    );
+
+    it('refuses a row without an id even when its live id would match anything', () => {
+        for (const liveId of [1, 812345678, Number.MAX_SAFE_INTEGER]) {
+            expect(canDeleteLedgerRepo({ ...ROW, githubId: null }, liveId, CONFIG)).toEqual({
+                delete: false,
+                reason: 'no recorded id',
+            });
+        }
     });
 
     it.each([
@@ -65,7 +78,7 @@ describe('canDeleteLedgerRepo', () => {
     it.each([Number.NaN, 1.5, -0.5, Number.POSITIVE_INFINITY])(
         'refuses a live id that is not an integer (%p)',
         (liveId) => {
-            expect(canDeleteLedgerRepo({ ...ROW, githubId: null }, liveId, CONFIG)).toEqual({
+            expect(canDeleteLedgerRepo(ROW, liveId, CONFIG)).toEqual({
                 delete: false,
                 reason: 'id mismatch',
             });
@@ -123,6 +136,8 @@ describe('demoRepoTargetRefusal (the check before any GitHub call)', () => {
 
     it('never looks at the id (no live id is known yet)', () => {
         expect(demoRepoTargetRefusal({ ...ROW, githubId: 1 }, CONFIG)).toBeNull();
+        // A row with no id is still looked up: a repository already gone closes it.
+        expect(demoRepoTargetRefusal({ ...ROW, githubId: null }, CONFIG)).toBeNull();
     });
 });
 

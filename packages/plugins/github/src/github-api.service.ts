@@ -279,6 +279,38 @@ function labelNames(raw: unknown): readonly string[] | undefined {
 		.filter((name): name is string => typeof name === 'string' && name.length > 0);
 }
 
+/** The fields of a repository GitHub's create response describes. */
+interface CreatedRepositoryPayload {
+	readonly id?: number;
+	readonly owner: { readonly login: string };
+	readonly name: string;
+	readonly full_name: string;
+	readonly description?: string | null;
+	readonly default_branch: string;
+	readonly private: boolean;
+	readonly html_url: string;
+	readonly clone_url: string;
+}
+
+/**
+ * A repository a create made, as GitHub's own create response described it
+ * (`createInOrg`, `createForAuthenticatedUser`, `createUsingTemplate`), with its
+ * `id` — the one fact that pins the repository the call created.
+ */
+function createdRepository(data: CreatedRepositoryPayload): GitRepository {
+	return {
+		owner: data.owner.login,
+		name: data.name,
+		fullName: data.full_name,
+		description: data.description ?? undefined,
+		defaultBranch: data.default_branch,
+		isPrivate: data.private,
+		url: data.html_url,
+		cloneUrl: data.clone_url,
+		...(typeof data.id === 'number' ? { id: String(data.id) } : {})
+	};
+}
+
 /**
  * A repository's topics, as GitHub reported them (APW-03 T22 — the Blueprint
  * probe and website-template discovery read `ever-works-app-blueprint` off
@@ -1137,16 +1169,7 @@ export class GitHubApiService {
 			data = res.data;
 		}
 
-		return {
-			owner: data.owner.login,
-			name: data.name,
-			fullName: data.full_name,
-			description: data.description ?? undefined,
-			defaultBranch: data.default_branch,
-			isPrivate: data.private,
-			url: data.html_url,
-			cloneUrl: data.clone_url
-		};
+		return createdRepository(data);
 	}
 
 	/**
@@ -1699,7 +1722,7 @@ export class GitHubApiService {
 		const existing = await this.getRepository(targetOwner, options.name, token, baseUrl);
 		if (existing) return existing;
 
-		await octokit.rest.repos.createUsingTemplate({
+		const { data: generated } = await octokit.rest.repos.createUsingTemplate({
 			template_owner: templateOwner,
 			template_repo: templateRepo,
 			owner: targetOwner,
@@ -1709,7 +1732,13 @@ export class GitHubApiService {
 			include_all_branches: true
 		});
 
-		return this.getRepository(targetOwner, options.name, token, baseUrl);
+		// The generate call answers the new repository, its id included; the read-back can 404
+		// for a moment while GitHub finishes it. Neither the id nor the repository is lost then:
+		// the generated one is answered, and the caller waits for it as for any new repository.
+		const readBack = await this.getRepository(targetOwner, options.name, token, baseUrl);
+		const id = typeof generated?.id === 'number' ? String(generated.id) : undefined;
+		if (readBack) return id === undefined ? readBack : { ...readBack, id };
+		return generated?.full_name ? createdRepository(generated) : null;
 	}
 
 	async listBranches(owner: string, repo: string, token: string, baseUrl?: string): Promise<GitBranch[]> {

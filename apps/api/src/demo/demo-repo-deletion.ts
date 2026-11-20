@@ -11,8 +11,10 @@ import type { DemoGithubRepo } from '@ever-works/agent/entities';
  *      `DemoGithubRepoRepository.pendingForSandbox(sandbox)`, and checks the row's sandbox);
  *   2. its owner is exactly `DEMO_GITHUB_ORG`, which must be set;
  *   3. its name starts with `DEMO_REPO_PREFIX` (exactly, case included), which must be set;
- *   4. the live GitHub id equals the id the ledger recorded, when it recorded one (so a later,
- *      unrelated repository that took the name is never hit).
+ *   4. the ledger recorded the repository's GitHub id, and the live id equals it (so a later,
+ *      unrelated repository that took the name is never hit). A row with no recorded id is
+ *      never deleted (design §5.2 step 5.1, ruling R28): nothing would tell the repository
+ *      the sandbox created from one another account made under the same name since.
  * Pure: no I/O, the configuration is passed in.
  */
 
@@ -27,6 +29,7 @@ export type DemoRepoDeletionRefusal =
     | 'DEMO_REPO_PREFIX not set'
     | 'owner mismatch'
     | 'name prefix mismatch'
+    | 'no recorded id'
     | 'id mismatch';
 
 export type DemoRepoDeletionVerdict =
@@ -67,8 +70,9 @@ export function canDeleteLedgerRepo(
     const refusal = demoRepoTargetRefusal(row, demo);
     if (refusal) return { delete: false, reason: refusal };
     if (!Number.isSafeInteger(liveId)) return { delete: false, reason: 'id mismatch' };
-    if (row.githubId !== null && row.githubId !== undefined && row.githubId !== liveId) {
-        return { delete: false, reason: 'id mismatch' };
+    if (row.githubId === null || row.githubId === undefined) {
+        return { delete: false, reason: 'no recorded id' };
     }
+    if (row.githubId !== liveId) return { delete: false, reason: 'id mismatch' };
     return { delete: true };
 }
