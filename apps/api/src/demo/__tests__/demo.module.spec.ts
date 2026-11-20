@@ -37,7 +37,7 @@ jest.mock('@ever-works/agent/tasks-domain', () => ({
 }));
 
 import { Inject, Injectable, Module, Optional } from '@nestjs/common';
-import { APP_FILTER } from '@nestjs/core';
+import { APP_FILTER, APP_GUARD } from '@nestjs/core';
 import { Test, type TestingModule } from '@nestjs/testing';
 import { TypeOrmModule, getRepositoryToken } from '@nestjs/typeorm';
 import type { Repository } from 'typeorm';
@@ -54,6 +54,7 @@ import { DemoSandboxSeederService } from '../seed/demo-sandbox-seeder.service';
 import { DemoAiQuotaService } from '../demo-ai-quota.service';
 import { DemoController } from '../demo.controller';
 import { DemoErrorFilter } from '../demo-error.filter';
+import { DemoRestrictionsGuard } from '../demo-restrictions.guard';
 
 /**
  * Platform demo mode — `DemoModule.register()` against a REAL Nest container.
@@ -203,6 +204,15 @@ describe('DemoModule', () => {
             const providers = DemoModule.register().providers ?? [];
 
             expect(providers).toContainEqual({ provide: APP_FILTER, useClass: DemoErrorFilter });
+        });
+
+        it('registers DemoRestrictionsGuard as a global guard', () => {
+            const providers = DemoModule.register().providers ?? [];
+
+            expect(providers).toContainEqual({
+                provide: APP_GUARD,
+                useClass: DemoRestrictionsGuard,
+            });
         });
 
         it('registers the POST /api/auth/demo controller', () => {
