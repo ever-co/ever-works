@@ -24,7 +24,12 @@ export const MEMBERSHIP_RESYNC_MAX_PAGES = 1_000;
 
 /** What one resync did, a machine code. */
 export type MembershipResyncOutcome =
-    'switched_off' | 'not_connected' | 'done' | 'module_disabled' | 'failed' | 'lease_lost';
+    | 'switched_off'
+    | 'not_connected'
+    | 'done'
+    | 'module_disabled'
+    | 'failed'
+    | 'lease_lost';
 
 /** What reading the list of one link did. */
 type LinkOutcome = 'read' | 'link_unknown' | 'module_disabled' | 'failed' | 'lease_lost';
@@ -100,7 +105,8 @@ export class EverConnectMembershipResyncService
         if ((await this.connection.connection()).status !== 'active') return 'not_connected';
         const client = await this.connection.client();
         if (!client) return 'not_connected';
-        // A `410` that arrives while this runs makes it owed again.
+        // Cleared before the first read: a `410` that arrives while this runs sets
+        // it again, so that resync is not lost.
         this.owed = false;
 
         const counts = new Map<string, number>();
@@ -145,6 +151,9 @@ export class EverConnectMembershipResyncService
             );
             return 'failed';
         }
+        // Read again: a later `module_disabled` (the role feed switched off again)
+        // is said again.
+        this.disabledLogged = false;
         this.logger.log(`ever_connect.membership.resync ${summary(counts)}`);
         return 'done';
     }

@@ -351,10 +351,18 @@ describe('Ever Connect — membership resync', () => {
 
             expect(client.call).toHaveBeenCalledTimes(2);
             expect(flow.addMemberForPlatform).not.toHaveBeenCalled();
-            expect(
-                log.mock.calls.filter(([message]) => String(message).includes('module_disabled')),
-            ).toHaveLength(1);
+            const said = () =>
+                log.mock.calls.filter(([message]) => String(message).includes('module_disabled'));
+            expect(said()).toHaveLength(1);
             expect(resync.isOwed()).toBe(false);
+
+            // Switched on, then off again on Ever Platform: said again.
+            client.call
+                .mockResolvedValueOnce(pages([])[0])
+                .mockRejectedValueOnce(new ProblemError(404, 'module_disabled'));
+            expect(await resync.resync()).toBe('done');
+            expect(await resync.resync()).toBe('module_disabled');
+            expect(said()).toHaveLength(2);
         });
 
         it('a link Ever Platform does not know as active is skipped; the others are read', async () => {

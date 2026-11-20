@@ -70,10 +70,10 @@ export class EverConnectFeedService {
         } catch (error) {
             const failure = platformFailure(error);
             if (failure.kind === 'problem' && failure.status === 410) {
-                // The position is past what Ever Platform keeps: read the state
-                // again (the integration states now; a part that keeps a copy of
-                // other state, such as the membership sync, in its own round),
-                // then continue from where it says.
+                // The position is past what Ever Platform keeps: tell the parts
+                // that keep a copy of other state (the membership sync, which
+                // reads it again in its own round), read the integration states
+                // again now, then continue from where it says.
                 this.extensions?.feedResyncRequired();
                 await this.integrations.refresh();
                 const lastId = (error as { lastId?: string }).lastId;
