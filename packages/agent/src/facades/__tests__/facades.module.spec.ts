@@ -296,6 +296,11 @@ describe('FacadesModule + barrel re-exports', () => {
                     'ProviderNotFoundError',
                     'ScreenshotFacadeError',
                     'ScreenshotFacadeService',
+                    // Signed public URLs for bytes-only screenshot providers (Gotenberg).
+                    'MAX_SIGNED_IMAGE_SEGMENT_LENGTH',
+                    'SCREENSHOT_IMAGE_ROUTE',
+                    'ScreenshotImageUrlSigner',
+                    'screenshotContentType',
                     'SearchFacadeError',
                     'SearchFacadeService',
                     // PR #1019 — Skills + Tasks facades.

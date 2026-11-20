@@ -35,10 +35,28 @@ const describeE2E = E2E_PATH ? describe : describe.skip;
 const NAMESPACE = `everworks-e2e-${Date.now()}`;
 const WORK_SLUG = 'e2e-site';
 const WORK_ID = 'e2e-test-work';
-// Tiny image with a working `/` endpoint for the readiness probe.
-// `nginxinc/nginx-unprivileged` runs as a non-root user, matching what
-// the platform-rendered Deployment expects.
+// Tiny image that runs as a non-root user, matching what the platform-rendered
+// Deployment expects. It serves `/` only, so `pointProbesAtRoot` moves the
+// rendered probes off the directory template's `/api/health`.
 const IMAGE = 'nginxinc/nginx-unprivileged:1.27-alpine';
+
+/**
+ * The renderer probes `/api/health`, a route of the directory template that the
+ * nginx fixture lacks (it answers 404, so the pod never turns Ready). The unit
+ * suite asserts the real probe paths; this suite checks that a rendered
+ * Deployment converges on a real kubelet, so it keeps every probe setting
+ * except the path.
+ */
+function pointProbesAtRoot(deployment: Record<string, unknown>): void {
+	type Probe = { httpGet?: { path?: string } };
+	type Container = { startupProbe?: Probe; readinessProbe?: Probe; livenessProbe?: Probe };
+	const spec = deployment.spec as { template: { spec: { containers: Container[] } } };
+	for (const container of spec.template.spec.containers) {
+		for (const probe of [container.startupProbe, container.readinessProbe, container.livenessProbe]) {
+			if (probe?.httpGet) probe.httpGet.path = '/';
+		}
+	}
+}
 
 describeE2E('k8s plugin e2e — against real cluster', () => {
 	let kubeconfig: string;
@@ -103,6 +121,7 @@ describeE2E('k8s plugin e2e — against real cluster', () => {
 			runAsUser: 101,
 			runAsGroup: 101
 		});
+		pointProbesAtRoot(deployment);
 		const service = buildService({
 			workId: WORK_ID,
 			workSlug: WORK_SLUG,

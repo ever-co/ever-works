@@ -32,6 +32,14 @@ export type { SearchFacadeOptions } from '@ever-works/plugin';
 
 // Screenshot Facade
 export { ScreenshotFacadeService, ScreenshotFacadeError } from './screenshot.facade';
+export type { SignedScreenshotImageResult } from './screenshot.facade';
+export {
+    ScreenshotImageUrlSigner,
+    SCREENSHOT_IMAGE_ROUTE,
+    MAX_SIGNED_IMAGE_SEGMENT_LENGTH,
+    screenshotContentType,
+} from './screenshot-image-url';
+export type { SignedScreenshotImage } from './screenshot-image-url';
 export {
     BrowserAutomationFacadeService,
     BrowserAutomationFacadeError,

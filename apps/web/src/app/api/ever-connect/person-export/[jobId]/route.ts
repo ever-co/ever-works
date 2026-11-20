@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { API_URL, ROUTES } from '@/lib/constants';
+import { API_URL, REDIRECT_SEARCH_PARAM, ROUTES } from '@/lib/constants';
 import { bffProxy } from '@/lib/api/bff-proxy';
 import { getAuthAccessCookie } from '@/lib/auth/cookies';
 
@@ -60,9 +60,26 @@ const download = bffProxy<RouteContext>(
 
 export async function GET(request: NextRequest, ctx: RouteContext): Promise<Response> {
     if (!(await getAuthAccessCookie())) {
-        return NextResponse.redirect(new URL(ROUTES.AUTH_LOGIN, request.url));
+        const { jobId } = await ctx.params;
+        if (!JOB_ID.test(jobId)) return notFound();
+        return signIn(jobId);
     }
     return download(request, ctx);
+}
+
+/**
+ * To the sign-in page, which brings the person back to this address once they are signed in
+ * (`redirect_uri`, a path of this site). `Location` is a path, sent as given: behind the
+ * ingress the request's own URL names the pod (`https://<pod>:3000/...`), never the public
+ * address, so an absolute address built from it would send the person nowhere.
+ */
+function signIn(jobId: string): Response {
+    const back = `/api/ever-connect/person-export/${jobId}`;
+    const query = new URLSearchParams([[REDIRECT_SEARCH_PARAM, back]]);
+    return new NextResponse(null, {
+        status: 307,
+        headers: { ...NO_STORE, Location: `${ROUTES.AUTH_LOGIN}?${query.toString()}` },
+    });
 }
 
 function notFound(): Response {

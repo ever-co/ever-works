@@ -126,15 +126,30 @@ async function checkAvailability(
     };
 }
 
+/**
+ * The auto-enabled system default (self-hosted Gotenberg), configured only
+ * where the stack sets PLUGIN_GOTENBERG_BASE_URL.
+ */
+const SYSTEM_DEFAULT_ID = 'gotenberg';
+
+/**
+ * POST a capture / get-url. These calls exercise ScreenshotOne's builder and
+ * error envelopes, so a call naming no provider and no Work is pinned to it:
+ * otherwise a stack WITH Gotenberg set up would route it there.
+ */
 async function postScreenshot(
     request: APIRequestContext,
     token: string,
     op: 'capture' | 'get-url',
     data: Record<string, unknown>,
 ): Promise<{ status: number; body: Record<string, unknown> }> {
+    const pinned =
+        data.providerOverride === undefined && data.workId === undefined
+            ? { ...data, providerOverride: 'screenshotone' }
+            : data;
     const res = await request.post(`${API_BASE}/api/screenshot/${op}`, {
         headers: authedHeaders(token),
-        data,
+        data: pinned,
     });
     return {
         status: res.status(),
@@ -252,9 +267,15 @@ test.describe('Screenshot capture/get-url — final deep: bounds, type guards, S
     }, testInfo) => {
         const token = await freshToken(request);
         await enableConfigured(request, token, uniqueSuffix(testInfo.title));
+        const { body } = await checkAvailability(request, token);
+        test.skip(
+            body.providers.some((p) => p.id === SYSTEM_DEFAULT_ID && p.configured),
+            'the system default (Gotenberg) is set up here, so "no override" routes to it',
+        );
 
         // An empty string must NOT be treated as an unknown provider (which would
-        // be a non-2xx) — it falls back to the configured default (screenshotone).
+        // be a non-2xx) — it falls back to the provider in use: with the system
+        // default not set up on this stack, the user's ScreenshotOne.
         const res = await postScreenshot(request, token, 'get-url', {
             url: 'https://example.com',
             providerOverride: '',
@@ -370,7 +391,7 @@ test.describe('Screenshot capture/get-url — final deep: bounds, type guards, S
         ).toContain('screenshotone');
     });
 
-    test('check-availability activeProvider is the SAME option as the configured default (id + icon)', async ({
+    test('check-availability activeProvider is the SAME option as in the list, and the one that will be used (id + icon)', async ({
         request,
     }, testInfo) => {
         const token = await freshToken(request);
@@ -381,14 +402,23 @@ test.describe('Screenshot capture/get-url — final deep: bounds, type guards, S
         const active = body.activeProvider!;
         const inList = body.providers.find((p) => p.id === active.id);
         expect(inList, 'activeProvider also appears in the providers list').toBeTruthy();
-        // The default screenshotone is the active one and is flagged default.
-        expect(active.id, 'screenshotone is active').toBe('screenshotone');
-        expect(inList!.isDefault, 'the active provider is the default').toBe(true);
         expect(inList!.configured, 'the active provider is configured').toBe(true);
-        // The icon descriptor is exposed verbatim from the manifest.
-        expect(active.icon?.type, 'icon type lucide').toBe('lucide');
-        expect(active.icon?.value, 'icon value Camera').toBe('Camera');
-        expect(active.icon?.backgroundColor, 'icon background colour pinned').toBe('#4f46e5');
+
+        // The system default (self-hosted Gotenberg) is active where it is set
+        // up; elsewhere the user's own ScreenshotOne is, without being the default.
+        const systemDefault = body.providers.find((p) => p.id === SYSTEM_DEFAULT_ID);
+        expect(active.id, 'the provider that will be used is active').toBe(
+            systemDefault?.configured ? SYSTEM_DEFAULT_ID : 'screenshotone',
+        );
+        if (active.id === 'screenshotone') {
+            expect(inList!.isDefault, 'the opt-in provider is not the default').toBe(
+                !systemDefault,
+            );
+            // The icon descriptor is exposed verbatim from the manifest.
+            expect(active.icon?.type, 'icon type lucide').toBe('lucide');
+            expect(active.icon?.value, 'icon value Camera').toBe('Camera');
+            expect(active.icon?.backgroundColor, 'icon background colour pinned').toBe('#4f46e5');
+        }
     });
 
     test('capture FAILURE envelope carries ONLY {status,message} — no imageUrl/cacheUrl/imageBase64 keys', async ({

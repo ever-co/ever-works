@@ -670,13 +670,20 @@ test.describe('SEC PIN: screenshot workId authz gaps (EW-711 #30)', () => {
         }
 
         // Ordering contrast: the byte-identical request WITHOUT the workId
-        // falls through to the provider gate.
-        const unscoped = await request.post(`${API_BASE}/api/screenshot/get-url`, {
+        // falls through to the provider gate — which exists only where no
+        // provider is set up for this fresh user (the self-hosted Gotenberg
+        // system default counts once PLUGIN_GOTENBERG_BASE_URL is set).
+        const personal = await request.get(`${API_BASE}/api/screenshot/check-availability`, {
             headers,
-            data: { url: 'https://example.com' },
         });
-        expect(unscoped.status(), 'un-scoped get-url → provider gate 400').toBe(400);
-        expect((await jsonOf(unscoped)).message).toBe('No screenshot provider configured');
+        if (!(await jsonOf(personal)).available) {
+            const unscoped = await request.post(`${API_BASE}/api/screenshot/get-url`, {
+                headers,
+                data: { url: 'https://example.com' },
+            });
+            expect(unscoped.status(), 'un-scoped get-url → provider gate 400').toBe(400);
+            expect((await jsonOf(unscoped)).message).toBe('No screenshot provider configured');
+        }
 
         // Anon get-url (check-availability + capture 401s are pinned by
         // flow-plugin-screenshot.spec.ts — get-url was the gap).
