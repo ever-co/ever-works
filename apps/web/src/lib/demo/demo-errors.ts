@@ -29,32 +29,3 @@ export function demoErrorKeyFromText(text: string | null | undefined): DemoError
         return null;
     }
 }
-
-/**
- * The text a chat stream carries for a failed model call. The AI SDK masks a stream error as
- * "An error occurred." unless the route's `onError` returns something else, so the route keeps
- * the API's status, `code` and `retryAfterMs` as JSON for demo codes and leaves every other
- * error as the SDK's own default.
- */
-export const CHAT_STREAM_DEFAULT_ERROR = 'An error occurred.';
-
-export function chatStreamErrorText(error: unknown): string {
-    const { statusCode, responseBody } = (error ?? {}) as {
-        statusCode?: unknown;
-        responseBody?: unknown;
-    };
-    if (typeof responseBody !== 'string' || !demoErrorKeyFromText(responseBody)) {
-        return CHAT_STREAM_DEFAULT_ERROR;
-    }
-    const body = JSON.parse(responseBody) as {
-        statusCode?: unknown;
-        code?: unknown;
-        error?: { code?: unknown };
-        retryAfterMs?: unknown;
-    };
-    return JSON.stringify({
-        statusCode: typeof statusCode === 'number' ? statusCode : body.statusCode,
-        code: body.code ?? body.error?.code,
-        ...(typeof body.retryAfterMs === 'number' && { retryAfterMs: body.retryAfterMs }),
-    });
-}

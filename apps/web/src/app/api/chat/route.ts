@@ -7,7 +7,7 @@ import { API_URL } from '@/lib/constants';
 import { getAuthAccessCookie } from '@/lib/auth/cookies';
 import { saveConversationMessages, type MessageUsage } from '@/lib/ai/persistence';
 import { applyBffWorkspaceScope } from '@/lib/api/bff-scope';
-import { chatStreamErrorText } from '@/lib/demo/demo-errors';
+import { chatStreamErrorText } from '@/lib/demo/chat-stream-error';
 
 export const maxDuration = 60;
 
