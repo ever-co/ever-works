@@ -130,6 +130,18 @@ import { fleetRunOrganizationPin } from '../auth/fleet-run-scope';
 import { ZeroFrictionFunnelService } from '@ever-works/agent/services';
 import { ZERO_FRICTION_FUNNEL_EVENTS } from '@ever-works/contracts/telemetry';
 import { buildSelectedProviders } from '@ever-works/plugin';
+import { GenerateStatusType } from '@ever-works/contracts/api';
+
+/**
+ * Whether a quick-create retry of the same funnel may reuse an earlier Work
+ * with this generation status: one whose generation never started (no status)
+ * or ended without content being generated (error, cancelled).
+ */
+function isQuickCreateRetryTarget(status: string | null | undefined): boolean {
+    return (
+        !status || status === GenerateStatusType.ERROR || status === GenerateStatusType.CANCELLED
+    );
+}
 // EW-P2-4 — validates the works-list `kind` filter.
 import { getWorkCapabilities, WORK_KINDS } from '@ever-works/contracts';
 import { AuthenticatedUser } from '@src/auth/types/auth.types';
@@ -496,17 +508,19 @@ export class WorksController {
         const user = await this.authService.getUser(auth.userId);
 
         // 0. A retry of the same funnel — another "Generate now" click after a
-        //    start was refused — reuses the Work that funnel already created
-        //    while its generation never started. Every click sends a fresh
-        //    slug, so creating again left one more Work AND one more managed
-        //    repository behind per click, and after three the visitor hit the
-        //    Ever Works Deploy quota (3 active Works) and could not go on. A
-        //    Work whose generation started (or finished) is not reused.
+        //    start was refused or a run failed — reuses the Work that funnel
+        //    already created. Every click sends a fresh slug, so creating again
+        //    left one more Work AND one more managed repository behind per
+        //    click, and after three the visitor hit the Ever Works Deploy quota
+        //    (3 active Works) and could not go on. Reused: a Work whose
+        //    generation never started (a refused start sets no status) or
+        //    ended in error / was cancelled. Not reused: one generating now or
+        //    already generated — a new Work is a new request.
         const earlier = dto.correlationId
             ? await this.workRepository.findLatestByUserAndCorrelationId(user.id, dto.correlationId)
             : null;
         let work: { id: string; slug: string; name: string };
-        if (earlier && !earlier.generateStatus?.status) {
+        if (earlier && isQuickCreateRetryTarget(earlier.generateStatus?.status)) {
             work = earlier;
         } else {
             work = await this.createQuickCreateWork(dto, user);

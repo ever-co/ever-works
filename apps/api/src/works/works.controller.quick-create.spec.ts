@@ -371,21 +371,61 @@ describe('WorksController.quickCreateWork — a retry reuses the Work instead of
         expect(funnel.emit).not.toHaveBeenCalled();
     });
 
-    it('creates a new Work when the earlier one already started a generation', async () => {
-        const { controller, createWork, generateItems } = makeController({
-            retryTarget: {
-                id: 'w-0',
-                slug: 'ai-coding-assistants-a1b2c3',
-                name: 'AI Coding Assistants',
-                userId: 'user-1',
-                generateStatus: { status: 'generated' },
-            },
-        });
+    it.each(['error', 'cancelled'])(
+        'reuses the Work when its earlier generation ended %s (a retry runs it again on the same Work)',
+        async (status) => {
+            const { controller, createWork, generateItems } = makeController({
+                retryTarget: {
+                    id: 'w-0',
+                    slug: 'ai-coding-assistants-a1b2c3',
+                    name: 'AI Coding Assistants',
+                    userId: 'user-1',
+                    generateStatus: { status },
+                },
+            });
+
+            await (controller as any).quickCreateWork(auth, retryDto);
+
+            expect(createWork).not.toHaveBeenCalled();
+            expect(generateItems.mock.calls[0][0]).toBe('w-0');
+        },
+    );
+
+    it.each(['generating', 'generated'])(
+        'creates a new Work when the earlier one is %s',
+        async (status) => {
+            const { controller, createWork, generateItems } = makeController({
+                retryTarget: {
+                    id: 'w-0',
+                    slug: 'ai-coding-assistants-a1b2c3',
+                    name: 'AI Coding Assistants',
+                    userId: 'user-1',
+                    generateStatus: { status },
+                },
+            });
+
+            await (controller as any).quickCreateWork(auth, retryDto);
+
+            expect(createWork).toHaveBeenCalledTimes(1);
+            expect(generateItems.mock.calls[0][0]).toBe('w-1');
+        },
+    );
+
+    it('a fresh create still persists the correlationId and emits the work-created funnel step', async () => {
+        const { controller, createWork, funnel } = makeController({});
 
         await (controller as any).quickCreateWork(auth, retryDto);
 
-        expect(createWork).toHaveBeenCalledTimes(1);
-        expect(generateItems.mock.calls[0][0]).toBe('w-1');
+        expect(createWork.mock.calls[0][0].correlationId).toBe('corr-1');
+        expect(funnel.emit).toHaveBeenCalledWith(
+            expect.objectContaining({
+                event: 'zero_friction.work_created',
+                funnelStep: 4,
+                correlationId: 'corr-1',
+                workId: 'w-1',
+                viaQuickCreate: true,
+            }),
+        );
     });
 
     it('does not look for an earlier Work without a correlationId', async () => {
