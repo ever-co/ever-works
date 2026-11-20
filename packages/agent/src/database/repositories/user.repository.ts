@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { FindOneOptions, LessThan, Repository, EntityManager } from 'typeorm';
+import { FindOneOptions, LessThan, MoreThan, Not, Repository, EntityManager } from 'typeorm';
 import { User } from '../../entities/user.entity';
 import { config } from '../../config';
 import { randomUUID } from 'node:crypto';
@@ -265,11 +265,41 @@ export class UserRepository {
         });
     }
 
+    /**
+     * Expired anonymous users for the nightly cleanup. Demo sandboxes
+     * (`registrationProvider = 'demo'`) are excluded: the demo sweeper deletes
+     * them itself, after their GitHub repos, so this cleanup must not race it.
+     */
     async findExpiredAnonymous(now: Date = new Date()): Promise<User[]> {
         return await this.repository.find({
             where: {
                 isAnonymous: true,
                 anonymousExpiresAt: LessThan(now),
+                registrationProvider: Not('demo'),
+            },
+        });
+    }
+
+    /** Platform demo mode: expired demo sandboxes, oldest first, for the demo sweeper. */
+    async findExpiredDemo(now: Date, limit: number): Promise<User[]> {
+        return await this.repository.find({
+            where: {
+                isAnonymous: true,
+                registrationProvider: 'demo',
+                anonymousExpiresAt: LessThan(now),
+            },
+            order: { anonymousExpiresAt: 'ASC', id: 'ASC' },
+            take: limit,
+        });
+    }
+
+    /** Platform demo mode: demo sandboxes that have not expired yet (capacity check). */
+    async countActiveDemo(now: Date): Promise<number> {
+        return await this.repository.count({
+            where: {
+                isAnonymous: true,
+                registrationProvider: 'demo',
+                anonymousExpiresAt: MoreThan(now),
             },
         });
     }

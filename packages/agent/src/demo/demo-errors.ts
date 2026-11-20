@@ -33,6 +33,13 @@ export class DemoFeatureDisabledError extends DemoError {
     }
 }
 
+/** The demo has no room for another sandbox right now (`DEMO_FULL`, 503). */
+export class DemoFullError extends DemoError {
+    constructor() {
+        super('The demo is full right now — please try again in a few minutes.', 'DEMO_FULL', 503);
+    }
+}
+
 /** The sandbox's or the instance's daily AI requests are used up (`DEMO_AI_QUOTA`, 429). */
 export class DemoQuotaExceededError extends DemoError {
     constructor(readonly scope: 'sandbox' | 'day') {

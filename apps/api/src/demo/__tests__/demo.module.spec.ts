@@ -13,6 +13,7 @@ import { DemoUsageCounter, User } from '@ever-works/agent/entities';
 import { DEMO_AI_QUOTA, type DemoAiQuotaPort } from '@ever-works/agent/demo';
 import { DemoModule } from '../demo.module';
 import { DemoAiQuotaService } from '../demo-ai-quota.service';
+import { DemoController } from '../demo.controller';
 import { DemoErrorFilter } from '../demo-error.filter';
 
 /**
@@ -158,6 +159,10 @@ describe('DemoModule', () => {
             const providers = DemoModule.register().providers ?? [];
 
             expect(providers).toContainEqual({ provide: APP_FILTER, useClass: DemoErrorFilter });
+        });
+
+        it('registers the POST /api/auth/demo controller', () => {
+            expect(DemoModule.register().controllers).toEqual([DemoController]);
         });
 
         it('refuses to start when the demo org does not match the git org', async () => {
