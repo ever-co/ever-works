@@ -38,7 +38,7 @@ import type { OAuthConnectionInfo } from '@/lib/api/plugins-capabilities/oauth';
 import type { GitProviderConnectionInfo } from '@/lib/api/plugins-capabilities/git-providers';
 import type { PluginDeviceAuthStatus } from '@/lib/api/plugins-capabilities/device-auth';
 import { quickCreateSlugFromPrompt } from '@/lib/works/work-slug.shared';
-import { readPromptHandoff } from './prompt-handoff';
+import { readPromptHandoff, workKindLabel, type HandoffWorkKind } from './prompt-handoff';
 import type { StartedWork } from './generation-console';
 
 export interface EverWorksOnboardingWizardProps {
@@ -160,7 +160,7 @@ export function EverWorksOnboardingWizard({
         const handoff = readPromptHandoff(window.location.href);
         if (!handoff) return;
 
-        startQuickStart(handoff.prompt);
+        startQuickStart(handoff.prompt, handoff.kind);
 
         // Strip what the hand-off consumed (prompt, corrId, type) so a reload
         // doesn't re-trigger it and the prompt doesn't leak to analytics
@@ -234,6 +234,8 @@ export function EverWorksOnboardingWizard({
         }
     };
 
+    const handoffKind = flow.handoffKind as HandoffWorkKind | undefined;
+
     // EW-617 G4: anonymous + claimed users alike can one-click finish. The
     // endpoint reads provider defaults from onboarding state.
     const quickCreate = async (prompt: string): Promise<QuickCreateStarted> => {
@@ -264,6 +266,8 @@ export function EverWorksOnboardingWizard({
             organization: false,
             deployProvider: flow.state.deploy.choice,
             storageProvider: flow.state.storage.choice,
+            // The chip picked on the home page ("Directory Website" → directory).
+            ...(handoffKind ? { kind: handoffKind } : {}),
             captchaToken: captchaToken || undefined,
             correlationId,
         });
@@ -343,6 +347,7 @@ export function EverWorksOnboardingWizard({
                                     prompt={flow.state.prompt}
                                     onPromptChange={flow.setPrompt}
                                     intro="Review or tweak your prompt, then generate. We create the Work with the setup on the left and build its content — you can follow every step below."
+                                    kindLabel={workKindLabel(handoffKind)}
                                     onQuickCreate={flow.state.prompt ? quickCreate : undefined}
                                     {...runHandlers}
                                 />
@@ -356,6 +361,7 @@ export function EverWorksOnboardingWizard({
                                     deviceAuthStatuses={deviceAuthStatuses}
                                     isStatusLoading={isStatusLoading}
                                     quickCreate={quickCreate}
+                                    kindLabel={workKindLabel(handoffKind)}
                                     runHandlers={runHandlers}
                                     onPluginConnected={(pluginId) =>
                                         void refreshConnections(pluginId)
@@ -643,6 +649,7 @@ function StepBody({
     deviceAuthStatuses,
     isStatusLoading,
     quickCreate,
+    kindLabel,
     runHandlers,
     onPluginConnected,
 }: {
@@ -654,6 +661,7 @@ function StepBody({
     deviceAuthStatuses: Record<string, PluginDeviceAuthStatus | null>;
     isStatusLoading: boolean;
     quickCreate: (prompt: string) => Promise<QuickCreateStarted>;
+    kindLabel?: string;
     runHandlers: RunHandlers;
     onPluginConnected: (pluginId: string) => void;
 }) {
@@ -827,6 +835,7 @@ function StepBody({
                     prompt={flow.state.prompt}
                     onPromptChange={flow.setPrompt}
                     desktopChoice={flow.state.desktop?.choice}
+                    kindLabel={kindLabel}
                     onQuickCreate={flow.state.prompt ? quickCreate : undefined}
                     {...runHandlers}
                 />
