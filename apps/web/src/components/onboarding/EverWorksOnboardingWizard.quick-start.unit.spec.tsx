@@ -4,14 +4,13 @@ import userEvent from '@testing-library/user-event';
 import { ONBOARDING_DEFAULT_STATE } from '@ever-works/contracts/api';
 import type { OnboardingCatalogResponse, OnboardingStateResponse } from '@ever-works/contracts/api';
 
-const { push, quickCreateWorkAction, completeOnboarding, getWorkForStatusRefresh } = vi.hoisted(
-    () => ({
+const { push, quickCreateWorkAction, completeOnboarding, getWorkGenerationStatusAction } =
+    vi.hoisted(() => ({
         push: vi.fn(),
         quickCreateWorkAction: vi.fn(),
         completeOnboarding: vi.fn(),
-        getWorkForStatusRefresh: vi.fn(),
-    }),
-);
+        getWorkGenerationStatusAction: vi.fn(),
+    }));
 
 vi.mock('next-intl', () => ({
     useTranslations: () => (key: string) => key,
@@ -48,7 +47,7 @@ vi.mock('@/app/actions/works/quick-create', () => ({ quickCreateWorkAction }));
 vi.mock('@/app/actions/telemetry/funnel', () => ({
     emitFunnelEventAction: vi.fn().mockResolvedValue(undefined),
 }));
-vi.mock('@/app/actions/dashboard/works', () => ({ getWorkForStatusRefresh }));
+vi.mock('@/app/actions/onboarding/generation-status', () => ({ getWorkGenerationStatusAction }));
 // The heavy steps are not under test here; they only have to exist.
 vi.mock('./steps/RosterStep', () => ({ RosterStep: () => <div>roster</div> }));
 vi.mock('./steps/ProfileStep', () => ({ ProfileStep: () => <div>profile</div> }));
@@ -123,7 +122,7 @@ beforeEach(() => {
     push.mockReset();
     quickCreateWorkAction.mockReset();
     completeOnboarding.mockReset();
-    getWorkForStatusRefresh.mockReset();
+    getWorkGenerationStatusAction.mockReset();
 });
 
 afterEach(() => {
@@ -151,6 +150,10 @@ describe('EverWorksOnboardingWizard — a visitor arriving with a prompt from ev
         expect(defaults.textContent).toContain('Ever Works AI');
         expect(defaults.textContent).toContain('Ever Works Git');
         expect(defaults.textContent).toContain('Ever Works Cloud');
+        // Self-hosted installs have no ever.works home page; the copy must not assume one.
+        expect(screen.getByTestId('onboarding-quick-start').textContent).not.toMatch(
+            /ever\.works/i,
+        );
     });
 
     it('keeps the platform default Work kind: the home-page type is not sent', async () => {
@@ -162,7 +165,10 @@ describe('EverWorksOnboardingWizard — a visitor arriving with a prompt from ev
                 generation: { historyId: 'h-1', message: 'Generation started' },
             },
         });
-        getWorkForStatusRefresh.mockResolvedValue({ generateStatus: { status: 'generating' } });
+        getWorkGenerationStatusAction.mockResolvedValue({
+            ok: true,
+            status: { status: 'generating' },
+        });
         renderWizard();
 
         // Mapping the chip onto a Work kind needs product sign-off (item
@@ -205,8 +211,9 @@ describe('EverWorksOnboardingWizard — a visitor arriving with a prompt from ev
             },
         });
         // The shape `GET /api/works/:id` answers while a run is going.
-        getWorkForStatusRefresh.mockResolvedValue({
-            generateStatus: {
+        getWorkGenerationStatusAction.mockResolvedValue({
+            ok: true,
+            status: {
                 status: 'generating',
                 step: 'items',
                 stepName: 'Generate items',
@@ -242,7 +249,7 @@ describe('EverWorksOnboardingWizard — a visitor arriving with a prompt from ev
         expect(log.textContent).toContain('Generated 12 items');
         expect(log.textContent).toContain('Screenshots are disabled for this run');
         expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '40');
-        expect(getWorkForStatusRefresh).toHaveBeenCalledWith('w-1');
+        expect(getWorkGenerationStatusAction).toHaveBeenCalledWith('w-1');
         await waitFor(() => expect(completeOnboarding).toHaveBeenCalledTimes(1));
         expect(onClose).not.toHaveBeenCalled();
 
@@ -250,6 +257,39 @@ describe('EverWorksOnboardingWizard — a visitor arriving with a prompt from ev
         await userEvent.click(screen.getByTestId('onboarding-console-open-work'));
         expect(onClose).toHaveBeenCalledTimes(1);
         expect(push).toHaveBeenCalledWith('/works/w-1/generator');
+    });
+});
+
+describe('EverWorksOnboardingWizard — a retry after a failed run', () => {
+    beforeEach(() => {
+        window.history.replaceState(
+            {},
+            '',
+            '/onboarding#prompt=AI%20robots%20directory&corrId=abcdef1234',
+        );
+    });
+
+    it('marks onboarding complete once, not on every successful start', async () => {
+        quickCreateWorkAction.mockResolvedValue({
+            success: true,
+            data: {
+                status: 'pending',
+                work: { id: 'w-1', slug: 'ai-robots-directory', name: 'AI robots directory' },
+                generation: { historyId: 'h-1', message: 'Generation started' },
+            },
+        });
+        getWorkGenerationStatusAction.mockResolvedValue({
+            ok: true,
+            status: { status: 'error', error: 'AI provider timed out' },
+        });
+        renderWizard();
+
+        await userEvent.click(await screen.findByTestId('onboarding-generate-now'));
+        await userEvent.click(await screen.findByTestId('onboarding-console-retry'));
+        await waitFor(() => expect(quickCreateWorkAction).toHaveBeenCalledTimes(2));
+        await screen.findByTestId('onboarding-console-retry');
+
+        expect(completeOnboarding).toHaveBeenCalledTimes(1);
     });
 });
 

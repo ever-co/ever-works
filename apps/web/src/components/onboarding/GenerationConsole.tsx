@@ -33,6 +33,7 @@ const STATUS_TEXT: Record<ConsolePhase, string> = {
     generated: 'Done',
     failed: 'Generation failed',
     cancelled: 'Cancelled',
+    lost: 'Stopped following',
 };
 
 const STATUS_DOT: Record<ConsolePhase, string> = {
@@ -43,6 +44,7 @@ const STATUS_DOT: Record<ConsolePhase, string> = {
     generated: 'bg-emerald-500',
     failed: 'bg-red-500',
     cancelled: 'bg-amber-500',
+    lost: 'bg-amber-500',
 };
 
 const TONE_TEXT: Record<ConsoleTone, string> = {
@@ -102,8 +104,11 @@ export function GenerationConsole({
     }, [lineCount]);
 
     const failed =
-        state.phase === 'start-failed' || state.phase === 'failed' || state.phase === 'cancelled';
-    const next = failed ? nextStepsFor(state.error, state.phase) : null;
+        state.phase === 'start-failed' ||
+        state.phase === 'failed' ||
+        state.phase === 'cancelled' ||
+        state.phase === 'lost';
+    const next = failed ? nextStepsFor(state.error, state.phase, state.stopReason) : null;
     const running = state.phase === 'starting' || state.phase === 'generating';
     const showProgress = state.phase === 'generating' || isTerminalPhase(state.phase);
     const progress = state.progress ?? 0;
@@ -111,7 +116,7 @@ export function GenerationConsole({
     return (
         <section
             data-testid="onboarding-console"
-            aria-label="Generation progress"
+            aria-label="Generation console"
             className={cn(
                 'overflow-hidden rounded-xl border border-card-border dark:border-white/9 bg-white dark:bg-card-primary-dark',
                 className,
@@ -132,8 +137,9 @@ export function GenerationConsole({
                 </div>
                 <span
                     data-testid="onboarding-console-elapsed"
-                    className="shrink-0 font-mono text-xs tabular-nums text-text-muted dark:text-text-muted-dark"
+                    role="timer"
                     aria-label="Elapsed time"
+                    className="shrink-0 font-mono text-xs tabular-nums text-text-muted dark:text-text-muted-dark"
                 >
                     {formatElapsed(elapsedMs)}
                 </span>
@@ -200,7 +206,12 @@ export function GenerationConsole({
                     <p
                         role="alert"
                         data-testid="onboarding-generate-error"
-                        className="whitespace-pre-line text-sm text-red-600 dark:text-red-400"
+                        className={cn(
+                            'whitespace-pre-line text-sm',
+                            state.phase === 'lost'
+                                ? 'text-amber-700 dark:text-amber-400'
+                                : 'text-red-600 dark:text-red-400',
+                        )}
                     >
                         {state.error}
                     </p>
@@ -229,6 +240,7 @@ export function GenerationConsole({
 function noStepText(phase: ConsolePhase): string {
     if (phase === 'generated') return 'All steps done';
     if (phase === 'failed' || phase === 'cancelled') return 'Stopped before the first step';
+    if (phase === 'lost') return 'No step reported yet';
     return 'Waiting for the first step…';
 }
 
@@ -264,11 +276,16 @@ function ConsoleActions({
     onOpenWork?: () => void;
     onRetry?: () => void;
 }) {
-    const canOpenWork = Boolean(state.work && onOpenWork);
+    // An ended session or a Work that is gone cannot be opened from here.
+    const workUnreachable =
+        state.phase === 'lost' &&
+        (state.stopReason === 'unauthenticated' || state.stopReason === 'not-found');
+    const canOpenWork = Boolean(state.work && onOpenWork) && !workUnreachable;
     const canRetry = actions.includes('retry') && Boolean(onRetry);
     const showPlugins = actions.includes('plugins');
     const showDashboard = actions.includes('dashboard');
-    if (!canOpenWork && !canRetry && !showPlugins && !showDashboard) return null;
+    const showSignIn = actions.includes('sign-in');
+    if (!canOpenWork && !canRetry && !showPlugins && !showDashboard && !showSignIn) return null;
 
     const primary =
         'inline-flex items-center gap-2 rounded-lg bg-black dark:bg-button-primary-dark px-3.5 py-2 text-sm font-medium text-white dark:text-black transition-colors hover:bg-button-primary-hover dark:hover:bg-button-primary-hover-dark';
@@ -304,6 +321,11 @@ function ConsoleActions({
             {showPlugins ? (
                 <Link href={ROUTES.DASHBOARD_PLUGINS} className={secondary}>
                     Open Plugins settings
+                </Link>
+            ) : null}
+            {showSignIn ? (
+                <Link href={ROUTES.AUTH_LOGIN} className={primary}>
+                    Sign in
                 </Link>
             ) : null}
             {showDashboard ? (

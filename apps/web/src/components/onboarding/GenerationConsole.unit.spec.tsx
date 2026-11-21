@@ -130,6 +130,32 @@ describe('GenerationConsole', () => {
         expect(screen.getByTestId('onboarding-console-retry')).toBeInTheDocument();
     });
 
+    it('tells a visitor whose session ended to sign in, instead of "still trying"', () => {
+        const state = consoleReducer(generating(), {
+            type: 'pollStopped',
+            reason: 'unauthenticated',
+            at: T0,
+        });
+        render(<GenerationConsole state={state} elapsedMs={0} onOpenWork={vi.fn()} />);
+
+        expect(screen.getByTestId('onboarding-console-status').textContent).toMatch(
+            /stopped following/i,
+        );
+        expect(screen.getByTestId('onboarding-console-hint').textContent).toMatch(/sign in/i);
+        expect(screen.getByRole('link', { name: /sign in/i })).toHaveAttribute('href', '/login');
+        expect(screen.queryByText(/still trying/i)).toBeNull();
+    });
+
+    it('gives the console, the clock and the progress bar their own accessible names', () => {
+        render(<GenerationConsole state={generating({ progress: 10 })} elapsedMs={5_000} />);
+
+        expect(screen.getByRole('region', { name: 'Generation console' })).toBeInTheDocument();
+        expect(
+            screen.getByRole('progressbar', { name: 'Generation progress' }),
+        ).toBeInTheDocument();
+        expect(screen.getByRole('timer', { name: 'Elapsed time' }).textContent).toBe('0:05');
+    });
+
     it('announces a finished generation', () => {
         const state = consoleReducer(generating(), {
             type: 'status',

@@ -200,9 +200,14 @@ export function EverWorksOnboardingWizard({
         onClose();
     }, [onClose, openWork, startedWork]);
 
+    // A "Try again" after a failed run starts another generation; onboarding is
+    // completed (and `onboarding_completed` sent) for the first one only.
+    const onboardingCompletedRef = useRef(false);
     const handleGenerationStarted = useCallback(
         (work: StartedWork) => {
             setStartedWork(work);
+            if (onboardingCompletedRef.current) return;
+            onboardingCompletedRef.current = true;
             // Onboarding is done; the wizard stays open on the console.
             finishFlow({ close: false });
         },
@@ -455,8 +460,8 @@ function QuickStartNav({
                     Build from your idea
                 </h2>
                 <p className="text-[11px] leading-relaxed mt-1 text-text-muted dark:text-text-muted-dark">
-                    You told us what you want on ever.works. We set it up with the Ever Works
-                    defaults; you can change any of them later in Settings.
+                    You started with a prompt, so your Work is set up with the defaults below. You
+                    can change any of them later in Settings.
                 </p>
             </div>
             <ol className="px-3 pb-2 space-y-0.5" aria-label="Quick start progress">

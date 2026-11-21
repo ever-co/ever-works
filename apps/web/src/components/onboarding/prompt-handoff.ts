@@ -17,19 +17,21 @@ import { sanitizePrompt } from '@/lib/utils/sanitize';
 export interface PromptHandoff {
     /** Sanitised and bounded to the 5000 characters the API accepts. */
     readonly prompt: string;
-    /** The home page's funnel id, when it is a plain token. */
-    readonly correlationId?: string;
     /** The same URL with the consumed keys removed, for `history.replaceState`. */
     readonly cleanedHref: string;
 }
 
 const CONSUMED_KEYS = ['prompt', 'corrId', 'type'] as const;
-const CORRELATION_ID = /^[A-Za-z0-9_-]{8,64}$/;
+/** `/onboarding`, optionally locale-prefixed (`/en/onboarding`) or with a trailing slash. */
+const ONBOARDING_PATH = /^(?:\/[a-z]{2}(?:-[A-Za-z]{2})?)?\/onboarding\/?$/;
 const PROMPT_MAX_LENGTH = 5000;
 
 /**
- * Reads the hand-off from a full URL. `null` when there is no usable prompt —
- * the wizard then opens as it always did.
+ * Reads the hand-off from a full URL. `null` when there is no usable prompt,
+ * or when the URL is not the onboarding page — the dashboard can auto-open the
+ * wizard on any page, and pages such as `/tasks/new?prompt=…` own their
+ * `prompt`. The wizard then opens as it always did. `corrId` is removed here
+ * but read by the wizard itself when it mounts.
  */
 export function readPromptHandoff(href: string): PromptHandoff | null {
     let url: URL;
@@ -38,14 +40,13 @@ export function readPromptHandoff(href: string): PromptHandoff | null {
     } catch {
         return null;
     }
+    if (!ONBOARDING_PATH.test(url.pathname)) return null;
 
     const hash = new URLSearchParams(url.hash.startsWith('#') ? url.hash.slice(1) : url.hash);
     const read = (key: string) => url.searchParams.get(key) ?? hash.get(key);
 
     const prompt = sanitizePrompt(read('prompt') ?? '', PROMPT_MAX_LENGTH);
     if (!prompt) return null;
-
-    const corrId = read('corrId');
 
     for (const key of CONSUMED_KEYS) {
         url.searchParams.delete(key);
@@ -56,7 +57,6 @@ export function readPromptHandoff(href: string): PromptHandoff | null {
 
     return {
         prompt,
-        ...(corrId && CORRELATION_ID.test(corrId) ? { correlationId: corrId } : {}),
         cleanedHref: url.toString(),
     };
 }

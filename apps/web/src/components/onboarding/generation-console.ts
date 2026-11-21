@@ -28,7 +28,21 @@ export type ConsolePhase =
     | 'generating'
     | 'generated'
     | 'failed'
-    | 'cancelled';
+    | 'cancelled'
+    /** The status can no longer be read (session ended, Work gone, server unreachable). */
+    | 'lost';
+
+/** Why the console stopped reading the status; see `WorkStatusResult`. */
+export type PollStopReason = 'unauthenticated' | 'not-found' | 'unreachable';
+
+/**
+ * One read of a Work's generation status (`getWorkGenerationStatusAction`):
+ * the status, or why it could not be read. `error` is transient and retried
+ * with back-off; the other two end the polling.
+ */
+export type WorkStatusResult =
+    | { readonly ok: true; readonly status: Partial<GenerateStatus> }
+    | { readonly ok: false; readonly reason: 'unauthenticated' | 'not-found' | 'error' };
 
 export type ConsoleTone = 'info' | 'step' | 'success' | 'warn' | 'error' | 'muted';
 
@@ -62,6 +76,8 @@ export interface ConsoleState {
     readonly error?: string;
     /** Consecutive status polls that came back empty. */
     readonly failedPolls: number;
+    /** Set in the `lost` phase: why the status stopped being read. */
+    readonly stopReason?: PollStopReason;
     /** Attempts made in this console (a retry is the second). */
     readonly attempts: number;
 }
@@ -71,7 +87,12 @@ export type ConsoleEvent =
     | { readonly type: 'started'; readonly work: StartedWork; readonly at: string }
     | { readonly type: 'startFailed'; readonly message: string; readonly at: string }
     | { readonly type: 'status'; readonly status: Partial<GenerateStatus>; readonly at: string }
-    | { readonly type: 'pollFailed'; readonly at: string };
+    | { readonly type: 'pollFailed'; readonly at: string }
+    | {
+          readonly type: 'pollStopped';
+          readonly reason: Exclude<PollStopReason, 'unreachable'>;
+          readonly at: string;
+      };
 
 export const INITIAL_CONSOLE_STATE: ConsoleState = {
     phase: 'idle',
@@ -82,10 +103,39 @@ export const INITIAL_CONSOLE_STATE: ConsoleState = {
 
 /** Polls in a row that may fail before the console says it lost contact. */
 const POLL_FAILURES_BEFORE_WARNING = 3;
+/** Polls in a row that may fail before the console stops reading altogether. */
+export const MAX_FAILED_POLLS = 10;
+/** The longest wait between two reads while the server does not answer. */
+const MAX_POLL_DELAY_MS = 30_000;
+
+/**
+ * The wait before the next status read: the base rate while reads succeed (or
+ * have failed only twice), then doubling from the third failure in a row, up
+ * to 30 s. With a 3 s base and `MAX_FAILED_POLLS` = 10 the console gives up
+ * after about three minutes of silence.
+ */
+export function nextPollDelay(failedPolls: number, baseMs: number): number {
+    if (failedPolls < POLL_FAILURES_BEFORE_WARNING) return baseMs;
+    const doubled = baseMs * 2 ** (failedPolls - POLL_FAILURES_BEFORE_WARNING + 1);
+    return Math.min(MAX_POLL_DELAY_MS, doubled);
+}
+
+const STOP_MESSAGES: Record<PollStopReason, string> = {
+    unauthenticated:
+        'Your session has ended, so this page can no longer read the progress. The generation itself keeps running.',
+    'not-found': 'This Work can no longer be found — it may have been deleted.',
+    unreachable:
+        'Stopped following: the server has not answered for a while. The generation keeps running on the server.',
+};
 /** The feed keeps this many lines; the Work page has the full history. */
 const MAX_LINES = 300;
 
-const TERMINAL_PHASES: ReadonlySet<ConsolePhase> = new Set(['generated', 'failed', 'cancelled']);
+const TERMINAL_PHASES: ReadonlySet<ConsolePhase> = new Set([
+    'generated',
+    'failed',
+    'cancelled',
+    'lost',
+]);
 
 const LOG_TONES: Record<string, ConsoleTone> = {
     error: 'error',
@@ -126,6 +176,7 @@ export function consoleReducer(state: ConsoleState, event: ConsoleEvent): Consol
                 progress: undefined,
                 itemsProcessed: undefined,
                 failedPolls: 0,
+                stopReason: undefined,
                 attempts: attempt,
                 lines: append(state.lines, lines),
             };
@@ -166,6 +217,9 @@ export function consoleReducer(state: ConsoleState, event: ConsoleEvent): Consol
         case 'pollFailed': {
             if (isTerminalPhase(state.phase)) return state;
             const failedPolls = state.failedPolls + 1;
+            if (failedPolls >= MAX_FAILED_POLLS) {
+                return stopFollowing({ ...state, failedPolls }, 'unreachable', event.at);
+            }
             const warn =
                 failedPolls === POLL_FAILURES_BEFORE_WARNING
                     ? [
@@ -180,11 +234,26 @@ export function consoleReducer(state: ConsoleState, event: ConsoleEvent): Consol
                     : [];
             return { ...state, failedPolls, lines: append(state.lines, warn) };
         }
+        case 'pollStopped':
+            if (isTerminalPhase(state.phase)) return state;
+            return stopFollowing(state, event.reason, event.at);
         case 'status':
             return applyStatus(state, event.status, event.at);
         default:
             return state;
     }
+}
+
+function stopFollowing(state: ConsoleState, reason: PollStopReason, at: string): ConsoleState {
+    const message = STOP_MESSAGES[reason];
+    return {
+        ...state,
+        phase: 'lost',
+        stopReason: reason,
+        error: message,
+        endedAt: at,
+        lines: append(state.lines, [line(at, 'warn', message, state.attempts, `lost-${reason}`)]),
+    };
 }
 
 function applyStatus(
@@ -352,7 +421,7 @@ function clampPercent(value: number): number {
 
 // ─── What to do next ─────────────────────────────────────────────────────────
 
-export type NextStepAction = 'retry' | 'open-work' | 'plugins' | 'dashboard';
+export type NextStepAction = 'retry' | 'open-work' | 'plugins' | 'dashboard' | 'sign-in';
 
 export interface NextSteps {
     readonly hint: string;
@@ -363,7 +432,26 @@ export interface NextSteps {
  * The guidance shown under an error. The API's own message is always shown in
  * full above it; this only adds what the visitor can do about it.
  */
-export function nextStepsFor(message: string | undefined, phase: ConsolePhase): NextSteps {
+export function nextStepsFor(
+    message: string | undefined,
+    phase: ConsolePhase,
+    stopReason?: PollStopReason,
+): NextSteps {
+    if (phase === 'lost') {
+        if (stopReason === 'unauthenticated') {
+            return {
+                hint: 'Sign in again to follow your Work on its page. If you were trying Ever Works without an account, sign up to keep the Works you make.',
+                actions: ['sign-in'],
+            };
+        }
+        if (stopReason === 'not-found') {
+            return { hint: 'Open the dashboard to see your Works.', actions: ['dashboard'] };
+        }
+        return {
+            hint: 'The generation keeps running. Open the Work to see where it is, or check your connection.',
+            actions: ['open-work', 'dashboard'],
+        };
+    }
     if (phase === 'failed') {
         return {
             hint: 'Your Work was created, but its generation stopped. Open the Work to read the full log and start the generation again from its Generator tab — or try again here.',
@@ -377,6 +465,20 @@ export function nextStepsFor(message: string | undefined, phase: ConsolePhase): 
         };
     }
     const text = message ?? '';
+    // Platform demo mode: the web already words the API's demo codes
+    // (`demo.errors.*`); a limit is not something "Try again" can get past.
+    if (/demo AI is busy|demo AI model is temporarily unavailable/i.test(text)) {
+        return {
+            hint: 'The demo AI is under load. Wait a few seconds, then press Try again.',
+            actions: ['retry'],
+        };
+    }
+    if (/not available in the demo|demo AI quota|demo workspace has used/i.test(text)) {
+        return {
+            hint: 'This is a demo with limits, and the message above names the one you reached. Sign up for your own account to go further, or open the dashboard to keep exploring.',
+            actions: ['dashboard'],
+        };
+    }
     if (/not configured|providers? (?:is|are) not available/i.test(text)) {
         return {
             hint: 'A provider this Work needs is not set up yet. Set it up in Settings → Plugins, then press Try again — your prompt stays here.',
@@ -391,7 +493,7 @@ export function nextStepsFor(message: string | undefined, phase: ConsolePhase): 
     }
     if (/captcha/i.test(text)) {
         return {
-            hint: 'We could not verify this browser. Reload the page and try again.',
+            hint: 'We could not verify this browser. Press Try again — it runs the check again. If it keeps failing, allow this site in your content blocker and try once more.',
             actions: ['retry'],
         };
     }

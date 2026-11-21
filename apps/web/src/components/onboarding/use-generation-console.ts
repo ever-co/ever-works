@@ -1,25 +1,32 @@
 'use client';
 
 import { useEffect, useReducer, useRef, useState } from 'react';
-import type { GenerateStatus } from '@/lib/api/types-only';
-import { INITIAL_CONSOLE_STATE, consoleReducer, isTerminalPhase } from './generation-console';
+import { GenerateStatusType } from '@/lib/api/enums';
+import {
+    INITIAL_CONSOLE_STATE,
+    consoleReducer,
+    isTerminalPhase,
+    MAX_FAILED_POLLS,
+    nextPollDelay,
+    type WorkStatusResult,
+} from './generation-console';
 
 /**
- * Reads a Work's current `generateStatus`. `null` when the Work could not be
- * read (a failed poll); `{}` when it has no status yet (the job is queued).
+ * Reads a Work's current `generateStatus`, or why it could not be read. An
+ * empty status (`{}`) means the job is still queued.
  */
-export type FetchWorkStatus = (workId: string) => Promise<Partial<GenerateStatus> | null>;
+export type FetchWorkStatus = (workId: string) => Promise<WorkStatusResult>;
 
 /**
- * The status source the Work page itself polls (`WorkLayoutClient`):
- * `getWorkForStatusRefresh` → `GET /api/works/:id`. Loaded on demand so this
- * module stays importable where server actions are not.
+ * The same source the Work page polls (`GET /api/works/:id`), through
+ * `getWorkGenerationStatusAction`, which tells an ended session and a missing
+ * Work apart from a transient error. Loaded on demand so this module stays
+ * importable where server actions are not.
  */
 export const fetchWorkStatusFromApi: FetchWorkStatus = async (workId) => {
-    const { getWorkForStatusRefresh } = await import('@/app/actions/dashboard/works');
-    const work = await getWorkForStatusRefresh(workId);
-    if (!work) return null;
-    return work.generateStatus ?? {};
+    const { getWorkGenerationStatusAction } =
+        await import('@/app/actions/onboarding/generation-status');
+    return getWorkGenerationStatusAction(workId);
 };
 
 export interface UseGenerationConsoleOptions {
@@ -27,6 +34,12 @@ export interface UseGenerationConsoleOptions {
     /** The Work page polls every 5 s; the console is the only thing on screen, so 3 s. */
     readonly pollIntervalMs?: number;
 }
+
+const FINAL_STATUSES: ReadonlySet<string> = new Set([
+    GenerateStatusType.GENERATED,
+    GenerateStatusType.ERROR,
+    GenerateStatusType.CANCELLED,
+]);
 
 function nowIso(): string {
     return new Date().toISOString();
@@ -52,34 +65,46 @@ export function useGenerationConsole({
     const workId = state.work?.id;
     const polling = state.phase === 'generating' && Boolean(workId);
 
+    // One read at a time, each scheduled after the last one answered: at the
+    // base rate while reads succeed, backing off while they fail. An ended
+    // session or a missing Work stops the reads for good; so does the run
+    // ending (the phase leaves `generating`) and unmounting.
     useEffect(() => {
         if (!polling || !workId) return;
         let cancelled = false;
-        let inFlight = false;
+        let timer: number | undefined;
+        let failures = 0;
 
         const tick = async () => {
-            if (inFlight) return;
-            inFlight = true;
+            let result: WorkStatusResult;
             try {
-                const status = await fetchRef.current(workId);
-                if (cancelled) return;
-                if (status) {
-                    dispatch({ type: 'status', status, at: nowIso() });
-                } else {
-                    dispatch({ type: 'pollFailed', at: nowIso() });
-                }
+                result = await fetchRef.current(workId);
             } catch {
-                if (!cancelled) dispatch({ type: 'pollFailed', at: nowIso() });
-            } finally {
-                inFlight = false;
+                result = { ok: false, reason: 'error' };
             }
+            if (cancelled) return;
+
+            // The chain also ends on its own (a final status, the last allowed
+            // failure) rather than only when the reducer's new phase re-renders.
+            if (result.ok) {
+                failures = 0;
+                dispatch({ type: 'status', status: result.status, at: nowIso() });
+                if (result.status.status && FINAL_STATUSES.has(result.status.status)) return;
+            } else if (result.reason === 'error') {
+                failures += 1;
+                dispatch({ type: 'pollFailed', at: nowIso() });
+                if (failures >= MAX_FAILED_POLLS) return;
+            } else {
+                dispatch({ type: 'pollStopped', reason: result.reason, at: nowIso() });
+                return;
+            }
+            timer = window.setTimeout(() => void tick(), nextPollDelay(failures, pollIntervalMs));
         };
 
         void tick();
-        const interval = window.setInterval(() => void tick(), pollIntervalMs);
         return () => {
             cancelled = true;
-            window.clearInterval(interval);
+            window.clearTimeout(timer);
         };
     }, [polling, workId, pollIntervalMs]);
 

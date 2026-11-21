@@ -74,6 +74,7 @@ const RUN_DESCRIPTIONS: Record<string, string> = {
     generated: 'All done. Opening your Work…',
     failed: 'Your Work exists, but its generation stopped. The log below says where.',
     cancelled: 'The generation was cancelled.',
+    lost: 'This page stopped following the generation. The note below says why and what to do.',
 };
 
 /**
@@ -172,7 +173,9 @@ export function CreateWorkStep({
               ? 'The generation stopped'
               : phase === 'start-failed'
                 ? 'We could not start the generation'
-                : 'Building your Work';
+                : phase === 'lost'
+                  ? 'Stopped following the generation'
+                  : 'Building your Work';
 
     return (
         <div className="space-y-5 max-w-2xl">

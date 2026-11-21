@@ -4,16 +4,13 @@ import { readPromptHandoff } from './prompt-handoff';
 const BASE = 'https://app.ever.works/onboarding';
 
 describe('readPromptHandoff — the ever.works home-page hand-off', () => {
-    it('reads the prompt, the funnel id and the chosen type from the hash', () => {
+    it('reads the prompt and removes the prompt, the funnel id and the type from the hash', () => {
         const handoff = readPromptHandoff(
             `${BASE}#prompt=AI%20robots%20directory&corrId=abcdef12-3456&type=directory-website`,
         );
 
-        expect(handoff).toEqual({
-            prompt: 'AI robots directory',
-            correlationId: 'abcdef12-3456',
-            cleanedHref: BASE,
-        });
+        // The wizard reads `corrId` itself when it mounts; here it is only removed.
+        expect(handoff).toEqual({ prompt: 'AI robots directory', cleanedHref: BASE });
         // The chip is consumed (stripped) but not mapped onto a Work kind.
         expect(handoff).not.toHaveProperty('kind');
     });
@@ -48,16 +45,22 @@ describe('readPromptHandoff — the ever.works home-page hand-off', () => {
         expect(handoff?.prompt.length).toBeLessThanOrEqual(5000);
     });
 
-    it('drops a funnel id that is not a plain token', () => {
-        const handoff = readPromptHandoff(`${BASE}#prompt=x&corrId=%3Cscript%3E`);
-
-        expect(handoff?.correlationId).toBeUndefined();
-    });
-
     it('answers null when there is no prompt', () => {
         expect(readPromptHandoff(BASE)).toBeNull();
         expect(readPromptHandoff(`${BASE}#type=blog`)).toBeNull();
         expect(readPromptHandoff(`${BASE}#prompt=%20%20`)).toBeNull();
+    });
+
+    it('only reads the hand-off on the onboarding page', () => {
+        // `/tasks/new?prompt=…` and `/agents/new?prompt=…` own their `prompt`;
+        // the dashboard's auto-opened wizard must not take it.
+        expect(readPromptHandoff('https://app.ever.works/tasks/new?prompt=Fix%20login')).toBeNull();
+        expect(readPromptHandoff('https://app.ever.works/agents/new#prompt=x')).toBeNull();
+        expect(readPromptHandoff('https://app.ever.works/onboarding-help#prompt=x')).toBeNull();
+        expect(readPromptHandoff('https://app.ever.works/en/onboarding#prompt=x')?.prompt).toBe(
+            'x',
+        );
+        expect(readPromptHandoff('https://app.ever.works/onboarding/#prompt=x')?.prompt).toBe('x');
     });
 
     it('answers null for a URL it cannot parse', () => {

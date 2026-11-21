@@ -4,6 +4,9 @@ import {
     INITIAL_CONSOLE_STATE,
     consoleReducer,
     formatElapsed,
+    isTerminalPhase,
+    MAX_FAILED_POLLS,
+    nextPollDelay,
     nextStepsFor,
     workLandingHref,
     type ConsoleState,
@@ -329,6 +332,71 @@ describe('consoleReducer — live generation status', () => {
     });
 });
 
+describe('consoleReducer — when the status can no longer be read', () => {
+    it.each([
+        ['unauthenticated', /session/i],
+        ['not-found', /can no longer be found/i],
+    ] as const)('stops following on %s and says why', (reason, text) => {
+        const state = consoleReducer(started(), { type: 'pollStopped', reason, at: T2 });
+
+        expect(state.phase).toBe('lost');
+        expect(state.stopReason).toBe(reason);
+        expect(isTerminalPhase(state.phase)).toBe(true);
+        expect(state.error).toMatch(text);
+        expect(state.endedAt).toBe(T2);
+        expect(state.lines.at(-1)?.tone).toBe('warn');
+    });
+
+    it('stops following after too many failed reads in a row', () => {
+        let state = started();
+        for (let i = 0; i < MAX_FAILED_POLLS - 1; i += 1) {
+            state = consoleReducer(state, { type: 'pollFailed', at: T2 });
+        }
+        expect(state.phase).toBe('generating');
+
+        state = consoleReducer(state, { type: 'pollFailed', at: T2 });
+        expect(state.phase).toBe('lost');
+        expect(state.stopReason).toBe('unreachable');
+    });
+
+    it('ignores statuses once it stopped following', () => {
+        const lost = consoleReducer(started(), {
+            type: 'pollStopped',
+            reason: 'unauthenticated',
+            at: T2,
+        });
+        expect(consoleReducer(lost, { type: 'status', status: status({}), at: T2 })).toBe(lost);
+    });
+
+    it('lets "Try again" start over after it stopped following', () => {
+        const lost = consoleReducer(started(), {
+            type: 'pollStopped',
+            reason: 'not-found',
+            at: T2,
+        });
+        const retried = consoleReducer(lost, { type: 'start', at: T2 });
+
+        expect(retried.phase).toBe('starting');
+        expect(retried.stopReason).toBeUndefined();
+        expect(retried.failedPolls).toBe(0);
+    });
+});
+
+describe('nextPollDelay — backing off while the server does not answer', () => {
+    it('polls at the base rate while reads succeed or have failed only a couple of times', () => {
+        expect(nextPollDelay(0, 3_000)).toBe(3_000);
+        expect(nextPollDelay(2, 3_000)).toBe(3_000);
+    });
+
+    it('doubles the wait from the third failure in a row, up to 30 s', () => {
+        expect(nextPollDelay(3, 3_000)).toBe(6_000);
+        expect(nextPollDelay(4, 3_000)).toBe(12_000);
+        expect(nextPollDelay(5, 3_000)).toBe(24_000);
+        expect(nextPollDelay(6, 3_000)).toBe(30_000);
+        expect(nextPollDelay(9, 3_000)).toBe(30_000);
+    });
+});
+
 describe('nextStepsFor — what to do after an error', () => {
     it('points at Settings → Plugins when a provider is not configured', () => {
         const next = nextStepsFor(
@@ -349,8 +417,50 @@ describe('nextStepsFor — what to do after an error', () => {
         expect(next.actions).not.toContain('retry');
     });
 
-    it('asks for a reload after a failed browser check', () => {
-        expect(nextStepsFor('captcha verification failed', 'start-failed').hint).toMatch(/reload/i);
+    it('sends a failed browser check to Try again, which runs the check again', () => {
+        const next = nextStepsFor('captcha verification failed', 'start-failed');
+        // The hand-off was already removed from the URL, so a reload would
+        // lose the prompt; "Try again" fetches a fresh check token instead.
+        expect(next.hint).not.toMatch(/reload/i);
+        expect(next.hint).toMatch(/try again/i);
+        expect(next.actions).toEqual(['retry']);
+    });
+
+    it.each([
+        'Not available in the demo — sign up to use it',
+        'The free demo AI quota is used up for today — sign up on app.ever.works to keep going',
+        'This demo workspace has used all its free AI requests — sign up on app.ever.works to keep going',
+    ])('treats a demo limit as a limit, not something to retry: %s', (message) => {
+        const next = nextStepsFor(message, 'start-failed');
+        expect(next.hint).toMatch(/demo/i);
+        expect(next.hint).toMatch(/sign up/i);
+        expect(next.actions).not.toContain('retry');
+    });
+
+    it.each([
+        'The demo AI is busy — try again in a few seconds',
+        'The demo AI model is temporarily unavailable — please try again later',
+    ])('asks for a short wait on a busy demo AI: %s', (message) => {
+        const next = nextStepsFor(message, 'start-failed');
+        expect(next.hint).toMatch(/wait/i);
+        expect(next.actions).toEqual(['retry']);
+    });
+
+    it('asks a visitor whose session ended to sign in again', () => {
+        const next = nextStepsFor(undefined, 'lost', 'unauthenticated');
+        expect(next.hint).toMatch(/sign in/i);
+        expect(next.actions).toEqual(['sign-in']);
+    });
+
+    it('sends a visitor whose Work is gone to the dashboard', () => {
+        const next = nextStepsFor(undefined, 'lost', 'not-found');
+        expect(next.actions).toEqual(['dashboard']);
+    });
+
+    it('offers the Work and the dashboard when the server stays unreachable', () => {
+        const next = nextStepsFor(undefined, 'lost', 'unreachable');
+        expect(next.hint).toMatch(/keeps running/i);
+        expect(next.actions).toEqual(['open-work', 'dashboard']);
     });
 
     it('asks the visitor to wait after a rate limit', () => {

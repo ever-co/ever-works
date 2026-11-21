@@ -49,7 +49,7 @@ describe('CreateWorkStep — the generation console', () => {
                 onLeave={vi.fn()}
                 prompt="AI robots directory"
                 onQuickCreate={() => pending.promise}
-                fetchWorkStatus={vi.fn().mockResolvedValue(null)}
+                fetchWorkStatus={vi.fn().mockResolvedValue({ ok: false, reason: 'error' })}
             />,
         );
 
@@ -68,13 +68,16 @@ describe('CreateWorkStep — the generation console', () => {
         const onLeave = vi.fn();
         const onGenerationStarted = vi.fn();
         const fetchWorkStatus = vi.fn().mockResolvedValue({
-            status: 'generating',
-            step: 'items',
-            stepName: 'Generate items',
-            stepIndex: 5,
-            totalSteps: 15,
-            progress: 40,
-        } as GenerateStatus);
+            ok: true,
+            status: {
+                status: 'generating',
+                step: 'items',
+                stepName: 'Generate items',
+                stepIndex: 5,
+                totalSteps: 15,
+                progress: 40,
+            } as GenerateStatus,
+        });
         render(
             <CreateWorkStep
                 onLeave={onLeave}
@@ -116,9 +119,10 @@ describe('CreateWorkStep — the generation console', () => {
                 prompt="AI robots directory"
                 onQuickCreate={vi.fn().mockResolvedValue(WORK)}
                 onOpenWork={onOpenWork}
-                fetchWorkStatus={vi
-                    .fn()
-                    .mockResolvedValue({ status: 'generating' } as GenerateStatus)}
+                fetchWorkStatus={vi.fn().mockResolvedValue({
+                    ok: true,
+                    status: { status: 'generating' } as GenerateStatus,
+                })}
                 pollIntervalMs={10}
             />,
         );
@@ -140,9 +144,10 @@ describe('CreateWorkStep — the generation console', () => {
                 prompt="AI robots directory"
                 onQuickCreate={vi.fn().mockResolvedValue(WORK)}
                 onOpenWork={onOpenWork}
-                fetchWorkStatus={vi
-                    .fn()
-                    .mockResolvedValue({ status: 'generated' } as GenerateStatus)}
+                fetchWorkStatus={vi.fn().mockResolvedValue({
+                    ok: true,
+                    status: { status: 'generated' } as GenerateStatus,
+                })}
                 pollIntervalMs={10}
             />,
         );
@@ -170,7 +175,7 @@ describe('CreateWorkStep — the generation console', () => {
                 prompt="AI robots directory"
                 onQuickCreate={onQuickCreate}
                 onBusyChange={onBusyChange}
-                fetchWorkStatus={vi.fn().mockResolvedValue(null)}
+                fetchWorkStatus={vi.fn().mockResolvedValue({ ok: false, reason: 'error' })}
                 pollIntervalMs={10}
             />,
         );
