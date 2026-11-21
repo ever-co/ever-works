@@ -38,6 +38,59 @@ describe('DemoController', () => {
         expect(sandbox.createSandbox).not.toHaveBeenCalled();
     });
 
+    /**
+     * The address comes from Express (`req.ip`, resolved through `trust proxy` /
+     * `TRUST_PROXY_HOPS` from the right of the chain), never from the left-most
+     * `X-Forwarded-For` entry, which the client writes. It is the address the `long`
+     * throttler keys on, so the captcha and the session record the caller the limit counted.
+     */
+    describe('client address', () => {
+        beforeEach(() => {
+            captcha.isEnabled.mockReturnValue(true);
+            captcha.verify.mockResolvedValue({ success: true });
+        });
+
+        it('takes req.ip, not the client-written first X-Forwarded-For entry', async () => {
+            const proxied = {
+                ip: '203.0.113.7',
+                headers: { 'x-forwarded-for': '6.6.6.6, 203.0.113.7', 'user-agent': 'jest' },
+            };
+
+            await controller.create(proxied, { captchaToken: 'ok' });
+
+            expect(captcha.verify).toHaveBeenCalledWith({ token: 'ok', remoteIp: '203.0.113.7' });
+            expect(sandbox.createSandbox).toHaveBeenCalledWith({
+                ipAddress: '203.0.113.7',
+                userAgent: 'jest',
+            });
+        });
+
+        it('falls back to the socket address, never to X-Forwarded-For, when req.ip is unset', async () => {
+            const bare = {
+                socket: { remoteAddress: '10.0.0.9' },
+                headers: { 'x-forwarded-for': '6.6.6.6', 'user-agent': 'jest' },
+            };
+
+            await controller.create(bare, { captchaToken: 'ok' });
+
+            expect(captcha.verify).toHaveBeenCalledWith({ token: 'ok', remoteIp: '10.0.0.9' });
+            expect(sandbox.createSandbox).toHaveBeenCalledWith({
+                ipAddress: '10.0.0.9',
+                userAgent: 'jest',
+            });
+        });
+
+        it('records no address rather than a forged one', async () => {
+            await controller.create({ headers: { 'x-forwarded-for': '6.6.6.6' } }, {});
+
+            expect(captcha.verify).toHaveBeenCalledWith({ token: undefined, remoteIp: null });
+            expect(sandbox.createSandbox).toHaveBeenCalledWith({
+                ipAddress: null,
+                userAgent: null,
+            });
+        });
+    });
+
     it('is POST /api/auth/demo, public, and throttled on the long tier', () => {
         expect(Reflect.getMetadata('path', DemoController)).toBe('api/auth');
         expect(Reflect.getMetadata('path', DemoController.prototype.create)).toBe('demo');

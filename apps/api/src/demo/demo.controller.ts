@@ -12,6 +12,7 @@ import { Throttle } from '@nestjs/throttler';
 import { config } from '@ever-works/agent/config';
 import { Public } from '../auth/decorators/public.decorator';
 import { CaptchaVerifierService } from '../auth/services/captcha-verifier.service';
+import { trustedClientIp } from '../config/trust-proxy';
 import { CreateDemoSandboxDto } from './dto/create-demo-sandbox.dto';
 import { DemoSandboxService } from './demo-sandbox.service';
 
@@ -35,10 +36,9 @@ export class DemoController {
     @ApiResponse({ status: 429, description: 'Rate limit exceeded for this IP' })
     @ApiResponse({ status: 503, description: 'DEMO_FULL: the demo has no free sandbox' })
     async create(@Request() req, @Body() body?: CreateDemoSandboxDto) {
-        const forwarded = req.headers?.['x-forwarded-for'];
-        const ipAddress =
-            (typeof req.ip === 'string' && req.ip) ||
-            (typeof forwarded === 'string' ? forwarded.split(',')[0].trim() : null);
+        // The address the `long` throttler counted (Express `trust proxy`), never the
+        // client-written left-most `X-Forwarded-For` entry.
+        const ipAddress = trustedClientIp(req);
         const userAgent =
             typeof req.headers?.['user-agent'] === 'string'
                 ? (req.headers['user-agent'] as string)
