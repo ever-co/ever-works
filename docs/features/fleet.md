@@ -352,13 +352,14 @@ Lease TTL is requested by the node and clamped by the platform — **30 seconds 
 
 ### What a node can actually run
 
-The worker host resolves an executor by the job's `kind`. Three are registered today:
+The worker host resolves an executor by the job's `kind`. Among them:
 
-| Kind                | What it does                                                                                                                                                                                                                                      |
-| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `acceptance-checks` | Runs a Task's dispatch-frozen [acceptance checks](./quality-gates.md) in a workspace on this machine and reports each exit code, with the platform's own verdict rules.                                                                           |
-| `agent-task`        | Executes a Task's agent run on this machine — the command-shaped path behind the `node` [job runtime](./job-runtimes.md), with the workspace provisioned locally.                                                                                 |
-| `browser-check`     | Drives the machine's real browser against a URL in a throwaway profile and reports what it rendered. Registered **only** on a node that actually resolved a browser executable, so the `browser` tag and the executor switch on by the same fact. |
+| Kind                | What it does                                                                                                                                                                                                                                                                                                                             |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `acceptance-checks` | Runs a Task's dispatch-frozen [acceptance checks](./quality-gates.md) in a workspace on this machine and reports each exit code, with the platform's own verdict rules.                                                                                                                                                                  |
+| `agent-task`        | Executes a Task's agent run on this machine — the command-shaped path behind the `node` [job runtime](./job-runtimes.md), with the workspace provisioned locally.                                                                                                                                                                        |
+| `browser-check`     | Drives the machine's real browser against a URL in a throwaway profile and reports what it rendered. Registered **only** on a node that actually resolved a browser executable, so the `browser` tag and the executor switch on by the same fact.                                                                                        |
+| `ai-completion`     | Relays ONE model request to a healthy local AI provider on the machine and reports its answer — the platform's own AI calls on your local model ([Local AI for the platform's own AI calls](#local-ai-for-the-platforms-own-ai-calls-work-generation)). Leased by the node's local-AI lane only, under `--work`, never by the work lane. |
 
 A leased job of any other kind is completed as a failure that names the kind, rather than dropped to expire and retry forever on the same incapable machine.
 
@@ -693,13 +694,35 @@ Routing preferences (**Settings → Fleet → Execution routing**) decide what h
 
 A node can run its agent CLI on a **local model server** — llama-swap, Ollama, LM Studio, vLLM or any OpenAI-compatible server on the machine or its LAN — instead of the CLI's cloud seat. The machine's operator configures it on the node (a `localAi` section in `node-config.json`, or `EVER_WORKS_NODE_LOCAL_AI_*` in the node's environment); the platform never chooses it. The full reference is in [`apps/node/README.md`](https://github.com/ever-co/ever-works/blob/develop/apps/node/README.md#local-ai-providers).
 
-- The node probes each provider (health and models only — a probe never generates) and advertises **`local-ai`**, **`local-ai:<kind>`**, **`local-model:<model>`** and, for a CLI bound to a provider that can serve it, **`local-agent:<cli>`** (`local-agent:claude-code`). Every one is withdrawn on the next heartbeat after the provider stops answering.
+- The node probes each provider (health and models only — a probe never generates) and advertises **`local-ai`**, **`local-ai-completions`** (when it serves the platform's model requests), **`local-ai:<kind>`**, **`local-model:<model>`** and, for a CLI bound to a provider that can serve it, **`local-agent:<cli>`** (`local-agent:claude-code`). Every one is withdrawn on the next heartbeat after the provider stops answering.
 - With `agentRuntime` set (`{ "cli": "claude-code", "provider": "gpu", "model": "flashnext" }`), every Task of that CLI the node takes runs on the local provider: Claude Code against a server that speaks the Anthropic Messages API, Codex against one that speaks the OpenAI Responses API. The run reports **`costUsd: 0` with `costBasis: 'local'`**, so it is recorded at 0 cents and counts nothing against a daily cost ceiling; no per-run dollar cap is passed to the CLI (it would price the unknown local model at cloud list rates).
 - A bound CLI whose provider is down **never falls back to the cloud seat**: the node withholds that CLI's `claude-code` / `codex` tag so it is not offered the work, and declines (hands back unsettled) a job it already leased.
 - Extra tags the node cannot detect — `gpu` on a VM whose model server runs on the GPU host — are declared with `extraCapabilities` / `EVER_WORKS_NODE_EXTRA_CAPABILITIES`.
 - Keys are never stored in the config (a file path or an env var name), never logged and never sent to the platform.
 
 Routing an Agent to local AI specifically (requiring `local-agent:claude-code`), and showing the providers' health on the node page, are follow-ups; today an Agent pinned to a bound node runs locally.
+
+### Local AI for the platform's own AI calls (Work generation)
+
+The same local providers can serve the **platform's** AI calls — a Work generation, a chat reply, any call the AI facade makes — so a directory is generated on your own GPU for free. Pick the AI provider **Local AI on your computers** (plugin `fleet-local-ai`) exactly as you would pick OpenRouter: enable it, choose a model (the picker lists the models your online computers serve), and select it for a Work or for one generation (`providers.ai = "fleet-local-ai"`).
+
+How a request travels:
+
+1. The plugin hands every client a **transport** instead of a URL: the plugin's own calls (LangChain) and the agent pipeline's AI SDK model both send their OpenAI-compatible requests through it. Tools, JSON mode, structured output and streaming work as against any OpenAI-compatible server (a streamed request is answered with an event stream rebuilt from the whole answer).
+2. The platform's **local AI relay** (`PluginContext.services.localAi` — in the API directly, in the Trigger.dev worker over the internal RPC) turns the request into ONE `ai-completion` fleet job. It is refused before it is queued when nothing could take it: no online computer of yours serves the model (`no-node`, naming what to start), the stop flag is set, the request is malformed or too large (bodies travel gzip-compressed; at most 200 KiB compressed, 4 MiB decoded).
+3. The job requires `local-ai`, `local-ai-completions` and the model's `local-model:` tag, and — like every fleet job — is offered only to its owner's nodes. A node serves it in its **local-AI lane** (`--work`, its own concurrency, never the Agents' slots), sends it to a healthy provider that serves the model, and completes the job with the provider's answer. A provider that went away hands the job back for another node.
+4. The relay waits in short slices (cancel and timeout are honoured; a request nobody leases within two minutes is `no-node`), returns the answer, and **purges the prompt and the answer from the job row** as soon as it has them.
+
+A local answer is free: the job is stamped 0 cents, every model of the plugin is priced 0, and no budget, credit or daily cost ceiling is touched. Requests never leave your own machines and the platform; nothing is ever sent to a third party.
+
+**Turn it on end to end** — a llama-swap GPU node and a Work:
+
+1. On the GPU machine: configure the provider (`localAi.providers` in `node-config.json`, or the `EVER_WORKS_NODE_LOCAL_AI_*` env shorthand — see the [node README](https://github.com/ever-co/ever-works/blob/develop/apps/node/README.md#local-ai-providers)), then `ever-works-node local-ai probe` (it must list the model) and `ever-works-node local-ai test`.
+2. Restart the node with `--work`. Its log says `serving the platform's model requests (ai-completion)`; its tags gain `local-ai-completions` and `local-model:<model>`.
+3. In Ever Works: **Plugins → Local AI on your computers → Enable**, pick the model, **Test connection** (it says how many of your computers serve it).
+4. Generate: select **Local AI on your computers** as the Work's AI provider (or per generation), with the agent pipeline or the standard pipeline.
+
+A model whose `local-model:` tag would not fit (an id longer than 20 characters once slugged) cannot be routed yet — serve it under a shorter alias (llama-swap `aliases`, an Ollama tag). The OpenCode pipeline dials its own HTTP endpoint and refuses this provider with a clear message.
 
 ### Suspend safety (lease generations)
 
