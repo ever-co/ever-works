@@ -417,4 +417,82 @@ describe('cluster-source-matrix — deploy matrix (renamed: k8s-works internal, 
             expect(result.lookupContext?.kubeContextOverride).toBe('tenant-current-context');
         });
     });
+    describe('Cloudflare Workers deploy context', () => {
+        const base = {
+            deployProvider: 'cloudflare',
+            pluginId: 'cloudflare',
+            settings: { accountId: 'a'.repeat(32), zoneName: 'ever.works' },
+            websiteOwner: 'acme',
+            websiteProjectName: 'awesome-crm-website',
+            workId: 'work-1',
+            workSlug: 'awesome-crm',
+            managedSubdomain: 'CRM',
+            env: { CLOUDFLARE_DEPLOY_API_TOKEN: 'platform-token' },
+        };
+
+        it("passes the member's token through and hands the plugin the Work facts", () => {
+            const result = resolveEffectiveDeploymentContext({
+                ...base,
+                resolvedToken: 'member-token',
+                settingSources: { apiToken: 'user' },
+            } as any);
+
+            expect(result.token).toBe('member-token');
+            expect(result.settings).toMatchObject({
+                accountId: 'a'.repeat(32),
+                platformManaged: false,
+                workSlug: 'awesome-crm',
+                managedSubdomain: 'crm',
+            });
+            expect(result.lookupContext).toEqual({
+                settingsOverride: result.settings,
+                projectNameOverride: 'awesome-crm-website',
+            });
+        });
+
+        it.each(['env', 'admin', 'platform'])(
+            'refuses a platform token (source %s) for a website repo outside the Ever Works orgs',
+            (source) => {
+                expect(() =>
+                    resolveEffectiveDeploymentContext({
+                        ...base,
+                        resolvedToken: 'platform-token',
+                        settingSources: { apiToken: source },
+                    } as any),
+                ).toThrow(/platform's Cloudflare account/);
+            },
+        );
+
+        it('recognises the operator token by value even without setting sources', () => {
+            expect(() =>
+                resolveEffectiveDeploymentContext({
+                    ...base,
+                    resolvedToken: 'platform-token',
+                } as any),
+            ).toThrow(/platform's Cloudflare account/);
+        });
+
+        it.each(['ever-works', 'ever-works-cloud'])(
+            'allows the platform token for a website repo in %s and flags platformManaged',
+            (owner) => {
+                const result = resolveEffectiveDeploymentContext({
+                    ...base,
+                    websiteOwner: owner,
+                    resolvedToken: 'platform-token',
+                    settingSources: { apiToken: 'env' },
+                } as any);
+                expect(result.settings.platformManaged).toBe(true);
+            },
+        );
+
+        it('does not touch the k8s path', () => {
+            const result = resolveEffectiveDeploymentContext({
+                ...base,
+                deployProvider: 'vercel',
+                pluginId: 'vercel',
+                resolvedToken: 'platform-token',
+            } as any);
+            expect(result).toEqual({ token: 'platform-token', settings: base.settings });
+        });
+    });
 });

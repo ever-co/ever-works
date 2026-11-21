@@ -36,8 +36,8 @@ export interface SubdomainState {
     readonly recordOk: boolean;
     /**
      * `true` iff the caller can re-allocate via `PUT`. Gated on
-     * `work.deployProvider ∈ {'ever-works','k8s'}` AND, for k8s, the
-     * `K8S_MANAGED_SUBDOMAIN` env flag being active so operator
+     * `work.deployProvider ∈ {'ever-works','k8s','cloudflare'}` AND, for
+     * k8s, the `K8S_MANAGED_SUBDOMAIN` env flag being active so operator
      * opt-in is respected.
      */
     readonly editable: boolean;
@@ -156,7 +156,7 @@ export class ManagedSubdomainService {
             throw new BadRequestException({
                 status: 'error',
                 message:
-                    'Managed subdomain is not editable for this work (requires ever-works or k8s provider with managed mode active).',
+                    'Managed subdomain is not editable for this work (requires the ever-works or cloudflare provider, or k8s with managed mode active).',
             });
         }
 
@@ -172,6 +172,15 @@ export class ManagedSubdomainService {
                 status: 'error',
                 message: `Subdomain "${normalized}" is already claimed by another work.`,
             });
+        }
+
+        // Cloudflare Workers: the label is the Worker's hostname label, and
+        // the Workers Custom Domain that `wrangler deploy` attaches brings its
+        // own DNS record (a CNAME to the k8s LB here would even block it).
+        // So a rename only re-claims the label; the next deploy publishes the
+        // site at the new hostname, on a new `ew-<label>` Worker.
+        if (this.isCloudflare(work)) {
+            return this.renameWithoutDns(work, currentSubdomain, normalized);
         }
 
         const provider = this.dnsService.getProvider();
@@ -281,7 +290,7 @@ export class ManagedSubdomainService {
      * `applyManagedSubdomain`. For `'k8s'` we additionally require the
      * `K8S_MANAGED_SUBDOMAIN` flag so operators opt-in per env —
      * matches the gate in `DeployService.isManagedSubdomainForK8sEnabled`.
-     * `'ever-works'` is always managed.
+     * `'ever-works'` and `'cloudflare'` are always managed.
      */
     private isEditable(work: Work): boolean {
         const provider = (work.deployProvider ?? '').trim().toLowerCase();
@@ -291,7 +300,40 @@ export class ManagedSubdomainService {
         if (provider === 'k8s') {
             return process.env.K8S_MANAGED_SUBDOMAIN === 'true';
         }
-        return false;
+        // The Cloudflare Workers provider always deploys on the managed
+        // subdomain (`DeployService.applyCloudflareSubdomain`); no flag.
+        return this.isCloudflare(work);
+    }
+
+    private isCloudflare(work: Work): boolean {
+        return (work.deployProvider ?? '').trim().toLowerCase() === 'cloudflare';
+    }
+
+    /**
+     * Rename for a provider whose hosting owns the DNS record (Cloudflare
+     * Workers Custom Domains): persist the new label — the partial unique
+     * index stays the race backstop — and touch no DNS.
+     */
+    private async renameWithoutDns(
+        work: Work,
+        currentSubdomain: string,
+        normalized: string,
+    ): Promise<SubdomainState> {
+        try {
+            await this.workRepository.update(work.id, { managedSubdomain: normalized });
+        } catch (cause) {
+            if (this.isUniqueViolation(cause)) {
+                throw new ConflictException({
+                    status: 'error',
+                    message: `Subdomain "${normalized}" was just claimed by another work. Please pick a different one.`,
+                });
+            }
+            throw cause;
+        }
+        this.logger.log(
+            `Managed subdomain for work ${work.id} updated: ${currentSubdomain || '(unset)'} -> ${normalized} (no DNS change; takes effect on the next deploy)`,
+        );
+        return this.getState(work.id);
     }
 
     private fallbackRootDomain(): string {

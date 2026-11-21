@@ -263,6 +263,51 @@ describe('DeploymentVerifierService', () => {
             expect((failedEvent as any).payload.terminalState).toBe('TIMEOUT');
         });
 
+        it('cloudflare: tolerates not-found for the whole build (the Worker appears only at the end), then READY', async () => {
+            deployFacade.lookupExistingDeployment.mockResolvedValue({ found: false } as any);
+            pluginRegistry.get.mockReturnValue({ plugin: {} } as any);
+
+            await service.startVerification(
+                buildWork({ deployProvider: 'cloudflare' }) as any,
+                'user-1',
+            );
+
+            // Well past the 3-minute discovery limit of the other providers.
+            for (let i = 0; i < FETCH_LIMIT * 3; i++) {
+                await jest.advanceTimersByTimeAsync(POLL_INTERVAL_MS);
+            }
+            expect(repository.update).not.toHaveBeenCalledWith('work-1', {
+                deploymentState: 'TIMEOUT',
+            });
+
+            deployFacade.lookupExistingDeployment.mockResolvedValue({
+                found: true,
+                website: 'https://crm.ever.works',
+                deploymentState: 'READY',
+            } as any);
+            await jest.advanceTimersByTimeAsync(POLL_INTERVAL_MS);
+
+            expect(repository.update).toHaveBeenCalledWith('work-1', { deploymentState: 'READY' });
+        });
+
+        it('cloudflare: still times out when the Worker never appears within the overall budget', async () => {
+            deployFacade.lookupExistingDeployment.mockResolvedValue({ found: false } as any);
+            pluginRegistry.get.mockReturnValue({ plugin: {} } as any);
+
+            await service.startVerification(
+                buildWork({ deployProvider: 'cloudflare' }) as any,
+                'user-1',
+            );
+
+            // 13 minutes at 10 s per poll is 78 polls; the 79th not-found ends it.
+            for (let i = 0; i < 80; i++) {
+                await jest.advanceTimersByTimeAsync(POLL_INTERVAL_MS);
+            }
+            expect(repository.update).toHaveBeenCalledWith('work-1', {
+                deploymentState: 'TIMEOUT',
+            });
+        });
+
         it('intermediate state (BUILDING / QUEUED) updates deploymentState in place but does NOT terminate', async () => {
             deployFacade.lookupExistingDeployment.mockResolvedValueOnce({
                 found: true,

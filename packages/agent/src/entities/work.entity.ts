@@ -201,7 +201,7 @@ export class Work {
     // null to stay out of the Ever Works Deploy quota counter. Still no
     // schema change — the column was already `nullable: true` varchar.
     @Column({ type: 'varchar', default: 'ever-works', nullable: true })
-    deployProvider?: string | null; // 'ever-works' | 'vercel' | 'k8s' | null (company) | ...
+    deployProvider?: string | null; // 'ever-works' | 'vercel' | 'k8s' | 'cloudflare' | null (company) | ...
 
     @Column({ nullable: true })
     website: string;
