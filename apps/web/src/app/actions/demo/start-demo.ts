@@ -12,6 +12,7 @@ type StartDemoResult =
     | {
           success: false;
           reason: 'throttled' | 'full' | 'captcha' | 'error';
+          /** For logs and tests only, never shown: the UI words `reason` through i18n. */
           error: string;
       };
 
