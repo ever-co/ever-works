@@ -127,6 +127,7 @@ A Work's **kind** is chosen once, at creation, and decides what that Work has. T
 | [Custom Domains](./custom-domains.md)        | Assign your own domain name to a work's deployed website                                               |
 | [Managed Hosting](./managed-hosting.md)      | A `*.ever.works` address, a database per Work, managed Git storage and DNS — nothing to operate        |
 | [K8s Deployment](./k8s-deployment.md)        | Deploy a Work to a Kubernetes cluster                                                                  |
+| [Cloudflare](./cloudflare-deployment.md)     | Host a static directory website on Cloudflare Workers, one Worker per Work                             |
 | [MCP Server](./mcp-server.md)                | Expose the Ever Works API as tools for AI assistants like Claude                                       |
 | [MCP Connections](./mcp-connections.md)      | The other direction — register external MCP servers and bind their tools to an Agent                   |
 | [Plugins](./plugins.md)                      | Every plugin your install carries, what each socket does, and how to enable and configure one          |

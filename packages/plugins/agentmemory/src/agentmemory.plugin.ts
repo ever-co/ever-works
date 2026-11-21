@@ -74,7 +74,9 @@ export class AgentmemoryPlugin implements IPlugin, IAgentMemoryPlugin {
 				title: 'agentmemory base URL',
 				description:
 					'REST endpoint of the agentmemory server. Defaults to http://localhost:3111 (matches the `npx agentmemory` server). Set to your hosted instance for a shared deployment. Falls back to the AGENTMEMORY_BASE_URL env var when empty.',
-				default: DEFAULT_BASE_URL,
+				// No schema `default`: the settings service resolves an unset field
+				// to its schema default, which would shadow the env-var fallback in
+				// resolveSettings. The client applies the default itself.
 				'x-scope': 'user'
 			},
 			apiKey: {
@@ -225,7 +227,10 @@ export class AgentmemoryPlugin implements IPlugin, IAgentMemoryPlugin {
 			builtIn: true,
 			autoEnable: false,
 			visibility: 'public',
-			defaultForCapabilities: ['agent-memory'],
+			// Not the default since the Memanto plugin landed: Memanto is the
+			// preferred agent-memory provider whenever it is enabled; this one
+			// stays the zero-config, fully offline option (and wins whenever it
+			// is the only agent-memory plugin enabled for a scope).
 			homepage: 'https://github.com/rohitg00/agentmemory',
 			uiHints: {
 				includeInOnboarding: false,

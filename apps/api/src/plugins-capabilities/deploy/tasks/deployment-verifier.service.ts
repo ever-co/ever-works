@@ -24,6 +24,7 @@ const isTerminalState = (state: DeploymentReadyState): state is DeploymentTermin
 
 const KUBERNETES_DEPLOY_PROVIDER_ID = 'k8s';
 const EVER_WORKS_DEPLOY_PROVIDER_ID = 'ever-works';
+const CLOUDFLARE_DEPLOY_PROVIDER_ID = 'cloudflare';
 
 const MAX_DEPLOYMENT_ERROR_LENGTH = 500;
 
@@ -88,9 +89,16 @@ export class DeploymentVerifierService {
         teamScope?: string,
         deploymentId?: string,
     ): Promise<CancelVerification> {
-        const FETCH_LIMIT = 18; // 3 minutes (POLL_INTERVAL * FETCH_LIMIT)
         const POLL_INTERVAL = 10 * 1000; // 10 seconds
         const TIMEOUT = 13 * 60 * 1000; // 13 minutes
+        // How long "no deployment yet" is tolerated: 3 minutes. A Cloudflare
+        // Worker only exists once the workflow's `wrangler deploy` ran, AFTER
+        // the whole site build, so a first deploy answers "not found" for the
+        // entire build: wait up to the overall TIMEOUT instead.
+        const FETCH_LIMIT =
+            work.deployProvider === CLOUDFLARE_DEPLOY_PROVIDER_ID
+                ? Math.ceil(TIMEOUT / POLL_INTERVAL)
+                : 18;
 
         const deployment = deploymentId
             ? await this.deploymentRepository.findById(deploymentId)

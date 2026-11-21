@@ -117,7 +117,7 @@ export class CreateWorkDto {
 
     @ApiPropertyOptional({
         description:
-            "Deploy provider for this work. One of 'ever-works' (default for users who picked Ever Works in onboarding), 'vercel', 'k8s'. " +
+            "Deploy provider for this work. One of 'ever-works' (default for users who picked Ever Works in onboarding), 'vercel', 'k8s', 'cloudflare' (Cloudflare Workers static hosting). " +
             'When omitted the server seeds from the user’s onboarding choice; failing that, falls back to the historical default of vercel.',
         example: 'ever-works',
     })

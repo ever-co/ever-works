@@ -1,0 +1,192 @@
+---
+# ─────────────────────────────────────────────────────────────────────────────
+# Memanto — OPTIONAL self-hosted deployment for the `memanto` agent-memory
+# plugin (the platform's default agent-memory provider when enabled).
+#
+# Like `agentmemory.optional.yaml`, this is intentionally NOT included from
+# any environment manifest (`k8s-manifest.{dev,stage,prod}.yaml`) — operators
+# opt in by applying it.
+#
+# Memanto is a thin FastAPI layer; storage, embeddings and search run on
+# Moorcheh. Pick ONE backend:
+#
+#   cloud   (default) Moorcheh Cloud. Needs MOORCHEH_API_KEY (trial, then paid:
+#           https://www.moorcheh.ai/pricing). Memory text is sent to Moorcheh.
+#   on-prem A Moorcheh server you run (`moorcheh/server` image + Ollama). Its
+#           Community Edition licence allows ONE node and NON-COMMERCIAL use
+#           only — a commercial deployment needs a Moorcheh Enterprise
+#           licence. Set MEMANTO_BACKEND=on-prem and MOORCHEH_ONPREM_URL.
+#
+# Build the image first (Docker Hub's moorcheh/memanto lags PyPI):
+#
+#   docker build -f .deploy/docker/memanto/Dockerfile -t <registry>/memanto:0.3.0 .
+#
+# The Secret uses shell-style placeholders — `kubectl apply` does NOT expand
+# them, so render it (or replace it with sealed-secrets / external-secrets):
+#
+#   export MOORCHEH_API_KEY=...                          # cloud backend
+#   export MEMANTO_SECRET_KEY="$(openssl rand -hex 32)"  # one-time
+#   export MEMANTO_IMAGE=<registry>/memanto:0.3.0
+#   envsubst < .deploy/k8s/memanto.optional.yaml | kubectl apply -n ever-works -f -
+#
+# Then point the plugin at it. Setting the env on the API Deployment turns Memanto
+# on as the agent-memory provider for EVERY user and agent (it is auto-enabled
+# and the default; without a configured server the platform skips it):
+#   baseUrl = http://memanto.ever-works.svc.cluster.local:8000   (MEMANTO_BASE_URL)
+#   apiKey  = $MOORCHEH_API_KEY on cloud, $MEMANTO_SECRET_KEY on-prem (MEMANTO_API_KEY)
+#
+# Memanto trusts LOOPBACK callers without a key, so never run it as a sidecar
+# in the API pod: as its own Service (below) every caller must present the key.
+#
+# Credential blast radius: on the cloud backend Memanto uses MOORCHEH_API_KEY as
+# its OWN management credential (upstream design, not configurable), so the
+# plugin apiKey is the Moorcheh billing key and can also call Moorcheh directly.
+# Keep it only in this Secret and the API Secret, and rotate it with both if
+# either is exposed. The on-prem backend uses MEMANTO_SECRET_KEY instead, which
+# only reaches Memanto. The image refuses to start with an unrendered
+# `$VARIABLE` placeholder as a credential, or a MEMANTO_SECRET_KEY shorter than
+# 32 characters.
+# ─────────────────────────────────────────────────────────────────────────────
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: memanto
+  labels:
+    app: memanto
+spec:
+  selector:
+    app: memanto
+  ports:
+    - name: rest
+      protocol: TCP
+      port: 8000
+      targetPort: 8000
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: memanto-data
+  labels:
+    app: memanto
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      # Only Memanto's own state lives here (agent registry, auth sessions,
+      # expiry policies, conflict reports) — the memories are in Moorcheh.
+      storage: 1Gi
+
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: memanto-secret
+  labels:
+    app: memanto
+type: Opaque
+stringData:
+  MOORCHEH_API_KEY: '$MOORCHEH_API_KEY'
+  MEMANTO_SECRET_KEY: '$MEMANTO_SECRET_KEY'
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: memanto
+  labels:
+    app: memanto
+spec:
+  # ONE replica: Memanto keeps its agent registry and the single live
+  # session per agent on local disk. Several replicas would each hold their
+  # own registry and rotate each other's session tokens. Known single-node
+  # limit: a rollout (Recreate) leaves agent memory down for the restart;
+  # agent runs and pipelines treat memory as best-effort and carry on
+  # without recall meanwhile.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: memanto
+  template:
+    metadata:
+      labels:
+        app: memanto
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        fsGroup: 1001
+        seccompProfile:
+          type: RuntimeDefault
+      automountServiceAccountToken: false
+      containers:
+        - name: memanto
+          image: '$MEMANTO_IMAGE'
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop:
+                - ALL
+          ports:
+            - name: rest
+              containerPort: 8000
+          env:
+            - name: MEMANTO_BACKEND
+              value: cloud
+            - name: MOORCHEH_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: memanto-secret
+                  key: MOORCHEH_API_KEY
+            - name: MEMANTO_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: memanto-secret
+                  key: MEMANTO_SECRET_KEY
+            # on-prem backend instead of cloud:
+            # - name: MEMANTO_BACKEND
+            #   value: on-prem
+            # - name: MOORCHEH_ONPREM_URL
+            #   value: http://moorcheh:8080
+            # Renew a near-expiry session transparently for callers that also
+            # send the management key (the plugin always does).
+            - name: SESSION_AUTO_ACTIVATE_ENABLED
+              value: 'true'
+            # Interactive API docs stay off (default); the plugin does not need them.
+            - name: MEMANTO_ENABLE_DOCS
+              value: 'false'
+          volumeMounts:
+            - name: data
+              mountPath: /home/memanto/.memanto
+          # /ready and /live never call Moorcheh; /health does (and spends
+          # credits on the cloud backend), so it is not used as a probe.
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /live
+              port: 8000
+            initialDelaySeconds: 20
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: '100m'
+              memory: '256Mi'
+            limits:
+              cpu: '1000m'
+              memory: '1Gi'
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: memanto-data

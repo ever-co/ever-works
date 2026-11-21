@@ -98,8 +98,17 @@ export class SubdomainAllocator {
      *                when that's also unconfigured (no env vars in dev)
      *                the probe is skipped — the DB uniqueness check + DB
      *                unique index alone keep allocation safe.
+     * @param options `baseLabel` — the first candidate to try instead of
+     *                `slugify(work.slug)` (the Cloudflare provider passes the
+     *                slug without its leading `awesome-`). It is slugified
+     *                the same way; an empty result falls back to the slug.
+     *                Ignored when a label is already persisted.
      */
-    async allocate(work: Work, dnsOps?: IDnsOperations): Promise<SubdomainAllocationResult> {
+    async allocate(
+        work: Work,
+        dnsOps?: IDnsOperations,
+        options?: { baseLabel?: string },
+    ): Promise<SubdomainAllocationResult> {
         const rootDomain = dnsOps?.rootDomain?.() ?? this.resolveRootDomain();
 
         // (1) idempotent reuse
@@ -114,7 +123,7 @@ export class SubdomainAllocator {
             };
         }
 
-        const base = this.slugifyLabel(work.slug);
+        const base = this.slugifyLabel(options?.baseLabel) || this.slugifyLabel(work.slug);
         if (!base) {
             throw new Error(
                 `SubdomainAllocator: work ${work.id} has no usable slug (got: ${JSON.stringify(work.slug)})`,

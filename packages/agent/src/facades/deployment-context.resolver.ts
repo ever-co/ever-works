@@ -19,6 +19,12 @@ export type DeploymentContextResolutionErrorCode =
     | 'PLATFORM_KUBECONFIG_MISSING'
     | 'RESERVED_NAMESPACE';
 
+/** Plugin id of the Cloudflare Workers deploy provider (`@ever-works/cloudflare-workers-plugin`). */
+export const CLOUDFLARE_DEPLOY_PROVIDER_ID = 'cloudflare';
+
+/** Operator env var holding the platform's own Cloudflare deploy token (the plugin's `apiToken` fallback). */
+export const CLOUDFLARE_PLATFORM_TOKEN_ENV = 'CLOUDFLARE_DEPLOY_API_TOKEN';
+
 export class DeploymentContextResolutionError extends Error {
     constructor(
         message: string,
@@ -40,6 +46,8 @@ export interface EffectiveDeploymentContextInput {
     readonly websiteProjectName?: string;
     readonly workId: string;
     readonly workSlug?: string | null;
+    /** The Work's persisted managed subdomain label (Cloudflare uses it as the hostname label). */
+    readonly managedSubdomain?: string | null;
     readonly ownerUserId?: string | null;
     readonly isPlatformAdmin?: boolean;
     readonly env?: NodeJS.ProcessEnv;
@@ -178,9 +186,78 @@ export function isSharedClusterSource(clusterSource: ClusterSource): boolean {
     return source === 'k8s-works-shared' || source.includes('shared');
 }
 
+/**
+ * Is the Cloudflare deploy credential the operator's (`CLOUDFLARE_DEPLOY_API_TOKEN`, or an admin/platform
+ * setting) rather than the member's own? Decided by where `apiToken` resolved from, and — whatever the
+ * sources say — by the token being byte-for-byte the operator's env token.
+ */
+export function isPlatformCloudflareToken(
+    resolvedToken: string,
+    settingSources?: Readonly<Record<string, SettingSource | undefined>>,
+    env: NodeJS.ProcessEnv = process.env,
+): boolean {
+    const source = settingSources?.apiToken;
+    if (source !== undefined && source !== 'user' && source !== 'work') {
+        return true;
+    }
+    const platformToken = env[CLOUDFLARE_PLATFORM_TOKEN_ENV]?.trim();
+    return Boolean(platformToken) && resolvedToken.trim() === platformToken;
+}
+
+/**
+ * Cloudflare Workers: the deploy pushes the token into the website repository as `CLOUDFLARE_TOKEN`, where
+ * anyone who can push a workflow to that repository can read it. The operator's token reaches every
+ * Worker and zone of the operator's account, so it is only ever pushed to a repository in an Ever Works
+ * organisation (`ever-works`, `ever-works-cloud`), whose workflows the platform controls. Anywhere else the
+ * member must connect their own Cloudflare account.
+ *
+ * The plugin also receives the facts it derives the Worker from (`managedSubdomain`, `workSlug`) and
+ * whether the credential is the operator's (`platformManaged`), which makes it ignore the member's
+ * account, zone and Worker prefix.
+ */
+function resolveCloudflareDeploymentContext(
+    input: EffectiveDeploymentContextInput,
+): EffectiveDeploymentContext {
+    const platformManaged = isPlatformCloudflareToken(
+        input.resolvedToken,
+        input.settingSources,
+        input.env ?? process.env,
+    );
+    if (platformManaged && !isEverWorksSharedOrg(input.websiteOwner)) {
+        throw new DeploymentContextResolutionError(
+            `The platform's Cloudflare account only hosts websites whose repository is in an Ever Works ` +
+                `GitHub organisation; this Work's website repository is in '${input.websiteOwner}'. ` +
+                `Add your own Cloudflare API token and account ID in the Cloudflare Workers plugin settings.`,
+            'DEPLOY_MATRIX_VIOLATION',
+            'CLOUDFLARE_PLATFORM_TOKEN_NOT_ALLOWED',
+        );
+    }
+    const settings: Record<string, unknown> = {
+        ...input.settings,
+        platformManaged,
+        workSlug: input.workSlug ?? null,
+        managedSubdomain: input.managedSubdomain?.trim().toLowerCase() || null,
+    };
+    return {
+        token: input.resolvedToken,
+        settings,
+        lookupContext: {
+            settingsOverride: settings,
+            projectNameOverride: input.websiteProjectName,
+        },
+    };
+}
+
 export function resolveEffectiveDeploymentContext(
     input: EffectiveDeploymentContextInput,
 ): EffectiveDeploymentContext {
+    if (
+        input.deployProvider === CLOUDFLARE_DEPLOY_PROVIDER_ID ||
+        input.pluginId === CLOUDFLARE_DEPLOY_PROVIDER_ID
+    ) {
+        return resolveCloudflareDeploymentContext(input);
+    }
+
     const isKubernetes =
         input.deployProvider === KUBERNETES_DEPLOY_PROVIDER_ID ||
         input.deployProvider === EVER_WORKS_DEPLOY_PROVIDER_ID ||
