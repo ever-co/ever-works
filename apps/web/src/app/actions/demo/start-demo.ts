@@ -68,11 +68,14 @@ export async function startDemo(input: { captchaToken?: string }): Promise<Start
 /**
  * The landing scope is navigation only: the sandbox is already started and its cookie set,
  * so a failed lookup lands on the dashboard rather than failing the start (as `login` does).
+ * The failure is logged, as the login twin (`resolveLoginDefaultWorkspaceHref` in
+ * `../auth.ts`) logs it, so a lookup that keeps failing is visible in the server logs.
  */
 async function landingHref(): Promise<string> {
     try {
         return await getLoginDefaultWorkspaceHref();
-    } catch {
+    } catch (error) {
+        console.error('Unable to resolve the demo landing workspace', error);
         return ROUTES.DASHBOARD;
     }
 }
