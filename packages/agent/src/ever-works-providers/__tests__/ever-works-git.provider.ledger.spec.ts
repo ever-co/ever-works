@@ -445,6 +445,94 @@ describe('EverWorksGitProvider — demo repository ledger', () => {
         });
     });
 
+    /**
+     * The sweeper's proof that a 404 of a repository means "gone": GitHub answers 404 too for a
+     * repository the PAT cannot see, so it first checks the PAT sees the org at all.
+     */
+    describe('getOrganizationId', () => {
+        function orgBody(login: string, id: number): Response {
+            return json(200, { login, id, url: `https://api.github.com/orgs/${login}` });
+        }
+
+        it("answers the org's id from GET /orgs/{org} with the PAT, following no redirect", async () => {
+            const fetchImpl = recordingFetch(orgBody(ORG, 160000001));
+            const provider = new EverWorksGitProvider();
+
+            await expect(provider.getOrganizationId(ORG, { fetchImpl })).resolves.toBe(160000001);
+
+            expect(fetchImpl).toHaveBeenCalledTimes(1);
+            const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+            expect(url).toBe(`https://api.github.com/orgs/${ORG}`);
+            expect(init.method).toBe('GET');
+            expect(init.redirect).toBe('manual');
+            expect((init.headers as Record<string, string>).authorization).toBe('Bearer ghp_test');
+        });
+
+        it('matches the login case-insensitively, as GitHub does', async () => {
+            const fetchImpl = recordingFetch(orgBody('Ever-Works-Cloud', 7));
+            const provider = new EverWorksGitProvider();
+
+            await expect(provider.getOrganizationId(ORG, { fetchImpl })).resolves.toBe(7);
+        });
+
+        it('answers null on 404 (the PAT cannot see the org, or it does not exist)', async () => {
+            const fetchImpl = recordingFetch(json(404, { message: 'Not Found' }));
+            const provider = new EverWorksGitProvider();
+
+            await expect(provider.getOrganizationId(ORG, { fetchImpl })).resolves.toBeNull();
+        });
+
+        it.each([401, 403, 500])('throws on a %p', async (status) => {
+            const fetchImpl = recordingFetch(json(status, { message: 'Bad credentials' }));
+            const provider = new EverWorksGitProvider();
+
+            await expect(provider.getOrganizationId(ORG, { fetchImpl })).rejects.toMatchObject({
+                status,
+            });
+        });
+
+        it('throws on a redirect (a renamed org is not the org asked for)', async () => {
+            const fetchImpl = recordingFetch(
+                new Response(null, {
+                    status: 301,
+                    headers: { location: 'https://api.github.com/organizations/1' },
+                }),
+            );
+            const provider = new EverWorksGitProvider();
+
+            await expect(provider.getOrganizationId(ORG, { fetchImpl })).rejects.toBeInstanceOf(
+                EverWorksGitRequestError,
+            );
+        });
+
+        it('throws when GitHub answers for a different org', async () => {
+            const fetchImpl = recordingFetch(orgBody('someone-else', 5));
+            const provider = new EverWorksGitProvider();
+
+            await expect(provider.getOrganizationId(ORG, { fetchImpl })).rejects.toBeInstanceOf(
+                EverWorksGitRequestError,
+            );
+        });
+
+        it('encodes the org into the path, and never asks for its repositories', async () => {
+            const fetchImpl = recordingFetch(json(404, {}));
+            const provider = new EverWorksGitProvider();
+
+            await provider.getOrganizationId('x/repos', { fetchImpl });
+
+            expect(fetchImpl.mock.calls[0][0]).toBe('https://api.github.com/orgs/x%2Frepos');
+        });
+
+        it('needs the PAT when no transport is injected', async () => {
+            process.env.EVER_WORKS_CUSTOMERS_GITHUB_PAT = '';
+            const provider = new EverWorksGitProvider();
+
+            await expect(provider.getOrganizationId(ORG)).rejects.toBeInstanceOf(
+                EverWorksGitMisconfiguredError,
+            );
+        });
+    });
+
     describe('deleteRepository', () => {
         describe('with the demo on', () => {
             beforeEach(() => {

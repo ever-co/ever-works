@@ -63,6 +63,13 @@ const SWEEP_MAX_LIFETIME_MS = 14 * 60 * 1000;
 type SandboxOutcome = 'purged' | 'pending' | 'deferred' | 'held';
 
 /**
+ * Whether this sweep may trust a repository 404 as "gone": `null` once the platform PAT was
+ * shown to see the demo org, else why not. Asked at most once per sweep run (see
+ * `DemoSandboxSweeperService.orgAccessCheck`).
+ */
+type OrgAccessCheck = () => Promise<string | null>;
+
+/**
  * Platform demo mode — deletes expired demo sandboxes and the GitHub repositories they
  * created (design §5.2.5). Registered only by `DemoModule.register()` with `DEMO` on, so the
  * cron does not exist on any other instance.
@@ -76,9 +83,13 @@ type SandboxOutcome = 'purged' | 'pending' | 'deferred' | 'held';
  * mid-sweep):
  *   1. each pending ledger row: refused — warned, `attempts` + 1 — unless the owner is
  *      `DEMO_GITHUB_ORG` and the name starts with `DEMO_REPO_PREFIX`;
- *   2. its live GitHub id: none (404) is already gone (closed); an id that differs from the
- *      recorded one is refused (`id mismatch`); otherwise the repository is deleted and the
- *      row closed (`canDeleteLedgerRepo` decides);
+ *   2. its live GitHub id: none (404) is already gone (closed) — but only once the sweep has
+ *      seen the platform PAT answer `GET /orgs/{DEMO_GITHUB_ORG}` (asked once per run, on its
+ *      first 404): GitHub answers 404 too for a repository the PAT cannot see, so with a revoked
+ *      PAT every row would otherwise close as gone and leak its repository. While that check
+ *      fails, every 404 of the run is a failure (logged once; the row's `attempts` + 1). An id
+ *      that differs from the recorded one is refused (`id mismatch`); otherwise the repository
+ *      is deleted and the row closed (`canDeleteLedgerRepo` decides);
  *   3. only once no row of the sandbox is pending — and no generation of it is in flight (a
  *      worker could still make a repository), unless the sandbox expired more than
  *      {@link DEMO_GENERATION_DEFERRAL_MAX_MS} ago — `DemoSandboxPurgeService` removes its
@@ -134,12 +145,13 @@ export class DemoSandboxSweeperService {
         let held = 0;
         let deferred = 0;
         let after: { expiresAt: Date; id: string } | undefined;
+        const orgAccess = this.orgAccessCheck();
         scan: for (let page = 0; page < DEMO_SWEEPER_MAX_PAGES; page += 1) {
             const expired = await this.users.findExpiredDemo(now, DEMO_SWEEPER_BATCH, after);
             for (const user of expired) {
                 scanned += 1;
                 after = { expiresAt: user.anonymousExpiresAt as Date, id: user.id };
-                const outcome = await this.sweepSandboxLocked(user, now, summary);
+                const outcome = await this.sweepSandboxLocked(user, now, summary, orgAccess);
                 if (outcome === 'held') held += 1;
                 else if (outcome === 'deferred') deferred += 1;
                 else acted += 1;
@@ -164,14 +176,45 @@ export class DemoSandboxSweeperService {
         return summary;
     }
 
+    /**
+     * The sweep run's {@link OrgAccessCheck}: on its first call it asks GitHub for the demo org
+     * (`GET /orgs/{DEMO_GITHUB_ORG}`, one call, never the org's repository list) and every later
+     * call of the run reuses that answer. A failed check is logged once, at error level.
+     */
+    private orgAccessCheck(): OrgAccessCheck {
+        let verdict: Promise<string | null> | undefined;
+        return () => (verdict ??= this.checkOrgAccess());
+    }
+
+    private async checkOrgAccess(): Promise<string | null> {
+        const org = config.demo.githubOrg();
+        let problem: string;
+        try {
+            if (!org) problem = 'DEMO_GITHUB_ORG is not set';
+            else if ((await this.everWorksGit.getOrganizationId(org)) !== null) return null;
+            else problem = `GET /orgs/${org} answered 404`;
+        } catch (error) {
+            problem = `GET /orgs/${org} failed: ${messageOf(error)}`;
+        }
+        const reason = `404 not trusted: the platform token cannot see the demo org ${org} (${problem})`;
+        this.logger.error(
+            `demo sweep: the platform token cannot see the demo org ${org} (${problem}); ` +
+                'no ledger row is closed as gone this run, every repository 404 counts as a failure',
+        );
+        return reason;
+    }
+
     /** One sandbox under its create lock; an error is logged, counted, and takes a slot. */
     private async sweepSandboxLocked(
         user: User,
         now: Date,
         summary: DemoSweepSummary,
+        orgAccess: OrgAccessCheck,
     ): Promise<SandboxOutcome | 'failed'> {
         try {
-            return await withDemoSandboxLock(user.id, () => this.sweepSandbox(user, now, summary));
+            return await withDemoSandboxLock(user.id, () =>
+                this.sweepSandbox(user, now, summary, orgAccess),
+            );
         } catch (error) {
             summary.failures += 1;
             this.logger.error(`demo sweep: sandbox ${user.id} failed: ${messageOf(error)}`);
@@ -183,6 +226,7 @@ export class DemoSandboxSweeperService {
         user: User,
         now: Date,
         summary: DemoSweepSummary,
+        orgAccess: OrgAccessCheck,
     ): Promise<SandboxOutcome> {
         const rows = await this.ledger.pendingForSandbox(user.id);
         const stuck = rows.filter((row) => row.attempts >= DEMO_LEDGER_MAX_ATTEMPTS);
@@ -210,7 +254,7 @@ export class DemoSandboxSweeperService {
         }
 
         for (const row of rows) {
-            await this.sweepRepository(user, row, now, summary);
+            await this.sweepRepository(user, row, now, summary, orgAccess);
         }
 
         if ((await this.ledger.pendingForSandbox(user.id)).length > 0) return 'pending';
@@ -272,6 +316,7 @@ export class DemoSandboxSweeperService {
         row: DemoGithubRepo,
         now: Date,
         summary: DemoSweepSummary,
+        orgAccess: OrgAccessCheck,
     ): Promise<void> {
         const target = `${row.owner}/${row.name}`;
         if (row.sandboxUserId !== user.id) {
@@ -288,6 +333,13 @@ export class DemoSandboxSweeperService {
         try {
             const liveId = await this.everWorksGit.getRepositoryId(row.owner, row.name);
             if (liveId === null) {
+                // A 404 is "gone" only if the PAT can see the org at all (asked once a run).
+                const untrusted = await orgAccess();
+                if (untrusted !== null) {
+                    summary.failures += 1;
+                    await this.markFailed(row, untrusted);
+                    return;
+                }
                 await this.ledger.markDeleted(row.id, now);
                 summary.reposDeleted += 1;
                 this.logger.log(`demo sweep: ${target} of sandbox ${user.id} was already gone`);

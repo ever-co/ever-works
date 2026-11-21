@@ -75,7 +75,11 @@ const NOW = new Date('2026-11-20T12:00:00.000Z');
 const EXPIRED = new Date('2026-11-20T11:00:00.000Z');
 const ALIVE = new Date('2026-11-21T11:00:00.000Z');
 
-type GitDouble = { getRepositoryId: jest.Mock; deleteRepository: jest.Mock };
+type GitDouble = {
+    getRepositoryId: jest.Mock;
+    getOrganizationId: jest.Mock;
+    deleteRepository: jest.Mock;
+};
 
 describe('DemoSandboxSweeperService', () => {
     const ORIGINAL_ENV = { ...process.env };
@@ -132,6 +136,8 @@ describe('DemoSandboxSweeperService', () => {
 
         git = {
             getRepositoryId: jest.fn(async () => null),
+            // The PAT sees the demo org, so a repository 404 means "gone".
+            getOrganizationId: jest.fn(async () => 160000001),
             deleteRepository: jest.fn(async () => 'deleted'),
         };
         // The Work delete path (`WorkLifecycleService.deleteWork`, repositories kept): here it
@@ -374,6 +380,151 @@ describe('DemoSandboxSweeperService', () => {
         expect((await row(repo.id)).deletedAt).toEqual(NOW);
         expect(await userExists(user.id)).toBe(false);
         expect(summary).toEqual({ sandboxes: 1, reposDeleted: 1, reposSkipped: 0, failures: 0 });
+    });
+
+    /**
+     * GitHub answers 404 for a repository the PAT cannot see as for one that is gone. A revoked
+     * PAT, or one moved off the org, would otherwise close every ledger row as gone and leak its
+     * repository silently. So a sweep trusts a 404 only once `GET /orgs/{DEMO_GITHUB_ORG}`
+     * answered the org, asked once per sweep run, on its first 404.
+     */
+    describe('a 404 is trusted only once the PAT is shown to see the org', () => {
+        it('asks once per sweep, on the first 404, then closes every 404 row as gone', async () => {
+            const first = await sandbox();
+            const second = await sandbox();
+            const rows = [
+                await ledgerRow(first.user.id, 'demo-00000001-foo'),
+                await ledgerRow(first.user.id, 'demo-00000001-foo-website'),
+                await ledgerRow(second.user.id, 'demo-00000002-bar'),
+            ];
+
+            const summary = await sweeper.sweep(NOW);
+
+            expect(git.getOrganizationId).toHaveBeenCalledTimes(1);
+            expect(git.getOrganizationId).toHaveBeenCalledWith(ORG);
+            for (const entry of rows) expect((await row(entry.id)).deletedAt).toEqual(NOW);
+            expect(summary).toEqual({
+                sandboxes: 2,
+                reposDeleted: 3,
+                reposSkipped: 0,
+                failures: 0,
+            });
+        });
+
+        it('makes no org call in a sweep that meets no 404', async () => {
+            const { user } = await sandbox();
+            await ledgerRow(user.id, 'demo-00000001-foo', 812345678);
+            git.getRepositoryId.mockResolvedValue(812345678);
+
+            await sweeper.sweep(NOW);
+            await sweeper.sweep(NOW);
+
+            expect(git.getOrganizationId).not.toHaveBeenCalled();
+            expect(git.deleteRepository).toHaveBeenCalledTimes(1);
+        });
+
+        it.each([
+            ['answers 404', () => git.getOrganizationId.mockResolvedValue(null)],
+            [
+                'throws',
+                () =>
+                    git.getOrganizationId.mockRejectedValue(
+                        new Error('GitHub responded 401 looking up the org: Bad credentials'),
+                    ),
+            ],
+        ])(
+            'when the org check %s, every 404 of the run is a failure: no row closed, no sandbox purged, logged once',
+            async (_label, failOrgCheck) => {
+                failOrgCheck();
+                const errors = jest
+                    .spyOn(Logger.prototype, 'error')
+                    .mockImplementation(() => undefined);
+                const first = await sandbox();
+                const second = await sandbox();
+                const rows = [
+                    await ledgerRow(first.user.id, 'demo-00000001-foo'),
+                    await ledgerRow(second.user.id, 'demo-00000002-bar'),
+                ];
+
+                const summary = await sweeper.sweep(NOW);
+
+                expect(git.getOrganizationId).toHaveBeenCalledTimes(1);
+                expect(git.deleteRepository).not.toHaveBeenCalled();
+                for (const entry of rows) {
+                    expect(await row(entry.id)).toMatchObject({
+                        deletedAt: null,
+                        attempts: 1,
+                        lastError: expect.stringContaining('404 not trusted'),
+                    });
+                }
+                expect(await userExists(first.user.id)).toBe(true);
+                expect(await userExists(second.user.id)).toBe(true);
+                expect(summary).toEqual({
+                    sandboxes: 0,
+                    reposDeleted: 0,
+                    reposSkipped: 0,
+                    failures: 2,
+                });
+                const orgErrors = errors.mock.calls.filter(([message]) =>
+                    String(message).includes(`cannot see the demo org ${ORG}`),
+                );
+                expect(orgErrors).toHaveLength(1);
+            },
+        );
+
+        it('still deletes a repository whose live id matches while the 404s are untrusted', async () => {
+            git.getOrganizationId.mockResolvedValue(null);
+            jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+            const { user } = await sandbox();
+            const live = await ledgerRow(user.id, 'demo-00000001-foo', 812345678);
+            const gone = await ledgerRow(user.id, 'demo-00000001-foo-website', 812345679);
+            git.getRepositoryId.mockImplementation(async (_owner: string, name: string) =>
+                name === 'demo-00000001-foo' ? 812345678 : null,
+            );
+
+            await sweeper.sweep(NOW);
+
+            expect(git.deleteRepository).toHaveBeenCalledWith(ORG, 'demo-00000001-foo');
+            expect((await row(live.id)).deletedAt).toEqual(NOW);
+            expect(await row(gone.id)).toMatchObject({ deletedAt: null, attempts: 1 });
+            expect(await userExists(user.id)).toBe(true);
+        });
+
+        it('asks again on the next sweep, and closes the row once the org is seen', async () => {
+            git.getOrganizationId.mockResolvedValueOnce(null);
+            jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+            const { user } = await sandbox();
+            const repo = await ledgerRow(user.id, 'demo-00000001-foo');
+
+            await sweeper.sweep(NOW);
+            expect((await row(repo.id)).deletedAt).toBeNull();
+
+            const summary = await sweeper.sweep(NOW);
+
+            expect(git.getOrganizationId).toHaveBeenCalledTimes(2);
+            expect((await row(repo.id)).deletedAt).toEqual(NOW);
+            expect(await userExists(user.id)).toBe(false);
+            expect(summary).toMatchObject({ sandboxes: 1, reposDeleted: 1, failures: 0 });
+        });
+
+        it('holds the sandbox for an operator after 3 sweeps of untrusted 404s', async () => {
+            git.getOrganizationId.mockResolvedValue(null);
+            const errors = jest
+                .spyOn(Logger.prototype, 'error')
+                .mockImplementation(() => undefined);
+            const { user } = await sandbox();
+            await ledgerRow(user.id, 'demo-00000001-foo');
+
+            for (let run = 0; run < 3; run += 1) await sweeper.sweep(NOW);
+            git.getRepositoryId.mockClear();
+            await sweeper.sweep(NOW);
+
+            expect(git.getRepositoryId).not.toHaveBeenCalled();
+            expect(errors).toHaveBeenCalledWith(
+                expect.stringMatching(new RegExp(`sandbox ${user.id} is held.*404 not trusted`)),
+            );
+            expect(await userExists(user.id)).toBe(true);
+        });
     });
 
     it('never deletes a live repository whose row has no recorded id, and keeps the sandbox (R28)', async () => {
@@ -903,6 +1054,8 @@ describe('DemoSandboxSweeperService', () => {
 
             expect(findExpired).not.toHaveBeenCalled();
             expect(git.getRepositoryId).not.toHaveBeenCalled();
+            expect(git.getOrganizationId).not.toHaveBeenCalled();
+            expect(git.deleteRepository).not.toHaveBeenCalled();
             expect(await userExists(user.id)).toBe(true);
             expect(summary).toEqual({
                 sandboxes: 0,
