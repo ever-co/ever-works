@@ -301,7 +301,9 @@ test.describe('flow: data-sync dispatch tick (deep, reconstructed via the shared
             expect(summary.failed, 'missing credentials is not a failure').toBe(0);
         } else {
             // Mixed/non-CI environments are still valid as long as the fold conserved
-            // and every status is from the closed union (already asserted above).
+            // and every status is from the closed union (already asserted above). The
+            // backoff is not covered here in any environment: Flows 2, 3 and 5 cover it
+            // with UNAVAILABLE_GIT_PROVIDER Works.
             test.info().annotations.push({
                 type: 'env-adaptive',
                 description: `tick fold = ${JSON.stringify(summary)} (not all-failed — git account may be connected).`,
@@ -687,28 +689,23 @@ test.describe('flow: data-sync dispatch tick (deep, reconstructed via the shared
 
         const first = await forceSync(request, token, w.id);
         expect(first.http).toBe(202);
+        // Where the no-credentials skip cannot be reached, the test is reported SKIPPED (not a
+        // green pass), so a run that covered none of it says so. CI has no connected account
+        // and loads the `github` plugin, so both branches stay off there.
         if (first.body.status === 'enqueued') {
-            test.info().annotations.push({
-                type: 'git-connected',
-                description:
-                    'first tick enqueued (a git account is connected — non-CI); the no-credentials skip does not apply.',
-            });
             expect(first.body.outcome).toBe('success');
-            return;
+            test.skip(
+                true,
+                'first tick enqueued (a git account is connected — non-CI); the no-credentials skip does not apply.',
+            );
         }
-        if (
+        // A throwaway API without GitHub configuration never loads the `github` plugin, so the
+        // credential lookup is never reached. CI and real instances load it.
+        test.skip(
             first.body.status === 'failed' &&
-            /Git provider not found: github/.test(String(first.body.errorTail))
-        ) {
-            // A throwaway API without GitHub configuration never loads the `github` plugin,
-            // so the credential lookup is never reached. CI and real instances load it.
-            test.info().annotations.push({
-                type: 'github-plugin-not-loaded',
-                description:
-                    'the github git provider is not loaded on this API; the no-credentials skip is not reachable here.',
-            });
-            return;
-        }
+                /Git provider not found: github/.test(String(first.body.errorTail)),
+            'the github git provider is not loaded on this API; the no-credentials skip is not reachable here.',
+        );
         expect(first.body, 'missing credentials is a typed skip').toMatchObject({
             status: 'skipped',
             reason: 'app-not-installed-and-no-credentials',
