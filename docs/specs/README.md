@@ -23,7 +23,8 @@ docs/specs/
 │   ├── 002-trigger-worker-callback-channel.md
 │   ├── 003-pnpm-overrides-strategy.md
 │   ├── 015-job-runtime-provider-pluggability.md  # Pluggable background-job runtime
-│   └── 016-dynamic-plugin-distribution.md  # Dual-mode bundled + runtime npm
+│   ├── 016-dynamic-plugin-distribution.md  # Dual-mode bundled + runtime npm
+│   └── 019-directory-hub-edge-worker.md    # One public MCP hub across all directories
 ├── architecture/                   # Cross-feature architecture docs
 │   ├── README.md                   # Reading order + companion-pair index
 │   ├── job-runtime-providers.md    # Pluggable runtime contract + worker models
@@ -60,6 +61,7 @@ docs/specs/
     ├── comparisons/
     ├── creating-a-work/
     ├── custom-domains/
+    ├── directory-hub/               # One MCP server across all directories (proposed)
     ├── dynamic-plugin-distribution/
     ├── data-generator/
     ├── data-management/
@@ -101,6 +103,7 @@ which now live folded into `tasks.md`).
 | [`custom-domains`](features/custom-domains/spec.md)                           | Retrospective | Branded domain assignment with provider sync                                                                                                                                                                         |
 | [`data-generator`](features/data-generator/spec.md)                           | Retrospective | Data repository management and item persistence                                                                                                                                                                      |
 | [`data-management`](features/data-management/spec.md)                         | Retrospective | Export / Import / GitHub Sync with secret hygiene                                                                                                                                                                    |
+| [`directory-hub`](features/directory-hub/spec.md)                             | Draft         | One public MCP server and API that searches every Ever Works directory at once                                                                                                                                       |
 | [`dynamic-plugin-distribution`](features/dynamic-plugin-distribution/spec.md) | Draft         | Dual-mode plugins: bundle all, or core-only + runtime npm install                                                                                                                                                    |
 | [`fleet`](features/fleet/README.md) (program, 20 epics)                       | Draft         | Run the machines, not just the Works: a Fleet hub, sessions on computers, desktop, logs, services, Docker, ports, files, commands, schedules, checkouts, VMs, cloud computers, Actions runners, agent/MCP/CLI parity |
 | [`work-changelog`](features/work-changelog/spec.md)                           | Retrospective | Audit trail of all work mutations                                                                                                                                                                                    |

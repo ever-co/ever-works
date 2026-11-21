@@ -1,0 +1,20 @@
+// Ever Works directory hub — Cloudflare Worker configuration.
+//
+// Not deployed yet. Going live is phase 1 of docs/specs/features/directory-hub/plan.md and needs the owner's go
+// plus a board claim (workspace MAINTENANCE.md). Until then there is deliberately no route, no custom domain and no
+// workers.dev URL, so even an accidental `wrangler deploy` publishes nothing.
+{
+	"name": "ever-works-directory-hub",
+	"main": "src/worker.ts",
+	"compatibility_date": "2026-11-01",
+	"workers_dev": false,
+	"preview_urls": false,
+	"observability": { "enabled": true },
+	"vars": {
+		// The Directory Registry document (spec FR-1). The catalog repo is created in phase 1 (tasks T-11).
+		"REGISTRY_URL": "https://raw.githubusercontent.com/ever-works/directory-registry/main/registry.json",
+		"HUB_URL": "https://directories.ever.works"
+	}
+	// Phase 1, after the owner's go:
+	// "routes": [{ "pattern": "directories.ever.works", "custom_domain": true }]
+}
