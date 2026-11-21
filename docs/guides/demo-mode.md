@@ -28,7 +28,7 @@ Two sites are easy to confuse:
 
 ## Environment variables
 
-Set these on the **API**. The web app reads the demo state from `GET /api/config`, so it needs no `DEMO*` variable of its own. Numeric values that are not a positive integer fall back to the default.
+Set these on the **API**. The web app reads the demo state from `GET /api/config`. Also set `DEMO=true` on the **web** container: it is only a hint, used when that read fails or is slow (the web retries once, then keeps its last good answer, else shows the demo with the default sign-up URL and TTL instead of the normal login form). An API answer always wins over it, and a web without `DEMO` still treats a failed read as "not a demo". Numeric values that are not a positive integer fall back to the default.
 
 | Variable                       | Default                           | Meaning                                                                                                                           |
 | ------------------------------ | --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
@@ -100,7 +100,7 @@ The Ever Works git provider creates every repository in `EVER_WORKS_CUSTOMERS_GI
 
 ## Operator checklist
 
-1. **Namespaces and images.** One environment per demo host (`demodev`, `demostage`, `demo.ever.works` here). Run the API image (1 replica, `Recreate`) and the web image. The web reaches the API in-cluster and proxies browser calls through its own `/api/*` routes, so the API needs no public host. Leave `NEXT_PUBLIC_API_URL` unset.
+1. **Namespaces and images.** One environment per demo host (`demodev`, `demostage`, `demo.ever.works` here). Run the API image (1 replica, `Recreate`) and the web image, both with `DEMO=true`. The web reaches the API in-cluster and proxies browser calls through its own `/api/*` routes, so the API needs no public host. Leave `NEXT_PUBLIC_API_URL` unset.
 2. **Storage.** A persistent volume for the SQLite file and the uploads directory (`DATABASE_TYPE=sqlite`, `DATABASE_PATH` on the volume). The sweeper resets the demo; never wipe the volume. It is a single-writer point of failure.
 3. **Secrets.** Names only: `AUTH_SECRET`, `PLATFORM_ENCRYPTION_KEY`, `PLUGIN_SECRET_ENCRYPTION_KEY`, the OpenRouter key, the GitHub token for the demo org, the Trigger.dev secret key and internal secret, `CAPTCHA_SECRET`, the search key. In this fleet they live in OpenBao and reach the pod through an ExternalSecret; elsewhere, use your secret store. Plain flags (`DEMO=true`, model ids) can live in the Deployment env in Git. Never commit a value.
 4. **GitHub.** A dedicated org (or the customers' org) and a token that can create and delete repositories there. Use a token separate from production's so revoking the demo never affects production.

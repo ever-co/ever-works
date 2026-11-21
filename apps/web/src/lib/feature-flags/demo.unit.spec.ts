@@ -14,8 +14,13 @@ describe('getDemoConfig', () => {
         resetDemoConfigCacheForTests();
         fetchMock.mockReset();
         vi.stubGlobal('fetch', fetchMock);
+        // A web without its own DEMO hint (production): the hinted web has its own spec.
+        vi.stubEnv('DEMO', '');
     });
-    afterEach(() => vi.unstubAllGlobals());
+    afterEach(() => {
+        vi.unstubAllEnvs();
+        vi.unstubAllGlobals();
+    });
 
     it('is enabled with the API numbers when features.demoMode is true', async () => {
         fetchMock.mockResolvedValue(

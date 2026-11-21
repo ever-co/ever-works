@@ -38,12 +38,15 @@ describe('getDemoConfig: the in-process cache', () => {
         resetDemoConfigCacheForTests();
         fetchMock.mockReset();
         vi.stubGlobal('fetch', fetchMock);
+        // A web without its own DEMO hint: the hinted web has `demo.hint.unit.spec.ts`.
+        vi.stubEnv('DEMO', '');
         // Only the clock: the fetch's own `AbortSignal.timeout` keeps real timers.
         vi.useFakeTimers({ toFake: ['Date'] });
         vi.setSystemTime(T0);
     });
     afterEach(() => {
         vi.useRealTimers();
+        vi.unstubAllEnvs();
         vi.unstubAllGlobals();
     });
 
