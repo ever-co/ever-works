@@ -18,9 +18,9 @@ import { Work } from '../../entities/work.entity';
 import type { User } from '../../entities/user.entity';
 import type { CreateWorkDto } from '../../dto/create-work.dto';
 import { DemoFeatureDisabledError } from '../../demo';
-import { EverWorksGitProvider } from '../../ever-works-providers/ever-works-git.provider';
 import type { EverWorksGitHttpFetch } from '../../ever-works-providers/ever-works-git.provider';
 import { WorkLifecycleService } from '../work-lifecycle.service';
+import { FetchInjectedEverWorksGit, githubCreates } from './fetch-injected-ever-works-git.fake';
 
 /**
  * Platform demo mode — a demo sandbox's Works (Task 8):
@@ -51,50 +51,6 @@ const otherUser = {
     email: 'operator@ever.works',
     registrationProvider: 'local',
 } as User;
-
-/**
- * The real provider, its GitHub calls going to `fetchImpl`. It records into a ledger double:
- * on a demo instance with no repository ledger bound it refuses every create (ruling R22).
- */
-class FetchInjectedEverWorksGit extends EverWorksGitProvider {
-    /** The demo topic calls (`PUT …/topics`, Task 10 R27), kept out of `fetchImpl`'s create count. */
-    readonly topicCalls: string[] = [];
-
-    constructor(private readonly fetchImpl: EverWorksGitHttpFetch) {
-        super({ record: jest.fn().mockResolvedValue(undefined) });
-    }
-
-    override createRepository(options: Parameters<EverWorksGitProvider['createRepository']>[0]) {
-        const routed = (async (url: string, init?: RequestInit) => {
-            if (init?.method === 'PUT' && url.endsWith('/topics')) {
-                this.topicCalls.push(url);
-                return new Response(JSON.stringify({ names: ['ever-works-demo'] }), {
-                    status: 200,
-                });
-            }
-            return this.fetchImpl(url, init);
-        }) as EverWorksGitHttpFetch;
-        return super.createRepository({ ...options, fetchImpl: routed });
-    }
-}
-
-/** GitHub answering `POST /orgs/{org}/repos` with 201 for whatever name was asked. */
-function githubCreates(): jest.Mock {
-    return jest.fn(async (_url: string, init: RequestInit) => {
-        const { name } = JSON.parse(init.body as string) as { name: string };
-        return new Response(
-            JSON.stringify({
-                name,
-                owner: { login: ORG },
-                full_name: `${ORG}/${name}`,
-                html_url: `https://github.com/${ORG}/${name}`,
-                clone_url: `https://github.com/${ORG}/${name}.git`,
-                private: true,
-            }),
-            { status: 201, headers: { 'content-type': 'application/json' } },
-        );
-    });
-}
 
 describe('WorkLifecycleService — demo Works', () => {
     const ORIGINAL_ENV = { ...process.env };
@@ -136,7 +92,8 @@ describe('WorkLifecycleService — demo Works', () => {
     });
 
     function makeService() {
-        const fetchImpl = githubCreates();
+        const fetchImpl = githubCreates(ORG);
+        const git = new FetchInjectedEverWorksGit(fetchImpl as unknown as EverWorksGitHttpFetch);
         const deployFacade = {
             isHiddenProvider: jest.fn().mockReturnValue(false),
             deploy: jest.fn(),
@@ -158,14 +115,14 @@ describe('WorkLifecycleService — demo Works', () => {
             templateCatalog as never,
             {} as never,
             quota as never,
-            new FetchInjectedEverWorksGit(fetchImpl as unknown as EverWorksGitHttpFetch),
+            git,
             {} as never, // everWorksDns
             { emit: jest.fn() } as never,
             { emit: jest.fn(), emitAsync: jest.fn().mockResolvedValue([]) } as never,
             {} as never, // organizationRepository
             gitFacade as never,
         );
-        return { service, fetchImpl, deployFacade, quota, gitFacade };
+        return { service, fetchImpl, git, deployFacade, quota, gitFacade };
     }
 
     function dto(slug: string, overrides: Partial<CreateWorkDto> = {}): CreateWorkDto {
@@ -215,8 +172,8 @@ describe('WorkLifecycleService — demo Works', () => {
     }
 
     describe('storage and deploy', () => {
-        it('stores Ever Works Git and a demo- repository whatever the request asked for', async () => {
-            const { service, fetchImpl, quota } = makeService();
+        it('stores Ever Works Git and a tagged demo- repository whatever the request asked for', async () => {
+            const { service, fetchImpl, git, quota } = makeService();
 
             const result = await service.createWork(
                 dto('my-tools', { storageProvider: 'user-github', gitProvider: 'gitlab' }),
@@ -232,6 +189,10 @@ describe('WorkLifecycleService — demo Works', () => {
             expect(stored!.getRepoOwner('data')).toBe(ORG);
             expect(fetchImpl).toHaveBeenCalledTimes(1);
             expect(fetchImpl.mock.calls[0][0]).toBe(`https://api.github.com/orgs/${ORG}/repos`);
+            // Tagged with the demo topic (R27), once, through the same provider.
+            expect(git.topicCalls).toEqual([
+                `https://api.github.com/repos/${ORG}/demo-1a2b3c4d-my-tools/topics`,
+            ]);
             expect(quota.assertWithinQuota).not.toHaveBeenCalled();
         });
 
@@ -262,7 +223,7 @@ describe('WorkLifecycleService — demo Works', () => {
         });
 
         it('leaves another account on a demo instance with the storage it asked for', async () => {
-            const { service, fetchImpl } = makeService();
+            const { service, fetchImpl, git } = makeService();
 
             const result = await service.createWork(dto('my-tools'), otherUser);
 
@@ -270,6 +231,7 @@ describe('WorkLifecycleService — demo Works', () => {
             expect(stored!.storageProvider).toBe('user-github');
             expect(stored!.deployProvider).toBe('vercel');
             expect(fetchImpl).not.toHaveBeenCalled();
+            expect(git.topicCalls).toEqual([]);
         });
     });
 
