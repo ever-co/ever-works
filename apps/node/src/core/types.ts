@@ -32,6 +32,7 @@ import {
 	type FleetEnrollableNodeKind,
 	type FleetNodeSelfDescription
 } from '@ever-works/contracts';
+import type { NodeLocalAiConfig } from './local-ai/config';
 
 export type {
 	FleetEnrollableNodeKind,
@@ -539,6 +540,20 @@ export interface NodeConfig {
 	 * switches OFF. Only `ever-works-node policy` writes it.
 	 */
 	executionPolicy?: Partial<NodeExecutionPolicy>;
+	/**
+	 * Local AI — model servers on (or next to) this machine, and which agent
+	 * CLI runs on which (`core/local-ai/config.ts`). Holds no secret: a
+	 * provider names its key's FILE or env var NAME. Absent: no local AI,
+	 * unless the `EVER_WORKS_NODE_LOCAL_AI_*` environment shorthand sets one.
+	 */
+	localAi?: NodeLocalAiConfig;
+	/**
+	 * Operator-declared capability tags ADDED to what the node detects
+	 * (`gpu`, `gpu:nvidia` on a VM whose GPU is the host's). Validated on use
+	 * (`normalizeExtraCapabilities`): reserved tags — identity, consent,
+	 * containment and the local-AI family — are refused.
+	 */
+	extraCapabilities?: string[];
 }
 
 /** Credential-free projection of {@link NodeConfig}, safe to log or render. */
@@ -565,6 +580,9 @@ export interface RedactedNodeConfig {
 	unsafe?: NodeUnsafeState;
 	/** The effective local execution policy (control 18) — switches, never values. */
 	executionPolicy: NodeExecutionPolicy;
+	/** Local AI as configured: addresses, key LOCATIONS (a path or an env var name), never a key. */
+	localAi?: NodeLocalAiConfig;
+	extraCapabilities?: string[];
 }
 
 /** Drop the credential from a config so it can cross a log or IPC boundary. */
@@ -596,6 +614,12 @@ export function redactConfig(config: NodeConfig): RedactedNodeConfig {
 	}
 	if (config.unsafe !== undefined) {
 		redacted.unsafe = { ...config.unsafe };
+	}
+	if (config.localAi !== undefined) {
+		redacted.localAi = JSON.parse(JSON.stringify(config.localAi)) as NodeLocalAiConfig;
+	}
+	if (config.extraCapabilities !== undefined) {
+		redacted.extraCapabilities = [...config.extraCapabilities];
 	}
 	return redacted;
 }

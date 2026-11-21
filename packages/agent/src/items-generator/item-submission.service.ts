@@ -181,8 +181,14 @@ export class ItemSubmissionService {
                 markdown: submitItemDto.markdown,
             };
 
-            // Capture screenshot if source URL provided and no images yet
-            if (submitItemDto.source_url && this.screenshotFacade.isAvailable()) {
+            // Capture screenshot if source URL provided and no images yet. Platform demo mode
+            // (R41): screenshots are off on a demo whatever provider is installed, so the
+            // submission goes on exactly as with no provider. With DEMO unset this is inert.
+            if (
+                submitItemDto.source_url &&
+                !appConfig.demo.isEnabled() &&
+                this.screenshotFacade.isAvailable()
+            ) {
                 try {
                     const result = await this.screenshotFacade.capture(
                         {

@@ -1,40 +1,13 @@
 import { BadRequestException, HttpException, Logger } from '@nestjs/common';
-import { redactSecrets } from '../../utils/secret-scan';
+import { redactErrorText } from '../../utils/error-text-redaction';
 
-// Security: upstream API / git error strings flow back to authenticated users
-// via `normalizeGeneratorError`. They can carry credentials embedded in URLs
-// (`https://user:token@host/…`) or raw secret tokens lifted from a cause chain.
-// Redact both BEFORE the string is returned so no caller can leak them.
-//
-// 1. Userinfo in any `scheme://user:pass@host` URL → `scheme://***:***@host`.
-//    A URL scheme (`[a-z][a-z0-9+.-]*`), then a userinfo segment of the form
-//    `user:pass@`; ONLY the user:pass is replaced with `***:***`.
-//
-//    The match starts at `://`, not at the scheme: a pattern that opens with
-//    the scheme is retried from every offset of a long run of scheme
-//    characters (seconds for 50,000 of them — CodeQL js/polynomial-redos),
-//    and the message is upstream text. Whether a scheme precedes the `://` is
-//    then read backwards from it: `[a-z][a-z0-9+.-]*` right before `://`
-//    exists exactly when the run of scheme characters ending there holds a
-//    letter. Runs before distinct `://` never overlap, so the whole pass stays
-//    linear, and it redacts exactly the URLs the scheme-first pattern did.
-const URL_USERINFO_RE = /:\/\/[^/\s:@]+:[^/\s@]+@/g;
-const URL_SCHEME_CHAR_RE = /^[a-z0-9+.-]$/i;
-const URL_SCHEME_LETTER_RE = /^[a-z]$/i;
-
-function redactUrlCredentials(message: string): string {
-    return message.replace(URL_USERINFO_RE, (userinfo: string, offset: number) => {
-        for (let at = offset - 1; at >= 0 && URL_SCHEME_CHAR_RE.test(message[at]); at -= 1) {
-            if (URL_SCHEME_LETTER_RE.test(message[at])) return '://***:***@';
-        }
-        return userinfo;
-    });
-}
-
+// Security: upstream API / git error strings flow back to users (on app.ever.works, possibly an
+// anonymous visitor) via `normalizeGeneratorError`. They can carry credentials embedded in URLs
+// (`https://user:token@host/…`), raw secret tokens lifted from a cause chain, or a key a provider
+// echoes back masked (`sk-proj-****wxyz`). `redactErrorText` removes all of them, linearly on
+// hostile input, BEFORE the string is returned so no caller can leak them.
 function redactCredentials(message: string): string {
-    // Strip credentials embedded in URLs first, then run the shared secret
-    // scrubber to catch standalone tokens (ghp_…, sk-…, Bearer …, JWTs, etc.).
-    return redactSecrets(redactUrlCredentials(message)).cleaned;
+    return redactErrorText(message);
 }
 
 function getErrorMessage(error: unknown): string {

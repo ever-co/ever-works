@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import superjson from 'superjson';
 import { config } from '@ever-works/agent/config';
 import { WorkContextResponse } from '@ever-works/agent/tasks';
+import { DEMO_WORKER_HEADER, DEMO_WORKER_HEADER_VALUE } from '@ever-works/agent/demo';
 import { demoErrorFromResponseBody } from '../demo-remote-error';
 
 /**
@@ -230,6 +231,18 @@ export class TriggerInternalApiClient {
         const maxRetries = retryable ? 3 : 0;
         const baseDelayMs = 500;
 
+        const headers: Record<string, string> = {
+            'content-type': 'application/json',
+            'x-trigger-secret': this.secret,
+        };
+        // Platform demo mode — the DEMO drift handshake: a worker running with `DEMO` on says
+        // so, and a demo API refuses every internal call that does not (a worker without
+        // `DEMO=true` would make unmetered AI calls and unledgered repository creates). With
+        // `DEMO` off the headers are exactly what they always were.
+        if (config.demo.isEnabled()) {
+            headers[DEMO_WORKER_HEADER] = DEMO_WORKER_HEADER_VALUE;
+        }
+
         let lastError: Error | undefined;
 
         for (let attempt = 0; attempt <= maxRetries; attempt++) {
@@ -253,10 +266,7 @@ export class TriggerInternalApiClient {
                 try {
                     response = await fetch(url, {
                         method,
-                        headers: {
-                            'content-type': 'application/json',
-                            'x-trigger-secret': this.secret,
-                        },
+                        headers,
                         body: body ? JSON.stringify(body) : undefined,
                         signal: controller.signal,
                     });

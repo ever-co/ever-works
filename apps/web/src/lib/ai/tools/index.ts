@@ -90,12 +90,21 @@ import { buildReportTools } from './reports';
  * Hand-written tools are spread LAST so they win any name collision with a
  * generated entry (they carry richer, bespoke UX).
  */
-export function buildChatTools(model: LanguageModel, options: GeneratedToolsOptions = {}) {
+export interface ChatToolsOptions extends GeneratedToolsOptions {
+    /**
+     * The suggestWorks sub-agent's retries per failed model call. Platform demo mode passes 0
+     * (every attempt spends demo AI quota); unset keeps the tool's own default of 1.
+     */
+    suggestMaxRetries?: number;
+}
+
+export function buildChatTools(model: LanguageModel, options: ChatToolsOptions = {}) {
+    const { suggestMaxRetries, ...generatedOptions } = options;
     return {
         // Security: `options.userConfirmed` ties every gated generated tool's
         // `confirmed: true` to the user's own latest message (see
         // ./generated/confirmation.ts).
-        ...buildGeneratedTools(ALL_OPERATIONS, options),
+        ...buildGeneratedTools(ALL_OPERATIONS, generatedOptions),
         ...buildCanvasTools(),
         ...buildReportTools(),
 
@@ -152,7 +161,7 @@ export function buildChatTools(model: LanguageModel, options: GeneratedToolsOpti
         // Search & User
         webSearch,
         getUserInfo,
-        suggestWorks: createSuggestWorksTool(model),
+        suggestWorks: createSuggestWorksTool(model, { maxRetries: suggestMaxRetries }),
 
         // Navigation
         navigate,

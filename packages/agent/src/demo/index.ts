@@ -4,3 +4,4 @@ export * from './demo-ai-quota.port';
 export * from './demo-work-policy';
 export * from './demo-sandbox-lock';
 export * from './demo-repo-ledger.port';
+export * from './demo-worker-handshake';

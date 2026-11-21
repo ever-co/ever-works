@@ -260,6 +260,65 @@ function indexOfTomlClosingDelimiter(text: string, delimiter: (typeof TOML_MULTI
 	}
 }
 
+/**
+ * Local AI — the provider a Codex run is pointed at instead of OpenAI.
+ *
+ * Emitted as `-c model_provider=<id>` plus the `model_providers.<id>.*` table
+ * (`name`, `base_url`, `wire_api`, and `env_key` when the server is keyed).
+ * Built by the node from its own validated local-AI settings, never from the
+ * wire — and validated AGAIN here, by patterns of its own, because these
+ * values land on a shell command line. The URL cannot go through
+ * {@link CODEX_SETTING_VALUE} (it refuses `:` and `/`, which every URL has), so
+ * it gets the dedicated {@link LOCAL_PROVIDER_URL_PATTERN} and is double-quoted.
+ */
+export interface ModelCliLocalProvider {
+	/** The provider id, used as a Codex config KEY segment: `[a-z0-9][a-z0-9_-]{0,31}`. */
+	id: string;
+	/** Where the Responses API lives, `http(s)://host[:port][/path]` (the `/v1` included). */
+	baseUrl: string;
+	/** Codex's `wire_api`. Only the Responses API: Codex has no other supported one. */
+	wireApi: 'responses';
+	/** NAME of the env var holding the key (`LOCAL_AI_API_KEY`); absent for a keyless server. */
+	envKey?: string;
+}
+
+/** A local provider id as a Codex config key segment — no `.` (TOML path), nothing a shell reads. */
+const LOCAL_PROVIDER_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,31}$/;
+
+/**
+ * A local provider's URL on a command line: scheme, host (name, IPv4 or a
+ * bracketed IPv6), port, plain path segments. Positive on purpose — no `%`,
+ * `$`, quote, backtick, space, `?`, `#`, `@`, `&`, `|`, `^`, `!` can match, so
+ * the value is inert inside the double quotes it is placed in, in both `sh`
+ * and `cmd.exe`, and carries no credential.
+ */
+const LOCAL_PROVIDER_URL_PATTERN =
+	/^https?:\/\/(?:[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?|\[[0-9A-Fa-f:.]{2,45}\])(?::\d{1,5})?(?:\/[A-Za-z0-9._~-]+)*$/;
+
+/** An env var NAME for `env_key`. */
+const LOCAL_PROVIDER_ENV_KEY_PATTERN = /^[A-Z_][A-Z0-9_]{0,63}$/;
+
+function assertLocalProvider(provider: ModelCliLocalProvider): ModelCliLocalProvider {
+	if (!provider || typeof provider !== 'object') {
+		throw new ModelCliCommandError('Local AI provider override is not an object');
+	}
+	if (typeof provider.id !== 'string' || !LOCAL_PROVIDER_ID_PATTERN.test(provider.id)) {
+		throw new ModelCliCommandError('Local AI provider id is not a bare identifier');
+	}
+	if (typeof provider.baseUrl !== 'string' || !LOCAL_PROVIDER_URL_PATTERN.test(provider.baseUrl)) {
+		throw new ModelCliCommandError(
+			'Local AI provider URL is not a plain http(s) URL this node puts on a command line'
+		);
+	}
+	if (provider.wireApi !== 'responses') {
+		throw new ModelCliCommandError('Local AI provider wire API must be "responses" for Codex');
+	}
+	if (provider.envKey !== undefined && !LOCAL_PROVIDER_ENV_KEY_PATTERN.test(provider.envKey)) {
+		throw new ModelCliCommandError('Local AI provider env_key is not an environment variable name');
+	}
+	return provider;
+}
+
 function assertCodexSetting(name: string, value: string | undefined): string | undefined {
 	if (value === undefined) return undefined;
 	if (!CODEX_SETTING_VALUE.test(value)) {
@@ -601,9 +660,23 @@ export function buildModelCliCommand(input: {
 	 * always built. Codex is unaffected: `exec --json` is already a stream.
 	 */
 	stream?: boolean;
+	/**
+	 * Local AI — Codex only: run on this local provider instead of OpenAI
+	 * (see {@link ModelCliLocalProvider}). Refused for any other provider: Claude
+	 * Code is pointed at a local server through its ENVIRONMENT, never argv.
+	 * Absent (the default) produces byte-for-byte the command this step has
+	 * always built.
+	 */
+	localProvider?: ModelCliLocalProvider;
 }): string {
 	const platform = input.platform ?? process.platform;
 	const { execution } = input;
+	if (input.localProvider !== undefined && execution.provider !== 'codex') {
+		throw new ModelCliCommandError(
+			`A local AI provider override is a Codex flag; ${String(execution.provider)} is pointed at it through its environment`
+		);
+	}
+	const localProvider = input.localProvider !== undefined ? assertLocalProvider(input.localProvider) : undefined;
 	const resumeSessionId = assertResumableSession(execution.provider, input.resumeSessionId);
 	const droppable = new Set(
 		MODEL_CLI_OPTIONAL_FLAGS[execution.provider as keyof typeof MODEL_CLI_OPTIONAL_FLAGS] ?? []
@@ -793,6 +866,25 @@ export function buildModelCliCommand(input: {
 		const ownerModel = assertCodexSetting('model', kept.model);
 		if (windowsSandbox) args.push('-c', `windows.sandbox=${windowsSandbox}`);
 		if (reasoningEffort) args.push('-c', `model_reasoning_effort=${reasoningEffort}`);
+		// Local AI: point the run at the node's local provider. `-c` values are
+		// parsed as TOML and fall back to the raw string when they are not TOML,
+		// which is how a bare id, `responses` and a URL all arrive as strings.
+		// Deep-merged into the (empty, `--ignore-user-config`) user layer, so the
+		// table is exactly the one written here.
+		if (localProvider) {
+			const table = `model_providers.${localProvider.id}`;
+			args.push(
+				'-c',
+				`model_provider=${localProvider.id}`,
+				'-c',
+				`${table}.name=${localProvider.id}`,
+				'-c',
+				`"${table}.base_url=${localProvider.baseUrl}"`,
+				'-c',
+				`${table}.wire_api=${localProvider.wireApi}`
+			);
+			if (localProvider.envKey) args.push('-c', `${table}.env_key=${localProvider.envKey}`);
+		}
 		// `--add-dir <DIR>` takes ONE directory and accumulates across
 		// occurrences. Only alongside `workspace-write`: in `read-only` the
 		// run writes nowhere at all, the primary included, so an extra
@@ -956,6 +1048,43 @@ export function assertMcpIsolationInCommand(input: { command: string; execution:
 			'The claude-code command line does not carry --mcp-config <file> --strict-mcp-config, so the run ' +
 				"would load the machine owner's own MCP servers"
 		);
+	}
+}
+
+/**
+ * Local AI — refuse to spawn a run bound to a local provider whose command
+ * line does not carry that binding.
+ *
+ * Same reasoning as the other gates here: checked on the real string handed
+ * to the shell, immediately before the spawn. The failure it catches is the
+ * expensive silent one — a refactor that computes the local model and then
+ * builds the command from the job's cloud model, which would run on the
+ * machine owner's cloud seat while the node reports a free local run.
+ *
+ *   - both CLIs: the local model is the one on the command line
+ *     (`--model <id>` / `-m <id>`);
+ *   - Codex: the provider override is there (`-c model_provider=<id>`).
+ */
+export function assertLocalBindingInCommand(input: {
+	command: string;
+	execution: FleetAgentModelExecution;
+	model: string;
+	localProvider?: ModelCliLocalProvider;
+}): void {
+	const flag = input.execution.provider === 'codex' ? '-m' : '--model';
+	if (!input.command.includes(` ${flag} ${input.model} `)) {
+		throw new ModelCliCommandError(
+			`The ${String(input.execution.provider)} command line does not carry ${flag} ${input.model}, so the run ` +
+				'would not use the local model it is bound to'
+		);
+	}
+	if (input.execution.provider === 'codex') {
+		const id = input.localProvider?.id;
+		if (!id || !input.command.includes(` -c model_provider=${id} `)) {
+			throw new ModelCliCommandError(
+				'The codex command line does not carry its local AI provider override, so the run would go to OpenAI'
+			);
+		}
 	}
 }
 

@@ -46,7 +46,7 @@ vi.mock('@trigger.dev/sdk', () => ({
 }));
 
 vi.mock('@ever-works/agent/config', () => ({
-    config: { trigger: triggerConfig },
+    config: { trigger: triggerConfig, demo: { isEnabled: () => false } },
 }));
 
 vi.mock('../trigger/worker/utils/worker-context.utils', () => ({

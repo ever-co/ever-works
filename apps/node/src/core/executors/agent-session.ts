@@ -100,6 +100,14 @@ export interface AgentSessionIo {
 	daemon: AgentSessionDaemon | null;
 	/** The CLI paths this node resolved (a missing or `null` entry = that CLI is not on this machine). */
 	modelCli: ModelCliPaths;
+	/**
+	 * Local AI — the CLIs this node's operator bound to a local provider
+	 * (`localAi.agentRuntime`). An interactive session of one of them is
+	 * REFUSED: this executor does not point a session at the local provider
+	 * yet, and starting one on the machine's cloud seat is exactly what the
+	 * binding rules out.
+	 */
+	localAiBoundClis?: readonly string[];
 	/** The containment seams `agent-task` uses (parent env, platform, config readers, session homes). */
 	containment: AgentTaskIo;
 	/** This node's enrollment id: a job pinned to another node is refused. */
@@ -238,6 +246,13 @@ export async function runAgentSessionJob(
 		throw new AgentSessionRefusal(
 			'unsupported_on_node',
 			`${payload.provider === 'codex' ? 'Codex' : 'Claude Code'} is not installed on this computer`
+		);
+	}
+	if (io.localAiBoundClis?.includes(payload.provider)) {
+		throw new AgentSessionRefusal(
+			'unsupported_on_node',
+			`${payload.provider === 'codex' ? 'Codex' : 'Claude Code'} on this computer runs on its local AI provider, ` +
+				'and Agent sessions on a local provider are not supported yet (Tasks are)'
 		);
 	}
 	const platform = io.platform ?? process.platform;
