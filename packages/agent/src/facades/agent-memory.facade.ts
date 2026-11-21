@@ -25,8 +25,10 @@ export class AgentMemoryFacadeError extends FacadeError {
  * Facade for the `agent-memory` capability.
  *
  * Routes save/search/context/session operations to the user's resolved
- * agent-memory plugin (default `@ever-works/agentmemory-plugin`, which
- * talks to a local or hosted `agentmemory` REST server).
+ * agent-memory plugin — `@ever-works/memanto-plugin` (Memanto server) is
+ * the default whenever it is enabled; `@ever-works/agentmemory-plugin`
+ * (local or hosted `agentmemory` REST server) serves scopes where it is
+ * the only one enabled.
  *
  * Mirrors the other facades: provider resolution + 4-level settings
  * hierarchy via `BaseFacadeService`. Optional governance methods

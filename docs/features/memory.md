@@ -262,7 +262,14 @@ Agent memory lives in an external agent-memory backend rather than in Postgres â
 | `POST /api/agent-memory/context`            | Build a context payload for a prompt |
 | `DELETE /api/agent-memory/entries/:id`      | Forget a single record               |
 
-The first-party provider is the bundled `agentmemory` plugin; enable it from [Plugins](./plugins.md).
+Two first-party providers ship; enable one from [Plugins](./plugins.md):
+
+| Plugin        | Backend                                                                | When to use it                                                                                                                                                      |
+| ------------- | ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `memanto`     | A [Memanto](https://github.com/moorcheh-ai/memanto) server on Moorcheh | **The default whenever it is enabled.** Semantic, typed memory (fact, decision, preference, â€¦) with no LLM call per write. Needs a Moorcheh key or on-prem licence. |
+| `agentmemory` | An [`agentmemory`](https://github.com/rohitg00/agentmemory) server     | Zero-config and fully offline (keyless BM25 search). Agents use it when it is the only provider enabled.                                                            |
+
+Memanto has no list of work sessions, so with it the panel above stays empty; the memories themselves are reachable through search, recall and the agents' `memory_search` tool. The comparison behind the default is in the [Memanto plugin](../plugin-system/built-in-plugins.md#memanto-memory) section.
 
 ## Meetings
 

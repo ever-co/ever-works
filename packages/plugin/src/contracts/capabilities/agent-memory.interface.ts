@@ -13,7 +13,7 @@ import type { PluginSettings } from '../../settings/settings.types.js';
  *
  * Plugins implementing this capability can run:
  *
- * 1. **Locally** alongside the Ever Works API — the default
+ * 1. **Locally** alongside the Ever Works API — e.g.
  *    `@ever-works/agentmemory-plugin` ships with a `baseUrl` defaulting to
  *    `http://localhost:3111`, matching the `agentmemory` npm package's
  *    standalone Node server. The operator runs `npx agentmemory` (or the
@@ -25,6 +25,12 @@ import type { PluginSettings } from '../../settings/settings.types.js';
  *    the `AGENTMEMORY_BASE_URL` / `AGENTMEMORY_API_KEY` env vars). This
  *    matches every other "external service" plugin in the repo
  *    (Activepieces, Make, Tavily, ...).
+ *
+ * Two first-party plugins ship: `@ever-works/memanto-plugin` (a Memanto
+ * server — typed, semantic memory over Moorcheh) is the DEFAULT provider
+ * whenever it is enabled (`defaultForCapabilities`), and
+ * `@ever-works/agentmemory-plugin` serves scopes where it is the only one
+ * enabled (zero-config, fully offline).
  *
  * Community plugins (mem0, zep, langmem, vector-db-backed homegrown
  * stores) implement the same interface; the `AgentMemoryFacadeService`
