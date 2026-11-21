@@ -49,7 +49,9 @@ export function DemoStrip({
                 </a>{' '}
                 {t('afterSignUp')}
             </p>
-            <p className="shrink-0 text-sky-800/90 dark:text-sky-200/80">
+            {/* Read from the clock: the server and the hydrating client can be an hour boundary
+                apart, so this one text may differ; the next render shows the client's count. */}
+            <p className="shrink-0 text-sky-800/90 dark:text-sky-200/80" suppressHydrationWarning>
                 {hoursLeft >= 1 ? t('expires', { hours: hoursLeft }) : t('expiresSoon')}
             </p>
             {aiQuotaExhausted && (

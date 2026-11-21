@@ -7,15 +7,15 @@ description: Operate an Ever Works instance as a public demo like demo.ever.work
 
 # Run a public demo (`DEMO` mode)
 
-Setting `DEMO=true` turns an instance into a public demo, the way <https://demo.ever.works> runs. A visitor clicks **Start the demo** and gets a private sandbox account with seeded example data and live AI on free OpenRouter models. No registration is needed. The sandbox, and the GitHub repositories it created, are deleted after 24 hours.
+Setting `DEMO=true` turns an instance into a public demo (Ever Works' own, <https://demo.ever.works>, is one example). A visitor clicks **Start the demo** and gets a private sandbox account with seeded example data and live AI on free OpenRouter models. No registration is needed. The sandbox, and the GitHub repositories it created, are deleted after 24 hours.
 
 With `DEMO` unset, none of this exists: no route, no blocked feature, no cron job. Nothing in this guide applies to a normal instance.
 
-Two sites are easy to confuse:
+Two of Ever Works' own sites are easy to confuse:
 
 | Site                      | What it is                                                                        |
 | ------------------------- | --------------------------------------------------------------------------------- |
-| <https://demo.ever.works> | The platform itself in demo mode (this guide).                                    |
+| <https://demo.ever.works> | The platform itself in demo mode (what this guide sets up).                       |
 | <https://dir.ever.works>  | An example of a website Ever Works generated (the directory template's own demo). |
 
 ## What a visitor gets
@@ -84,7 +84,9 @@ Repositories are shared with real customers' repositories, so deletion is strict
 3. its name starts with `DEMO_REPO_PREFIX`;
 4. the live GitHub repository id equals the id recorded in the ledger.
 
-The org is never listed, and nothing is ever deleted by name pattern. A ledger row with no recorded id is never deleted: the sandbox is held for an operator. A row that fails 3 times, or a sandbox whose purge fails 3 times, is also held. Demo repositories carry the GitHub topic `ever-works-demo`; searching the org for that topic is how an operator finds a repository that leaked.
+The org is never listed, and nothing is ever deleted by name pattern. A ledger row with no recorded id is never deleted: the sandbox is held for an operator.
+
+GitHub answers 404 both for a repository that is gone and for a private one the token can no longer read (its owner left the org, a fine-grained approval was revoked, the repository selection narrowed). So a sweep closes a row as "already gone" only with proof that the token still reads the org's private repositories: another lookup in the same sweep returned a ledger row's recorded id, or the canary did. The canary is the newest repository of a sandbox that has not expired yet, looked up once per sweep. Without that proof the row counts as failed. If the canary lookup itself fails (a GitHub 5xx, a rate limit, a network error), the row is retried on the next sweep and no failed attempt is counted. A row that fails 3 times, or a sandbox whose purge fails 3 times, is also held. Demo repositories carry the GitHub topic `ever-works-demo`; searching the org for that topic is how an operator finds a repository that leaked.
 
 ### Why the demo org must be the customers' org
 
@@ -100,7 +102,7 @@ The Ever Works git provider creates every repository in `EVER_WORKS_CUSTOMERS_GI
 
 ## Deploy order
 
-A demo API refuses every internal call from a worker that does not send `x-ever-works-demo: 1` (`409 DEMO_WORKER_MISMATCH`, see Known limits). Workers built before that header existed do not send it, and the two halves do not roll out together:
+A demo API refuses every internal call from a worker that does not send `x-ever-works-demo: 1` (`409 DEMO_WORKER_MISMATCH`, see Known limits). Workers built before that header existed do not send it, and the API and the workers are usually deployed separately. In the Ever Works fleet, for example, they do not roll out together (substitute your own deploy tooling):
 
 - ArgoCD Image Updater rolls the demo API as soon as its image is published.
 - The demo Trigger.dev deploy (`release-trigger-selfhosted.yml`) only runs after CI.
@@ -115,16 +117,31 @@ Production is unaffected: its API runs with `DEMO` unset and never refuses a wor
 
 ## Operator checklist
 
-1. **Namespaces and images.** One environment per demo host (`demodev`, `demostage`, `demo.ever.works` here). Run the API image (1 replica, `Recreate`) and the web image, both with `DEMO=true`. The web reaches the API in-cluster and proxies browser calls through its own `/api/*` routes, so the API needs no public host. Leave `NEXT_PUBLIC_API_URL` unset.
+1. **Namespaces and images.** One environment per demo host (for example, the Ever Works fleet runs `demodev.ever.works`, `demostage.ever.works` and `demo.ever.works`). Run the API image (1 replica, `Recreate`) and the web image, both with `DEMO=true`. The web reaches the API in-cluster and proxies browser calls through its own `/api/*` routes, so the API needs no public host. Leave `NEXT_PUBLIC_API_URL` unset.
 2. **Storage.** A persistent volume for the SQLite file and the uploads directory (`DATABASE_TYPE=sqlite`, `DATABASE_PATH` on the volume). The sweeper resets the demo; never wipe the volume. It is a single-writer point of failure.
-3. **Secrets.** Names only: `AUTH_SECRET`, `PLATFORM_ENCRYPTION_KEY`, `PLUGIN_SECRET_ENCRYPTION_KEY`, the OpenRouter key, the GitHub token for the demo org, the Trigger.dev secret key and internal secret, `CAPTCHA_SECRET`, the search key. In this fleet they live in OpenBao and reach the pod through an ExternalSecret; elsewhere, use your secret store. Plain flags (`DEMO=true`, model ids) can live in the Deployment env in Git. Never commit a value.
+3. **Secrets.** Names only: `AUTH_SECRET`, `PLATFORM_ENCRYPTION_KEY`, `PLUGIN_SECRET_ENCRYPTION_KEY`, the OpenRouter key, the GitHub token for the demo org, the Trigger.dev secret key and internal secret, `CAPTCHA_SECRET`, the search key. Keep them in your secret store (the Ever Works fleet, for example, keeps them in OpenBao and syncs them to the pod with an ExternalSecret). Plain flags (`DEMO=true`, model ids) can live in the Deployment env in Git. Never commit a value.
 4. **GitHub.** A dedicated org (or the customers' org) and a token that can create and delete repositories there. Use a token separate from production's so revoking the demo never affects production.
-5. **OpenRouter.** A dedicated key with a **$0 credit limit**, so even a bug in the guard cannot buy a paid call. On an account that has bought at least $10 of credits once, which raises the free limit from 50 to 1000 requests a day.
+5. **OpenRouter.** A dedicated key with a **$0 credit limit**, so even a bug in the guard cannot buy a paid call. Create it on an account that has bought at least $10 of credits once: that raises OpenRouter's free limit from 50 to 1000 requests a day.
 6. **Search.** A free-tier search provider key for generation.
 7. **Trigger.dev.** A project for the demo with `DEMO=true`, the demo API's internal URL and secret, and the plugin keys and model ids. Cap it to a small concurrency so demo runs never crowd out production runs on shared workers. Without `DEMO=true` there, the demo API refuses the workers' calls (`409 DEMO_WORKER_MISMATCH`, see Known limits).
-8. **Switch off** on the demo: billing and subscriptions, credits enforcement, deploys, fleet, terminal sessions, Ever Connect, statistics, scheduled updates, template auto-update, magic links, OAuth client ids and the mailer. Switch on: project Works, git storage, the customers' org, and Trigger.dev where Works must run.
+8. **Switch features off and on.** On the demo API, switch off:
+    - billing and subscriptions: `SUBSCRIPTIONS_ENABLED=false`, `STRIPE_RELAY_ENABLED=false`;
+    - credits enforcement: `CREDITS_ENFORCEMENT=off`;
+    - deploys: `DEPLOY_EVER_WORKS_ENABLED=false`;
+    - fleet: `FLEET_ENABLED=false`;
+    - terminal sessions: `TERMINAL_SESSIONS_ENABLED=false`;
+    - Ever Connect: `EVER_CONNECT_ENABLED=false`;
+    - statistics: `EVER_STATS_ENABLED=false`;
+    - scheduled updates: `SCHEDULED_UPDATES_ENABLED=false`;
+    - template auto-update: `WEBSITE_TEMPLATE_AUTO_UPDATE_ENABLED=false`;
+    - magic links: `MAGIC_LINK_ENABLED=false`;
+    - social sign-in: leave `GH_CLIENT_ID`, `GOOGLE_CLIENT_ID`, `FACEBOOK_CLIENT_ID` and `LINKEDIN_CLIENT_ID` unset;
+    - the mailer: `MAILER_PROVIDER=none`.
+
+    Switch on: project Works (`EVER_WORKS_PROJECT_WORKS_ENABLED=true`), git storage (`STORAGE_EVER_WORKS_GIT_ENABLED=true`), the customers' org (`EVER_WORKS_CUSTOMERS_GITHUB_ORG`, the same value as `DEMO_GITHUB_ORG`), and Trigger.dev (`TRIGGER_ENABLED=true`) where Works must run.
+
 9. **Check it.** `GET /api/config` shows `features.demoMode: true`. "Start the demo" lands in a sandbox. After the TTL the sandbox and its repositories are gone. Search the org for the `ever-works-demo` topic and expect no leftovers.
-10. **Monitoring.** `external-uptime-monitor.yml` probes `https://dir.ever.works/` ("Demo directory"). Its "Platform demo" row for `https://demo.ever.works/login` ships commented out: uncomment it once the demo host serves the platform login, because any failing row opens the shared uptime alert issue.
+10. **Monitoring.** Probe the demo's login page (`https://<demo host>/login`) from your uptime monitor. In the Ever Works repository, for example, `external-uptime-monitor.yml` probes `https://dir.ever.works/` ("Demo directory"), and its "Platform demo" row for `https://demo.ever.works/login` ships commented out: uncomment it once the demo host serves the platform login, because any failing row opens the shared uptime alert issue.
 
 ## Local try-out
 
