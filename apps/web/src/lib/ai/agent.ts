@@ -6,6 +6,7 @@ import { selectActiveToolNames } from './tools/tool-selection';
 import { createUserConfirmationCheckFromMessages } from './tools/generated/confirmation';
 import { toModelHistory } from './model-history';
 import { API_URL } from '@/lib/constants';
+import { getDemoConfig } from '@/lib/feature-flags/demo';
 import { sanitizeText } from '@/lib/utils';
 
 const MAX_TOOL_STEPS = 50;
@@ -122,6 +123,10 @@ export async function runAgent({
     currentPageUrl,
     onFinish,
 }: AgentOptions) {
+    // Platform demo mode: started now, read once the history is converted (it never throws:
+    // an unreadable config means "not a demo").
+    const demoConfig = getDemoConfig();
+
     const provider = createBackendProvider({
         baseURL: `${API_URL}/v1`,
         authToken,
@@ -165,18 +170,27 @@ export async function runAgent({
         Object.entries(allTools).filter(([name]) => activeSet.has(name)),
     ) as typeof allTools;
 
-    return streamText({
-        model,
-        system: SYSTEM_PROMPT.replace('{context}', context),
-        // Security: replayed tool results from earlier turns go through each
-        // tool's `toModelOutput` too (the untrusted fence), not raw.
-        messages: await toModelHistory(
+    // Security: replayed tool results from earlier turns go through each
+    // tool's `toModelOutput` too (the untrusted fence), not raw.
+    const [history, demo] = await Promise.all([
+        toModelHistory(
             messages.filter((message) => !isProviderErrorMessage(message)),
             allTools,
         ),
+        demoConfig,
+    ]);
+
+    return streamText({
+        model,
+        system: SYSTEM_PROMPT.replace('{context}', context),
+        messages: history,
         tools,
         stopWhen: stepCountIs(MAX_TOOL_STEPS),
         onFinish,
+        // Platform demo mode: each attempt is a call the API counts against the sandbox's and
+        // the day's AI quota, and a `DEMO_AI_QUOTA` refusal cannot change on a retry, so a demo
+        // turn makes one attempt. With demo off the SDK's default retries are untouched.
+        ...(demo.enabled ? { maxRetries: 0 } : {}),
     });
 }
 
