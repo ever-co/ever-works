@@ -141,7 +141,7 @@ Production is unaffected: its API runs with `DEMO` unset and never refuses a wor
     Switch on: project Works (`EVER_WORKS_PROJECT_WORKS_ENABLED=true`), git storage (`STORAGE_EVER_WORKS_GIT_ENABLED=true`), the customers' org (`EVER_WORKS_CUSTOMERS_GITHUB_ORG`, the same value as `DEMO_GITHUB_ORG`), and Trigger.dev (`TRIGGER_ENABLED=true`) where Works must run.
 
 9. **Check it.** `GET /api/config` shows `features.demoMode: true`. "Start the demo" lands in a sandbox. After the TTL the sandbox and its repositories are gone. Search the org for the `ever-works-demo` topic and expect no leftovers.
-10. **Monitoring.** Probe the demo's login page (`https://<demo host>/login`) from your uptime monitor. In the Ever Works repository, for example, `external-uptime-monitor.yml` probes `https://dir.ever.works/` ("Demo directory"), and its "Platform demo" row for `https://demo.ever.works/login` ships commented out: uncomment it once the demo host serves the platform login, because any failing row opens the shared uptime alert issue.
+10. **Monitoring.** Probe the demo's login page (`https://<demo host>/login`) from your uptime monitor, and add the probe only once the demo host serves the platform login: any failing row opens the shared uptime alert issue. In the Ever Works repository, for example, `external-uptime-monitor.yml` probes `https://dir.ever.works/` ("Demo directory") and, as a secondary target outside its critical list, `https://demo.ever.works/login` ("Platform demo").
 
 ## Local try-out
 
