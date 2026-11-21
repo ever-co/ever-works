@@ -100,6 +100,7 @@ function makeFullService(): AgentToolService {
             ingest: { repository: stub() },
             digest: { digestService: stub() },
             meetings: { repository: stub() },
+            memory: { facade: stub() },
             // Mirrors the catalog harness (FL-19): every fleet sub-source, and the
             // sessions and commands bundles, so the two assemblies stay comparable.
             fleet: {
@@ -178,6 +179,9 @@ describe('buildAgentToolCatalog', () => {
         // omitted `agentReviews` until review found it.
         expect(names).toContain('submitTaskReview');
         expect(names).toContain('resolve_merge_policy');
+        // Agent memory — the active path into the agent-memory capability.
+        expect(names).toContain('memory_search');
+        expect(names).toContain('memory_save');
         expect(names).toContain('resolve_tool_grants');
         // FL-19 — the fleet catalogue's own tools and one per bound fleet family.
         expect(names).toContain('fleet_status');

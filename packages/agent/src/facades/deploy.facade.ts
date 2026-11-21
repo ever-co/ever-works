@@ -1212,6 +1212,7 @@ export class DeployFacadeService implements IDeployFacade {
             websiteProjectName: work.getWebsiteRepo(),
             workId: work.id,
             workSlug: work.slug,
+            managedSubdomain: work.managedSubdomain,
             ownerUserId: owner?.id,
             isPlatformAdmin: Boolean(owner?.isPlatformAdmin),
         });

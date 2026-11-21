@@ -1870,4 +1870,158 @@ describe('DeployService — plugin-driven dispatch + secrets', () => {
             expect(nsSecrets.mock.calls[0][0].namespace).toBe('kube-system');
         });
     });
+    describe('Cloudflare Workers provider', () => {
+        const originalEnv = process.env;
+
+        beforeEach(() => {
+            process.env = { ...originalEnv };
+            delete process.env.CLOUDFLARE_DEPLOY_API_TOKEN;
+        });
+
+        afterEach(() => {
+            process.env = originalEnv;
+        });
+
+        const cloudflarePlugin = () => ({
+            id: 'cloudflare',
+            getWorkflowFilenames: () => ['deploy_cloudflare.yaml'],
+            getDeploymentSecrets: jest.fn().mockResolvedValue({
+                CLOUDFLARE_ACCOUNT_ID: 'acct',
+                CLOUDFLARE_WORKER_NAME: 'ew-crm',
+                CLOUDFLARE_HOSTNAME: 'crm.ever.works',
+            }),
+        });
+
+        it('allocates the managed subdomain from the slug without awesome-, hands it to the plugin and dispatches deploy_cloudflare.yaml', async () => {
+            const plugin = cloudflarePlugin();
+            const { service, work, githubPlugin, subdomainAllocator, dnsService } = buildService({
+                plugin,
+                deployProvider: 'cloudflare',
+                token: 'cf-member-token',
+                settings: { accountId: 'a'.repeat(32) },
+            });
+            (work as any).slug = 'awesome-crm';
+            subdomainAllocator.allocate.mockResolvedValueOnce({
+                subdomain: 'crm',
+                fqdn: 'crm.ever.works',
+                rootDomain: 'ever.works',
+                allocated: true,
+            });
+
+            await service.deploy('work-1', 'user-1', {});
+
+            expect(subdomainAllocator.allocate).toHaveBeenCalledWith(work, undefined, {
+                baseLabel: 'crm',
+            });
+            expect(plugin.getDeploymentSecrets).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    accountId: 'a'.repeat(32),
+                    managedSubdomain: 'crm',
+                    workSlug: 'awesome-crm',
+                    platformManaged: false,
+                }),
+            );
+            const { secrets, dispatches } = captureCalls(githubPlugin);
+            const byKey = Object.fromEntries(secrets.map((s: any) => [s.key, s.value]));
+            expect(byKey.CLOUDFLARE_TOKEN).toBe('cf-member-token');
+            expect(byKey.DEPLOY_TOKEN).toBe('cf-member-token');
+            expect(byKey.CLOUDFLARE_WORKER_NAME).toBe('ew-crm');
+            expect(byKey.CLOUDFLARE_HOSTNAME).toBe('crm.ever.works');
+            expect(dispatches.map((d: any) => d.workflow)).toEqual(['deploy_cloudflare.yaml']);
+            // A Workers Custom Domain brings its own DNS record: no CNAME.
+            expect(dnsService.ensureWorkSubdomain).not.toHaveBeenCalled();
+        });
+
+        it('reuses a persisted managed subdomain without allocating', async () => {
+            const plugin = cloudflarePlugin();
+            const { service, work, subdomainAllocator } = buildService({
+                plugin,
+                deployProvider: 'cloudflare',
+                token: 'cf-member-token',
+            });
+            (work as any).managedSubdomain = 'Tools';
+
+            await service.deploy('work-1', 'user-1', {});
+
+            expect(subdomainAllocator.allocate).not.toHaveBeenCalled();
+            expect(plugin.getDeploymentSecrets).toHaveBeenCalledWith(
+                expect.objectContaining({ managedSubdomain: 'tools' }),
+            );
+        });
+
+        it('refuses the deploy when no unique subdomain can be allocated (slugs are not unique across tenants)', async () => {
+            const plugin = cloudflarePlugin();
+            const { service, subdomainAllocator, githubPlugin } = buildService({
+                plugin,
+                deployProvider: 'cloudflare',
+                token: 'cf-member-token',
+            });
+            subdomainAllocator.allocate.mockRejectedValueOnce(new Error('db down'));
+
+            await expect(service.deploy('work-1', 'user-1', {})).rejects.toThrow(
+                /unique ever\.works subdomain/,
+            );
+
+            expect(plugin.getDeploymentSecrets).not.toHaveBeenCalled();
+            expect(captureCalls(githubPlugin).dispatches).toHaveLength(0);
+        });
+
+        it('refuses to push the platform token to a website repo outside the Ever Works orgs', async () => {
+            const plugin = cloudflarePlugin();
+            const { service, deployFacade, githubPlugin } = buildService({
+                plugin,
+                deployProvider: 'cloudflare',
+                token: 'cf-platform-token',
+                websiteOwner: 'acme',
+            });
+            const resolved = await deployFacade.getPluginAndTokenAndSettings();
+            deployFacade.getPluginAndTokenAndSettings.mockResolvedValue({
+                ...resolved,
+                settingSources: { apiToken: 'env' },
+            });
+
+            await expect(service.deploy('work-1', 'user-1', {})).rejects.toThrow(
+                /platform's Cloudflare account/,
+            );
+            expect(githubPlugin.setActionSecret).not.toHaveBeenCalled();
+            expect(githubPlugin.dispatchWorkflow).not.toHaveBeenCalled();
+        });
+
+        it('treats a token equal to CLOUDFLARE_DEPLOY_API_TOKEN as the platform token whatever its source', async () => {
+            process.env.CLOUDFLARE_DEPLOY_API_TOKEN = 'cf-platform-token';
+            const { service, githubPlugin } = buildService({
+                plugin: cloudflarePlugin(),
+                deployProvider: 'cloudflare',
+                token: 'cf-platform-token',
+                websiteOwner: 'acme',
+            });
+
+            await expect(service.deploy('work-1', 'user-1', {})).rejects.toThrow(
+                /platform's Cloudflare account/,
+            );
+            expect(githubPlugin.dispatchWorkflow).not.toHaveBeenCalled();
+        });
+
+        it('deploys an ever-works org website on the platform token in platform-managed mode', async () => {
+            const plugin = cloudflarePlugin();
+            const { service, deployFacade, githubPlugin } = buildService({
+                plugin,
+                deployProvider: 'cloudflare',
+                token: 'cf-platform-token',
+                websiteOwner: 'ever-works',
+            });
+            const resolved = await deployFacade.getPluginAndTokenAndSettings();
+            deployFacade.getPluginAndTokenAndSettings.mockResolvedValue({
+                ...resolved,
+                settingSources: { apiToken: 'env' },
+            });
+
+            await service.deploy('work-1', 'user-1', {});
+
+            expect(plugin.getDeploymentSecrets).toHaveBeenCalledWith(
+                expect.objectContaining({ platformManaged: true }),
+            );
+            expect(captureCalls(githubPlugin).dispatches).toHaveLength(1);
+        });
+    });
 });

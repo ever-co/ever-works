@@ -192,14 +192,16 @@ export default async function DeployPage({ params }: DeployPageParams) {
              * managed `*.ever.works` subdomain is the primary/default
              * address, so it renders ABOVE `DomainManagement` (which lists
              * additional custom domains). Only relevant for the
-             * managed-subdomain providers (`ever-works`, `k8s`); for
-             * Vercel/etc the API returns `editable=false` + null state,
-             * which the component handles, but we skip the card entirely
-             * to avoid wasted requests + UI noise.
+             * managed-subdomain providers (`ever-works`, `k8s`,
+             * `cloudflare`); for Vercel/etc the API returns
+             * `editable=false` + null state, which the component handles,
+             * but we skip the card entirely to avoid wasted requests + UI
+             * noise.
              */}
-            {work.id && (work.deployProvider === 'ever-works' || work.deployProvider === 'k8s') && (
-                <SubdomainManagement work={work} />
-            )}
+            {work.id &&
+                (work.deployProvider === 'ever-works' ||
+                    work.deployProvider === 'k8s' ||
+                    work.deployProvider === 'cloudflare') && <SubdomainManagement work={work} />}
             {work.website && <DomainManagement work={work} />}
             {work.website && <RuntimeEnvManagement work={work} />}
         </div>

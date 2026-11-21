@@ -684,6 +684,20 @@ test.describe('Org Memory — the agent-memory plugin', () => {
         expect(body.capabilities).toContain('agent-memory');
     });
 
+    test('GET /api/plugins exposes the memanto plugin (agent-memory capability)', async ({
+        request,
+    }) => {
+        const ctx = await buildOrgCtx(request);
+        const res = await request.get(`${API_BASE}/api/plugins`, { headers: ctx.headers });
+        expect(res.status()).toBe(200);
+        const body = await res.json();
+
+        const memanto = body.plugins.find((p: { id: string }) => p.id === 'memanto');
+        expect(memanto, 'memanto plugin present').toBeTruthy();
+        expect(memanto.capabilities).toContain('agent-memory');
+        expect(memanto.builtIn).toBe(true);
+    });
+
     test('the plugins registry is auth-gated (401 without a token)', async ({ request }) => {
         const res = await request.get(`${API_BASE}/api/plugins`);
         expect(res.status()).toBe(401);

@@ -364,4 +364,60 @@ describe('ManagedSubdomainService', () => {
             });
         });
     });
+    describe('cloudflare provider', () => {
+        it('is always editable (no flag)', async () => {
+            workRepository.findById.mockResolvedValue(
+                buildWork({ deployProvider: 'cloudflare', managedSubdomain: 'my-site' }),
+            );
+            process.env.K8S_MANAGED_SUBDOMAIN = 'false';
+
+            expect((await service.getState('work-1')).editable).toBe(true);
+        });
+
+        it('renames by persisting the label only: no CNAME, no record removal, no LB needed', async () => {
+            delete process.env.EVER_WORKS_DEPLOY_LB_HOSTNAME;
+            const workBefore = buildWork({
+                deployProvider: 'cloudflare',
+                managedSubdomain: 'old-name',
+            });
+            const workAfter = { ...workBefore, managedSubdomain: 'new-name' };
+            workRepository.findById
+                .mockResolvedValueOnce(workBefore)
+                .mockResolvedValueOnce(workAfter);
+
+            const result = await service.update('work-1', 'New-Name');
+
+            expect(workRepository.update).toHaveBeenCalledWith(workBefore.id, {
+                managedSubdomain: 'new-name',
+            });
+            expect(provider.ensureRecord).not.toHaveBeenCalled();
+            expect(provider.removeRecord).not.toHaveBeenCalled();
+            expect(result.subdomain).toBe('new-name');
+        });
+
+        it('still rejects a label claimed by another work', async () => {
+            workRepository.findById.mockResolvedValue(
+                buildWork({ deployProvider: 'cloudflare', managedSubdomain: 'old-name' }),
+            );
+            workRepository.findByManagedSubdomain.mockResolvedValue({ id: 'someone-else' });
+
+            await expect(service.update('work-1', 'taken')).rejects.toBeInstanceOf(
+                ConflictException,
+            );
+            expect(workRepository.update).not.toHaveBeenCalled();
+        });
+
+        it('maps a unique-violation on persist to 409 Conflict', async () => {
+            workRepository.findById.mockResolvedValue(
+                buildWork({ deployProvider: 'cloudflare', managedSubdomain: null }),
+            );
+            workRepository.update.mockRejectedValue(
+                Object.assign(new Error('dup'), { code: '23505' }),
+            );
+
+            await expect(service.update('work-1', 'racy')).rejects.toBeInstanceOf(
+                ConflictException,
+            );
+        });
+    });
 });

@@ -10,6 +10,7 @@ import { EventEmitter2 } from '@nestjs/event-emitter';
 import { randomBytes } from 'crypto';
 import { DeployFacadeService, GitFacadeService } from '@ever-works/agent/facades';
 import {
+    CLOUDFLARE_DEPLOY_PROVIDER_ID,
     DeploymentContextResolutionError,
     coerceDeploymentClusterSource,
     resolveEffectiveDeploymentContext,
@@ -664,6 +665,7 @@ export class DeployService {
                 websiteProjectName: work.getWebsiteRepo(),
                 workId: work.id,
                 workSlug: work.slug,
+                managedSubdomain: work.managedSubdomain,
                 ownerUserId: user.id,
                 isPlatformAdmin: Boolean(user.isPlatformAdmin),
             });
@@ -735,6 +737,13 @@ export class DeployService {
         // Ingress rule via `extraHosts`. The managed subdomain is never
         // removed — adding a custom domain is purely additive (spec §4.6).
         const mergedAfterLegacy = await this.mergeCustomDomainHosts(work, legacy);
+
+        // (1b) Cloudflare Workers — the managed subdomain is the hostname
+        // label and the Worker name. No flag: the provider is new, so no
+        // deployed Work depends on the old behaviour.
+        if (work.deployProvider === CLOUDFLARE_DEPLOY_PROVIDER_ID) {
+            return this.applyCloudflareSubdomain(work, mergedAfterLegacy);
+        }
 
         // (2) Gated extension — only fires for k8s + flag ON + no host
         // already resolved by the legacy path. When OFF, this is a no-op
@@ -817,6 +826,59 @@ export class DeployService {
             );
             return mergedAfterLegacy;
         }
+    }
+
+    /**
+     * Cloudflare Workers — make sure the Work has a managed subdomain and
+     * hand it to the plugin, which derives the Worker name
+     * (`<prefix><label>`, e.g. `ew-crm`) and the hostname (`<label>.<zone>`)
+     * from it.
+     *
+     * The label is allocated by `SubdomainAllocator` (collision-free and
+     * persisted on `work.managedSubdomain`), starting from the slug without
+     * its leading `awesome-`. Uniqueness matters here more than anywhere:
+     * the label IS the Worker name, and `wrangler deploy` in CI takes over an
+     * existing custom domain or DNS record, so two Works sharing a label would
+     * overwrite each other's site. It shares one label space with the k8s
+     * managed subdomains, which live in the same `ever.works` zone.
+     *
+     * No DNS record is created here — a Workers Custom Domain brings its own
+     * (an existing CNAME would even block it). When allocation fails the deploy
+     * is REFUSED: Work slugs are not unique across tenants (`works.slug` has no
+     * unique index), so a slug-derived Worker name could overwrite another
+     * tenant's site on the shared platform account (review of #3275).
+     */
+    private async applyCloudflareSubdomain(
+        work: Work,
+        settings: Record<string, unknown> | undefined,
+    ): Promise<Record<string, unknown>> {
+        let label = (work.managedSubdomain ?? '').trim().toLowerCase();
+        if (!label) {
+            try {
+                const slug = (work.slug ?? '').trim().toLowerCase();
+                const allocation = await this.subdomainAllocator.allocate(work, undefined, {
+                    baseLabel: slug.startsWith('awesome-') ? slug.slice('awesome-'.length) : slug,
+                });
+                label = allocation.subdomain;
+            } catch (cause) {
+                this.logger.error(
+                    `Cloudflare managed-subdomain allocation failed for work ${work.id}: ${(cause as Error).message}; deploy refused`,
+                );
+                throw new InternalServerErrorException(
+                    'Could not allocate a unique ever.works subdomain for this Work; the Cloudflare deploy was not started. Try again.',
+                );
+            }
+            if (!label) {
+                throw new InternalServerErrorException(
+                    'No unique ever.works subdomain could be allocated for this Work; the Cloudflare deploy was not started.',
+                );
+            }
+        }
+        const next: Record<string, unknown> = { ...(settings ?? {}), workSlug: work.slug };
+        if (label) {
+            next.managedSubdomain = label;
+        }
+        return next;
     }
 
     /**

@@ -261,7 +261,11 @@ import {
 } from '@ever-works/agent/agents';
 import { McpModule, McpToolSource } from '@ever-works/agent/mcp';
 import { ConversationsModule, ConversationMessageService } from '@ever-works/agent/conversations';
-import { BrowserAutomationFacadeService, GitFacadeService } from '@ever-works/agent/facades';
+import {
+    AgentMemoryFacadeService,
+    BrowserAutomationFacadeService,
+    GitFacadeService,
+} from '@ever-works/agent/facades';
 import { InboxModule as AgentInboxModule, InboxService } from '@ever-works/agent/inbox';
 import { PullRequestGateService } from '@ever-works/agent/policy';
 import { WorkRepository } from '@ever-works/agent/database';
@@ -383,7 +387,24 @@ describe('api-side AgentsModule — domain chat-tool wiring', () => {
             { token: FleetUsageViewService, optional: true }, // 4d4407def (FL-20)
             { token: FleetActionsRunnersService, optional: true }, // f04b78c18 (FL-18 P1)
             { token: FLEET_DESKTOP_READER, optional: true }, // cca91ad1a (FL-07)
+            // Agent memory — `memory_search` / `memory_save` through the
+            // agent-memory facade (Memanto by default). APPENDED LAST, OPTIONAL.
+            { token: AgentMemoryFacadeService, optional: true },
         ]);
+    });
+
+    it('binds the agent-memory facade as the LAST positional service (backs memory_search / memory_save)', () => {
+        const factory = findProvider(AGENT_DOMAIN_TOOL_SOURCES);
+        const inject = factory?.inject ?? [];
+        const bundle = factory?.useFactory?.(...inject.map((_, index) => ({ stub: index }))) as {
+            memory?: { facade?: unknown };
+        };
+        expect(bundle?.memory?.facade).toEqual({ stub: inject.length - 1 });
+        // Unbound (the optional token resolves to null), the tools are simply not offered.
+        const unbound = factory?.useFactory?.(
+            ...inject.map((_, index) => (index === inject.length - 1 ? null : { stub: index })),
+        ) as Record<string, unknown>;
+        expect(unbound).not.toHaveProperty('memory');
     });
 
     it('takes exactly one factory parameter per injected service (the list is positional)', () => {
@@ -554,6 +575,8 @@ describe('api-side AgentsModule — domain chat-tool wiring', () => {
             'ingest',
             'digest',
             'meetings',
+            // Agent memory — `memory_search` / `memory_save`.
+            'memory',
             'fleet',
             // Audit G22 — headless browsing. Bound with only `read`, so the
             // capability's page-driving `act` is unreachable from chat.

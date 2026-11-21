@@ -98,6 +98,11 @@ The Agent's own `lastRunAt` / `lastRunStatus` fields (on `GET /api/agents/:id`, 
 - **Long-term** — the five definition files, the durable, intentional store the Agent edits deliberately.
 - **Passive history** — recent activity, read on demand (not injected every tick, to save cost).
 - **Institutional context** — the per-Work [Knowledge Base](./knowledge-base.md): brand voice, legal copy, personas, research, glossary. Agents read from it on every run.
+- **Agent memory** — facts, decisions and lessons kept in the [agent-memory](./memory.md#agent-memory) backend (Memanto by default). Relevant memories are recalled into the prompt at the start of each task run, and during a run the Agent can call two tools itself:
+    - `memory_search` — look up what earlier runs on this project learned ("how do we deploy staging?"). Results are fenced as untrusted reference data.
+    - `memory_save` — keep one durable fact for future runs (a decision and its reason, a working command, an owner preference). Each saved memory is stamped with the Agent and run that wrote it.
+
+    Both tools reach whichever agent-memory provider the owner or Work has enabled; with none enabled they answer with a clear error and the run carries on. Turning the Agent's `memoryRecallEnabled` off removes `memory_search` and the recall block, but keeps `memory_save`: it stops the reading, not the remembering.
 
 Agents cannot read each other's definition files. Shared knowledge flows through **tasks**, **KB documents**, and the **activity log**.
 
