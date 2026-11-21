@@ -210,8 +210,12 @@ test.describe('Data-sync — idempotency / duplicate-suppression (retry-backoff 
         request,
     }) => {
         const owner = await registerUserViaAPI(request);
+        // A git provider no plugin answers: the render gate fails for real in every
+        // environment and arms the backoff. A default (`github`) Work without credentials
+        // is skipped instead (#3264: `app-not-installed-and-no-credentials`, no backoff).
         const work = await createWorkViaAPI(request, owner.access_token, {
             name: `Data Sync Idempotency ${Date.now()}`,
+            gitProvider: 'e2e-unavailable-git',
         });
 
         const dispatch = () =>
@@ -219,31 +223,15 @@ test.describe('Data-sync — idempotency / duplicate-suppression (retry-backoff 
                 headers: authedHeaders(owner.access_token),
             });
 
-        // First dispatch: render gate runs (and fails, with no connected git
-        // account), which writes the `data-sync:retry-after:<workId>` cache key.
+        // First dispatch: the render gate runs and fails, which writes the
+        // `data-sync:retry-after:<workId>` cache key.
         const first = await dispatch();
         expect(first.status()).toBe(202);
         const firstBody = await first.json();
-        // The first attempt actively ran a gate (not pre-suppressed). It is
-        // either 'failed' (render gate threw — the CI path, no connected git
-        // account) or — if a residual backoff from a prior shared-DB run is still
-        // live — already 'skipped'. Both write the retry-backoff cache key, so
-        // the suppression contract below holds.
-        expect(['failed', 'skipped', 'enqueued']).toContain(firstBody.status);
-
-        // If the first dispatch actually ENQUEUED (a git account IS connected —
-        // only possible outside CI), the render gate passed and no retry-backoff
-        // key is written, so duplicate suppression does not apply and the poll
-        // below would spin to timeout. That's a non-CI environment, not a
-        // regression — assert the enqueue happened and skip the suppression poll.
-        if (firstBody.status === 'enqueued') {
-            test.info().annotations.push({
-                type: 'git-connected',
-                description:
-                    'first dispatch enqueued (git account connected — non-CI); retry-backoff suppression does not apply, skipping the suppression poll.',
-            });
-            return;
-        }
+        expect(firstBody, 'the first dispatch fails and arms the backoff').toMatchObject({
+            status: 'failed',
+            errorClass: 'data-repo-unreachable',
+        });
 
         // Second dispatch in the same window MUST be suppressed at gate 1
         // (retry-backoff). This is the duplicate-suppression contract: a freshly

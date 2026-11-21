@@ -119,6 +119,8 @@ export async function createWorkViaAPI(
         name: string;
         slug?: string;
         description?: string;
+        /** The Work's git provider id; omitted, the API's default (`github`) applies. */
+        gitProvider?: string;
     },
 ): Promise<{ id: string; raw: unknown }> {
     const slug = payload.slug || payload.name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
@@ -129,6 +131,7 @@ export async function createWorkViaAPI(
             slug,
             description: payload.description || `e2e ${payload.name}`,
             organization: false,
+            ...(payload.gitProvider ? { gitProvider: payload.gitProvider } : {}),
         },
     });
     if (!res.ok()) {
