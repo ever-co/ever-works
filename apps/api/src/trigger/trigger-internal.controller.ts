@@ -81,7 +81,9 @@ import {
     FleetVirtualReconcileService,
     FleetCloudSweepService,
     FleetActionsRunnersPollService,
+    FleetAiCompletionService,
 } from '@ever-works/agent/fleet';
+import { fleetAiCompletionRemoteFacade } from '../fleet/fleet-ai-completion.remote';
 import { ModelAccountHealthService } from '@ever-works/agent/model-routing';
 import { DesktopRecordingService } from '@ever-works/agent/computer';
 import { AgentRepository, AgentRunRepository } from '@ever-works/agent/database';
@@ -818,6 +820,12 @@ export class TriggerInternalController implements OnModuleInit {
         // LAST + `@Optional()` per the arity rule above.
         @Optional()
         private readonly demoRepoLedgerService?: DemoRepoLedgerService,
+        // Local AI completions — the worker's local AI relay (`PluginServices.localAi`, bound
+        // by `TriggerPluginsModule`) sends a plugin's model request to the owner's fleet
+        // through this service's five calls. Provided and exported by the agent
+        // `FleetModule`. Appended LAST + `@Optional()` per the arity rule above.
+        @Optional()
+        private readonly fleetAiCompletionService?: FleetAiCompletionService,
     ) {}
 
     onModuleInit() {
@@ -1239,6 +1247,13 @@ export class TriggerInternalController implements OnModuleInit {
             ...(this.workProposalsApiService
                 ? { WorkProposalsApiService: this.workProposalsApiService }
                 : {}),
+            // Local AI completions — a FIVE-member facade (the `PluginAllowlistReader`
+            // precedent): `listModels`, `submit`, `awaitResult`, `cancel`, `release`, each
+            // argument rebuilt from the fields the service reads. The service re-checks that a
+            // job belongs to the user named. Maps to `undefined` without the service.
+            FleetAiCompletionService: this.fleetAiCompletionService
+                ? fleetAiCompletionRemoteFacade(this.fleetAiCompletionService)
+                : undefined,
         };
 
         // C-05 RPC half: build a per-service allow-list of callable methods.
