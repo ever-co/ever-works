@@ -177,19 +177,39 @@ describe('createFleetLocalAiRelay — complete', () => {
         expect(t.cancel).toHaveBeenCalledWith({ userId: 'user-1', jobId: JOB });
     });
 
-    it('says no-node and cancels when nobody leases the request within the queue window', async () => {
+    it('keeps waiting while the request is queued behind a busy node — a long queue is not no-node', async () => {
         let now = 0;
         const t = transport([]);
+        let polls = 0;
         t.awaitResult.mockImplementation(async () => {
-            now += 30_000;
-            return { state: 'pending', status: 'queued' };
+            now += 15_000;
+            polls += 1;
+            return polls < 20 ? { state: 'pending', status: 'queued' } : DONE;
         });
         const relay = createFleetLocalAiRelay(t as FleetAiCompletionTransport, { now: () => now });
 
-        const outcome = await relay.complete(request());
+        await expect(relay.complete(request({ timeoutMs: 30 * 60_000 }))).resolves.toMatchObject({
+            ok: true,
+        });
+        expect(polls).toBe(20);
+        expect(t.cancel).not.toHaveBeenCalled();
+    });
 
-        expect(outcome).toMatchObject({ ok: false, code: 'no-node' });
-        expect(t.cancel).toHaveBeenCalled();
+    it('hands back the service verdict that nothing can serve the request any more', async () => {
+        const t = transport([
+            { state: 'pending', status: 'queued' },
+            {
+                state: 'failed',
+                ok: false,
+                code: 'no-node',
+                message: 'No local AI node of yours serves this model any more',
+            },
+        ]);
+        const relay = createFleetLocalAiRelay(t as FleetAiCompletionTransport);
+        await expect(relay.complete(request())).resolves.toMatchObject({
+            ok: false,
+            code: 'no-node',
+        });
     });
 
     it('stops at once on the caller’s cancel — it never waits out a slice', async () => {

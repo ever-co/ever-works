@@ -43,10 +43,11 @@ import type {
  *   4. on a deadline or a cancel, `cancel` the job; on any end, `release` it
  *      so the prompt and the answer leave the job row.
  *
- * A request nobody leases within {@link FleetLocalAiRelayOptions.queueTimeoutMs}
- * is `no-node` (the machine that looked online stopped serving), not a
- * fifteen-minute wait. A transport error is retried (bounded) — the job keeps
- * running server-side whatever this side's connection does.
+ * A request that waits while NO node could serve it any more (the machine
+ * that looked online stopped serving) is answered `no-node` by the service
+ * at the end of a slice — a request queued behind a busy node keeps waiting.
+ * A transport error is retried (bounded) — the job keeps running server-side
+ * whatever this side's connection does.
  */
 
 /** The platform service as the relay calls it (the service itself, or a remote proxy to it). */
@@ -65,14 +66,11 @@ export interface FleetAiCompletionTransport {
 export const FLEET_LOCAL_AI_RELAY_DEFAULT_TIMEOUT_MS = 15 * 60_000;
 export const FLEET_LOCAL_AI_RELAY_MIN_TIMEOUT_MS = 10_000;
 export const FLEET_LOCAL_AI_RELAY_MAX_TIMEOUT_MS = 60 * 60_000;
-export const FLEET_LOCAL_AI_RELAY_QUEUE_TIMEOUT_MS = 120_000;
 export const FLEET_LOCAL_AI_RELAY_WAIT_SLICE_MS = 15_000;
 
 export interface FleetLocalAiRelayOptions {
     /** The whole wait when a request names none. */
     defaultTimeoutMs?: number;
-    /** How long a request may sit unleased before it is `no-node`. */
-    queueTimeoutMs?: number;
     /** One `awaitResult` slice. */
     waitSliceMs?: number;
     /** Retries of one transport call that threw. */
@@ -100,7 +98,6 @@ export function createFleetLocalAiRelay(
             }));
     const retries = options.transportRetries ?? 4;
     const retryDelayMs = options.retryDelayMs ?? 1_000;
-    const queueTimeoutMs = options.queueTimeoutMs ?? FLEET_LOCAL_AI_RELAY_QUEUE_TIMEOUT_MS;
     const waitSliceMs = options.waitSliceMs ?? FLEET_LOCAL_AI_RELAY_WAIT_SLICE_MS;
     const newRequestId = options.newRequestId ?? (() => randomUUID());
 
@@ -227,16 +224,9 @@ export function createFleetLocalAiRelay(
                     if (outcome === ABORTED) {
                         return await giveUp('cancelled', 'The local AI completion was cancelled');
                     }
-                    if (outcome.state === 'pending') {
-                        if (outcome.status === 'queued' && now() - started >= queueTimeoutMs) {
-                            return await giveUp(
-                                'no-node',
-                                `No local AI node took the request within ${Math.round(queueTimeoutMs / 1000)} s — ` +
-                                    'the computer that serves the model may have stopped serving (is its local AI provider up?)',
-                            );
-                        }
-                        continue;
-                    }
+                    // Still queued or running: ask again (the service itself says
+                    // `no-node` once nothing could serve the request any more).
+                    if (outcome.state === 'pending') continue;
                     if (outcome.state === 'failed') return fail(outcome.code, outcome.message);
                     const result = outcome.result;
                     let body: unknown;

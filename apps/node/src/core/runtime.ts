@@ -2011,9 +2011,15 @@ export function createNodeRuntime(config: NodeConfig, io: NodeIo, options: Creat
 				// Fleet node link (CONTRACTS R-34): machine jobs belong to the
 				// management lane alone, whatever this process's consents.
 				for (const kind of managementPlan.ownedKinds) if (!excluded.includes(kind)) excluded.push(kind);
-				// Local AI completions belong to the local-AI lane alone, whether or
-				// not it runs here: the work lane has no executor for them.
-				for (const kind of FLEET_LOCAL_AI_LANE_KINDS) if (!excluded.includes(kind)) excluded.push(kind);
+				// Local AI completions belong to the local-AI lane alone. Excluded
+				// only where that lane runs: only then does this node advertise
+				// `local-ai-completions`, which every completion requires, so a node
+				// without the lane is never offered one anyway — and its lease
+				// request stays byte-for-byte what an older platform (whose DTO does
+				// not know the kind) accepts.
+				if (localAiLanePlan.enabled) {
+					for (const kind of FLEET_LOCAL_AI_LANE_KINDS) if (!excluded.includes(kind)) excluded.push(kind);
+				}
 				return excluded.length > 0 ? { excludeKinds: excluded } : {};
 			})(),
 			// Fleet usage limits: the CLIs an agent-task can run with here, so a

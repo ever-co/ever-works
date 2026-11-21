@@ -218,13 +218,21 @@ describe('the local-AI lane — tags and leases', () => {
 		for (const body of workLeases) expect(body.excludeKinds).toEqual(expect.arrayContaining(['ai-completion']));
 	});
 
-	it('keeps the kind out of the work lane even on a node without local AI', async () => {
-		const w = world();
-		const runtime = createNodeRuntime(config(), w.io, { workerEnabled: true, localAi: null });
-		await runtime.worker?.start();
-		await runtime.worker?.stop();
-		for (const body of leases(w.calls))
-			expect(body.excludeKinds).toEqual(expect.arrayContaining(['ai-completion']));
+	it('leaves the lease request of a node without the lane byte-for-byte as it was (an older platform rejects an unknown kind)', async () => {
+		for (const localAi of [null, 'completions-off'] as const) {
+			const w = world();
+			const runtime = createNodeRuntime(config(), w.io, {
+				workerEnabled: true,
+				localAi: localAi === null ? null : w.localAi({ ...GATEWAY, completions: { enabled: false } })
+			});
+			await runtime.worker?.start();
+			await runtime.worker?.stop();
+			const bodies = leases(w.calls);
+			expect(bodies.length).toBeGreaterThan(0);
+			for (const body of bodies) {
+				expect((body.excludeKinds as string[] | undefined) ?? []).not.toContain('ai-completion');
+			}
+		}
 	});
 
 	it('asks for no completion while no provider is up', async () => {

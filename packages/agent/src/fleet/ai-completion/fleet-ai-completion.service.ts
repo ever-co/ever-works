@@ -109,6 +109,9 @@ export interface FleetAiCompletionModel {
 @Injectable()
 export class FleetAiCompletionService {
     private readonly logger = new Logger(FleetAiCompletionService.name);
+    /** Requests waiting on this replica, by job id (see `nextChange`). */
+    private readonly waiters = new Map<string, Set<() => void>>();
+    private listening = false;
 
     constructor(
         private readonly jobs: FleetJobService,
@@ -259,8 +262,34 @@ export class FleetAiCompletionService {
             );
             job = (await this.jobRows.findById(job.id)) ?? job;
         }
+        if (job.status === 'queued' && !(await this.anyNodeCanServe(job))) {
+            // Nobody leased it and nobody could: the computer that served the
+            // model stopped (its provider went down, it went offline, its lane
+            // was switched off). A busy one keeps the request queued instead.
+            await this.jobs.cancel(job.id).catch(() => undefined);
+            return {
+                state: 'failed',
+                ...failure(
+                    'no-node',
+                    'No local AI node of yours serves this model any more (it went offline, or its local AI provider stopped answering)',
+                ),
+            };
+        }
         if (!isTerminal(job.status)) return { state: 'pending', status: job.status };
         return this.settled(job);
+    }
+
+    /** True while at least one of the owner's serving nodes advertises every tag `job` requires. */
+    private async anyNodeCanServe(job: FleetJob): Promise<boolean> {
+        try {
+            const nodes = await this.servingNodes(job.userId);
+            return nodes.some((node) =>
+                nodeSatisfiesCapabilities(node.capabilities, job.requiredCapabilities),
+            );
+        } catch {
+            // A registry read that fails is no verdict: keep waiting.
+            return true;
+        }
     }
 
     /** Cancel one completion (a queued job is dropped; a running one is aborted by its node). Never throws. */
@@ -376,23 +405,43 @@ export class FleetAiCompletionService {
         };
     }
 
-    /** Resolve on this replica's completion event for `jobId`, or after `ms`. */
+    /**
+     * Resolve on this replica's completion event for `jobId`, or after `ms`.
+     *
+     * ONE listener on the bus for every waiting request (attached on first
+     * use), dispatching to the waiters by job id — not a listener per wait,
+     * which would trip the emitter's leak warning at the eleventh concurrent
+     * completion.
+     */
     private nextChange(jobId: string, ms: number): Promise<void> {
+        this.listenForCompletions();
         return new Promise((resolve) => {
             let done = false;
             const finish = (): void => {
                 if (done) return;
                 done = true;
                 clearTimeout(timer);
-                this.events?.off(FleetJobCompletedEvent.EVENT_NAME, onCompleted);
+                const waiting = this.waiters.get(jobId);
+                waiting?.delete(finish);
+                if (waiting && waiting.size === 0) this.waiters.delete(jobId);
                 resolve();
-            };
-            const onCompleted = (event: FleetJobCompletedEvent): void => {
-                if (event?.job?.id === jobId) finish();
             };
             const timer = setTimeout(finish, Math.max(1, ms));
             (timer as { unref?: () => void }).unref?.();
-            this.events?.on(FleetJobCompletedEvent.EVENT_NAME, onCompleted);
+            const waiting = this.waiters.get(jobId) ?? new Set<() => void>();
+            waiting.add(finish);
+            this.waiters.set(jobId, waiting);
+        });
+    }
+
+    private listenForCompletions(): void {
+        if (this.listening || !this.events) return;
+        this.listening = true;
+        this.events.on(FleetJobCompletedEvent.EVENT_NAME, (event: FleetJobCompletedEvent) => {
+            const id = event?.job?.id;
+            const waiting = typeof id === 'string' ? this.waiters.get(id) : undefined;
+            if (!waiting) return;
+            for (const wake of [...waiting]) wake();
         });
     }
 

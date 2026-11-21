@@ -1082,8 +1082,7 @@ describe('createNodeRuntime — the attended live-view lane (Agent computers)', 
 					'vm-control',
 					'usage-scan',
 					'runner-install',
-					'runner-control',
-					'ai-completion'
+					'runner-control'
 				]
 			})
 		);

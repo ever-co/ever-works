@@ -288,6 +288,18 @@ describe('FleetAiCompletionService.awaitResult', () => {
         expect(jobRows.stampCostCents).toHaveBeenCalledWith(JOB_ID, 0);
     });
 
+    it('answers no-node — and cancels — for a queued request nothing can serve any more', async () => {
+        const { service, jobs, nodes } = harness();
+        nodes.findByUser.mockResolvedValue([node({ status: 'offline' })] as never);
+        await expect(
+            service.awaitResult({ userId: USER, jobId: JOB_ID, waitMs: 0 }),
+        ).resolves.toMatchObject({
+            state: 'failed',
+            code: 'no-node',
+        });
+        expect(jobs.cancel).toHaveBeenCalledWith(JOB_ID);
+    });
+
     it('answers pending once its slice runs out', async () => {
         const { service } = harness();
         const started = Date.now();
@@ -313,6 +325,17 @@ describe('FleetAiCompletionService.awaitResult', () => {
         const outcome = await service.awaitResult({ userId: USER, jobId: JOB_ID, waitMs: 15_000 });
         expect(outcome.state).toBe('done');
         expect(Date.now() - started).toBeLessThan(2_000);
+    });
+
+    it('keeps ONE bus listener however many requests wait (no emitter leak warning)', async () => {
+        const { service, events } = harness();
+        const waits = Array.from({ length: 12 }, () =>
+            service.awaitResult({ userId: USER, jobId: JOB_ID, waitMs: 40 }),
+        );
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        expect(events.listenerCount(FleetJobCompletedEvent.EVENT_NAME)).toBe(1);
+        await Promise.all(waits);
+        expect(events.listenerCount(FleetJobCompletedEvent.EVENT_NAME)).toBe(1);
     });
 
     it.each([
