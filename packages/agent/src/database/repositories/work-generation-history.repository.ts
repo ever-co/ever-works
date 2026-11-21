@@ -6,6 +6,7 @@ import {
     GenerationMetrics,
 } from '@src/entities/work-generation-history.entity';
 import { GenerateStatusType } from '@src/entities/types';
+import { redactGenerationText } from '../../utils/error-text-redaction';
 import {
     WorkHistoryActivityType,
     type WorkChangelog,
@@ -74,7 +75,9 @@ export class WorkGenerationHistoryRepository {
             scheduleId: params.scheduleId ?? null,
             activityType: params.activityType ?? WorkHistoryActivityType.GENERATION,
             changelog: params.changelog ?? null,
-            warnings: normalizeWarnings(params.warnings),
+            // Provider text is shown to the Work's owner (possibly an anonymous visitor): no keys.
+            warnings: redactGenerationText({ warnings: normalizeWarnings(params.warnings) })
+                .warnings as string[] | null,
             finishedAt: params.finishedAt ?? null,
             durationInSeconds: params.durationInSeconds ?? null,
             newItemsCount: params.newItemsCount ?? 0,
@@ -89,14 +92,16 @@ export class WorkGenerationHistoryRepository {
         id: string,
         updates: HistoryUpdateParams,
     ): Promise<WorkGenerationHistory | null> {
-        const normalizedUpdates = {
+        // Provider text (the errorMessage, warnings) is shown to the Work's owner, who can be an
+        // anonymous visitor: key-like substrings are redacted before it is stored.
+        const normalizedUpdates = redactGenerationText({
             ...updates,
             ...('warnings' in updates
                 ? {
                       warnings: normalizeWarnings(updates.warnings),
                   }
                 : {}),
-        };
+        });
 
         await this.repository.update(id, {
             ...normalizedUpdates,
@@ -270,7 +275,10 @@ export class WorkGenerationHistoryRepository {
         if (!entry) return;
 
         const existing = entry.logs ?? [];
-        await this.repository.update(id, { logs: [...existing, ...newLogs] });
+        const { logs: redactedLogs } = redactGenerationText({ logs: newLogs });
+        await this.repository.update(id, {
+            logs: [...existing, ...(redactedLogs as GenerationStepLog[])],
+        });
     }
 
     /**

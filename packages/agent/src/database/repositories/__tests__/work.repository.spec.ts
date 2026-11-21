@@ -741,6 +741,63 @@ describe('WorkRepository', () => {
     });
 
     describe('updateGenerateStatus', () => {
+        it('redacts key-like text in the error, warnings and recent logs before storing them', async () => {
+            repository.update.mockResolvedValueOnce({} as never);
+            const masked = `sk-proj-${'*'.repeat(40)}wxyz`;
+
+            await service.updateGenerateStatus('w1', {
+                status: 'error',
+                error: `Incorrect API key provided: ${masked}.`,
+                warnings: [
+                    `Web search (Tavily) was unavailable during generation (invalid key tvly-****WXYZ).`,
+                ],
+                recentLogs: [
+                    {
+                        timestamp: '2026-11-20T22:31:06.621Z',
+                        level: 'error',
+                        source: 'pipeline',
+                        event: 'message',
+                        message: `Parent agent: stream error - Incorrect API key provided: ${masked}.`,
+                    },
+                ],
+            } as never);
+
+            const updateCall = repository.update.mock.calls[0][1] as {
+                generateStatus: {
+                    error: string;
+                    warnings: string[];
+                    recentLogs: { message: string; level: string }[];
+                };
+            };
+            expect(updateCall.generateStatus.error).toBe(
+                'Incorrect API key provided: [redacted secret].',
+            );
+            expect(updateCall.generateStatus.warnings).toEqual([
+                'Web search (Tavily) was unavailable during generation (invalid key [redacted secret]).',
+            ]);
+            expect(updateCall.generateStatus.recentLogs).toEqual([
+                expect.objectContaining({
+                    level: 'error',
+                    message:
+                        'Parent agent: stream error - Incorrect API key provided: [redacted secret].',
+                }),
+            ]);
+        });
+
+        it('stores the credits message as it is', async () => {
+            repository.update.mockResolvedValueOnce({} as never);
+            const status = {
+                status: 'error',
+                error: 'Insufficient credits. Add more using https://openrouter.ai/settings/credits',
+            } as never;
+
+            await service.updateGenerateStatus('w1', status);
+
+            expect(
+                (repository.update.mock.calls[0][1] as { generateStatus: unknown }).generateStatus,
+            ).toBe(status);
+        });
+
         it('dedupes warnings via `new Set(...)` and sets generationProgressedAt to a fresh Date', async () => {
             repository.update.mockResolvedValueOnce({} as never);
             const before = Date.now();
