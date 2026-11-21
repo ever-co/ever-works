@@ -65,7 +65,7 @@ export interface LoaderOptions {
 export const DEFAULT_LIMITS: SizeLimits = {
 	registry: 1_000_000,
 	directory: 256_000,
-	items: 8_000_000,
+	items: 4_000_000,
 	item: 1_000_000,
 	taxonomy: 1_000_000,
 	mcp: 2_000_000
@@ -126,6 +126,16 @@ function nullableStr(value: unknown): string | null {
 function strArray(value: unknown): string[] {
 	return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string') : [];
 }
+
+/** An absolute http(s) URL, or `null`: no `javascript:` or `data:` link from a directory reaches a client. */
+function httpUrl(value: unknown): string | null {
+	const text = typeof value === 'string' ? value.trim() : '';
+	if (!/^https?:\/\//i.test(text)) return null;
+	return URL.canParse(text) ? text : null;
+}
+
+/** Longest item description the hub keeps (characters); a directory's own `get_item` has the full text. */
+export const MAX_DESCRIPTION_LENGTH = 2000;
 
 function count(value: unknown): number {
 	return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? Math.floor(value) : 0;
@@ -203,16 +213,16 @@ export function toItemSummary(value: unknown): ItemSummary | null {
 	if (!slug || !name) return null;
 	return {
 		slug,
-		name,
-		description: str(raw['description']),
-		url: str(raw['url']),
-		website: nullableStr(raw['website']),
+		name: name.slice(0, 300),
+		description: str(raw['description']).slice(0, MAX_DESCRIPTION_LENGTH),
+		url: httpUrl(raw['url']) ?? '',
+		website: httpUrl(raw['website']),
 		categories: strArray(raw['categories']),
 		category_ids: strArray(raw['category_ids']),
 		tags: strArray(raw['tags']),
 		tag_ids: strArray(raw['tag_ids']),
 		featured: raw['featured'] === true,
-		logo: nullableStr(raw['logo']),
+		logo: httpUrl(raw['logo']),
 		updated_at: nullableStr(raw['updated_at'])
 	};
 }
@@ -259,10 +269,35 @@ async function readCapped(response: Response, max: number): Promise<string> {
 	return new TextDecoder().decode(bytes);
 }
 
+/** Release an unread body, so the connection goes back to the pool (six per request). */
+async function discardBody(response: Response): Promise<void> {
+	try {
+		await response.body?.cancel();
+	} catch {
+		// Nothing to release.
+	}
+}
+
 function describeError(error: unknown): string {
 	if (error instanceof FetchFailure) return error.message;
 	if (error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError')) return 'timed out';
 	return 'network error';
+}
+
+/**
+ * The data of the first server-sent event that has any, its `data:` lines joined (the response to our one request).
+ *
+ * @param body - Event stream text
+ */
+export function firstSseData(body: string): string {
+	for (const event of body.split(/\r?\n\r?\n/)) {
+		const lines = event
+			.split(/\r?\n/)
+			.filter((line) => line.startsWith('data:'))
+			.map((line) => line.slice(line.startsWith('data: ') ? 6 : 5));
+		if (lines.length > 0) return lines.join('\n');
+	}
+	return '';
 }
 
 /**
@@ -279,6 +314,12 @@ export class DirectoryLoader {
 	private readonly userAgent: string;
 	private readonly slots = new Map<string, CacheSlot<unknown>>();
 
+	/**
+	 * Keeps a shared load running after the request that started it ends. Set per request to `ctx.waitUntil`: a load
+	 * is shared by every concurrent caller, so a client that hangs up must not cancel it for the others.
+	 */
+	keepAlive?: (promise: Promise<unknown>) => void;
+
 	constructor(private readonly options: LoaderOptions) {
 		this.fetchFn = options.fetch ?? ((input, init) => fetch(input, init));
 		this.now = options.now ?? Date.now;
@@ -292,6 +333,15 @@ export class DirectoryLoader {
 
 	/** Fetch and parse JSON with a timeout, a byte cap and the edge cache. */
 	async fetchJson(url: string, maxBytes: number, edgeTtl: number): Promise<unknown> {
+		try {
+			return await this.fetchJsonOnce(url, maxBytes, edgeTtl);
+		} catch (error) {
+			// Timeouts and network errors become a FetchFailure too, so callers report them as a tool error.
+			throw error instanceof FetchFailure ? error : new FetchFailure(describeError(error));
+		}
+	}
+
+	private async fetchJsonOnce(url: string, maxBytes: number, edgeTtl: number): Promise<unknown> {
 		const response = await this.fetchFn(url, {
 			headers: { Accept: 'application/json', 'User-Agent': this.userAgent },
 			signal: AbortSignal.timeout(this.timeoutMs),
@@ -300,8 +350,11 @@ export class DirectoryLoader {
 			// Cloudflare edge cache; 404s (old builds without /data/) are cached briefly, server errors not at all.
 			cf: { cacheEverything: true, cacheTtlByStatus: { '200-299': edgeTtl, '404': 60, '500-599': 0 } }
 		});
-		if (response.status === 404) throw new FetchFailure('not found (HTTP 404)', 404);
-		if (!response.ok) throw new FetchFailure(`HTTP ${response.status}`, response.status);
+		if (!response.ok) {
+			await discardBody(response);
+			if (response.status === 404) throw new FetchFailure('not found (HTTP 404)', 404);
+			throw new FetchFailure(`HTTP ${response.status}`, response.status);
+		}
 		const body = await readCapped(response, maxBytes);
 		try {
 			return JSON.parse(body) as unknown;
@@ -346,6 +399,7 @@ export class DirectoryLoader {
 				return { value: slot.value, stale: true };
 			}
 		);
+		this.keepAlive?.(slot.inflight.catch(() => undefined));
 		return slot.inflight;
 	}
 
@@ -445,6 +499,12 @@ export class DirectoryLoader {
 	/** One item's full detail, `null` when the directory does not have it. */
 	async getItemDetail(directory: LoadedDirectory, slug: string): Promise<ItemDetail | null> {
 		if (!SLUG_PATTERN.test(slug)) return null;
+		// Answer unknown slugs from the (cached) item list instead of asking the directory for each guess.
+		const known = await this.getItems(directory).then(
+			({ items }) => items.some((item) => item.slug === slug),
+			() => true
+		);
+		if (!known) return null;
 		const url = directory.info.endpoints.item.replace('{slug}', encodeURIComponent(slug));
 		let document: unknown;
 		try {
@@ -459,8 +519,10 @@ export class DirectoryLoader {
 		return {
 			...summary,
 			markdown: nullableStr(raw['markdown']),
-			markdown_url: str(raw['markdown_url']),
-			images: strArray(raw['images']),
+			markdown_url: httpUrl(raw['markdown_url']) ?? '',
+			images: strArray(raw['images'])
+				.map(httpUrl)
+				.filter((image): image is string => image !== null),
 			brand: nullableStr(raw['brand']),
 			publisher: nullableStr(raw['publisher']),
 			related: strArray(raw['related'])
@@ -486,6 +548,19 @@ export class DirectoryLoader {
 	async callDirectoryTool(directory: LoadedDirectory, tool: string, args: Record<string, unknown>): Promise<unknown> {
 		const endpoint = directory.info.endpoints.mcp;
 		if (!endpoint) throw new FetchFailure('the directory has no MCP endpoint');
+		try {
+			return await this.callDirectoryToolOnce(endpoint, tool, args);
+		} catch (error) {
+			if (error instanceof FetchFailure || error instanceof UpstreamRpcError) throw error;
+			throw new FetchFailure(describeError(error));
+		}
+	}
+
+	private async callDirectoryToolOnce(
+		endpoint: string,
+		tool: string,
+		args: Record<string, unknown>
+	): Promise<unknown> {
 		const response = await this.fetchFn(endpoint, {
 			method: 'POST',
 			headers: {
@@ -503,13 +578,12 @@ export class DirectoryLoader {
 			signal: AbortSignal.timeout(this.timeoutMs),
 			redirect: 'manual'
 		});
-		if (!response.ok) throw new FetchFailure(`HTTP ${response.status}`, response.status);
-		let body = await readCapped(response, this.limits.mcp);
-		if ((response.headers.get('Content-Type') ?? '').includes('text/event-stream')) {
-			// A streaming server: take the first `data:` event, which carries the response to our single request.
-			const data = body.split(/\r?\n/).find((line) => line.startsWith('data:'));
-			body = data ? data.slice(5).trim() : '';
+		if (!response.ok) {
+			await discardBody(response);
+			throw new FetchFailure(`HTTP ${response.status}`, response.status);
 		}
+		let body = await readCapped(response, this.limits.mcp);
+		if ((response.headers.get('Content-Type') ?? '').includes('text/event-stream')) body = firstSseData(body);
 		let message: Record<string, unknown> | null;
 		try {
 			message = record(JSON.parse(body));

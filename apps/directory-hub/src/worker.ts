@@ -18,12 +18,20 @@ function loaderFor(env: Env): DirectoryLoader {
 	return isolateLoader.loader;
 }
 
+/** The part of the Workers `ExecutionContext` the hub uses. */
+interface WaitUntilContext {
+	waitUntil(promise: Promise<unknown>): void;
+}
+
 export default {
-	async fetch(request: Request, env: Env): Promise<Response> {
+	async fetch(request: Request, env: Env, ctx?: WaitUntilContext): Promise<Response> {
 		if (!env.REGISTRY_URL) return jsonResponse({ error: 'The hub is not configured (REGISTRY_URL).' }, 503);
 		const hubUrl = (env.HUB_URL || new URL(request.url).origin).replace(/\/+$/, '');
+		const loader = loaderFor(env);
+		// Shared loads outlive the request that started them (a client hanging up must not fail the others).
+		if (ctx) loader.keepAlive = (promise) => ctx.waitUntil(promise);
 		return handleRequest(request, {
-			loader: loaderFor(env),
+			loader,
 			hubUrl,
 			log: (entry) => console.log(JSON.stringify(entry))
 		});

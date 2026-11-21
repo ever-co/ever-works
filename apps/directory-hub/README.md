@@ -73,7 +73,8 @@ open a pull request there. No hub deploy is needed.
 Every deploy needs a board claim (workspace `MAINTENANCE.md`). Use one of:
 
 - the manual workflow `.github/workflows/deploy-directory-hub.yml` (GitHub-hosted; tests, then deploys, then smoke
-  tests). It needs the `DIRECTORY_HUB_CLOUDFLARE_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` repository secrets;
+  tests), from `main` only. It needs the `DIRECTORY_HUB_CLOUDFLARE_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` secrets in the
+  `directory-hub` environment, with its deployment branches limited to `main`;
 - or `npx wrangler@4 deploy` from this folder, with `CLOUDFLARE_API_TOKEN` scoped to Workers Scripts on the account
   and Workers Routes on the `ever.works` zone.
 

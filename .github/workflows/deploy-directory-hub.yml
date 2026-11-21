@@ -1,8 +1,11 @@
 # Deploys apps/directory-hub (the MCP hub across all Ever Works directories) to Cloudflare Workers at
 # https://directories.ever.works. Manual dispatch only for now (spec docs/specs/features/directory-hub, task T-15).
 #
-# Needs two repository secrets: DIRECTORY_HUB_CLOUDFLARE_TOKEN (Workers Scripts write on the account, Workers Routes
-# write on the ever.works zone) and CLOUDFLARE_ACCOUNT_ID. Live deploys follow the board rule (workspace
+# Runs in the `directory-hub` environment. Keep the two secrets there, not at repository level:
+# - DIRECTORY_HUB_CLOUDFLARE_TOKEN: Workers Scripts write on the account, Workers Routes write on the ever.works zone;
+# - CLOUDFLARE_ACCOUNT_ID.
+# Restrict the environment's deployment branches to `main` (Settings > Environments). The `if:` below repeats that, but
+# only the environment rule binds a branch that edits this file. Live deploys follow the board rule (workspace
 # MAINTENANCE.md). Rollback: re-run this workflow on the previous commit, or `wrangler rollback`.
 name: Deploy directory hub
 
@@ -18,6 +21,8 @@ concurrency:
 
 jobs:
   deploy:
+    if: github.ref == 'refs/heads/main'
+    environment: directory-hub
     # GitHub-hosted on purpose: the Cloudflare token never reaches a self-hosted runner.
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -67,8 +72,8 @@ jobs:
       - name: Smoke test
         run: |
           set -e
-          curl -fsS https://directories.ever.works/.well-known/mcp.json > /dev/null
-          curl -fsS -X POST https://directories.ever.works/mcp \
+          curl -fsS --max-time 20 https://directories.ever.works/.well-known/mcp.json > /dev/null
+          curl -fsS --max-time 30 -X POST https://directories.ever.works/mcp \
             -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
             -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | grep -q '"search_all"'
           echo "directories.ever.works answers"

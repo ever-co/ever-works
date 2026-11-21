@@ -30,8 +30,11 @@ export interface Registry {
 /** Thrown when a registry document has neither accepted shape. */
 export class RegistryError extends Error {}
 
-/** Upper bound on registry entries, so a broken registry cannot make the hub fan out without limit. */
-export const MAX_REGISTRY_ENTRIES = 2000;
+/**
+ * Upper bound on registry entries, so a broken registry cannot make the hub fan out without limit. A cold search reads
+ * two documents per directory, and a Workers Paid request may make 1,000 subrequests; 400 keeps a margin.
+ */
+export const MAX_REGISTRY_ENTRIES = 400;
 
 const ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/;
 

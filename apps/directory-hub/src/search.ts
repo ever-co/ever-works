@@ -19,6 +19,9 @@ import {
 import type { LoadedDirectory } from './loader';
 import type { DirectoryEntry } from './registry';
 
+/** At most this many words of a query are used. */
+export const MAX_QUERY_TOKENS = 12;
+
 /** Words that never have to match; they only add score when they do. */
 export const FILLER_WORDS: ReadonlySet<string> = new Set([
 	'a',
@@ -92,7 +95,11 @@ export interface ParsedQuery {
  * @param query - Raw query
  */
 export function parseQuery(query: string): ParsedQuery {
-	const tokens = tokenize(query);
+	const all = tokenize(query);
+	// One-letter words match nearly everything; they count only when nothing longer is left ("c", "r"). The cap keeps
+	// one anonymous query from scoring hundreds of words against every item.
+	const long = all.filter((token) => token.length > 1);
+	const tokens = (long.length > 0 ? long : all).slice(0, MAX_QUERY_TOKENS);
 	const required = tokens.filter((token) => !FILLER_WORDS.has(token));
 	return {
 		required: required.length > 0 ? required : tokens,
@@ -114,19 +121,25 @@ export function tokenVariants(token: string): string[] {
 
 /** A directory's searchable text, normalized once. */
 export interface DirectoryText {
-	id: string;
+	/** The id and its `-`-separated parts ("time-tracking" → "time-tracking", "time", "tracking") */
+	idWords: string[];
 	nameWords: string[];
-	topics: string[];
+	/** Every word of every topic and alias */
+	topicWords: string[];
 	description: string;
+}
+
+function wordsOf(value: string): string[] {
+	return normalizeText(value)
+		.split(/[^\p{L}\p{N}]+/u)
+		.filter((word) => word.length > 0);
 }
 
 function textOf(entry: DirectoryEntry, name: string, description: string): DirectoryText {
 	return {
-		id: entry.id,
-		nameWords: normalizeText(name)
-			.split(/[^\p{L}\p{N}]+/u)
-			.filter((word) => word && word !== 'awesome'),
-		topics: [...entry.topics, ...entry.aliases].map(normalizeText),
+		idWords: [...new Set([entry.id, ...entry.id.split('-')])].filter((word) => word.length > 0),
+		nameWords: wordsOf(name).filter((word) => word !== 'awesome'),
+		topicWords: [...new Set([...entry.topics, ...entry.aliases].flatMap(wordsOf))],
 		description: normalizeText(description)
 	};
 }
@@ -159,8 +172,9 @@ export function directoryTokenScore(token: string, text: DirectoryText): { score
 	for (const variant of tokenVariants(token)) {
 		let score = 0;
 		if (text.nameWords.some((word) => word.startsWith(variant))) score += DIRECTORY_WEIGHTS.nameWord;
-		if (text.topics.some((topic) => topic.includes(variant))) score += DIRECTORY_WEIGHTS.topic;
-		if (text.id.includes(variant)) score += DIRECTORY_WEIGHTS.id;
+		// Word prefixes, not substrings: "ai" must not make every directory with an "email" topic match.
+		if (text.topicWords.some((word) => word.startsWith(variant))) score += DIRECTORY_WEIGHTS.topic;
+		if (text.idWords.some((word) => word.startsWith(variant))) score += DIRECTORY_WEIGHTS.id;
 		const strong = score > 0;
 		if (text.description.includes(variant)) score += DIRECTORY_WEIGHTS.description;
 		if (score > best.score) best = { score, strong };

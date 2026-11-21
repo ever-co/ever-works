@@ -61,6 +61,31 @@ function negotiateVersion(requested: unknown): string {
 		: SUPPORTED_PROTOCOL_VERSIONS[0];
 }
 
+/** Largest JSON-RPC message the hub reads (bytes); a tool call is a few hundred. */
+export const MAX_BODY_BYTES = 65_536;
+
+/** The request body as text, or `null` when it is larger than `max` bytes (read in chunks, never whole). */
+async function readBody(request: Request, max: number): Promise<string | null> {
+	const declared = Number(request.headers.get('Content-Length'));
+	if (Number.isFinite(declared) && declared > max) return null;
+	if (!request.body) return '';
+	const reader = (request.body as ReadableStream<Uint8Array>).getReader();
+	const decoder = new TextDecoder();
+	let size = 0;
+	let text = '';
+	for (;;) {
+		const { done, value } = await reader.read();
+		if (done) break;
+		size += value.byteLength;
+		if (size > max) {
+			await reader.cancel();
+			return null;
+		}
+		text += decoder.decode(value, { stream: true });
+	}
+	return text + decoder.decode();
+}
+
 function params(value: unknown): Record<string, unknown> {
 	return value !== null && typeof value === 'object' && !Array.isArray(value)
 		? (value as Record<string, unknown>)
@@ -87,9 +112,11 @@ export async function handleMcpRequest(request: Request, options: McpOptions): P
 		);
 	}
 
+	const body = await readBody(request, MAX_BODY_BYTES);
+	if (body === null) return rpcError(null, -32600, `Request too large (at most ${MAX_BODY_BYTES} bytes)`, 413);
 	let message: unknown;
 	try {
-		message = await request.json();
+		message = JSON.parse(body);
 	} catch {
 		return rpcError(null, -32700, 'Parse error: body must be a JSON-RPC 2.0 message', 400);
 	}

@@ -238,12 +238,14 @@ REST twins: `GET /data/directories.json` (= `list_directories` with `include_una
 
 1. Tokenize the query with Contract v1 `tokenize`. Tokens in a short filler list (`find`, `list`, `show`, `best`, `top`,
    `tools`, `software`, `apps`, `platforms`, `services`, `for`, `the`, `and`, `of`, `with`, …) are **optional**; all
-   others are **required**. When every token is filler, every token is required.
+   others are **required**. When every token is filler, every token is required. One-letter tokens are dropped unless
+   nothing longer is left, and at most 12 tokens are used (an anonymous query must not score hundreds of words against
+   every item).
 2. A token matches text when the text contains the token or its simple singular (`servers` → `server`,
    `companies` → `company`).
 3. **Directory score** per token: `+6` when a word of the directory name starts with it (the word "awesome" is
-   ignored), `+4` when a topic or alias contains it, `+3` when the directory id contains it, `+1` when the description
-   contains it. Only the name, topic, alias and id matches are **strong**: a word found only in the directory's
+   ignored), `+4` when a word of a topic or alias starts with it, `+3` when the id or one of its `-` parts starts with
+   it, `+1` when the description contains it. Word prefixes, not substrings: "ai" must not match an "email" topic. Only the name, topic, alias and id matches are **strong**: a word found only in the directory's
    description adds score but does not count as matched for its items (otherwise "open source crm" would return every
    CRM whose directory description mentions open source).
 4. **Item score** per token: Contract v1 weights (`+8` whole name, `+5` name word prefix, `+3` name contains, `+2`
@@ -272,7 +274,8 @@ their items match, so "which directories cover MCP?" still answers.
 
 Deploying is `npx wrangler deploy` from `apps/directory-hub` with a Cloudflare token scoped to Workers on the
 `ever.works` zone, or the manual workflow `.github/workflows/deploy-directory-hub.yml` (GitHub-hosted runner, needs the
-`DIRECTORY_HUB_CLOUDFLARE_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` repository secrets). Each deploy follows the board rule.
+`DIRECTORY_HUB_CLOUDFLARE_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` secrets in the `directory-hub` environment, whose
+deployment branches should be limited to `main`). Each deploy follows the board rule.
 Rollback: `wrangler rollback` to the previous version, or remove the custom domain to take the hub offline (the
 directories are untouched; the hub only reads them).
 

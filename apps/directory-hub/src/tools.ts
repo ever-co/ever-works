@@ -9,6 +9,9 @@ import { resolveEntry } from './registry';
 import { parseQuery, scoreDirectory, scoreEntry, searchAll } from './search';
 
 export const HUB_TOOL_NAMES = ['list_directories', 'search_all', 'get_item', 'query_directory'] as const;
+
+/** Largest `query_directory` arguments object forwarded to a directory (JSON characters). */
+export const MAX_FORWARDED_ARGUMENTS = 8_192;
 export type HubToolName = (typeof HUB_TOOL_NAMES)[number];
 
 /** Invalid input or an expected failure; reported as a tool result with `isError: true`. */
@@ -177,7 +180,7 @@ function stringList(input: Record<string, unknown>, key: string): string[] | und
 	if (!Array.isArray(list) || !list.every((entry) => typeof entry === 'string')) {
 		throw new ToolInputError(`"${key}" must be an array of strings`);
 	}
-	const cleaned = list.map((entry) => entry.trim()).filter(Boolean);
+	const cleaned = list.map((entry) => entry.trim().slice(0, 200)).filter(Boolean);
 	return cleaned.length > 0 ? cleaned.slice(0, 200) : undefined;
 }
 
@@ -385,6 +388,10 @@ async function queryDirectory(loader: DirectoryLoader, input: Record<string, unk
 		throw new ToolInputError('"arguments" must be an object');
 	}
 	const toolArgs = args(raw);
+	// The hub forwards these to the directory: keep it from relaying anything bigger than a real tool call.
+	if (JSON.stringify(toolArgs).length > MAX_FORWARDED_ARGUMENTS) {
+		throw new ToolInputError(`"arguments" is too large (at most ${MAX_FORWARDED_ARGUMENTS} characters)`);
+	}
 	const directory = await resolveAvailable(loader, directoryValue);
 
 	try {

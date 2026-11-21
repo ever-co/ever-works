@@ -27,9 +27,18 @@
       "Phase 1 live"). Not run: connecting Claude itself (`claude mcp add --transport http ever-works https://directories.ever.works/mcp`).
 - [ ] T-14 ever-works-website: `/llms.txt` section and `/.well-known/mcp.json` + `/.well-known/api-catalog` pointing to the hub.
       PR [ever-co/ever-works-website#322](https://github.com/ever-co/ever-works-website/pull/322), not merged yet.
-- [ ] T-15 Deploy workflow for the Worker (manual dispatch first) with the token in repository secrets. The workflow is
-      `.github/workflows/deploy-directory-hub.yml`; the `DIRECTORY_HUB_CLOUDFLARE_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`
-      secrets are not set yet (owner to choose the token).
+- [ ] T-15 Deploy workflow for the Worker (manual dispatch first). The workflow is
+      `.github/workflows/deploy-directory-hub.yml` (environment `directory-hub`, `main` only). Not done yet: the
+      `DIRECTORY_HUB_CLOUDFLARE_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` environment secrets, and limiting the environment's
+      deployment branches to `main` (owner to choose the token).
+- [x] T-16 Hardening after the phase 1 code review (2026-11-21):
+    - query caps: 12 words, no one-letter words;
+    - word-prefix directory matching;
+    - a 64 KB request body cap and an 8 KB cap on forwarded arguments;
+    - shared loads kept alive with `waitUntil`;
+    - a 4 MB `items.json` cap, descriptions cut to 2,000 characters, http(s)-only links;
+    - unknown slugs answered from the item list, and timeouts reported as tool errors;
+    - at most 400 registry entries (the subrequest budget).
 
 ## Phase 2
 
