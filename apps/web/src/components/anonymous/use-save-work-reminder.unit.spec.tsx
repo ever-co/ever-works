@@ -30,9 +30,13 @@ function renderReminder(anonymous: boolean) {
 describe('useSaveWorkReminder', () => {
     beforeEach(() => {
         vi.clearAllMocks();
+        vi.useFakeTimers();
         window.localStorage.clear();
     });
-    afterEach(() => cleanup());
+    afterEach(() => {
+        cleanup();
+        vi.useRealTimers();
+    });
 
     it('does nothing for a registered account (no context), so its own toast shows', () => {
         const remind = renderReminder(false);
@@ -47,6 +51,9 @@ describe('useSaveWorkReminder', () => {
         const remind = renderReminder(true);
 
         expect(remind.current('w-1', true)).toBe(true);
+        // Published on the next tick, once the root <Toaster> has subscribed (see below).
+        expect(mocks.success).not.toHaveBeenCalled();
+        vi.runAllTimers();
         expect(mocks.success).toHaveBeenCalledTimes(1);
         const [title, options] = mocks.success.mock.calls[0];
         expect(title).toBe('Your Work is ready');
@@ -67,12 +74,26 @@ describe('useSaveWorkReminder', () => {
         expect(remind.current('w-1', false)).toBe(true);
         expect(remind.current('w-1', false)).toBe(false);
         expect(remind.current('w-2', false)).toBe(true);
+        vi.runAllTimers();
         expect(mocks.info).toHaveBeenCalledTimes(2);
         expect(mocks.info.mock.calls[0][0]).toBe('This Work is on a temporary account');
         expect(JSON.parse(window.localStorage.getItem(SAVE_WORK_REMINDER_STORAGE_KEY)!)).toEqual([
             'w-1',
             'w-2',
         ]);
+    });
+
+    // Found on the local stack: on a full page load the Work page's mount effect runs before
+    // the root <Toaster> subscribes (a child's effects run first), and sonner drops a toast
+    // published with no subscriber, while the Work was already marked as reminded. So the
+    // toast must not go out in the same tick as the call.
+    it('never publishes in the same tick as the call, so a Toaster mounting after it gets it', () => {
+        const remind = renderReminder(true);
+
+        remind.current('w-1', false);
+        expect(mocks.info).not.toHaveBeenCalled();
+        vi.advanceTimersByTime(0);
+        expect(mocks.info).toHaveBeenCalledTimes(1);
     });
 
     it('still reminds when storage is unreadable (private window), and does not throw', () => {

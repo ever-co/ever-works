@@ -59,15 +59,20 @@ export function useSaveWorkReminder(): (workId: string, justFinished: boolean) =
             rememberReminded(workId);
 
             const show = justFinished ? toast.success : toast.info;
-            show(justFinished ? t('ready') : t('kept'), {
-                id: `save-work-${workId}`,
-                description: t('description'),
-                duration: 10_000,
-                action: {
-                    label: t('action'),
-                    onClick: () => router.push(ROUTES.SAVE_ACCOUNT),
-                },
-            });
+            // On the next tick, not now: on a full page load this runs in the Work page's
+            // mount effect, BEFORE the root <Toaster> has subscribed (a child's effects run
+            // before its parent's), and sonner drops a toast published with no subscriber.
+            window.setTimeout(() => {
+                show(justFinished ? t('ready') : t('kept'), {
+                    id: `save-work-${workId}`,
+                    description: t('description'),
+                    duration: 10_000,
+                    action: {
+                        label: t('action'),
+                        onClick: () => router.push(ROUTES.SAVE_ACCOUNT),
+                    },
+                });
+            }, 0);
             return true;
         },
         [anonymous, router, t],

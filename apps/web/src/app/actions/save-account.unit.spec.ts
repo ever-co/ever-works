@@ -13,8 +13,10 @@ const mocks = vi.hoisted(() => ({
     claimAccount: vi.fn(),
     register: vi.fn(),
     redirect: vi.fn(),
+    revalidatePath: vi.fn(),
 }));
 
+vi.mock('next/cache', () => ({ revalidatePath: mocks.revalidatePath }));
 vi.mock('@/lib/api', () => ({
     authAPI: { claimAccount: mocks.claimAccount, register: mocks.register },
 }));
@@ -61,6 +63,27 @@ describe('saveAnonymousAccount', () => {
             locale: 'en',
             href: '/?accountSaved=true&verifyEmail=required',
         });
+    });
+
+    // Seen on the local stack: the strip lives in the dashboard layout, which the redirect
+    // reused from the router cache, so it stayed on screen after saving until a reload.
+    it('invalidates the whole layout tree before redirecting, so the strip goes at once', async () => {
+        const order: string[] = [];
+        mocks.revalidatePath.mockImplementation(() => order.push('revalidate'));
+        mocks.redirect.mockImplementation(() => order.push('redirect'));
+
+        await saveAnonymousAccount('jane@example.com', 'MySecure123!', TERMS);
+
+        expect(mocks.revalidatePath).toHaveBeenCalledWith('/', 'layout');
+        expect(order).toEqual(['revalidate', 'redirect']);
+    });
+
+    it('invalidates nothing when the save fails', async () => {
+        mocks.claimAccount.mockRejectedValue(new ApiResponseError('taken', 409));
+
+        await saveAnonymousAccount('jane@example.com', 'MySecure123!', TERMS);
+
+        expect(mocks.revalidatePath).not.toHaveBeenCalled();
     });
 
     it('leaves the email notice off when the address is already confirmed', async () => {

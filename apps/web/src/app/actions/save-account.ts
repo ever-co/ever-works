@@ -1,5 +1,6 @@
 'use server';
 
+import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 import { ZOD3_ERROR_MESSAGES } from '@ever-works/plugin/helpers';
 import { getLocale, getTranslations } from 'next-intl/server';
@@ -104,7 +105,13 @@ export async function saveAnonymousAccount(
         href = withUnverifiedEmailNotice(href);
     }
 
-    // Throws NEXT_REDIRECT: the dashboard re-renders with the fresh profile, so the strip is gone.
+    // The strip lives in the dashboard LAYOUT, which a redirect to another page under the same
+    // layout reuses from the router cache. Seen on the local stack: without this the strip was
+    // still on screen after saving, until a reload. Invalidate the whole tree so the layout
+    // reads the fresh (no longer anonymous) profile.
+    revalidatePath('/', 'layout');
+
+    // Throws NEXT_REDIRECT.
     redirect({ locale: await getLocale(), href });
     return { success: false, error: tSave('generic') };
 }
