@@ -21,10 +21,11 @@ import { centsToUsdInput, formatCeilingCents, usdInputToCents } from './fleet-co
  * back to the deployment default.
  *
  * The copy is explicit about two things a user would otherwise learn the
- * hard way: the ceiling is a STOP (drained nodes stay disabled until
- * re-enabled — it is not a rate limit), and the figure it counts is the
- * CLI's own estimate, billed to the seat each node is logged in as, never
- * to platform credits.
+ * hard way: the ceiling is DAILY (drained nodes stay disabled for the rest
+ * of the UTC day, and after midnight UTC the ones the ceiling alone
+ * disabled return to service by themselves — a node a person disabled
+ * stays disabled), and the figure it counts is the CLI's own estimate,
+ * billed to the seat each node is logged in as, never to platform credits.
  */
 export function FleetCostCeiling() {
     const t = useTranslations('dashboard.settings.fleet.costCeiling');

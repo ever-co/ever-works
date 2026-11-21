@@ -961,8 +961,9 @@ export const config = {
          * ceiling. `FLEET_NODE_DAILY_COST_CEILING_USD`; a node's own
          * `dailyCostCeilingCents` column overrides it. Unset (the default)
          * means no ceiling and zero behaviour change — enabling one is an
-         * explicit decision, and crossing it DRAINS the node until its
-         * owner re-enables it.
+         * explicit decision, and crossing it DRAINS the node for the rest
+         * of the UTC day (`FleetCostCeilingResetService` hands it back after
+         * midnight UTC unless a person disabled it too).
          */
         getDefaultNodeDailyCostCeilingCents(): number | null {
             return usdEnvToCents(process.env.FLEET_NODE_DAILY_COST_CEILING_USD);
@@ -2941,8 +2942,8 @@ export const config = {
         aiRequestsPerMinute: (): number => demoPositiveInt('DEMO_AI_REQUESTS_PER_MINUTE', 18),
         maxWorksPerSandbox: (): number => demoPositiveInt('DEMO_MAX_WORKS_PER_SANDBOX', 3),
         maxActiveSandboxes: (): number => demoPositiveInt('DEMO_MAX_ACTIVE_SANDBOXES', 300),
-        createPerIpPerHour: (): number => demoPositiveInt('DEMO_CREATE_PER_IP_PER_HOUR', 5)
-    }
+        createPerIpPerHour: (): number => demoPositiveInt('DEMO_CREATE_PER_IP_PER_HOUR', 5),
+    },
 };
 
 const DEMO_DEFAULT_SIGN_UP_URL = 'https://app.ever.works/register';

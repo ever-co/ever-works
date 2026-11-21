@@ -541,8 +541,9 @@ export interface FleetNodeView {
 	dailyCostCeilingCents?: number | null;
 	/**
 	 * The UTC day (`YYYY-MM-DD`) on which this node was last drained by
-	 * its daily ceiling, or null. A drained node stays `disabled` until
-	 * its owner re-enables it — a ceiling is a stop, not a rate limit.
+	 * its daily ceiling, or null. The ceiling is daily: a drained node stays
+	 * `disabled` for the rest of that UTC day, and after midnight UTC it goes
+	 * back into service (and this clears) unless a person disabled it too.
 	 */
 	dailyCostTrippedOn?: string | null;
 	/**

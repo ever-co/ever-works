@@ -1,4 +1,4 @@
-import { DatabaseSync } from 'node:sqlite';
+import type { DatabaseSync } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { expect, test, type BrowserContext, type Cookie, type Page } from '@playwright/test';
@@ -55,7 +55,11 @@ function uuidAfter(marker: string, url: string | null): string | null {
 }
 
 function openDb(): DatabaseSync {
-    const db = new DatabaseSync(DB_PATH as string);
+    // Loaded here, on first use, not at the top of the file: Node 24 prints an
+    // ExperimentalWarning when `node:sqlite` loads, and only the cases that read the demo
+    // API's SQLite file (`DEMO_E2E_DATABASE_PATH`) need it.
+    const sqlite = process.getBuiltinModule('node:sqlite');
+    const db = new sqlite.DatabaseSync(DB_PATH as string);
     // The API holds the same file open; wait for its write lock instead of failing.
     db.exec('PRAGMA busy_timeout = 5000');
     return db;

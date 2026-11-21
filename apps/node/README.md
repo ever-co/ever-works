@@ -69,6 +69,9 @@ ever-works-node capabilities
 ever-works-node doctor [--workspace-root <dir>] [--max-age <days>] [--max-count <n>] [--offline] [--json]
 ever-works-node gc [--workspace-root <dir>] [--max-age <days>] [--max-count <n>] [--dry-run] [--offline]
 ever-works-node policy [--allow-skip-permissions on|off] [--allow-shell-commands on|off] [--restricted-mode on|off] [--allow-mcp-bridge on|off]
+ever-works-node local-ai list [--json]
+ever-works-node local-ai probe [--json]
+ever-works-node local-ai test [--provider <id>] [--model <id>] [--api <api>] [--timeout <seconds>] [--json]
 ```
 
 - **`enroll`** consumes a one-time token from the platform's Fleet page (`POST /api/fleet/enroll`)
@@ -102,7 +105,13 @@ ever-works-node policy [--allow-skip-permissions on|off] [--allow-shell-commands
   decommissioned laptop holding a live fleet secret is the worse outcome.
 - **`status`** prints the local enrollment with the credential reported but never shown, including
   where it is stored and whether the node is paused.
-- **`capabilities`** prints the tags this machine would report, without enrolling.
+- **`capabilities`** prints the tags this machine would report, without enrolling (local-AI tags
+  included: it probes the configured providers once).
+- **`local-ai list | probe | test`** — see "Local AI providers" below. `list` prints the resolved
+  configuration without touching the network; `probe` asks every provider for its health and models
+  and says whether each bound agent CLI could take a Task (exit `1` if not); `test` sends one tiny
+  real request per wire API to one provider (exit `1` if any fails). None of them writes the config,
+  and none prints a key — only where it is read from.
 - **`doctor`** is read-only: free space on the workspace volume against the disk floor, the workspace
   root, how many Task worktrees and repository pools it holds, and — per worktree — what `gc` would do
   and why. `--json` emits one object for scripts. Works whether or not the machine is enrolled.
@@ -174,9 +183,20 @@ Detected at enroll and re-detected on **every heartbeat**, so installing Docker 
 node shows up in Fleet without a restart:
 
 `os:<platform>` · `arch:<arch>` · `node:<major>` · `terminal` · `workspace` · plus `docker`, `git`,
-`display`, `browser`, `gpu` and `gpu:<vendor>` when present. Tags are normalized with the same rules
-the server applies (trim → 32 chars → dedupe → max 16), so what the node reports is exactly what
-Fleet stores.
+`display`, `browser`, `gpu` and `gpu:<vendor>` when present, and the local-AI family (`local-ai`,
+`local-ai:<kind>`, `local-model:<id>`, `local-agent:<cli>`, see "Local AI providers"). Tags are
+normalized with the same rules the server applies (trim → 32 chars → dedupe → max 32 by default), so
+what the node reports is exactly what Fleet stores.
+
+**Extra tags.** What detection cannot see — a VM whose model server runs on the GPU host shows no GPU —
+the operator declares: `"extraCapabilities": ["gpu", "gpu:nvidia"]` in the config file, or
+`EVER_WORKS_NODE_EXTRA_CAPABILITIES=gpu,gpu:nvidia` in the node's environment (the two are merged).
+They are ADDED after the capability selection, at most 8, in the tag grammar (lower-case letters,
+digits, `.`, `_`, `-`, `family:value`). Tags the node decides itself are refused with a startup
+warning: machine identity (`os:`, `arch:`, `node:`), the local-AI family (`local-ai…`, `local-model:…`,
+`local-agent:…` — only the probe may claim those), and every tag whose presence
+is a containment or consent promise (`git-push`, `claude-code`, `codex`, `browser`, `attended`,
+`screen…`, `input`, `managed`, `sessions`, `usage-scan`, `helper:…`).
 
 Two rules govern what may appear:
 
@@ -437,8 +457,201 @@ before this build has neither; it is dated by its Git mtimes, and while a `.work
 exists for the config — a worker that may predate leases could be using it — `gc` keeps it until its
 first run under this build stamps it.
 
+## Local AI providers
+
+A node can run its agent CLI on a **local model server** instead of the CLI's cloud seat: llama-swap,
+Ollama, LM Studio, vLLM, or any OpenAI-compatible server on the machine or the LAN. The node probes
+each configured provider (health and models, time-bounded, cached for the probe interval, re-probed
+on the heartbeat), advertises what it found as capability tags, and — when the operator binds an
+agent CLI to a provider — runs that CLI's Tasks on it.
+
+### Provider kinds
+
+| Kind                | Probe (never generates)                            | Default address          | Wire APIs by default                                                      |
+| ------------------- | -------------------------------------------------- | ------------------------ | ------------------------------------------------------------------------- |
+| `openai-compatible` | `GET /v1/models`                                   | — (required)             | `openai-chat`                                                             |
+| `llama-swap`        | `GET /v1/models`, `GET /running` (loaded model)    | — (required)             | `openai-chat`, `openai-responses`, `anthropic-messages`                   |
+| `ollama`            | `GET /api/tags`, `/api/ps`, `/api/version`         | `http://127.0.0.1:11434` | `openai-chat`, `openai-responses`, `anthropic-messages` (Ollama ≥ 0.14)   |
+| `lm-studio`         | `GET /api/v0/models` (falls back to `/v1/models`)  | `http://127.0.0.1:1234`  | `openai-chat`, `openai-responses`, `anthropic-messages` (LM Studio ≥ 0.4) |
+| `vllm`              | `GET /v1/models` (`max_model_len`), `GET /version` | `http://127.0.0.1:8000`  | `openai-chat`, `openai-responses`                                         |
+
+`ollama`, `lm-studio` and `vllm` match the platform's AI-provider plugin ids. A provider's `apis`
+replaces its kind's defaults whenever it is given — declare it for an older server or one whose
+upstream speaks less (or more); `ever-works-node local-ai test` shows which APIs really answer.
+An unknown kind is refused at startup with the list of kinds this build knows.
+
+Claude Code is pointed at a provider that speaks **`anthropic-messages`**, Codex at one that speaks
+**`openai-responses`**; which product serves the API does not matter.
+
+### Configure it
+
+In the node config file (`node-config.json`, see "Config file"), a `localAi` section:
+
+```json
+"localAi": {
+	"providers": [
+		{
+			"id": "gpu",
+			"kind": "llama-swap",
+			"baseUrl": "http://192.168.1.69:8000",
+			"apiKeyFile": "/etc/ever-works-node/local-llm.key",
+			"defaultModel": "flashnext",
+			"apis": ["openai-chat", "openai-responses", "anthropic-messages"]
+		}
+	],
+	"agentRuntime": { "cli": "claude-code", "provider": "gpu", "model": "flashnext" },
+	"probeIntervalSec": 60,
+	"probeTimeoutSec": 5
+},
+"extraCapabilities": ["gpu", "gpu:nvidia"]
+```
+
+| Provider field | Meaning                                                                                            |
+| -------------- | -------------------------------------------------------------------------------------------------- |
+| `id`           | Your name for it (`[a-z0-9][a-z0-9_-]{0,31}`); defaults to the kind.                               |
+| `kind`         | One of the kinds above.                                                                            |
+| `baseUrl`      | The server root; a trailing `/v1` is accepted and dropped. http(s), no user/password, no query.    |
+| `apiKeyFile`   | Absolute path of a file holding ONLY the key (read at use time — rotate it without a restart).     |
+| `apiKeyEnv`    | Or: the NAME of an environment variable of the node process holding the key. Never the key itself. |
+| `defaultModel` | The model a bound CLI uses when its `agentRuntime` names none.                                     |
+| `models`       | Optional: the models that matter (they lead the `local-model:` tags).                              |
+| `apis`         | Optional: the wire APIs the server speaks (see above).                                             |
+
+`agentRuntime` is one `{ cli, provider, model?, smallModel? }` or a list with one entry per CLI
+(`claude-code`, `codex`). `model` defaults to the provider's `defaultModel`, then to its only model;
+`smallModel` is Claude Code's fast model (defaults to `model`).
+
+**Or in the environment** — one provider and its binding, for a node run as a service with an env
+file (`/etc/default/ever-works-node`, the Windows service's environment):
+
+```bash
+EVER_WORKS_NODE_LOCAL_AI_KIND=llama-swap
+EVER_WORKS_NODE_LOCAL_AI_ID=gpu                                       # optional; defaults to the kind
+EVER_WORKS_NODE_LOCAL_AI_BASE_URL=http://192.168.1.69:8000
+EVER_WORKS_NODE_LOCAL_AI_API_KEY_FILE=/etc/ever-works-node/local-llm.key   # or _API_KEY_ENV=<VAR NAME>
+EVER_WORKS_NODE_LOCAL_AI_MODEL=flashnext
+EVER_WORKS_NODE_LOCAL_AI_APIS=openai-chat,openai-responses,anthropic-messages   # optional
+EVER_WORKS_NODE_LOCAL_AI_AGENT_CLI=claude-code                        # or codex; none/unset = probe + tags only
+EVER_WORKS_NODE_EXTRA_CAPABILITIES=gpu,gpu:nvidia
+```
+
+The env provider replaces a config-file provider with the same id, and its binding replaces the
+file's binding for the same CLI. Then check it and restart the node when it is idle:
+
+```bash
+ever-works-node local-ai list     # what the node resolved (and every entry it refused, with why)
+ever-works-node local-ai probe    # is it up, which models, is claude-code READY on it, which tags
+ever-works-node local-ai test     # one tiny request per API (anthropic-messages is what Claude Code needs)
+```
+
+Every entry the node cannot use is dropped with a warning at startup (and listed by `local-ai list`);
+nothing about local AI can stop the node from starting or beating.
+
+### What a bound run does
+
+When `agentRuntime` binds a CLI, **every** Task of that CLI this node takes runs on the local
+provider:
+
+- **Claude Code** gets `ANTHROPIC_BASE_URL` (the provider), `ANTHROPIC_AUTH_TOKEN` (the key, or a
+  fixed placeholder for a keyless server — never empty, or Claude Code would fall back to the
+  machine's own login and send THAT to the local server), `ANTHROPIC_MODEL`,
+  `ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU}_MODEL`, `ANTHROPIC_SMALL_FAST_MODEL` and
+  `CLAUDE_CODE_SUBAGENT_MODEL` set to the local model, and `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`,
+  `DISABLE_TELEMETRY`, `DISABLE_ERROR_REPORTING`, `DISABLE_AUTOUPDATER`. `--model` is the local model,
+  whatever cloud model the platform planned.
+- **Codex** gets `-c model_provider=<id>` and the `model_providers.<id>` table (`name`, `base_url` =
+  `<root>/v1`, `wire_api = "responses"`, `env_key = LOCAL_AI_API_KEY` when keyed), the key in
+  `LOCAL_AI_API_KEY`, and `-m <local model>`. The URL is validated by its own pattern and
+  double-quoted — it is the one value on that command line that needs `:` and `/`.
+- The cloud credential NAMES a job grants (`CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY`,
+  `CODEX_ACCESS_TOKEN`, `OPENAI_API_KEY`, the Bedrock/Vertex switches) are stripped from the run, so
+  the CLI cannot pick one ahead of the local endpoint.
+- No `--max-budget-usd`: the CLI prices an unknown model at cloud list rates (Claude Code reported
+  `$0.12` for a free `flashnext` run), so a dollar cap would abort a free run. The wall-clock timeout
+  still bounds it.
+- The result reports **`costUsd: 0` with `costBasis: 'local'`** (and the local model as `modelId`), so
+  the platform records 0 cents and a daily cost ceiling has nothing to count. A local run is not
+  reported to agent readiness (that is about the cloud seat) and is never read as a usage limit.
+- The command line is checked before the spawn to actually carry the local model (and, for Codex, the
+  provider override); a refactor that loses either fails the job instead of billing the seat.
+
+**A bound CLI whose provider cannot serve it never falls back to the cloud seat.** Down, not probed,
+missing the wire API the CLI needs, no model, or the named model not served: the CLI's own tag
+(`claude-code` / `codex`) is withheld from the next heartbeat — exactly as if the CLI were not
+installed — so the platform stops offering this node that work, and a job leased in between is
+**declined before anything is provisioned** and handed back unsettled for the platform to re-offer,
+with the reason in the node's log. An interactive Agent session of a bound CLI is refused (not yet
+supported on a local provider).
+
+Without `agentRuntime`, a configured provider is probed and advertised only; every run uses the CLIs'
+own sign-in as before. This replaces the `claude-local` wrapper some fleet VMs pinned as their Claude
+binary: unpin it (`EVER_WORKS_NODE_CLAUDE_PATH` back to the real `claude`) when you switch.
+
+### Tags
+
+| Tag                   | When                                                                                                                                       |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `local-ai`            | at least one provider answered its probe                                                                                                   |
+| `local-agent:<cli>`   | that CLI is bound and its provider can serve it now                                                                                        |
+| `local-ai:<kind>`     | a healthy provider of that kind                                                                                                            |
+| `local-model:<model>` | a model a healthy provider serves — the bound one first, at most 4; ids slugged into the tag grammar (`qwen3:8b` → `local-model:qwen3-8b`) |
+
+At most 8 local-AI tags in all, appended after every older tag. All of them count toward the ONE
+per-node cap (32 by default, the server's `FLEET_MAX_CAPABILITY_TAGS`), in this order: detected tags, link
+module tags, local-AI tags, then extra tags — so if a node ever exceeds the cap, the extra tags are
+trimmed first and the detected ones never. They are always advertised
+(configuring a provider is the opt-in), whatever an older capability selection says. A tag pin on the
+platform side (**Settings → Fleet → Capability tags**) freezes the whole list, local-AI tags included.
+
+### Adding a provider kind
+
+One file under `src/core/local-ai/providers/` exporting a `LocalAiProviderDefinition`
+(`src/core/local-ai/types.ts`), and one line in `providers/index.ts`:
+
+```ts
+export const myServerProvider: LocalAiProviderDefinition = {
+	kind: 'my-server', // [a-z0-9][a-z0-9-]{0,23}
+	displayName: 'My Server',
+	description: 'What it is; what its probe reads.',
+	defaultBaseUrl: 'http://127.0.0.1:9000', // optional
+	defaultApis: ['openai-chat', 'anthropic-messages'],
+	probe: async (context) => ({ models: await probeOpenAiModels(context) }), // GETs only; throw = down
+	endpoint: (provider, api) => `${provider.baseUrl}/v1` // optional
+};
+```
+
+The probe gets its HTTP only through `context.getJson(path)` — authenticated, time-bounded,
+size-bounded, against the provider's own address, and a path with anything but plain segments (`@`, `?`,
+`%`, `//`) is refused — so a definition never handles the key and cannot send it anywhere else. An
+`endpoint()` override may change the PATH a CLI is pointed at, never the server: one that leaves the
+provider's origin fails the binding (and `local-ai test` does not send that request). Config validation, tags, the CLI commands and the agent binding pick a new kind
+up with no other change. An embedder can also pass its own `LocalAiProviderRegistry`.
+
+### Security notes
+
+- The config holds **no secret**: a key file path or an env var NAME. The key is read at use time,
+  registered with the redacting logger the moment it is read, sent only as the `Authorization: Bearer`
+  header of the provider's own requests (and to the bound CLI's environment), and scrubbed out of
+  every probe error and everything a run reports (summary, output tail, step records, transcript).
+  Status lines, `local-ai list` and `status` print where it is read from, never what it is.
+- Keep the key file owner-only (`0600`, or `root:<node user> 0640` on a service install). A file that
+  is not a regular file, is larger than 4 KiB, or holds more than one word is refused.
+- A base URL with a user name, password, query string or fragment is refused, and nothing a shell or
+  `cmd.exe` could interpret can pass its pattern.
+- The bound CLI's model can read its own environment, so it can read the local key — exactly like any
+  credential a run is given. The key only opens the local gateway; scope it there.
+- Nothing local-AI-related is sent to the platform beyond the tags above: no URL, no key, no model
+  list beyond the bounded `local-model:` tags.
+- No probe ever asks a model to generate (a completion would make llama-swap load a model); only
+  `local-ai test`, run by a person, does.
+
 ## Follow-ups
 
+- **Local AI:** per-Agent routing ("run this Agent on local AI" → require `local-agent:claude-code`),
+  a Fleet badge and the provider health on the node page (needs an additive heartbeat field and a
+  `fleet_nodes` column — tags only for now), agent readiness that reads a locally bound CLI as ready
+  without a cloud sign-in, Agent sessions on a local provider, and dropping the session-home mirror
+  for local runs (they need no cloud login).
 - Further job kinds behind the same executor seam: full agent execution, `pty-local`
   (`terminal-stream`) sessions and `local-workspace` provisioning. Each is one `register(kind, …)`
   call — no protocol change, no new endpoint, no new credential.

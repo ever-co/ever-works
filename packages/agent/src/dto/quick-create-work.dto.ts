@@ -156,9 +156,15 @@ export class QuickCreateWorkDto {
 
     @ApiPropertyOptional({
         description:
-            'Optional UUID v4 minted at funnel entry (landing page → wizard). Threaded into the zero-friction telemetry funnel so ops can correlate `landing_prompt_submit` → `work_created` → `deploy_ready` across services.',
+            'Optional UUID v4 minted at funnel entry (landing page → wizard). Threaded into the zero-friction telemetry funnel so ops can correlate `landing_prompt_submit` → `work_created` → `deploy_ready` across services. 8–64 characters of [A-Za-z0-9_-], the shape the funnel telemetry endpoint requires.',
+        pattern: '^[A-Za-z0-9_-]{8,64}$',
     })
     @IsOptional()
     @IsString()
+    // It arrives from the onboarding URL (`#corrId=…`), so a visitor can edit
+    // it, and it is stored in `work.lastDeployCorrelationId` (varchar(64)).
+    @Matches(/^[A-Za-z0-9_-]{8,64}$/, {
+        message: 'correlationId must be 8-64 characters of letters, digits, "_" or "-"',
+    })
     correlationId?: string;
 }

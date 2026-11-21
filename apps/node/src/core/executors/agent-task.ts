@@ -76,6 +76,7 @@ import {
 	type AgentTaskQuestionFs
 } from './agent-task-question';
 import {
+	assertLocalBindingInCommand,
 	assertMcpIsolationInCommand,
 	assertSettingsIsolationInCommand,
 	assertMountGrantsInCommand,
@@ -112,6 +113,12 @@ import {
 	type RepositoryLayerFs
 } from './codex-repository-layers';
 import { readClaudeRateLimitWindows, type AgentRunObservation } from '../agent-readiness';
+import {
+	buildLocalAgentLaunch,
+	withoutReplacedCredentialNames,
+	type LocalAgentLaunch,
+	type LocalAiAgentBinding
+} from '../local-ai/agent-binding';
 import type { Logger } from '../logger';
 import type { FleetTaskWorkspaceErrorCode } from '../workspaces/fleet-task-workspace';
 import { extractRunEnvSecretValues } from '../workspaces/run-env-files';
@@ -402,15 +409,33 @@ export interface AgentTaskIo extends AcceptanceChecksIo {
 	onPublishWithheld?: (reason: string) => void;
 	/**
 	 * Called when the node DECLINED to start the run before anything was
-	 * written: the workspace volume is below the disk floor, or the worktree
-	 * is being reclaimed by the workspace reaper at this very moment. Like
-	 * `onPublishWithheld`, this executor only reports it; the caller decides
-	 * what it means for the job (the runtime hands it back unsettled so the
-	 * platform re-offers it to a node with room).
+	 * written: the workspace volume is below the disk floor, the worktree
+	 * is being reclaimed by the workspace reaper at this very moment, or the
+	 * run's agent CLI is bound to a local AI provider that cannot serve it
+	 * right now. Like `onPublishWithheld`, this executor only reports it; the
+	 * caller decides what it means for the job (the runtime hands it back
+	 * unsettled so the platform re-offers it).
 	 */
 	onProvisionDeclined?: (reason: string) => void;
 	/** Model CLIs this node may drive, resolved once at startup. */
 	modelCli?: ModelCliPaths;
+	/**
+	 * Local AI — how THIS node runs a provider's Tasks on a local model server
+	 * (`localAi.agentRuntime` in the node config), asked once per run before
+	 * anything is provisioned.
+	 *
+	 *   - absent, or answering `null`: the CLI is not bound — the run is
+	 *     exactly the cloud-seat run it always was;
+	 *   - `unavailable`: bound, but the provider cannot serve it now (down,
+	 *     missing the wire API, no model). The run is DECLINED before a byte is
+	 *     written ({@link onProvisionDeclined}) — never run on the cloud seat
+	 *     instead, which is the one thing the operator who bound it ruled out;
+	 *   - `bound`: the model step gets the local env overlay and model, the
+	 *     cloud credential names are stripped from the run's grants, no
+	 *     per-run dollar budget is passed, and the result reports `costUsd: 0`
+	 *     with `costBasis: 'local'`.
+	 */
+	localAiRuntime?: (provider: FleetAgentExecutionProvider) => Promise<LocalAiAgentBinding | null>;
 	/**
 	 * Node lifecycle (self-build slice AR) — what the PINNED binary for a
 	 * provider is and which flags it advertises, asked right before the
@@ -639,6 +664,11 @@ export async function runAgentTaskJob(
 		},
 		io.executionPolicy
 	);
+	// Local AI: decided BEFORE anything is provisioned. A run bound to a local
+	// provider that cannot serve it is declined here, while declining still
+	// costs nothing — not after a clone, a setup phase and a model start that
+	// would fail on a connection refused.
+	const localBinding = execution ? await resolveLocalAiBinding(job.id, execution, io) : null;
 
 	let workspaceResolution: { path: string; descriptor: FleetTaskWorkspaceDescriptor | null };
 	try {
@@ -674,7 +704,8 @@ export async function runAgentTaskJob(
 				checks,
 				workspaceResolution,
 				runEnvGrants,
-				runSecretValues
+				runSecretValues,
+				localBinding
 			},
 			io,
 			signal
@@ -823,6 +854,47 @@ interface ResolvedAgentTask {
 	 * they have to be carried rather than looked up.
 	 */
 	runSecretValues: readonly string[];
+	/** Local AI: the binding this run's model step runs on, or null for an ordinary cloud-seat run. */
+	localBinding: BoundLocalAi | null;
+}
+
+/** A local-AI binding that can run (see {@link AgentTaskIo.localAiRuntime}). */
+type BoundLocalAi = Extract<LocalAiAgentBinding, { kind: 'bound' }>;
+
+/**
+ * Local AI — what this run's model step runs on.
+ *
+ * Null for an unbound CLI. An `unavailable` binding, or a resolver that
+ * throws, DECLINES the run: reported through `onProvisionDeclined` (the
+ * runtime hands the job back unsettled, so the platform re-offers it) and
+ * thrown, so a caller without a lease fails it naming the reason. Never a
+ * silent fallback to the machine's cloud seat.
+ */
+async function resolveLocalAiBinding(
+	jobId: string,
+	execution: FleetAgentModelExecution,
+	io: AgentTaskIo
+): Promise<BoundLocalAi | null> {
+	if (!io.localAiRuntime) return null;
+	let binding: LocalAiAgentBinding | null;
+	try {
+		binding = await io.localAiRuntime(execution.provider);
+	} catch (error) {
+		binding = {
+			kind: 'unavailable',
+			cli: execution.provider,
+			providerId: '',
+			reason: `the local AI binding could not be resolved: ${error instanceof Error ? error.message : String(error)}`
+		};
+	}
+	if (!binding) return null;
+	if (binding.kind === 'bound') return binding;
+	const reason =
+		`${execution.provider} on this node runs on local AI, and it cannot right now — ${binding.reason}. ` +
+		'The job was handed back without running (it is not run on a cloud seat instead).';
+	io.logger?.warn(`[fleet-node] job ${jobId}: declined — ${reason}`);
+	io.onProvisionDeclined?.(reason);
+	throw new AgentTaskPayloadError(reason);
 }
 
 /**
@@ -978,7 +1050,8 @@ async function runResolvedAgentTask(
 			resolveMcpBridgeSpec(payload),
 			io,
 			signal,
-			runSecretValues
+			runSecretValues,
+			context.localBinding
 		);
 		model = modelStep.model;
 		mcp = modelStep.mcp;
@@ -1390,12 +1463,30 @@ async function runModelStep(
 	 * come straight back as the job result. Scrubbed on the same footing as
 	 * a granted credential.
 	 */
-	runSecretValues: readonly string[] = []
+	runSecretValues: readonly string[] = [],
+	/**
+	 * Local AI — the provider this run's CLI runs on, or null for an ordinary
+	 * cloud-seat run (byte-for-byte the step it always was). See
+	 * {@link localExecution} for what a bound run changes.
+	 */
+	localBinding: BoundLocalAi | null = null
 ): Promise<{
 	model: FleetAgentTaskModelResult;
 	mcp: FleetAgentTaskMcpResult | null;
 	containment: FleetAgentTaskContainment;
 }> {
+	const launch: LocalAgentLaunch | null = localBinding ? buildLocalAgentLaunch(localBinding) : null;
+	if (localBinding && launch) {
+		execution = localExecution(execution, launch);
+		// The key is scrubbed out of everything the run reports, on the same
+		// footing as a delivered `.env` value: a model with a shell tool can
+		// echo its own environment into its summary.
+		runSecretValues = [...runSecretValues, ...launch.protectedValues];
+		io.logger?.info(
+			`[fleet-node] job ${jobId}: ${execution.provider} runs on local AI provider "${localBinding.providerId}" ` +
+				`(${localBinding.providerKind}), model ${launch.model}`
+		);
+	}
 	const executable = io.modelCli?.[execution.provider];
 	if (typeof executable !== 'string' || !executable.trim()) {
 		throw new AgentTaskPayloadError(
@@ -1446,9 +1537,13 @@ async function runModelStep(
 	// not the run got an isolated home, and the ONE overlay the command runner
 	// applies after its scrub carries both.
 	const mcpIsolationEnv = modelCliMcpIsolationEnv(execution.provider);
-	const modelEnvOverlay: NodeCommandEnvOverlay | undefined = mcpIsolationEnv
-		? { ...(containment.envOverlay ?? {}), ...mcpIsolationEnv }
-		: containment.envOverlay;
+	// Local AI: the endpoint, token and model variables sit between the two —
+	// over the containment overlay (they share no name with it), under the
+	// MCP switch, which is a constant that must win whatever else is set.
+	const modelEnvOverlay: NodeCommandEnvOverlay | undefined =
+		mcpIsolationEnv || launch
+			? { ...(containment.envOverlay ?? {}), ...(launch?.envOverlay ?? {}), ...(mcpIsolationEnv ?? {}) }
+			: containment.envOverlay;
 	try {
 		// ── MCP isolation when there is no bridge ───────────────────────
 		//
@@ -1551,8 +1646,19 @@ async function runModelStep(
 					...(resumeSessionId ? { resumeSessionId } : {}),
 					...(io.platform ? { platform: io.platform } : {}),
 					...(streamClaude ? { stream: true } : {}),
-					...(droppedFlags.length > 0 ? { omitFlags: droppedFlags } : {})
+					...(droppedFlags.length > 0 ? { omitFlags: droppedFlags } : {}),
+					...(launch?.codexProvider ? { localProvider: launch.codexProvider } : {})
 				});
+				// Local AI, same gate: a bound run whose command line would use
+				// the job's cloud model (or, for Codex, OpenAI itself) is refused.
+				if (launch) {
+					assertLocalBindingInCommand({
+						command,
+						execution,
+						model: launch.model,
+						...(launch.codexProvider ? { localProvider: launch.codexProvider } : {})
+					});
+				}
 				// Same gate, for MCP: a Claude Code command that would load the
 				// owner's own MCP servers is refused, not spawned.
 				assertMcpIsolationInCommand({ command, execution });
@@ -1594,7 +1700,8 @@ async function runModelStep(
 				envOverlay: modelEnvOverlay,
 				runSecretValues,
 				recordEvidence,
-				lineDelimitedOutput
+				lineDelimitedOutput,
+				localRun: launch !== null
 			});
 		};
 
@@ -1636,6 +1743,13 @@ async function runModelStep(
 		// and whoever reads the run should not have to find that in a node's
 		// log file.
 		if (droppedFlags.length > 0) model = { ...model, droppedFlags };
+		// Local AI: the model ran on the machine owner's own hardware. Whatever
+		// the CLI priced it at (Claude Code applies Claude list rates to a model
+		// id it does not know), it cost nothing, and `0` with `costBasis` says
+		// so in a form the platform's cost accounting and ceilings can read.
+		if (localBinding && launch) {
+			model = { ...model, costUsd: 0, costBasis: 'local', modelId: model.modelId ?? launch.model };
+		}
 		return {
 			model,
 			mcp: bridge.result(),
@@ -1667,6 +1781,29 @@ async function runModelStep(
 			);
 		}
 	}
+}
+
+/**
+ * Local AI — the execution a bound run's model step is built from.
+ *
+ *   - `model` is the LOCAL model, whatever cloud model the platform planned
+ *     (the fleet's model setting is per user and names a cloud model);
+ *   - the cloud credential NAMES are stripped from `envPassthrough` and
+ *     `envGrants`, so the CLI cannot resolve a cloud key ahead of the local
+ *     endpoint and bill the seat (see `LOCAL_AI_REPLACED_ENV_NAMES`);
+ *   - `maxBudgetUsd` is dropped: the CLI prices tokens at cloud list rates for
+ *     a model id it does not know, so a dollar cap would abort a run that is
+ *     free. The wall-clock timeout still bounds it, and so do the platform's
+ *     ceilings, which read the run's `0`.
+ */
+function localExecution(execution: FleetAgentModelExecution, launch: LocalAgentLaunch): FleetAgentModelExecution {
+	const { maxBudgetUsd: _cloudBudget, ...rest } = execution;
+	const local: FleetAgentModelExecution = { ...rest, model: launch.model };
+	const passthrough = withoutReplacedCredentialNames(execution.envPassthrough);
+	if (passthrough) local.envPassthrough = passthrough;
+	const grants = withoutReplacedCredentialNames(execution.envGrants);
+	if (grants) local.envGrants = grants;
+	return local;
 }
 
 /**
@@ -2534,6 +2671,10 @@ export function recognizeModelUsageLimit(
 	io: Pick<AgentTaskIo, 'usageLimitClock'> = {}
 ): FleetModelUsageLimit | null {
 	if (model.status === 'succeeded' || model.status === 'timeout') return null;
+	// Local AI: a usage limit is the cloud seat's quota. A local run has none,
+	// and parking the job until a "reset" — and throttling this node's CLI —
+	// over words a local model or gateway printed would strand the work.
+	if (model.costBasis === 'local') return null;
 	const now = io.usageLimitClock?.now() ?? Date.now();
 	const timeZone = io.usageLimitClock?.timeZone ?? localTimeZone();
 	const options = { provider: model.provider, now, ...(timeZone ? { timeZone } : {}) };
@@ -2722,6 +2863,14 @@ async function invokeModelCliStep(input: {
 	runSecretValues: readonly string[];
 	recordEvidence: boolean;
 	lineDelimitedOutput: boolean;
+	/**
+	 * Local AI — the run went to a local provider, not the CLI's cloud seat.
+	 * Agent readiness is a report about the SEAT (signed in, refused, rate
+	 * limited), so a local run proves nothing about it and is not reported:
+	 * a 401 from a mistyped local key must never mark the owner's Claude
+	 * login as signed out.
+	 */
+	localRun?: boolean;
 }): Promise<FleetAgentTaskModelResult> {
 	const { jobId, execution, step, workspacePath, scratch, scratchFs, io, signal } = input;
 	// Slice AP: the SAME protected values the summary is scrubbed of, so the
@@ -2772,7 +2921,7 @@ async function invokeModelCliStep(input: {
 	// summary or the output tail, which carry the model's words — plus the
 	// seat's own usage events out of the raw stream, and the names (never the
 	// values) of the credentials this run was granted.
-	if (io.onModelRun) {
+	if (io.onModelRun && input.localRun !== true) {
 		try {
 			const usage = execution.provider === 'claude-code' ? readClaudeRateLimitWindows(rawOutput) : [];
 			io.onModelRun({

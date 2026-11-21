@@ -244,11 +244,15 @@ describe('FleetService', () => {
                 // The security property this replaces the old refusal
                 // with, and the one that actually matters: a beat may
                 // stamp liveness but must never promote the node back to
-                // a leasable state.
+                // a leasable state. It does not even write the sticky
+                // status back — a beat that wrote back the `disabled` it
+                // read could land after a concurrent re-enable (a person's,
+                // or the cost ceiling's daily reset) and undo it.
                 expect(repository.update).toHaveBeenCalledWith(
                     '11111111-1111-4111-8111-111111111111',
-                    expect.objectContaining({ status }),
+                    expect.objectContaining({ lastHeartbeatAt: expect.any(Date) }),
                 );
+                expect(repository.update.mock.calls[0][1]).not.toHaveProperty('status');
                 expect(result?.node.status).toBe(status);
             },
         );

@@ -2,6 +2,10 @@ import type { Repository } from 'typeorm';
 import { WorkGenerationHistoryRepository } from '../work-generation-history.repository';
 import { WorkGenerationHistory } from '@src/entities/work-generation-history.entity';
 
+// Credential-shaped fixtures are assembled at runtime so the source never holds a literal that
+// secret scanners (GitGuardian) take for a real key. Every value here is made up.
+const fake = (...parts: string[]): string => parts.join('');
+
 describe('WorkGenerationHistoryRepository', () => {
     let repository: jest.Mocked<Pick<Repository<WorkGenerationHistory>, 'find'>>;
     let service: WorkGenerationHistoryRepository;
@@ -76,5 +80,97 @@ describe('WorkGenerationHistoryRepository', () => {
             take: 10,
             skip: 0,
         });
+    });
+});
+
+describe('WorkGenerationHistoryRepository: provider text is redacted before it is stored', () => {
+    const masked = `sk-proj-${'*'.repeat(40)}wxyz`;
+    let repository: {
+        update: jest.Mock;
+        findOne: jest.Mock;
+        create: jest.Mock;
+        save: jest.Mock;
+    };
+    let service: WorkGenerationHistoryRepository;
+
+    beforeEach(() => {
+        repository = {
+            update: jest.fn().mockResolvedValue({}),
+            findOne: jest.fn(),
+            create: jest.fn((record) => record),
+            save: jest.fn(async (record) => record),
+        };
+        service = new WorkGenerationHistoryRepository(
+            repository as unknown as Repository<WorkGenerationHistory>,
+        );
+    });
+
+    it('updateEntry redacts the errorMessage and the warnings', async () => {
+        repository.findOne.mockResolvedValue(null);
+
+        await service.updateEntry('history-1', {
+            errorMessage: `Incorrect API key provided: ${masked}.`,
+            warnings: [fake('Search failed: Authorization: Bear', 'er ', 'abc123', 'def456')],
+        } as never);
+
+        expect(repository.update).toHaveBeenCalledWith(
+            'history-1',
+            expect.objectContaining({
+                errorMessage: 'Incorrect API key provided: [redacted secret].',
+                warnings: ['Search failed: Authorization: Bearer [redacted secret]'],
+            }),
+        );
+    });
+
+    it('updateEntry keeps the credits message as it is', async () => {
+        repository.findOne.mockResolvedValue(null);
+
+        await service.updateEntry('history-1', {
+            errorMessage:
+                'Insufficient credits. Add more using https://openrouter.ai/settings/credits',
+        } as never);
+
+        expect(repository.update).toHaveBeenCalledWith(
+            'history-1',
+            expect.objectContaining({
+                errorMessage:
+                    'Insufficient credits. Add more using https://openrouter.ai/settings/credits',
+            }),
+        );
+    });
+
+    it('appendLogs redacts each new log message', async () => {
+        repository.findOne.mockResolvedValue({
+            id: 'history-1',
+            logs: [{ message: 'Generation started' }],
+        });
+
+        await service.appendLogs('history-1', [
+            {
+                timestamp: '2026-11-20T22:31:06.621Z',
+                level: 'error',
+                source: 'pipeline',
+                event: 'message',
+                message: `Parent agent: stream error - Incorrect API key provided: ${masked}.`,
+            },
+        ]);
+
+        expect(repository.update).toHaveBeenCalledWith('history-1', {
+            logs: [
+                { message: 'Generation started' },
+                expect.objectContaining({
+                    message:
+                        'Parent agent: stream error - Incorrect API key provided: [redacted secret].',
+                }),
+            ],
+        });
+    });
+
+    it('createEntry redacts the warnings', async () => {
+        await service.createEntry({ workId: 'work-1', warnings: [`invalid key ${masked}`] });
+
+        expect(repository.create).toHaveBeenCalledWith(
+            expect.objectContaining({ warnings: ['invalid key [redacted secret]'] }),
+        );
     });
 });

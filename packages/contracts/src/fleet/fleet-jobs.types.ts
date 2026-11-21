@@ -257,6 +257,47 @@ export function fleetManagementLaneKindsFor(
 export const FLEET_GPU_CAPABILITY = 'gpu';
 
 /**
+ * Local AI on fleet nodes — capability tags a node advertises when its
+ * operator configured a model server on (or next to) the machine (llama-swap,
+ * Ollama, LM Studio, vLLM, any OpenAI-compatible server) and the node's own
+ * probe found it healthy.
+ *
+ *   - `local-ai`                   at least one local provider is up;
+ *   - `local-ai:<kind>`            a healthy provider of that kind (`local-ai:ollama`);
+ *   - `local-model:<model>`        a model a healthy provider serves (bounded, slugged);
+ *   - `local-agent:<cli>`          this node runs that agent CLI's Tasks ON its
+ *                                  local provider (`local-agent:claude-code`) —
+ *                                  the tag a "run this Agent locally" routing rule
+ *                                  requires.
+ *
+ * A tag is a promise the node can keep: every one of them is withdrawn on the
+ * next heartbeat after the provider stops answering.
+ */
+export const FLEET_LOCAL_AI_CAPABILITY = 'local-ai';
+/** Prefix of the per-provider-kind tag, e.g. `local-ai:llama-swap`. */
+export const FLEET_LOCAL_AI_KIND_CAPABILITY_PREFIX = 'local-ai:';
+/** Prefix of the per-model tag, e.g. `local-model:flashnext`. */
+export const FLEET_LOCAL_MODEL_CAPABILITY_PREFIX = 'local-model:';
+/** Prefix of the agent-runtime tag, e.g. `local-agent:claude-code`. */
+export const FLEET_LOCAL_AGENT_CAPABILITY_PREFIX = 'local-agent:';
+
+/** The `local-agent:<cli>` tag for one agent CLI. */
+export function fleetLocalAgentCapability(provider: FleetAgentExecutionProvider): string {
+	return `${FLEET_LOCAL_AGENT_CAPABILITY_PREFIX}${provider}`;
+}
+
+/** True for any tag of the local-AI family above. */
+export function isFleetLocalAiCapability(tag: unknown): boolean {
+	return (
+		typeof tag === 'string' &&
+		(tag === FLEET_LOCAL_AI_CAPABILITY ||
+			tag.startsWith(FLEET_LOCAL_AI_KIND_CAPABILITY_PREFIX) ||
+			tag.startsWith(FLEET_LOCAL_MODEL_CAPABILITY_PREFIX) ||
+			tag.startsWith(FLEET_LOCAL_AGENT_CAPABILITY_PREFIX))
+	);
+}
+
+/**
  * Capability tag a node advertises when it can capture a picture of an
  * Agent's own browser for a live view — backed by a capture backend on the
  * machine, never advertised on the strength of a browser binary alone.
@@ -1204,8 +1245,21 @@ export interface FleetAgentTaskModelResult {
 	 * The platform records it as the run's cost (`plugin_usage_events` +
 	 * `agent_runs.costCents`) and evaluates daily ceilings against it; it
 	 * never debits platform credits for it (the seat is the owner's).
+	 *
+	 * A run on a LOCAL model (`costBasis: 'local'`) reports `0`: the model
+	 * ran on the machine owner's own hardware, so it is free by construction,
+	 * whatever list price the CLI applied to a model id it did not know.
 	 */
 	costUsd?: number | null;
+	/**
+	 * How {@link costUsd} was arrived at. Absent (every run before local AI,
+	 * and every cloud-model run) means `'cli'`: the CLI's own estimate, as
+	 * described above. `'local'` means the run's model was served by a local
+	 * AI provider on the node (llama-swap, Ollama, LM Studio, vLLM, …), so
+	 * `costUsd` is `0` on purpose — not "unknown" — and a per-run budget or a
+	 * daily cost ceiling has nothing to count.
+	 */
+	costBasis?: FleetAgentTaskModelCostBasis;
 	/** Model round-trips the CLI reported, when it did. */
 	turns?: number | null;
 	/** CLI session id, for a later resume. */
@@ -1287,6 +1341,18 @@ export interface FleetAgentTaskModelResult {
 	 * did; an older platform ignores the field.
 	 */
 	resume?: FleetAgentTaskModelResumeRecord;
+}
+
+/** See {@link FleetAgentTaskModelResult.costBasis}. */
+export type FleetAgentTaskModelCostBasis = 'cli' | 'local';
+
+export const FLEET_AGENT_TASK_MODEL_COST_BASES: readonly FleetAgentTaskModelCostBasis[] = ['cli', 'local'];
+
+/** True when a model result says its model ran on a local AI provider (free by construction). */
+export function isFleetLocalModelResult(
+	model: Pick<FleetAgentTaskModelResult, 'costBasis'> | null | undefined
+): boolean {
+	return model?.costBasis === 'local';
 }
 
 /**

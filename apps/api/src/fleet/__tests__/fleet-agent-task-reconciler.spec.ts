@@ -480,6 +480,94 @@ describe('FleetAgentTaskReconcilerService', () => {
             expect(runs.markFailed).not.toHaveBeenCalled();
         });
 
+        it('a LOCAL AI run records 0 cents marked local, hands the ceiling 0, and says there was no model spend', async () => {
+            await completed({
+                ...billed,
+                model: {
+                    ...billed.model!,
+                    // Claude Code priced the unknown local model at list rates; the node reports 0.
+                    costUsd: 0,
+                    costBasis: 'local',
+                    modelId: 'flashnext',
+                },
+            });
+
+            expect(pluginUsage!.record).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    costCents: 0,
+                    modelId: 'flashnext',
+                    metadata: expect.objectContaining({ costUsd: 0, costBasis: 'local' }),
+                }),
+            );
+            expect(jobsRepo!.stampCostCents).toHaveBeenCalledWith('job-1', 0);
+            expect(costCeiling!.evaluateAfterCompletion).toHaveBeenCalledWith(
+                expect.objectContaining({ costCents: 0 }),
+            );
+            const body = taskChat.post.mock.calls[0][1].body as string;
+            expect(body).toContain(
+                "flashnext on this machine's own local AI provider — no model spend",
+            );
+            expect(body).not.toContain('Model spend reported by the CLI');
+        });
+
+        it('treats a "local" result with NO figure as unknown, like any run that reported none', async () => {
+            await completed({
+                ...billed,
+                model: {
+                    ...billed.model!,
+                    costUsd: undefined,
+                    costBasis: 'local',
+                    modelId: 'flashnext',
+                },
+            });
+
+            // Absent is "unknown", never "free": no usage row, no stamp, no free-run sentence.
+            expect(pluginUsage!.record).not.toHaveBeenCalled();
+            expect(jobsRepo!.stampCostCents).not.toHaveBeenCalled();
+            const body = taskChat.post.mock.calls[0][1].body as string;
+            expect(body).not.toContain('no model spend');
+            expect(body).not.toContain('Model spend reported by the CLI');
+        });
+
+        it('records what a contradictory "local" result claims: a non-zero figure is spend, not free', async () => {
+            await completed({
+                ...billed,
+                model: {
+                    ...billed.model!,
+                    costUsd: 0.12,
+                    costBasis: 'local',
+                    modelId: 'flashnext',
+                },
+            });
+
+            // The platform does not second-guess the node's figure in either direction.
+            expect(pluginUsage!.record).toHaveBeenCalledWith(
+                expect.objectContaining({ costCents: 12 }),
+            );
+            expect(jobsRepo!.stampCostCents).toHaveBeenCalledWith('job-1', 12);
+            expect(costCeiling!.evaluateAfterCompletion).toHaveBeenCalledWith(
+                expect.objectContaining({ costCents: 12 }),
+            );
+            const body = taskChat.post.mock.calls[0][1].body as string;
+            expect(body).toContain('Model spend reported by the CLI: $0.12');
+            expect(body).not.toContain('no model spend');
+        });
+
+        it('reads an unknown costBasis as the CLI estimate, never as free', async () => {
+            await completed({
+                ...billed,
+                model: { ...billed.model!, costBasis: 'free' as never },
+            });
+
+            expect(pluginUsage!.record).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    costCents: 42,
+                    metadata: expect.objectContaining({ costBasis: 'cli' }),
+                }),
+            );
+            expect(taskChat.post.mock.calls[0][1].body).toContain('$0.42');
+        });
+
         it('a Codex run (tokens, no price) adds its tokens, writes NO usage row, stamps NO cost, and hands the ceiling a null cost', async () => {
             await completed({
                 ...billed,

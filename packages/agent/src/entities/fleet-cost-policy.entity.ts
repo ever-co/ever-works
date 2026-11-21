@@ -20,11 +20,13 @@ import { PortableDateColumn } from './_types';
  * `fleet_nodes.dailyCostTrippedOn` is for the per-node one: the trip is a
  * CAS on it (`FleetCostPolicyRepository.casTrip`), so however many
  * completions cross the ceiling on one day, exactly one files the Inbox
- * notice. Draining is repeated on every crossing — a ceiling is a stop, not
- * a rate limit — and every node stays `disabled` until the owner re-enables
- * it. Cleared whenever the owner changes the ceiling
- * (`FleetCostPolicyRepository.upsertCeiling`): the next crossing of a NEW
- * ceiling is news again.
+ * notice. Draining is repeated on every crossing, and the drained nodes
+ * stay `disabled` for the rest of the UTC day. The ceiling is DAILY: after
+ * midnight UTC `FleetCostCeilingResetService` puts every node the ceiling
+ * alone disabled back in service and clears this marker (a node a person
+ * disabled stays disabled). Also cleared whenever the owner changes the
+ * ceiling (`FleetCostPolicyRepository.upsertCeiling`): the next crossing of
+ * a NEW ceiling is news again.
  *
  * The ceiling sums `fleet_jobs.costCents` ONLY — spend the owner's own
  * machines reported — never the account's cloud spend or BYOK usage rows.

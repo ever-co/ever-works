@@ -84,9 +84,11 @@ type CategoryLookup = { get(id: string): Category | undefined };
  * never runs the AI items-generator — it just re-renders the main repo
  * against whatever the data repo currently holds.
  *
- * `expectedSourceSha` is informational only: if the data repo HEAD has
- * already advanced past it by the time we clone, we render against
- * current HEAD anyway. A stale webhook is not a reason to skip a sync.
+ * `expectedSourceSha` is the data-repo HEAD the caller read just before this
+ * call ({@link MarkdownGeneratorService.readDataRepoHeadSha}). It never
+ * gates the render: if HEAD has advanced past it by the time we clone, we
+ * render against current HEAD anyway. It decides what `afterSha` reports —
+ * see {@link SyncFromDataRepoResult.afterSha}.
  */
 export type SyncFromDataRepoOptions = {
     expectedSourceSha?: string;
@@ -104,7 +106,21 @@ export type SyncFromDataRepoResult = {
     skipped?: MarkdownRenderSkipReason;
     /** Data-repo HEAD SHA before this sync's clone/pull. TODO(EW-628): wire when stats helper lands. */
     beforeSha?: string;
-    /** Data-repo HEAD SHA the main repo was rendered against. TODO(EW-628): wire when stats helper lands. */
+    /**
+     * Data-repo SHA this render is known to cover — what the data-sync
+     * poller compares the next HEAD against (`Work.lastSyncedDataRepoSha`).
+     *
+     * - Separate data repository: `expectedSourceSha`, the HEAD read BEFORE
+     *   the clone. Reading HEAD after the render could record a commit that
+     *   landed mid-render and was never rendered, and the poller would then
+     *   skip it as unchanged. Without `expectedSourceSha`, HEAD read after
+     *   the render.
+     * - One repository for both roles (managed single-repo storage): HEAD
+     *   read after the render, which includes the render's own commit — the
+     *   one HEAD the next poll must see as unchanged.
+     *
+     * Undefined when the HEAD read fails.
+     */
     afterSha?: string;
     /** Number of files written to the main repo. TODO(EW-628): wire from MarkdownRepository write counters. */
     filesChanged: number;
@@ -129,7 +145,12 @@ export class MarkdownGeneratorService {
         work: Work,
         user: User,
         options: InitializeOptions = {},
-    ): Promise<{ filesChanged: number; skipped?: MarkdownRenderSkipReason }> {
+    ): Promise<{
+        filesChanged: number;
+        skipped?: MarkdownRenderSkipReason;
+        /** Set when the markdown and data roles resolved to one checkout (single-repo storage). */
+        sharesOneRepo?: boolean;
+    }> {
         throwIfGenerationCancelled(options.signal);
 
         // The single gate for the provider repository. `initialize` is called
@@ -551,7 +572,7 @@ export class MarkdownGeneratorService {
             // `filesChanged` on the activity row without an extra git
             // diff. Existing callers ignore the return value, so this
             // is backwards compatible.
-            return { filesChanged: markdownRepo.getWriteCount() };
+            return { filesChanged: markdownRepo.getWriteCount(), sharesOneRepo };
         } catch (err) {
             // Nest's Logger prints a non-string second argument as `{}` or
             // drops it, which left only "Error during markdown generation" in
@@ -585,10 +606,10 @@ export class MarkdownGeneratorService {
      *   - `beforeSha` — `work.lastSyncedDataRepoSha` at entry, i.e. the
      *     SHA the previous sync rendered against. May be `undefined` for
      *     a Work's first sync.
-     *   - `afterSha` — current data-repo HEAD SHA fetched via the git
-     *     provider plugin AFTER `initialize` finishes (so we record the
-     *     SHA we actually rendered against, not whatever races a webhook
-     *     into HEAD mid-flight).
+     *   - `afterSha` — the data-repo SHA the render covers: the caller's
+     *     `expectedSourceSha` (HEAD read before the clone) for a separate
+     *     data repository, or HEAD read after the push for single-repo
+     *     storage. See {@link SyncFromDataRepoResult.afterSha}.
      *   - `filesChanged` — `MarkdownRepository.getWriteCount()` returned
      *     by `initialize`. Counts README, per-item detail markdowns,
      *     license writes, plus any `removeDetails` calls.
@@ -607,7 +628,7 @@ export class MarkdownGeneratorService {
         const startedAt = Date.now();
         const beforeSha = work.lastSyncedDataRepoSha ?? undefined;
 
-        const { filesChanged, skipped } = await this.initialize(work, user, {
+        const { filesChanged, skipped, sharesOneRepo } = await this.initialize(work, user, {
             signal: options.signal,
             skipWhenNoData: true,
         });
@@ -615,14 +636,17 @@ export class MarkdownGeneratorService {
             return { skipped, beforeSha, filesChanged, durationMs: Date.now() - startedAt };
         }
 
-        const afterSha = await this.captureDataRepoHeadSha(work, user).catch((err) => {
-            this.logger.warn(
-                `Failed to capture data-repo HEAD SHA for work=${work.id}: ${
-                    err instanceof Error ? err.message : String(err)
-                }`,
-            );
-            return undefined;
-        });
+        const afterSha =
+            !sharesOneRepo && options.expectedSourceSha
+                ? options.expectedSourceSha
+                : await this.readDataRepoHeadSha(work).catch((err) => {
+                      this.logger.warn(
+                          `Failed to capture data-repo HEAD SHA for work=${work.id}: ${
+                              err instanceof Error ? err.message : String(err)
+                          }`,
+                      );
+                      return undefined;
+                  });
 
         return {
             beforeSha,
@@ -633,12 +657,16 @@ export class MarkdownGeneratorService {
     }
 
     /**
-     * Resolve the current data-repo HEAD SHA via the git provider plugin
-     * (one remote API call). Pulled out of `syncFromDataRepo` so the
-     * error-swallowing wrapper at the call site stays readable and the
-     * happy path is one expression.
+     * The current HEAD SHA of the Work's data repository default branch, read
+     * through the git provider plugin (two API calls, no clone). Undefined
+     * when the provider has no commit reader or the branch has no commit.
+     *
+     * Throws what the provider throws (`NoGitCredentialsError` when the owner
+     * has no connected account, HTTP errors): callers decide whether a failed
+     * read matters. The data-sync poller reads it before rendering, to skip a
+     * Work whose HEAD has not moved since `Work.lastSyncedDataRepoSha`.
      */
-    private async captureDataRepoHeadSha(work: Work, user: User): Promise<string | undefined> {
+    async readDataRepoHeadSha(work: Work): Promise<string | undefined> {
         const workOwner = getWorkOwner(work);
         const dataRepoOwner = work.getRepoOwner('data');
         const dataRepoName = work.getDataRepo();
@@ -657,10 +685,6 @@ export class MarkdownGeneratorService {
             branch,
             facadeOptions,
         );
-        // `user` is unused on the happy path but kept on the signature so
-        // future stats (e.g. `lastSyncedAtForUser`) can attribute without
-        // a churn.
-        void user;
         return commit?.sha;
     }
 

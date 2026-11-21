@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { getDemoConfig } from './demo';
+import { getDemoConfig, resetDemoConfigCacheForTests } from './demo';
 
 const fetchMock = vi.fn();
 
@@ -9,10 +9,18 @@ function jsonResponse(body: unknown, status = 200) {
 
 describe('getDemoConfig', () => {
     beforeEach(() => {
+        // Each case reads the API afresh: the process-level cache has its own spec
+        // (`demo.ttl.unit.spec.ts`).
+        resetDemoConfigCacheForTests();
         fetchMock.mockReset();
         vi.stubGlobal('fetch', fetchMock);
+        // A web without its own DEMO hint (production): the hinted web has its own spec.
+        vi.stubEnv('DEMO', '');
     });
-    afterEach(() => vi.unstubAllGlobals());
+    afterEach(() => {
+        vi.unstubAllEnvs();
+        vi.unstubAllGlobals();
+    });
 
     it('is enabled with the API numbers when features.demoMode is true', async () => {
         fetchMock.mockResolvedValue(
@@ -42,6 +50,7 @@ describe('getDemoConfig', () => {
     it('is disabled when demoMode is false or absent', async () => {
         fetchMock.mockResolvedValue(jsonResponse({ features: { demoMode: false }, demo: null }));
         expect((await getDemoConfig()).enabled).toBe(false);
+        resetDemoConfigCacheForTests();
         fetchMock.mockResolvedValue(jsonResponse({ features: {} }));
         expect((await getDemoConfig()).enabled).toBe(false);
     });
@@ -49,6 +58,7 @@ describe('getDemoConfig', () => {
     it('fails closed on a fetch error (unreachable or timeout)', async () => {
         fetchMock.mockRejectedValue(new TypeError('fetch failed'));
         expect((await getDemoConfig()).enabled).toBe(false);
+        resetDemoConfigCacheForTests();
         fetchMock.mockRejectedValue(new DOMException('timed out', 'TimeoutError'));
         expect((await getDemoConfig()).enabled).toBe(false);
     });
@@ -56,6 +66,7 @@ describe('getDemoConfig', () => {
     it('fails closed on a non-200 and on a body that is not JSON', async () => {
         fetchMock.mockResolvedValue(jsonResponse({ features: { demoMode: true } }, 500));
         expect((await getDemoConfig()).enabled).toBe(false);
+        resetDemoConfigCacheForTests();
         fetchMock.mockResolvedValue({
             ok: true,
             status: 200,

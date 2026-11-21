@@ -121,6 +121,37 @@ const getWorkDefaultDataConfig = (work: Work): Partial<IDataConfig> => ({
     company_name: work.name || work.slug,
 });
 
+/**
+ * Does this clone failure (or anything in its `cause` chain) say the remote
+ * repository was not found? Matches isomorphic-git's `HttpError` with status
+ * 404 (`HTTP Error: 404 Not Found`) and `RepositoryNotReadyError`
+ * (`code: 'repository_not_ready'`). Auth failures (401/403) and every other
+ * error are NOT a missing repository.
+ */
+export const isRepositoryNotFoundError = (error: unknown): boolean => {
+    const seen = new Set<unknown>();
+    let current: unknown = error;
+    while (current && typeof current === 'object' && !seen.has(current)) {
+        seen.add(current);
+        const candidate = current as {
+            code?: unknown;
+            message?: unknown;
+            data?: { statusCode?: unknown };
+            cause?: unknown;
+        };
+        if (candidate.code === 'repository_not_ready') return true;
+        if (candidate.code === 'HttpError' && candidate.data?.statusCode === 404) return true;
+        if (
+            typeof candidate.message === 'string' &&
+            /\bHTTP Error: 404\b/i.test(candidate.message)
+        ) {
+            return true;
+        }
+        current = candidate.cause;
+    }
+    return false;
+};
+
 export type InitializeResult =
     | {
           success: true;
@@ -290,7 +321,14 @@ export class DataGeneratorService {
                 success: false,
                 error: {
                     code: 'GENERATION_FAILED' as const,
-                    message: pipelineResult.error?.toString() || 'Pipeline execution failed',
+                    // The error's own message, not `toString()`: that prefixes the name
+                    // ("AI_APICallError: …"), and the generation orchestrator then appends the
+                    // cause's message again, so the Work read the provider's text twice behind it.
+                    // An Error without a message is still named by `toString()` (its name).
+                    message:
+                        (pipelineResult.error instanceof Error
+                            ? pipelineResult.error.message || pipelineResult.error.toString()
+                            : pipelineResult.error?.toString()) || 'Pipeline execution failed',
                     cause:
                         pipelineResult.error instanceof Error
                             ? pipelineResult.error
@@ -1495,7 +1533,13 @@ export class DataGeneratorService {
     }
 
     /**
-     * Gets existing data from the repository if it exists, otherwise returns empty data
+     * Gets existing data from the repository if it exists, otherwise returns empty data.
+     *
+     * With `requireRuntimeCompatibility` (create-update generation) a repository
+     * that EXISTS must clone and pass `assertRuntimeCompatible()`, or this throws.
+     * A data repository that does not exist yet is not a failure: it is the
+     * first generation of a new Work, whose repositories are created later in
+     * the same run, so the answer is "no existing data".
      */
     private async getExistingData(
         work: Work,
@@ -1505,6 +1549,11 @@ export class DataGeneratorService {
         const workOwner = this.getWorkOwner(work);
         const committer = work.resolveCommitter(user);
         const repo = work.getDataRepo();
+        const gitOptions = {
+            userId: workOwner.id,
+            providerId: work.gitProvider,
+            workId: work.id,
+        };
 
         try {
             // EW-P2-4 floor: never clone the derived `<slug>-data` name of a
@@ -1515,14 +1564,30 @@ export class DataGeneratorService {
                     `Work "${work.slug}" has no repository (kind "${work.kind}") — there is no data repository to read.`,
                 );
             }
-            const dest = await this.gitFacade.cloneOrPull(
-                { owner: work.getRepoOwner(), repo, committer },
-                {
-                    userId: workOwner.id,
-                    providerId: work.gitProvider,
-                    workId: work.id,
-                },
-            );
+            let dest: string;
+            try {
+                dest = await this.gitFacade.cloneOrPull(
+                    { owner: work.getRepoOwner(), repo, committer },
+                    gitOptions,
+                );
+            } catch (cloneError) {
+                if (
+                    await this.isAbsentRepository(cloneError, work.getRepoOwner(), repo, gitOptions)
+                ) {
+                    this.logger.log(
+                        `Data repository ${work.getRepoOwner()}/${repo} does not exist yet; generating without existing data`,
+                    );
+                    return {
+                        existingItems: [],
+                        existingCategories: [],
+                        existingTags: [],
+                        existingCollections: [],
+                        existingReferences: [],
+                        existingConfig: null,
+                    };
+                }
+                throw cloneError;
+            }
             const data = await DataRepository.create(dest, getWorkDefaultDataConfig(work));
 
             if (options.requireRuntimeCompatibility) {
@@ -1559,6 +1624,38 @@ export class DataGeneratorService {
                 existingReferences: [],
                 existingConfig: null,
             };
+        }
+    }
+
+    /**
+     * Did `cloneOrPull` fail because the repository does not exist?
+     *
+     * A clone of a missing GitHub repository fails with isomorphic-git's
+     * `HttpError` (`HTTP Error: 404 Not Found`), possibly wrapped; a
+     * `RepositoryNotReadyError` says the same. A 404 alone is not proof — a
+     * repository the token cannot read answers 404 too, and so can a
+     * flaky git frontend — so the provider API is asked whether the
+     * repository exists. Only a definite "no" counts; when that check fails
+     * the original clone error stands.
+     */
+    private async isAbsentRepository(
+        error: unknown,
+        owner: string,
+        repo: string,
+        gitOptions: { userId: string; providerId: string; workId: string },
+    ): Promise<boolean> {
+        if (!isRepositoryNotFoundError(error)) {
+            return false;
+        }
+        try {
+            return !(await this.gitFacade.repositoryExists(owner, repo, gitOptions));
+        } catch (checkError) {
+            this.logger.warn(
+                `Could not confirm whether ${owner}/${repo} exists after a not-found clone: ${
+                    checkError instanceof Error ? checkError.message : String(checkError)
+                }`,
+            );
+            return false;
         }
     }
 

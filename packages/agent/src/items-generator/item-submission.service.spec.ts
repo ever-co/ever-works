@@ -479,6 +479,92 @@ describe('ItemSubmissionService', () => {
             expect(captureMock).not.toHaveBeenCalled();
         });
 
+        /**
+         * Platform demo mode (R41): screenshots are off on a demo, whatever screenshot
+         * provider is installed. A submission there behaves exactly as with no provider:
+         * no capture, the visitor's images kept as sent, and the submission succeeds.
+         */
+        describe('on a demo instance (DEMO=true)', () => {
+            let savedDemo: string | undefined;
+            beforeEach(() => {
+                savedDemo = process.env.DEMO;
+                process.env.DEMO = 'true';
+            });
+            afterEach(() => {
+                if (savedDemo === undefined) delete process.env.DEMO;
+                else process.env.DEMO = savedDemo;
+            });
+
+            it('skips the capture even with a provider available, and the submission succeeds', async () => {
+                const dataRepo = makeDataRepoMock();
+                dataRepoCreateMock.mockResolvedValue(dataRepo);
+                const captureMock = jest.fn().mockResolvedValue({
+                    success: true,
+                    cacheUrl: 'https://cache.example.com/abc.png',
+                });
+                const screenshotFacade = makeScreenshotFacade({
+                    isAvailable: jest.fn().mockReturnValue(true),
+                    capture: captureMock,
+                });
+                const { service } = makeService(undefined, screenshotFacade);
+
+                const result = await service.submitItem(
+                    makeWork() as any,
+                    makeUser() as any,
+                    {
+                        name: 'Tool A',
+                        description: 'desc',
+                        source_url: 'https://example.com',
+                        category: 'AI',
+                        images: ['https://existing.png'],
+                    } as any,
+                );
+
+                expect(captureMock).not.toHaveBeenCalled();
+                expect(result.status).toBe('success');
+                // Exactly the no-provider outcome: the images as sent, nothing prepended.
+                expect(dataRepo.writeItem).toHaveBeenCalledWith(
+                    expect.objectContaining({ images: ['https://existing.png'] }),
+                );
+            });
+        });
+
+        it('demo off: still captures when a provider is available (DEMO unset)', async () => {
+            const savedDemo = process.env.DEMO;
+            delete process.env.DEMO;
+            try {
+                const dataRepo = makeDataRepoMock();
+                dataRepoCreateMock.mockResolvedValue(dataRepo);
+                const captureMock = jest.fn().mockResolvedValue({
+                    success: true,
+                    cacheUrl: 'https://cache.example.com/abc.png',
+                });
+                const screenshotFacade = makeScreenshotFacade({
+                    isAvailable: jest.fn().mockReturnValue(true),
+                    capture: captureMock,
+                });
+                const { service } = makeService(undefined, screenshotFacade);
+
+                await service.submitItem(
+                    makeWork() as any,
+                    makeUser() as any,
+                    {
+                        name: 'Tool A',
+                        description: 'desc',
+                        source_url: 'https://example.com',
+                        category: 'AI',
+                    } as any,
+                );
+
+                expect(captureMock).toHaveBeenCalledTimes(1);
+                expect(dataRepo.writeItem).toHaveBeenCalledWith(
+                    expect.objectContaining({ images: ['https://cache.example.com/abc.png'] }),
+                );
+            } finally {
+                if (savedDemo !== undefined) process.env.DEMO = savedDemo;
+            }
+        });
+
         it('skips screenshot capture when source_url is missing', async () => {
             const dataRepo = makeDataRepoMock();
             dataRepoCreateMock.mockResolvedValue(dataRepo);

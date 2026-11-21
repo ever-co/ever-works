@@ -18,6 +18,7 @@ import {
 	normalizeFleetMacAddress,
 	FLEET_SESSIONS_CAPABILITY,
 	FLEET_USAGE_SCAN_CAPABILITY,
+	isFleetLocalAiCapability,
 	isFleetTimeZone,
 	normalizeFleetAgentReadinessReport,
 	normalizeFleetNodeSelfUpdate,
@@ -185,6 +186,27 @@ export interface CapabilityEnvironment {
 	 * re-reads it every beat.
 	 */
 	usageScan?: boolean;
+	/**
+	 * Local AI (`localAi` in the node config) — what the node's last probe of
+	 * its local providers says, via `LocalAiMonitor.capabilityFacts()`:
+	 *
+	 *   - `tags` (`local-ai`, `local-ai:<kind>`, `local-model:<id>`,
+	 *     `local-agent:<cli>`) are appended after every older tag;
+	 *   - `unavailableClis` WITHHOLDS those CLIs' own tags (`claude-code`,
+	 *     `codex`): a CLI the operator bound to a local provider that is down
+	 *     cannot take a Task here, exactly like a CLI that is not installed.
+	 *
+	 * Absent on a node without local AI, which advertises exactly what it did.
+	 */
+	localAi?: { tags: readonly string[]; unavailableClis: readonly string[] };
+	/**
+	 * Operator-declared extra tags (`extraCapabilities` / `EVER_WORKS_NODE_EXTRA_CAPABILITIES`),
+	 * already validated (`normalizeExtraCapabilities`) — what detection cannot
+	 * see, like `gpu` on a VM whose model server runs on the GPU host. ADDED
+	 * after the operator's selection is applied, never subject to it: the
+	 * operator who declared them is the one who would have selected them.
+	 */
+	extraCapabilities?: readonly string[];
 }
 
 /**
@@ -380,9 +402,17 @@ export async function detectCapabilities(runner: CommandRunner, environment: Cap
 	]);
 	const major = nodeMajor(environment.nodeVersion);
 	const hasBrowser = typeof environment.browserPath === 'string' && environment.browserPath.length > 0;
+	// Local AI: a CLI bound to a local provider that cannot serve it is, for
+	// the scheduler, a CLI this machine cannot run — same rule as a missing one.
+	const withheld = new Set(environment.localAi?.unavailableClis ?? []);
 	const hasClaude =
-		typeof environment.modelCli?.['claude-code'] === 'string' && environment.modelCli['claude-code'].length > 0;
-	const hasCodex = typeof environment.modelCli?.codex === 'string' && environment.modelCli.codex.length > 0;
+		typeof environment.modelCli?.['claude-code'] === 'string' &&
+		environment.modelCli['claude-code'].length > 0 &&
+		!withheld.has('claude-code');
+	const hasCodex =
+		typeof environment.modelCli?.codex === 'string' &&
+		environment.modelCli.codex.length > 0 &&
+		!withheld.has('codex');
 
 	return normalizeCapabilities([
 		`os:${environment.platform}`,
@@ -435,7 +465,10 @@ export async function detectCapabilities(runner: CommandRunner, environment: Cap
 		...(environment.linkModuleTags ?? []),
 		// Usage & cost on the fleet (FL-20): only under --usage-scan, after the
 		// module tags so every older node's list keeps its order.
-		environment.usageScan === true ? FLEET_USAGE_SCAN_CAPABILITY : null
+		environment.usageScan === true ? FLEET_USAGE_SCAN_CAPABILITY : null,
+		// Local AI: what the last probe found, LAST for the same reason. Bounded
+		// on its own (LOCAL_AI_MAX_TAGS), so it can never crowd out the tags above.
+		...(environment.localAi?.tags ?? [])
 	]);
 }
 
@@ -496,7 +529,9 @@ const NON_SELECTABLE_TAGS = new Set<string>([
  * identity, or a capability whose absence would only strand work.
  */
 export function isAlwaysAdvertisedCapability(tag: string): boolean {
-	return isIdentityCapability(tag) || NON_SELECTABLE_TAGS.has(tag);
+	// Local AI: configuring a provider IS the opt-in (like `--attend` for
+	// `attended`), and every one of these tags is backed by a live probe.
+	return isIdentityCapability(tag) || NON_SELECTABLE_TAGS.has(tag) || isFleetLocalAiCapability(tag);
 }
 
 /**
@@ -700,7 +735,13 @@ export async function describeSelf(
 	const description: NodeSelfDescriptionPayload = {
 		platform: describePlatform(environment),
 		version: version.slice(0, MAX_VERSION_LENGTH),
-		capabilities: applyCapabilitySelection(detected, selection)
+		// The operator's extra tags join AFTER the selection (see
+		// `CapabilityEnvironment.extraCapabilities`), and after everything
+		// detected, so the cap trims them first.
+		capabilities: normalizeCapabilities([
+			...applyCapabilitySelection(detected, selection),
+			...(environment.extraCapabilities ?? [])
+		])
 	};
 
 	const cliVersion = await resolveTelemetry(telemetry.cliVersion);

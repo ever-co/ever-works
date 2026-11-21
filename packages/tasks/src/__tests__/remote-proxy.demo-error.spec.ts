@@ -22,6 +22,8 @@ const { triggerConfig } = vi.hoisted(() => ({
 vi.mock('@ever-works/agent/config', () => ({
     config: {
         trigger: triggerConfig,
+        // A demo worker: it sends the DEMO handshake header (asserted in its own spec).
+        demo: { isEnabled: () => true },
     },
 }));
 

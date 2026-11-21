@@ -18,6 +18,7 @@ import {
 } from '../../entities/agent.entity';
 import type { Agent, AgentPermissions } from '../../entities/agent.entity';
 import type { AgentPluginToolsFacade } from '../agent-plugin-tools-facade';
+import { DemoFeatureDisabledError } from '../../demo';
 
 /**
  * Agents/Skills/Tasks PR #1017 — Phase 16.10.
@@ -150,6 +151,65 @@ describe('AgentToolService plugin pass-through tools (Phase 16.10)', () => {
         expect(tools.find((t) => t.name === 'searchWeb')).toBeDefined();
         expect(tools.find((t) => t.name === 'screenshot')).toBeDefined();
         expect(tools.find((t) => t.name === 'extractContent')).toBeDefined();
+    });
+
+    /**
+     * Platform demo mode (R41): screenshots are off on a demo. The tool is not offered to the
+     * model there; the api adapter's refusal stays as a backstop, and reaches the model as an
+     * `{ error }` result rather than failing the run. With DEMO unset nothing changes.
+     */
+    describe('on a demo instance (DEMO=true)', () => {
+        let savedDemo: string | undefined;
+        beforeEach(() => {
+            savedDemo = process.env.DEMO;
+            process.env.DEMO = 'true';
+        });
+        afterEach(() => {
+            if (savedDemo === undefined) delete process.env.DEMO;
+            else process.env.DEMO = savedDemo;
+        });
+
+        it('hides the screenshot tool, and keeps searchWeb and extractContent', () => {
+            const names = svc
+                .resolveAllowedTools(
+                    makeAgent({ permissions: makePerms({ canCallExternalTools: true }) }),
+                )
+                .map((t) => t.name);
+
+            expect(names).not.toContain('screenshot');
+            expect(names).toContain('searchWeb');
+            expect(names).toContain('extractContent');
+        });
+    });
+
+    it('demo off: offers the screenshot tool, in its usual place between the other two', () => {
+        const saved = process.env.DEMO;
+        delete process.env.DEMO;
+        try {
+            const names = svc
+                .resolveAllowedTools(
+                    makeAgent({ permissions: makePerms({ canCallExternalTools: true }) }),
+                )
+                .map((t) => t.name)
+                .filter((name) => ['searchWeb', 'screenshot', 'extractContent'].includes(name));
+
+            expect(names).toEqual(['searchWeb', 'screenshot', 'extractContent']);
+        } finally {
+            if (saved !== undefined) process.env.DEMO = saved;
+        }
+    });
+
+    it("hands the model the adapter's demo refusal as an { error } result (the backstop)", async () => {
+        pluginTools.screenshot.mockRejectedValueOnce(new DemoFeatureDisabledError('screenshots'));
+        const tool = svc
+            .resolveAllowedTools(
+                makeAgent({ permissions: makePerms({ canCallExternalTools: true }) }),
+            )
+            .find((t) => t.name === 'screenshot')!;
+
+        await expect(tool.invoke({ url: 'https://x.example' } as any)).resolves.toEqual({
+            error: 'Not available in the demo: screenshots',
+        });
     });
 
     it('searchWeb invoke forwards semantic args (including agentId + workId for attribution)', async () => {

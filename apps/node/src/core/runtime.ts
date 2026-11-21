@@ -135,6 +135,8 @@ import { NO_HOOK_OVERLAY, type HookOverlayPort } from './sessions/hook-overlay.p
 import { resolveHookPaths } from './sessions/hook-client';
 import { SessionHookOverlay } from './sessions/hook-overlay';
 import { SessionStatusPipeline } from './sessions/session-status';
+import type { LocalAiMonitor } from './local-ai/monitor';
+import { setupNodeLocalAi, type NodeLocalAiSetup } from './local-ai/setup';
 import { spawn as spawnProcess } from 'node:child_process';
 import { homedir as osHomedir, userInfo as osUserInfo } from 'node:os';
 import { posix as posixPath, win32 as win32Path } from 'node:path';
@@ -552,6 +554,12 @@ export interface NodeRuntime {
 		worker: WorkerLoop;
 		kinds: FleetJobKind[];
 	};
+	/**
+	 * Local AI — this node's local model servers as last probed (null: none
+	 * configured). Already wired into the heartbeat's `describe` (the tags) and
+	 * the `agent-task` executor (the binding); exposed for the shell.
+	 */
+	localAi: LocalAiMonitor | null;
 }
 
 /** The provisioner surface the runtime composes over; the real one and every test double satisfy it. */
@@ -844,6 +852,14 @@ export interface CreateNodeRuntimeOptions {
 	checkoutsRegistryPath?: string;
 	/** Test seam: replace the checkouts module's git runner. */
 	checkoutsGit?: CheckoutGitRunner;
+	/**
+	 * Local AI — the node's local providers and extra tags, already resolved.
+	 * Absent: resolved here from `config.localAi`, `config.extraCapabilities`
+	 * and the environment ({@link env}), probing over `io.fetchFn`. `null`: no
+	 * local AI at all, whatever the config says (an embedder that has not
+	 * adopted it).
+	 */
+	localAi?: NodeLocalAiSetup | null;
 }
 
 /**
@@ -895,6 +911,31 @@ export function createNodeRuntime(config: NodeConfig, io: NodeIo, options: Creat
 		...(io.now ? { now: io.now } : {})
 	});
 	const pinnedModelCli = options.modelCli ?? io.environment.modelCli ?? {};
+	// Local AI: resolved ONCE per process from the stored config and the env
+	// shorthand. No network here — the first probe runs on the first beat.
+	// Every entry that was dropped (or will fail closed) is said once, now.
+	const localAiSetup =
+		options.localAi !== undefined
+			? options.localAi
+			: setupNodeLocalAi({
+					stored: config.localAi ?? null,
+					extraCapabilities: config.extraCapabilities ?? null,
+					env: options.env ?? process.env,
+					fetchFn: io.fetchFn,
+					logger: io.logger,
+					...(io.now ? { now: io.now } : {})
+				});
+	for (const problem of localAiSetup?.problems ?? []) io.logger.warn(`[local-ai] ${problem}`);
+	const localAi = localAiSetup?.monitor ?? null;
+	const extraCapabilities = localAiSetup?.extraCapabilities ?? [];
+	if (localAi) {
+		const runtimes = localAi.settings.agentRuntimes.map((runtime) => `${runtime.cli} → ${runtime.provider || '?'}`);
+		io.logger.info(
+			`[local-ai] ${localAi.settings.providers.length} provider(s): ${
+				localAi.settings.providers.map((provider) => `${provider.id} (${provider.kind})`).join(', ') || 'none'
+			}${runtimes.length > 0 ? `; agent runtime: ${runtimes.join(', ')}` : ''}`
+		);
+	}
 	const telemetry = buildSelfDescriptionTelemetry(
 		{
 			...io,
@@ -1535,7 +1576,8 @@ export function createNodeRuntime(config: NodeConfig, io: NodeIo, options: Creat
 				}
 			: {}),
 		...(consents.manage ? { managed: true } : {}),
-		...(linkModuleTags.length > 0 ? { linkModuleTags } : {})
+		...(linkModuleTags.length > 0 ? { linkModuleTags } : {}),
+		...(extraCapabilities.length > 0 ? { extraCapabilities } : {})
 	};
 	// Usage & cost on the fleet (FL-20, CONTRACTS §1.2): `usage-scan` is
 	// advertised while `--usage-scan` is on AND a Claude Code or Codex record
@@ -1560,7 +1602,9 @@ export function createNodeRuntime(config: NodeConfig, io: NodeIo, options: Creat
 		const tags = linkModules.tags(moduleEnvironment);
 		const { linkModuleTags: _previous, ...rest } = environment;
 		const base: CapabilityEnvironment = tags.length > 0 ? { ...rest, linkModuleTags: tags } : rest;
-		return usageScanAvailable() ? { ...base, usageScan: true } : base;
+		// Local AI: from the monitor's CACHE — `describe` refreshes it first.
+		const withLocalAi: CapabilityEnvironment = localAi ? { ...base, localAi: localAi.capabilityFacts() } : base;
+		return usageScanAvailable() ? { ...withLocalAi, usageScan: true } : withLocalAi;
 	};
 	telemetry.consents = () => consents;
 	// Fleet agent readiness: the per-CLI report on every BEAT — wired here and
@@ -1752,6 +1796,10 @@ export function createNodeRuntime(config: NodeConfig, io: NodeIo, options: Creat
 		// agent CLI or filling a disk is exactly the kind of change an
 		// operator needs to see without restarting the node.
 		describe: async () => {
+			// Local AI: re-probe providers whose answer is older than the probe
+			// interval (bounded by the probe timeout, never rejecting), so the
+			// tags this beat carries are what the servers answer now.
+			if (localAi) await localAi.current();
 			const description = await describeSelf(io.runner, currentEnvironment(), io.version, selection, telemetry);
 			lastDescribedCapabilities = description.capabilities;
 			return description;
@@ -1805,6 +1853,7 @@ export function createNodeRuntime(config: NodeConfig, io: NodeIo, options: Creat
 		lifecycle,
 		cliCompat,
 		consents,
+		localAi,
 		...(sessions ? { sessions } : {})
 	};
 
@@ -2181,6 +2230,12 @@ export function createNodeRuntime(config: NodeConfig, io: NodeIo, options: Creat
 								}
 							: {}),
 						modelCli,
+						// Local AI: the binding of this run's CLI to a local
+						// provider, re-probed (if stale) and with its key read
+						// right before the run. Only when local AI is configured:
+						// otherwise the executor never asks and every run is the
+						// cloud-seat run it always was.
+						...(localAi ? { localAiRuntime: (provider) => localAi.bindingFor(provider) } : {}),
 						// Node lifecycle (slice AR): what the pinned binary
 						// understands, asked right before the model step so an
 						// optional flag it does not advertise is dropped rather
@@ -2290,6 +2345,7 @@ export function createNodeRuntime(config: NodeConfig, io: NodeIo, options: Creat
 				workEnabled: options.workerEnabled === true,
 				daemon: sessions?.supervisor ?? null,
 				modelCli,
+				...(localAi ? { localAiBoundClis: localAi.boundClis() } : {}),
 				containment: {
 					sessionConfigFs: defaultSessionConfigFs,
 					managedMcpConfigFs: defaultSessionConfigFs,
