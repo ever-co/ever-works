@@ -132,11 +132,17 @@ describe('getDemoConfig: the in-process cache', () => {
     it('demo off: the same answer as before, read once per TTL instead of once per call', async () => {
         fetchMock.mockResolvedValue(jsonResponse({ features: { demoMode: false }, demo: null }));
 
-        for (let call = 0; call < 5; call++) {
-            vi.setSystemTime(T0 + call * 1_000);
+        // Well past the 5 s failure TTL and up to the edge of the 60 s one: an answer is kept
+        // for the success TTL.
+        for (const at of [0, 6_000, 30_000, DEMO_CONFIG_TTL_MS - 1]) {
+            vi.setSystemTime(T0 + at);
             await expect(getDemoConfig()).resolves.toEqual(DEMO_OFF);
         }
         expect(fetchMock).toHaveBeenCalledTimes(1);
+
+        vi.setSystemTime(T0 + DEMO_CONFIG_TTL_MS);
+        await expect(getDemoConfig()).resolves.toEqual(DEMO_OFF);
+        expect(fetchMock).toHaveBeenCalledTimes(2);
         expect(fetchMock).toHaveBeenCalledWith(
             expect.stringMatching(/\/config$/),
             expect.objectContaining({ cache: 'no-store' }),

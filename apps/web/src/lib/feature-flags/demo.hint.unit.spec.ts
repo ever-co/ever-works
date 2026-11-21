@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 import {
     DEMO_CONFIG_BUDGET_MS,
     DEMO_CONFIG_FAILURE_TTL_MS,
@@ -50,7 +50,7 @@ function hangsUntilAborted(_url: string, init: { signal: AbortSignal }) {
 const T0 = new Date('2026-11-21T10:00:00.000Z').getTime();
 
 describe('getDemoConfig: the web-side DEMO hint', () => {
-    let timeoutSpy: ReturnType<typeof vi.spyOn>;
+    let timeoutSpy: MockInstance<typeof AbortSignal.timeout>;
 
     beforeEach(() => {
         resetDemoConfigCacheForTests();

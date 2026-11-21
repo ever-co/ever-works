@@ -56,7 +56,7 @@ async function runSuggest(tool: ReturnType<typeof createSuggestWorksTool>) {
     // The SDK backs off 2 s before its retry; fake timers skip the wait.
     vi.useFakeTimers();
     try {
-        const run = tool.execute!({}, CALL) as Promise<{ success: boolean }>;
+        const run = Promise.resolve(tool.execute!({}, CALL)) as Promise<{ success: boolean }>;
         await vi.advanceTimersByTimeAsync(5_000);
         return await run;
     } finally {
