@@ -43,6 +43,28 @@ describe('resolveLabel', () => {
 	});
 });
 
+describe('resolveWorkerIdentity on the shared platform account', () => {
+	const platform = { platformManaged: true, workerPrefix: 'ew-', zoneName: 'ever.works' } as unknown as Parameters<typeof resolveWorkerIdentity>[0];
+	const member = { platformManaged: false, workerPrefix: 'ew-', zoneName: 'example.com' } as unknown as Parameters<typeof resolveWorkerIdentity>[0];
+
+	it('refuses a slug-derived name when no managed subdomain is allocated (slugs are not unique)', () => {
+		expect(() => resolveWorkerIdentity(platform, { workSlug: 'awesome-crm' })).toThrow(CloudflareConfigError);
+		expect(() => resolveWorkerIdentity(platform, {}, 'awesome-crm-website')).toThrow(CloudflareConfigError);
+	});
+
+	it('uses the allocated managed subdomain', () => {
+		expect(resolveWorkerIdentity(platform, { managedSubdomain: 'crm', workSlug: 'awesome-crm' })).toEqual({
+			label: 'crm',
+			workerName: 'ew-crm',
+			hostname: 'crm.ever.works'
+		});
+	});
+
+	it("still falls back to the slug on a member's own account", () => {
+		expect(resolveWorkerIdentity(member, { workSlug: 'awesome-crm' }).workerName).toBe('ew-crm');
+	});
+});
+
 describe('toDnsLabel / buildWorkerName', () => {
 	it('normalises arbitrary text to a DNS label', () => {
 		expect(toDnsLabel('  My Cool_Directory!! ')).toBe('my-cool-directory');

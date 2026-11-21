@@ -166,6 +166,13 @@ export function resolveWorkerIdentity(
 	settings: Record<string, unknown>,
 	projectName?: string
 ): CloudflareWorkerIdentity {
+	// On the shared platform account the label MUST be the Work's allocated managed subdomain (unique across all
+	// tenants). Work slugs are not unique, so a slug fallback could address another tenant's Worker (review of #3275).
+	if (config.platformManaged && !toDnsLabel(str(settings.managedSubdomain))) {
+		throw new CloudflareConfigError(
+			'This Work has no allocated ever.works subdomain yet; refusing to derive a Worker name from its slug on the shared platform account.'
+		);
+	}
 	const label = resolveLabel(settings, projectName);
 	return {
 		label,

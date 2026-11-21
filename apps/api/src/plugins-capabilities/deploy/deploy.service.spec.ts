@@ -1949,7 +1949,7 @@ describe('DeployService — plugin-driven dispatch + secrets', () => {
             );
         });
 
-        it('still deploys (slug fallback in the plugin) when allocation fails', async () => {
+        it('refuses the deploy when no unique subdomain can be allocated (slugs are not unique across tenants)', async () => {
             const plugin = cloudflarePlugin();
             const { service, subdomainAllocator, githubPlugin } = buildService({
                 plugin,
@@ -1958,12 +1958,12 @@ describe('DeployService — plugin-driven dispatch + secrets', () => {
             });
             subdomainAllocator.allocate.mockRejectedValueOnce(new Error('db down'));
 
-            await service.deploy('work-1', 'user-1', {});
+            await expect(service.deploy('work-1', 'user-1', {})).rejects.toThrow(
+                /unique ever\.works subdomain/,
+            );
 
-            const settings = plugin.getDeploymentSecrets.mock.calls[0][0];
-            expect(settings.managedSubdomain).toBeNull();
-            expect(settings.workSlug).toBe('my-site');
-            expect(captureCalls(githubPlugin).dispatches).toHaveLength(1);
+            expect(plugin.getDeploymentSecrets).not.toHaveBeenCalled();
+            expect(captureCalls(githubPlugin).dispatches).toHaveLength(0);
         });
 
         it('refuses to push the platform token to a website repo outside the Ever Works orgs', async () => {

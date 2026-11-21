@@ -843,8 +843,10 @@ export class DeployService {
      * managed subdomains, which live in the same `ever.works` zone.
      *
      * No DNS record is created here — a Workers Custom Domain brings its own
-     * (an existing CNAME would even block it). Never throws: when allocation
-     * fails the plugin falls back to the slug without `awesome-`.
+     * (an existing CNAME would even block it). When allocation fails the deploy
+     * is REFUSED: Work slugs are not unique across tenants (`works.slug` has no
+     * unique index), so a slug-derived Worker name could overwrite another
+     * tenant's site on the shared platform account (review of #3275).
      */
     private async applyCloudflareSubdomain(
         work: Work,
@@ -860,7 +862,15 @@ export class DeployService {
                 label = allocation.subdomain;
             } catch (cause) {
                 this.logger.error(
-                    `Cloudflare managed-subdomain allocation failed for work ${work.id}: ${(cause as Error).message}; the plugin falls back to the slug`,
+                    `Cloudflare managed-subdomain allocation failed for work ${work.id}: ${(cause as Error).message}; deploy refused`,
+                );
+                throw new InternalServerErrorException(
+                    'Could not allocate a unique ever.works subdomain for this Work; the Cloudflare deploy was not started. Try again.',
+                );
+            }
+            if (!label) {
+                throw new InternalServerErrorException(
+                    'No unique ever.works subdomain could be allocated for this Work; the Cloudflare deploy was not started.',
                 );
             }
         }
