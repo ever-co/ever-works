@@ -61,8 +61,11 @@ function writesPluginSettings(request: DemoRouteRequest): boolean {
 /**
  * A shared-view settings change (`UpdateSharedViewDto`) that publishes something: turning
  * sharing on (any `status` but `paused`), publishing a section or knowledge classes, or letting
- * crawlers index the page. Turning sharing off and narrowing what is published stay open. A value
- * the change does not spell out as "off" counts as publishing (fail closed).
+ * crawlers index the page. Only a change that spells everything it sends out as "off" stays
+ * open: `status: 'paused'`, `sections` whose every value is `false`, `knowledgeClasses: []`
+ * and `searchIndexable: false`. That is not every narrowing: a shorter but non-empty
+ * `knowledgeClasses` list still publishes those classes and is refused, as is a `sections`
+ * entry left `true`. Any other value counts as publishing (fail closed).
  */
 function publishesSharedView(request: DemoRouteRequest): boolean {
     const { status, sections, knowledgeClasses, searchIndexable } = bodyOf(request);

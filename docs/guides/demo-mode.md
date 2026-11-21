@@ -28,7 +28,7 @@ Two sites are easy to confuse:
 
 ## Environment variables
 
-Set these on the **API**. The web app reads the demo state from `GET /api/config`, so it needs no `DEMO*` variable of its own. Numeric values that are not a positive integer fall back to the default.
+Set these on the **API**. The web app reads the demo state from `GET /api/config`. Also set `DEMO=true` on the **web** container: it is only a hint, used when that read fails or is slow (the web retries once, then keeps its last good answer, else shows the demo with the default sign-up URL and TTL instead of the normal login form). An API answer always wins over it, and a web without `DEMO` still treats a failed read as "not a demo". Numeric values that are not a positive integer fall back to the default.
 
 | Variable                       | Default                           | Meaning                                                                                                                           |
 | ------------------------------ | --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
@@ -93,20 +93,35 @@ The Ever Works git provider creates every repository in `EVER_WORKS_CUSTOMERS_GI
 ## Known limits
 
 - **One API replica.** Run the demo API as a single replica with the `Recreate` strategy. The per-sandbox Works cap uses an in-process lock, and SQLite is one file.
-- **Trigger.dev.** The Trigger.dev project used by the demo must set `DEMO=true` in its own environment, so background workers apply the same AI policy as the API.
+- **Trigger.dev.** The Trigger.dev project used by the demo must set `DEMO=true` in its own environment, so background workers apply the same AI policy as the API. If the Trigger env lacks `DEMO=true`, the API refuses the worker's calls: a demo API answers every call to its internal worker channel (`/internal/trigger/*`) that does not carry the worker's `x-ever-works-demo: 1` header with `409 DEMO_WORKER_MISMATCH`, and logs the refused target once, so those workers fail instead of making unmetered AI calls or creating repositories the sweeper cannot find. Set `DEMO=true` in the Trigger.dev project and redeploy the workers. The reverse (a worker with `DEMO=true` calling an API without it) is served, with a warning in the API log.
 - **Turnstile.** If you use Cloudflare Turnstile, the site's hostname allowlist must include the demo hosts.
 - **No pgvector on SQLite.** Knowledge search is lexical.
 - **Not available on a demo:** workflow-run AI nodes, and the Ideas and User research features.
 
+## Deploy order
+
+A demo API refuses every internal call from a worker that does not send `x-ever-works-demo: 1` (`409 DEMO_WORKER_MISMATCH`, see Known limits). Workers built before that header existed do not send it, and the two halves do not roll out together:
+
+- ArgoCD Image Updater rolls the demo API as soon as its image is published.
+- The demo Trigger.dev deploy (`release-trigger-selfhosted.yml`) only runs after CI.
+- Trigger.dev v4 keeps each in-flight run on the version it started on, so a run started on an old worker keeps calling without the header until it ends.
+
+So, for a demo that is live, either:
+
+1. **Workers first.** Dispatch **Deploy to Self-hosted Trigger.dev** (`release-trigger-selfhosted.yml`) with `target: demo-project` before the new API image is published. The new workers send the header, which an older demo API ignores. Or:
+2. **Accept a one-time window.** After the API rolls, runs still on the old workers fail with `409 DEMO_WORKER_MISMATCH`; runs started after the new workers are deployed are served. Start them again if they matter.
+
+Production is unaffected: its API runs with `DEMO` unset and never refuses a worker.
+
 ## Operator checklist
 
-1. **Namespaces and images.** One environment per demo host (`demodev`, `demostage`, `demo.ever.works` here). Run the API image (1 replica, `Recreate`) and the web image. The web reaches the API in-cluster and proxies browser calls through its own `/api/*` routes, so the API needs no public host. Leave `NEXT_PUBLIC_API_URL` unset.
+1. **Namespaces and images.** One environment per demo host (`demodev`, `demostage`, `demo.ever.works` here). Run the API image (1 replica, `Recreate`) and the web image, both with `DEMO=true`. The web reaches the API in-cluster and proxies browser calls through its own `/api/*` routes, so the API needs no public host. Leave `NEXT_PUBLIC_API_URL` unset.
 2. **Storage.** A persistent volume for the SQLite file and the uploads directory (`DATABASE_TYPE=sqlite`, `DATABASE_PATH` on the volume). The sweeper resets the demo; never wipe the volume. It is a single-writer point of failure.
 3. **Secrets.** Names only: `AUTH_SECRET`, `PLATFORM_ENCRYPTION_KEY`, `PLUGIN_SECRET_ENCRYPTION_KEY`, the OpenRouter key, the GitHub token for the demo org, the Trigger.dev secret key and internal secret, `CAPTCHA_SECRET`, the search key. In this fleet they live in OpenBao and reach the pod through an ExternalSecret; elsewhere, use your secret store. Plain flags (`DEMO=true`, model ids) can live in the Deployment env in Git. Never commit a value.
 4. **GitHub.** A dedicated org (or the customers' org) and a token that can create and delete repositories there. Use a token separate from production's so revoking the demo never affects production.
 5. **OpenRouter.** A dedicated key with a **$0 credit limit**, so even a bug in the guard cannot buy a paid call. On an account that has bought at least $10 of credits once, which raises the free limit from 50 to 1000 requests a day.
 6. **Search.** A free-tier search provider key for generation.
-7. **Trigger.dev.** A project for the demo with `DEMO=true`, the demo API's internal URL and secret, and the plugin keys and model ids. Cap it to a small concurrency so demo runs never crowd out production runs on shared workers.
+7. **Trigger.dev.** A project for the demo with `DEMO=true`, the demo API's internal URL and secret, and the plugin keys and model ids. Cap it to a small concurrency so demo runs never crowd out production runs on shared workers. Without `DEMO=true` there, the demo API refuses the workers' calls (`409 DEMO_WORKER_MISMATCH`, see Known limits).
 8. **Switch off** on the demo: billing and subscriptions, credits enforcement, deploys, fleet, terminal sessions, Ever Connect, statistics, scheduled updates, template auto-update, magic links, OAuth client ids and the mailer. Switch on: project Works, git storage, the customers' org, and Trigger.dev where Works must run.
 9. **Check it.** `GET /api/config` shows `features.demoMode: true`. "Start the demo" lands in a sandbox. After the TTL the sandbox and its repositories are gone. Search the org for the `ever-works-demo` topic and expect no leftovers.
 10. **Monitoring.** `external-uptime-monitor.yml` probes `https://dir.ever.works/` ("Demo directory"). Its "Platform demo" row for `https://demo.ever.works/login` ships commented out: uncomment it once the demo host serves the platform login, because any failing row opens the shared uptime alert issue.

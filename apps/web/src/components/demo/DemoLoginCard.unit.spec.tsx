@@ -85,19 +85,21 @@ describe('DemoLoginCard', () => {
 
     it('passes the turnstile token, and none when there is none', async () => {
         mocks.getToken.mockResolvedValue('tok');
-        mocks.startDemo.mockResolvedValue({ success: true });
+        mocks.startDemo.mockResolvedValue({ success: true, href: '/dashboard' });
         render(<DemoLoginCard ttlHours={24} expired={false} />);
         fireEvent.click(screen.getByRole('button', { name: 'Start the demo' }));
         await waitFor(() => expect(mocks.startDemo).toHaveBeenCalledWith({ captchaToken: 'tok' }));
+        await waitFor(() => expect(mocks.push).toHaveBeenCalledWith('/dashboard'));
     });
 
     it('sends no token when Turnstile yields an empty one', async () => {
-        mocks.startDemo.mockResolvedValue({ success: true });
+        mocks.startDemo.mockResolvedValue({ success: true, href: '/dashboard' });
         render(<DemoLoginCard ttlHours={24} expired={false} />);
         fireEvent.click(screen.getByRole('button', { name: 'Start the demo' }));
         await waitFor(() =>
             expect(mocks.startDemo).toHaveBeenCalledWith({ captchaToken: undefined }),
         );
+        await waitFor(() => expect(mocks.push).toHaveBeenCalledWith('/dashboard'));
     });
 
     it('shows the full message and re-enables the button on a full result', async () => {
