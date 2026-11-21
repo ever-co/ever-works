@@ -96,6 +96,23 @@ describe('localAiCapabilityFacts', () => {
 		]);
 	});
 
+	it('advertises local-ai-completions right after local-ai when the lane serves, and only beside a healthy provider', () => {
+		const { settings } = resolveLocalAiSettings({ stored: { providers: [{ kind: 'ollama' }] } }, registry);
+		const healthy = [up('ollama', 'ollama', ['qwen3:8b'])];
+		expect(localAiCapabilityFacts(settings, healthy, registry, { servesCompletions: true }).tags).toEqual([
+			'local-ai',
+			'local-ai-completions',
+			'local-ai:ollama',
+			'local-model:qwen3-8b'
+		]);
+		expect(localAiCapabilityFacts(settings, healthy, registry).tags).not.toContain('local-ai-completions');
+		expect(
+			localAiCapabilityFacts(settings, [{ ...healthy[0]!, status: 'down' }], registry, {
+				servesCompletions: true
+			}).tags
+		).toEqual([]);
+	});
+
 	it('withholds a bound CLI whose provider is down, unknown or missing', () => {
 		const stored: NodeLocalAiConfig = {
 			providers: [{ id: 'gpu', kind: 'llama-swap', baseUrl: 'http://gw:8000', defaultModel: 'flashnext' }],

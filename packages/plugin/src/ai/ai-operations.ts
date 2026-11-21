@@ -34,6 +34,7 @@ import type {
 	EmbeddingOptions,
 	EmbeddingResponse,
 	AiModel,
+	AiProviderFetch,
 	AskJsonCompletionResponse
 } from '../contracts/capabilities/ai-provider.interface.js';
 import { TokenUsageTracker } from './token-usage.tracker.js';
@@ -73,6 +74,15 @@ export interface AiOperationsConfig {
 	maxTokens?: number;
 	providerType: string;
 	embeddingModel?: string;
+	/**
+	 * The provider's own transport (`IAiProviderPlugin.createTransport`): every
+	 * request goes through it instead of the network, and `baseURL` is the
+	 * placeholder origin it understands. The SSRF guard below protects the
+	 * DEFAULT transport — the one that would send the key to a user-supplied
+	 * address — so it is not applied to a supplied one, which decides itself
+	 * where (if anywhere) the bytes go.
+	 */
+	fetch?: AiProviderFetch;
 }
 
 export class AiOperations {
@@ -313,12 +323,12 @@ export class AiOperations {
 
 		// Security (SSRF): same guard as createChatModel — OpenAIEmbeddings is
 		// constructed directly here with the user-supplied baseURL.
-		this.assertSafeBaseUrl(config.baseURL);
+		if (!config.fetch) this.assertSafeBaseUrl(config.baseURL);
 
 		const embeddings = new OpenAIEmbeddings({
 			apiKey: config.apiKey,
 			model,
-			...(config.baseURL && { configuration: { baseURL: config.baseURL } })
+			...this.clientConfiguration(config)
 		});
 
 		const inputs = Array.isArray(options.input) ? options.input : [options.input];
@@ -347,12 +357,14 @@ export class AiOperations {
 		// runs the lexical SSRF guard and re-checks the resolved IP (mitigating
 		// DNS rebinding) before issuing the request, refusing private/loopback/
 		// link-local/cloud-metadata destinations and non-http(s) schemes.
-		const response = await safeFetchWithDnsPin(modelsUrl, {
-			headers: {
-				Authorization: `Bearer ${config.apiKey}`,
-				'Content-Type': 'application/json'
-			}
-		});
+		const headers = {
+			Authorization: `Bearer ${config.apiKey}`,
+			'Content-Type': 'application/json'
+		};
+		// A supplied transport answers itself; the default one is SSRF-guarded.
+		const response = config.fetch
+			? await config.fetch(modelsUrl, { headers })
+			: await safeFetchWithDnsPin(modelsUrl, { headers });
 
 		if (!response.ok) {
 			throw new Error(`Failed to list models: ${response.status} ${response.statusText}`);
@@ -526,7 +538,7 @@ export class AiOperations {
 		// issues any LLM request (chat/stream/askJson/testConnection all build
 		// the client here), since the request body + Bearer key would otherwise
 		// be forwarded to an attacker-chosen internal address.
-		this.assertSafeBaseUrl(config.baseURL);
+		if (!config.fetch) this.assertSafeBaseUrl(config.baseURL);
 
 		const modelKwargs: Record<string, unknown> = {};
 
@@ -546,9 +558,20 @@ export class AiOperations {
 			model,
 			temperature,
 			maxTokens: options?.maxTokens ?? config.maxTokens,
-			...(config.baseURL && { configuration: { baseURL: config.baseURL } }),
+			...this.clientConfiguration(config),
 			...(Object.keys(modelKwargs).length > 0 && { modelKwargs })
 		});
+	}
+
+	/** The OpenAI client options: the base URL, and the provider's own transport when it has one. */
+	private clientConfiguration(config: AiOperationsConfig): {
+		configuration?: { baseURL?: string; fetch?: AiProviderFetch };
+	} {
+		if (!config.baseURL && !config.fetch) return {};
+		const configuration: { baseURL?: string; fetch?: AiProviderFetch } = {};
+		if (config.baseURL) configuration.baseURL = config.baseURL;
+		if (config.fetch) configuration.fetch = config.fetch;
+		return { configuration };
 	}
 
 	/**

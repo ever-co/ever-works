@@ -10,6 +10,8 @@ export * from './fleet-node-credential';
 export * from './fleet-job.service';
 export * from './fleet-job.repository';
 export * from './fleet-job-payload-head';
+// Local AI completions — the `ai-completion` service, the plugins' relay, its codec.
+export * from './ai-completion';
 // APW-08 T12 / T48 — the lease half of isolated-run admission (a leaf port).
 export * from './fleet-app-work-lease-admission.port';
 export * from './fleet-execution-preference.service';

@@ -3,6 +3,7 @@ import {
 	FLEET_BROWSER_CAPABILITY,
 	FLEET_INPUT_CAPABILITY,
 	FLEET_LOCAL_AI_CAPABILITY,
+	FLEET_LOCAL_AI_COMPLETIONS_CAPABILITY,
 	FLEET_LOCAL_AI_KIND_CAPABILITY_PREFIX,
 	FLEET_LOCAL_MODEL_CAPABILITY_PREFIX,
 	FLEET_PUSH_CAPABILITY,
@@ -10,6 +11,7 @@ import {
 	FLEET_SESSIONS_CAPABILITY,
 	FLEET_USAGE_SCAN_CAPABILITY,
 	fleetLocalAgentCapability,
+	fleetLocalModelTagSlug,
 	isFleetLocalAiCapability,
 	type FleetAgentExecutionProvider
 } from '@ever-works/contracts';
@@ -104,23 +106,19 @@ export function normalizeExtraCapabilities(raw: readonly unknown[] | undefined):
  * grammar (`:` and `/` of `qwen3:8b`, `org/model`) folded to `-`. Null when the
  * resulting `local-model:<slug>` would not fit a tag. Lossy on purpose — the
  * tag is a routing hint, the exact id lives in the run.
+ *
+ * The normalisation itself lives in the contracts (`fleetLocalModelTagSlug`),
+ * so the platform computes the SAME tag when it routes an `ai-completion` to a
+ * model this node advertised.
  */
 export function localModelTagSlug(modelId: string): string | null {
-	const folded = modelId
-		.toLowerCase()
-		.replace(/[^a-z0-9._-]+/g, '-')
-		.replace(/-{2,}/g, '-');
-	// Trimmed by index, not by an end-anchored regex: the id comes from a
-	// server's model list, and `[-._]+$` is quadratic on a long run of them.
-	const edge = (char: string | undefined): boolean => char === '-' || char === '.' || char === '_';
-	let start = 0;
-	let end = folded.length;
-	while (start < end && edge(folded[start])) start += 1;
-	while (end > start && edge(folded[end - 1])) end -= 1;
-	const slug = folded.slice(start, end);
-	if (!slug) return null;
-	const tag = `${FLEET_LOCAL_MODEL_CAPABILITY_PREFIX}${slug}`;
-	return tag.length <= MAX_CAPABILITY_TAG_LENGTH && CAPABILITY_TAG_PATTERN.test(tag) ? slug : null;
+	return fleetLocalModelTagSlug(modelId);
+}
+
+/** What the node's lanes add to the local-AI tags. */
+export interface LocalAiCapabilityOptions {
+	/** The local-AI lane runs (`--work`, completions on): advertise `local-ai-completions`. */
+	servesCompletions?: boolean;
 }
 
 /** What local AI contributes to one heartbeat's capability list. */
@@ -139,15 +137,17 @@ export interface LocalAiCapabilityFacts {
 /**
  * The tags and the withheld CLIs for the providers as last probed.
  *
- * Order (the cap keeps the first): `local-ai`, `local-agent:<cli>` per bound
- * CLI that can run, `local-ai:<kind>` per healthy kind, then `local-model:<id>`
- * — the bound models first, then each healthy provider's default and declared
- * models, then what it lists.
+ * Order (the cap keeps the first): `local-ai`, `local-ai-completions` when
+ * this node serves the platform's `ai-completion` jobs, `local-agent:<cli>` per
+ * bound CLI that can run, `local-ai:<kind>` per healthy kind, then
+ * `local-model:<id>` — the bound models first, then each healthy provider's
+ * default and declared models, then what it lists.
  */
 export function localAiCapabilityFacts(
 	settings: LocalAiSettings | null,
 	statuses: readonly LocalAiProviderStatus[],
-	registry: LocalAiProviderRegistry
+	registry: LocalAiProviderRegistry,
+	options: LocalAiCapabilityOptions = {}
 ): LocalAiCapabilityFacts {
 	if (!settings) return { tags: [], unavailableClis: [] };
 	const up = new Map(statuses.filter((status) => status.status === 'up').map((status) => [status.id, status]));
@@ -168,7 +168,11 @@ export function localAiCapabilityFacts(
 	}
 	if (healthy.length === 0) return { tags: [], unavailableClis };
 
-	tags.push(FLEET_LOCAL_AI_CAPABILITY, ...agentTags);
+	tags.push(FLEET_LOCAL_AI_CAPABILITY);
+	// Only beside a healthy provider, like every tag of the family: a lane with
+	// nothing to forward to must not be offered completions.
+	if (options.servesCompletions === true) tags.push(FLEET_LOCAL_AI_COMPLETIONS_CAPABILITY);
+	tags.push(...agentTags);
 	for (const provider of healthy) {
 		const tag = `${FLEET_LOCAL_AI_KIND_CAPABILITY_PREFIX}${provider.kind}`;
 		if (!tags.includes(tag)) tags.push(tag);

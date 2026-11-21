@@ -1,5 +1,6 @@
 import type {
 	AiModel,
+	AiProviderFetch,
 	ChatCompletionOptions,
 	ChatCompletionResponse,
 	ChatCompletionChunk,
@@ -104,6 +105,15 @@ export interface AiProviderConfig {
 	readonly providerName: string;
 	readonly baseUrl?: string;
 	readonly apiKey?: string;
+	/**
+	 * The provider's own transport (`IAiProviderPlugin.createTransport`), when its
+	 * API is not a plain URL — the fleet local AI plugin carries each request to
+	 * the caller's machines. A client that builds its own model from this config
+	 * MUST pass it as its `fetch` (the AI SDK's and the OpenAI SDK's `fetch`
+	 * option); `baseUrl` is then a placeholder origin only that transport
+	 * understands. Absent for every URL-based provider.
+	 */
+	readonly fetch?: AiProviderFetch;
 	readonly defaultModel?: string;
 	readonly routing: {
 		readonly simpleModel?: string;

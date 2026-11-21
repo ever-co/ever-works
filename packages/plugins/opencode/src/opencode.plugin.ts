@@ -297,7 +297,8 @@ export class OpenCodePlugin implements IPlugin, IPipelinePlugin, IFormSchemaProv
 		try {
 			const settings = await resolveSettings(this.context, userId, work.id);
 			const version = (settings.version as string) || DEFAULT_CLI_VERSION;
-			const { providerConfig, modelName } = await this.resolveAiProvider(execContext, facadeOptions);
+			const { providerConfig, modelName, unsupported } = await this.resolveAiProvider(execContext, facadeOptions);
+			if (unsupported) return this.handleError(new Error(unsupported), startTime);
 
 			if (!providerConfig || !modelName) {
 				return this.handleError(
@@ -564,8 +565,20 @@ export class OpenCodePlugin implements IPlugin, IPipelinePlugin, IFormSchemaProv
 	): Promise<{
 		providerConfig: Awaited<ReturnType<typeof execContext.aiFacade.getProviderConfig>> | null;
 		modelName: string | null;
+		/** Why the configured provider cannot drive the CLI at all (it has no HTTP endpoint). */
+		unsupported?: string;
 	}> {
 		const providerConfig = await execContext.aiFacade.getProviderConfig(facadeOptions);
+		if (providerConfig.fetch) {
+			// The OpenCode CLI dials `baseUrl` itself; a provider reachable only
+			// through the platform's transport (local AI on the owner's computers)
+			// cannot serve it. Say so instead of sending the CLI to a placeholder.
+			return {
+				providerConfig: null,
+				modelName: null,
+				unsupported: `AI provider "${providerConfig.providerId}" is reachable only through the platform, which the OpenCode CLI cannot use — pick the Agent Pipeline, or an AI provider with an HTTP endpoint`
+			};
+		}
 		if (!providerConfig.baseUrl || !providerConfig.apiKey) {
 			return { providerConfig: null, modelName: null };
 		}
@@ -1001,10 +1014,11 @@ export class OpenCodePlugin implements IPlugin, IPipelinePlugin, IFormSchemaProv
 			workId,
 			providerOverride: execContext.aiProviderId
 		};
-		const { providerConfig, modelName } = await this.resolveAiProvider(
+		const { providerConfig, modelName, unsupported } = await this.resolveAiProvider(
 			{ aiFacade } as unknown as NonNullable<PipelineExecutionOptions['execContext']>,
 			facadeOptions
 		);
+		if (unsupported) return failedCodeEditResult(startTime, unsupported);
 		if (!providerConfig || !modelName) {
 			return failedCodeEditResult(
 				startTime,

@@ -14,7 +14,11 @@ import type { FleetAgentExecutionProvider } from '@ever-works/contracts';
  *      work to the machines that have it;
  *   3. when the operator binds an agent CLI to it (`agentRuntime`), runs that
  *      CLI's Tasks on the local model instead of the cloud seat — the env
- *      overlay, the model, a `0` cost marked `costBasis: 'local'`.
+ *      overlay, the model, a `0` cost marked `costBasis: 'local'`;
+ *   4. under `--work`, serves the PLATFORM's own model requests on it
+ *      (`ai-completion` jobs, the local-AI lane — `completion-lane.ts`): one
+ *      request body in, the provider's answer out, so a Work generation runs
+ *      on the owner's own GPU for free.
  *
  * ## The extension point
  *
@@ -80,6 +84,24 @@ export interface LocalAiAgentRuntimeSettings {
 	smallModel: string | null;
 }
 
+/**
+ * Serving the platform's own model requests (`ai-completion` jobs) — the
+ * local-AI lane (`localAi.completions`, `EVER_WORKS_NODE_LOCAL_AI_COMPLETIONS*`).
+ */
+export interface LocalAiCompletionSettings {
+	/**
+	 * On by default once a provider is configured: the lane still runs only
+	 * under `--work`, and only the owner's own requests ever reach it.
+	 */
+	enabled: boolean;
+	/** Completions in flight at once — the GPU's share of this node (default 1). */
+	concurrency: number;
+	/** Ceiling on the budget a request may ask for; the node never waits longer on a provider. */
+	maxTimeoutMs: number;
+	/** How often an idle lane asks for a completion (a lane that just served one asks every second). */
+	idlePollMs: number;
+}
+
 /** Everything the node runs local AI from, resolved from the config file and the environment. */
 export interface LocalAiSettings {
 	providers: LocalAiProviderSettings[];
@@ -88,6 +110,12 @@ export interface LocalAiSettings {
 	probeIntervalMs: number;
 	/** Wall-clock budget of ONE probe of one provider (all of its requests together). */
 	probeTimeoutMs: number;
+	/**
+	 * Serving `ai-completion` jobs. Optional so a settings object built by hand
+	 * (an embedder, an older test) keeps compiling; absent reads as the
+	 * defaults (`resolveLocalAiCompletionSettings`).
+	 */
+	completions?: LocalAiCompletionSettings;
 }
 
 /** One model a provider serves, as its own list reported it. */

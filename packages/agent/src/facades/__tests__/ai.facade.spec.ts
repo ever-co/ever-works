@@ -733,8 +733,10 @@ describe('AiFacadeService', () => {
 
             await service.testConnection({ userId: 'user-1' });
 
+            // …and who is asking (`AiProviderCallScope`), for a provider whose answer is the caller's.
             expect(aiPlugin.isAvailable).toHaveBeenCalledWith(
                 expect.objectContaining({ apiKey: 'test-key' }),
+                { userId: 'user-1' },
             );
         });
     });
@@ -1222,6 +1224,7 @@ describe('AiFacadeService', () => {
 
             expect(aiPlugin.listModels).toHaveBeenCalledWith(
                 expect.objectContaining({ apiKey: 'test-key' }),
+                { userId: 'user-1' },
             );
         });
     });
