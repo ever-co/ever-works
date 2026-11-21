@@ -1,11 +1,13 @@
 import {
     BadRequestException,
     Body,
+    ConflictException,
     Controller,
     ForbiddenException,
     forwardRef,
     Get,
     Headers,
+    Logger,
     OnModuleInit,
     Optional,
     Param,
@@ -167,7 +169,11 @@ import {
 // Platform demo mode — the workers' AI quota (bound only when `DEMO` is on).
 import { DemoAiQuotaService } from '../demo/demo-ai-quota.service';
 import { DemoRepoLedgerService } from '../demo/demo-repo-ledger.service';
-import type { DemoRepoLedgerEntry } from '@ever-works/agent/demo';
+import {
+    DEMO_WORKER_HEADER,
+    isDemoWorkerHeader,
+    type DemoRepoLedgerEntry,
+} from '@ever-works/agent/demo';
 
 /**
  * C-05 RPC half — methods that must never be reachable via `POST
@@ -294,8 +300,11 @@ function buildMethodAllowList(instance: object): Set<string> {
 @SkipThrottle({ short: true, medium: true, long: true })
 @Controller('internal/trigger')
 export class TriggerInternalController implements OnModuleInit {
+    private readonly logger = new Logger(TriggerInternalController.name);
     private remoteMap: Record<string, object> = {};
     private allowedMethods: Record<string, Set<string>> = {};
+    /** The DEMO drift handshake's log, once per target (see `ensureDemoHandshake`). */
+    private readonly demoDriftLogged = new Set<string>();
 
     constructor(
         private readonly workRepository: WorkRepository,
@@ -1261,8 +1270,11 @@ export class TriggerInternalController implements OnModuleInit {
         @Headers('x-trigger-secret') secret: string,
         @Param('id') workId: string,
         @Query('userId') userId: string,
+        // Platform demo mode — appended LAST so every positional call keeps its meaning.
+        @Headers(DEMO_WORKER_HEADER) demoHeader?: string,
     ): Promise<WorkContextResponse> {
         this.ensureSecret(secret);
+        this.ensureDemoHandshake(demoHeader, 'works/:id/context');
 
         if (!userId) {
             throw new BadRequestException('Missing userId');
@@ -1285,8 +1297,15 @@ export class TriggerInternalController implements OnModuleInit {
 
     @Post('remote/call')
     @Public()
-    async callRemote(@Headers('x-trigger-secret') secret: string, @Body() body: RemoteCallDto) {
+    async callRemote(
+        @Headers('x-trigger-secret') secret: string,
+        @Body() body: RemoteCallDto,
+        // Platform demo mode — appended LAST so every positional call keeps its meaning.
+        @Headers(DEMO_WORKER_HEADER) demoHeader?: string,
+    ) {
         this.ensureSecret(secret);
+        // Before anything is resolved or run: a refused worker reaches no target at all.
+        this.ensureDemoHandshake(demoHeader, this.remoteTargetLabel(body?.name));
 
         // C-05 RPC half: hard input shape. We are NOT relying on Nest's
         // ValidationPipe alone — repeated locally so the security-critical
@@ -1363,6 +1382,71 @@ export class TriggerInternalController implements OnModuleInit {
         if (!lengthsMatch || !bytesMatch) {
             throw new ForbiddenException('Invalid trigger secret');
         }
+    }
+
+    /**
+     * Platform demo mode — the DEMO drift handshake (fail closed). A demo instance runs the
+     * API and its Trigger.dev workers as two deployments that read `DEMO` separately. A worker
+     * whose environment lacks `DEMO=true` binds no demo AI quota and no demo repository ledger
+     * (`trigger-facades.module.ts`), so it would make unmetered AI calls and create
+     * repositories no sweep can find. A worker with `DEMO` on sends `x-ever-works-demo: 1`
+     * (`TriggerInternalApiClient`); a demo API refuses every internal call without it.
+     *
+     * A non-demo API serves a call that carries the header and only warns: nothing a demo
+     * worker does needs refusing there. With `DEMO` off on both sides this is a no-op. Each
+     * mismatch is logged once per target (a refused worker retries its task, and every
+     * retry would otherwise log again); the 409 answers every call.
+     *
+     * Runs after `ensureSecret`, so a caller without the secret learns nothing here.
+     */
+    private ensureDemoHandshake(demoHeader: string | undefined, target: string): void {
+        const workerDemo = isDemoWorkerHeader(demoHeader);
+        if (config.demo.isEnabled()) {
+            if (workerDemo) return;
+            this.logDemoDriftOnce(`refused:${target}`, () =>
+                this.logger.error(
+                    `Refused the Trigger.dev worker's call to ${target}: this API runs with ` +
+                        'DEMO=true but the worker sent no x-ever-works-demo header. Set ' +
+                        'DEMO=true (and the other DEMO_* variables) in the Trigger.dev ' +
+                        "project's environment and redeploy the workers.",
+                ),
+            );
+            throw new ConflictException({
+                statusCode: 409,
+                error: 'Conflict',
+                code: 'DEMO_WORKER_MISMATCH',
+                message:
+                    'This API runs in demo mode (DEMO=true) but the calling Trigger.dev worker ' +
+                    'does not: set DEMO=true in the Trigger.dev environment. Every internal ' +
+                    'call is refused until then.',
+            });
+        }
+        if (workerDemo) {
+            this.logDemoDriftOnce(`served:${target}`, () =>
+                this.logger.warn(
+                    `The Trigger.dev worker calling ${target} runs with DEMO=true, but this ` +
+                        'API does not; the call is served. Unset DEMO in the Trigger.dev ' +
+                        "project's environment, or set it on the API.",
+                ),
+            );
+        }
+    }
+
+    private logDemoDriftOnce(key: string, log: () => void): void {
+        if (this.demoDriftLogged.has(key)) return;
+        this.demoDriftLogged.add(key);
+        log();
+    }
+
+    /**
+     * The `remote/call` target as the drift log names it: a registered target's own name,
+     * anything else one label (so the once-per-target set stays bounded by the remote map).
+     */
+    private remoteTargetLabel(name: unknown): string {
+        return typeof name === 'string' &&
+            Object.prototype.hasOwnProperty.call(this.remoteMap, name)
+            ? name
+            : '(unregistered target)';
     }
 
     // H-06: project an explicit allow-list of User fields. The previous

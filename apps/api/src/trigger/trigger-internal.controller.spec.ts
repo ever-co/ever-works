@@ -193,15 +193,20 @@ jest.mock('../demo/demo-repo-ledger.service', () => ({
 }));
 
 const getInternalSecretMock = jest.fn<string | undefined, []>();
+// Platform demo mode — off unless a case turns it on (the DEMO drift handshake below).
+const demoEnabledMock = jest.fn<boolean, []>(() => false);
 jest.mock('@ever-works/agent/config', () => ({
     config: {
         trigger: {
             getInternalSecret: () => getInternalSecretMock(),
         },
+        demo: {
+            isEnabled: () => demoEnabledMock(),
+        },
     },
 }));
 
-import { BadRequestException, ForbiddenException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Logger } from '@nestjs/common';
 import superjson from 'superjson';
 import { GitHubAppInstallationRepository } from '@ever-works/agent/database';
 import { DemoRateLimitedError } from '@ever-works/agent/demo';
@@ -407,6 +412,7 @@ describe('TriggerInternalController', () => {
     beforeEach(() => {
         jest.clearAllMocks();
         getInternalSecretMock.mockReturnValue(VALID_SECRET);
+        demoEnabledMock.mockReturnValue(false);
 
         workRepository = { name: 'WorkRepository' };
         ownershipService = { ensureAccess: jest.fn() };
@@ -2105,6 +2111,110 @@ describe('TriggerInternalController', () => {
 
             expect(at).toBe(paramTypes.length - 1);
             expect(optionalIndices).toContain(at);
+        });
+    });
+
+    /**
+     * Platform demo mode — the DEMO drift handshake, API half. A worker running with `DEMO`
+     * on sends `x-ever-works-demo: 1` on every internal call. A demo API refuses a call
+     * without it (fail closed): such a worker binds no demo AI quota and no repository
+     * ledger, so it would make unmetered AI calls and create repositories no sweep finds.
+     * A non-demo API serves a call that carries it and only warns. Demo off and no header:
+     * nothing changes.
+     */
+    describe('the DEMO drift handshake (x-ever-works-demo)', () => {
+        const DEMO_HEADER_ON = '1';
+        const echoBody = () => ({
+            name: 'PluginRepository',
+            method: 'echo',
+            args: superjson.serialize(['hello']) as any,
+        });
+
+        let errorSpy: jest.SpyInstance;
+        let warnSpy: jest.SpyInstance;
+        beforeEach(() => {
+            errorSpy = jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+            warnSpy = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+        });
+        afterEach(() => {
+            errorSpy.mockRestore();
+            warnSpy.mockRestore();
+        });
+
+        describe('on a demo API (DEMO=true)', () => {
+            beforeEach(() => demoEnabledMock.mockReturnValue(true));
+
+            it('refuses a remote call that lacks the header with a 409 naming the fix, and runs nothing', async () => {
+                const refusal = controller.callRemote(VALID_SECRET, echoBody());
+
+                await expect(refusal).rejects.toBeInstanceOf(ConflictException);
+                await expect(refusal).rejects.toMatchObject({
+                    status: 409,
+                    response: expect.objectContaining({
+                        statusCode: 409,
+                        code: 'DEMO_WORKER_MISMATCH',
+                        message: expect.stringContaining('DEMO=true'),
+                    }),
+                });
+                expect(pluginRepository.echo).not.toHaveBeenCalled();
+            });
+
+            it('refuses the work-context read too (every internal route), before any lookup', async () => {
+                await expect(
+                    controller.getWorkContext(VALID_SECRET, 'work-1', 'user-1'),
+                ).rejects.toBeInstanceOf(ConflictException);
+                expect(ownershipService.ensureAccess).not.toHaveBeenCalled();
+                expect(gitFacade.getAccessToken).not.toHaveBeenCalled();
+            });
+
+            it('logs the refusal once per target, naming it', async () => {
+                await expect(controller.callRemote(VALID_SECRET, echoBody())).rejects.toThrow();
+                await expect(controller.callRemote(VALID_SECRET, echoBody())).rejects.toThrow();
+                await expect(
+                    controller.getWorkContext(VALID_SECRET, 'work-1', 'user-1'),
+                ).rejects.toThrow();
+
+                expect(errorSpy).toHaveBeenCalledTimes(2);
+                expect(errorSpy.mock.calls[0][0]).toContain('PluginRepository');
+                expect(errorSpy.mock.calls[0][0]).toContain('DEMO=true');
+                expect(errorSpy.mock.calls[1][0]).toContain('works/:id/context');
+            });
+
+            it('serves a worker that sends the header', async () => {
+                const out = await controller.callRemote(VALID_SECRET, echoBody(), DEMO_HEADER_ON);
+
+                expect(pluginRepository.echo).toHaveBeenCalledWith('hello');
+                expect(superjson.deserialize(out.result as any)).toBe('echo:hello');
+                expect(errorSpy).not.toHaveBeenCalled();
+            });
+
+            it('checks the secret first: a caller without it learns nothing about the demo', async () => {
+                await expect(controller.callRemote('wrong', echoBody())).rejects.toBeInstanceOf(
+                    ForbiddenException,
+                );
+                expect(errorSpy).not.toHaveBeenCalled();
+            });
+        });
+
+        describe('demo off (DEMO unset)', () => {
+            it('serves a header-less call exactly as before, with no log', async () => {
+                const out = await controller.callRemote(VALID_SECRET, echoBody());
+
+                expect(superjson.deserialize(out.result as any)).toBe('echo:hello');
+                expect(errorSpy).not.toHaveBeenCalled();
+                expect(warnSpy).not.toHaveBeenCalled();
+            });
+
+            it('does not reject a worker that says it is a demo: it serves it and warns once per target', async () => {
+                const first = await controller.callRemote(VALID_SECRET, echoBody(), DEMO_HEADER_ON);
+                await controller.callRemote(VALID_SECRET, echoBody(), DEMO_HEADER_ON);
+
+                expect(superjson.deserialize(first.result as any)).toBe('echo:hello');
+                expect(pluginRepository.echo).toHaveBeenCalledTimes(2);
+                expect(warnSpy).toHaveBeenCalledTimes(1);
+                expect(warnSpy.mock.calls[0][0]).toContain('PluginRepository');
+                expect(errorSpy).not.toHaveBeenCalled();
+            });
         });
     });
 });

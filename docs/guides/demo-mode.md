@@ -93,7 +93,7 @@ The Ever Works git provider creates every repository in `EVER_WORKS_CUSTOMERS_GI
 ## Known limits
 
 - **One API replica.** Run the demo API as a single replica with the `Recreate` strategy. The per-sandbox Works cap uses an in-process lock, and SQLite is one file.
-- **Trigger.dev.** The Trigger.dev project used by the demo must set `DEMO=true` in its own environment, so background workers apply the same AI policy as the API.
+- **Trigger.dev.** The Trigger.dev project used by the demo must set `DEMO=true` in its own environment, so background workers apply the same AI policy as the API. If the Trigger env lacks `DEMO=true`, the API refuses the worker's calls: a demo API answers every call to its internal worker channel (`/internal/trigger/*`) that does not carry the worker's `x-ever-works-demo: 1` header with `409 DEMO_WORKER_MISMATCH`, and logs the refused target once, so those workers fail instead of making unmetered AI calls or creating repositories the sweeper cannot find. Set `DEMO=true` in the Trigger.dev project and redeploy the workers. The reverse (a worker with `DEMO=true` calling an API without it) is served, with a warning in the API log.
 - **Turnstile.** If you use Cloudflare Turnstile, the site's hostname allowlist must include the demo hosts.
 - **No pgvector on SQLite.** Knowledge search is lexical.
 - **Not available on a demo:** workflow-run AI nodes, and the Ideas and User research features.
@@ -106,7 +106,7 @@ The Ever Works git provider creates every repository in `EVER_WORKS_CUSTOMERS_GI
 4. **GitHub.** A dedicated org (or the customers' org) and a token that can create and delete repositories there. Use a token separate from production's so revoking the demo never affects production.
 5. **OpenRouter.** A dedicated key with a **$0 credit limit**, so even a bug in the guard cannot buy a paid call. On an account that has bought at least $10 of credits once, which raises the free limit from 50 to 1000 requests a day.
 6. **Search.** A free-tier search provider key for generation.
-7. **Trigger.dev.** A project for the demo with `DEMO=true`, the demo API's internal URL and secret, and the plugin keys and model ids. Cap it to a small concurrency so demo runs never crowd out production runs on shared workers.
+7. **Trigger.dev.** A project for the demo with `DEMO=true`, the demo API's internal URL and secret, and the plugin keys and model ids. Cap it to a small concurrency so demo runs never crowd out production runs on shared workers. Without `DEMO=true` there, the demo API refuses the workers' calls (`409 DEMO_WORKER_MISMATCH`, see Known limits).
 8. **Switch off** on the demo: billing and subscriptions, credits enforcement, deploys, fleet, terminal sessions, Ever Connect, statistics, scheduled updates, template auto-update, magic links, OAuth client ids and the mailer. Switch on: project Works, git storage, the customers' org, and Trigger.dev where Works must run.
 9. **Check it.** `GET /api/config` shows `features.demoMode: true`. "Start the demo" lands in a sandbox. After the TTL the sandbox and its repositories are gone. Search the org for the `ever-works-demo` topic and expect no leftovers.
 10. **Monitoring.** `external-uptime-monitor.yml` probes `https://dir.ever.works/` ("Demo directory"). Its "Platform demo" row for `https://demo.ever.works/login` ships commented out: uncomment it once the demo host serves the platform login, because any failing row opens the shared uptime alert issue.

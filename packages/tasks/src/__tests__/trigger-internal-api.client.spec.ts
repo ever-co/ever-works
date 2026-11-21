@@ -12,6 +12,8 @@ const { triggerConfig } = vi.hoisted(() => ({
 vi.mock('@ever-works/agent/config', () => ({
     config: {
         trigger: triggerConfig,
+        // Platform demo mode off: the demo handshake header has its own spec.
+        demo: { isEnabled: () => false },
     },
 }));
 
