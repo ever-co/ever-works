@@ -33,6 +33,10 @@ export const ONBOARDING_TELEMETRY_EVENTS = [
     'onboarding_roster_provision_started',
     'onboarding_roster_provision_finished',
     'onboarding_roster_intro_viewed',
+    // The prompt-first quick start a visitor from the ever.works home page
+    // lands on. Properties: `kind`, a Work-kind enum value, or null.
+    'onboarding_quick_start_entered',
+    'onboarding_quick_start_customize',
 ] as const;
 
 export type OnboardingTelemetryEvent = (typeof ONBOARDING_TELEMETRY_EVENTS)[number];

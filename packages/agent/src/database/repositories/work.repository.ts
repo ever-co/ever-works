@@ -17,6 +17,7 @@ import { User } from '../../entities/user.entity';
 import { WorkProposal } from '../../entities/work-proposal.entity';
 import { buildCaseInsensitiveLikeClause, prepareCaseInsensitiveContainsPattern } from '../utils';
 import { config } from '../../config';
+import { redactGenerationText } from '../../utils/error-text-redaction';
 
 /**
  * Cross-database case-insensitive LIKE using LOWER() function.
@@ -1137,6 +1138,9 @@ export class WorkRepository {
         if (generateStatus?.warnings?.length) {
             generateStatus = { ...generateStatus, warnings: [...new Set(generateStatus.warnings)] };
         }
+        // `error`, `warnings` and `recentLogs` carry provider text to the Work's owner, who can be
+        // an anonymous visitor: key-like substrings are redacted before they are stored.
+        generateStatus = redactGenerationText(generateStatus);
         await this.repository.update(id, { generateStatus, generationProgressedAt: new Date() });
     }
 

@@ -79,6 +79,9 @@ jest.mock('../fleet-cost-policy.repository', () => ({
 jest.mock('../fleet-cost-ceiling.service', () => ({
     FleetCostCeilingService: class FleetCostCeilingService {},
 }));
+jest.mock('../fleet-cost-ceiling-reset.service', () => ({
+    FleetCostCeilingResetService: class FleetCostCeilingResetService {},
+}));
 jest.mock('../fleet-kill-switch.repository', () => ({
     FleetKillSwitchRepository: class FleetKillSwitchRepository {},
 }));
@@ -111,6 +114,7 @@ import { FleetAgentNodeAffinityRepository } from '../fleet-agent-node-affinity.r
 import { FleetAgentNodeAffinityService } from '../fleet-agent-node-affinity.service';
 import { FleetCostPolicyRepository } from '../fleet-cost-policy.repository';
 import { FleetCostCeilingService } from '../fleet-cost-ceiling.service';
+import { FleetCostCeilingResetService } from '../fleet-cost-ceiling-reset.service';
 import { FleetKillSwitchRepository } from '../fleet-kill-switch.repository';
 import { FleetKillSwitchService } from '../fleet-kill-switch.service';
 import { FleetAuditService } from '../fleet-audit.service';
@@ -154,6 +158,7 @@ describe('FleetModule', () => {
             FleetExecutionPreferenceService,
             FleetAgentNodeAffinityService,
             FleetCostCeilingService,
+            FleetCostCeilingResetService,
             FleetAuditService,
             FleetKillSwitchService,
             ApiKeyRepository,
@@ -191,6 +196,7 @@ describe('FleetModule', () => {
             FleetExecutionPreferenceService,
             FleetAgentNodeAffinityService,
             FleetCostCeilingService,
+            FleetCostCeilingResetService,
             FleetAuditService,
             FleetKillSwitchService,
             FleetRunCredentialService,
@@ -262,6 +268,7 @@ describe('fleet barrel', () => {
         expect(barrel.FleetAgentNodeAffinityRepository).toBe(FleetAgentNodeAffinityRepository);
         expect(barrel.FleetCostPolicyRepository).toBe(FleetCostPolicyRepository);
         expect(barrel.FleetCostCeilingService).toBe(FleetCostCeilingService);
+        expect(barrel.FleetCostCeilingResetService).toBe(FleetCostCeilingResetService);
         expect(barrel.FleetKillSwitchService).toBe(FleetKillSwitchService);
         expect(barrel.FleetKillSwitchRepository).toBe(FleetKillSwitchRepository);
         expect(barrel.FleetAuditService).toBe(FleetAuditService);

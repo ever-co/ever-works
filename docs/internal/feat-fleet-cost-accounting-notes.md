@@ -85,10 +85,24 @@ run" was unenforceable.
   the notice body says why it tripped. The budget precheck refuses the
   run under the same rule.
 - **`disabled`, not `paused`.** A node can lift its own pause
-  (`setPausedByCredential`) but not an owner-level disable. A drained
-  node stays disabled past midnight until the owner re-enables it — a
-  ceiling is a stop, not a rate limit. The day boundary is UTC (owner
-  time zones are not modelled); the notice says so.
+  (`setPausedByCredential`) but not an owner-level disable. The day
+  boundary is UTC (owner time zones are not modelled); the notice says so.
+- **The ceiling resets daily** (owner, 2026-11-21: "make sure it resets
+  daily"; it used to be a stop that held until someone re-enabled the
+  node — one tripped on 2026-11-16 was still disabled on the 20th).
+  `FleetCostCeilingResetService` runs on a disabled node's heartbeat and
+  on the ceiling settings read: once the UTC day of the trip is over, a
+  node whose CURRENT disable is the ceiling's alone goes back to
+  `offline` (or `paused`), its trip markers are cleared and one
+  `node.disable` row (actor null, `via: cost-ceiling`, `reset: daily`)
+  records it. "The ceiling's alone" is read from the node's
+  `fleet_audit` trail, no new column: the newest ceiling drain that took
+  the node out of service must be strictly newer than every other status
+  row of the node, with no `drain-all` since. Fails closed on anything
+  it cannot prove. Not handed back while today's spend is already over a
+  ceiling that applies. The heartbeat stopped writing a sticky status
+  back, so a concurrent beat cannot undo the reset (or a person's
+  re-enable).
 - **The fleet-wide ceiling sums `fleet_jobs.costCents` only** — what the
   owner's own machines reported — never the account's cloud spend or
   BYOK usage rows. Those have their own budgets; folding them in would

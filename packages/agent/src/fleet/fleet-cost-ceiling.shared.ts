@@ -1,12 +1,29 @@
 import { BadRequestException } from '@nestjs/common';
 import { FLEET_MAX_DAILY_COST_CEILING_CENTS } from '@ever-works/contracts';
+import { config } from '../config';
+import type { FleetCostPolicy } from '../entities/fleet-cost-policy.entity';
+import type { FleetNode } from '../entities/fleet-node.entity';
 
 /**
  * Fleet cost accounting (EW-777) — pure helpers shared by `FleetService`
- * (the per-node ceiling) and `FleetCostCeilingService` (the fleet-wide one
- * and the evaluation), kept in a leaf file so the two services do not
- * import each other.
+ * (the per-node ceiling), `FleetCostCeilingService` (the fleet-wide one
+ * and the evaluation) and `FleetCostCeilingResetService` (the daily
+ * reset), kept in a leaf file so the services do not import each other.
  */
+
+/** The per-node ceiling in force: the node's own column, else the deployment default. */
+export function resolveNodeDailyCeilingCents(
+    node: Pick<FleetNode, 'dailyCostCeilingCents'>,
+): number | null {
+    return node.dailyCostCeilingCents ?? config.fleet.getDefaultNodeDailyCostCeilingCents();
+}
+
+/** The fleet-wide ceiling in force: the owner's policy row, else the deployment default. */
+export function resolveFleetDailyCeilingCents(
+    policy: Pick<FleetCostPolicy, 'dailyCeilingCents'> | null | undefined,
+): number | null {
+    return policy?.dailyCeilingCents ?? config.fleet.getDefaultFleetDailyCostCeilingCents();
+}
 
 /**
  * Validate a ceiling from the edge: null clears it; otherwise a positive

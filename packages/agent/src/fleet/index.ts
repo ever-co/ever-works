@@ -20,6 +20,7 @@ export * from './fleet-agent-node-affinity.service';
 export * from './fleet-agent-node-affinity.repository';
 // Fleet cost accounting (EW-777) — daily model-spend ceilings.
 export * from './fleet-cost-ceiling.service';
+export * from './fleet-cost-ceiling-reset.service';
 export * from './fleet-cost-policy.repository';
 // Panic controls (EW-778) — the global stop flag + the fleet audit trail.
 export * from './fleet-kill-switch.service';
