@@ -9,7 +9,10 @@ import {
 } from '@ever-works/agent/database';
 import { withDemoSandboxLock } from '@ever-works/agent/demo';
 import type { DemoGithubRepo, User } from '@ever-works/agent/entities';
-import { EverWorksGitProvider } from '@ever-works/agent/ever-works-providers';
+import {
+    EverWorksGitProvider,
+    EverWorksGitRequestError,
+} from '@ever-works/agent/ever-works-providers';
 import {
     canDeleteLedgerRepo,
     demoRepoDeletionConfig,
@@ -63,6 +66,31 @@ const SWEEP_MAX_LIFETIME_MS = 14 * 60 * 1000;
 type SandboxOutcome = 'purged' | 'pending' | 'deferred' | 'held';
 
 /**
+ * What a sweep run makes of a repository 404. GitHub answers 404 both for a repository that is
+ * gone and for a private one the platform PAT can no longer read (its owner left the org, a
+ * fine-grained approval was revoked, the repository selection narrowed), while `GET /orgs/{org}`
+ * stays 200 (org profiles are public) and demo repositories are private. A revoked or expired
+ * PAT is not this case: it answers 401, which `getRepositoryId` throws and the row records as
+ * a failure.
+ */
+type NotFoundVerdict =
+    | { readonly kind: 'trusted' }
+    /** No proof the PAT reads the org's private repositories: the row fails (`attempts` + 1). */
+    | { readonly kind: 'untrusted'; readonly reason: string }
+    /** The proof could not be asked (GitHub 5xx, rate limit, network): retried next sweep, uncounted. */
+    | { readonly kind: 'unknown'; readonly reason: string };
+
+const TRUSTED: NotFoundVerdict = { kind: 'trusted' };
+
+/** One sweep run's trust in repository 404s (see `DemoSandboxSweeperService.notFoundTrust`). */
+interface NotFoundTrust {
+    /** A lookup of this run answered a ledger row's recorded id. */
+    liveMatch(): void;
+    /** The verdict on a repository 404 of this run. */
+    verdict(): Promise<NotFoundVerdict>;
+}
+
+/**
  * Platform demo mode — deletes expired demo sandboxes and the GitHub repositories they
  * created (design §5.2.5). Registered only by `DemoModule.register()` with `DEMO` on, so the
  * cron does not exist on any other instance.
@@ -76,9 +104,15 @@ type SandboxOutcome = 'purged' | 'pending' | 'deferred' | 'held';
  * mid-sweep):
  *   1. each pending ledger row: refused — warned, `attempts` + 1 — unless the owner is
  *      `DEMO_GITHUB_ORG` and the name starts with `DEMO_REPO_PREFIX`;
- *   2. its live GitHub id: none (404) is already gone (closed); an id that differs from the
- *      recorded one is refused (`id mismatch`); otherwise the repository is deleted and the
- *      row closed (`canDeleteLedgerRepo` decides);
+ *   2. its live GitHub id: none (404) is already gone (closed) — but only on proof the PAT reads
+ *      the org's PRIVATE repositories, since GitHub answers 404 too for one it cannot read: a
+ *      lookup of this run answered a row's recorded id, or else the canary does (the newest
+ *      pending row of a sandbox that has not expired, looked up once a run, on the first 404
+ *      without proof). Without proof every 404 of the run fails (`attempts` + 1, logged once);
+ *      when the canary lookup itself errs (5xx, rate limit, network) its 404s are left
+ *      uncounted for the next sweep. An id that differs from the recorded one is refused
+ *      (`id mismatch`); otherwise the repository is deleted and the row closed
+ *      (`canDeleteLedgerRepo` decides);
  *   3. only once no row of the sandbox is pending — and no generation of it is in flight (a
  *      worker could still make a repository), unless the sandbox expired more than
  *      {@link DEMO_GENERATION_DEFERRAL_MAX_MS} ago — `DemoSandboxPurgeService` removes its
@@ -134,12 +168,13 @@ export class DemoSandboxSweeperService {
         let held = 0;
         let deferred = 0;
         let after: { expiresAt: Date; id: string } | undefined;
+        const trust = this.notFoundTrust(now);
         scan: for (let page = 0; page < DEMO_SWEEPER_MAX_PAGES; page += 1) {
             const expired = await this.users.findExpiredDemo(now, DEMO_SWEEPER_BATCH, after);
             for (const user of expired) {
                 scanned += 1;
                 after = { expiresAt: user.anonymousExpiresAt as Date, id: user.id };
-                const outcome = await this.sweepSandboxLocked(user, now, summary);
+                const outcome = await this.sweepSandboxLocked(user, now, summary, trust);
                 if (outcome === 'held') held += 1;
                 else if (outcome === 'deferred') deferred += 1;
                 else acted += 1;
@@ -164,14 +199,86 @@ export class DemoSandboxSweeperService {
         return summary;
     }
 
+    /**
+     * The sweep run's {@link NotFoundTrust}. A 404 is trusted once any lookup of the run answered
+     * a ledger row's recorded id: a ledger row exists only after GitHub created its repository
+     * (201), so that answer proves the PAT reads the org's private repositories. Without such an
+     * answer, the first 404 asks the canary ({@link askCanary}), once a run; every later 404 of
+     * the run reuses its verdict, unless a lookup has answered a recorded id since.
+     */
+    private notFoundTrust(now: Date): NotFoundTrust {
+        let proven = false;
+        let canary: Promise<NotFoundVerdict> | undefined;
+        return {
+            liveMatch: () => {
+                proven = true;
+            },
+            verdict: () => (proven ? Promise.resolve(TRUSTED) : (canary ??= this.askCanary(now))),
+        };
+    }
+
+    /**
+     * Looks up the canary: the newest pending ledger row with a recorded id whose sandbox has
+     * NOT expired (`DemoGithubRepoRepository.newestLiveCanary`), so this run never deletes it.
+     * Its recorded id answered is proof; a 404, another id, a refusal or no canary at all is not
+     * (the 404s fail and count). A lookup that errs (5xx, rate limit, network) or a ledger read
+     * that fails gives no verdict: the 404s are left uncounted for the next sweep. One GitHub
+     * call at most, never the org's repository list; anything but proof is logged once.
+     */
+    private async askCanary(now: Date): Promise<NotFoundVerdict> {
+        let canary: DemoGithubRepo | null;
+        try {
+            canary = await this.ledger.newestLiveCanary(config.demo.githubOrg(), now);
+        } catch (error) {
+            return this.unproven('unknown', `the canary could not be read: ${messageOf(error)}`);
+        }
+        if (!canary || demoRepoTargetRefusal(canary, demoRepoDeletionConfig()) !== null) {
+            return this.unproven(
+                'untrusted',
+                'no lookup of this run answered a recorded id, and no live sandbox has a repository to check',
+            );
+        }
+
+        const target = `${canary.owner}/${canary.name}`;
+        let liveId: number | null;
+        try {
+            liveId = await this.everWorksGit.getRepositoryId(canary.owner, canary.name);
+        } catch (error) {
+            return this.unproven(
+                isTransientGitHubFailure(error) ? 'unknown' : 'untrusted',
+                `the canary ${target} could not be looked up: ${messageOf(error)}`,
+            );
+        }
+        if (liveId !== null && liveId === canary.githubId) return TRUSTED;
+        return this.unproven(
+            'untrusted',
+            liveId === null
+                ? `the canary ${target} of live sandbox ${canary.sandboxUserId} answered 404`
+                : `the canary ${target} answered id ${liveId}, recorded ${String(canary.githubId)}`,
+        );
+    }
+
+    private unproven(kind: 'untrusted' | 'unknown', detail: string): NotFoundVerdict {
+        this.logger.error(
+            `demo sweep: a repository 404 is not proof it is gone (${detail}); ` +
+                (kind === 'unknown'
+                    ? 'the 404s of this run are left for the next sweep, no attempt counted'
+                    : 'every 404 of this run counts as a failure, no ledger row is closed as gone'),
+        );
+        return { kind, reason: `404 not trusted: ${detail}` };
+    }
+
     /** One sandbox under its create lock; an error is logged, counted, and takes a slot. */
     private async sweepSandboxLocked(
         user: User,
         now: Date,
         summary: DemoSweepSummary,
+        trust: NotFoundTrust,
     ): Promise<SandboxOutcome | 'failed'> {
         try {
-            return await withDemoSandboxLock(user.id, () => this.sweepSandbox(user, now, summary));
+            return await withDemoSandboxLock(user.id, () =>
+                this.sweepSandbox(user, now, summary, trust),
+            );
         } catch (error) {
             summary.failures += 1;
             this.logger.error(`demo sweep: sandbox ${user.id} failed: ${messageOf(error)}`);
@@ -183,6 +290,7 @@ export class DemoSandboxSweeperService {
         user: User,
         now: Date,
         summary: DemoSweepSummary,
+        trust: NotFoundTrust,
     ): Promise<SandboxOutcome> {
         const rows = await this.ledger.pendingForSandbox(user.id);
         const stuck = rows.filter((row) => row.attempts >= DEMO_LEDGER_MAX_ATTEMPTS);
@@ -210,7 +318,7 @@ export class DemoSandboxSweeperService {
         }
 
         for (const row of rows) {
-            await this.sweepRepository(user, row, now, summary);
+            await this.sweepRepository(user, row, now, summary, trust);
         }
 
         if ((await this.ledger.pendingForSandbox(user.id)).length > 0) return 'pending';
@@ -272,6 +380,7 @@ export class DemoSandboxSweeperService {
         row: DemoGithubRepo,
         now: Date,
         summary: DemoSweepSummary,
+        trust: NotFoundTrust,
     ): Promise<void> {
         const target = `${row.owner}/${row.name}`;
         if (row.sandboxUserId !== user.id) {
@@ -288,10 +397,25 @@ export class DemoSandboxSweeperService {
         try {
             const liveId = await this.everWorksGit.getRepositoryId(row.owner, row.name);
             if (liveId === null) {
+                // A 404 is "gone" only on proof the PAT reads the org's private repositories.
+                const notFound = await trust.verdict();
+                if (notFound.kind === 'unknown') {
+                    // No verdict (the canary lookup erred): left for the next sweep, uncounted.
+                    summary.failures += 1;
+                    return;
+                }
+                if (notFound.kind === 'untrusted') {
+                    summary.failures += 1;
+                    await this.markFailed(row, notFound.reason);
+                    return;
+                }
                 await this.ledger.markDeleted(row.id, now);
                 summary.reposDeleted += 1;
                 this.logger.log(`demo sweep: ${target} of sandbox ${user.id} was already gone`);
                 return;
+            }
+            if (row.githubId !== null && row.githubId !== undefined && liveId === row.githubId) {
+                trust.liveMatch();
             }
 
             const verdict = canDeleteLedgerRepo(row, liveId, demo);
@@ -341,4 +465,13 @@ export class DemoSandboxSweeperService {
 
 function messageOf(error: unknown): string {
     return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * A canary lookup that gave no answer rather than a wrong one: GitHub's 5xx, its rate limits
+ * (429, and the 403 its primary and secondary limits answer with), or no HTTP answer at all.
+ */
+function isTransientGitHubFailure(error: unknown): boolean {
+    if (!(error instanceof EverWorksGitRequestError)) return true;
+    return error.status >= 500 || error.status === 429 || error.status === 403;
 }

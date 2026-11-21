@@ -57,3 +57,19 @@ export function resolveTrustProxyHops(
     // bad value disable the limit by trusting the spoofable header chain.
     return parsed < 0 ? 0 : parsed;
 }
+
+/**
+ * The client address of a request, as the throttler (`UserAwareThrottlerGuard.getTracker`)
+ * keys it: `req.ip`, which Express resolves through `trust proxy` ({@link resolveTrustProxyHops},
+ * counted from the right of the `X-Forwarded-For` chain, where the ingress appended the real
+ * peer), else the socket address. Never the header itself: its left-most entry is whatever the
+ * client sent, so trusting it would let a caller name any address. `null` when there is none.
+ */
+export function trustedClientIp(req: {
+    ip?: unknown;
+    socket?: { remoteAddress?: unknown } | null;
+}): string | null {
+    if (typeof req.ip === 'string' && req.ip) return req.ip;
+    const socketAddress = req.socket?.remoteAddress;
+    return typeof socketAddress === 'string' && socketAddress ? socketAddress : null;
+}

@@ -1,3 +1,4 @@
+import { Logger } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import {
     KnowledgeBaseTranscribeService,
@@ -104,6 +105,8 @@ describe('KnowledgeBaseTranscribeService', () => {
         service = module.get(KnowledgeBaseTranscribeService);
     });
 
+    afterEach(() => jest.restoreAllMocks());
+
     it('happy path: creates a document carrying metadata.transcribedFromUploadId', async () => {
         const result = await service.transcribeUpload(payload);
 
@@ -187,6 +190,79 @@ describe('KnowledgeBaseTranscribeService', () => {
             extractionError: 'Transcription is not available in the demo',
         });
         expect(kb.createDocument).not.toHaveBeenCalled();
+    });
+
+    it('a demo refusal from the facade survives a failed skipped-mark (no retry for a permanent refusal)', async () => {
+        const refusal = new DemoFeatureDisabledError('transcription');
+        aiFacade.transcribe.mockRejectedValue(refusal);
+        uploadRepo.updateById.mockRejectedValue(new Error('database is locked'));
+        jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+
+        await expect(service.transcribeUpload(payload)).rejects.toBe(refusal);
+    });
+
+    describe('on a demo instance (DEMO=true)', () => {
+        const saved = process.env.DEMO;
+
+        beforeEach(() => {
+            process.env.DEMO = 'true';
+        });
+
+        afterEach(() => {
+            if (saved === undefined) delete process.env.DEMO;
+            else process.env.DEMO = saved;
+            jest.restoreAllMocks();
+        });
+
+        it('refuses before downloading the audio: no storage read, no facade call', async () => {
+            const error = await service.transcribeUpload(payload).catch((e: unknown) => e);
+
+            expect(error).toBeInstanceOf(DemoFeatureDisabledError);
+            expect((error as DemoFeatureDisabledError).feature).toBe('transcription');
+            expect(storage.getObject).not.toHaveBeenCalled();
+            expect(aiFacade.transcribe).not.toHaveBeenCalled();
+            expect(kb.createDocument).not.toHaveBeenCalled();
+            expect(uploadRepo.updateById).toHaveBeenCalledWith(WORK_ID, UPLOAD_ID, {
+                extractionStatus: KbUploadExtractionStatus.SKIPPED,
+                extractionFinishedAt: expect.any(Date),
+                extractionError: 'Transcription is not available in the demo',
+            });
+        });
+
+        it('still throws the refusal, not the database error, when the skipped-mark fails', async () => {
+            uploadRepo.updateById.mockRejectedValue(new Error('database is locked'));
+            const warnings = jest
+                .spyOn(Logger.prototype, 'warn')
+                .mockImplementation(() => undefined);
+
+            const error = await service.transcribeUpload(payload).catch((e: unknown) => e);
+
+            expect(error).toBeInstanceOf(DemoFeatureDisabledError);
+            expect(storage.getObject).not.toHaveBeenCalled();
+            expect(warnings).toHaveBeenCalledWith(expect.stringContaining('database is locked'));
+        });
+    });
+
+    describe('with DEMO off', () => {
+        const saved = process.env.DEMO;
+
+        beforeEach(() => {
+            delete process.env.DEMO;
+        });
+
+        afterEach(() => {
+            if (saved !== undefined) process.env.DEMO = saved;
+        });
+
+        it('downloads and transcribes as before, and never marks the upload skipped', async () => {
+            await expect(service.transcribeUpload(payload)).resolves.toMatchObject({
+                providerId: 'whisper-1',
+            });
+
+            expect(storage.getObject).toHaveBeenCalledWith(payload.sourceStoragePath);
+            expect(aiFacade.transcribe).toHaveBeenCalledTimes(1);
+            expect(uploadRepo.updateById).not.toHaveBeenCalled();
+        });
     });
 
     it('any other facade error leaves the upload row alone', async () => {

@@ -247,6 +247,41 @@ describe('DemoAiQuotaService', () => {
         expect(counters.rows.has('ai:sandbox:operator')).toBe(false);
     });
 
+    it('caches an operator (a row with no anonymousExpiresAt): one lookup for many calls', async () => {
+        await callN(5, () => 'operator');
+
+        expect(findById).toHaveBeenCalledTimes(1);
+    });
+
+    /**
+     * No user row for the caller (a sandbox the sweeper deleted mid-flight, or an id that never
+     * existed) is not an operator: the demo fails closed, and does not remember the miss.
+     */
+    describe('a caller with no user row', () => {
+        it('is refused with DemoQuotaExceededError("sandbox"), counting nothing', async () => {
+            const refusal = await service.consume('deleted', START).catch((e: unknown) => e);
+
+            expect(refusal).toBeInstanceOf(DemoQuotaExceededError);
+            expect((refusal as DemoQuotaExceededError).scope).toBe('sandbox');
+            expect(counters.rows.size).toBe(0);
+        });
+
+        it('is looked up again on the next call, not cached for 60 s', async () => {
+            await service.consume('deleted', START).catch(() => undefined);
+            await service.consume('deleted', at(1)).catch(() => undefined);
+
+            expect(findById).toHaveBeenCalledTimes(2);
+        });
+
+        it('is served once its row exists', async () => {
+            await service.consume('late', START).catch(() => undefined);
+            users.set('late', { id: 'late', anonymousExpiresAt: TTL_END });
+
+            await expect(service.consume('late', at(1))).resolves.toBeUndefined();
+            expect(counters.count('ai:sandbox:late')).toBe(1);
+        });
+    });
+
     it('fails closed for a sandbox whose TTL has passed', async () => {
         const refusal = await service.consume('expired', START).catch((e: unknown) => e);
 

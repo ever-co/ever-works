@@ -114,6 +114,23 @@ function clampedIntEnv(
     return Math.min(Math.max(parsed, min), max);
 }
 
+/**
+ * Platform demo mode — the default of every `DEMO_*` knob `config.demo` reads, in one place
+ * (documented in docs/guides/demo-mode.md). Each accessor falls back to its entry when the
+ * variable is unset or invalid.
+ */
+export const DEMO_DEFAULTS = Object.freeze({
+    sandboxTtlHours: 24,
+    signUpUrl: 'https://app.ever.works/register',
+    repoPrefix: 'demo-',
+    aiRequestsPerSandbox: 120,
+    aiRequestsPerDay: 900,
+    aiRequestsPerMinute: 18,
+    maxWorksPerSandbox: 3,
+    maxActiveSandboxes: 300,
+    createPerIpPerHour: 5,
+});
+
 export const config = {
     getEnvironment() {
         return process.env.NODE_ENV;
@@ -2925,7 +2942,8 @@ export const config = {
         isEnabled(): boolean {
             return ['true', '1', 'yes'].includes((process.env.DEMO ?? '').trim().toLowerCase());
         },
-        sandboxTtlHours: (): number => demoPositiveInt('DEMO_SANDBOX_TTL_HOURS', 24),
+        sandboxTtlHours: (): number =>
+            demoPositiveInt('DEMO_SANDBOX_TTL_HOURS', DEMO_DEFAULTS.sandboxTtlHours),
         signUpUrl(): string {
             const raw = (process.env.DEMO_SIGN_UP_URL ?? '').trim();
             try {
@@ -2933,20 +2951,25 @@ export const config = {
             } catch {
                 // not an absolute URL: use the default
             }
-            return DEMO_DEFAULT_SIGN_UP_URL;
+            return DEMO_DEFAULTS.signUpUrl;
         },
         githubOrg: (): string => (process.env.DEMO_GITHUB_ORG ?? '').trim(),
-        repoPrefix: (): string => (process.env.DEMO_REPO_PREFIX ?? '').trim() || 'demo-',
-        aiRequestsPerSandbox: (): number => demoPositiveInt('DEMO_AI_REQUESTS_PER_SANDBOX', 120),
-        aiRequestsPerDay: (): number => demoPositiveInt('DEMO_AI_REQUESTS_PER_DAY', 900),
-        aiRequestsPerMinute: (): number => demoPositiveInt('DEMO_AI_REQUESTS_PER_MINUTE', 18),
-        maxWorksPerSandbox: (): number => demoPositiveInt('DEMO_MAX_WORKS_PER_SANDBOX', 3),
-        maxActiveSandboxes: (): number => demoPositiveInt('DEMO_MAX_ACTIVE_SANDBOXES', 300),
-        createPerIpPerHour: (): number => demoPositiveInt('DEMO_CREATE_PER_IP_PER_HOUR', 5),
+        repoPrefix: (): string =>
+            (process.env.DEMO_REPO_PREFIX ?? '').trim() || DEMO_DEFAULTS.repoPrefix,
+        aiRequestsPerSandbox: (): number =>
+            demoPositiveInt('DEMO_AI_REQUESTS_PER_SANDBOX', DEMO_DEFAULTS.aiRequestsPerSandbox),
+        aiRequestsPerDay: (): number =>
+            demoPositiveInt('DEMO_AI_REQUESTS_PER_DAY', DEMO_DEFAULTS.aiRequestsPerDay),
+        aiRequestsPerMinute: (): number =>
+            demoPositiveInt('DEMO_AI_REQUESTS_PER_MINUTE', DEMO_DEFAULTS.aiRequestsPerMinute),
+        maxWorksPerSandbox: (): number =>
+            demoPositiveInt('DEMO_MAX_WORKS_PER_SANDBOX', DEMO_DEFAULTS.maxWorksPerSandbox),
+        maxActiveSandboxes: (): number =>
+            demoPositiveInt('DEMO_MAX_ACTIVE_SANDBOXES', DEMO_DEFAULTS.maxActiveSandboxes),
+        createPerIpPerHour: (): number =>
+            demoPositiveInt('DEMO_CREATE_PER_IP_PER_HOUR', DEMO_DEFAULTS.createPerIpPerHour),
     },
 };
-
-const DEMO_DEFAULT_SIGN_UP_URL = 'https://app.ever.works/register';
 
 /** Demo env var: a positive integer, else the default. */
 function demoPositiveInt(name: string, fallback: number): number {
