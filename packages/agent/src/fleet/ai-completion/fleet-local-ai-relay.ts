@@ -162,6 +162,9 @@ export function createFleetLocalAiRelay(
             const timeoutMs = clampTimeout(request.timeoutMs ?? options.defaultTimeoutMs);
             const deadline = started + timeoutMs;
 
+            // One id for every attempt: a retried submit after a lost response must find the
+            // job the first attempt queued, never queue a second one (the idempotency key).
+            const requestId = newRequestId();
             let submitted: FleetAiCompletionSubmitOutcome;
             try {
                 submitted = await retrying('submitting the request', deadline, () =>
@@ -173,7 +176,7 @@ export function createFleetLocalAiRelay(
                         body: encoded.body,
                         bodyEncoding: encoded.bodyEncoding,
                         timeoutSec: clampFleetAiCompletionTimeoutSec(Math.floor(timeoutMs / 1000)),
-                        requestId: newRequestId(),
+                        requestId,
                     }),
                 );
             } catch (error) {

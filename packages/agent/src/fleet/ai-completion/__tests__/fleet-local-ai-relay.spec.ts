@@ -114,17 +114,20 @@ describe('createFleetLocalAiRelay — complete', () => {
                 return { ok: true as const, jobId: JOB };
             });
         const ids: string[] = [];
-        t.submit.mock.calls; // (typed access below)
+        // A generator that answers a NEW id on every call, so the test fails if the
+        // relay asks for an id per attempt instead of once per request.
+        let minted = 0;
         const relay = createFleetLocalAiRelay(t as FleetAiCompletionTransport, {
             sleep: async () => undefined,
-            newRequestId: () => 'req-fixed-0001',
+            newRequestId: () => `req-${++minted}`,
         });
 
         await expect(relay.complete(request())).resolves.toMatchObject({ ok: true });
 
         for (const call of t.submit.mock.calls)
             ids.push((call[0] as FleetAiCompletionSubmitInput).requestId);
-        expect(ids).toEqual(['req-fixed-0001', 'req-fixed-0001']);
+        expect(ids).toEqual(['req-1', 'req-1']);
+        expect(minted).toBe(1);
     });
 
     it('hands back the platform’s refusal as it is (no-node), without waiting', async () => {
