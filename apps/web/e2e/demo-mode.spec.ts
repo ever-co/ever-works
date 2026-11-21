@@ -506,6 +506,13 @@ test.describe('platform demo mode: DEMO on', { tag: '@demo-on' }, () => {
             (cookie) => cookie.name === 'everworks_auth_token',
         );
         expect(sessionCookies).toEqual([]);
+
+        // No bounce: with no cookie left, another page is an ordinary signed-out visit (the
+        // auth gate's plain sign-in page), not the API's 401 and `/login?demo=expired` again.
+        await page.goto(`${sandbox.home}/dashboard`);
+        await page.waitForURL((url) => url.pathname === '/login');
+        expect(new URL(page.url()).searchParams.get('demo')).toBeNull();
+        await expect(page.getByTestId('demo-expired-notice')).toHaveCount(0);
     });
 });
 
