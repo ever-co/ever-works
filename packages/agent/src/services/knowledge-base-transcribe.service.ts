@@ -37,8 +37,10 @@ import { DemoFeatureDisabledError } from '../demo';
  *     the task body and surfaced as the upload's `extractionError`
  *     (slice 2c wiring).
  *   - Provider HTTP error — bubbles to Trigger.dev for retry.
- *   - `DemoFeatureDisabledError` (a demo instance) — the upload is
- *     marked `skipped` and the error rethrown; the task acks it.
+ *   - `DemoFeatureDisabledError` (a demo instance) — thrown before the
+ *     source bytes are fetched (step 3), and also caught from the facade:
+ *     the upload is marked `skipped` (best effort) and the refusal
+ *     rethrown; the task acks it.
  */
 
 export interface KbTranscribeResult {
@@ -108,6 +110,12 @@ export class KnowledgeBaseTranscribeService {
             };
         }
 
+        // Platform demo mode: no transcription, so refuse before the audio is
+        // downloaded (the facade refuses too; this saves the storage read).
+        if (config.demo.isEnabled()) {
+            await this.refuseOnDemo(payload, new DemoFeatureDisabledError('transcription'));
+        }
+
         const fetched = await this.storage.getObject(payload.sourceStoragePath);
         const filename = friendlyFilename(upload.originalFilename, payload.sourceMimeType);
 
@@ -125,14 +133,8 @@ export class KnowledgeBaseTranscribeService {
                 },
             )
             .catch(async (error: unknown) => {
-                // Platform demo mode: no transcription. Settle the upload as
-                // skipped (it would otherwise stay "running"); the task acks.
                 if (error instanceof DemoFeatureDisabledError) {
-                    await this.uploads.updateById(payload.workId, payload.uploadId, {
-                        extractionStatus: KbUploadExtractionStatus.SKIPPED,
-                        extractionFinishedAt: new Date(),
-                        extractionError: 'Transcription is not available in the demo',
-                    });
+                    await this.refuseOnDemo(payload, error);
                 }
                 throw error;
             });
@@ -189,6 +191,32 @@ export class KnowledgeBaseTranscribeService {
             durationSeconds: response.durationSeconds ?? 0,
             tokensUsed: 0,
         };
+    }
+
+    /**
+     * Platform demo mode: settles the upload as skipped (it would otherwise
+     * stay "running") and throws `refusal`, which the task acks. Marking the
+     * row is best effort: a failed write is logged, and never replaces the
+     * refusal — a database error would turn a permanent refusal into a retry.
+     */
+    private async refuseOnDemo(
+        payload: KbTranscribePayload,
+        refusal: DemoFeatureDisabledError,
+    ): Promise<never> {
+        try {
+            await this.uploads.updateById(payload.workId, payload.uploadId, {
+                extractionStatus: KbUploadExtractionStatus.SKIPPED,
+                extractionFinishedAt: new Date(),
+                extractionError: 'Transcription is not available in the demo',
+            });
+        } catch (error) {
+            this.logger.warn(
+                `kb-transcribe: upload ${payload.uploadId} could not be marked skipped on the demo: ${
+                    error instanceof Error ? error.message : String(error)
+                }`,
+            );
+        }
+        throw refusal;
     }
 
     /**

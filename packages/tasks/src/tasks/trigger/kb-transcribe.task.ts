@@ -27,8 +27,8 @@ import { withWorkerContext } from '../../trigger/worker/utils/worker-context.uti
  *   - input byte size exceeds the resolved provider's per-call cap
  *
  * Skipped and acked (not failed): a demo instance (`DEMO=true`), where
- * the facade refuses with `DemoFeatureDisabledError` and the service
- * marks the upload `skipped`.
+ * the service refuses with `DemoFeatureDisabledError` before it fetches
+ * the audio and marks the upload `skipped`.
  *
  * Concurrency: keyed on `workId` so per-Work transcribe runs serialize
  * but different Works parallelise up to the queue limit.

@@ -42,7 +42,10 @@ import {
     User,
     Work,
 } from '@ever-works/agent/entities';
-import type { EverWorksGitProvider } from '@ever-works/agent/ever-works-providers';
+import {
+    EverWorksGitRequestError,
+    type EverWorksGitProvider,
+} from '@ever-works/agent/ever-works-providers';
 import { AnonymousUserCleanupService, type WorkLifecycleService } from '@ever-works/agent/services';
 import { DemoSandboxPurgeService } from '../demo-sandbox-purge.service';
 import {
@@ -58,16 +61,19 @@ import {
  * For each expired demo sandbox, oldest first, 20 at a time:
  *   1. every pending ledger row of the sandbox: refused (warned, `attempts` + 1) unless the
  *      owner is `DEMO_GITHUB_ORG` and the name starts with `DEMO_REPO_PREFIX`;
- *   2. its live GitHub id: none (404) is "already gone"; an id that differs from the
- *      recorded one is refused; otherwise the repository is deleted and the row closed;
+ *   2. its live GitHub id: none (404) is "already gone" once the run has proof the PAT reads the
+ *      org's private repositories (a lookup answered a recorded id, or the live canary did); an
+ *      id that differs from the recorded one is refused; otherwise the repository is deleted
+ *      and the row closed;
  *   3. only once no row of the sandbox is pending: its Works, its content, its Organization
  *      and Tenant, then the user;
  *   4. a sandbox with a row at 3 attempts is left for an operator.
  * One sandbox failing never stops the batch.
  *
  * Real SQLite tables (users, ledger, Works, Organization, Tenant, sessions …); GitHub is a
- * double of the provider's two calls. The sandbox's real seeded workspace is purged in
- * `demo-sandbox-purge.spec.ts`.
+ * double of the provider's two calls, answering from `github` (`owner/name` → id). Every test
+ * starts with one live sandbox whose repository the PAT reads (the canary). The sandbox's real
+ * seeded workspace is purged in `demo-sandbox-purge.spec.ts`.
  */
 
 const ORG = 'ever-works-cloud';
@@ -76,6 +82,11 @@ const EXPIRED = new Date('2026-11-20T11:00:00.000Z');
 const ALIVE = new Date('2026-11-21T11:00:00.000Z');
 
 type GitDouble = { getRepositoryId: jest.Mock; deleteRepository: jest.Mock };
+
+/** A live sandbox's repository, which the PAT reads: the canary that lets a 404 mean "gone". */
+const CANARY_NAME = 'demo-ffffffff-live-website';
+const CANARY_ID = 870000001;
+const CANARY_KEY = `${ORG}/${CANARY_NAME}`;
 
 describe('DemoSandboxSweeperService', () => {
     const ORIGINAL_ENV = { ...process.env };
@@ -89,6 +100,9 @@ describe('DemoSandboxSweeperService', () => {
     let purge: DemoSandboxPurgeService;
     let counters: DemoUsageCounterRepository;
     let serial = 0;
+    /** The repositories GitHub has, as the PAT reads them: `owner/name` → id; anything else 404s. */
+    let github: Map<string, number>;
+    let canary: DemoGithubRepo;
 
     beforeAll(async () => {
         dataSource = new DataSource({
@@ -130,10 +144,27 @@ describe('DemoSandboxSweeperService', () => {
         delete process.env.DEMO_REPO_PREFIX;
         deleteAllByOwner.mockClear();
 
+        github = new Map();
         git = {
-            getRepositoryId: jest.fn(async () => null),
+            getRepositoryId: jest.fn(
+                async (owner: string, name: string) => github.get(`${owner}/${name}`) ?? null,
+            ),
             deleteRepository: jest.fn(async () => 'deleted'),
         };
+        // A sandbox that has not expired, with a repository the PAT reads under its recorded id.
+        const live = await users.create({
+            username: 'demo-ffffffff',
+            isAnonymous: true,
+            anonymousExpiresAt: ALIVE,
+            registrationProvider: 'demo',
+        });
+        canary = await ledger.record({
+            sandboxUserId: live.id,
+            owner: ORG,
+            name: CANARY_NAME,
+            githubId: CANARY_ID,
+        });
+        github.set(CANARY_KEY, CANARY_ID);
         // The Work delete path (`WorkLifecycleService.deleteWork`, repositories kept): here it
         // removes the row, as the real one does after its teardown.
         deleteWork = jest.fn(async (workId: string) => {
@@ -366,7 +397,6 @@ describe('DemoSandboxSweeperService', () => {
     it('treats a 404 on lookup as already gone, and purges the sandbox', async () => {
         const { user } = await sandbox();
         const repo = await ledgerRow(user.id, 'demo-00000001-foo');
-        git.getRepositoryId.mockResolvedValue(null);
 
         const summary = await sweeper.sweep(NOW);
 
@@ -374,6 +404,245 @@ describe('DemoSandboxSweeperService', () => {
         expect((await row(repo.id)).deletedAt).toEqual(NOW);
         expect(await userExists(user.id)).toBe(false);
         expect(summary).toEqual({ sandboxes: 1, reposDeleted: 1, reposSkipped: 0, failures: 0 });
+    });
+
+    /**
+     * GitHub answers 404 both for a repository that is gone and for a private one the PAT can no
+     * longer read: its owner left the org, a fine-grained approval was revoked, the repository
+     * selection narrowed. `GET /orgs/{org}` stays 200 in all of those (org profiles are public),
+     * and a revoked or expired PAT is not this case (401 on every call, which the lookup throws
+     * and the row records as a failure). So a run trusts a 404 only on proof the PAT reads the
+     * org's private repositories: a lookup of the run answered a row's recorded id, or else the
+     * canary (the newest pending row of a sandbox that has NOT expired) answers its recorded id.
+     */
+    describe('a 404 means "gone" only on proof the PAT reads the private repositories', () => {
+        /** `canary`'s lookup throws `error`; every other lookup answers from `github`. */
+        function canaryThrows(error: Error): void {
+            git.getRepositoryId.mockImplementation(async (owner: string, name: string) => {
+                if (name === CANARY_NAME) throw error;
+                return github.get(`${owner}/${name}`) ?? null;
+            });
+        }
+
+        function canaryLookups(): number {
+            return git.getRepositoryId.mock.calls.filter(([, name]) => name === CANARY_NAME).length;
+        }
+
+        function errorsMatching(errors: jest.SpyInstance, text: string): unknown[] {
+            return errors.mock.calls.filter(([message]) => String(message).includes(text));
+        }
+
+        it('trusts a 404 once a lookup of the run answered a recorded id, without the canary', async () => {
+            // Oldest first: `proof` is swept before `gone`.
+            const proof = await sandbox(new Date(EXPIRED.getTime() - 60_000));
+            const gone = await sandbox();
+            const live = await ledgerRow(proof.user.id, 'demo-00000001-foo', 11);
+            const missing = await ledgerRow(gone.user.id, 'demo-00000002-bar', 21);
+            github.set(`${ORG}/demo-00000001-foo`, 11);
+
+            const summary = await sweeper.sweep(NOW);
+
+            expect(canaryLookups()).toBe(0);
+            expect((await row(live.id)).deletedAt).toEqual(NOW);
+            expect((await row(missing.id)).deletedAt).toEqual(NOW);
+            expect(await userExists(gone.user.id)).toBe(false);
+            expect(summary).toEqual({
+                sandboxes: 2,
+                reposDeleted: 2,
+                reposSkipped: 0,
+                failures: 0,
+            });
+        });
+
+        it('with no proof yet, asks the canary once a run and trusts the 404s when it answers its recorded id', async () => {
+            const first = await sandbox();
+            const second = await sandbox();
+            const rows = [
+                await ledgerRow(first.user.id, 'demo-00000001-foo'),
+                await ledgerRow(second.user.id, 'demo-00000002-bar'),
+            ];
+
+            const summary = await sweeper.sweep(NOW);
+
+            expect(canaryLookups()).toBe(1);
+            expect(git.getRepositoryId).toHaveBeenCalledWith(ORG, CANARY_NAME);
+            for (const entry of rows) expect((await row(entry.id)).deletedAt).toEqual(NOW);
+            // The canary's sandbox is live: its row and user are untouched.
+            expect(await row(canary.id)).toMatchObject({ deletedAt: null, attempts: 0 });
+            expect(await userExists(canary.sandboxUserId)).toBe(true);
+            expect(git.deleteRepository).not.toHaveBeenCalledWith(ORG, CANARY_NAME);
+            expect(summary).toEqual({
+                sandboxes: 2,
+                reposDeleted: 2,
+                reposSkipped: 0,
+                failures: 0,
+            });
+        });
+
+        it('makes no canary lookup in a sweep that meets no 404', async () => {
+            const { user } = await sandbox();
+            await ledgerRow(user.id, 'demo-00000001-foo', 812345678);
+            github.set(`${ORG}/demo-00000001-foo`, 812345678);
+
+            await sweeper.sweep(NOW);
+
+            expect(canaryLookups()).toBe(0);
+            expect(git.deleteRepository).toHaveBeenCalledTimes(1);
+        });
+
+        it.each<[string, () => Promise<void> | void]>([
+            ['answers 404', () => void github.delete(CANARY_KEY)],
+            ['answers another id', () => void github.set(CANARY_KEY, 5)],
+            [
+                'is refused (401)',
+                () => canaryThrows(new EverWorksGitRequestError(401, 'GitHub responded 401')),
+            ],
+            [
+                'does not exist (no live sandbox has a repository)',
+                () => ledger.markDeleted(canary.id, NOW),
+            ],
+        ])(
+            'when the canary %s, every 404 of the run fails (attempts + 1), none is closed, logged once',
+            async (_label, breakCanary) => {
+                await breakCanary();
+                const errors = jest
+                    .spyOn(Logger.prototype, 'error')
+                    .mockImplementation(() => undefined);
+                const first = await sandbox();
+                const second = await sandbox();
+                const rows = [
+                    await ledgerRow(first.user.id, 'demo-00000001-foo'),
+                    await ledgerRow(second.user.id, 'demo-00000002-bar'),
+                ];
+
+                const summary = await sweeper.sweep(NOW);
+
+                expect(canaryLookups()).toBeLessThanOrEqual(1);
+                expect(git.deleteRepository).not.toHaveBeenCalled();
+                for (const entry of rows) {
+                    expect(await row(entry.id)).toMatchObject({
+                        deletedAt: null,
+                        attempts: 1,
+                        lastError: expect.stringContaining('404 not trusted'),
+                    });
+                }
+                expect(await userExists(first.user.id)).toBe(true);
+                expect(await userExists(second.user.id)).toBe(true);
+                expect(summary).toEqual({
+                    sandboxes: 0,
+                    reposDeleted: 0,
+                    reposSkipped: 0,
+                    failures: 2,
+                });
+                expect(errorsMatching(errors, 'is not proof it is gone')).toHaveLength(1);
+            },
+        );
+
+        it.each<[string, Error]>([
+            ['a 502', new EverWorksGitRequestError(502, 'GitHub responded 502')],
+            ['a 503', new EverWorksGitRequestError(503, 'GitHub responded 503')],
+            ['a rate limit (403)', new EverWorksGitRequestError(403, 'API rate limit exceeded')],
+            ['a rate limit (429)', new EverWorksGitRequestError(429, 'Too Many Requests')],
+            ['a network error', new TypeError('fetch failed')],
+        ])(
+            'when the canary lookup fails with %s, the 404s are left for the next sweep, no attempt counted',
+            async (_label, error) => {
+                canaryThrows(error);
+                const errors = jest
+                    .spyOn(Logger.prototype, 'error')
+                    .mockImplementation(() => undefined);
+                const first = await sandbox();
+                const second = await sandbox();
+                const rows = [
+                    await ledgerRow(first.user.id, 'demo-00000001-foo'),
+                    await ledgerRow(second.user.id, 'demo-00000002-bar'),
+                ];
+
+                const summary = await sweeper.sweep(NOW);
+
+                expect(canaryLookups()).toBe(1);
+                for (const entry of rows) {
+                    expect(await row(entry.id)).toMatchObject({
+                        deletedAt: null,
+                        attempts: 0,
+                        lastError: null,
+                    });
+                }
+                expect(await userExists(first.user.id)).toBe(true);
+                expect(summary).toEqual({
+                    sandboxes: 0,
+                    reposDeleted: 0,
+                    reposSkipped: 0,
+                    failures: 2,
+                });
+                expect(errorsMatching(errors, 'is not proof it is gone')).toHaveLength(1);
+
+                // GitHub is back: the next sweep closes them.
+                git.getRepositoryId.mockImplementation(
+                    async (owner: string, name: string) => github.get(`${owner}/${name}`) ?? null,
+                );
+                const next = await sweeper.sweep(NOW);
+
+                for (const entry of rows) expect((await row(entry.id)).deletedAt).toEqual(NOW);
+                expect(next).toMatchObject({ sandboxes: 2, reposDeleted: 2, failures: 0 });
+            },
+        );
+
+        it('trusts the later 404s of a run once a lookup answers a recorded id, after the canary failed', async () => {
+            github.delete(CANARY_KEY);
+            jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+            const early = await sandbox(new Date(EXPIRED.getTime() - 120_000));
+            const proof = await sandbox(new Date(EXPIRED.getTime() - 60_000));
+            const late = await sandbox();
+            const earlyRow = await ledgerRow(early.user.id, 'demo-00000001-foo');
+            await ledgerRow(proof.user.id, 'demo-00000002-bar', 22);
+            const lateRow = await ledgerRow(late.user.id, 'demo-00000003-baz');
+            github.set(`${ORG}/demo-00000002-bar`, 22);
+
+            await sweeper.sweep(NOW);
+
+            expect(await row(earlyRow.id)).toMatchObject({ deletedAt: null, attempts: 1 });
+            expect((await row(lateRow.id)).deletedAt).toEqual(NOW);
+            expect(await userExists(late.user.id)).toBe(false);
+            expect(await userExists(early.user.id)).toBe(true);
+        });
+
+        it('asks the canary again on the next sweep, and closes the row once it answers', async () => {
+            github.delete(CANARY_KEY);
+            jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+            const { user } = await sandbox();
+            const repo = await ledgerRow(user.id, 'demo-00000001-foo');
+
+            await sweeper.sweep(NOW);
+            expect((await row(repo.id)).deletedAt).toBeNull();
+
+            github.set(CANARY_KEY, CANARY_ID);
+            const summary = await sweeper.sweep(NOW);
+
+            expect(canaryLookups()).toBe(2);
+            expect((await row(repo.id)).deletedAt).toEqual(NOW);
+            expect(await userExists(user.id)).toBe(false);
+            expect(summary).toMatchObject({ sandboxes: 1, reposDeleted: 1, failures: 0 });
+        });
+
+        it('holds the sandbox for an operator after 3 sweeps of untrusted 404s', async () => {
+            github.delete(CANARY_KEY);
+            const errors = jest
+                .spyOn(Logger.prototype, 'error')
+                .mockImplementation(() => undefined);
+            const { user } = await sandbox();
+            await ledgerRow(user.id, 'demo-00000001-foo');
+
+            for (let run = 0; run < 3; run += 1) await sweeper.sweep(NOW);
+            git.getRepositoryId.mockClear();
+            await sweeper.sweep(NOW);
+
+            expect(git.getRepositoryId).not.toHaveBeenCalled();
+            expect(errors).toHaveBeenCalledWith(
+                expect.stringMatching(new RegExp(`sandbox ${user.id} is held.*404 not trusted`)),
+            );
+            expect(await userExists(user.id)).toBe(true);
+        });
     });
 
     it('never deletes a live repository whose row has no recorded id, and keeps the sandbox (R28)', async () => {
@@ -419,7 +688,6 @@ describe('DemoSandboxSweeperService', () => {
     it('closes a no-id row whose repository is already gone, and purges the sandbox', async () => {
         const { user } = await sandbox();
         const repo = await ledgerRow(user.id, 'demo-00000001-foo-website', null);
-        git.getRepositoryId.mockResolvedValue(null);
 
         await sweeper.sweep(NOW);
 
@@ -583,7 +851,9 @@ describe('DemoSandboxSweeperService', () => {
         await ledgerRow(user.id, 'demo-00000001-foo');
         const order: string[] = [];
         let lateCreate: Promise<void> | undefined;
-        git.getRepositoryId.mockImplementation(async () => {
+        git.getRepositoryId.mockImplementation(async (_owner: string, name: string) => {
+            // The live canary, asked once on the 404 below: not this sandbox's lookup.
+            if (name === CANARY_NAME) return CANARY_ID;
             // A create of this sandbox arriving mid-sweep (it takes the lock `createWork` and
             // Generate take).
             lateCreate = withDemoSandboxLock(user.id, async () => {
@@ -903,6 +1173,7 @@ describe('DemoSandboxSweeperService', () => {
 
             expect(findExpired).not.toHaveBeenCalled();
             expect(git.getRepositoryId).not.toHaveBeenCalled();
+            expect(git.deleteRepository).not.toHaveBeenCalled();
             expect(await userExists(user.id)).toBe(true);
             expect(summary).toEqual({
                 sandboxes: 0,

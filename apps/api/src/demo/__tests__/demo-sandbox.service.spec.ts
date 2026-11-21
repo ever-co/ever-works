@@ -4,7 +4,7 @@ jest.mock('../seed/demo-sandbox-seeder.service', () => ({
     DemoSandboxSeederService: class DemoSandboxSeederService {},
 }));
 
-import { InternalServerErrorException } from '@nestjs/common';
+import { InternalServerErrorException, Logger } from '@nestjs/common';
 import { createHash } from 'node:crypto';
 import { DataSource } from 'typeorm';
 import { ENTITIES, UserRepository } from '@ever-works/agent/database';
@@ -68,7 +68,9 @@ describe('DemoSandboxService', () => {
         expect(sessions).toHaveLength(1);
         expect(sessions[0].userId).toBe(user.id);
         expect(sessions[0].token).toBeNull();
-        expect(sessions[0].tokenHash).toBe(createHash('sha256').update(res.access_token, 'utf8').digest('hex'));
+        expect(sessions[0].tokenHash).toBe(
+            createHash('sha256').update(res.access_token, 'utf8').digest('hex'),
+        );
         expect(sessions[0].expiresAt.getTime()).toBe(user.anonymousExpiresAt!.getTime());
         expect(sessions[0].ipAddress).toBe('1.2.3.4');
 
@@ -88,7 +90,9 @@ describe('DemoSandboxService', () => {
         // row stays (deleting it would orphan them), expired, so the demo sweeper purges the
         // whole sandbox through its one path (ruling R13).
         seeder.seed.mockRejectedValue(new Error('boom: secret detail'));
-        const err = await service.createSandbox({ ipAddress: null, userAgent: null }).catch((e) => e);
+        const err = await service
+            .createSandbox({ ipAddress: null, userAgent: null })
+            .catch((e) => e);
         expect(err).toBeInstanceOf(InternalServerErrorException);
         expect(err.message).toBe('Could not start the demo');
 
@@ -104,9 +108,84 @@ describe('DemoSandboxService', () => {
         expect(await userRepository.countActiveDemo(new Date())).toBe(0);
     });
 
+    /**
+     * The rollback of a failed seed expires the user FIRST, then ends its sessions: whatever
+     * happens between the two, the half-seeded sandbox is already the sweeper's (whose purge
+     * removes its sessions too), and never stays live with a session for its whole TTL.
+     */
+    describe('rollback order', () => {
+        afterEach(() => jest.restoreAllMocks());
+
+        function recordOrder(): string[] {
+            const order: string[] = [];
+            const sessions = dataSource.getRepository(AuthSession);
+            const realDelete = sessions.delete.bind(sessions);
+            jest.spyOn(sessions, 'delete').mockImplementation(async (criteria) => {
+                order.push('delete sessions');
+                return realDelete(criteria);
+            });
+            const realUpdate = userRepository.update.bind(userRepository);
+            jest.spyOn(userRepository, 'update').mockImplementation(async (id, patch) => {
+                order.push('expire user');
+                return realUpdate(id, patch);
+            });
+            return order;
+        }
+
+        it('expires the user before it deletes the sessions', async () => {
+            seeder.seed.mockRejectedValue(new Error('boom'));
+            jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+            const order = recordOrder();
+
+            await service
+                .createSandbox({ ipAddress: null, userAgent: null })
+                .catch(() => undefined);
+
+            expect(order).toEqual(['expire user', 'delete sessions']);
+        });
+
+        it('leaves the sandbox expired for the sweeper when the session delete fails', async () => {
+            seeder.seed.mockRejectedValue(new Error('boom'));
+            jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+            jest.spyOn(dataSource.getRepository(AuthSession), 'delete').mockRejectedValue(
+                new Error('database is locked'),
+            );
+
+            const err = await service
+                .createSandbox({ ipAddress: null, userAgent: null })
+                .catch((e) => e);
+
+            expect(err).toBeInstanceOf(InternalServerErrorException);
+            const [user] = await dataSource.getRepository(User).find();
+            expect(user.anonymousExpiresAt!.getTime()).toBeLessThan(Date.now());
+            expect(await userRepository.countActiveDemo(new Date())).toBe(0);
+            expect((await userRepository.findExpiredDemo(new Date(), 20)).map((u) => u.id)).toEqual(
+                [user.id],
+            );
+        });
+
+        it('still ends the sessions when expiring the user fails', async () => {
+            seeder.seed.mockRejectedValue(new Error('boom'));
+            const errors = jest
+                .spyOn(Logger.prototype, 'error')
+                .mockImplementation(() => undefined);
+            jest.spyOn(userRepository, 'update').mockRejectedValue(new Error('database is locked'));
+
+            const err = await service
+                .createSandbox({ ipAddress: null, userAgent: null })
+                .catch((e) => e);
+
+            expect(err).toBeInstanceOf(InternalServerErrorException);
+            expect(await dataSource.getRepository(AuthSession).count()).toBe(0);
+            expect(errors).toHaveBeenCalledWith(expect.stringContaining('database is locked'));
+        });
+    });
+
     it('throws DEMO_FULL at the active-sandbox cap and creates nothing', async () => {
         jest.spyOn(userRepository, 'countActiveDemo').mockResolvedValue(300);
-        const err = await service.createSandbox({ ipAddress: null, userAgent: null }).catch((e) => e);
+        const err = await service
+            .createSandbox({ ipAddress: null, userAgent: null })
+            .catch((e) => e);
         expect(err).toBeInstanceOf(DemoFullError);
         expect(err.code).toBe('DEMO_FULL');
         expect(seeder.seed).not.toHaveBeenCalled();
