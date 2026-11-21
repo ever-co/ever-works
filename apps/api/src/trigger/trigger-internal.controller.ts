@@ -203,6 +203,9 @@ const DANGEROUS_METHOD_NAMES = new Set<string>([
 
 const METHOD_NAME_RE = /^[a-zA-Z][a-zA-Z0-9_]*$/;
 
+/** How often one DEMO handshake mismatch is logged again for the same target. */
+const DEMO_DRIFT_LOG_INTERVAL_MS = 60 * 60 * 1000;
+
 /**
  * Methods of a registered target that the Trigger.dev worker answers LOCALLY and
  * must never call over this hop, left out of the target's derived allow-list.
@@ -303,8 +306,13 @@ export class TriggerInternalController implements OnModuleInit {
     private readonly logger = new Logger(TriggerInternalController.name);
     private remoteMap: Record<string, object> = {};
     private allowedMethods: Record<string, Set<string>> = {};
-    /** The DEMO drift handshake's log, once per target (see `ensureDemoHandshake`). */
-    private readonly demoDriftLogged = new Set<string>();
+    /**
+     * When each DEMO handshake mismatch was last logged, per target (see `ensureDemoHandshake`).
+     * Bounded: its keys are the registered remote targets, `works/:id/context` and
+     * `(unregistered target)`, each as refused or served. Held on the controller, a default-scope
+     * (singleton) Nest provider; a per-request scope would log every mismatch.
+     */
+    private readonly demoDriftLoggedAt = new Map<string, number>();
 
     constructor(
         private readonly workRepository: WorkRepository,
@@ -1394,8 +1402,8 @@ export class TriggerInternalController implements OnModuleInit {
      *
      * A non-demo API serves a call that carries the header and only warns: nothing a demo
      * worker does needs refusing there. With `DEMO` off on both sides this is a no-op. Each
-     * mismatch is logged once per target (a refused worker retries its task, and every
-     * retry would otherwise log again); the 409 answers every call.
+     * mismatch is logged once per target per hour (a refused worker retries its task, and
+     * every retry would otherwise log again); the 409 answers every call.
      *
      * Runs after `ensureSecret`, so a caller without the secret learns nothing here.
      */
@@ -1403,7 +1411,7 @@ export class TriggerInternalController implements OnModuleInit {
         const workerDemo = isDemoWorkerHeader(demoHeader);
         if (config.demo.isEnabled()) {
             if (workerDemo) return;
-            this.logDemoDriftOnce(`refused:${target}`, () =>
+            this.logDemoDrift(`refused:${target}`, () =>
                 this.logger.error(
                     `Refused the Trigger.dev worker's call to ${target}: this API runs with ` +
                         'DEMO=true but the worker sent no x-ever-works-demo header. Set ' +
@@ -1422,7 +1430,7 @@ export class TriggerInternalController implements OnModuleInit {
             });
         }
         if (workerDemo) {
-            this.logDemoDriftOnce(`served:${target}`, () =>
+            this.logDemoDrift(`served:${target}`, () =>
                 this.logger.warn(
                     `The Trigger.dev worker calling ${target} runs with DEMO=true, but this ` +
                         'API does not; the call is served. Unset DEMO in the Trigger.dev ' +
@@ -1432,15 +1440,18 @@ export class TriggerInternalController implements OnModuleInit {
         }
     }
 
-    private logDemoDriftOnce(key: string, log: () => void): void {
-        if (this.demoDriftLogged.has(key)) return;
-        this.demoDriftLogged.add(key);
+    /** Logs a mismatch at most once per `DEMO_DRIFT_LOG_INTERVAL_MS` for each key. */
+    private logDemoDrift(key: string, log: () => void): void {
+        const now = Date.now();
+        const last = this.demoDriftLoggedAt.get(key);
+        if (last !== undefined && now - last < DEMO_DRIFT_LOG_INTERVAL_MS) return;
+        this.demoDriftLoggedAt.set(key, now);
         log();
     }
 
     /**
      * The `remote/call` target as the drift log names it: a registered target's own name,
-     * anything else one label (so the once-per-target set stays bounded by the remote map).
+     * anything else one label (so the per-target log map stays bounded by the remote map).
      */
     private remoteTargetLabel(name: unknown): string {
         return typeof name === 'string' &&
