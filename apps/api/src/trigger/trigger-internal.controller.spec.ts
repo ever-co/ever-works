@@ -193,15 +193,36 @@ jest.mock('../demo/demo-repo-ledger.service', () => ({
 }));
 
 const getInternalSecretMock = jest.fn<string | undefined, []>();
+// Platform demo mode — off unless a case turns it on (the DEMO drift handshake below).
+const demoEnabledMock = jest.fn<boolean, []>(() => false);
 jest.mock('@ever-works/agent/config', () => ({
     config: {
         trigger: {
             getInternalSecret: () => getInternalSecretMock(),
         },
+        demo: {
+            isEnabled: () => demoEnabledMock(),
+        },
     },
 }));
 
-import { BadRequestException, ForbiddenException } from '@nestjs/common';
+import {
+    BadRequestException,
+    ConflictException,
+    Controller,
+    ForbiddenException,
+    Logger,
+    type INestApplication,
+} from '@nestjs/common';
+import { Test } from '@nestjs/testing';
+import {
+    OPTIONAL_DEPS_METADATA,
+    PARAMTYPES_METADATA,
+    ROUTE_ARGS_METADATA,
+    SELF_DECLARED_DEPS_METADATA,
+} from '@nestjs/common/constants';
+import { RouteParamtypes } from '@nestjs/common/enums/route-paramtypes.enum';
+import * as request from 'supertest';
 import superjson from 'superjson';
 import { GitHubAppInstallationRepository } from '@ever-works/agent/database';
 import { DemoRateLimitedError } from '@ever-works/agent/demo';
@@ -407,6 +428,7 @@ describe('TriggerInternalController', () => {
     beforeEach(() => {
         jest.clearAllMocks();
         getInternalSecretMock.mockReturnValue(VALID_SECRET);
+        demoEnabledMock.mockReturnValue(false);
 
         workRepository = { name: 'WorkRepository' };
         ownershipService = { ensureAccess: jest.fn() };
@@ -2105,6 +2127,228 @@ describe('TriggerInternalController', () => {
 
             expect(at).toBe(paramTypes.length - 1);
             expect(optionalIndices).toContain(at);
+        });
+    });
+
+    /**
+     * Platform demo mode — the DEMO drift handshake, API half. A worker running with `DEMO`
+     * on sends `x-ever-works-demo: 1` on every internal call. A demo API refuses a call
+     * without it (fail closed): such a worker binds no demo AI quota and no repository
+     * ledger, so it would make unmetered AI calls and create repositories no sweep finds.
+     * A non-demo API serves a call that carries it and only warns. Demo off and no header:
+     * nothing changes.
+     */
+    describe('the DEMO drift handshake (x-ever-works-demo)', () => {
+        const DEMO_HEADER_ON = '1';
+        const echoBody = () => ({
+            name: 'PluginRepository',
+            method: 'echo',
+            args: superjson.serialize(['hello']) as any,
+        });
+
+        let errorSpy: jest.SpyInstance;
+        let warnSpy: jest.SpyInstance;
+        beforeEach(() => {
+            errorSpy = jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+            warnSpy = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+        });
+        afterEach(() => {
+            errorSpy.mockRestore();
+            warnSpy.mockRestore();
+        });
+
+        describe('on a demo API (DEMO=true)', () => {
+            beforeEach(() => demoEnabledMock.mockReturnValue(true));
+
+            it('refuses a remote call that lacks the header with a 409 naming the fix, and runs nothing', async () => {
+                const refusal = controller.callRemote(VALID_SECRET, echoBody());
+
+                await expect(refusal).rejects.toBeInstanceOf(ConflictException);
+                await expect(refusal).rejects.toMatchObject({
+                    status: 409,
+                    response: expect.objectContaining({
+                        statusCode: 409,
+                        code: 'DEMO_WORKER_MISMATCH',
+                        message: expect.stringContaining('DEMO=true'),
+                    }),
+                });
+                expect(pluginRepository.echo).not.toHaveBeenCalled();
+            });
+
+            it('refuses the work-context read too (every internal route), before any lookup', async () => {
+                await expect(
+                    controller.getWorkContext(VALID_SECRET, 'work-1', 'user-1'),
+                ).rejects.toBeInstanceOf(ConflictException);
+                expect(ownershipService.ensureAccess).not.toHaveBeenCalled();
+                expect(gitFacade.getAccessToken).not.toHaveBeenCalled();
+            });
+
+            it('logs a target again only once an hour has passed', async () => {
+                const now = jest.spyOn(Date, 'now').mockReturnValue(1_000_000);
+                try {
+                    await expect(controller.callRemote(VALID_SECRET, echoBody())).rejects.toThrow();
+                    now.mockReturnValue(1_000_000 + 59 * 60 * 1000);
+                    await expect(controller.callRemote(VALID_SECRET, echoBody())).rejects.toThrow();
+                    expect(errorSpy).toHaveBeenCalledTimes(1);
+
+                    now.mockReturnValue(1_000_000 + 60 * 60 * 1000);
+                    await expect(controller.callRemote(VALID_SECRET, echoBody())).rejects.toThrow();
+                    expect(errorSpy).toHaveBeenCalledTimes(2);
+                    expect(errorSpy.mock.calls[1][0]).toContain('PluginRepository');
+                } finally {
+                    now.mockRestore();
+                }
+            });
+
+            it('logs the refusal once per target, naming it', async () => {
+                await expect(controller.callRemote(VALID_SECRET, echoBody())).rejects.toThrow();
+                await expect(controller.callRemote(VALID_SECRET, echoBody())).rejects.toThrow();
+                await expect(
+                    controller.getWorkContext(VALID_SECRET, 'work-1', 'user-1'),
+                ).rejects.toThrow();
+
+                expect(errorSpy).toHaveBeenCalledTimes(2);
+                expect(errorSpy.mock.calls[0][0]).toContain('PluginRepository');
+                expect(errorSpy.mock.calls[0][0]).toContain('DEMO=true');
+                expect(errorSpy.mock.calls[1][0]).toContain('works/:id/context');
+            });
+
+            it('serves a worker that sends the header', async () => {
+                const out = await controller.callRemote(VALID_SECRET, echoBody(), DEMO_HEADER_ON);
+
+                expect(pluginRepository.echo).toHaveBeenCalledWith('hello');
+                expect(superjson.deserialize(out.result as any)).toBe('echo:hello');
+                expect(errorSpy).not.toHaveBeenCalled();
+            });
+
+            it('checks the secret first: a caller without it learns nothing about the demo', async () => {
+                await expect(controller.callRemote('wrong', echoBody())).rejects.toBeInstanceOf(
+                    ForbiddenException,
+                );
+                expect(errorSpy).not.toHaveBeenCalled();
+            });
+        });
+
+        describe('demo off (DEMO unset)', () => {
+            it('serves a header-less call exactly as before, with no log', async () => {
+                const out = await controller.callRemote(VALID_SECRET, echoBody());
+
+                expect(superjson.deserialize(out.result as any)).toBe('echo:hello');
+                expect(errorSpy).not.toHaveBeenCalled();
+                expect(warnSpy).not.toHaveBeenCalled();
+            });
+
+            it('does not reject a worker that says it is a demo: it serves it and warns once per target', async () => {
+                const first = await controller.callRemote(VALID_SECRET, echoBody(), DEMO_HEADER_ON);
+                await controller.callRemote(VALID_SECRET, echoBody(), DEMO_HEADER_ON);
+
+                expect(superjson.deserialize(first.result as any)).toBe('echo:hello');
+                expect(pluginRepository.echo).toHaveBeenCalledTimes(2);
+                expect(warnSpy).toHaveBeenCalledTimes(1);
+                expect(warnSpy.mock.calls[0][0]).toContain('PluginRepository');
+                expect(errorSpy).not.toHaveBeenCalled();
+            });
+        });
+
+        /**
+         * The binding, over real HTTP: the header reaches the handshake on both internal routes
+         * whatever case the worker writes its name in (Node lower-cases incoming header names,
+         * and Nest's `@Headers()` lower-cases the name it looks up).
+         */
+        describe('over HTTP: the header binding on both internal routes', () => {
+            let app: INestApplication;
+
+            /**
+             * The real controller's routes and parameter bindings (inherited), mounted at its
+             * path with no constructor dependencies: these cases stop at the handshake, or at
+             * the input checks right after it. Its own empty DI metadata keeps Nest from
+             * resolving the parent's constructor.
+             */
+            @Controller('internal/trigger')
+            class HandshakeHarness extends TriggerInternalController {
+                constructor() {
+                    super(
+                        ...(new Array(TriggerInternalController.length).fill(
+                            undefined,
+                        ) as unknown as ConstructorParameters<typeof TriggerInternalController>),
+                    );
+                }
+            }
+            for (const key of [
+                PARAMTYPES_METADATA,
+                SELF_DECLARED_DEPS_METADATA,
+                OPTIONAL_DEPS_METADATA,
+            ]) {
+                Reflect.defineMetadata(key, [], HandshakeHarness);
+            }
+
+            beforeEach(async () => {
+                demoEnabledMock.mockReturnValue(true);
+                const moduleRef = await Test.createTestingModule({
+                    controllers: [HandshakeHarness],
+                }).compile();
+                app = moduleRef.createNestApplication({ logger: false });
+                await app.init();
+            });
+            afterEach(async () => {
+                await app.close();
+            });
+
+            const remoteCall = () =>
+                request(app.getHttpServer())
+                    .post('/internal/trigger/remote/call')
+                    .set('x-trigger-secret', VALID_SECRET)
+                    .send({
+                        name: 'NotARealTarget',
+                        method: 'echo',
+                        args: superjson.serialize([]),
+                    });
+            const workContext = () =>
+                // No `userId`: past the handshake the route answers 400 "Missing userId".
+                request(app.getHttpServer())
+                    .get('/internal/trigger/works/work-1/context')
+                    .set('x-trigger-secret', VALID_SECRET);
+
+            it('remote/call: a mixed-case X-Ever-Works-Demo: 1 passes the handshake', async () => {
+                const res = await remoteCall().set('X-Ever-Works-Demo', '1');
+
+                // Past the handshake: the input checks answer, not the 409.
+                expect(res.status).toBe(400);
+                expect(res.body.message).toContain('Unknown remote target: NotARealTarget');
+            });
+
+            it('works/:id/context: a mixed-case x-Ever-Works-Demo: 1 passes the handshake', async () => {
+                const res = await workContext().set('x-Ever-Works-Demo', '1');
+
+                expect(res.status).toBe(400);
+                expect(res.body.message).toBe('Missing userId');
+            });
+
+            it('both routes answer 409 DEMO_WORKER_MISMATCH without it', async () => {
+                for (const res of [await remoteCall(), await workContext()]) {
+                    expect(res.status).toBe(409);
+                    expect(res.body).toMatchObject({
+                        statusCode: 409,
+                        code: 'DEMO_WORKER_MISMATCH',
+                    });
+                }
+            });
+
+            it('route metadata: both handlers bind x-ever-works-demo with @Headers()', () => {
+                for (const handler of ['callRemote', 'getWorkContext'] as const) {
+                    const args = Reflect.getMetadata(
+                        ROUTE_ARGS_METADATA,
+                        TriggerInternalController,
+                        handler,
+                    ) as Record<string, { index: number; data?: unknown }>;
+                    const headers = Object.entries(args)
+                        .filter(([key]) => key.startsWith(`${RouteParamtypes.HEADERS}:`))
+                        .map(([, arg]) => arg.data);
+                    expect(headers).toEqual(
+                        expect.arrayContaining(['x-trigger-secret', 'x-ever-works-demo']),
+                    );
+                }
+            });
         });
     });
 });

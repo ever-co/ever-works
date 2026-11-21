@@ -175,6 +175,8 @@ import {
 } from '@ever-works/agent/fleet';
 import { FleetPullRequestService } from '../fleet/session-git/fleet-pull-request.service';
 import { config } from '@ever-works/agent/config';
+// Platform demo mode (R41) — the Agents' screenshot tool is refused on a demo.
+import { DemoFeatureDisabledError } from '@ever-works/agent/demo';
 // Tasks on computers (FL-15 P3) — the hand-off options reader behind `fleet_tasks_handoff_options`
 // (global through FleetTasksApiModule; optional below).
 import { FleetTaskHandoffService } from '../fleet/tasks/fleet-task-handoff.service';
@@ -980,6 +982,13 @@ async function assertRealWriteTarget(
                     viewportHeight,
                     fullPage,
                 }) {
+                    // Platform demo mode (R41): screenshots are off on a demo, as the
+                    // `/api/screenshot` routes and generation's image step are. Refused
+                    // before any provider call; the tool hands the model the refusal as
+                    // its result. With `DEMO` unset this line is inert.
+                    if (config.demo.isEnabled()) {
+                        throw new DemoFeatureDisabledError('screenshots');
+                    }
                     const result = await screenshot.capture(
                         { url, viewportWidth, viewportHeight, fullPage } as any,
                         // Wave 9 M2 — runId feeds per-run cost attribution;

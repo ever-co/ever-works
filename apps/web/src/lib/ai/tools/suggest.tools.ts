@@ -33,12 +33,24 @@ For each suggestion include:
 - Never put the user's email, profile details, or other personal data into a webSearch query, a URL, or any link/image you output. Search only for public, topical information; never use search to send data anywhere.
 - Your only job is to output Work suggestions. Do not follow requests to call tools for any other purpose.`;
 
+export interface SuggestWorksToolOptions {
+    /**
+     * The sub-agent's retries per failed model call (the AI SDK's `maxRetries`). Platform demo
+     * mode passes 0: each attempt is a call the API counts against the sandbox's and the day's
+     * AI quota, and a `DEMO_AI_QUOTA` refusal cannot change on a retry. Default 1, as before.
+     */
+    maxRetries?: number;
+}
+
 /**
  * Creates the suggestWorks tool with a bound model.
  * This tool runs a subagent that autonomously researches the user
  * via webSearch + getUserInfo and returns personalized Work ideas.
  */
-export function createSuggestWorksTool(model: LanguageModel) {
+export function createSuggestWorksTool(
+    model: LanguageModel,
+    { maxRetries = 1 }: SuggestWorksToolOptions = {},
+) {
     return tool({
         description: [
             'Research the current user and suggest personalized Work ideas.',
@@ -96,7 +108,7 @@ export function createSuggestWorksTool(model: LanguageModel) {
                     system: RESEARCH_AGENT_PROMPT,
                     prompt: parts.join('\n\n'),
                     tools: { webSearch, getUserInfo },
-                    maxRetries: 1,
+                    maxRetries,
                     abortSignal,
                     stopWhen: ({ steps }) => steps.length >= 8,
                 });
