@@ -24,7 +24,7 @@ const REPO_NAME_MAX_LENGTH = 100;
 /** Function shape used to call GitHub. Overridable in tests. */
 export type EverWorksGitHttpFetch = typeof fetch;
 
-/** The transport override the sweeper's GitHub calls take (for tests). */
+/** The transport override `getRepositoryId` / `deleteRepository` take (for tests). */
 interface GitHubCallOptions {
     readonly fetchImpl?: EverWorksGitHttpFetch;
 }
@@ -66,8 +66,8 @@ interface GitHubErrorApiResponse {
  *
  * Platform demo mode: every repository it creates is recorded in the demo repository ledger
  * (`DEMO_REPO_LEDGER`), and with the demo on and no ledger bound it creates nothing. The
- * sweeper's `getRepositoryId` / `getOrganizationId` / `deleteRepository` live here too, beside
- * the PAT they use; `deleteRepository` deletes only a demo repository (see there).
+ * sweeper's `getRepositoryId` / `deleteRepository` live here too, beside the PAT they use;
+ * `deleteRepository` deletes only a demo repository (see there).
  */
 @Injectable()
 export class EverWorksGitProvider {
@@ -289,38 +289,6 @@ export class EverWorksGitProvider {
             throw new EverWorksGitRequestError(
                 response.status,
                 `GitHub answered ${String(body.full_name)} (id ${String(body.id)}) for ${owner}/${name}`,
-            );
-        }
-        return body.id as number;
-    }
-
-    /**
-     * Platform demo mode — the GitHub id of the org `org` as the platform PAT sees it, or `null`
-     * when GitHub answers 404 (no such org, or not visible to the PAT). Reads `GET /orgs/{org}`
-     * (never its repository list) and follows no redirect; any other status, or a body naming
-     * another org, throws. The demo sweeper asks it before it trusts a repository 404 as gone:
-     * GitHub answers 404 too for a repository the PAT cannot see.
-     */
-    async getOrganizationId(org: string, options: GitHubCallOptions = {}): Promise<number | null> {
-        const { pat, fetchImpl } = this.githubAccess(options);
-        const response = await fetchImpl(`${GITHUB_API_BASE}/orgs/${encodeURIComponent(org)}`, {
-            method: 'GET',
-            headers: githubHeaders(pat),
-            redirect: 'manual',
-        });
-
-        if (response.status === 404) return null;
-        if (response.status !== 200) {
-            throw await requestError(response, `looking up the org ${org}`);
-        }
-
-        const body = (await response.json()) as { login?: unknown; id?: unknown };
-        const sameOrg =
-            typeof body.login === 'string' && body.login.toLowerCase() === org.toLowerCase();
-        if (!sameOrg || !Number.isSafeInteger(body.id)) {
-            throw new EverWorksGitRequestError(
-                response.status,
-                `GitHub answered ${String(body.login)} (id ${String(body.id)}) for the org ${org}`,
             );
         }
         return body.id as number;

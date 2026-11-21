@@ -84,7 +84,9 @@ Repositories are shared with real customers' repositories, so deletion is strict
 3. its name starts with `DEMO_REPO_PREFIX`;
 4. the live GitHub repository id equals the id recorded in the ledger.
 
-The org is never listed, and nothing is ever deleted by name pattern. A ledger row with no recorded id is never deleted: the sandbox is held for an operator. A row that fails 3 times, or a sandbox whose purge fails 3 times, is also held. Demo repositories carry the GitHub topic `ever-works-demo`; searching the org for that topic is how an operator finds a repository that leaked.
+The org is never listed, and nothing is ever deleted by name pattern. A ledger row with no recorded id is never deleted: the sandbox is held for an operator.
+
+GitHub answers 404 both for a repository that is gone and for a private one the token can no longer read (its owner left the org, a fine-grained approval was revoked, the repository selection narrowed). So a sweep closes a row as "already gone" only with proof that the token still reads the org's private repositories: another lookup in the same sweep returned a ledger row's recorded id, or the canary did. The canary is the newest repository of a sandbox that has not expired yet, looked up once per sweep. Without that proof the row counts as failed. If the canary lookup itself fails (a GitHub 5xx, a rate limit, a network error), the row is retried on the next sweep and no failed attempt is counted. A row that fails 3 times, or a sandbox whose purge fails 3 times, is also held. Demo repositories carry the GitHub topic `ever-works-demo`; searching the org for that topic is how an operator finds a repository that leaked.
 
 ### Why the demo org must be the customers' org
 
