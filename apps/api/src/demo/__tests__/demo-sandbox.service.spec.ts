@@ -68,7 +68,9 @@ describe('DemoSandboxService', () => {
         expect(sessions).toHaveLength(1);
         expect(sessions[0].userId).toBe(user.id);
         expect(sessions[0].token).toBeNull();
-        expect(sessions[0].tokenHash).toBe(createHash('sha256').update(res.access_token, 'utf8').digest('hex'));
+        expect(sessions[0].tokenHash).toBe(
+            createHash('sha256').update(res.access_token, 'utf8').digest('hex'),
+        );
         expect(sessions[0].expiresAt.getTime()).toBe(user.anonymousExpiresAt!.getTime());
         expect(sessions[0].ipAddress).toBe('1.2.3.4');
 
@@ -88,7 +90,9 @@ describe('DemoSandboxService', () => {
         // row stays (deleting it would orphan them), expired, so the demo sweeper purges the
         // whole sandbox through its one path (ruling R13).
         seeder.seed.mockRejectedValue(new Error('boom: secret detail'));
-        const err = await service.createSandbox({ ipAddress: null, userAgent: null }).catch((e) => e);
+        const err = await service
+            .createSandbox({ ipAddress: null, userAgent: null })
+            .catch((e) => e);
         expect(err).toBeInstanceOf(InternalServerErrorException);
         expect(err.message).toBe('Could not start the demo');
 
@@ -106,7 +110,9 @@ describe('DemoSandboxService', () => {
 
     it('throws DEMO_FULL at the active-sandbox cap and creates nothing', async () => {
         jest.spyOn(userRepository, 'countActiveDemo').mockResolvedValue(300);
-        const err = await service.createSandbox({ ipAddress: null, userAgent: null }).catch((e) => e);
+        const err = await service
+            .createSandbox({ ipAddress: null, userAgent: null })
+            .catch((e) => e);
         expect(err).toBeInstanceOf(DemoFullError);
         expect(err.code).toBe('DEMO_FULL');
         expect(seeder.seed).not.toHaveBeenCalled();

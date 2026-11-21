@@ -1,4 +1,12 @@
-import { BadRequestException, Body, Controller, HttpCode, HttpStatus, Post, Request } from '@nestjs/common';
+import {
+    BadRequestException,
+    Body,
+    Controller,
+    HttpCode,
+    HttpStatus,
+    Post,
+    Request,
+} from '@nestjs/common';
 import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import { config } from '@ever-works/agent/config';
@@ -31,10 +39,16 @@ export class DemoController {
         const ipAddress =
             (typeof req.ip === 'string' && req.ip) ||
             (typeof forwarded === 'string' ? forwarded.split(',')[0].trim() : null);
-        const userAgent = typeof req.headers?.['user-agent'] === 'string' ? (req.headers['user-agent'] as string) : null;
+        const userAgent =
+            typeof req.headers?.['user-agent'] === 'string'
+                ? (req.headers['user-agent'] as string)
+                : null;
 
         if (this.captchaVerifier.isEnabled()) {
-            const result = await this.captchaVerifier.verify({ token: body?.captchaToken, remoteIp: ipAddress });
+            const result = await this.captchaVerifier.verify({
+                token: body?.captchaToken,
+                remoteIp: ipAddress,
+            });
             if (!result.success) {
                 throw new BadRequestException('captcha verification failed');
             }

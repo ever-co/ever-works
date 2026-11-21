@@ -32,7 +32,10 @@ export class DemoSandboxService {
         private readonly seeder: DemoSandboxSeederService,
     ) {}
 
-    async createSandbox(meta: { ipAddress: string | null; userAgent: string | null }): Promise<DemoSandboxResult> {
+    async createSandbox(meta: {
+        ipAddress: string | null;
+        userAgent: string | null;
+    }): Promise<DemoSandboxResult> {
         const now = new Date();
         if ((await this.userRepository.countActiveDemo(now)) >= config.demo.maxActiveSandboxes()) {
             throw new DemoFullError();
