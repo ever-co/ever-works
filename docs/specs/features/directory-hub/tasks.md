@@ -28,9 +28,10 @@
 - [ ] T-14 ever-works-website: `/llms.txt` section and `/.well-known/mcp.json` + `/.well-known/api-catalog` pointing to the hub.
       PR [ever-co/ever-works-website#322](https://github.com/ever-co/ever-works-website/pull/322), not merged yet.
 - [ ] T-15 Deploy workflow for the Worker (manual dispatch first). The workflow is
-      `.github/workflows/deploy-directory-hub.yml` (environment `directory-hub`, `main` only). Not done yet: the
-      `DIRECTORY_HUB_CLOUDFLARE_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` environment secrets, and limiting the environment's
-      deployment branches to `main` (owner to choose the token).
+      `.github/workflows/deploy-directory-hub.yml` (environment `directory-hub`, `main` only). Since 2026-11-21 19:15Z
+      the environment exists with deployment branches limited to `main`, and holds the `DIRECTORY_HUB_CLOUDFLARE_TOKEN`
+      (owner: reuse the scoped deploy token) and `CLOUDFLARE_ACCOUNT_ID` secrets. Left: the first run, once this PR
+      reaches `main`.
 - [x] T-16 Hardening after the phase 1 code review (2026-11-21):
     - query caps: 12 words, no one-letter words;
     - word-prefix directory matching;
