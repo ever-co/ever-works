@@ -1,18 +1,20 @@
 import { describe, expect, it } from 'vitest';
-import { readPromptHandoff } from './prompt-handoff';
+import { landingTypeToWorkKind, readPromptHandoff, workKindLabel } from './prompt-handoff';
 
 const BASE = 'https://app.ever.works/onboarding';
 
 describe('readPromptHandoff — the ever.works home-page hand-off', () => {
-    it('reads the prompt and removes the prompt, the funnel id and the type from the hash', () => {
+    it('reads the prompt and the chosen type, and removes them and the funnel id from the hash', () => {
         const handoff = readPromptHandoff(
             `${BASE}#prompt=AI%20robots%20directory&corrId=abcdef12-3456&type=directory-website`,
         );
 
         // The wizard reads `corrId` itself when it mounts; here it is only removed.
-        expect(handoff).toEqual({ prompt: 'AI robots directory', cleanedHref: BASE });
-        // The chip is consumed (stripped) but not mapped onto a Work kind.
-        expect(handoff).not.toHaveProperty('kind');
+        expect(handoff).toEqual({
+            prompt: 'AI robots directory',
+            kind: 'directory',
+            cleanedHref: BASE,
+        });
     });
 
     it('removes only what it consumed, so other hand-off keys survive', () => {
@@ -65,5 +67,44 @@ describe('readPromptHandoff — the ever.works home-page hand-off', () => {
 
     it('answers null for a URL it cannot parse', () => {
         expect(readPromptHandoff('not a url')).toBeNull();
+    });
+});
+
+describe('landingTypeToWorkKind', () => {
+    it('maps the home-page chips onto Work kinds', () => {
+        expect(landingTypeToWorkKind('website')).toBe('website');
+        expect(landingTypeToWorkKind('landing-page')).toBe('landing-page');
+        expect(landingTypeToWorkKind('blog')).toBe('blog');
+        expect(landingTypeToWorkKind('directory-website')).toBe('directory');
+        expect(landingTypeToWorkKind('directory')).toBe('directory');
+        expect(landingTypeToWorkKind('awesome-repo')).toBe('awesome-repo');
+        expect(landingTypeToWorkKind(' Directory-Website ')).toBe('directory');
+    });
+
+    it('leaves the kind to the platform default for chips without a generated kind', () => {
+        // `company` is reserved for the Register-Company flow; `repo` and `app`
+        // need a repository URL; the rest have no Work kind of their own yet.
+        for (const type of [
+            'knowledge-base',
+            'store',
+            'company',
+            'mission',
+            'idea',
+            'repo',
+            'app',
+            'x',
+            '',
+        ]) {
+            expect(landingTypeToWorkKind(type)).toBeUndefined();
+        }
+        expect(landingTypeToWorkKind(null)).toBeUndefined();
+    });
+});
+
+describe('workKindLabel', () => {
+    it('names the kind the way the home page did', () => {
+        expect(workKindLabel('directory')).toBe('Directory website');
+        expect(workKindLabel('landing-page')).toBe('Landing page');
+        expect(workKindLabel(undefined)).toBeUndefined();
     });
 });

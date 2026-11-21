@@ -156,7 +156,7 @@ describe('EverWorksOnboardingWizard — a visitor arriving with a prompt from ev
         );
     });
 
-    it('keeps the platform default Work kind: the home-page type is not sent', async () => {
+    it('carries the home-page type through as the Work kind', async () => {
         quickCreateWorkAction.mockResolvedValue({
             success: true,
             data: {
@@ -171,17 +171,17 @@ describe('EverWorksOnboardingWizard — a visitor arriving with a prompt from ev
         });
         renderWizard();
 
-        // Mapping the chip onto a Work kind needs product sign-off (item
-        // generation is not kind-aware yet), so quick-create keeps the default.
-        await userEvent.click(await screen.findByTestId('onboarding-generate-now'));
+        expect((await screen.findByTestId('onboarding-work-kind')).textContent).toContain(
+            'Directory website',
+        );
+        await userEvent.click(screen.getByTestId('onboarding-generate-now'));
 
         await waitFor(() => expect(quickCreateWorkAction).toHaveBeenCalledTimes(1));
         expect(quickCreateWorkAction.mock.calls[0][0]).toMatchObject({
+            kind: 'directory',
             prompt: 'AI robots directory',
             correlationId: 'abcdef1234',
         });
-        expect(quickCreateWorkAction.mock.calls[0][0]).not.toHaveProperty('kind');
-        expect(screen.queryByTestId('onboarding-work-kind')).toBeNull();
     });
 
     it('removes the hand-off from the address bar, type included', async () => {
