@@ -28,9 +28,13 @@ generations: a run can fetch a digest of what prior runs learned and save a shor
 observation at the end, so the next run starts informed rather than cold.
 
 Memory is **not stored in Postgres.** It lives entirely in an external
-agent-memory REST backend (default `@ever-works/agentmemory-plugin`, base URL
-`http://localhost:3111`), partitioned by a `project` namespace (derived from the
-Work slug/id). The **only** Postgres surface is a single nullable column,
+agent-memory REST backend, partitioned by a `project` namespace (derived from the
+Work slug/id). Two first-party backends ship: `@ever-works/memanto-plugin`
+(Memanto server, default `http://localhost:8000`, one Memanto agent per Work —
+the **default provider, auto-enabled wherever a Memanto server is configured** — the
+facade skips it via `isConfigured` elsewhere) and
+`@ever-works/agentmemory-plugin` (`agentmemory` server on `http://localhost:3111`,
+zero-config and fully offline, used when it is the only one enabled). The **only** Postgres surface is a single nullable column,
 `agent_runs.memorySessionId` (migration
 `1779991011000-AddMemorySessionIdToAgentRuns.ts`), which records the opaque
 session id an agent run opened so the run row can be correlated with its memory

@@ -90,11 +90,14 @@ describe('AgentmemoryPlugin', () => {
 			// vars manually instead.
 			expect(props.baseUrl['x-envVar']).toBeUndefined();
 			expect(props.apiKey['x-envVar']).toBeUndefined();
+			// …and no schema default either: the settings service resolves an
+			// unset field to it, which would shadow AGENTMEMORY_BASE_URL.
+			expect(props.baseUrl.default).toBeUndefined();
 		});
 
-		it('declares itself the default for agent-memory in its manifest', () => {
+		it('is built in but no longer the agent-memory default (Memanto is, when enabled)', () => {
 			const manifest = plugin.getManifest();
-			expect(manifest.defaultForCapabilities).toContain('agent-memory');
+			expect(manifest.defaultForCapabilities ?? []).not.toContain('agent-memory');
 			expect(manifest.builtIn).toBe(true);
 		});
 	});

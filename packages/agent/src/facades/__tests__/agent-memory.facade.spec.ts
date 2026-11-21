@@ -114,6 +114,88 @@ describe('AgentMemoryFacadeService', () => {
         });
     });
 
+    describe('implicit resolution skips providers that are not configured (isConfigured)', () => {
+        const opts = { userId: 'user-1' };
+
+        function wireDefaultPlusFallback(memantoConfigured: boolean) {
+            const memanto = {
+                ...createMockMemoryPlugin('memanto', 'memanto'),
+                isConfigured: jest.fn().mockReturnValue(memantoConfigured),
+            };
+            const agentmemory = createMockMemoryPlugin('agentmemory', 'agentmemory');
+            const entries = [
+                createRegisteredPlugin(agentmemory, { capabilities: ['agent-memory'] }),
+                createRegisteredPlugin(memanto, {
+                    capabilities: ['agent-memory'],
+                    defaultForCapabilities: ['agent-memory'],
+                }),
+            ];
+            registry.getByCapability.mockReturnValue(entries);
+            registry.get.mockImplementation((id: string) =>
+                entries.find((e) => e.plugin.id === id),
+            );
+            return { memanto, agentmemory };
+        }
+
+        it('routes to the configured default (Memanto) ahead of agentmemory', async () => {
+            const { memanto, agentmemory } = wireDefaultPlusFallback(true);
+            await service.saveMemory({ content: 'x' }, opts);
+            expect(memanto.saveMemory).toHaveBeenCalled();
+            expect(agentmemory.saveMemory).not.toHaveBeenCalled();
+            // The probe sees the scope's resolved settings.
+            expect(memanto.isConfigured).toHaveBeenCalledWith({ baseUrl: 'http://localhost:3111' });
+        });
+
+        it('falls through to agentmemory when the default reports itself unconfigured', async () => {
+            const { memanto, agentmemory } = wireDefaultPlusFallback(false);
+            await service.saveMemory({ content: 'x' }, opts);
+            expect(agentmemory.saveMemory).toHaveBeenCalled();
+            expect(memanto.saveMemory).not.toHaveBeenCalled();
+            await expect(service.getDefaultProvider(undefined, 'user-1')).resolves.toEqual({
+                id: 'agentmemory',
+                name: 'agentmemory',
+            });
+        });
+
+        it('answers NoProviderError when the only enabled provider is unconfigured', async () => {
+            const memanto = {
+                ...createMockMemoryPlugin('memanto', 'memanto'),
+                isConfigured: jest.fn().mockResolvedValue(false),
+            };
+            registry.getByCapability.mockReturnValue([
+                createRegisteredPlugin(memanto, { capabilities: ['agent-memory'] }),
+            ]);
+            await expect(service.buildContext({ query: 'q' }, opts)).rejects.toBeInstanceOf(
+                NoProviderError,
+            );
+        });
+
+        it('treats a throwing readiness probe as unconfigured', async () => {
+            const broken = {
+                ...createMockMemoryPlugin('memanto', 'memanto'),
+                isConfigured: jest.fn().mockImplementation(() => {
+                    throw new Error('probe exploded');
+                }),
+            };
+            const agentmemory = createMockMemoryPlugin('agentmemory', 'agentmemory');
+            registry.getByCapability.mockReturnValue([
+                createRegisteredPlugin(broken, {
+                    capabilities: ['agent-memory'],
+                    defaultForCapabilities: ['agent-memory'],
+                }),
+                createRegisteredPlugin(agentmemory, { capabilities: ['agent-memory'] }),
+            ]);
+            await service.saveMemory({ content: 'x' }, opts);
+            expect(agentmemory.saveMemory).toHaveBeenCalled();
+        });
+
+        it('never filters an explicit provider override', async () => {
+            const { memanto } = wireDefaultPlusFallback(false);
+            await service.saveMemory({ content: 'x' }, { ...opts, providerOverride: 'memanto' });
+            expect(memanto.saveMemory).toHaveBeenCalled();
+        });
+    });
+
     describe('routing', () => {
         const opts = { userId: 'user-1', workId: 'work-1' };
 

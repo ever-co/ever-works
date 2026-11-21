@@ -68,7 +68,9 @@ export const PLUGIN_CAPABILITIES = {
 	CONNECTOR_BLUESKY: 'connector-bluesky',
 	CONNECTOR_MASTODON: 'connector-mastodon',
 	// Pluggable persistent memory for AI coding / generation agents.
-	// First-party implementation: `@ever-works/agentmemory-plugin`
+	// First-party implementations: `@ever-works/memanto-plugin` (default
+	// when enabled — a Memanto server over Moorcheh) and
+	// `@ever-works/agentmemory-plugin`
 	// (talks to the `agentmemory` standalone Node server on :3111 —
 	// runs locally OR hosted via a configurable `baseUrl` + bearer
 	// token). Community plugins (mem0, zep, langmem) implement the
