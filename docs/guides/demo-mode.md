@@ -98,6 +98,21 @@ The Ever Works git provider creates every repository in `EVER_WORKS_CUSTOMERS_GI
 - **No pgvector on SQLite.** Knowledge search is lexical.
 - **Not available on a demo:** workflow-run AI nodes, and the Ideas and User research features.
 
+## Deploy order
+
+A demo API refuses every internal call from a worker that does not send `x-ever-works-demo: 1` (`409 DEMO_WORKER_MISMATCH`, see Known limits). Workers built before that header existed do not send it, and the two halves do not roll out together:
+
+- ArgoCD Image Updater rolls the demo API as soon as its image is published.
+- The demo Trigger.dev deploy (`release-trigger-selfhosted.yml`) only runs after CI.
+- Trigger.dev v4 keeps each in-flight run on the version it started on, so a run started on an old worker keeps calling without the header until it ends.
+
+So, for a demo that is live, either:
+
+1. **Workers first.** Dispatch **Deploy to Self-hosted Trigger.dev** (`release-trigger-selfhosted.yml`) with `target: demo-project` before the new API image is published. The new workers send the header, which an older demo API ignores. Or:
+2. **Accept a one-time window.** After the API rolls, runs still on the old workers fail with `409 DEMO_WORKER_MISMATCH`; runs started after the new workers are deployed are served. Start them again if they matter.
+
+Production is unaffected: its API runs with `DEMO` unset and never refuses a worker.
+
 ## Operator checklist
 
 1. **Namespaces and images.** One environment per demo host (`demodev`, `demostage`, `demo.ever.works` here). Run the API image (1 replica, `Recreate`) and the web image, both with `DEMO=true`. The web reaches the API in-cluster and proxies browser calls through its own `/api/*` routes, so the API needs no public host. Leave `NEXT_PUBLIC_API_URL` unset.
