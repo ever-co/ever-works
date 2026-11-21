@@ -250,6 +250,17 @@ describe('DataGeneratorService runtime YAML certification', () => {
         ])('does not match %s', (_label, error) => {
             expect(isRepositoryNotFoundError(error)).toBe(false);
         });
+
+        it('terminates on a cyclic cause chain', () => {
+            const a = new Error('outer') as Error & { cause?: unknown };
+            const b = new Error('inner') as Error & { cause?: unknown };
+            a.cause = b;
+            b.cause = a;
+            expect(isRepositoryNotFoundError(a)).toBe(false);
+
+            b.cause = Object.assign(new Error('HTTP Error: 404 Not Found'), { cause: a });
+            expect(isRepositoryNotFoundError(a)).toBe(true);
+        });
     });
 
     it('keeps ordinary item reads tolerant by skipping generation certification', async () => {
