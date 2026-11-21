@@ -219,7 +219,14 @@ export interface FleetAiCompletionPayload {
 	timeoutSec: number;
 }
 
-export type FleetAiCompletionParse<T> = { ok: true; value: T } | { ok: false; reason: string };
+/**
+ * A parse outcome. Both arms name both fields (one of them `undefined`), so a
+ * consumer compiled WITHOUT `strictNullChecks` — which does not narrow on `ok` —
+ * still reads `reason` / `value` type-safely.
+ */
+export type FleetAiCompletionParse<T> =
+	| { ok: true; value: T; reason?: undefined }
+	| { ok: false; reason: string; value?: undefined };
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
 	return !!value && typeof value === 'object' && !Array.isArray(value);
@@ -257,7 +264,7 @@ export function normalizeFleetAiCompletionPayload(raw: unknown): FleetAiCompleti
 	}
 	if (!isFleetAiCompletionModelId(raw.model)) return { ok: false, reason: 'model is not a model id' };
 	const body = readEncodedBody(raw);
-	if (!body.ok) return body;
+	if (!body.ok) return { ok: false, reason: body.reason ?? 'the body is not readable' };
 	return {
 		ok: true,
 		value: {
@@ -366,7 +373,7 @@ export function normalizeFleetAiCompletionResult(raw: unknown): FleetAiCompletio
 		return { ok: false, reason: 'status is not an HTTP status' };
 	}
 	const body = readEncodedBody(raw);
-	if (!body.ok) return body;
+	if (!body.ok) return { ok: false, reason: body.reason ?? 'the body is not readable' };
 	if (typeof raw.providerId !== 'string' || !PROVIDER_LABEL_PATTERN.test(raw.providerId)) {
 		return { ok: false, reason: 'providerId is not a provider id' };
 	}
