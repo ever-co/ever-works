@@ -93,7 +93,7 @@ export class LocalAiMonitor {
 
 	/** Probe every provider now, whatever the cache says. Never rejects. */
 	async refresh(): Promise<LocalAiProviderStatus[]> {
-		await this.probe(this.settings.providers);
+		await this.probe(this.settings.providers, true);
 		return this.snapshot();
 	}
 
@@ -188,18 +188,41 @@ export class LocalAiMonitor {
 		return key;
 	}
 
-	private probe(providers: readonly LocalAiProviderSettings[]): Promise<void> {
-		// One round at a time: an asker that arrives mid-round waits for it
-		// rather than starting a second set of requests to the same servers.
-		if (this.round) return this.round;
-		const round = Promise.all(providers.map((provider) => this.probeOne(provider)))
-			.then(() => undefined)
-			.catch(() => undefined)
+	/**
+	 * Probe `providers`, one round at a time.
+	 *
+	 * An asker that arrives mid-round waits for it rather than sending a second
+	 * set of requests to the same servers, and then probes only what that round
+	 * did not answer SINCE it asked — a provider outside the round, or one the
+	 * round had already finished before the ask. `force` (a `refresh()` with no
+	 * round in flight) probes everything it was given.
+	 */
+	private async probe(providers: readonly LocalAiProviderSettings[], force = false): Promise<void> {
+		const askedAt = this.now();
+		let waited = false;
+		while (this.round) {
+			waited = true;
+			await this.round;
+		}
+		const pending =
+			force && !waited
+				? [...providers]
+				: providers.filter(
+						(provider) => (this.stored.get(provider.id)?.checkedAtMs ?? Number.NEGATIVE_INFINITY) < askedAt
+					);
+		if (pending.length === 0) return;
+		// Set synchronously after the loop: the next waiter to resume sees it
+		// and waits on this round instead of starting its own.
+		const round: Promise<void> = Promise.all(pending.map((provider) => this.probeOne(provider)))
+			.then(
+				() => undefined,
+				() => undefined
+			)
 			.finally(() => {
 				if (this.round === round) this.round = null;
 			});
 		this.round = round;
-		return round;
+		await round;
 	}
 
 	private async probeOne(provider: LocalAiProviderSettings): Promise<void> {

@@ -1893,9 +1893,11 @@ function composeSuccessMessage(
 ): string {
     const lines = ['**Fleet run finished** (executed on one of your own machines).', '', summary];
     if (finalizeNote) lines.push('', finalizeNote);
-    if (isFleetLocalModelResult(result.model)) {
+    if (isFleetLocalModelResult(result.model) && result.model?.costUsd === 0) {
         // Local AI: the CLI's own dollar figure for a model id it did not know
-        // is meaningless, and the node reported 0 on purpose.
+        // is meaningless, and the node reported 0 on purpose. A "local" result
+        // that still carries a non-zero figure is contradictory, so it falls
+        // through and is reported as the spend it claims (and recorded as such).
         lines.push(
             '',
             `Model: ${result.model?.modelId ?? 'a local model'} on this machine's own local AI provider — no model spend${result.model?.turns ? ` (${result.model.turns} turn(s))` : ''}.`,

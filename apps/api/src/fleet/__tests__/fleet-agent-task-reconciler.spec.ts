@@ -510,6 +510,26 @@ describe('FleetAgentTaskReconcilerService', () => {
             expect(body).not.toContain('Model spend reported by the CLI');
         });
 
+        it('records what a contradictory "local" result claims: a non-zero figure is spend, not free', async () => {
+            await completed({
+                ...billed,
+                model: {
+                    ...billed.model!,
+                    costUsd: 0.12,
+                    costBasis: 'local',
+                    modelId: 'flashnext',
+                },
+            });
+
+            // The platform does not second-guess the node's figure in either direction.
+            expect(pluginUsage!.record).toHaveBeenCalledWith(
+                expect.objectContaining({ costCents: 12 }),
+            );
+            const body = taskChat.post.mock.calls[0][1].body as string;
+            expect(body).toContain('Model spend reported by the CLI: $0.12');
+            expect(body).not.toContain('no model spend');
+        });
+
         it('a Codex run (tokens, no price) adds its tokens, writes NO usage row, stamps NO cost, and hands the ceiling a null cost', async () => {
             await completed({
                 ...billed,

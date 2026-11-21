@@ -75,31 +75,50 @@ const MAX_TEST_TIMEOUT_SEC = 600;
  */
 export async function readStoredLocalAi(
 	deps: Pick<LocalAiCliDeps, 'fs' | 'configPath'>
-): Promise<{ stored: NodeLocalAiConfig | null; extraCapabilities: string[] }> {
+): Promise<{ stored: NodeLocalAiConfig | null; extraCapabilities: string[]; problems: string[] }> {
 	let raw: string | null = null;
 	try {
 		raw = await deps.fs.readFile(deps.configPath);
-	} catch {
-		raw = null;
-	}
-	if (!raw) return { stored: null, extraCapabilities: [] };
-	try {
-		const parsed = JSON.parse(raw) as { localAi?: unknown; extraCapabilities?: unknown };
+	} catch (error) {
+		// Said, not swallowed: a config the node cannot read is a config whose
+		// local AI it cannot see — the operator must not read that as "none".
 		return {
-			stored: sanitizeStoredLocalAiConfig(parsed?.localAi) ?? null,
-			extraCapabilities: Array.isArray(parsed?.extraCapabilities)
-				? parsed.extraCapabilities.filter((tag): tag is string => typeof tag === 'string')
-				: []
+			stored: null,
+			extraCapabilities: [],
+			problems: [
+				`${deps.configPath} could not be read (${error instanceof Error ? error.message : String(error)}) — ` +
+					'its localAi section and extra tags are ignored'
+			]
 		};
-	} catch {
-		return { stored: null, extraCapabilities: [] };
 	}
+	if (!raw) return { stored: null, extraCapabilities: [], problems: [] };
+	let parsed: { localAi?: unknown; extraCapabilities?: unknown } | null;
+	try {
+		parsed = JSON.parse(raw) as { localAi?: unknown; extraCapabilities?: unknown } | null;
+	} catch {
+		return {
+			stored: null,
+			extraCapabilities: [],
+			problems: [`${deps.configPath} is not valid JSON — its localAi section and extra tags are ignored`]
+		};
+	}
+	const problems: string[] = [];
+	const stored = sanitizeStoredLocalAiConfig(parsed?.localAi) ?? null;
+	if (parsed?.localAi !== undefined && !stored)
+		problems.push('"localAi" in the config file is not an object — ignored');
+	return {
+		stored,
+		extraCapabilities: Array.isArray(parsed?.extraCapabilities)
+			? parsed.extraCapabilities.filter((tag): tag is string => typeof tag === 'string')
+			: [],
+		problems
+	};
 }
 
 /** Resolve the node's local AI exactly as `start` does. */
 export async function loadNodeLocalAi(deps: LocalAiCliDeps): Promise<NodeLocalAiSetup> {
-	const { stored, extraCapabilities } = await readStoredLocalAi(deps);
-	return setupNodeLocalAi({
+	const { stored, extraCapabilities, problems } = await readStoredLocalAi(deps);
+	const setup = setupNodeLocalAi({
 		stored,
 		extraCapabilities,
 		env: deps.env,
@@ -108,6 +127,7 @@ export async function loadNodeLocalAi(deps: LocalAiCliDeps): Promise<NodeLocalAi
 		...(deps.readKeyFile ? { readKeyFile: deps.readKeyFile } : {}),
 		...(deps.now ? { now: deps.now } : {})
 	});
+	return problems.length > 0 ? { ...setup, problems: [...problems, ...setup.problems] } : setup;
 }
 
 function describeKey(provider: LocalAiProviderSettings): string {

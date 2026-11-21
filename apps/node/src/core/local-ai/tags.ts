@@ -106,11 +106,18 @@ export function normalizeExtraCapabilities(raw: readonly unknown[] | undefined):
  * tag is a routing hint, the exact id lives in the run.
  */
 export function localModelTagSlug(modelId: string): string | null {
-	const slug = modelId
+	const folded = modelId
 		.toLowerCase()
 		.replace(/[^a-z0-9._-]+/g, '-')
-		.replace(/-{2,}/g, '-')
-		.replace(/^[-._]+|[-._]+$/g, '');
+		.replace(/-{2,}/g, '-');
+	// Trimmed by index, not by an end-anchored regex: the id comes from a
+	// server's model list, and `[-._]+$` is quadratic on a long run of them.
+	const edge = (char: string | undefined): boolean => char === '-' || char === '.' || char === '_';
+	let start = 0;
+	let end = folded.length;
+	while (start < end && edge(folded[start])) start += 1;
+	while (end > start && edge(folded[end - 1])) end -= 1;
+	const slug = folded.slice(start, end);
 	if (!slug) return null;
 	const tag = `${FLEET_LOCAL_MODEL_CAPABILITY_PREFIX}${slug}`;
 	return tag.length <= MAX_CAPABILITY_TAG_LENGTH && CAPABILITY_TAG_PATTERN.test(tag) ? slug : null;

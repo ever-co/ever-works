@@ -20,7 +20,8 @@ const GW = 'http://192.168.1.69:8000';
 const config = {
 	apiUrl: 'https://api.ever.works',
 	nodeId: '11111111-2222-4333-8444-555555555555',
-	secret: 'ZmFrZS1zZWNyZXQtdmFsdWUtZm9yLXVuaXQtdGVzdHM',
+	// Synthetic: parseConfig only needs a non-empty credential here.
+	secret: 'x'.repeat(43),
 	kind: 'node',
 	capabilities: [],
 	heartbeatIntervalMs: 30_000,
@@ -39,8 +40,18 @@ const UP: Record<string, FakeRoute> = {
 
 const runner: CommandRunner = { run: async () => ({ code: 127, stdout: '', stderr: '' }) };
 
-function harness(options: { routes?: Record<string, FakeRoute>; stored?: unknown; env?: Record<string, string> } = {}) {
-	const files = new Map<string, string>([[CONFIG_PATH, JSON.stringify(options.stored ?? config)]]);
+function harness(
+	options: {
+		routes?: Record<string, FakeRoute>;
+		stored?: unknown;
+		rawConfig?: string;
+		env?: Record<string, string>;
+		readKeyFile?: (path: string) => Promise<string | null>;
+	} = {}
+) {
+	const files = new Map<string, string>([
+		[CONFIG_PATH, options.rawConfig ?? JSON.stringify(options.stored ?? config)]
+	]);
 	const stdout: string[] = [];
 	const entries: LogEntry[] = [];
 	const logger = createLogger({ sink: (entry) => entries.push(entry) });
@@ -71,7 +82,7 @@ function harness(options: { routes?: Record<string, FakeRoute>; stored?: unknown
 		platform: 'linux',
 		out: (line) => stdout.push(line),
 		env: options.env ?? {},
-		readLocalAiKeyFile: async (path) => (path === KEY_PATH ? KEY : null)
+		readLocalAiKeyFile: options.readKeyFile ?? (async (path) => (path === KEY_PATH ? KEY : null))
 	};
 	const everything = (): string => [...stdout, ...entries.map((entry) => entry.message)].join('\n');
 	return { deps, stdout, entries, fetch, everything };
@@ -133,6 +144,33 @@ describe('ever-works-node local-ai list', () => {
 		await runCli(['local-ai', 'list'], h.deps);
 		expect(h.stdout).toContain('provider     ollama (ollama)');
 		expect(h.stdout).toContain('agent        codex runs on provider ollama, model qwen3:8b');
+	});
+});
+
+describe('ever-works-node local-ai — a config or key it cannot use', () => {
+	it('says so when the config file is not valid JSON, instead of reading it as "no local AI"', async () => {
+		const h = harness({ rawConfig: '{ "localAi": ' });
+		expect(await runCli(['local-ai', 'list'], h.deps)).toBe(EXIT_OK);
+		expect(h.stdout).toContain(
+			`problem      ${CONFIG_PATH} is not valid JSON — its localAi section and extra tags are ignored`
+		);
+	});
+
+	it('reports an unreadable or oversized key file by its path, never its contents', async () => {
+		for (const failure of ['EACCES', 'LOCAL_AI_KEY_TOO_LARGE']) {
+			const h = harness({
+				readKeyFile: async () => {
+					throw Object.assign(new Error(`boom ${KEY}`), { code: failure });
+				}
+			});
+			expect(await runCli(['local-ai', 'probe'], h.deps)).toBe(EXIT_FAILURE);
+			expect(h.stdout[0]).toContain(`the API key file ${KEY_PATH}`);
+			expect(h.stdout[0]).toContain(
+				failure === 'EACCES' ? 'could not be read (EACCES)' : 'is larger than 4096 bytes'
+			);
+			expect(h.fetch.calls).toHaveLength(0);
+			expect(h.everything()).not.toContain(KEY);
+		}
 	});
 });
 

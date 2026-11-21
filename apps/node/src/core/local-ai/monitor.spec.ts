@@ -89,6 +89,13 @@ describe('LocalAiMonitor — probing', () => {
 		expect(fetch.calls.filter((call) => call.url.endsWith('/v1/models'))).toHaveLength(1);
 	});
 
+	it('re-probes on an explicit refresh once the round it shared is over, even on a frozen clock', async () => {
+		const { monitor, fetch } = monitorFor(UP, { now: () => 5_000 });
+		await monitor.refresh();
+		await monitor.refresh();
+		expect(fetch.calls.filter((call) => call.url.endsWith('/v1/models'))).toHaveLength(2);
+	});
+
 	it('calls a provider that never answers down at the probe timeout, without rejecting', async () => {
 		const { monitor } = monitorFor({ [`${GW}/v1/models`]: { hang: true } }, { timeoutMs: 50 });
 		const [status] = await monitor.refresh();
