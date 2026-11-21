@@ -92,10 +92,17 @@ let inFlight: Promise<DemoConfig> | undefined;
  * the process-level cache below answers for `DEMO_CONFIG_TTL_MS`: outside a render (a route
  * handler such as the chat turn, a server action) `React.cache` passes every call through, and
  * without it every chat message cost an extra `GET /api/config`, production included.
+ *
+ * Never rejects: every failure resolves to the fail-closed answer (or, on a demo-hinted web, the
+ * fallback above), so callers may start it early and await it later.
  */
 export const getDemoConfig = cache(readDemoConfigCached);
 
-/** Test seam: forget the process-level answer (module state outlives a single test). */
+/**
+ * Test seam: forget the process-level answer (module state outlives a single test). Tests only;
+ * production has no eviction hook on purpose: an answer lives at most `DEMO_CONFIG_TTL_MS`, the
+ * endpoint's own `max-age`, and flipping `DEMO` needs an API restart anyway.
+ */
 export function resetDemoConfigCacheForTests(): void {
     cached = undefined;
     lastGood = undefined;

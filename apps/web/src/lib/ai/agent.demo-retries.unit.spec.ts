@@ -16,14 +16,16 @@ import type { DemoConfig } from '@/lib/feature-flags/demo';
 const mocks = vi.hoisted(() => ({
     getDemoConfig: vi.fn<() => Promise<DemoConfig>>(),
     model: { current: undefined as unknown },
+    buildChatTools: vi.fn((_model: unknown, _options?: { suggestMaxRetries?: number }) => ({})),
 }));
 
 vi.mock('@/lib/feature-flags/demo', () => ({ getDemoConfig: mocks.getDemoConfig }));
 vi.mock('./provider', () => ({
     createBackendProvider: () => ({ chatModel: () => mocks.model.current }),
 }));
-// The tool set is irrelevant to the retry policy; an empty one keeps the suite light.
-vi.mock('./tools', () => ({ buildChatTools: () => ({}) }));
+// An empty tool set keeps the suite light; the options it is built with carry the sub-agent's
+// retry policy (`suggestWorks`, asserted below and in `tools/suggest.tools.demo-retries`).
+vi.mock('./tools', () => ({ buildChatTools: mocks.buildChatTools }));
 
 import { runAgent } from './agent';
 
@@ -69,7 +71,10 @@ async function runTurn() {
 }
 
 describe('runAgent: upstream retries on a demo', () => {
-    beforeEach(() => mocks.getDemoConfig.mockReset());
+    beforeEach(() => {
+        mocks.getDemoConfig.mockReset();
+        mocks.buildChatTools.mockClear();
+    });
     afterEach(() => vi.useRealTimers());
 
     it('makes ONE attempt on a demo when the API answers 503 (no retry charges the quota again)', async () => {
@@ -97,12 +102,34 @@ describe('runAgent: upstream retries on a demo', () => {
         const doStream = failingModel(apiCallError(503, { statusCode: 503, message: 'upstream' }));
         // The SDK backs off 2 s, then 4 s, between attempts; fake timers skip the wait.
         vi.useFakeTimers();
-
-        const turn = runTurn();
-        await vi.advanceTimersByTimeAsync(10_000);
-        await turn;
+        try {
+            const turn = runTurn();
+            await vi.advanceTimersByTimeAsync(10_000);
+            await turn;
+        } finally {
+            vi.useRealTimers();
+        }
 
         expect(doStream).toHaveBeenCalledTimes(3);
+    });
+
+    it('builds the tools with the demo retry policy: the suggestWorks sub-agent gets 0 retries', async () => {
+        mocks.getDemoConfig.mockResolvedValue(DEMO_ON);
+        failingModel(apiCallError(503, { statusCode: 503, message: 'upstream' }));
+
+        await runTurn();
+
+        expect(mocks.buildChatTools).toHaveBeenCalledTimes(1);
+        expect(mocks.buildChatTools.mock.calls[0][1]).toMatchObject({ suggestMaxRetries: 0 });
+    });
+
+    it('demo off: the suggestWorks sub-agent keeps its 1 retry', async () => {
+        mocks.getDemoConfig.mockResolvedValue(DEMO_OFF);
+        failingModel(apiCallError(400, { statusCode: 400, message: 'bad request' }));
+
+        await runTurn();
+
+        expect(mocks.buildChatTools.mock.calls[0][1]).toMatchObject({ suggestMaxRetries: 1 });
     });
 
     it('reads the demo flag through the shared demo config, once per turn', async () => {
