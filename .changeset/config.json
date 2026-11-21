@@ -13,6 +13,7 @@
 		"ever-works-cli",
 		"@ever-works/cli",
 		"ever-works-mcp",
+		"ever-works-directory-hub",
 		"ever-works-docs",
 		"@ever-works/agent",
 		"@ever-works/cli-shared",
