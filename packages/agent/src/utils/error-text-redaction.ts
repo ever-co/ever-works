@@ -38,7 +38,23 @@ const MASKED_PREFIXED_KEY_RE =
 const TAVILY_KEY_RE = /\btvly-[A-Za-z0-9_-]{10,}/g;
 
 // `Bearer <credential>` / `Basic <credential>`; the scheme word stays so the sentence still reads.
-const AUTH_SCHEME_RE = /\b(Bearer|Basic)(\s+)([A-Za-z0-9._~+/=-]{4,})/g;
+// Every credential is removed, however short (the text can reach an anonymous visitor), except the
+// prose words that commonly follow the scheme name ("Bearer token missing", "Basic auth is …").
+const AUTH_SCHEME_RE = /\b(Bearer|Basic)(\s+)([A-Za-z0-9._~+/=-]+)/g;
+const AUTH_SCHEME_PROSE = new Set([
+    'auth',
+    'authentication',
+    'authorization',
+    'credential',
+    'credentials',
+    'header',
+    'is',
+    'or',
+    'realm',
+    'scheme',
+    'token',
+    'tokens',
+]);
 
 // An asterisk-masked tail (`****ab12`): never prose, so always removed. The run may only start
 // where the previous character is not `*`, so a long star run is tried from one offset only.
@@ -86,7 +102,7 @@ export function redactErrorText(text: string): string {
     out = out.replace(MASKED_PREFIXED_KEY_RE, REDACTED);
     out = out.replace(TAVILY_KEY_RE, REDACTED);
     out = out.replace(AUTH_SCHEME_RE, (whole, scheme: string, space: string, credential: string) =>
-        /\d/.test(credential) || credential.length >= 20 ? `${scheme}${space}${REDACTED}` : whole,
+        AUTH_SCHEME_PROSE.has(credential.toLowerCase()) ? whole : `${scheme}${space}${REDACTED}`,
     );
     out = redactSecrets(out).cleaned;
     out = out.replace(STAR_MASKED_TAIL_RE, REDACTED);

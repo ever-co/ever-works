@@ -103,6 +103,25 @@ describe('redactErrorText', () => {
             expect(redactErrorText('Authorization: Bearer abc123')).toBe(
                 `Authorization: Bearer ${R}`,
             );
+            // Short or letters-only credentials too: the text is shown to anonymous visitors.
+            expect(redactErrorText('Authorization: Bearer AbcDefGhi')).toBe(
+                `Authorization: Bearer ${R}`,
+            );
+            expect(redactErrorText('Authorization: Basic QWxhZGRp')).toBe(
+                `Authorization: Basic ${R}`,
+            );
+            expect(redactErrorText('Authorization: Bearer abcdefghi')).toBe(
+                `Authorization: Bearer ${R}`,
+            );
+        });
+
+        it('keeps prose that names the scheme', () => {
+            expect(redactErrorText('Bearer token missing from the request')).toBe(
+                'Bearer token missing from the request',
+            );
+            expect(redactErrorText('Basic auth is not supported by this provider')).toBe(
+                'Basic auth is not supported by this provider',
+            );
         });
 
         it('a key tail next to a key word', () => {
@@ -138,6 +157,14 @@ describe('redactErrorText', () => {
                 redactErrorText('fetch https://oauth2:gho_abc@github.com/ever-works/x.git failed'),
             ).toBe('fetch https://***:***@github.com/ever-works/x.git failed');
         });
+    });
+
+    it('stays linear on a prefixed key whose mask never completes', () => {
+        const started = Date.now();
+        redactErrorText(`sk-proj-${'a*'.repeat(10_000)}`);
+        redactErrorText(`sk-proj-${'a'.repeat(100_000)}!`);
+        redactErrorText(`tvly-${'a.'.repeat(10_000)}`);
+        expect(Date.now() - started).toBeLessThan(2_000);
     });
 
     it('stays linear on long hostile input', () => {
