@@ -13499,6 +13499,46 @@
             "opensInNewTab": "(opens in a new tab)"
         }
     },
+    "anonymousAccount": {
+        "strip": {
+            "message": "You're using a temporary account. Sign up to keep your Works.",
+            "deletedInDays": "Deleted in {days, plural, one {# day} other {# days}} {hours} h",
+            "deletedInHours": "Deleted in {hours} h",
+            "deletedSoon": "Deleted in less than an hour",
+            "action": "Save my account"
+        },
+        "save": {
+            "metaTitle": "Save your account",
+            "title": "Save your account",
+            "intro": "Add an email and a password to keep this account. Nothing moves: your Works, their repositories and your settings stay exactly where they are.",
+            "deadlineDays": "Without it, this account and its Works are deleted in {days, plural, one {# day} other {# days}} {hours} h.",
+            "deadlineHours": "Without it, this account and its Works are deleted in {hours} h.",
+            "deadlineSoon": "Without it, this account and its Works are deleted in less than an hour.",
+            "deadlineUnknown": "Without it, this account and its Works are deleted after a few days.",
+            "worksHeading": "Kept with your account",
+            "worksMore": "and {count} more",
+            "submit": "Save my account",
+            "submitting": "Saving…",
+            "otherAccount": "Signing in to a different account does not move these Works to it.",
+            "errors": {
+                "emailTaken": "This email already has an account. Use another email to keep these Works on this account.",
+                "notTemporary": "This account is already saved, or it cannot be saved here.",
+                "tooManyAttempts": "Too many attempts. Wait a while, then try again.",
+                "rejected": "The account could not be saved with these details. Check them and try again.",
+                "generic": "The account could not be saved. Try again."
+            }
+        },
+        "saved": {
+            "title": "Account saved",
+            "description": "Your Works stay with you. From now on, sign in with your email and password."
+        },
+        "reminder": {
+            "ready": "Your Work is ready",
+            "kept": "This Work is on a temporary account",
+            "description": "Save your account to keep it. Temporary accounts are deleted after a few days.",
+            "action": "Save my account"
+        }
+    },
     "demo": {
         "login": {
             "title": "Try Ever Works — no sign-up needed",

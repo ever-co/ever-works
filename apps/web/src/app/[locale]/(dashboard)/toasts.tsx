@@ -7,12 +7,15 @@ import { useTranslations } from 'next-intl';
 import { APP_NAME } from '@/lib/constants';
 import { OAuthProvider } from '@/lib/api/enums';
 import { VERIFY_EMAIL_PARAM, VERIFY_EMAIL_REQUIRED } from '@/lib/auth/unverified-email';
+import { ACCOUNT_SAVED_PARAM } from '@/lib/anonymous/account-saved';
 
 export default function DashboardToasts() {
     const searchParams = useSearchParams();
     const t = useTranslations('dashboard.toasts');
+    const tSaved = useTranslations('anonymousAccount.saved');
 
     const isNewUser = searchParams.get('newUser') === 'true';
+    const isAccountSaved = searchParams.get(ACCOUNT_SAVED_PARAM) === 'true';
     const isVerified = searchParams.get('verified') === 'true';
     // EW-077 / EW-080: set by `register` and `redeemMagicLink` when the session
     // they just minted belongs to an address nobody has confirmed yet.
@@ -127,11 +130,28 @@ export default function DashboardToasts() {
             });
         }
 
+        // EW-617 G3: set by `saveAnonymousAccount` once a temporary account is saved.
+        if (isAccountSaved) {
+            toast.success(tSaved('title'), {
+                id: 'account-saved',
+                description: tSaved('description'),
+                duration: 6000,
+            });
+        }
+
         // Clean up URL after showing toasts
-        if (isNewUser || isVerified || isOAuthConnected || oauthError || isEmailUnconfirmed) {
+        if (
+            isNewUser ||
+            isVerified ||
+            isOAuthConnected ||
+            oauthError ||
+            isEmailUnconfirmed ||
+            isAccountSaved
+        ) {
             const timer = setTimeout(() => {
                 // Remove query params without page refresh
                 const url = new URL(window.location.href);
+                url.searchParams.delete(ACCOUNT_SAVED_PARAM);
                 url.searchParams.delete('newUser');
                 url.searchParams.delete('verified');
                 url.searchParams.delete('oauth_connected');
@@ -143,7 +163,17 @@ export default function DashboardToasts() {
 
             return () => clearTimeout(timer);
         }
-    }, [isNewUser, isVerified, isOAuthConnected, oauthError, isEmailUnconfirmed, providerLabel, t]);
+    }, [
+        isNewUser,
+        isVerified,
+        isOAuthConnected,
+        oauthError,
+        isEmailUnconfirmed,
+        isAccountSaved,
+        providerLabel,
+        t,
+        tSaved,
+    ]);
 
     return null; // This component doesn't render anything
 }

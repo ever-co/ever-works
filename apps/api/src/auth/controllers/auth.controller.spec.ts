@@ -195,6 +195,99 @@ describe('AuthController', () => {
             );
         });
 
+        describe('terms acceptance (save-account form)', () => {
+            const terms = [
+                {
+                    documentId: 'tos:ever-works',
+                    version: '2026-01-01',
+                    sha256: 'a'.repeat(64),
+                    locale: 'en',
+                },
+            ];
+            const anonReq = () => ({
+                user: { userId: 'u-anon-1', isAnonymous: true },
+                ip: '1.2.3.4',
+                headers: { 'user-agent': 'jest-agent' },
+            });
+
+            beforeEach(() => {
+                claimAccount.claim.mockResolvedValue({
+                    id: 'u-anon-1',
+                    email: 'jane@example.com',
+                    username: 'anon-deadbeef',
+                    emailVerified: false,
+                });
+            });
+
+            it('checks the claims before claiming and records them against the SAME user id', async () => {
+                const order: string[] = [];
+                termsAcceptance.assertClaimsArePublished.mockImplementation(() => {
+                    order.push('assert');
+                });
+                claimAccount.claim.mockImplementation(async () => {
+                    order.push('claim');
+                    return {
+                        id: 'u-anon-1',
+                        email: 'jane@example.com',
+                        username: 'anon-deadbeef',
+                        emailVerified: false,
+                    };
+                });
+
+                await (controller as any).claimAccount(anonReq(), {
+                    email: 'jane@example.com',
+                    password: 'MySecure123!',
+                    terms,
+                });
+
+                expect(order).toEqual(['assert', 'claim']);
+                expect(termsAcceptance.record).toHaveBeenCalledWith('u-anon-1', terms, {
+                    method: 'signup-checkbox',
+                    ip: '1.2.3.4',
+                    userAgent: 'jest-agent',
+                });
+            });
+
+            it('refuses the whole claim when a claim is unpublished (account untouched)', async () => {
+                termsAcceptance.assertClaimsArePublished.mockImplementation(() => {
+                    throw new BadRequestException('never published');
+                });
+
+                await expect(
+                    (controller as any).claimAccount(anonReq(), {
+                        email: 'jane@example.com',
+                        password: 'MySecure123!',
+                        terms,
+                    }),
+                ).rejects.toThrow(BadRequestException);
+
+                expect(claimAccount.claim).not.toHaveBeenCalled();
+                expect(termsAcceptance.record).not.toHaveBeenCalled();
+            });
+
+            it('still answers the claim when recording fails (the account is already claimed)', async () => {
+                termsAcceptance.record.mockRejectedValue(new Error('db down'));
+
+                await expect(
+                    (controller as any).claimAccount(anonReq(), {
+                        email: 'jane@example.com',
+                        password: 'MySecure123!',
+                        terms,
+                    }),
+                ).resolves.toMatchObject({ id: 'u-anon-1' });
+            });
+
+            it('records nothing when no terms were sent (machine-driven claim)', async () => {
+                await (controller as any).claimAccount(anonReq(), {
+                    email: 'jane@example.com',
+                    password: 'MySecure123!',
+                });
+
+                expect(termsAcceptance.assertClaimsArePublished).not.toHaveBeenCalled();
+                expect(termsAcceptance.record).not.toHaveBeenCalled();
+            });
+        });
+
         it('rejects with 403 when the bearer-user is NOT anonymous (L-05)', async () => {
             await expect(
                 (controller as any).claimAccount(

@@ -194,6 +194,22 @@ export class ClaimAccountDto {
     @IsUUID('4')
     @IsOptional()
     correlationId?: string;
+
+    /**
+     * The legal documents the user ticked the box for on the save-account form,
+     * exactly as it displayed them. Claiming is how an anonymous visitor signs
+     * up, so it records the same acceptance `RegisterDto.terms` does; without it
+     * a claimed account would be the one kind of account with no record of what
+     * it accepted. Optional for the same reason as there: machine-driven claims
+     * that never showed a checkbox are not forced to invent one.
+     */
+    @ApiPropertyOptional({ type: () => [TermsAcceptanceClaimDto] })
+    @IsOptional()
+    @IsArray()
+    @ArrayNotEmpty({ message: 'Terms acceptance, when supplied, must list at least one document' })
+    @ValidateNested({ each: true })
+    @Type(() => TermsAcceptanceClaimDto)
+    terms?: TermsAcceptanceClaimDto[];
 }
 
 export class OAuthCallbackDto {

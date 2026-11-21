@@ -67,6 +67,22 @@ emailVerificationCallbackUrl? }` (validated by `ClaimAccountDto`
   transfer is needed.
 - **FR-G3-7** The endpoint MUST be throttled (default: 10/hour per
   IP) to dampen email-squatting brute force.
+- **FR-G3-8** The endpoint accepts the same optional `terms` claims as
+  `RegisterDto`. When present they MUST be checked against the published
+  corpus BEFORE the account changes (an unpublished claim refuses the
+  whole claim) and recorded against the same user id afterwards; a
+  recording failure is logged and does not undo the claim.
+- **FR-G3-9** Web (2026-11): while the signed-in account is anonymous,
+  every dashboard page MUST show a non-dismissible strip above the header
+  ("You're using a temporary account…", the real time left from
+  `anonymousExpiresAt`, and a **Save my account** action). The action
+  opens `/save-account` (email, password, terms → `POST /api/auth/claim`),
+  never `/register`, so the Works stay. The strip MUST NOT show to a
+  registered account, a demo sandbox, or on a demo instance (the demo
+  strip covers sign-up there, and the API refuses a demo claim).
+  `/register` MUST send a signed-in anonymous visitor to `/save-account`.
+  A finished generation on an anonymous account MUST say "Save your
+  account to keep it" once per Work (toast with the same action).
 
 ### Non-functional requirements
 

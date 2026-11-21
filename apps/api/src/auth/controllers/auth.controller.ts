@@ -238,7 +238,7 @@ export class AuthController {
     @ApiOperation({
         summary: 'Create an anonymous (zero-friction) user',
         description:
-            'Mints a temporary User row + session token. The row + its Works are wiped automatically after ANONYMOUS_USER_TTL_DAYS (default 7) days unless the user calls POST /api/auth/claim first.',
+            'Mints a temporary User row + session token. The row + its Works are wiped automatically after ANONYMOUS_USER_TTL_DAYS (default 3) days unless the user calls POST /api/auth/claim first.',
     })
     @ApiResponse({ status: 201, description: 'Anonymous session issued' })
     @ApiResponse({ status: 400, description: 'Captcha verification failed' })
@@ -345,6 +345,13 @@ export class AuthController {
             );
         }
 
+        // Same order as `register`: check the terms claims BEFORE the account
+        // changes, so a malformed or unpublished claim refuses the whole claim
+        // instead of leaving a claimed account with no acceptance on file.
+        if (claimDto.terms?.length) {
+            this.termsAcceptanceService.assertClaimsArePublished(claimDto.terms);
+        }
+
         const claimed = await this.claimAccountService.claim({
             userId,
             email: claimDto.email,
@@ -352,6 +359,26 @@ export class AuthController {
             username: claimDto.username,
             emailVerificationCallbackUrl: claimDto.emailVerificationCallbackUrl,
         });
+
+        // Record the acceptance against the same user id (a claim never changes
+        // it). Logged and swallowed like `register`: the claims were validated
+        // above, so a failure here is infrastructure, and the account is already
+        // claimed. The write is idempotent, so a later retry is safe.
+        if (claimDto.terms?.length) {
+            try {
+                await this.termsAcceptanceService.record(claimed.id, claimDto.terms, {
+                    method: 'signup-checkbox',
+                    ip: req.ip ?? null,
+                    userAgent: req.headers?.['user-agent'] ?? null,
+                });
+            } catch (error) {
+                this.logger.error(
+                    `Failed to record terms acceptance for claimed user ${claimed.id}: ${
+                        error instanceof Error ? error.message : String(error)
+                    }`,
+                );
+            }
+        }
 
         const ipAddress =
             (typeof req.ip === 'string' && req.ip) ||

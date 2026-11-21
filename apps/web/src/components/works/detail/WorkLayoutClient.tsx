@@ -14,6 +14,7 @@ import { useTranslations } from 'next-intl';
 import { toast } from 'sonner';
 import { getWorkForStatusRefresh, syncWorkData } from '@/app/actions/dashboard/works';
 import { useBackgroundActivity } from '@/lib/hooks/use-background-activity';
+import { useSaveWorkReminder } from '@/components/anonymous/use-save-work-reminder';
 import {
     clearDashboardCurrentWork,
     setDashboardCurrentWork,
@@ -60,6 +61,7 @@ export function WorkLayoutClient({
     const lastGenerateStatus = useRef(work.generateStatus?.status);
     const hasSyncedOnMount = useRef(false);
     const { markGenerating, clearGenerating } = useBackgroundActivity();
+    const remindToSaveWork = useSaveWorkReminder();
     // `POST /api/works/:id/sync-data` clones the Work's data repository. A kind
     // that provisions none (`repos.data: false` — today the App Work) has
     // nothing to sync, and calling anyway cost a failed clone and an API error
@@ -114,9 +116,12 @@ export function WorkLayoutClient({
         }
 
         if (lastStatus !== currentStatus && currentStatus === GenerateStatusType.GENERATED) {
-            toast.success(t('generationCompleted'), {
-                id: 'generation-complete',
-            });
+            // EW-617: on a temporary account the "ready" toast carries the save action instead.
+            if (!remindToSaveWork(syncedWork.id, true)) {
+                toast.success(t('generationCompleted'), {
+                    id: 'generation-complete',
+                });
+            }
         }
 
         if (lastStatus !== currentStatus && currentStatus === GenerateStatusType.CANCELLED) {
@@ -136,7 +141,25 @@ export function WorkLayoutClient({
         }
 
         lastGenerateStatus.current = currentStatus;
-    }, [router, syncedWork.generateStatus?.status, syncedWork.id, syncsFromDataRepository, t]);
+    }, [
+        router,
+        syncedWork.generateStatus?.status,
+        syncedWork.id,
+        syncsFromDataRepository,
+        t,
+        remindToSaveWork,
+    ]);
+
+    // EW-617: a finished Work opened on a temporary account (the onboarding console opens it
+    // once generated, so the transition above is never seen here) gets the reminder once.
+    const remindRef = useRef(remindToSaveWork);
+    useEffect(() => {
+        remindRef.current = remindToSaveWork;
+    }, [remindToSaveWork]);
+    const openedGenerated = work.generateStatus?.status === GenerateStatusType.GENERATED;
+    useEffect(() => {
+        if (openedGenerated) remindRef.current(work.id, false);
+    }, [work.id, openedGenerated]);
 
     useEffect(() => {
         if (!isGenerating) {
