@@ -193,7 +193,8 @@ the operator declares: `"extraCapabilities": ["gpu", "gpu:nvidia"]` in the confi
 `EVER_WORKS_NODE_EXTRA_CAPABILITIES=gpu,gpu:nvidia` in the node's environment (the two are merged).
 They are ADDED after the capability selection, at most 8, in the tag grammar (lower-case letters,
 digits, `.`, `_`, `-`, `family:value`). Tags the node decides itself are refused with a startup
-warning: machine identity (`os:`, `arch:`, `node:`), the local-AI family, and every tag whose presence
+warning: machine identity (`os:`, `arch:`, `node:`), the local-AI family (`local-ai…`, `local-model:…`,
+`local-agent:…` — only the probe may claim those), and every tag whose presence
 is a containment or consent promise (`git-push`, `claude-code`, `codex`, `browser`, `attended`,
 `screen…`, `input`, `managed`, `sessions`, `usage-scan`, `helper:…`).
 
@@ -617,8 +618,10 @@ export const myServerProvider: LocalAiProviderDefinition = {
 ```
 
 The probe gets its HTTP only through `context.getJson(path)` — authenticated, time-bounded,
-size-bounded, against the provider's own address — so a definition never handles the key and cannot
-send it anywhere else. Config validation, tags, the CLI commands and the agent binding pick a new kind
+size-bounded, against the provider's own address, and a path with anything but plain segments (`@`, `?`,
+`%`, `//`) is refused — so a definition never handles the key and cannot send it anywhere else. An
+`endpoint()` override may change the PATH a CLI is pointed at, never the server: one that leaves the
+provider's origin fails the binding (and `local-ai test` does not send that request). Config validation, tags, the CLI commands and the agent binding pick a new kind
 up with no other change. An embedder can also pass its own `LocalAiProviderRegistry`.
 
 ### Security notes

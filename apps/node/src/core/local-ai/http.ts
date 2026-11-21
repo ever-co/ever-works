@@ -39,6 +39,34 @@ export interface LocalAiRequest {
 	signal?: AbortSignal;
 }
 
+/**
+ * A probe path a definition may ask for: absolute, plain segments only. No
+ * `@`, `?`, `#`, `%` or `//` — nothing that, appended to the provider's
+ * address, could move the request (and its Bearer key) to another host.
+ */
+export const LOCAL_AI_PROBE_PATH_PATTERN = /^\/[A-Za-z0-9._~-]+(?:\/[A-Za-z0-9._~-]+)*$/;
+
+/** `<baseUrl><path>` for a probe, or a thrown error for a path that could leave the provider. */
+export function localAiProbeUrl(baseUrl: string, path: string): string {
+	if (typeof path !== 'string' || !LOCAL_AI_PROBE_PATH_PATTERN.test(path)) {
+		throw new LocalAiHttpError('body', 'the probe asked for a path this node does not send');
+	}
+	return `${baseUrl}${path}`;
+}
+
+/**
+ * Whether `url` is on the same origin (scheme, host, port) as the provider's
+ * `baseUrl`. A kind's `endpoint()` override is where an agent CLI — and the
+ * key — is pointed, so it may change the PATH, never the server.
+ */
+export function isSameLocalAiOrigin(url: string, baseUrl: string): boolean {
+	try {
+		return new URL(url).origin === new URL(baseUrl).origin;
+	} catch {
+		return false;
+	}
+}
+
 /** Authorization header for a provider key, or none for a keyless server. */
 export function bearerHeaders(apiKey: string | null): Record<string, string> {
 	return apiKey ? { Authorization: `Bearer ${apiKey}` } : {};

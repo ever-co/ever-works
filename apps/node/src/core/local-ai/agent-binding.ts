@@ -1,5 +1,7 @@
 import type { FleetAgentExecutionProvider } from '@ever-works/contracts';
 import type { ModelCliLocalProvider } from '../executors/model-cli';
+import { LOCAL_AI_BASE_URL_PATTERN } from './config';
+import { isSameLocalAiOrigin } from './http';
 import type { LocalAiProviderRegistry } from './registry';
 import {
 	defaultLocalAiEndpoint,
@@ -141,8 +143,12 @@ export function evaluateLocalAiRuntime(
 	if (served.length === 0) {
 		return fail(`local AI provider "${provider.id}" answered but serves no models`);
 	}
-	const definition = registry.has(provider.kind) ? registry.get(provider.kind) : null;
-	const endpoint = definition?.endpoint?.(provider, api) ?? defaultLocalAiEndpoint(provider.baseUrl, api);
+	const endpoint = resolveLocalAiEndpoint(registry, provider, api);
+	if (!endpoint) {
+		return fail(
+			`the ${provider.kind} kind points ${api} away from provider "${provider.id}"'s own address — refused`
+		);
+	}
 	return {
 		ok: true,
 		runtime,
@@ -152,6 +158,24 @@ export function evaluateLocalAiRuntime(
 		api,
 		endpoint
 	};
+}
+
+/**
+ * Where a client of `api` is pointed on `provider`: the kind's `endpoint()`
+ * override, else the default layout. Null when an override leaves the
+ * provider's own origin or is not a plain URL (the key would go with it), so
+ * the caller refuses instead of following it.
+ */
+export function resolveLocalAiEndpoint(
+	registry: LocalAiProviderRegistry,
+	provider: LocalAiProviderSettings,
+	api: LocalAiWireApi
+): string | null {
+	const definition = registry.has(provider.kind) ? registry.get(provider.kind) : null;
+	const override = definition?.endpoint?.(provider, api);
+	if (override === undefined) return defaultLocalAiEndpoint(provider.baseUrl, api);
+	const value = typeof override === 'string' ? override.replace(/\/+$/, '') : '';
+	return LOCAL_AI_BASE_URL_PATTERN.test(value) && isSameLocalAiOrigin(value, provider.baseUrl) ? value : null;
 }
 
 /** True when `served` lists `model` — Ollama's implicit `:latest` tag counted as the bare name. */

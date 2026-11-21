@@ -2,7 +2,7 @@ import type { FleetAgentExecutionProvider } from '@ever-works/contracts';
 import type { FetchLike } from '../fleet-client';
 import type { Logger } from '../logger';
 import { evaluateLocalAiRuntime, type LocalAiAgentBinding } from './agent-binding';
-import { bearerHeaders, LocalAiHttpError, localAiRequestJson } from './http';
+import { bearerHeaders, LocalAiHttpError, localAiProbeUrl, localAiRequestJson } from './http';
 import { isUsableLocalModelId, LOCAL_AI_MAX_MODELS } from './providers/openai-compatible';
 import { defaultLocalAiProviderRegistry, type LocalAiProviderRegistry } from './registry';
 import { LocalAiSecretError, readLocalAiApiKey, type LocalAiSecretIo } from './secrets';
@@ -259,7 +259,7 @@ export class LocalAiMonitor {
 					(
 						await localAiRequestJson(this.fetchFn, {
 							method: 'GET',
-							url: `${provider.baseUrl}${path}`,
+							url: localAiProbeUrl(provider.baseUrl, path),
 							label: path,
 							headers: bearerHeaders(key),
 							timeoutMs: Math.max(1, deadline - this.now()),

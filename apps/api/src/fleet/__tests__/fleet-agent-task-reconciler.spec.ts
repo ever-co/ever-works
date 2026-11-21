@@ -510,6 +510,25 @@ describe('FleetAgentTaskReconcilerService', () => {
             expect(body).not.toContain('Model spend reported by the CLI');
         });
 
+        it('treats a "local" result with NO figure as unknown, like any run that reported none', async () => {
+            await completed({
+                ...billed,
+                model: {
+                    ...billed.model!,
+                    costUsd: undefined,
+                    costBasis: 'local',
+                    modelId: 'flashnext',
+                },
+            });
+
+            // Absent is "unknown", never "free": no usage row, no stamp, no free-run sentence.
+            expect(pluginUsage!.record).not.toHaveBeenCalled();
+            expect(jobsRepo!.stampCostCents).not.toHaveBeenCalled();
+            const body = taskChat.post.mock.calls[0][1].body as string;
+            expect(body).not.toContain('no model spend');
+            expect(body).not.toContain('Model spend reported by the CLI');
+        });
+
         it('records what a contradictory "local" result claims: a non-zero figure is spend, not free', async () => {
             await completed({
                 ...billed,

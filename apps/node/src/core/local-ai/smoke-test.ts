@@ -1,7 +1,8 @@
 import { LocalAiHttpError } from './http';
 import type { LocalAiMonitor } from './monitor';
 import { LocalAiSecretError } from './secrets';
-import { defaultLocalAiEndpoint, type LocalAiProviderSettings, type LocalAiWireApi } from './types';
+import { resolveLocalAiEndpoint } from './agent-binding';
+import type { LocalAiProviderSettings, LocalAiWireApi } from './types';
 
 /**
  * `ever-works-node local-ai test` — one tiny real request per wire API, so an
@@ -98,12 +99,20 @@ export async function runLocalAiSmokeTest(
 	options: { model: string; apis?: readonly LocalAiWireApi[]; timeoutMs: number; now?: () => number }
 ): Promise<LocalAiSmokeResult[]> {
 	const now = options.now ?? (() => Date.now());
-	const definition = monitor.registry.has(provider.kind) ? monitor.registry.get(provider.kind) : null;
 	const results: LocalAiSmokeResult[] = [];
 	for (const api of options.apis ?? provider.apis) {
 		const spec = SMOKE[api];
-		const base = definition?.endpoint?.(provider, api) ?? defaultLocalAiEndpoint(provider.baseUrl, api);
+		const base = resolveLocalAiEndpoint(monitor.registry, provider, api);
 		const startedAt = now();
+		if (!base) {
+			results.push({
+				api,
+				ok: false,
+				latencyMs: 0,
+				detail: 'the kind points this API away from the provider’s own address — not sent'
+			});
+			continue;
+		}
 		try {
 			const { json } = await monitor.request(
 				provider,
