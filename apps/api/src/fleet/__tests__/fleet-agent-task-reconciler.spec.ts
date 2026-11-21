@@ -480,6 +480,36 @@ describe('FleetAgentTaskReconcilerService', () => {
             expect(runs.markFailed).not.toHaveBeenCalled();
         });
 
+        it('a LOCAL AI run records 0 cents marked local, hands the ceiling 0, and says there was no model spend', async () => {
+            await completed({
+                ...billed,
+                model: {
+                    ...billed.model!,
+                    // Claude Code priced the unknown local model at list rates; the node reports 0.
+                    costUsd: 0,
+                    costBasis: 'local',
+                    modelId: 'flashnext',
+                },
+            });
+
+            expect(pluginUsage!.record).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    costCents: 0,
+                    modelId: 'flashnext',
+                    metadata: expect.objectContaining({ costUsd: 0, costBasis: 'local' }),
+                }),
+            );
+            expect(jobsRepo!.stampCostCents).toHaveBeenCalledWith('job-1', 0);
+            expect(costCeiling!.evaluateAfterCompletion).toHaveBeenCalledWith(
+                expect.objectContaining({ costCents: 0 }),
+            );
+            const body = taskChat.post.mock.calls[0][1].body as string;
+            expect(body).toContain(
+                "flashnext on this machine's own local AI provider — no model spend",
+            );
+            expect(body).not.toContain('Model spend reported by the CLI');
+        });
+
         it('a Codex run (tokens, no price) adds its tokens, writes NO usage row, stamps NO cost, and hands the ceiling a null cost', async () => {
             await completed({
                 ...billed,
