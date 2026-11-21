@@ -247,9 +247,10 @@ describe('MemantoPlugin', () => {
 				tags: ['deploy'],
 				projectId: 'w1'
 			});
+			// Filtered recalls over-fetch: the tag filter is enforced client-side.
 			expect(client.recall).toHaveBeenCalledWith('ever-works-w1', {
 				query: 'deploy staging',
-				limit: 5,
+				limit: 40,
 				status: 'active',
 				tags: ['deploy']
 			});
@@ -276,11 +277,46 @@ describe('MemantoPlugin', () => {
 			});
 			expect(client.recall).toHaveBeenCalledWith('shared', {
 				query: 'x',
-				limit: 10,
+				limit: 40,
 				status: 'active',
 				tags: ['ew.project.w1'],
 				min_similarity: 0.3
 			});
+		});
+
+		it('drops another Work’s memories on a shared agent even when the backend ignores the tag filter', async () => {
+			// moorcheh/server v0.1.5 (on-prem) ignores `#tag` filters — verified on a real server.
+			client.recall.mockResolvedValue({
+				memories: [
+					{ ...ITEM, id: 'mine', tags: ['ew.project.w1'] },
+					{ ...ITEM, id: 'other-work', tags: ['ew.project.w2'] },
+					{ ...ITEM, id: 'no-project', tags: [] }
+				]
+			});
+			const res = await plugin.searchMemory({
+				query: 'x',
+				projectId: 'w1',
+				settings: { agentId: 'shared' } as never
+			});
+			expect(res.results.map((r) => r.id)).toEqual(['shared:mine']);
+		});
+
+		it('enforces user tag filters client-side and still honours the limit', async () => {
+			client.recall.mockResolvedValue({
+				memories: [
+					{ ...ITEM, id: 'a', tags: ['deploy', 'decision'] },
+					{ ...ITEM, id: 'b', tags: ['deploy'] },
+					{ ...ITEM, id: 'c', tags: ['deploy', 'decision'] },
+					{ ...ITEM, id: 'd', tags: ['deploy', 'decision'] }
+				]
+			});
+			const res = await plugin.searchMemory({ query: 'x', limit: 2, tags: ['deploy', 'decision'] });
+			expect(res.results.map((r) => r.id)).toEqual(['ever-works:a', 'ever-works:c']);
+		});
+
+		it('does not filter or over-fetch an unfiltered per-Work search', async () => {
+			await plugin.searchMemory({ query: 'x', limit: 7, projectId: 'w1' });
+			expect(client.recall).toHaveBeenCalledWith('ever-works-w1', { query: 'x', limit: 7, status: 'active' });
 		});
 
 		it('clamps limit and query length to Memanto’s cost guards', async () => {
@@ -302,6 +338,27 @@ describe('MemantoPlugin', () => {
 			expect(ctx.content).toBe('- [instruction] Staging deploys go through ArgoCD.');
 			expect(ctx.approxTokens).toBe(Math.ceil(ctx.content.length / 4));
 			expect(ctx.references?.[0].id).toBe('ever-works-w1:m1');
+		});
+
+		it('keeps only the Work’s own memories in context on a shared agent', async () => {
+			client.recall.mockResolvedValue({
+				memories: [
+					{ ...ITEM, id: 'other', content: 'Work two secret.', tags: ['ew.project.w2'] },
+					{ ...ITEM, id: 'mine', content: 'Work one fact.', tags: ['ew.project.w1'] }
+				]
+			});
+			const ctx = await plugin.buildContext({
+				query: 'x',
+				projectId: 'w1',
+				settings: { agentId: 'shared' } as never
+			});
+			expect(ctx.content).toBe('- [instruction] Work one fact.');
+			expect(client.recall).toHaveBeenCalledWith('shared', {
+				limit: 100,
+				status: 'active',
+				tags: ['ew.project.w1'],
+				query: 'x'
+			});
 		});
 
 		it('falls back to the most recent memories without a query', async () => {

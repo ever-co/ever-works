@@ -384,7 +384,9 @@ export class MemantoPlugin implements IPlugin, IAgentMemoryPlugin {
 		const query = clampText((input.query ?? '').trim(), MEMANTO_MAX_QUERY_CHARS);
 		// A blank / wildcard query has no semantic meaning — answer newest first.
 		const wantsRecent = !query || query === '*';
-		const body: Record<string, unknown> = { limit, status: 'active' };
+		// Over-fetch when filtering: the filter is enforced HERE (see keepTagged),
+		// so the backend must hand back enough candidates to fill `limit`.
+		const body: Record<string, unknown> = { limit: fetchLimit(limit, filterTags), status: 'active' };
 		if (filterTags.length > 0) body.tags = filterTags;
 		if (!wantsRecent) {
 			body.query = query;
@@ -394,7 +396,9 @@ export class MemantoPlugin implements IPlugin, IAgentMemoryPlugin {
 		}
 		const res = wantsRecent ? await client.recallRecent(agentId, body) : await client.recall(agentId, body);
 		return {
-			results: (res.memories ?? []).map((m) => toAgentMemoryRecord(m, agentId, input.projectId))
+			results: keepTagged(res.memories ?? [], filterTags)
+				.slice(0, limit)
+				.map((m) => toAgentMemoryRecord(m, agentId, input.projectId))
 		};
 	}
 
@@ -404,8 +408,12 @@ export class MemantoPlugin implements IPlugin, IAgentMemoryPlugin {
 		const { agentId, projectTagValue } = this.target(settings, input.projectId);
 		const maxChars = Math.max(200, (input.maxTokens ?? DEFAULT_CONTEXT_TOKENS) * CHARS_PER_TOKEN);
 
-		const body: Record<string, unknown> = { limit: CONTEXT_CANDIDATES, status: 'active' };
-		if (projectTagValue) body.tags = [projectTag(projectTagValue)];
+		const scopeTags = projectTagValue ? [projectTag(projectTagValue)] : [];
+		const body: Record<string, unknown> = {
+			limit: fetchLimit(CONTEXT_CANDIDATES, scopeTags),
+			status: 'active'
+		};
+		if (scopeTags.length > 0) body.tags = scopeTags;
 
 		const query = clampText((input.query ?? '').trim(), MEMANTO_MAX_QUERY_CHARS);
 		let items: readonly MemantoMemoryItem[];
@@ -419,7 +427,7 @@ export class MemantoPlugin implements IPlugin, IAgentMemoryPlugin {
 			items = (await client.recallRecent(agentId, body)).memories ?? [];
 		}
 
-		const { content, used } = packContext(items, maxChars);
+		const { content, used } = packContext(keepTagged(items, scopeTags).slice(0, CONTEXT_CANDIDATES), maxChars);
 		return {
 			content,
 			approxTokens: Math.ceil(content.length / CHARS_PER_TOKEN),
@@ -515,6 +523,29 @@ export class MemantoPlugin implements IPlugin, IAgentMemoryPlugin {
 			}
 		};
 	}
+}
+
+/**
+ * Enforce tag / project scoping on the CLIENT. Memanto forwards tag filters
+ * to Moorcheh as `#tag` query tokens; Moorcheh Cloud honours them, but the
+ * on-prem server (moorcheh/server v0.1.5) ignores them and returns every
+ * semantic match — verified against a real server: a filter on a tag no
+ * memory carries still returned memories. Without this, a pinned shared
+ * agent (`agentId` setting) would leak one Work's memories into another's
+ * recall, and user tag filters would not narrow anything. Keeping the
+ * backend filter too lets Cloud do the narrowing first.
+ */
+export function keepTagged(items: readonly MemantoMemoryItem[], requiredTags: readonly string[]): MemantoMemoryItem[] {
+	if (requiredTags.length === 0) return [...items];
+	return items.filter((item) => {
+		const tags = new Set(item.tags ?? []);
+		return requiredTags.every((tag) => tags.has(tag));
+	});
+}
+
+/** Candidates to request so client-side filtering can still fill `limit`. */
+function fetchLimit(limit: number, filterTags: readonly string[]): number {
+	return filterTags.length === 0 ? limit : Math.min(MEMANTO_MAX_RECALL_LIMIT, Math.max(limit * 4, 40));
 }
 
 function clampLimit(raw: number): number {

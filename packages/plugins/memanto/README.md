@@ -94,6 +94,13 @@ rotating it out, and adopts a renewed token from the `X-Session-Token` response 
 
 ## Tests
 
+**Verified against a real backend (2026-11-21):** Memanto 0.3.0 on Moorcheh on-prem `moorcheh/server:v0.1.5` with `nomic-embed-text` embeddings (Ollama, CPU), single node, internal testing:
+
+- The live contract suite passed 5/5. The `packages/agent` facade suite passed 5/5 (agent `memory_save` / `memory_search` and run-start recall resolved to Memanto). A booted API served a brand-new user with nothing enabled (`activeProvider: memanto`), and a cross-user delete was refused with 403.
+- Recall quality: paraphrased questions over 8 distinct facts found the right memory first 7/8 times and in the top 3 8/8 times. Average save took 38 ms and recall 81 ms.
+- **On-prem Moorcheh ignores tag filters.** A filter on a tag no memory carries still returns matches. The plugin therefore enforces project and tag scoping itself on every recall (`keepTagged`), over-fetching to fill the limit. Without that, a shared `agentId` would leak one Work's memories into another's recall.
+- **Setup trap:** `moorcheh/server` runs as uid 65532, so its `/app/data` volume must be writable by that user. Otherwise every namespace create fails with "failed persisting new namespace".
+
 ```bash
 pnpm --filter @ever-works/memanto-plugin test
 ```
