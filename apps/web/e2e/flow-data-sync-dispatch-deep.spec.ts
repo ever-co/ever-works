@@ -38,11 +38,16 @@ import { API_BASE, authedHeaders, createWorkViaAPI, registerUserViaAPI } from '.
  *     dispatcher counts it as `skipped` and never re-dispatches. THIS is the
  *     idempotency / duplicate-suppression de-dup gate.
  *   - Gate 2 generation-in-progress → { status:'skipped', reason:'generation-in-progress' }.
- *   - Gate 3 render: in CI there is NO connected git account, so syncFromDataRepo
- *     throws and the very FIRST sync on a fresh work is
- *       { status:'failed', errorClass:'unknown',
- *         errorTail:'No connected account found for user ... with provider github' }
- *     (PROBED). classifyError() yields `unknown` (no 404/403/timeout token in the tail).
+ *   - Gate 3 render. Since #3264 a Work with NO git credentials (the CI case: no
+ *     connected account, no platform token) is SKIPPED, not failed:
+ *       { status:'skipped', reason:'app-not-installed-and-no-credentials' }
+ *     with no failure row and NO retry-backoff (the sync cannot run until the owner
+ *     connects an account; see Flow 7). So the backoff flows use a Work whose git
+ *     provider no plugin answers (`UNAVAILABLE_GIT_PROVIDER`): its render gate fails
+ *     for real in every environment,
+ *       { status:'failed', errorClass:'data-repo-unreachable',
+ *         errorTail:'... Git provider not found: e2e-unavailable-git' }
+ *     and that failure arms the backoff exactly as any real render failure does.
  *   - work-not-found gate: if the work row is gone by lock-acquire time, runGates
  *     returns { status:'failed', errorClass:'work-not-found' }; but the force-sync
  *     CONTROLLER checks ownership first via WorkRepository.findById and returns a
@@ -208,6 +213,23 @@ function isBackoffSkipRow(r: ActivityRow): boolean {
     );
 }
 
+/**
+ * A git provider id that no plugin answers. A Work using it fails the render gate with
+ * `GitProviderNotFoundError` in every environment (CI or not), so its first sync is a
+ * real failure that arms the retry-backoff. A default (`github`) Work without credentials
+ * is skipped instead (#3264) and never reaches the backoff gate.
+ */
+const UNAVAILABLE_GIT_PROVIDER = 'e2e-unavailable-git';
+
+/** The first sync of a backoff Work: a real render failure that arms the backoff. */
+function expectBackoffArmingFailure(outcome: DataSyncOutcome): void {
+    expect(outcome.status, 'the first sync of an unavailable-provider Work fails').toBe('failed');
+    expect(outcome.errorClass, 'its failure is classified').toBe('data-repo-unreachable');
+    expect(String(outcome.errorTail), 'its tail names the missing provider').toMatch(
+        /Git provider not found/,
+    );
+}
+
 function uniqueSuffix(): string {
     return `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 }
@@ -266,20 +288,22 @@ test.describe('flow: data-sync dispatch tick (deep, reconstructed via the shared
             'dispatched + skipped + failed conserves to due',
         ).toBe(summary.due);
 
-        // In CI (no connected git account) every FIRST render gate throws → all failed.
-        // Outside CI a connected account would enqueue. Assert truthfully per-env.
-        const allFailed = outcomes.every((o) => o.status === 'failed');
-        if (allFailed) {
-            expect(summary.failed, 'CI render gate fails every fresh work').toBe(WORK_COUNT);
-            for (const o of outcomes) {
-                expect(o.errorClass, 'failed carries a low-cardinality errorClass').toBeTruthy();
-                expect(String(o.errorTail), 'errorTail names the missing git account').toMatch(
-                    /No connected account|github|not found/i,
-                );
-            }
+        // In CI (no connected git account) every fresh `github` Work is skipped for its
+        // missing credentials (#3264). Outside CI a connected account would enqueue.
+        // Assert truthfully per-env.
+        const allWithoutCredentials = outcomes.every(
+            (o) => o.status === 'skipped' && o.reason === 'app-not-installed-and-no-credentials',
+        );
+        if (allWithoutCredentials) {
+            expect(summary.skipped, 'CI skips every fresh work without credentials').toBe(
+                WORK_COUNT,
+            );
+            expect(summary.failed, 'missing credentials is not a failure').toBe(0);
         } else {
             // Mixed/non-CI environments are still valid as long as the fold conserved
-            // and every status is from the closed union (already asserted above).
+            // and every status is from the closed union (already asserted above). The
+            // backoff is not covered here in any environment: Flows 2, 3 and 5 cover it
+            // with UNAVAILABLE_GIT_PROVIDER Works.
             test.info().annotations.push({
                 type: 'env-adaptive',
                 description: `tick fold = ${JSON.stringify(summary)} (not all-failed — git account may be connected).`,
@@ -305,6 +329,7 @@ test.describe('flow: data-sync dispatch tick (deep, reconstructed via the shared
         const token = owner.access_token;
         const w = await createWorkViaAPI(request, token, {
             name: `dispatch-idem-${uniqueSuffix()}`,
+            gitProvider: UNAVAILABLE_GIT_PROVIDER,
         });
 
         const K = 4;
@@ -316,21 +341,8 @@ test.describe('flow: data-sync dispatch tick (deep, reconstructed via the shared
             outcomes.push(body);
         }
 
-        const first = outcomes[0];
-
-        if (first.status === 'enqueued') {
-            // Non-CI: a connected git account made gate 3 pass, no backoff key was
-            // written, so suppression does not apply. Assert the enqueue + bail.
-            test.info().annotations.push({
-                type: 'git-connected',
-                description:
-                    'first tick enqueued (git account connected — non-CI); retry-backoff idempotency does not arm, skipping the suppression invariant.',
-            });
-            expect(first.outcome).toBe('success');
-            return;
-        }
-
-        // CI path: the first tick ran a gate (failed/skipped) and armed backoff.
+        // The first tick ran the render gate, failed for real and armed the backoff.
+        expectBackoffArmingFailure(outcomes[0]);
         // The remaining ticks in the same window are suppressed as retry-backoff —
         // poll because the cache write settles asynchronously.
         await expect
@@ -383,20 +395,13 @@ test.describe('flow: data-sync dispatch tick (deep, reconstructed via the shared
         const token = owner.access_token;
         const w = await createWorkViaAPI(request, token, {
             name: `dispatch-order-${uniqueSuffix()}`,
+            gitProvider: UNAVAILABLE_GIT_PROVIDER,
         });
 
-        // First tick: render gate throws (CI) → failed + arms backoff.
+        // First tick: the render gate fails (no plugin answers the provider) → failed + arms backoff.
         const firstRes = await forceSync(request, token, w.id);
         expect(firstRes.http).toBe(202);
-
-        if (firstRes.body.status === 'enqueued') {
-            test.info().annotations.push({
-                type: 'git-connected',
-                description: 'first tick enqueued (non-CI); gate-ordering assertion skipped.',
-            });
-            expect(firstRes.body.outcome).toBe('success');
-            return;
-        }
+        expectBackoffArmingFailure(firstRes.body);
 
         // Drive a second (suppressed) tick + wait for both rows to land.
         await forceSync(request, token, w.id);
@@ -551,21 +556,13 @@ test.describe('flow: data-sync dispatch tick (deep, reconstructed via the shared
         const token = owner.access_token;
         const w = await createWorkViaAPI(request, token, {
             name: `dispatch-reasons-${uniqueSuffix()}`,
+            gitProvider: UNAVAILABLE_GIT_PROVIDER,
         });
 
         // Arm backoff with the first tick.
         const first = await forceSync(request, token, w.id);
         expect(first.http).toBe(202);
-
-        if (first.body.status === 'enqueued') {
-            test.info().annotations.push({
-                type: 'git-connected',
-                description:
-                    'first tick enqueued (non-CI); retry-backoff reason not reachable, skipping reason discrimination.',
-            });
-            expect(first.body.outcome).toBe('success');
-            return;
-        }
+        expectBackoffArmingFailure(first.body);
 
         // The next in-window tick MUST be a typed skip with the retry-backoff reason.
         await expect
@@ -668,5 +665,63 @@ test.describe('flow: data-sync dispatch tick (deep, reconstructed via the shared
         const a1Rows = dataSyncRows(await listActivity(request, tokenA, a1.id));
         const strangerSourced = a1Rows.filter((r) => r.userId === ownerB.user.id);
         expect(strangerSourced.length, "no row on A's work is attributed to the stranger").toBe(0);
+    });
+
+    // ───────────────────────────────────────────────────────────────────────────
+    // FLOW 7 — NO GIT CREDENTIALS IS A SKIP, NOT A FAILURE (#3264). A default
+    // (`github`) Work whose owner has no connected account (and no platform token)
+    // cannot sync until the owner connects one. Each tick is a typed skip with the
+    // reason `app-not-installed-and-no-credentials`; no failure row is written and no
+    // retry-backoff arms, so the next tick runs the gates again instead of being a
+    // `retry-backoff` skip.
+    // ───────────────────────────────────────────────────────────────────────────
+    test('a work without git credentials is skipped, writes no failure row and arms no retry-backoff', async ({
+        request,
+    }) => {
+        test.setTimeout(90_000);
+        const owner = await registerUserViaAPI(request, {
+            name: `Dispatch No Credentials ${uniqueSuffix()}`,
+        });
+        const token = owner.access_token;
+        const w = await createWorkViaAPI(request, token, {
+            name: `dispatch-no-creds-${uniqueSuffix()}`,
+        });
+
+        const first = await forceSync(request, token, w.id);
+        expect(first.http).toBe(202);
+        // Where the no-credentials skip cannot be reached, the test is reported SKIPPED (not a
+        // green pass), so a run that covered none of it says so. CI has no connected account
+        // and loads the `github` plugin, so both branches stay off there.
+        if (first.body.status === 'enqueued') {
+            expect(first.body.outcome).toBe('success');
+            test.skip(
+                true,
+                'first tick enqueued (a git account is connected — non-CI); the no-credentials skip does not apply.',
+            );
+        }
+        // A throwaway API without GitHub configuration never loads the `github` plugin, so the
+        // credential lookup is never reached. CI and real instances load it.
+        test.skip(
+            first.body.status === 'failed' &&
+                /Git provider not found: github/.test(String(first.body.errorTail)),
+            'the github git provider is not loaded on this API; the no-credentials skip is not reachable here.',
+        );
+        expect(first.body, 'missing credentials is a typed skip').toMatchObject({
+            status: 'skipped',
+            reason: 'app-not-installed-and-no-credentials',
+        });
+
+        // No backoff was armed: the next tick runs the gates again and skips for the same reason.
+        const second = await forceSync(request, token, w.id);
+        expect(second.http).toBe(202);
+        expect(second.body, 'the next tick is not a retry-backoff skip').toMatchObject({
+            status: 'skipped',
+            reason: 'app-not-installed-and-no-credentials',
+        });
+
+        // The feed holds no failure row and no retry-backoff row for this Work.
+        const ds = dataSyncRows(await listActivity(request, token, w.id));
+        expect(ds.some(isFailedRow), 'no data_sync_failed row').toBe(false);
+        expect(ds.some(isBackoffSkipRow), 'no retry-backoff skip row').toBe(false);
     });
 });

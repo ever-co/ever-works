@@ -16,6 +16,7 @@ import { FleetAgentNodeAffinityService } from './fleet-agent-node-affinity.servi
 import { FleetCostPolicy } from '../entities/fleet-cost-policy.entity';
 import { FleetCostPolicyRepository } from './fleet-cost-policy.repository';
 import { FleetCostCeilingService } from './fleet-cost-ceiling.service';
+import { FleetCostCeilingResetService } from './fleet-cost-ceiling-reset.service';
 import { FleetKillSwitch } from '../entities/fleet-kill-switch.entity';
 import { FleetAudit } from '../entities/fleet-audit.entity';
 import { FleetKillSwitchRepository } from './fleet-kill-switch.repository';
@@ -57,6 +58,10 @@ import { NeedsALookService } from './needs-a-look/needs-a-look.service';
  *     through the same disable + requeue pair the drain endpoint uses and
  *     files one Inbox notice per day (the `INBOX_PRODUCER` token is
  *     `@Optional()` — bound by the api-side @Global() InboxModule).
+ *   - `FleetCostCeilingResetService` — the DAILY RESET of those ceilings:
+ *     a node the ceiling alone disabled on an earlier UTC day is put back
+ *     in service by its first heartbeat after midnight UTC (and by the
+ *     ceiling settings read); a node a person disabled never is.
  *   - `FleetKillSwitchService` (EW-778) — the GLOBAL STOP FLAG, read
  *     fail-closed by the dispatch gate (via the `RUN_KILL_SWITCH` port
  *     the api-side AgentsModule binds), the run router and every lease;
@@ -119,6 +124,7 @@ import { NeedsALookService } from './needs-a-look/needs-a-look.service';
         FleetExecutionPreferenceService,
         FleetAgentNodeAffinityService,
         FleetCostCeilingService,
+        FleetCostCeilingResetService,
         FleetAuditService,
         FleetKillSwitchService,
         // `ApiKeyRepository` is also provided by the api-side
@@ -156,6 +162,7 @@ import { NeedsALookService } from './needs-a-look/needs-a-look.service';
         FleetExecutionPreferenceService,
         FleetAgentNodeAffinityService,
         FleetCostCeilingService,
+        FleetCostCeilingResetService,
         FleetAuditService,
         FleetKillSwitchService,
         // Exported so the api-side `FleetJobsController` can mint on the

@@ -90,6 +90,13 @@ interface FlowReducerState {
     readonly history: number[]; // recent step indices, for Back
     readonly stepIndex: number;
     readonly refreshNonce: number;
+    /**
+     * Set while a visitor who arrived with a prompt from the ever.works home
+     * page is on the prompt-first quick start (Idea → Generate → Open your
+     * Work) instead of the full wizard. Not persisted: a reload opens the full
+     * wizard, with the prompt kept in the saved state.
+     */
+    readonly quickStart?: boolean;
 }
 
 type FlowAction =
@@ -107,7 +114,9 @@ type FlowAction =
     | { type: 'recordSkip'; stepId: string }
     | { type: 'setPluginsReviewed'; value: boolean }
     | { type: 'mergeServerState'; value: OnboardingWizardStateV2 }
-    | { type: 'refresh' };
+    | { type: 'refresh' }
+    | { type: 'startQuickStart'; prompt: string }
+    | { type: 'customizeSetup' };
 
 function reduce(state: FlowReducerState, action: FlowAction): FlowReducerState {
     switch (action.type) {
@@ -227,6 +236,23 @@ function reduce(state: FlowReducerState, action: FlowAction): FlowReducerState {
             };
         case 'refresh':
             return { ...state, refreshNonce: state.refreshNonce + 1 };
+        case 'startQuickStart':
+            // EW-617 hand-off. The visitor already said what they want, so they
+            // get the short path rather than the 11-step wizard — and, unlike the
+            // old jump to the last step, no step is marked as visited.
+            return {
+                ...state,
+                quickStart: true,
+                state: { ...state.state, prompt: action.prompt.trim() || undefined },
+            };
+        case 'customizeSetup': {
+            // "Customize setup" from the quick start: the full wizard from its
+            // first step. The prompt stays, so its last step still offers
+            // "Generate now".
+            const { quickStart: _left, ...rest } = state;
+            void _left;
+            return { ...rest, stepIndex: 0, history: [], state: { ...state.state, lastStep: 0 } };
+        }
         default:
             return state;
     }
@@ -270,7 +296,11 @@ export interface UseOnboardingFlowResult {
     readonly skip: () => void;
     readonly refresh: () => void;
     readonly jumpTo: (index: number) => void;
-    readonly finish: (options?: { dismissed?: boolean }) => void;
+    readonly finish: (options?: { dismissed?: boolean; close?: boolean }) => void;
+    /** Set while on the prompt-first quick start; see `FlowReducerState.quickStart`. */
+    readonly quickStart?: boolean;
+    readonly startQuickStart: (prompt: string) => void;
+    readonly customizeSetup: () => void;
     readonly notePlannedClick: (
         bucket: 'ai' | 'storage' | 'db' | 'deploy' | 'desktop',
         choice: string,
@@ -427,7 +457,7 @@ export function useOnboardingFlow({
     const jumpTo = useCallback((index: number) => dispatch({ type: 'jumpTo', index }), []);
 
     const finish = useCallback(
-        (options?: { dismissed?: boolean }) => {
+        (options?: { dismissed?: boolean; close?: boolean }) => {
             if (options?.dismissed) {
                 trackEvent('onboarding_closed', {
                     completed: false,
@@ -437,10 +467,27 @@ export function useOnboardingFlow({
                 trackEvent('onboarding_completed', {});
                 markCompleted();
             }
-            onClose();
+            // `close: false` — onboarding is done (the generation started) but
+            // the wizard stays open to show its progress.
+            if (options?.close !== false) {
+                onClose();
+            }
         },
         [markCompleted, onClose, reducerState.stepIndex, trackEvent],
     );
+
+    const startQuickStart = useCallback(
+        (prompt: string) => {
+            trackEvent('onboarding_quick_start_entered', {});
+            dispatch({ type: 'startQuickStart', prompt });
+        },
+        [trackEvent],
+    );
+
+    const customizeSetup = useCallback(() => {
+        trackEvent('onboarding_quick_start_customize', {});
+        dispatch({ type: 'customizeSetup' });
+    }, [trackEvent]);
 
     const notePlannedClick = useCallback(
         (bucket: 'ai' | 'storage' | 'db' | 'deploy' | 'desktop', choice: string) =>
@@ -479,6 +526,9 @@ export function useOnboardingFlow({
         jumpTo,
         finish,
         notePlannedClick,
+        quickStart: reducerState.quickStart,
+        startQuickStart,
+        customizeSetup,
     };
 }
 

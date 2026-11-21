@@ -28,7 +28,8 @@ import { API_BASE, authedHeaders, createWorkViaAPI, registerUserViaAPI } from '.
  *
  *     POST /api/onboarding/telemetry   body: { event, properties? }
  *       -> 204 No Content (empty body) for any allow-listed `event`
- *       allow-list (exactly 18, OnboardingTelemetryBodyDto.ONBOARDING_TELEMETRY_EVENTS):
+ *       allow-list (OnboardingTelemetryBodyDto.ONBOARDING_TELEMETRY_EVENTS; the wizard's
+ *       events below, plus the AW-20 roster events and the quick-start events):
  *         onboarding_opened, onboarding_closed, onboarding_completed,
  *         onboarding_step_viewed, onboarding_step_next, onboarding_step_back,
  *         onboarding_step_skipped, onboarding_ai_choice_selected,
@@ -36,14 +37,15 @@ import { API_BASE, authedHeaders, createWorkViaAPI, registerUserViaAPI } from '.
  *         onboarding_plugin_connected, onboarding_plugin_refresh_clicked,
  *         onboarding_planned_card_clicked, onboarding_byok_skipped,
  *         onboarding_plugins_step_expanded, onboarding_plugins_step_skipped,
- *         onboarding_plugins_step_advanced, onboarding_ever_works_quota_blocked
+ *         onboarding_plugins_step_advanced, onboarding_ever_works_quota_blocked,
+ *         onboarding_quick_start_entered, onboarding_quick_start_customize
  *       - `properties` is @IsOptional @IsObject:
  *           absent            -> 204
  *           null              -> 204 (IsOptional treats null as "not provided")
  *           {}                -> 204
  *           [array]           -> 400 ["properties must be an object"]
  *           "string"/number   -> 400 ["properties must be an object"]
- *       - unknown event       -> 400 ["event must be one of the following values: …<18>"]
+ *       - unknown event       -> 400 ["event must be one of the following values: …<the whole allow-list>"]
  *       - missing event       -> 400 (same enumerated message)
  *       - extra top-level key -> 400 ["property <key> should not exist"]
  *                                 (global ValidationPipe forbidNonWhitelisted: true)
@@ -99,7 +101,10 @@ const ONBOARDING_TELEMETRY = `${API_BASE}/api/onboarding/telemetry`;
 const ONBOARDING_STATE = `${API_BASE}/api/onboarding/state`;
 const FUNNEL = `${API_BASE}/api/telemetry/funnel`;
 
-/** Exactly the 18 allow-listed onboarding telemetry event names. */
+/**
+ * The allow-listed onboarding telemetry event names this spec pins (the AW-20
+ * roster events are on the allow-list too, and are not repeated here).
+ */
 const ONBOARDING_EVENTS = [
     'onboarding_opened',
     'onboarding_closed',
@@ -119,6 +124,8 @@ const ONBOARDING_EVENTS = [
     'onboarding_plugins_step_skipped',
     'onboarding_plugins_step_advanced',
     'onboarding_ever_works_quota_blocked',
+    'onboarding_quick_start_entered',
+    'onboarding_quick_start_customize',
 ] as const;
 
 /** Exactly the 8 allow-listed zero-friction funnel event names. */

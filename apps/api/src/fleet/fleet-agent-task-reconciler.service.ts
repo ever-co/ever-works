@@ -49,6 +49,7 @@ import {
     INBOX_MAX_BODY_CHARS,
     INBOX_MAX_TITLE_CHARS,
     fleetModelCostUsdToCents,
+    isFleetLocalModelResult,
     fleetModelPluginId,
     isFleetAgentExecutionProvider,
     isFleetAgentModelSessionId,
@@ -1218,6 +1219,11 @@ export class FleetAgentTaskReconcilerService {
                             fleetJobId: event.job.id,
                             billedTo: node?.modelIdentity ?? null,
                             costUsd: model.costUsd ?? null,
+                            // Local AI: `'local'` says the 0 above is free by
+                            // construction (the node's own model server), not unknown.
+                            // Read through the contract's predicate, so the row can only
+                            // ever say one of the two known values.
+                            costBasis: isFleetLocalModelResult(model) ? 'local' : 'cli',
                             turns: model.turns ?? null,
                             inputTokens: model.inputTokens ?? null,
                             outputTokens: model.outputTokens ?? null,
@@ -1889,7 +1895,16 @@ function composeSuccessMessage(
 ): string {
     const lines = ['**Fleet run finished** (executed on one of your own machines).', '', summary];
     if (finalizeNote) lines.push('', finalizeNote);
-    if (result.model?.costUsd !== undefined && result.model?.costUsd !== null) {
+    if (isFleetLocalModelResult(result.model) && result.model?.costUsd === 0) {
+        // Local AI: the CLI's own dollar figure for a model id it did not know
+        // is meaningless, and the node reported 0 on purpose. A "local" result
+        // that still carries a non-zero figure is contradictory, so it falls
+        // through and is reported as the spend it claims (and recorded as such).
+        lines.push(
+            '',
+            `Model: ${result.model?.modelId ?? 'a local model'} on this machine's own local AI provider — no model spend${result.model?.turns ? ` (${result.model.turns} turn(s))` : ''}.`,
+        );
+    } else if (result.model?.costUsd !== undefined && result.model?.costUsd !== null) {
         lines.push(
             '',
             `Model spend reported by the CLI: $${result.model.costUsd.toFixed(2)}${result.model.turns ? ` over ${result.model.turns} turn(s)` : ''}.`,
