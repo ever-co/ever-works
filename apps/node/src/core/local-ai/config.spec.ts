@@ -108,9 +108,9 @@ describe('resolveLocalAiSettings', () => {
 		expect(
 			resolve({ providers: [{ kind: 'ollama', apiKeyFile: '/k', apiKeyEnv: 'LLM_KEY' }] }).problems[0]
 		).toContain('apiKeyFile OR apiKeyEnv');
-		const valueAsName = resolve({ providers: [{ kind: 'ollama', apiKeyEnv: 'sk-abc.def-123' }] });
+		const valueAsName = resolve({ providers: [{ kind: 'ollama', apiKeyEnv: 'test-key.value-123' }] });
 		expect(valueAsName.problems[0]).toContain('must be an environment variable NAME');
-		expect(valueAsName.problems.join('\n')).not.toContain('sk-abc.def-123');
+		expect(valueAsName.problems.join('\n')).not.toContain('test-key.value-123');
 	});
 
 	it('accepts a Windows key file path and an env var name', () => {
@@ -271,7 +271,7 @@ describe('stored config', () => {
 	it('keeps only known keys and string values', () => {
 		expect(
 			sanitizeStoredLocalAiConfig({
-				providers: [{ kind: 'ollama', apiKey: 'sk-should-never-be-here', models: ['a', 2] }, 'x'],
+				providers: [{ kind: 'ollama', apiKey: 'test-key-should-never-be-here', models: ['a', 2] }, 'x'],
 				agentRuntime: { cli: 'codex', provider: 'ollama', extra: 1 }
 			})
 		).toEqual({

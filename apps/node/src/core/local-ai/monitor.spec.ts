@@ -12,7 +12,7 @@ import type { LocalAiSettings } from './types';
  * reaches a log line or an error, and the per-run binding that fails closed.
  */
 
-const KEY = 'sk-llamaswap-THE-SECRET-0123456789';
+const KEY = 'test-local-ai-key-the-secret-0123';
 const GW = 'http://192.168.1.69:8000';
 
 function settings(stored: NodeLocalAiConfig): LocalAiSettings {

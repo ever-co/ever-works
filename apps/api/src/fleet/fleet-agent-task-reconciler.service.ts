@@ -1221,7 +1221,9 @@ export class FleetAgentTaskReconcilerService {
                             costUsd: model.costUsd ?? null,
                             // Local AI: `'local'` says the 0 above is free by
                             // construction (the node's own model server), not unknown.
-                            costBasis: model.costBasis ?? 'cli',
+                            // Read through the contract's predicate, so the row can only
+                            // ever say one of the two known values.
+                            costBasis: isFleetLocalModelResult(model) ? 'local' : 'cli',
                             turns: model.turns ?? null,
                             inputTokens: model.inputTokens ?? null,
                             outputTokens: model.outputTokens ?? null,

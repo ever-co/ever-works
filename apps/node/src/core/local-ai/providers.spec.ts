@@ -11,7 +11,7 @@ import type { LocalAiProviderSettings, LocalAiProviderStatus } from './types';
  * down. No probe ever asks a model to generate anything.
  */
 
-const KEY = 'sk-local-0123456789abcdef';
+const KEY = 'test-local-ai-key-0123456789abcdef';
 
 function provider(kind: string, over: Partial<LocalAiProviderSettings> = {}): LocalAiProviderSettings {
 	const definition = defaultLocalAiProviderRegistry().get(kind);

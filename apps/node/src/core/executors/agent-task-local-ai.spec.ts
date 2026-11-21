@@ -33,10 +33,10 @@ const CLAUDE = process.platform === 'win32' ? 'C:\\npm\\claude.cmd' : '/usr/loca
 const CODEX = process.platform === 'win32' ? 'C:\\npm\\codex.cmd' : '/usr/local/bin/codex';
 const SCRATCH = process.platform === 'win32' ? 'C:\\scratch' : '/scratch';
 const GATEWAY = 'http://192.168.1.69:8000';
-const LOCAL_KEY = 'sk-llamaswap-LOCAL-KEY-0123456789';
-const CLOUD_OAUTH = 'sk-ant-oat01-CLOUD-SEAT-TOKEN-abcdef';
-const CLOUD_API_KEY = 'sk-ant-api03-CLOUD-API-KEY-abcdef';
-const OPENAI_KEY = 'sk-proj-OPENAI-CLOUD-KEY-abcdef';
+const LOCAL_KEY = 'test-local-ai-key-0123456789';
+const CLOUD_OAUTH = 'test-cloud-seat-token-value-abcdef';
+const CLOUD_API_KEY = 'test-cloud-api-key-value-abcdef';
+const OPENAI_KEY = 'test-openai-cloud-key-value-abcdef';
 
 const descriptor: FleetTaskWorkspaceDescriptor = {
 	path: ABSOLUTE,

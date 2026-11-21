@@ -596,7 +596,10 @@ binary: unpin it (`EVER_WORKS_NODE_CLAUDE_PATH` back to the real `claude`) when 
 | `local-ai:<kind>`     | a healthy provider of that kind                                                                                                            |
 | `local-model:<model>` | a model a healthy provider serves — the bound one first, at most 4; ids slugged into the tag grammar (`qwen3:8b` → `local-model:qwen3-8b`) |
 
-At most 8 local-AI tags in all, appended after every older tag. They are always advertised
+At most 8 local-AI tags in all, appended after every older tag. All of them count toward the ONE
+per-node cap (32 by default, the server's `FLEET_MAX_CAPABILITY_TAGS`), in this order: detected tags, link
+module tags, local-AI tags, then extra tags — so if a node ever exceeds the cap, the extra tags are
+trimmed first and the detected ones never. They are always advertised
 (configuring a provider is the opt-in), whatever an older capability selection says. A tag pin on the
 platform side (**Settings → Fleet → Capability tags**) freezes the whole list, local-AI tags included.
 

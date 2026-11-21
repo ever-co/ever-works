@@ -14,7 +14,7 @@ import { EXIT_FAILURE, EXIT_OK, runCli, type CliDeps } from './program';
 
 const CONFIG_PATH = '/etc/ever-works-node/node-config.json';
 const KEY_PATH = '/etc/ever-works-node/local-llm.key';
-const KEY = 'sk-llamaswap-NEVER-PRINT-ME-0123456789';
+const KEY = 'test-local-ai-key-never-printed-0123';
 const GW = 'http://192.168.1.69:8000';
 
 const config = {
