@@ -31,7 +31,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     HOME=/home/memanto
 
-RUN pip install "memanto==${MEMANTO_VERSION}" "moorcheh-client==${MOORCHEH_CLIENT_VERSION}" \
+COPY .deploy/docker/memanto/entrypoint.sh /usr/local/bin/memanto-entrypoint
+
+RUN chmod 0755 /usr/local/bin/memanto-entrypoint \
+    && pip install "memanto==${MEMANTO_VERSION}" "moorcheh-client==${MOORCHEH_CLIENT_VERSION}" \
     && useradd --create-home --uid 1001 --user-group memanto \
     && mkdir -p /home/memanto/.memanto \
     && chown -R memanto:memanto /home/memanto
@@ -44,4 +47,5 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s \
     CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/ready', timeout=4).status == 200 else 1)"
 
-CMD ["uvicorn", "memanto.app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Refuses unrendered placeholder or weak credentials, then runs uvicorn.
+ENTRYPOINT ["/usr/local/bin/memanto-entrypoint"]

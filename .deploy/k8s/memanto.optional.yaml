@@ -37,6 +37,15 @@
 #
 # Memanto trusts LOOPBACK callers without a key, so never run it as a sidecar
 # in the API pod: as its own Service (below) every caller must present the key.
+#
+# Credential blast radius: on the cloud backend Memanto uses MOORCHEH_API_KEY as
+# its OWN management credential (upstream design, not configurable), so the
+# plugin apiKey is the Moorcheh billing key and can also call Moorcheh directly.
+# Keep it only in this Secret and the API Secret, and rotate it with both if
+# either is exposed. The on-prem backend uses MEMANTO_SECRET_KEY instead, which
+# only reaches Memanto. The image refuses to start with an unrendered
+# `$VARIABLE` placeholder as a credential, or a MEMANTO_SECRET_KEY shorter than
+# 32 characters.
 # ─────────────────────────────────────────────────────────────────────────────
 
 apiVersion: v1
@@ -92,7 +101,10 @@ metadata:
 spec:
   # ONE replica: Memanto keeps its agent registry and the single live
   # session per agent on local disk. Several replicas would each hold their
-  # own registry and rotate each other's session tokens.
+  # own registry and rotate each other's session tokens. Known single-node
+  # limit: a rollout (Recreate) leaves agent memory down for the restart;
+  # agent runs and pipelines treat memory as best-effort and carry on
+  # without recall meanwhile.
   replicas: 1
   strategy:
     type: Recreate
