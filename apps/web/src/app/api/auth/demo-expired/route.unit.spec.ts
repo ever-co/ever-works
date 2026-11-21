@@ -8,8 +8,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
  * reads the session bounced the visitor back to the sign-in page. This route handler may write
  * cookies: it removes the session cookie when the API rejects it, and only then.
  *
- * The real `lib/auth` and `lib/auth/cookies` run here; the cookie store, the API, the demo
- * config and the redirect are doubles.
+ * The real `lib/auth` and `lib/auth/cookies` run here; the cookie store, the API and the demo
+ * config are doubles.
  */
 
 const jar = vi.hoisted(() => {
@@ -43,9 +43,6 @@ const mocks = vi.hoisted(() => ({
     getProfile: vi.fn(),
     getDemoConfig: vi.fn(),
     rememberEverIdSignOut: vi.fn(),
-    redirect: vi.fn((): never => {
-        throw new Error('NEXT_REDIRECT');
-    }),
     nextRedirect: vi.fn((): never => {
         throw new Error('NEXT_REDIRECT (next/navigation)');
     }),
@@ -56,9 +53,7 @@ vi.mock('react', async (importOriginal) => {
     return { ...actual, cache: <T>(fn: T) => fn };
 });
 vi.mock('next/headers', () => ({ cookies: async () => jar.store }));
-vi.mock('next-intl/server', () => ({ getLocale: async () => 'en' }));
 vi.mock('next/navigation', () => ({ redirect: mocks.nextRedirect }));
-vi.mock('@/i18n/navigation', () => ({ redirect: mocks.redirect }));
 vi.mock('@/lib/api', () => ({
     authAPI: { getProfile: mocks.getProfile, getFreshProfile: vi.fn() },
 }));
@@ -83,20 +78,14 @@ import { GET } from './route';
 import { AUTH_COOKIE_NAME } from '@/lib/auth/cookies';
 import { ApiResponseError } from '@/lib/api/server-api';
 
-/** Runs the handler; the href it redirected to, or the response it answered with. */
-async function run(): Promise<{ href?: string; response?: Response }> {
-    try {
-        const response = await GET();
-        return { response };
-    } catch (error) {
-        expect((error as Error).message).toBe('NEXT_REDIRECT');
-        expect(mocks.redirect).toHaveBeenCalledTimes(1);
-        const [{ locale, href }] = mocks.redirect.mock.calls[0] as unknown as [
-            { locale: string; href: string },
-        ];
-        expect(locale).toBe('en');
-        return { href };
-    }
+/** Runs the handler and checks it answered the sign-in page's demo-expired address, uncached. */
+async function expectLandsOnExpiredSignIn(): Promise<void> {
+    const response = await GET();
+    expect(response.status).toBe(307);
+    expect(response.headers.get('location')).toBe('/login?demo=expired');
+    expect(response.headers.get('cache-control')).toBe('no-store');
+    // The sign-in variant of the check: no second trip through a redirect.
+    expect(mocks.nextRedirect).not.toHaveBeenCalled();
 }
 
 describe('GET /api/auth/demo-expired', () => {
@@ -125,57 +114,71 @@ describe('GET /api/auth/demo-expired', () => {
         it('removes the session cookie the API rejects, then lands on /login?demo=expired', async () => {
             mocks.getProfile.mockRejectedValue(new ApiResponseError('unauthorized', 401));
 
-            const { href } = await run();
+            await expectLandsOnExpiredSignIn();
 
-            expect(href).toBe('/login?demo=expired');
             expect(jar.deletes).toEqual([AUTH_COOKIE_NAME]);
             expect(jar.values.has(AUTH_COOKIE_NAME)).toBe(false);
-            // The sign-in variant of the check: no second trip through a redirect.
-            expect(mocks.nextRedirect).not.toHaveBeenCalled();
         });
 
         it('keeps a session the API still accepts, so a link here signs no one out', async () => {
             mocks.getProfile.mockResolvedValue({ id: 'u1', email: 'demo@demo.ever.works' });
 
-            const { href } = await run();
-
             // The sign-in page sends a signed-in visitor on to the dashboard.
-            expect(href).toBe('/login?demo=expired');
+            await expectLandsOnExpiredSignIn();
+
             expect(jar.deletes).toEqual([]);
             expect(jar.values.get(AUTH_COOKIE_NAME)).toBe('encrypted-session');
         });
 
-        it('keeps the cookie and still lands on the sign-in page when the API cannot answer', async () => {
+        it('keeps the cookie and still lands on the sign-in page when the API answers 5xx', async () => {
             mocks.getProfile.mockRejectedValue(new ApiResponseError('boom', 500));
 
-            const { href } = await run();
+            await expectLandsOnExpiredSignIn();
 
-            expect(href).toBe('/login?demo=expired');
             expect(jar.deletes).toEqual([]);
+        });
+
+        it('keeps the cookie and still lands on the sign-in page when the API is unreachable', async () => {
+            mocks.getProfile.mockRejectedValue(new TypeError('fetch failed'));
+
+            await expectLandsOnExpiredSignIn();
+
+            expect(jar.deletes).toEqual([]);
+            expect(jar.values.get(AUTH_COOKIE_NAME)).toBe('encrypted-session');
+        });
+
+        it('an Ever ID sign-out 401: removes the cookie and remembers the sign-out for the notice', async () => {
+            mocks.getProfile.mockRejectedValue(
+                new ApiResponseError('signed out', 401, 'ever_id_signed_out'),
+            );
+
+            await expectLandsOnExpiredSignIn();
+
+            expect(jar.deletes).toEqual([AUTH_COOKIE_NAME]);
+            expect(mocks.rememberEverIdSignOut).toHaveBeenCalledTimes(1);
         });
 
         it('asks the API nothing when there is no session cookie to check', async () => {
             mocks.getAuthFromRequest.mockResolvedValue({ isAuthenticated: false });
 
-            const { href } = await run();
+            await expectLandsOnExpiredSignIn();
 
-            expect(href).toBe('/login?demo=expired');
             expect(mocks.getProfile).not.toHaveBeenCalled();
             expect(jar.deletes).toEqual([]);
         });
     });
 
-    it('demo off: answers 404 and touches nothing, as before the route existed', async () => {
+    it('demo off: answers 404, uncached, and touches nothing, as before the route existed', async () => {
         mocks.getDemoConfig.mockResolvedValue({ enabled: false });
         mocks.getProfile.mockRejectedValue(new ApiResponseError('unauthorized', 401));
 
-        const { response, href } = await run();
+        const response = await GET();
 
-        expect(href).toBeUndefined();
-        expect(response?.status).toBe(404);
+        expect(response.status).toBe(404);
+        expect(response.headers.get('cache-control')).toBe('no-store');
+        expect(response.headers.get('location')).toBeNull();
         expect(mocks.getAuthFromRequest).not.toHaveBeenCalled();
         expect(mocks.getProfile).not.toHaveBeenCalled();
         expect(jar.deletes).toEqual([]);
-        expect(mocks.redirect).not.toHaveBeenCalled();
     });
 });

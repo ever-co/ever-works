@@ -1,5 +1,3 @@
-import { getLocale } from 'next-intl/server';
-import { redirect } from '@/i18n/navigation';
 import { DEMO_EXPIRED_HREF, getAuthFromCookieOnSignIn } from '@/lib/auth';
 import { getDemoConfig } from '@/lib/feature-flags/demo';
 
@@ -10,8 +8,8 @@ import { getDemoConfig } from '@/lib/feature-flags/demo';
  * `getAuthFromCookie` notices the expiry while a page RENDERS, where Next.js refuses to change a
  * cookie, so the stale session cookie used to survive the redirect: every other page that reads
  * the session then asked the API again, got a 401 and sent the visitor back to the sign-in page,
- * until they started a new demo. A route handler may write cookies, so it sends the visitor
- * here first.
+ * until they started a new demo. A route handler may write cookies, so a render sends the
+ * visitor here first (a Server Action removes the cookie itself and skips this stop).
  *
  * The cookie goes only when the API rejects it: the session is checked once more through the
  * sign-in page's variant of the check, which removes a rejected cookie (as it does everywhere
@@ -21,10 +19,15 @@ import { getDemoConfig } from '@/lib/feature-flags/demo';
  *
  * Demo off: nothing redirects here, and the address answers 404 without reading or touching
  * any cookie, as before it existed.
+ *
+ * Both answers are `Cache-Control: no-store`: one depends on the visitor's own cookie and may
+ * remove it, so no shared cache (a CDN's "cache everything" rule, say) may ever keep either.
  */
+const NO_STORE = { 'cache-control': 'no-store' } as const;
+
 export async function GET(): Promise<Response> {
     if (!(await getDemoConfig()).enabled) {
-        return new Response(null, { status: 404 });
+        return new Response(null, { status: 404, headers: NO_STORE });
     }
 
     try {
@@ -34,7 +37,11 @@ export async function GET(): Promise<Response> {
         console.warn('Could not check the expired demo session; leaving its cookie', error);
     }
 
-    const locale = await getLocale();
-    // `localePrefix: 'never'` — the plain path is the whole URL.
-    return redirect({ locale, href: DEMO_EXPIRED_HREF });
+    // A relative Location, as `redirect()` sends one: `localePrefix: 'never'`, so the plain path
+    // is the whole URL, and no host taken from the request (which can be an internal one behind
+    // a proxy) ends up in it. The cookie removal above rides on this response.
+    return new Response(null, {
+        status: 307,
+        headers: { ...NO_STORE, location: DEMO_EXPIRED_HREF },
+    });
 }
