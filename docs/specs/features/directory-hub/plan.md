@@ -2,7 +2,7 @@
 
 **Feature ID**: `directory-hub`
 **Spec**: [`./spec.md`](./spec.md)
-**Status**: `Draft` (phase 0 code in `apps/directory-hub`, not deployed)
+**Status**: `In Progress` (phase 1 live at `https://directories.ever.works` since 2026-11-21 17:3xZ)
 **Last updated**: 2026-11-21
 
 ---
@@ -35,10 +35,29 @@ The Worker ran under workerd on a workstation with a scratch registry of the 100
 - "open source crm" ranks the CRM directory's open-source entries first; "email marketing" lands on transactional
   email (the email marketing directory was still on an old build).
 - **The owner's two examples need data, not code**: `timetrack.ever.works` does not serve Contract v1 yet (full template,
-  ever-works/directory-web-template#1181), and no MCP-servers directory exists, so "time tracking tools" returned only
-  tangential matches and "MCP servers for databases" returned nothing, with the hint. Both work in the unit tests with
-  such directories present.
+  ever-works/directory-web-template#1181), and the scratch registry had no MCP-servers directory, so "time tracking
+  tools" returned only tangential matches and "MCP servers for databases" returned nothing, with the hint. Both work in
+  the unit tests with such directories present.
 - The official MCP Inspector CLI connected over Streamable HTTP, listed the four tools and ran `search_all`.
+
+### Phase 1 live (2026-11-21, owner's go)
+
+- Worker `ever-works-directory-hub` deployed with `wrangler deploy` on the Workers Custom Domain
+  `directories.ever.works` (no `workers.dev` or preview URL). The registry is
+  [`ever-works/directory-registry`](https://github.com/ever-works/directory-registry) with 115 entries: the 100
+  directories, `timetrack` and 14 older Works whose sites run on k8s. Among those is `awesome-mcp-servers`
+  (`mcpserver.ever.works`, 6 items), but it runs a build without Contract v1.
+- **Same-zone fetches work (plan §7 risk closed):** the directory sites are Workers on custom domains of the same zone,
+  and the hub reads them with plain `fetch()`, no service binding. At 17:4xZ, 53 of 115 directories were available;
+  42 answered `404` on `/data/directory.json` (older builds, including all 14 older Works and `timetrack`) and 20 had no
+  site yet (`530`).
+- Cold `directories.json` 1.7 s; warm `search_all` about 25–35 ms; `initialize` 190 ms.
+- `query_directory` (`crm`, `search_items`) is byte-identical to calling `crm.ever.works/mcp` directly; `get_item`
+  works. The MCP Inspector CLI runs `search_all` against the live hub. Every discovery document answers `200` with
+  `Cache-Control: public, max-age=300, s-maxage=900`.
+- "open source crm", "ai voice agents" and "email marketing" rank the right directory first. "time tracking software"
+  and "MCP servers for databases" still wait for `timetrack` and `mcpserver` to serve Contract v1. Meanwhile
+  `list_directories` with a query and `include_unavailable` names them, with the reason.
 
 ## 1. Options and the recommended default
 
@@ -251,17 +270,19 @@ their items match, so "which directories cover MCP?" still answers.
 | 2     | Directory-side pointer (Contract v1.1 `network` field and an `llms.txt` line, both templates); platform opt-in flag and `GET /api/public/directories`; optional `ever.works/mcp` route; Cron + KV index if needed; publish `@ever-works/agent-api`.                                    | Owner's go per item                                   |
 | 3     | List the hub in the official MCP Registry (`server.json`, remote `streamable-http`), Smithery and other catalogs; optional semantic search (Vectorize); optional human "all directories" page (design rule applies).                                                                   | Owner's go (external publishing)                      |
 
-Deploying (phase 1) is `npx wrangler deploy` from `apps/directory-hub` with a Cloudflare token scoped to Workers on the
-`ever.works` zone, after adding the custom domain to `wrangler.jsonc`. Rollback: remove the custom domain (the
+Deploying is `npx wrangler deploy` from `apps/directory-hub` with a Cloudflare token scoped to Workers on the
+`ever.works` zone, or the manual workflow `.github/workflows/deploy-directory-hub.yml` (GitHub-hosted runner, needs the
+`DIRECTORY_HUB_CLOUDFLARE_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` repository secrets). Each deploy follows the board rule.
+Rollback: `wrangler rollback` to the previous version, or remove the custom domain to take the hub offline (the
 directories are untouched; the hub only reads them).
 
 ## 7. Risks
 
-| Risk                                                                    | Mitigation                                                                                                         |
-| ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| A Worker fetching sibling Workers on the same zone hits a platform rule | Verify at phase 1 deploy; fallback is service bindings to each directory Worker or reading their `/data/` from R2. |
-| Cold isolate fans out 200 requests                                      | Six at a time, 4 s timeout, shared in-flight promises, edge cache; phase 2 KV index.                               |
-| Third-party text in items steers agents (prompt injection)              | Returned as data only; server instructions say item text is untrusted; no tool ever acts on item content.          |
-| SSRF through `directory` arguments or a directory's own documents       | Only registry origins are fetched; endpoints read from a `directory.json` must stay on that directory's origin.    |
-| Hub ranking drifts from Contract v1                                     | `query_directory` proxies the directory itself; the shared weights are pinned by tests.                            |
-| Registry fetch blocked or rate-limited                                  | Last known good copy; fallback to a deploy-time static asset (§1.3).                                               |
+| Risk                                                                    | Mitigation                                                                                                                                                                                       |
+| ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| A Worker fetching sibling Workers on the same zone hits a platform rule | Closed at the phase 1 deploy: plain `fetch()` reaches them, because the directories are on Workers Custom Domains (not routes). Should a directory move to a route, use a service binding to it. |
+| Cold isolate fans out 200 requests                                      | Six at a time, 4 s timeout, shared in-flight promises, edge cache; phase 2 KV index.                                                                                                             |
+| Third-party text in items steers agents (prompt injection)              | Returned as data only; server instructions say item text is untrusted; no tool ever acts on item content.                                                                                        |
+| SSRF through `directory` arguments or a directory's own documents       | Only registry origins are fetched; endpoints read from a `directory.json` must stay on that directory's origin.                                                                                  |
+| Hub ranking drifts from Contract v1                                     | `query_directory` proxies the directory itself; the shared weights are pinned by tests.                                                                                                          |
+| Registry fetch blocked or rate-limited                                  | Last known good copy; fallback to a deploy-time static asset (§1.3).                                                                                                                             |

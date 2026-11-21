@@ -6,14 +6,17 @@
 
 **Feature ID**: `directory-hub`
 **Branch**: `feat/directory-hub`
-**Status**: `Draft`
+**Status**: `In Progress` (phase 1 live at `https://directories.ever.works` since 2026-11-21)
 **Created**: 2026-11-21
 **Last updated**: 2026-11-21
 **Owner**: Ever Works Team
 
 ---
 
-## Decisions at a glance (recommended defaults, owner to confirm)
+## Decisions at a glance
+
+The owner approved phase 1 on 2026-11-21, which settles the public address and the catalog repo. The other rows are
+still recommended defaults.
 
 | Question                 | Recommended default                                                                                                                       | Alternatives kept open                                                              |
 | ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
@@ -198,10 +201,11 @@ agents where the hub is.
 
 ## 8. Open Questions
 
-- `[NEEDS CLARIFICATION: public address: directories.ever.works (recommended) or ever.works/mcp through a Workers route on the apex, or both]`
-- `[NEEDS CLARIFICATION: create the catalog repo ever-works/directory-registry for registry.json (recommended), or keep the registry as a "directory of directories" Work]`
+- Resolved 2026-11-21 (owner approved phase 1): the address is `https://directories.ever.works`, and the registry
+  lives in the catalog repo [`ever-works/directory-registry`](https://github.com/ever-works/directory-registry).
+  `ever.works/mcp` through a Workers route on the apex stays a phase 2 option.
 - `[NEEDS CLARIFICATION: Works of other tenants: may they opt in to the hub (phase 2), and is the default off]`
-- `[NEEDS CLARIFICATION: the "MCP servers for databases" example needs a directory of MCP servers; none of the 100 directories is one. Create mcp-servers.ever.works?]`
+- `[NEEDS CLARIFICATION: the "MCP servers for databases" example needs a directory of MCP servers. The older Work awesome-mcp-servers (mcpserver.ever.works, 6 items) is one, but runs a build without Contract v1. Grow it and move it to a current template, or create a new one among the 100?]`
 - `[NEEDS CLARIFICATION: go-ahead to list the hub in the official MCP Registry and other public catalogs (phase 3)]`
 - `[NEEDS CLARIFICATION: may the hub log query text (without IPs) to learn what agents look for]`
 

@@ -6,7 +6,7 @@
 import { CONTRACT_TOOL_NAMES, type ContractToolName } from './contract';
 import { FetchFailure, UpstreamRpcError, type DirectoryLoader, type LoadedDirectory } from './loader';
 import { resolveEntry } from './registry';
-import { parseQuery, scoreDirectory, searchAll } from './search';
+import { parseQuery, scoreDirectory, scoreEntry, searchAll } from './search';
 
 export const HUB_TOOL_NAMES = ['list_directories', 'search_all', 'get_item', 'query_directory'] as const;
 export type HubToolName = (typeof HUB_TOOL_NAMES)[number];
@@ -57,7 +57,8 @@ export function hubToolDefinitions(): JsonSchema[] {
 					include_unavailable: {
 						type: 'boolean',
 						default: false,
-						description: 'Also list directories that cannot be read right now, with the reason.'
+						description:
+							'Also list directories that cannot be read right now, with the reason (with "query": only the ones about it).'
 					},
 					offset: { type: 'integer', minimum: 0, default: 0 },
 					limit: { type: 'integer', minimum: 1, maximum: 200, default: 50 }
@@ -224,8 +225,19 @@ async function listDirectories(loader: DirectoryLoader, input: Record<string, un
 	const set = await loader.getDirectories();
 
 	let ordered: LoadedDirectory[];
+	let unavailable = set.unavailable;
 	if (query) {
 		const parsed = parseQuery(query);
+		// An agent asking about a topic should learn that a matching directory exists even while it cannot be read.
+		const entries = new Map(set.registry.entries.map((entry) => [entry.id, entry]));
+		unavailable = set.unavailable
+			.map((directory) => {
+				const entry = entries.get(directory.id);
+				return { directory, score: entry ? scoreEntry(entry, parsed) : 0 };
+			})
+			.filter((candidate) => candidate.score > 0)
+			.sort((a, b) => b.score - a.score)
+			.map((candidate) => candidate.directory);
 		const scored = set.available
 			.map((directory) => ({ directory, score: scoreDirectory(directory, parsed) }))
 			.filter((entry) => entry.score > 0)
@@ -252,7 +264,7 @@ async function listDirectories(loader: DirectoryLoader, input: Record<string, un
 		limit,
 		directories: ordered.slice(offset, offset + limit).map(summarizeDirectory),
 		unavailable_count: set.unavailable.length,
-		...(includeUnavailable ? { unavailable: set.unavailable } : {})
+		...(includeUnavailable ? { unavailable } : {})
 	};
 }
 

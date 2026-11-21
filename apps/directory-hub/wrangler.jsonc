@@ -1,8 +1,8 @@
 // Ever Works directory hub — Cloudflare Worker configuration.
 //
-// Not deployed yet. Going live is phase 1 of docs/specs/features/directory-hub/plan.md and needs the owner's go
-// plus a board claim (workspace MAINTENANCE.md). Until then there is deliberately no route, no custom domain and no
-// workers.dev URL, so even an accidental `wrangler deploy` publishes nothing.
+// Live at https://directories.ever.works (phase 1 of docs/specs/features/directory-hub/plan.md, owner's go
+// 2026-11-21). Deploys need a board claim (workspace MAINTENANCE.md). There is no workers.dev URL and no preview URL:
+// the custom domain below is the only way in.
 {
 	"name": "ever-works-directory-hub",
 	"main": "src/worker.ts",
@@ -11,10 +11,11 @@
 	"preview_urls": false,
 	"observability": { "enabled": true },
 	"vars": {
-		// The Directory Registry document (spec FR-1). The catalog repo is created in phase 1 (tasks T-11).
+		// The Directory Registry document (spec FR-1), kept in the catalog repo ever-works/directory-registry.
 		"REGISTRY_URL": "https://raw.githubusercontent.com/ever-works/directory-registry/main/registry.json",
 		"HUB_URL": "https://directories.ever.works"
-	}
-	// Phase 1, after the owner's go:
-	// "routes": [{ "pattern": "directories.ever.works", "custom_domain": true }]
+	},
+	// A Workers Custom Domain (not a route): the directories are Workers on custom domains of the same zone, and
+	// same-zone fetch() to a custom domain reaches the target Worker without a service binding.
+	"routes": [{ "pattern": "directories.ever.works", "custom_domain": true }]
 }

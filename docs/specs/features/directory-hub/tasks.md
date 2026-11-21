@@ -16,15 +16,20 @@
 
 ## Phase 1 — go live (owner's go + board claim)
 
-- [ ] T-10 Owner answers the open questions in [`spec.md`](./spec.md) §8 (address, registry repo, analytics).
-- [ ] T-11 Create `ever-works/directory-registry` (README, CONTRIBUTING, MIT, `registry.json`, a validate workflow per
-      ADR-014), seeded with the 100 directories and the older ones.
-- [ ] T-12 Add the custom domain to `apps/directory-hub/wrangler.jsonc`, set `REGISTRY_URL`, deploy with a Workers-scoped
-      token; confirm sibling-Worker fetches work on the zone (plan §7).
-- [ ] T-13 Live checks: MCP Inspector, Claude (`claude mcp add --transport http ever-works https://directories.ever.works/mcp`),
-      the two example questions, `/data/search.json`, every discovery document.
+- [ ] T-10 Owner answers the open questions in [`spec.md`](./spec.md) §8. Address and registry repo: answered by the
+      phase 1 go (2026-11-21); tenants opt-in, the MCP-servers directory, catalogs and analytics are still open.
+- [x] T-11 Create `ever-works/directory-registry` (README, CONTRIBUTING, MIT, `registry.json`, a validate workflow per
+      ADR-014), seeded with the 100 directories and the older ones. Done 2026-11-21: 115 entries (100 + `timetrack` +
+      14 older Works with sites).
+- [x] T-12 Add the custom domain to `apps/directory-hub/wrangler.jsonc`, set `REGISTRY_URL`, deploy with a Workers-scoped
+      token; confirm sibling-Worker fetches work on the zone (plan §7). Done 2026-11-21: same-zone fetches work.
+- [x] T-13 Live checks: MCP Inspector, the two example questions, `/data/search.json`, every discovery document (plan §0,
+      "Phase 1 live"). Not run: connecting Claude itself (`claude mcp add --transport http ever-works https://directories.ever.works/mcp`).
 - [ ] T-14 ever-works-website: `/llms.txt` section and `/.well-known/mcp.json` + `/.well-known/api-catalog` pointing to the hub.
-- [ ] T-15 Deploy workflow for the Worker (manual dispatch first) with the token in repository secrets.
+      PR [ever-co/ever-works-website#322](https://github.com/ever-co/ever-works-website/pull/322), not merged yet.
+- [ ] T-15 Deploy workflow for the Worker (manual dispatch first) with the token in repository secrets. The workflow is
+      `.github/workflows/deploy-directory-hub.yml`; the `DIRECTORY_HUB_CLOUDFLARE_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`
+      secrets are not set yet (owner to choose the token).
 
 ## Phase 2
 

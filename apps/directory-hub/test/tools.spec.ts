@@ -127,6 +127,21 @@ describe('list_directories', () => {
 		expect(all.directories).toHaveLength(2);
 		expect(all.unavailable.map((entry: any) => entry.id).sort()).toEqual(['down', 'mismatch', 'old']);
 	});
+
+	it('with a query, lists only the unavailable directories about it', async () => {
+		const loader = loaderFor(fakeNetwork());
+		const old = structured(
+			await callHubTool('list_directories', { query: 'old directory', include_unavailable: true }, loader)
+		);
+		expect(old.directories).toEqual([]);
+		expect(old.unavailable.map((entry: any) => entry.id)).toEqual(['old']);
+		expect(old.unavailable_count).toBe(3);
+
+		const none = structured(
+			await callHubTool('list_directories', { query: 'crm', include_unavailable: true }, loader)
+		);
+		expect(none.unavailable).toEqual([]);
+	});
 });
 
 describe('get_item', () => {

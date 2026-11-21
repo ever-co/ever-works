@@ -64,11 +64,20 @@ Registry document (Directory Registry v1):
 
 A Contract v1 `items.json` whose items' `website` are directory origins works as a registry too.
 
-## Deploy (phase 1, owner's go + board claim)
+## Deploy
 
-1. Create the registry repo and publish `registry.json` (tasks T-11).
-2. Uncomment the custom domain route in `wrangler.jsonc`.
-3. `npx wrangler@4 deploy` with a Cloudflare API token scoped to Workers on the `ever.works` zone.
-4. Check `https://directories.ever.works/.well-known/mcp.json`, an MCP `initialize`, and both example questions.
+Live at `https://directories.ever.works` since 2026-11-21 (Workers Custom Domain, set in `wrangler.jsonc`). The
+registry is [`ever-works/directory-registry`](https://github.com/ever-works/directory-registry); to add a directory,
+open a pull request there. No hub deploy is needed.
 
-Rollback: remove the custom domain (or `wrangler delete`). The directories are untouched; the hub only reads them.
+Every deploy needs a board claim (workspace `MAINTENANCE.md`). Use one of:
+
+- the manual workflow `.github/workflows/deploy-directory-hub.yml` (GitHub-hosted; tests, then deploys, then smoke
+  tests). It needs the `DIRECTORY_HUB_CLOUDFLARE_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` repository secrets;
+- or `npx wrangler@4 deploy` from this folder, with `CLOUDFLARE_API_TOKEN` scoped to Workers Scripts on the account
+  and Workers Routes on the `ever.works` zone.
+
+Then check `https://directories.ever.works/.well-known/mcp.json` and an MCP `tools/list`.
+
+Rollback: `npx wrangler@4 rollback` to the previous version. To take the hub offline, remove the custom domain. The
+directories are untouched either way; the hub only reads them.

@@ -17,6 +17,7 @@ import {
 	type PreparedText
 } from './contract';
 import type { LoadedDirectory } from './loader';
+import type { DirectoryEntry } from './registry';
 
 /** Words that never have to match; they only add score when they do. */
 export const FILLER_WORDS: ReadonlySet<string> = new Set([
@@ -119,19 +120,33 @@ export interface DirectoryText {
 	description: string;
 }
 
+function textOf(entry: DirectoryEntry, name: string, description: string): DirectoryText {
+	return {
+		id: entry.id,
+		nameWords: normalizeText(name)
+			.split(/[^\p{L}\p{N}]+/u)
+			.filter((word) => word && word !== 'awesome'),
+		topics: [...entry.topics, ...entry.aliases].map(normalizeText),
+		description: normalizeText(description)
+	};
+}
+
 /**
  * Normalize a directory's searchable fields. The word "awesome" (in every "Awesome X" name) is ignored.
  *
  * @param directory - Loaded directory
  */
 export function directoryText(directory: LoadedDirectory): DirectoryText {
-	const name = normalizeText(directory.info.name);
-	return {
-		id: directory.entry.id,
-		nameWords: name.split(/[^\p{L}\p{N}]+/u).filter((word) => word && word !== 'awesome'),
-		topics: [...directory.entry.topics, ...directory.entry.aliases].map(normalizeText),
-		description: normalizeText(directory.info.description)
-	};
+	return textOf(directory.entry, directory.info.name, directory.info.description);
+}
+
+/**
+ * The same text built from the registry alone (fallback name and description), for a directory that cannot be read.
+ *
+ * @param entry - Registry entry
+ */
+export function entryText(entry: DirectoryEntry): DirectoryText {
+	return textOf(entry, entry.name ?? entry.host, entry.description ?? '');
 }
 
 /**
@@ -315,7 +330,20 @@ export function searchAll(
  * @param query - Parsed query
  */
 export function scoreDirectory(directory: LoadedDirectory, query: ParsedQuery): number {
-	const text = directoryText(directory);
+	return scoreText(directoryText(directory), query);
+}
+
+/**
+ * Score a registry entry the same way, from its fallback name, description, topics, aliases and id.
+ *
+ * @param entry - Registry entry
+ * @param query - Parsed query
+ */
+export function scoreEntry(entry: DirectoryEntry, query: ParsedQuery): number {
+	return scoreText(entryText(entry), query);
+}
+
+function scoreText(text: DirectoryText, query: ParsedQuery): number {
 	let total = 0;
 	for (const token of query.required) {
 		const { score } = directoryTokenScore(token, text);

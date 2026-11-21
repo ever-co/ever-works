@@ -2,8 +2,9 @@
 
 ## Status
 
-**Proposed** — spec at [`../features/directory-hub/spec.md`](../features/directory-hub/spec.md). Owner to confirm the
-public address and the catalog repo (spec §8).
+**Accepted** (2026-11-21, owner approved phase 1). Spec: [`../features/directory-hub/spec.md`](../features/directory-hub/spec.md).
+The hub is live at `https://directories.ever.works`, and its registry is in
+[`ever-works/directory-registry`](https://github.com/ever-works/directory-registry).
 
 ## Date
 
