@@ -138,6 +138,23 @@ describe('agent-session executor (FL-04 P2)', () => {
 		);
 	});
 
+	it('refuses a session of a CLI bound to local AI rather than start it on the cloud seat', async () => {
+		const daemon = {
+			request: vi.fn(async () => ({})),
+			onEvent: vi.fn(() => () => undefined)
+		};
+		const error = await refusal(
+			runAgentSessionJob(
+				job(),
+				new AbortController().signal,
+				io({ daemon: daemon as unknown as AgentSessionDaemon, localAiBoundClis: ['claude-code'] })
+			)
+		);
+		expect(error.code).toBe('unsupported_on_node');
+		expect(error.hint).toMatch(/runs on its local AI provider/);
+		expect(daemon.request).not.toHaveBeenCalled();
+	});
+
 	it('never downgrades: a computer that cannot isolate refuses with the reason, and starts nothing', async () => {
 		const daemon = {
 			request: vi.fn(async () => ({})),

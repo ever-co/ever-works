@@ -21,6 +21,9 @@ export * from './config-store';
 export * from './resource-limits';
 export * from './fleet-client';
 export * from './gpu-probe';
+// Local AI — node-side providers (llama-swap, Ollama, LM Studio, vLLM, OpenAI-compatible),
+// their probes and tags, and the agent-CLI binding.
+export * from './local-ai';
 export * from './job-client';
 export * from './heartbeat';
 export * from './health-probe';
