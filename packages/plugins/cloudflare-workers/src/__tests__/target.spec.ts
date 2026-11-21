@@ -77,6 +77,20 @@ describe('toDnsLabel / buildWorkerName', () => {
 		expect(name.endsWith('-')).toBe(false);
 		expect(name.startsWith('ew-')).toBe(true);
 	});
+
+	it('gives two long labels with the same first 60 characters different Worker names', () => {
+		const stem = 'x'.repeat(60);
+		const a = buildWorkerName('ew-', `${stem}-a1b2`);
+		const b = buildWorkerName('ew-', `${stem}-c3d4`);
+		expect(a).not.toBe(b);
+		expect(a.length).toBeLessThanOrEqual(63);
+		expect(b.length).toBeLessThanOrEqual(63);
+		expect(buildWorkerName('ew-', `${stem}-a1b2`)).toBe(a);
+	});
+
+	it('leaves a label that fits unchanged', () => {
+		expect(buildWorkerName('ew-', 'crm')).toBe('ew-crm');
+	});
 });
 
 describe('isPlatformManaged', () => {

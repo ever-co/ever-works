@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import {
 	CLOUDFLARE_DEPLOY_ENV,
 	DEFAULT_WORKER_PREFIX,
@@ -150,10 +152,19 @@ export function resolveLabel(settings: Record<string, unknown>, projectName?: st
 	return label;
 }
 
-/** `<prefix><label>`, kept within the 63-character Workers limit. */
+/**
+ * `<prefix><label>`, kept within the 63-character Workers limit.
+ *
+ * A label that does not fit is cut and given an 8-hex digest of the WHOLE label, so two long labels that
+ * share their first characters still get different Workers (a plain cut would map them onto one Worker).
+ */
 export function buildWorkerName(prefix: string, label: string): string {
 	const room = MAX_WORKER_NAME - prefix.length;
-	const name = `${prefix}${label.slice(0, room).replace(/-+$/, '')}`;
+	const fitted =
+		label.length <= room
+			? label
+			: `${label.slice(0, room - 9).replace(/-+$/, '')}-${createHash('sha256').update(label).digest('hex').slice(0, 8)}`;
+	const name = `${prefix}${fitted.replace(/-+$/, '')}`;
 	if (!NAME_RE.test(name)) {
 		throw new CloudflareConfigError(`"${name}" is not a valid Worker name.`);
 	}
