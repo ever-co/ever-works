@@ -112,4 +112,26 @@ describe('normalizeGeneratorError', () => {
             'Something unexpected happened while building the page',
         );
     });
+    it("redacts a masked key a provider echoes, keeping the provider's sentence", () => {
+        const masked = `sk-proj-${'*'.repeat(60)}wxyz`;
+        expect(
+            normalizeGeneratorError(
+                new Error(
+                    `Incorrect API key provided: ${masked}. You can find your API key at https://platform.openai.com/account/api-keys.`,
+                ),
+            ),
+        ).toBe(
+            'Incorrect API key provided: [redacted secret]. You can find your API key at https://platform.openai.com/account/api-keys.',
+        );
+    });
+
+    it('keeps the OpenRouter credits message exactly readable', () => {
+        expect(
+            normalizeGeneratorError(
+                new Error(
+                    'Insufficient credits. Add more using https://openrouter.ai/settings/credits',
+                ),
+            ),
+        ).toBe('Insufficient credits. Add more using https://openrouter.ai/settings/credits');
+    });
 });
