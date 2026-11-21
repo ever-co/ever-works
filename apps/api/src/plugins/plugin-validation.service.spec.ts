@@ -16,6 +16,9 @@ import { PluginValidationService } from './plugin-validation.service';
 import type { PluginRegistryService, PluginSettingsService } from '@ever-works/agent/plugins';
 import type { GitFacadeService } from '@ever-works/agent/facades';
 
+/** Who asked: the service passes it on to the plugin (the fleet local AI plugin reads it). */
+const CALLER_SCOPE = expect.objectContaining({ userId: expect.any(String) });
+
 describe('PluginValidationService', () => {
     let pluginRegistry: { get: jest.Mock };
     let pluginSettings: { getSettings: jest.Mock };
@@ -103,7 +106,7 @@ describe('PluginValidationService', () => {
                 workId: 'w-1',
                 includeSecrets: true,
             });
-            expect(validateConnection).toHaveBeenCalledWith({ apiKey: 'sk-x' });
+            expect(validateConnection).toHaveBeenCalledWith({ apiKey: 'sk-x' }, CALLER_SCOPE);
         });
 
         it('coerces BadRequestException with object body to {success:false, message, modelResults}', async () => {
@@ -229,7 +232,7 @@ describe('PluginValidationService', () => {
 
             const result = await service.tryValidateConnection('plug-1', 'u-1');
 
-            expect(isAvailable).toHaveBeenCalledWith({ token: 'x' });
+            expect(isAvailable).toHaveBeenCalledWith({ token: 'x' }, CALLER_SCOPE);
             expect(result).toEqual({
                 success: true,
                 message: 'Local connection verified.',
@@ -299,7 +302,7 @@ describe('PluginValidationService', () => {
             const result = await service.tryValidateConnection('plug-1', 'u-1');
 
             expect(result).toEqual({ success: true, message: 'ok' });
-            expect(validateConnection).toHaveBeenCalledWith({ apiKey: 'k' });
+            expect(validateConnection).toHaveBeenCalledWith({ apiKey: 'k' }, CALLER_SCOPE);
         });
 
         // F6: the first load resolves, but an onLoad that failed there leaves the

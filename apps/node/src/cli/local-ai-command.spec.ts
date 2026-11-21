@@ -99,10 +99,21 @@ describe('ever-works-node local-ai list', () => {
 			'  apis       openai-chat, openai-responses, anthropic-messages (the kind’s defaults)',
 			'  model      flashnext',
 			'agent        claude-code runs on provider gpu',
+			"completions  on — serves the platform's model requests under --work, 1 at a time, up to 1800 s each",
 			'extra tags   gpu, gpu:nvidia'
 		]);
 		expect(h.fetch.calls).toHaveLength(0);
 		expect(h.everything()).not.toContain(KEY);
+	});
+
+	it('says when completions are switched off', async () => {
+		const h = harness({
+			stored: { ...config, localAi: { ...config.localAi, completions: { enabled: false } } }
+		});
+		expect(await runCli(['local-ai', 'list'], h.deps)).toBe(EXIT_OK);
+		expect(h.stdout).toContain(
+			'completions  off (localAi.completions.enabled or EVER_WORKS_NODE_LOCAL_AI_COMPLETIONS)'
+		);
 	});
 
 	it('emits JSON with the known kinds and the problems', async () => {

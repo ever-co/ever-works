@@ -6,6 +6,7 @@ import type {
 	SettingScope
 } from '../settings/settings.types.js';
 import type { PluginEventName, PluginEventPayloads, EventHandler, EventSubscription } from '../events/event-types.js';
+import type { LocalAiRelayServiceRef } from './local-ai-relay.interface.js';
 
 /**
  * Logger interface for plugins (minimal, framework-agnostic)
@@ -73,6 +74,12 @@ export interface PluginServices {
 	readonly work?: WorkServiceRef;
 	/** User service (limited interface) */
 	readonly user?: UserServiceRef;
+	/**
+	 * The model servers on the caller's OWN machines (fleet nodes with a local
+	 * AI provider), reached through the platform — see {@link LocalAiRelayServiceRef}.
+	 * Absent where the process cannot reach the fleet.
+	 */
+	readonly localAi?: LocalAiRelayServiceRef;
 }
 
 /**

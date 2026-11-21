@@ -811,6 +811,17 @@ describe('PluginContextFactoryService', () => {
             expect(context.services.work).toBe(mockWorkService);
             expect(context.services.user).toBeUndefined();
         });
+
+        it('lets a context created BEFORE a service was injected see it (the local AI relay binds in onModuleInit)', () => {
+            const context = service.createContext('test-plugin');
+            expect(context.services.localAi).toBeUndefined();
+
+            const relay = { listModels: jest.fn(), complete: jest.fn() };
+            service.injectServices({ localAi: relay as any });
+
+            expect(context.services.localAi).toBe(relay);
+            expect(service.createContext('test-plugin').services.localAi).toBe(relay);
+        });
     });
 
     describe('default options', () => {

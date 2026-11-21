@@ -161,6 +161,8 @@ async function resolveAiProvidersFromChain(
                 name: cfg.providerId,
                 baseURL: cfg.baseUrl,
                 apiKey: cfg.apiKey,
+                // A provider reachable only through its own transport (fleet local AI).
+                ...(cfg.fetch ? { fetch: cfg.fetch } : {}),
             });
             resolved.push({
                 model: provider(modelName),

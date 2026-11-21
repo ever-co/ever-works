@@ -5,6 +5,7 @@ import {
 	defaultLocalAiProviderRegistry,
 	evaluateLocalAiRuntime,
 	isLocalAiWireApi,
+	localAiCompletionSettings,
 	LOCAL_AI_ENV,
 	EXTRA_CAPABILITIES_ENV,
 	runLocalAiSmokeTest,
@@ -173,6 +174,7 @@ export async function runLocalAiList(deps: LocalAiCliDeps, options: LocalAiComma
 					})),
 					providers: monitor ? monitor.settings.providers.map(providerJson) : [],
 					agentRuntimes: monitor ? monitor.settings.agentRuntimes.map((runtime) => ({ ...runtime })) : [],
+					completions: monitor ? localAiCompletionSettings(monitor.settings) : null,
 					extraCapabilities: setup.extraCapabilities,
 					problems: setup.problems
 				},
@@ -205,6 +207,12 @@ export async function runLocalAiList(deps: LocalAiCliDeps, options: LocalAiComma
 		if (monitor.settings.agentRuntimes.length === 0) {
 			deps.out('agent        (no agent CLI is bound — Tasks run on the CLIs’ own sign-in)');
 		}
+		const completions = localAiCompletionSettings(monitor.settings);
+		deps.out(
+			completions.enabled
+				? `completions  on — serves the platform's model requests under --work, ${completions.concurrency} at a time, up to ${Math.round(completions.maxTimeoutMs / 1000)} s each`
+				: `completions  off (localAi.completions.enabled or ${LOCAL_AI_ENV.completions})`
+		);
 	}
 	deps.out(
 		`extra tags   ${setup.extraCapabilities.join(', ') || `(none — config "extraCapabilities" or ${EXTRA_CAPABILITIES_ENV})`}`

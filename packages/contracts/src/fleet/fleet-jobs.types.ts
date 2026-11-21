@@ -155,7 +155,18 @@ export type FleetJobKind =
 	 */
 	| 'runner-install'
 	/** Actions runners (FL-18) — start / stop / restart / remove (and, phase 3, reinstall) one runner. */
-	| 'runner-control';
+	| 'runner-control'
+	/**
+	 * Local AI completions — ONE model request (an OpenAI Chat Completions,
+	 * OpenAI Responses or Anthropic Messages body) that a node relays to a
+	 * HEALTHY local AI provider on (or next to) the machine and answers with
+	 * the provider's response. It is how the platform's own pipelines (Work
+	 * generation) use the owner's local models for free. Requires `local-ai`,
+	 * `local-ai-completions` and `local-model:<model>`; leased by the node's
+	 * local-AI lane under `--work`, never by the work lane. Shapes and bounds:
+	 * `fleet-ai-completion.types.ts`.
+	 */
+	| 'ai-completion';
 
 /** Canonical job-kind list. */
 export const FLEET_JOB_KINDS: readonly FleetJobKind[] = [
@@ -168,7 +179,8 @@ export const FLEET_JOB_KINDS: readonly FleetJobKind[] = [
 	'vm-control',
 	'usage-scan',
 	'runner-install',
-	'runner-control'
+	'runner-control',
+	'ai-completion'
 ];
 
 /**
@@ -263,6 +275,8 @@ export const FLEET_GPU_CAPABILITY = 'gpu';
  * probe found it healthy.
  *
  *   - `local-ai`                   at least one local provider is up;
+ *   - `local-ai-completions`       this node serves `ai-completion` jobs (its
+ *                                  local-AI lane runs, under `--work`);
  *   - `local-ai:<kind>`            a healthy provider of that kind (`local-ai:ollama`);
  *   - `local-model:<model>`        a model a healthy provider serves (bounded, slugged);
  *   - `local-agent:<cli>`          this node runs that agent CLI's Tasks ON its
@@ -280,6 +294,15 @@ export const FLEET_LOCAL_AI_KIND_CAPABILITY_PREFIX = 'local-ai:';
 export const FLEET_LOCAL_MODEL_CAPABILITY_PREFIX = 'local-model:';
 /** Prefix of the agent-runtime tag, e.g. `local-agent:claude-code`. */
 export const FLEET_LOCAL_AGENT_CAPABILITY_PREFIX = 'local-agent:';
+/**
+ * This node SERVES `ai-completion` jobs: its local-AI lane is running (the
+ * node was started with `--work` and the operator did not switch completions
+ * off) and at least one local provider is up. Every `ai-completion` job
+ * requires it, so a node that only advertises `local-ai` (an older build, or
+ * one whose completions are off) is never offered a completion it would have
+ * to fail.
+ */
+export const FLEET_LOCAL_AI_COMPLETIONS_CAPABILITY = 'local-ai-completions';
 
 /** The `local-agent:<cli>` tag for one agent CLI. */
 export function fleetLocalAgentCapability(provider: FleetAgentExecutionProvider): string {
@@ -291,6 +314,7 @@ export function isFleetLocalAiCapability(tag: unknown): boolean {
 	return (
 		typeof tag === 'string' &&
 		(tag === FLEET_LOCAL_AI_CAPABILITY ||
+			tag === FLEET_LOCAL_AI_COMPLETIONS_CAPABILITY ||
 			tag.startsWith(FLEET_LOCAL_AI_KIND_CAPABILITY_PREFIX) ||
 			tag.startsWith(FLEET_LOCAL_MODEL_CAPABILITY_PREFIX) ||
 			tag.startsWith(FLEET_LOCAL_AGENT_CAPABILITY_PREFIX))
@@ -430,7 +454,12 @@ export const FLEET_JOB_DEFAULT_QUEUED_MAX_AGE_SEC: Readonly<Record<FleetJobKind,
 	// undercut the shortest existing default (the fallback an unknown kind fails
 	// closed to), so an older reader's answer for an unknown kind is unchanged.
 	'runner-install': 2 * 60 * 60,
-	'runner-control': 2 * 60 * 60
+	'runner-control': 2 * 60 * 60,
+	// Local AI completions. A caller waits for ONE answer and cancels the job
+	// at its own deadline (minutes), so this SLA is only the backstop behind
+	// that; like the kinds above it does NOT undercut the shortest existing
+	// default (the fallback an unknown kind fails closed to).
+	'ai-completion': 2 * 60 * 60
 });
 
 /** Floor/ceiling clamps applied to any operator-supplied queued max age. */
