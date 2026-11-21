@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { landingTypeToWorkKind, readPromptHandoff, workKindLabel } from './prompt-handoff';
+import { readPromptHandoff } from './prompt-handoff';
 
 const BASE = 'https://app.ever.works/onboarding';
 
@@ -12,9 +12,10 @@ describe('readPromptHandoff — the ever.works home-page hand-off', () => {
         expect(handoff).toEqual({
             prompt: 'AI robots directory',
             correlationId: 'abcdef12-3456',
-            kind: 'directory',
             cleanedHref: BASE,
         });
+        // The chip is consumed (stripped) but not mapped onto a Work kind.
+        expect(handoff).not.toHaveProperty('kind');
     });
 
     it('removes only what it consumed, so other hand-off keys survive', () => {
@@ -61,44 +62,5 @@ describe('readPromptHandoff — the ever.works home-page hand-off', () => {
 
     it('answers null for a URL it cannot parse', () => {
         expect(readPromptHandoff('not a url')).toBeNull();
-    });
-});
-
-describe('landingTypeToWorkKind', () => {
-    it('maps the home-page chips onto Work kinds', () => {
-        expect(landingTypeToWorkKind('website')).toBe('website');
-        expect(landingTypeToWorkKind('landing-page')).toBe('landing-page');
-        expect(landingTypeToWorkKind('blog')).toBe('blog');
-        expect(landingTypeToWorkKind('directory-website')).toBe('directory');
-        expect(landingTypeToWorkKind('directory')).toBe('directory');
-        expect(landingTypeToWorkKind('awesome-repo')).toBe('awesome-repo');
-        expect(landingTypeToWorkKind(' Directory-Website ')).toBe('directory');
-    });
-
-    it('leaves the kind to the platform default for chips without a generated kind', () => {
-        // `company` is reserved for the Register-Company flow; `repo` and `app`
-        // need a repository URL; the rest have no Work kind of their own yet.
-        for (const type of [
-            'knowledge-base',
-            'store',
-            'company',
-            'mission',
-            'idea',
-            'repo',
-            'app',
-            'x',
-            '',
-        ]) {
-            expect(landingTypeToWorkKind(type)).toBeUndefined();
-        }
-        expect(landingTypeToWorkKind(null)).toBeUndefined();
-    });
-});
-
-describe('workKindLabel', () => {
-    it('names the kind the way the home page did', () => {
-        expect(workKindLabel('directory')).toBe('Directory website');
-        expect(workKindLabel('landing-page')).toBe('Landing page');
-        expect(workKindLabel(undefined)).toBeUndefined();
     });
 });
