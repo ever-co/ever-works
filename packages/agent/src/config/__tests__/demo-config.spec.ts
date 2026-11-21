@@ -1,4 +1,4 @@
-import { config } from '../index';
+import { config, DEMO_DEFAULTS } from '../index';
 
 describe('config.demo', () => {
     const saved = { ...process.env };
@@ -104,5 +104,46 @@ describe('config.demo', () => {
                 }
             },
         );
+    });
+
+    /**
+     * Every `DEMO_*` default lives in one frozen block, declared before `config` reads it; each
+     * accessor falls back to its entry (the values are the ones documented in
+     * docs/guides/demo-mode.md).
+     */
+    describe('DEMO_DEFAULTS', () => {
+        it('holds every demo default, once', () => {
+            expect(DEMO_DEFAULTS).toEqual({
+                sandboxTtlHours: 24,
+                signUpUrl: 'https://app.ever.works/register',
+                repoPrefix: 'demo-',
+                aiRequestsPerSandbox: 120,
+                aiRequestsPerDay: 900,
+                aiRequestsPerMinute: 18,
+                maxWorksPerSandbox: 3,
+                maxActiveSandboxes: 300,
+                createPerIpPerHour: 5,
+            });
+            expect(Object.isFrozen(DEMO_DEFAULTS)).toBe(true);
+        });
+
+        it('is what every accessor answers with its variable unset', () => {
+            expect({
+                sandboxTtlHours: config.demo.sandboxTtlHours(),
+                signUpUrl: config.demo.signUpUrl(),
+                repoPrefix: config.demo.repoPrefix(),
+                aiRequestsPerSandbox: config.demo.aiRequestsPerSandbox(),
+                aiRequestsPerDay: config.demo.aiRequestsPerDay(),
+                aiRequestsPerMinute: config.demo.aiRequestsPerMinute(),
+                maxWorksPerSandbox: config.demo.maxWorksPerSandbox(),
+                maxActiveSandboxes: config.demo.maxActiveSandboxes(),
+                createPerIpPerHour: config.demo.createPerIpPerHour(),
+            }).toEqual(DEMO_DEFAULTS);
+        });
+
+        it('is also the fallback for a blank DEMO_REPO_PREFIX', () => {
+            process.env.DEMO_REPO_PREFIX = '   ';
+            expect(config.demo.repoPrefix()).toBe(DEMO_DEFAULTS.repoPrefix);
+        });
     });
 });
