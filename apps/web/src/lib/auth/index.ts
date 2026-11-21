@@ -17,7 +17,9 @@ export const DEMO_EXPIRED_HREF = `${ROUTES.AUTH_LOGIN}?demo=expired`;
 /**
  * The route handler (`app/api/auth/demo-expired/route.ts`) a render sends that visitor
  * through on the way to {@link DEMO_EXPIRED_HREF}: it removes the stale session cookie, which a
- * render cannot, so no other page bounces the visitor back to the sign-in page.
+ * render cannot, so no other page bounces the visitor back to the sign-in page. Only a render
+ * goes this way; a Server Action or route handler removes the cookie itself and redirects
+ * straight to {@link DEMO_EXPIRED_HREF}.
  */
 export const DEMO_EXPIRED_SIGN_OUT_HREF = '/api/auth/demo-expired';
 
@@ -90,9 +92,11 @@ async function clearAuthCookieOnUnauthorized(
         // as unauthenticated is the part that matters; the redirect to login
         // follows, and the stale cookie is cleared by the next Server Action
         // or route handler (login POST, /logout) where the write is legal.
+        let cleared = true;
         try {
             await removeAuthAccessCookies();
         } catch (clearError) {
+            cleared = false;
             console.warn(
                 'Could not clear the auth cookie from this context (expected during a Server Component render); treating the session as unauthenticated anyway.',
                 clearError,
@@ -103,15 +107,19 @@ async function clearAuthCookieOnUnauthorized(
         }
         // Demo instance: the sandbox is deleted with its session, so a 401 means it
         // expired (or the sweeper took it). Say so instead of leaving a generic
-        // sign-in page. The way there is a route handler that removes the stale
-        // cookie (the write above fails during a render), so the next page that
-        // reads the session does not bounce the visitor back. The sign-in page
+        // sign-in page. Where the cookie is already gone (a Server Action or a
+        // route handler), straight there. Where it could not be removed (a
+        // render), by way of the route handler that removes it, so the next page
+        // that reads the session does not bounce the visitor back. Not the
+        // detour from an action: Next.js follows an action's redirect on the
+        // server and would show the sign-in page under the detour's address,
+        // without `?demo=expired` and so without the notice. The sign-in page
         // itself opts out (`redirectOnDemoExpiry: false`), as does that route
         // handler's own check — redirecting from there would loop. Demo off:
         // nothing changes.
         if (redirectOnDemoExpiry && !endedByEverId && (await getDemoConfig()).enabled) {
             // `localePrefix: 'never'` — the plain path is the whole URL.
-            redirect(DEMO_EXPIRED_SIGN_OUT_HREF);
+            redirect(cleared ? DEMO_EXPIRED_HREF : DEMO_EXPIRED_SIGN_OUT_HREF);
         }
         return true;
     }
