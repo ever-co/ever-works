@@ -1,3 +1,5 @@
+import { isTrackingQueryParam } from './dedup-utils.js';
+
 export type ReferenceStatus = 'success' | 'empty' | 'error' | 'skipped';
 
 export interface ReferenceEntry {
@@ -25,8 +27,6 @@ export interface ReferenceSkipDecision {
 }
 
 const DEFAULT_REFERENCE_TTL_DAYS = 90;
-const TRACKING_PARAM_PREFIXES = ['utm_'];
-const TRACKING_PARAM_NAMES = new Set(['fbclid', 'gclid', 'msclkid', 'srsltid']);
 
 export function getDefaultReferenceTtlDays(): number {
 	return DEFAULT_REFERENCE_TTL_DAYS;
@@ -68,13 +68,7 @@ export function normalizeReferenceUrl(raw: string): string {
 		}
 		const pathname = parsed.pathname.replace(/(?<!\/)\/+$/, '') || '/';
 		const searchParams = [...parsed.searchParams.entries()]
-			.filter(([key]) => {
-				const normalizedKey = key.toLowerCase();
-				return (
-					!TRACKING_PARAM_NAMES.has(normalizedKey) &&
-					!TRACKING_PARAM_PREFIXES.some((prefix) => normalizedKey.startsWith(prefix))
-				);
-			})
+			.filter(([key]) => !isTrackingQueryParam(key))
 			.sort(([leftKey, leftValue], [rightKey, rightValue]) => {
 				if (leftKey === rightKey) {
 					return leftValue.localeCompare(rightValue);

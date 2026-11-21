@@ -222,11 +222,17 @@ export class PluginValidationService {
 
         // Prefer validateConnection() — plugins self-describe their validation logic
         const validateConnection = plugin.validateConnection as
-            | ((s: Record<string, unknown>) => Promise<ConnectionValidationResult>)
+            | ((
+                  s: Record<string, unknown>,
+                  scope?: { userId?: string; workId?: string },
+              ) => Promise<ConnectionValidationResult>)
             | undefined;
+        // Who is asking: a plugin whose answer depends on the caller's own resources
+        // (the fleet local AI plugin checks the caller's machines) needs it; others ignore it.
+        const scope = workId ? { userId, workId } : { userId };
 
         if (typeof validateConnection === 'function') {
-            const result = await validateConnection.call(plugin, settings);
+            const result = await validateConnection.call(plugin, settings, scope);
             if (!result.success) {
                 throw new BadRequestException({
                     message: result.message,
@@ -248,11 +254,14 @@ export class PluginValidationService {
 
         // Fallback: generic availability check
         const isAvailable = plugin.isAvailable as
-            | ((s?: Record<string, unknown>) => Promise<boolean>)
+            | ((
+                  s?: Record<string, unknown>,
+                  scope?: { userId?: string; workId?: string },
+              ) => Promise<boolean>)
             | undefined;
 
         if (typeof isAvailable === 'function') {
-            const available = await isAvailable.call(plugin, settings);
+            const available = await isAvailable.call(plugin, settings, scope);
             if (!available) {
                 throw new BadRequestException(
                     `${registered.plugin.name} connection test failed. Check your credentials and try again.`,

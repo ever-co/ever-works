@@ -27,6 +27,10 @@ import {
  * the demo AI quota. Other plugins, and every plugin with `DEMO` unset, are
  * checked exactly as before.
  */
+
+/** Who asked: the service passes it on to the plugin (the fleet local AI plugin reads it). */
+const CALLER_SCOPE = expect.objectContaining({ userId: expect.any(String) });
+
 describe('PluginValidationService — demo mode', () => {
     const originalDemo = process.env.DEMO;
     let pluginRegistry: { get: jest.Mock };
@@ -73,11 +77,14 @@ describe('PluginValidationService — demo mode', () => {
 
         await service.validateUserPluginConnection('openrouter', 'u-1');
 
-        expect(validateConnection).toHaveBeenCalledWith({
-            apiKey: 'sk-or',
-            defaultModel: 'google/gemma-4-31b-it:free',
-            complexModel: 'deepseek/deepseek-r3:free',
-        });
+        expect(validateConnection).toHaveBeenCalledWith(
+            {
+                apiKey: 'sk-or',
+                defaultModel: 'google/gemma-4-31b-it:free',
+                complexModel: 'deepseek/deepseek-r3:free',
+            },
+            CALLER_SCOPE,
+        );
         expect(quota.consume.mock.calls).toEqual([['u-1'], ['u-1']]);
     });
 
@@ -147,7 +154,7 @@ describe('PluginValidationService — demo mode', () => {
 
         await service.validateUserPluginConnection('tavily', 'u-1');
 
-        expect(validateConnection).toHaveBeenCalledWith({ apiKey: 'tv' });
+        expect(validateConnection).toHaveBeenCalledWith({ apiKey: 'tv' }, CALLER_SCOPE);
         expect(quota.consume).not.toHaveBeenCalled();
     });
 
@@ -157,12 +164,15 @@ describe('PluginValidationService — demo mode', () => {
 
         await service.validateUserPluginConnection('anthropic', 'u-1');
 
-        expect(validateConnection).toHaveBeenCalledWith({
-            apiKey: 'sk-or',
-            defaultModel: 'google/gemma-4-31b-it:free',
-            simpleModel: 'openai/gpt-6.1-mini',
-            complexModel: 'deepseek/deepseek-r3:free',
-        });
+        expect(validateConnection).toHaveBeenCalledWith(
+            {
+                apiKey: 'sk-or',
+                defaultModel: 'google/gemma-4-31b-it:free',
+                simpleModel: 'openai/gpt-6.1-mini',
+                complexModel: 'deepseek/deepseek-r3:free',
+            },
+            CALLER_SCOPE,
+        );
         expect(quota.consume).not.toHaveBeenCalled();
     });
 });

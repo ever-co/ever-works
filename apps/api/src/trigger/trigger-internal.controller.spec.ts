@@ -2125,6 +2125,91 @@ describe('TriggerInternalController', () => {
                 (type) => (type as { name?: string })?.name === 'DemoRepoLedgerService',
             );
 
+            // In the tail (local AI completions appended one more after it).
+            expect(at).toBeGreaterThan(0);
+            expect(at).toBeLessThan(paramTypes.length);
+            expect(optionalIndices).toContain(at);
+        });
+    });
+
+    /**
+     * Local AI completions — the worker's local AI relay reaches the API's
+     * `FleetAiCompletionService` through a FIVE-member facade, each argument rebuilt
+     * (the facade itself is pinned in `fleet/__tests__/fleet-ai-completion.remote.spec.ts`).
+     */
+    describe('the FleetAiCompletionService remote target (local AI completions)', () => {
+        const call = (method: string, args: unknown[]) => ({
+            name: 'FleetAiCompletionService',
+            method,
+            args: superjson.serialize(args) as any,
+        });
+
+        let completions: Record<string, jest.Mock>;
+
+        beforeEach(() => {
+            completions = {
+                listModels: jest.fn().mockResolvedValue([{ id: 'flashnext', nodes: 1 }]),
+                submit: jest.fn().mockResolvedValue({ ok: true, jobId: 'job-1' }),
+                awaitResult: jest.fn().mockResolvedValue({ state: 'pending', status: 'queued' }),
+                cancel: jest.fn().mockResolvedValue({ cancelled: true }),
+                release: jest.fn().mockResolvedValue({ released: true }),
+                servingNodes: jest.fn(),
+            };
+        });
+
+        it('reaches the relay calls over the hop', async () => {
+            (controller as any).fleetAiCompletionService = completions;
+            controller.onModuleInit();
+
+            const response = await controller.callRemote(
+                VALID_SECRET,
+                call('listModels', ['user-1']),
+            );
+            await controller.callRemote(
+                VALID_SECRET,
+                call('awaitResult', [{ userId: 'user-1', jobId: 'job-1', waitMs: 15_000 }]),
+            );
+
+            expect(superjson.deserialize(response.result as any)).toEqual([
+                { id: 'flashnext', nodes: 1 },
+            ]);
+            expect(completions.awaitResult).toHaveBeenCalledWith({
+                userId: 'user-1',
+                jobId: 'job-1',
+                waitMs: 15_000,
+            });
+        });
+
+        it('exposes the five relay calls ONLY', async () => {
+            (controller as any).fleetAiCompletionService = completions;
+            controller.onModuleInit();
+
+            await expect(
+                controller.callRemote(VALID_SECRET, call('servingNodes', ['user-1'])),
+            ).rejects.toThrow(
+                'Method not in allow-list for FleetAiCompletionService: servingNodes',
+            );
+            expect(completions.servingNodes).not.toHaveBeenCalled();
+        });
+
+        it('is an unknown target without the service', async () => {
+            (controller as any).fleetAiCompletionService = undefined;
+            controller.onModuleInit();
+
+            await expect(
+                controller.callRemote(VALID_SECRET, call('listModels', ['u'])),
+            ).rejects.toThrow('Unknown remote target: FleetAiCompletionService');
+        });
+
+        it('appends the service last, in the @Optional() tail', () => {
+            const paramTypes: unknown[] =
+                Reflect.getMetadata('design:paramtypes', TriggerInternalController) ?? [];
+            const optionalIndices: number[] =
+                Reflect.getMetadata('optional:paramtypes', TriggerInternalController) ?? [];
+            const at = paramTypes.findIndex(
+                (type) => (type as { name?: string })?.name === 'FleetAiCompletionService',
+            );
+
             expect(at).toBe(paramTypes.length - 1);
             expect(optionalIndices).toContain(at);
         });

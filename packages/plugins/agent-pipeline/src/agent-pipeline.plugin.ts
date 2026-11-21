@@ -492,7 +492,10 @@ export class AgentPipelinePlugin implements IPlugin, IPipelinePlugin<AgentPipeli
 		const provider = createOpenAICompatible({
 			name: providerConfig.providerId,
 			baseURL: providerConfig.baseUrl!,
-			apiKey: providerConfig.apiKey!
+			apiKey: providerConfig.apiKey!,
+			// A provider reachable only through its own transport (local AI on the
+			// owner's computers): every request goes through it, never to baseURL.
+			...(providerConfig.fetch ? { fetch: providerConfig.fetch } : {})
 		});
 
 		const wrapModel = (name: string) => {

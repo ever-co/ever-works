@@ -189,6 +189,15 @@ function isGitConnected(firstSync: ForceSyncBody): boolean {
     return firstSync.status === 'enqueued';
 }
 
+/**
+ * A git provider id that no plugin answers. Since #3264 a default (`github`) Work without git
+ * credentials (the CI case) is SKIPPED (`app-not-installed-and-no-credentials`: no failure row,
+ * no retry-backoff), so it never reaches the render failure Flows 1, 2 and 4 pin. A Work using
+ * this provider fails the render gate for real in every environment (`GitProviderNotFoundError`,
+ * classed `data-repo-unreachable`), which arms the backoff like any real render failure.
+ */
+const UNAVAILABLE_GIT_PROVIDER = 'e2e-unavailable-git';
+
 test.describe('flow: work data-sync state-field + conflict contract (EW-628, deep)', () => {
     // ───────────────────────────────────────────────────────────────────────────
     // FLOW 1 — A FAILED SYNC NEVER ADVANCES THE CONFLICT BASELINE.
@@ -211,6 +220,7 @@ test.describe('flow: work data-sync state-field + conflict contract (EW-628, dee
         const token = owner.access_token;
         const work = await createWorkViaAPI(request, token, {
             name: `sync-baseline-${uniqueSuffix()}`,
+            gitProvider: UNAVAILABLE_GIT_PROVIDER,
         });
         expect(work.id, 'work created').toBeTruthy();
 
@@ -253,13 +263,13 @@ test.describe('flow: work data-sync state-field + conflict contract (EW-628, dee
             return;
         }
 
-        // CI path: the render gate threw → failed. The baseline must NOT advance.
-        expect(first.body.status, 'CI render gate fails').toBe('failed');
+        // The render gate fails (no plugin answers the provider). The baseline must NOT advance.
+        expect(first.body.status, 'the render gate fails').toBe('failed');
         expect(ERROR_CLASSES, 'errorClass is from the closed union').toContain(
             first.body.errorClass,
         );
-        expect(String(first.body.errorTail), 'errorTail names the missing git account').toMatch(
-            /No connected account|github|not found/i,
+        expect(String(first.body.errorTail), 'errorTail names the missing git provider').toMatch(
+            /Git provider not found/,
         );
 
         // Drive a duplicate (suppressed) tick too — neither the failure nor its
@@ -300,6 +310,7 @@ test.describe('flow: work data-sync state-field + conflict contract (EW-628, dee
         const token = owner.access_token;
         const work = await createWorkViaAPI(request, token, {
             name: `sync-dedup-${uniqueSuffix()}`,
+            gitProvider: UNAVAILABLE_GIT_PROVIDER,
         });
 
         const BURST = 5;
@@ -428,7 +439,8 @@ test.describe('flow: work data-sync state-field + conflict contract (EW-628, dee
     // `generation-in-progress` ONLY while `work.generateStatus.status` is
     // GENERATING. In CI no AI/search provider is configured, so generate() CANNOT
     // start a run → `generateStatus` stays null → the gate is correctly NOT
-    // tripped and a concurrent force-sync still resolves its own (failed) outcome
+    // tripped and a concurrent force-sync still resolves its own (failed: the Work's
+    // git provider is UNAVAILABLE_GIT_PROVIDER) outcome
     // rather than a false generation-in-progress skip. We assert that truthfully,
     // with a tolerant branch that IF a run ever does flip GENERATING, the sync is
     // skipped:generation-in-progress (the documented behavior).
@@ -441,6 +453,7 @@ test.describe('flow: work data-sync state-field + conflict contract (EW-628, dee
         const token = owner.access_token;
         const work = await createWorkViaAPI(request, token, {
             name: `sync-vs-gen-${uniqueSuffix()}`,
+            gitProvider: UNAVAILABLE_GIT_PROVIDER,
         });
 
         // Kick a generation. In CI this 400s (provider not configured) and the

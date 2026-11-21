@@ -512,6 +512,34 @@ describe('OpenCodePlugin', () => {
 			expect(executeOpenCode).not.toHaveBeenCalled();
 		});
 
+		it('refuses a provider reachable only through the platform transport (local AI), naming why, without running the CLI', async () => {
+			const { executeOpenCode } = await import('../utils/process-runner');
+			const getProviderConfig = vi.fn().mockResolvedValue({
+				providerId: 'fleet-local-ai',
+				providerName: 'Local AI on your computers',
+				baseUrl: 'https://fleet-local-ai.invalid/v1',
+				apiKey: 'fleet-local-ai',
+				defaultModel: 'flashnext',
+				routing: {},
+				fetch: vi.fn()
+			});
+			await plugin.onLoad(createMockContext());
+
+			const result = await plugin.execute(work, request, existing, {
+				execContext: createExecContext({ aiFacade: { getProviderConfig } })
+			});
+			const edit = await plugin.executeCodeEdit(
+				{ instruction: 'x' } as never,
+				{ execContext: { aiFacade: { getProviderConfig }, userId: 'user1', workId: 'dir1' } } as never
+			);
+
+			expect(result.success).toBe(false);
+			expect(String(result.error)).toContain('reachable only through the platform');
+			expect(edit.success).toBe(false);
+			expect(JSON.stringify(edit)).toContain('reachable only through the platform');
+			expect(executeOpenCode).not.toHaveBeenCalled();
+		});
+
 		it('should require execContext and still succeed when screenshot facade throws', async () => {
 			const ctx = createMockContext();
 			await plugin.onLoad(ctx);

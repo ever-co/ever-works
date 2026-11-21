@@ -33,6 +33,8 @@ import { FL02_NEEDS_A_LOOK_PRODUCERS, FL03_NEEDS_A_LOOK_PRODUCERS } from './need
 import { FleetAccessService } from './fleet-access.service';
 import { FleetOrganizationDirectory } from './fleet-organization-directory';
 import { NeedsALookService } from './needs-a-look/needs-a-look.service';
+import { FleetAiCompletionService } from './ai-completion/fleet-ai-completion.service';
+import { FleetLocalAiPluginServices } from './ai-completion/fleet-local-ai-plugin-services';
 
 /**
  * Fleet (Wave 12, slice 1 + Desktop PRD M4) — agent-side module owning
@@ -149,6 +151,10 @@ import { NeedsALookService } from './needs-a-look/needs-a-look.service';
         FleetOrganizationDirectory,
         FleetAccessService,
         NeedsALookService,
+        // Local AI completions — one model request on the owner's fleet, and
+        // the relay every plugin context gets (`services.localAi`).
+        FleetAiCompletionService,
+        FleetLocalAiPluginServices,
     ],
     exports: [
         FleetNodeRepository,
@@ -177,6 +183,8 @@ import { NeedsALookService } from './needs-a-look/needs-a-look.service';
         // register into it; the hub reads it).
         FleetAccessService,
         NeedsALookService,
+        // Local AI completions — the Trigger.dev internal RPC exposes it to the worker.
+        FleetAiCompletionService,
     ],
 })
 export class FleetModule {}

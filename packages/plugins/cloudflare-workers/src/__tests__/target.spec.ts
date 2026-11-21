@@ -44,8 +44,12 @@ describe('resolveLabel', () => {
 });
 
 describe('resolveWorkerIdentity on the shared platform account', () => {
-	const platform = { platformManaged: true, workerPrefix: 'ew-', zoneName: 'ever.works' } as unknown as Parameters<typeof resolveWorkerIdentity>[0];
-	const member = { platformManaged: false, workerPrefix: 'ew-', zoneName: 'example.com' } as unknown as Parameters<typeof resolveWorkerIdentity>[0];
+	const platform = { platformManaged: true, workerPrefix: 'ew-', zoneName: 'ever.works' } as unknown as Parameters<
+		typeof resolveWorkerIdentity
+	>[0];
+	const member = { platformManaged: false, workerPrefix: 'ew-', zoneName: 'example.com' } as unknown as Parameters<
+		typeof resolveWorkerIdentity
+	>[0];
 
 	it('refuses a slug-derived name when no managed subdomain is allocated (slugs are not unique)', () => {
 		expect(() => resolveWorkerIdentity(platform, { workSlug: 'awesome-crm' })).toThrow(CloudflareConfigError);

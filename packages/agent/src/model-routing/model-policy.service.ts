@@ -341,7 +341,10 @@ export class ModelPolicyService {
     /** False when the id is absent from, or the provider could not list, its catalogue. */
     private async catalogueHas(
         plugin: {
-            listModels(settings?: Record<string, unknown>): Promise<readonly { id: string }[]>;
+            listModels(
+                settings?: Record<string, unknown>,
+                scope?: { userId?: string },
+            ): Promise<readonly { id: string }[]>;
         },
         providerPluginId: string,
         modelId: string,
@@ -354,7 +357,8 @@ export class ModelPolicyService {
                       includeSecrets: true,
                   })
                 : {};
-            const models = await plugin.listModels(settings);
+            // The caller: a provider whose catalogue is the caller's own (fleet local AI) needs it.
+            const models = await plugin.listModels(settings, { userId });
             return models.some((model) => model.id === modelId);
         } catch {
             return false;

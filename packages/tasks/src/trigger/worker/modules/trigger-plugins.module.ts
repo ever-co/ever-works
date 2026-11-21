@@ -26,6 +26,10 @@ import { TriggerInternalApiClient } from '../services/trigger-internal-api.clien
 import { createRemoteProxy } from '../remote-proxy';
 import { LocalPluginStore } from '../services/local-plugin-store';
 import { TriggerPluginHydratorService } from '../services/trigger-plugin-hydrator.service';
+import {
+    bindTriggerLocalAiRelay,
+    TRIGGER_LOCAL_AI_RELAY,
+} from '../services/trigger-local-ai-relay';
 
 /**
  * Global plugin module for Trigger.dev context.
@@ -124,6 +128,13 @@ export class TriggerPluginsModule {
                 CustomCapabilityRegistryService,
                 PluginBootstrapService,
                 TriggerPluginHydratorService,
+                // Local AI completions — every plugin context here gets the relay to the
+                // owner's machines (`services.localAi`), over the internal RPC.
+                {
+                    provide: TRIGGER_LOCAL_AI_RELAY,
+                    useFactory: bindTriggerLocalAiRelay,
+                    inject: [PluginContextFactoryService, TriggerInternalApiClient],
+                },
             ],
             exports: [
                 PluginRepository,

@@ -427,9 +427,20 @@ export class PluginContextFactoryService {
      * Create PluginServices for a plugin.
      */
     private createServices(_scopeOptions?: { userId?: string; workId?: string }): PluginServices {
+        // Read through getters, not copied: a plugin's context is created when
+        // it loads, which can be before a module injects a service (the local
+        // AI relay is bound in `onModuleInit`), and the plugin must still see it.
+        const injected = (): Partial<PluginServices> => this.injectedServices;
         return {
-            work: this.injectedServices.work,
-            user: this.injectedServices.user,
+            get work() {
+                return injected().work;
+            },
+            get user() {
+                return injected().user;
+            },
+            get localAi() {
+                return injected().localAi;
+            },
         };
     }
 

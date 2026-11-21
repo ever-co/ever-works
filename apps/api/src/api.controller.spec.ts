@@ -154,7 +154,10 @@ describe('APIController', () => {
             process.env.DEMO_SANDBOX_TTL_HOURS = '6';
             const r = controller.getConfig();
             expect(r.features.demoMode).toBe(true);
-            expect(r.demo).toEqual({ signUpUrl: 'https://app.ever.works/register', sandboxTtlHours: 6 });
+            expect(r.demo).toEqual({
+                signUpUrl: 'https://app.ever.works/register',
+                sandboxTtlHours: 6,
+            });
         });
 
         it('honors NEXT_PUBLIC_SITE_DESCRIPTION before APP_DESCRIPTION', () => {
