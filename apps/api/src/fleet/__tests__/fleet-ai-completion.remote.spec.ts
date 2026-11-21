@@ -100,6 +100,38 @@ describe('fleetAiCompletionRemoteFacade', () => {
         expect(svc.awaitResult).toHaveBeenCalledWith({ userId: 'u', jobId: 'j', waitMs: 0 });
     });
 
+    it('bounds the provider budget and the wait before they reach the service', async () => {
+        const svc = service();
+        const facade = fleetAiCompletionRemoteFacade(svc as unknown as FleetAiCompletionService);
+
+        await facade.submit({
+            userId: 'u',
+            api: 'openai-chat',
+            model: 'm',
+            body: 'b',
+            bodyEncoding: 'json',
+            requestId: 'r',
+            timeoutSec: 1e9,
+        });
+        await facade.submit({
+            userId: 'u',
+            api: 'openai-chat',
+            model: 'm',
+            body: 'b',
+            bodyEncoding: 'json',
+            requestId: 'r',
+            timeoutSec: 1,
+        });
+        await facade.awaitResult({ userId: 'u', jobId: 'j', waitMs: 3_600_000 });
+
+        expect(svc.submit).toHaveBeenNthCalledWith(
+            1,
+            expect.objectContaining({ timeoutSec: 1800 }),
+        );
+        expect(svc.submit).toHaveBeenNthCalledWith(2, expect.objectContaining({ timeoutSec: 10 }));
+        expect(svc.awaitResult).toHaveBeenCalledWith({ userId: 'u', jobId: 'j', waitMs: 20_000 });
+    });
+
     it('reads anything that is not an object as an empty one (coercion to empty strings is intended: the service refuses them)', async () => {
         const svc = service();
         const facade = fleetAiCompletionRemoteFacade(svc as unknown as FleetAiCompletionService);
