@@ -6,8 +6,32 @@ import {
 	normalizeItemName,
 	createItemLookupIndex,
 	isItemDuplicate,
-	filterNewItemsManually
+	filterNewItemsManually,
+	isTrackingQueryParam
 } from '../dedup-utils.js';
+import { normalizeReferenceUrl } from '../references.js';
+
+describe('isTrackingQueryParam', () => {
+	it('matches the tracking names and the utm_ prefix, in any case', () => {
+		for (const key of ['utm_source', 'UTM_Medium', 'utm_', 'fbclid', 'GCLID', 'msclkid', 'srsltid']) {
+			expect(isTrackingQueryParam(key)).toBe(true);
+		}
+	});
+
+	it('leaves page parameters and look-alikes alone', () => {
+		for (const key of ['id', 'ref', 'q', 'utmost', 'utm', 'xfbclid', 'gclid_x', '']) {
+			expect(isTrackingQueryParam(key)).toBe(false);
+		}
+	});
+
+	it('is the one list both URL normalizers drop', () => {
+		// normalizeUrl (item dedup) and normalizeReferenceUrl (reference TTL) shape URLs
+		// differently on purpose, but they must drop the same parameters.
+		const tagged = 'https://example.com/tool?utm_source=a&fbclid=b&gclid=c&msclkid=d&srsltid=e&id=7';
+		expect(normalizeUrl(tagged)).toBe(normalizeUrl('https://example.com/tool?id=7'));
+		expect(normalizeReferenceUrl(tagged)).toBe(normalizeReferenceUrl('https://example.com/tool?id=7'));
+	});
+});
 
 const item = (overrides: Partial<MutableItemData> = {}): MutableItemData =>
 	({
@@ -103,9 +127,7 @@ describe('normalizeUrl', () => {
 
 	it('keeps parameters that identify the page, in a stable order', () => {
 		expect(normalizeUrl('https://example.com/item?id=7&utm_source=x')).toBe('example.com/item?id=7');
-		expect(normalizeUrl('https://example.com/item?id=7')).not.toBe(
-			normalizeUrl('https://example.com/item?id=8')
-		);
+		expect(normalizeUrl('https://example.com/item?id=7')).not.toBe(normalizeUrl('https://example.com/item?id=8'));
 		expect(normalizeUrl('https://example.com/s?b=1&a=2')).toBe(normalizeUrl('https://example.com/s?a=2&b=1'));
 		expect(normalizeUrl('https://example.com/s?&&a=2&')).toBe('example.com/s?a=2');
 	});
@@ -131,9 +153,26 @@ describe('normalizeUrl', () => {
 		expect(isItemDuplicate(tagged, index)).toBe(true);
 	});
 
+	it('sorts repeated keys too, and keeps each occurrence', () => {
+		expect(normalizeUrl('https://example.com/s?id=8&id=7')).toBe('example.com/s?id=7&id=8');
+		expect(normalizeUrl('https://example.com/s?id=7&id=8')).toBe(normalizeUrl('https://example.com/s?id=8&id=7'));
+		// A repeated pair is not collapsed: `?id=7&id=7` is left as the page sent it.
+		expect(normalizeUrl('https://example.com/s?id=7&id=7')).toBe('example.com/s?id=7&id=7');
+	});
+
+	it('strips an index file in front of a kept query', () => {
+		expect(normalizeUrl('https://example.com/docs/index.html?id=7')).toBe('example.com/docs?id=7');
+		expect(normalizeUrl('https://example.com/docs/index.html?id=7')).toBe(
+			normalizeUrl('https://example.com/docs/?id=7')
+		);
+		expect(normalizeUrl('https://example.com/docs/index.html?utm_source=x')).toBe('example.com/docs');
+	});
+
 	it('stays linear on hostile input (CodeQL js/polynomial-redos)', () => {
-		normalizeUrl(`x?${'&'.repeat(50_000)}`);
 		const started = Date.now();
+		normalizeUrl(`x?${'&'.repeat(50_000)}`);
+		// 50,000 distinct kept keys: one split, one filter, one sort.
+		normalizeUrl(`x?${Array.from({ length: 50_000 }, (_, i) => `k${i}=v`).join('&')}`);
 		normalizeUrl(`${'#'.repeat(50_000)}\nx`);
 		// The slash stops `[^/]+` while `.` stops at the newline: the old pattern's worst case.
 		normalizeUrl(`/tree/${'.'.repeat(50_000)}/\nx`);
