@@ -94,17 +94,32 @@ export class DemoSandboxService {
      * the user is not deleted here (that would orphan them): it is expired, which hands the
      * whole sandbox to the demo sweeper's one purge path, and its sessions end now. The
      * session table has no foreign key to the user, so its rows are removed explicitly.
+     *
+     * The user is expired FIRST: whatever stops the rollback after that (a crash, a failed
+     * delete), the half-seeded sandbox is already the sweeper's, whose purge removes its
+     * sessions too; the other order could leave it live, with a session, for its whole TTL.
+     * Each step is tried even when the other failed.
      */
     private async rollback(userId: string): Promise<void> {
         try {
-            await this.dataSource.getRepository(AuthSession).delete({ userId });
             await this.userRepository.update(userId, {
                 anonymousExpiresAt: new Date(Date.now() - 1_000),
             });
         } catch (error) {
-            this.logger.error(
-                `demo sandbox rollback failed for user ${userId}: ${error instanceof Error ? error.message : String(error)}`,
-            );
+            this.logRollbackFailure(userId, 'expiring the user', error);
         }
+        try {
+            await this.dataSource.getRepository(AuthSession).delete({ userId });
+        } catch (error) {
+            this.logRollbackFailure(userId, 'ending its sessions', error);
+        }
+    }
+
+    private logRollbackFailure(userId: string, step: string, error: unknown): void {
+        this.logger.error(
+            `demo sandbox rollback failed for user ${userId} (${step}): ${
+                error instanceof Error ? error.message : String(error)
+            }`,
+        );
     }
 }
