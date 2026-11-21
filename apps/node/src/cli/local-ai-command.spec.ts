@@ -106,6 +106,16 @@ describe('ever-works-node local-ai list', () => {
 		expect(h.everything()).not.toContain(KEY);
 	});
 
+	it('says when completions are switched off', async () => {
+		const h = harness({
+			stored: { ...config, localAi: { ...config.localAi, completions: { enabled: false } } }
+		});
+		expect(await runCli(['local-ai', 'list'], h.deps)).toBe(EXIT_OK);
+		expect(h.stdout).toContain(
+			'completions  off (localAi.completions.enabled or EVER_WORKS_NODE_LOCAL_AI_COMPLETIONS)'
+		);
+	});
+
 	it('emits JSON with the known kinds and the problems', async () => {
 		const h = harness({
 			stored: { ...config, localAi: { providers: [{ kind: 'koboldcpp', baseUrl: 'http://x:1' }] } }

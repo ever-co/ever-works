@@ -18,7 +18,8 @@ import type { NodeConfig } from './types';
  */
 
 const NODE_ID = '11111111-2222-4333-8444-555555555555';
-const SECRET = 'ZmFrZS1zZWNyZXQtdmFsdWUtZm9yLXVuaXQtdGVzdHM';
+// Synthetic and deliberately low-entropy: never a real node credential.
+const SECRET = 'test-node-secret-not-a-real-one-00000000';
 const GW = 'http://192.168.1.69:8000';
 
 const environment: CapabilityEnvironment = {

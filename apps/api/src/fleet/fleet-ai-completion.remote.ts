@@ -2,6 +2,7 @@ import type {
     FleetAiCompletionService,
     FleetAiCompletionSubmitInput,
 } from '@ever-works/agent/fleet';
+import { FLEET_AI_COMPLETION_BODY_ENCODINGS, isFleetAiWireApi } from '@ever-works/contracts';
 
 /**
  * Local AI completions — what the Trigger.dev worker may call on
@@ -11,9 +12,11 @@ import type {
  * `TriggerPluginsModule`) is composed of. The derived allow-list of this facade
  * is exactly these five names.
  *
- * Every argument is REBUILT from the fields the service reads (strings as
- * strings, the wait as a number), so nothing else a caller sends reaches it;
- * the service itself re-checks that a job belongs to the user named.
+ * Every argument is REBUILT into a fresh object from the scalar fields the
+ * service reads (strings as strings, the wait as a non-negative number, the
+ * wire API and the body encoding only from their vocabularies — anything else
+ * arrives as `''`, which the service refuses), so nothing else a caller sends
+ * reaches it; the service itself re-checks that a job belongs to the user named.
  */
 export function fleetAiCompletionRemoteFacade(service: FleetAiCompletionService) {
     return {
@@ -25,7 +28,9 @@ export function fleetAiCompletionRemoteFacade(service: FleetAiCompletionService)
                 userId: text(raw.userId),
                 jobId: text(raw.jobId),
                 waitMs:
-                    typeof raw.waitMs === 'number' && Number.isFinite(raw.waitMs) ? raw.waitMs : 0,
+                    typeof raw.waitMs === 'number' && Number.isFinite(raw.waitMs)
+                        ? Math.max(0, raw.waitMs)
+                        : 0,
             });
         },
         cancel: (input?: unknown) => service.cancel(readIds(input)),
@@ -52,10 +57,14 @@ function readSubmit(input: unknown): FleetAiCompletionSubmitInput {
     const raw = record(input);
     const out: FleetAiCompletionSubmitInput = {
         userId: text(raw.userId),
-        api: text(raw.api) as FleetAiCompletionSubmitInput['api'],
+        api: (isFleetAiWireApi(raw.api) ? raw.api : '') as FleetAiCompletionSubmitInput['api'],
         model: text(raw.model),
         body: text(raw.body),
-        bodyEncoding: text(raw.bodyEncoding) as FleetAiCompletionSubmitInput['bodyEncoding'],
+        bodyEncoding: ((FLEET_AI_COMPLETION_BODY_ENCODINGS as readonly unknown[]).includes(
+            raw.bodyEncoding,
+        )
+            ? raw.bodyEncoding
+            : '') as FleetAiCompletionSubmitInput['bodyEncoding'],
         requestId: text(raw.requestId),
     };
     if (typeof raw.timeoutSec === 'number' && Number.isFinite(raw.timeoutSec))

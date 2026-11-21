@@ -79,4 +79,34 @@ describe('fleetAiCompletionRemoteFacade', () => {
         expect(svc.release).toHaveBeenCalledWith({ userId: '', jobId: '' });
         expect(svc.listModels).toHaveBeenCalledWith('');
     });
+
+    it('passes a wire API, an encoding or a wait outside their vocabularies as values the service refuses', async () => {
+        const svc = service();
+        const facade = fleetAiCompletionRemoteFacade(svc as unknown as FleetAiCompletionService);
+
+        await facade.submit({
+            userId: 'u',
+            api: 'arbitrary',
+            bodyEncoding: 'zip',
+            model: 'm',
+            body: 'b',
+            requestId: 'r',
+        });
+        await facade.awaitResult({ userId: 'u', jobId: 'j', waitMs: -5 });
+
+        expect(svc.submit).toHaveBeenCalledWith(
+            expect.objectContaining({ api: '', bodyEncoding: '' }),
+        );
+        expect(svc.awaitResult).toHaveBeenCalledWith({ userId: 'u', jobId: 'j', waitMs: 0 });
+    });
+
+    it('reads anything that is not an object as an empty one (coercion to empty strings is intended: the service refuses them)', async () => {
+        const svc = service();
+        const facade = fleetAiCompletionRemoteFacade(svc as unknown as FleetAiCompletionService);
+        for (const input of [null, undefined, 'x', 42, ['userId']]) await facade.cancel(input);
+        expect(svc.cancel).toHaveBeenCalledTimes(5);
+        for (const call of svc.cancel.mock.calls as unknown[][]) {
+            expect(call[0]).toEqual({ userId: '', jobId: '' });
+        }
+    });
 });
