@@ -94,6 +94,28 @@ describe('tagAndRecordDemoRepository', () => {
         expect(ledger.record).toHaveBeenCalledWith({ ...repository, githubId: 812345678 });
     });
 
+    it('keeps recording when the tag throws, with a warning (best effort)', async () => {
+        const ledger = ledgerDouble();
+        const logger = loggerDouble();
+
+        await tagAndRecordDemoRepository({
+            ...repository,
+            ledger,
+            logger,
+            tag: async () => {
+                throw new Error('topics endpoint down');
+            },
+            githubId: () => 812345678,
+        });
+
+        expect(logger.warn).toHaveBeenCalledTimes(1);
+        expect(logger.warn.mock.calls[0][0]).toBe(
+            'Demo repository ever-works-cloud/demo-1a2b3c4d-tools not tagged ever-works-demo: topics endpoint down',
+        );
+        expect(logger.error).not.toHaveBeenCalled();
+        expect(ledger.record).toHaveBeenCalledWith({ ...repository, githubId: 812345678 });
+    });
+
     it('records a null id as null', async () => {
         const ledger = ledgerDouble();
 
