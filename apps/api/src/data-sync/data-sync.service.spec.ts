@@ -61,7 +61,7 @@ describe('DataSyncService (EW-628)', () => {
     let cacheManager: { get: jest.Mock; set: jest.Mock; del: jest.Mock };
     let activityLogService: { log: jest.Mock };
     let workRepository: { findById: jest.Mock; update: jest.Mock };
-    let markdownGenerator: { syncFromDataRepo: jest.Mock };
+    let markdownGenerator: { syncFromDataRepo: jest.Mock; readDataRepoHeadSha: jest.Mock };
     let analyticsService: { track: jest.Mock };
 
     /**
@@ -93,7 +93,10 @@ describe('DataSyncService (EW-628)', () => {
             findById: jest.fn(),
             update: jest.fn().mockResolvedValue({}),
         };
-        markdownGenerator = { syncFromDataRepo: jest.fn() };
+        markdownGenerator = {
+            syncFromDataRepo: jest.fn(),
+            readDataRepoHeadSha: jest.fn().mockResolvedValue(undefined),
+        };
         analyticsService = { track: jest.fn() };
 
         const module: TestingModule = await Test.createTestingModule({
@@ -493,6 +496,217 @@ describe('DataSyncService (EW-628)', () => {
                     'No connected account found for user owner-1 with provider github',
                 );
                 warnSpy.mockRestore();
+            });
+        });
+
+        // The poller re-rendered, committed and pushed every Work every 5 min
+        // (prod 2026-11-20: 4,382 files per poll for one Work). A poll whose
+        // data-repo HEAD equals `lastSyncedDataRepoSha` now ends before the
+        // render (spec §5.2).
+        describe('data-repo HEAD pre-check (poll)', () => {
+            const syncedWork = (
+                id: string,
+                lastSyncedDataRepoSha: string | null = 'sha-synced',
+            ) => ({
+                id,
+                user: { id: 'owner-1' },
+                generateStatus: { status: GenerateStatusType.GENERATED },
+                lastSyncedDataRepoSha,
+            });
+            const renderStats = {
+                beforeSha: 'sha-synced',
+                afterSha: 'sha-new',
+                filesChanged: 4,
+                durationMs: 50,
+            };
+
+            it('HEAD unchanged: skipped:no-changes, no render, Work stamped, one rate-limited skip row, no backoff', async () => {
+                cacheManager.get.mockResolvedValue(null);
+                workRepository.findById.mockResolvedValue(syncedWork('work-same'));
+                markdownGenerator.readDataRepoHeadSha.mockResolvedValue('sha-synced');
+
+                await expect(service.runDataSync('work-same', 'poll')).resolves.toEqual({
+                    status: 'skipped',
+                    reason: 'no-changes',
+                });
+
+                expect(markdownGenerator.readDataRepoHeadSha).toHaveBeenCalledWith(
+                    expect.objectContaining({ id: 'work-same' }),
+                );
+                expect(markdownGenerator.syncFromDataRepo).not.toHaveBeenCalled();
+                expect(workRepository.update).toHaveBeenCalledTimes(1);
+                expect(workRepository.update).toHaveBeenCalledWith('work-same', {
+                    pendingSyncRequestedAt: null,
+                    lastPolledAt: expect.any(Date),
+                });
+                expect(activityLogService.log).toHaveBeenCalledTimes(1);
+                expect(activityLogService.log).toHaveBeenCalledWith(
+                    expect.objectContaining({
+                        actionType: ActivityActionType.DATA_SYNC_SKIPPED,
+                        summary: 'Sync skipped: no-changes',
+                        details: { kind: 'skipped', source: 'poll', reason: 'no-changes' },
+                    }),
+                );
+                expect(cacheManager.set).toHaveBeenCalledWith(
+                    'data-sync:skip-noise:no-changes:work-same',
+                    '1',
+                    3_600_000,
+                );
+                expect(cacheManager.set).not.toHaveBeenCalledWith(
+                    'data-sync:retry-after:work-same',
+                    expect.anything(),
+                    expect.anything(),
+                );
+            });
+
+            it('HEAD unchanged inside the noise window: no second skip row, Work still stamped', async () => {
+                cacheManager.get.mockImplementation(async (key: string) =>
+                    key === 'data-sync:skip-noise:no-changes:work-same' ? '1' : null,
+                );
+                workRepository.findById.mockResolvedValue(syncedWork('work-same'));
+                markdownGenerator.readDataRepoHeadSha.mockResolvedValue('sha-synced');
+
+                await expect(service.runDataSync('work-same', 'poll')).resolves.toEqual({
+                    status: 'skipped',
+                    reason: 'no-changes',
+                });
+
+                expect(markdownGenerator.syncFromDataRepo).not.toHaveBeenCalled();
+                expect(activityLogService.log).not.toHaveBeenCalled();
+                expect(cacheManager.set).not.toHaveBeenCalled();
+                expect(workRepository.update).toHaveBeenCalledWith('work-same', {
+                    pendingSyncRequestedAt: null,
+                    lastPolledAt: expect.any(Date),
+                });
+            });
+
+            it('HEAD moved: renders against it (expectedSourceSha) and records the rendered SHA', async () => {
+                cacheManager.get.mockResolvedValue(null);
+                workRepository.findById.mockResolvedValue(syncedWork('work-moved'));
+                markdownGenerator.readDataRepoHeadSha.mockResolvedValue('sha-new');
+                markdownGenerator.syncFromDataRepo.mockResolvedValue(renderStats);
+
+                await expect(service.runDataSync('work-moved', 'poll')).resolves.toMatchObject({
+                    status: 'success',
+                    stats: { afterSha: 'sha-new', filesChanged: 4 },
+                });
+
+                expect(markdownGenerator.syncFromDataRepo).toHaveBeenCalledWith(
+                    expect.objectContaining({ id: 'work-moved' }),
+                    expect.objectContaining({ id: 'owner-1' }),
+                    { expectedSourceSha: 'sha-new' },
+                );
+                expect(workRepository.update).toHaveBeenCalledWith(
+                    'work-moved',
+                    expect.objectContaining({ lastSyncedDataRepoSha: 'sha-new' }),
+                );
+            });
+
+            it('first sync (no SHA recorded yet): renders', async () => {
+                cacheManager.get.mockResolvedValue(null);
+                workRepository.findById.mockResolvedValue(syncedWork('work-first', null));
+                markdownGenerator.readDataRepoHeadSha.mockResolvedValue('sha-first');
+                markdownGenerator.syncFromDataRepo.mockResolvedValue({
+                    ...renderStats,
+                    beforeSha: undefined,
+                    afterSha: 'sha-first',
+                });
+
+                await expect(service.runDataSync('work-first', 'poll')).resolves.toMatchObject({
+                    status: 'success',
+                });
+                expect(markdownGenerator.syncFromDataRepo).toHaveBeenCalledWith(
+                    expect.anything(),
+                    expect.anything(),
+                    { expectedSourceSha: 'sha-first' },
+                );
+            });
+
+            it('HEAD read fails (provider error): renders as before, without an expected SHA', async () => {
+                cacheManager.get.mockResolvedValue(null);
+                workRepository.findById.mockResolvedValue(syncedWork('work-flaky'));
+                markdownGenerator.readDataRepoHeadSha.mockRejectedValue(
+                    new Error('HTTP Error: 502 Bad Gateway'),
+                );
+                markdownGenerator.syncFromDataRepo.mockResolvedValue(renderStats);
+
+                await expect(service.runDataSync('work-flaky', 'poll')).resolves.toMatchObject({
+                    status: 'success',
+                });
+                expect(markdownGenerator.syncFromDataRepo).toHaveBeenCalledWith(
+                    expect.anything(),
+                    expect.anything(),
+                    { expectedSourceSha: undefined },
+                );
+                expect(activityLogService.log).not.toHaveBeenCalledWith(
+                    expect.objectContaining({ actionType: ActivityActionType.DATA_SYNC_FAILED }),
+                );
+            });
+
+            it('HEAD read without git credentials: skipped:app-not-installed-and-no-credentials, no render', async () => {
+                const warnSpy = jest
+                    .spyOn(Logger.prototype, 'warn')
+                    .mockImplementation(() => undefined);
+                cacheManager.get.mockResolvedValue(null);
+                workRepository.findById.mockResolvedValue(syncedWork('work-nocreds'));
+                const noCredentials = new Error(
+                    'No connected account found for user owner-1 with provider github',
+                );
+                noCredentials.name = 'NoGitCredentialsError';
+                markdownGenerator.readDataRepoHeadSha.mockRejectedValue(noCredentials);
+
+                await expect(service.runDataSync('work-nocreds', 'poll')).resolves.toEqual({
+                    status: 'skipped',
+                    reason: 'app-not-installed-and-no-credentials',
+                });
+                expect(markdownGenerator.syncFromDataRepo).not.toHaveBeenCalled();
+                expect(activityLogService.log).not.toHaveBeenCalledWith(
+                    expect.objectContaining({ actionType: ActivityActionType.DATA_SYNC_FAILED }),
+                );
+                warnSpy.mockRestore();
+            });
+
+            it.each<SyncSource>(['manual', 'webhook'])(
+                '%s sync with an unchanged HEAD still renders',
+                async (source) => {
+                    cacheManager.get.mockResolvedValue(null);
+                    workRepository.findById.mockResolvedValue(syncedWork('work-forced'));
+                    markdownGenerator.readDataRepoHeadSha.mockResolvedValue('sha-synced');
+                    markdownGenerator.syncFromDataRepo.mockResolvedValue({
+                        ...renderStats,
+                        afterSha: 'sha-synced',
+                    });
+
+                    await expect(service.runDataSync('work-forced', source)).resolves.toMatchObject(
+                        {
+                            status: 'success',
+                        },
+                    );
+                    expect(markdownGenerator.syncFromDataRepo).toHaveBeenCalledWith(
+                        expect.objectContaining({ id: 'work-forced' }),
+                        expect.anything(),
+                        { expectedSourceSha: 'sha-synced' },
+                    );
+                    expect(activityLogService.log).not.toHaveBeenCalledWith(
+                        expect.objectContaining({
+                            details: expect.objectContaining({ reason: 'no-changes' }),
+                        }),
+                    );
+                },
+            );
+
+            it('runs after the pipeline-running gate: a generating Work is not even read', async () => {
+                cacheManager.get.mockResolvedValue(null);
+                workRepository.findById.mockResolvedValue({
+                    ...syncedWork('work-gen'),
+                    generateStatus: { status: GenerateStatusType.GENERATING },
+                });
+
+                await expect(service.runDataSync('work-gen', 'poll')).resolves.toEqual({
+                    status: 'skipped',
+                    reason: 'generation-in-progress',
+                });
+                expect(markdownGenerator.readDataRepoHeadSha).not.toHaveBeenCalled();
             });
         });
 
