@@ -485,7 +485,18 @@ describe('cluster-source-matrix — deploy matrix (renamed: k8s-works internal, 
             },
         );
 
-        it('does not touch the k8s path', () => {
+        it("accepts a member's own token for an Ever Works org website without flagging platformManaged", () => {
+            const result = resolveEffectiveDeploymentContext({
+                ...base,
+                websiteOwner: 'ever-works',
+                resolvedToken: 'member-token',
+                settingSources: { apiToken: 'user' },
+            } as any);
+            expect(result.token).toBe('member-token');
+            expect(result.settings.platformManaged).toBe(false);
+        });
+
+        it('leaves other providers (Vercel) untouched', () => {
             const result = resolveEffectiveDeploymentContext({
                 ...base,
                 deployProvider: 'vercel',

@@ -80,9 +80,9 @@ Keep Workers that are not Work sites out of the `ew-` name space on the platform
 
 ## Custom domains
 
-With your own Cloudflare account, the Work's **Domains** panel adds, lists, verifies and removes Workers Custom Domains on the Work's Worker. The domain's zone must be on Cloudflare, in the same account. Cloudflare creates the DNS record and certificate, so there is nothing to verify by hand.
+With your own Cloudflare account, the Work's **Domains** panel adds, lists, verifies and removes Workers Custom Domains on the Work's Worker. The domain's zone must be on Cloudflare, in the same account. Cloudflare creates the DNS record and certificate, so there is nothing to verify by hand. Sites hosted on the platform's Cloudflare account cannot add or remove custom domains at all.
 
-:::caution
+:::warning
 `wrangler deploy` replaces a Worker's custom domains with the ones its configuration lists, and the template's workflow lists only the Work's hostname. A domain added from the Domains panel therefore stays attached only until the next deploy. Add it to the workflow's `routes` if it must survive redeploys.
 :::
 
