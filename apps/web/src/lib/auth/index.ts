@@ -15,6 +15,13 @@ import { ROUTES } from '../constants';
 export const DEMO_EXPIRED_HREF = `${ROUTES.AUTH_LOGIN}?demo=expired`;
 
 /**
+ * The route handler (`app/api/auth/demo-expired/route.ts`) a render sends that visitor
+ * through on the way to {@link DEMO_EXPIRED_HREF}: it removes the stale session cookie, which a
+ * render cannot, so no other page bounces the visitor back to the sign-in page.
+ */
+export const DEMO_EXPIRED_SIGN_OUT_HREF = '/api/auth/demo-expired';
+
+/**
  * APW-12 (Ever ID) S6 — the API answers `401 { code: 'ever_id_signed_out' }`
  * for a session that an Ever ID sign-out notice ended, instead of the plain
  * `401` an expired session gets. A type-only import keeps the literal checked
@@ -96,12 +103,15 @@ async function clearAuthCookieOnUnauthorized(
         }
         // Demo instance: the sandbox is deleted with its session, so a 401 means it
         // expired (or the sweeper took it). Say so instead of leaving a generic
-        // sign-in page. The sign-in page itself opts out (`redirectOnDemoExpiry:
-        // false`) — redirecting from there would loop, since the stale cookie
-        // cannot be cleared during a render. Demo off: nothing changes.
+        // sign-in page. The way there is a route handler that removes the stale
+        // cookie (the write above fails during a render), so the next page that
+        // reads the session does not bounce the visitor back. The sign-in page
+        // itself opts out (`redirectOnDemoExpiry: false`), as does that route
+        // handler's own check — redirecting from there would loop. Demo off:
+        // nothing changes.
         if (redirectOnDemoExpiry && !endedByEverId && (await getDemoConfig()).enabled) {
             // `localePrefix: 'never'` — the plain path is the whole URL.
-            redirect(DEMO_EXPIRED_HREF);
+            redirect(DEMO_EXPIRED_SIGN_OUT_HREF);
         }
         return true;
     }
@@ -177,7 +187,8 @@ export const getAuthFromCookie = cache(() => getAuthFromCookieImpl(true));
 
 /**
  * {@link getAuthFromCookie} for the sign-in page: identical, except a rejected
- * session never redirects to `/login?demo=expired` (it is already there).
+ * session never redirects to `/login?demo=expired` (it is already there). The
+ * demo-expiry route handler checks with it too, on its way there.
  */
 export const getAuthFromCookieOnSignIn = cache(() => getAuthFromCookieImpl(false));
 

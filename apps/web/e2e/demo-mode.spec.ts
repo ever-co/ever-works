@@ -500,6 +500,12 @@ test.describe('platform demo mode: DEMO on', { tag: '@demo-on' }, () => {
         await expect(page.getByTestId('demo-expired-notice')).toHaveText(EXPIRED_TEXT);
         await expect(page.getByRole('button', { name: 'Start the demo' })).toBeEnabled();
         await expect(page.getByTestId('demo-strip')).toHaveCount(0);
+        // The stale session cookie went on the way (`/api/auth/demo-expired`): a render cannot
+        // remove it, and left in place it sent the visitor of every other page back here.
+        const sessionCookies = (await page.context().cookies()).filter(
+            (cookie) => cookie.name === 'everworks_auth_token',
+        );
+        expect(sessionCookies).toEqual([]);
     });
 });
 
@@ -511,6 +517,10 @@ test.describe('platform demo mode: DEMO unset', { tag: '@demo-off' }, () => {
         expect(config.features?.demoMode).not.toBe(true);
         expect(config.demo ?? null).toBeNull();
         expect((await request.post(`${API_ORIGIN}/api/auth/demo`, { data: {} })).status()).toBe(
+            404,
+        );
+        // The web's demo-expiry stop is not there either (no redirect, no cookie touched).
+        expect((await request.get('/api/auth/demo-expired', { maxRedirects: 0 })).status()).toBe(
             404,
         );
 
