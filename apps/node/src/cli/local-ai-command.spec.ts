@@ -99,6 +99,7 @@ describe('ever-works-node local-ai list', () => {
 			'  apis       openai-chat, openai-responses, anthropic-messages (the kind’s defaults)',
 			'  model      flashnext',
 			'agent        claude-code runs on provider gpu',
+			"completions  on — serves the platform's model requests under --work, 1 at a time, up to 1800 s each",
 			'extra tags   gpu, gpu:nvidia'
 		]);
 		expect(h.fetch.calls).toHaveLength(0);

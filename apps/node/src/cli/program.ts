@@ -991,6 +991,9 @@ export async function runStart(deps: CliDeps, options: StartCommandOptions): Pro
 	// Fleet node link (FL-02, CONTRACTS R-34): the management lane, present only
 	// when a kind registered for it has its consent on (none in FL-02).
 	const managementWorker = runtime.management?.worker ?? null;
+	// Local AI completions: the local-AI lane, present when this node serves the
+	// platform's model requests (`--work`, a provider configured, completions on).
+	const localAiWorker = runtime.localAiLane?.worker ?? null;
 	haltManagementLane = managementWorker
 		? () => {
 				void managementWorker.stop();
@@ -1005,7 +1008,7 @@ export async function runStart(deps: CliDeps, options: StartCommandOptions): Pro
 		entryPath: deps.entryPath ?? null,
 		// Never kills work: an upgrade waits until no lane runs a job.
 		isIdle: () =>
-			[worker, attendedWorker, managementWorker].every(
+			[worker, attendedWorker, managementWorker, localAiWorker].every(
 				(lane) => !lane || lane.getState().activeJobIds.length === 0
 			),
 		requestRestart: (to) => {
@@ -1099,11 +1102,21 @@ export async function runStart(deps: CliDeps, options: StartCommandOptions): Pro
 				`Management lane enabled — leasing [${(runtime.management?.kinds ?? []).join(', ')}] one at a time, outside --concurrency`
 			);
 		}
+		if (localAiWorker && worker?.getState().state === 'unsafe') {
+			deps.out(
+				'Local AI lane held — the worker host is QUARANTINED, which disables every lease on this machine.'
+			);
+		} else if (localAiWorker) {
+			await localAiWorker.start();
+			deps.out(
+				`Local AI lane enabled — serving the platform's model requests (ai-completion) on this machine's local AI, ${runtime.localAiLane?.concurrency ?? 1} at a time, outside --concurrency`
+			);
+		}
 	};
 	let lanesStarted: Promise<void> = Promise.resolve();
 	let laneStartFailed = false;
 	let laneStartFailure: unknown = undefined;
-	if (worker || attendedWorker || managementWorker) {
+	if (worker || attendedWorker || managementWorker || localAiWorker) {
 		if (loop.getState().state === 'connected') {
 			await startLanes();
 		} else {
@@ -1221,6 +1234,10 @@ export async function runStart(deps: CliDeps, options: StartCommandOptions): Pro
 	if (managementWorker) {
 		// Drains like the work lane: a machine job in flight finishes and reports.
 		await managementWorker.stop();
+	}
+	if (localAiWorker) {
+		// Drains: a completion in flight is bounded by its provider budget.
+		await localAiWorker.stop();
 	}
 	if (worker) {
 		// Drains: stops leasing at once, then WAITS for the jobs already

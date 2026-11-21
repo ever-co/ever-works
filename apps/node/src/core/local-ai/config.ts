@@ -1,9 +1,15 @@
-import { FLEET_AGENT_EXECUTION_MODEL_PATTERN, isFleetAgentExecutionProvider } from '@ever-works/contracts';
+import {
+	FLEET_AGENT_EXECUTION_MODEL_PATTERN,
+	FLEET_AI_COMPLETION_MAX_TIMEOUT_SEC,
+	FLEET_AI_COMPLETION_MIN_TIMEOUT_SEC,
+	isFleetAgentExecutionProvider
+} from '@ever-works/contracts';
 import type { LocalAiProviderRegistry } from './registry';
 import {
 	isLocalAiWireApi,
 	type LocalAiAgentRuntimeSettings,
 	type LocalAiApiKeyRef,
+	type LocalAiCompletionSettings,
 	type LocalAiProviderSettings,
 	type LocalAiSettings,
 	type LocalAiWireApi
@@ -40,6 +46,20 @@ export interface NodeLocalAiConfig {
 	probeIntervalSec?: number;
 	/** Budget of one provider's probe, seconds (default 5, 1–30). */
 	probeTimeoutSec?: number;
+	/** Serving the platform's `ai-completion` jobs (the local-AI lane). */
+	completions?: NodeLocalAiCompletionsConfig;
+}
+
+/** `localAi.completions` as stored. Every field optional. */
+export interface NodeLocalAiCompletionsConfig {
+	/** Default true. False: this node never serves the platform's model requests. */
+	enabled?: boolean;
+	/** Completions in flight at once (default 1, 1–8). */
+	concurrency?: number;
+	/** Ceiling on one request's provider budget, seconds (default and max 1800, min 10). */
+	maxTimeoutSec?: number;
+	/** Idle poll, seconds (default 5, 1–60). */
+	idlePollSec?: number;
 }
 
 export interface NodeLocalAiProviderConfig {
@@ -71,6 +91,27 @@ export const LOCAL_AI_MAX_PROBE_INTERVAL_MS = 3_600_000;
 export const LOCAL_AI_DEFAULT_PROBE_TIMEOUT_MS = 5_000;
 export const LOCAL_AI_MIN_PROBE_TIMEOUT_MS = 1_000;
 export const LOCAL_AI_MAX_PROBE_TIMEOUT_MS = 30_000;
+
+export const LOCAL_AI_COMPLETIONS_DEFAULT_CONCURRENCY = 1;
+export const LOCAL_AI_COMPLETIONS_MAX_CONCURRENCY = 8;
+export const LOCAL_AI_COMPLETIONS_DEFAULT_IDLE_POLL_MS = 5_000;
+export const LOCAL_AI_COMPLETIONS_MIN_IDLE_POLL_MS = 1_000;
+export const LOCAL_AI_COMPLETIONS_MAX_IDLE_POLL_MS = 60_000;
+
+/** The completion defaults: on, one at a time, the contract's longest budget, a 5 s idle poll. */
+export const LOCAL_AI_COMPLETIONS_DEFAULTS: Readonly<LocalAiCompletionSettings> = Object.freeze({
+	enabled: true,
+	concurrency: LOCAL_AI_COMPLETIONS_DEFAULT_CONCURRENCY,
+	maxTimeoutMs: FLEET_AI_COMPLETION_MAX_TIMEOUT_SEC * 1000,
+	idlePollMs: LOCAL_AI_COMPLETIONS_DEFAULT_IDLE_POLL_MS
+});
+
+/** The completion settings in force (`settings.completions`, else {@link LOCAL_AI_COMPLETIONS_DEFAULTS}). */
+export function localAiCompletionSettings(
+	settings: { completions?: LocalAiCompletionSettings } | null
+): LocalAiCompletionSettings {
+	return settings?.completions ? { ...settings.completions } : { ...LOCAL_AI_COMPLETIONS_DEFAULTS };
+}
 
 /**
  * A provider id. It becomes a Codex config KEY (`model_providers.<id>`) on a
@@ -110,7 +151,11 @@ export const LOCAL_AI_ENV = {
 	smallModel: 'EVER_WORKS_NODE_LOCAL_AI_SMALL_MODEL',
 	models: 'EVER_WORKS_NODE_LOCAL_AI_MODELS',
 	apis: 'EVER_WORKS_NODE_LOCAL_AI_APIS',
-	agentCli: 'EVER_WORKS_NODE_LOCAL_AI_AGENT_CLI'
+	agentCli: 'EVER_WORKS_NODE_LOCAL_AI_AGENT_CLI',
+	/** `on` / `off` — serve the platform's `ai-completion` jobs (default on). */
+	completions: 'EVER_WORKS_NODE_LOCAL_AI_COMPLETIONS',
+	/** Completions in flight at once (1–8). */
+	completionsConcurrency: 'EVER_WORKS_NODE_LOCAL_AI_COMPLETIONS_CONCURRENCY'
 } as const;
 
 /** Operator-declared extra capability tags (comma-separated), added to what the node detects. */
@@ -165,6 +210,16 @@ export function sanitizeStoredLocalAiConfig(raw: unknown): NodeLocalAiConfig | u
 	}
 	for (const key of ['probeIntervalSec', 'probeTimeoutSec'] as const) {
 		if (typeof source[key] === 'number' && Number.isFinite(source[key])) out[key] = source[key] as number;
+	}
+	const completions = source.completions;
+	if (completions && typeof completions === 'object' && !Array.isArray(completions)) {
+		const entry = completions as Record<string, unknown>;
+		const kept: NodeLocalAiCompletionsConfig = {};
+		if (typeof entry.enabled === 'boolean') kept.enabled = entry.enabled;
+		for (const key of ['concurrency', 'maxTimeoutSec', 'idlePollSec'] as const) {
+			if (typeof entry[key] === 'number' && Number.isFinite(entry[key])) kept[key] = entry[key] as number;
+		}
+		out.completions = kept;
 	}
 	return out;
 }
@@ -364,9 +419,62 @@ export function resolveLocalAiSettings(
 				LOCAL_AI_DEFAULT_PROBE_TIMEOUT_MS,
 				LOCAL_AI_MIN_PROBE_TIMEOUT_MS,
 				LOCAL_AI_MAX_PROBE_TIMEOUT_MS
-			)
+			),
+			completions: resolveCompletionSettings(stored.completions, input.env ?? {}, problems)
 		},
 		problems
+	};
+}
+
+/**
+ * `localAi.completions` merged with the env shorthand (the env wins, as it
+ * does for providers). An unreadable env value is a problem line and leaves
+ * the file's (or the default) value in force.
+ */
+function resolveCompletionSettings(
+	stored: NodeLocalAiCompletionsConfig | undefined,
+	env: Readonly<Record<string, string | undefined>>,
+	problems: string[]
+): LocalAiCompletionSettings {
+	let enabled = typeof stored?.enabled === 'boolean' ? stored.enabled : LOCAL_AI_COMPLETIONS_DEFAULTS.enabled;
+	const rawEnabled = readEnv(env, LOCAL_AI_ENV.completions);
+	if (rawEnabled !== undefined) {
+		const flag = rawEnabled.toLowerCase();
+		if (['on', 'true', '1', 'yes'].includes(flag)) enabled = true;
+		else if (['off', 'false', '0', 'no'].includes(flag)) enabled = false;
+		else problems.push(`${LOCAL_AI_ENV.completions}: "${rawEnabled.slice(0, 16)}" ignored — use on or off`);
+	}
+	let concurrency = stored?.concurrency;
+	const rawConcurrency = readEnv(env, LOCAL_AI_ENV.completionsConcurrency);
+	if (rawConcurrency !== undefined) {
+		const parsed = Number(rawConcurrency);
+		if (Number.isInteger(parsed) && parsed > 0) concurrency = parsed;
+		else {
+			problems.push(
+				`${LOCAL_AI_ENV.completionsConcurrency}: "${rawConcurrency.slice(0, 16)}" ignored — a whole number from 1 to ${LOCAL_AI_COMPLETIONS_MAX_CONCURRENCY}`
+			);
+		}
+	}
+	return {
+		enabled,
+		concurrency: clamp(
+			concurrency,
+			LOCAL_AI_COMPLETIONS_DEFAULT_CONCURRENCY,
+			1,
+			LOCAL_AI_COMPLETIONS_MAX_CONCURRENCY
+		),
+		maxTimeoutMs: clamp(
+			typeof stored?.maxTimeoutSec === 'number' ? stored.maxTimeoutSec * 1000 : undefined,
+			LOCAL_AI_COMPLETIONS_DEFAULTS.maxTimeoutMs,
+			FLEET_AI_COMPLETION_MIN_TIMEOUT_SEC * 1000,
+			FLEET_AI_COMPLETION_MAX_TIMEOUT_SEC * 1000
+		),
+		idlePollMs: clamp(
+			typeof stored?.idlePollSec === 'number' ? stored.idlePollSec * 1000 : undefined,
+			LOCAL_AI_COMPLETIONS_DEFAULT_IDLE_POLL_MS,
+			LOCAL_AI_COMPLETIONS_MIN_IDLE_POLL_MS,
+			LOCAL_AI_COMPLETIONS_MAX_IDLE_POLL_MS
+		)
 	};
 }
 
