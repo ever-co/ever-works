@@ -284,6 +284,7 @@ const sidebars: SidebarsConfig = {
 				// public works repository that seeds the blueprint picker.
 				'features/work-blueprints',
 				'features/k8s-deployment',
+				'features/cloudflare-deployment',
 				'features/managed-hosting',
 				// `features/app-launcher` moved into the App Works category
 				// (after `features/work-kinds`), beside the pages it belongs with.

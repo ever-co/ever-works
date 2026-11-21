@@ -96,6 +96,34 @@ describe('SubdomainAllocator', () => {
         expect(repo.update).toHaveBeenCalledWith(work.id, { managedSubdomain: 'ai-coding' });
     });
 
+    it('starts from options.baseLabel when given (Cloudflare: slug without awesome-)', async () => {
+        const otherWork = { id: 'other-id', managedSubdomain: 'crm' } as Work;
+        const repo = makeRepo({
+            findByManagedSubdomainReturns: (label) => (label === 'crm' ? otherWork : null),
+        });
+        const probe = makeProbe(async () => false);
+        const alloc = new SubdomainAllocator(repo, makeDnsService(probe));
+
+        const work = makeWork({ id: 'aabbccdd-1111-2222-3333-444444444444', slug: 'awesome-crm' });
+        const result = await alloc.allocate(work, probe, { baseLabel: 'CRM' });
+
+        // The base is slugified like the slug and keeps the collision suffix rules.
+        expect(result.subdomain).toBe('crm-aabb');
+        expect(repo.update).toHaveBeenCalledWith(work.id, { managedSubdomain: 'crm-aabb' });
+    });
+
+    it('falls back to the slug when options.baseLabel slugifies to nothing', async () => {
+        const repo = makeRepo();
+        const probe = makeProbe(async () => false);
+        const alloc = new SubdomainAllocator(repo, makeDnsService(probe));
+
+        const result = await alloc.allocate(makeWork({ slug: 'ai-coding' }), probe, {
+            baseLabel: '---',
+        });
+
+        expect(result.subdomain).toBe('ai-coding');
+    });
+
     it('appends a deterministic shortId suffix on DB collision', async () => {
         const otherWork = { id: 'other-id', managedSubdomain: 'ai-coding' } as Work;
         const repo = makeRepo({
