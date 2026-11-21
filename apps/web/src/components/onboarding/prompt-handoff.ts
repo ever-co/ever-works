@@ -9,22 +9,63 @@ import { sanitizePrompt } from '@/lib/utils/sanitize';
  * query is the older form and still accepted.
  *
  * `type` is the chip the visitor picked under the box ("Directory Website",
- * "Blog", …). It is consumed and removed from the URL — it used to stay behind
- * as `#type=directory-website` — but not mapped onto a Work kind: item
- * generation is not kind-aware yet, so that mapping waits for product sign-off
- * and quick-create keeps the platform default kind.
+ * "Blog", …). It is removed from the URL and, where it names a generated
+ * Work kind, sent to quick-create as that kind.
  */
 export interface PromptHandoff {
     /** Sanitised and bounded to the 5000 characters the API accepts. */
     readonly prompt: string;
+    /** The Work kind for the chip the visitor picked, when it has one. */
+    readonly kind?: HandoffWorkKind;
     /** The same URL with the consumed keys removed, for `history.replaceState`. */
     readonly cleanedHref: string;
 }
+
+export type HandoffWorkKind = 'website' | 'landing-page' | 'blog' | 'directory' | 'awesome-repo';
 
 const CONSUMED_KEYS = ['prompt', 'corrId', 'type'] as const;
 /** `/onboarding`, optionally locale-prefixed (`/en/onboarding`) or with a trailing slash. */
 const ONBOARDING_PATH = /^(?:\/[a-z]{2}(?:-[A-Za-z]{2})?)?\/onboarding\/?$/;
 const PROMPT_MAX_LENGTH = 5000;
+
+/**
+ * Home-page chip → Work kind. Only chips that name a generated kind the
+ * create path offers are mapped; every other chip (`knowledge-base`, `store`,
+ * `mission`, `idea`, and `company`, which only the Register-Company flow may
+ * set) leaves the kind to the platform default. `repo` and `app` are not
+ * home-page chips and need a repository URL, so they are never set from here.
+ */
+const KIND_BY_LANDING_TYPE: Readonly<Record<string, HandoffWorkKind>> = {
+    website: 'website',
+    'landing-page': 'landing-page',
+    landing: 'landing-page',
+    blog: 'blog',
+    'directory-website': 'directory',
+    directory: 'directory',
+    'awesome-repo': 'awesome-repo',
+};
+
+const KIND_LABELS: Readonly<Record<HandoffWorkKind, string>> = {
+    website: 'Website',
+    'landing-page': 'Landing page',
+    blog: 'Blog',
+    directory: 'Directory website',
+    'awesome-repo': 'Awesome repo',
+};
+
+export function landingTypeToWorkKind(
+    type: string | null | undefined,
+): HandoffWorkKind | undefined {
+    if (typeof type !== 'string') return undefined;
+    const key = type.trim().toLowerCase();
+    return Object.prototype.hasOwnProperty.call(KIND_BY_LANDING_TYPE, key)
+        ? KIND_BY_LANDING_TYPE[key]
+        : undefined;
+}
+
+export function workKindLabel(kind: HandoffWorkKind | undefined): string | undefined {
+    return kind ? KIND_LABELS[kind] : undefined;
+}
 
 /**
  * Reads the hand-off from a full URL. `null` when there is no usable prompt,
@@ -48,6 +89,8 @@ export function readPromptHandoff(href: string): PromptHandoff | null {
     const prompt = sanitizePrompt(read('prompt') ?? '', PROMPT_MAX_LENGTH);
     if (!prompt) return null;
 
+    const kind = landingTypeToWorkKind(read('type'));
+
     for (const key of CONSUMED_KEYS) {
         url.searchParams.delete(key);
         hash.delete(key);
@@ -57,6 +100,7 @@ export function readPromptHandoff(href: string): PromptHandoff | null {
 
     return {
         prompt,
+        ...(kind ? { kind } : {}),
         cleanedHref: url.toString(),
     };
 }

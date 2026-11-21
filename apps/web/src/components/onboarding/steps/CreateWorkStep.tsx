@@ -48,6 +48,8 @@ export interface CreateWorkStepProps {
     readonly desktopChoice?: OnboardingDesktopChoice;
     /** Replaces the description under "Ready to generate" (the quick start has no "wizard choices"). */
     readonly intro?: string;
+    /** The Work kind the visitor picked on the home page, as a label ("Directory website"). */
+    readonly kindLabel?: string;
     /** `true` when "Generate now" is pressed, `false` when that start is refused. */
     readonly onBusyChange?: (busy: boolean) => void;
     /** The Work exists and its generation has started. */
@@ -93,6 +95,7 @@ export function CreateWorkStep({
     onPromptChange,
     desktopChoice,
     intro,
+    kindLabel,
     onBusyChange,
     onGenerationStarted,
     onOpenWork,
@@ -208,6 +211,14 @@ export function CreateWorkStep({
                                 >
                                     Prompt
                                 </label>
+                                {kindLabel ? (
+                                    <span
+                                        data-testid="onboarding-work-kind"
+                                        className="rounded-full bg-surface-secondary dark:bg-white/5 px-2.5 py-0.5 text-xs text-text-secondary dark:text-text-secondary-dark"
+                                    >
+                                        Type: {kindLabel}
+                                    </span>
+                                ) : null}
                             </div>
                             <textarea
                                 id="onboarding-prompt-input"
