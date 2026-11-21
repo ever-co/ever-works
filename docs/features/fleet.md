@@ -307,7 +307,7 @@ None of these help when the break is in the protocol itself — when the platfor
 
 ## Capabilities
 
-A node advertises capability tags (up to 16) such as `terminal`, `workspace` or `docker`. These describe what the node can host.
+A node advertises capability tags (up to 32 by default) such as `terminal`, `workspace` or `docker`. These describe what the node can host.
 
 They are not decoration. Tags decide which work a node is even offered — see [Capability targeting](#capability-targeting) — and the full detected set, plus how to pin tags so heartbeats stop overwriting them, is in [The tags a node reports](#the-tags-a-node-reports).
 
@@ -688,6 +688,18 @@ With the `node` runtime selected, every Task run dispatched to an Agent becomes 
 When the node reports, the platform reconciles the result the same way a cloud run is reconciled: the run is marked started when the node leases the job and completed or failed when it reports (with the CLI's final message as the run summary and the acceptance-check verdicts on the run), the pushed task branch becomes a pull request (or is handed to a human when the Agent may not open one) and the Task moves to _In review_, the Agent posts the fleet report to the Task chat, a failure files an Inbox notice, and parked runs on the Work are drained. **Cancelling a run** cancels the fleet job too: a job no node has claimed is dropped; a job a node is executing is flagged, the node's next job heartbeat is refused, and the node aborts the CLI and reports.
 
 Routing preferences (**Settings → Fleet → Execution routing**) decide what happens when no runner is free: wait for one (`local-wait`), fall back to the cloud with a notice (`local-fallback`), or always use the cloud. An Agent can be pinned to one specific node (`PUT /api/fleet/agents/:agentId/node-affinity`); a pinned Agent never runs elsewhere.
+
+### Local AI on a node
+
+A node can run its agent CLI on a **local model server** — llama-swap, Ollama, LM Studio, vLLM or any OpenAI-compatible server on the machine or its LAN — instead of the CLI's cloud seat. The machine's operator configures it on the node (a `localAi` section in `node-config.json`, or `EVER_WORKS_NODE_LOCAL_AI_*` in the node's environment); the platform never chooses it. The full reference is in [`apps/node/README.md`](https://github.com/ever-co/ever-works/blob/develop/apps/node/README.md#local-ai-providers).
+
+- The node probes each provider (health and models only — a probe never generates) and advertises **`local-ai`**, **`local-ai:<kind>`**, **`local-model:<model>`** and, for a CLI bound to a provider that can serve it, **`local-agent:<cli>`** (`local-agent:claude-code`). Every one is withdrawn on the next heartbeat after the provider stops answering.
+- With `agentRuntime` set (`{ "cli": "claude-code", "provider": "gpu", "model": "flashnext" }`), every Task of that CLI the node takes runs on the local provider: Claude Code against a server that speaks the Anthropic Messages API, Codex against one that speaks the OpenAI Responses API. The run reports **`costUsd: 0` with `costBasis: 'local'`**, so it is recorded at 0 cents and counts nothing against a daily cost ceiling; no per-run dollar cap is passed to the CLI (it would price the unknown local model at cloud list rates).
+- A bound CLI whose provider is down **never falls back to the cloud seat**: the node withholds that CLI's `claude-code` / `codex` tag so it is not offered the work, and declines (hands back unsettled) a job it already leased.
+- Extra tags the node cannot detect — `gpu` on a VM whose model server runs on the GPU host — are declared with `extraCapabilities` / `EVER_WORKS_NODE_EXTRA_CAPABILITIES`.
+- Keys are never stored in the config (a file path or an env var name), never logged and never sent to the platform.
+
+Routing an Agent to local AI specifically (requiring `local-agent:claude-code`), and showing the providers' health on the node page, are follow-ups; today an Agent pinned to a bound node runs locally.
 
 ### Suspend safety (lease generations)
 
