@@ -3,7 +3,14 @@ import type { FleetCostCeilingView } from '@ever-works/contracts';
 import { config } from '../config';
 import type { FleetNode } from '../entities/fleet-node.entity';
 import { INBOX_PRODUCER, type InboxProducer } from '../inbox/inbox-producer.port';
-import { normalizeDailyCeilingCents, utcDay, utcDayStart } from './fleet-cost-ceiling.shared';
+import {
+    normalizeDailyCeilingCents,
+    resolveFleetDailyCeilingCents,
+    resolveNodeDailyCeilingCents,
+    utcDay,
+    utcDayStart,
+} from './fleet-cost-ceiling.shared';
+import { FleetCostCeilingResetService } from './fleet-cost-ceiling-reset.service';
 import { FleetCostPolicyRepository } from './fleet-cost-policy.repository';
 import { FleetJobRepository } from './fleet-job.repository';
 import { FleetJobService } from './fleet-job.service';
@@ -95,9 +102,13 @@ const NONE: FleetCostCeilingScopeVerdict = {
  * silently permitted whenever it could not count would not be a ceiling.
  *
  * `disabled`, not `paused`, deliberately: a node can lift its own pause
- * (`FleetService.setPausedByCredential`) but not an owner-level disable,
- * and the drained node stays disabled past midnight until the owner
- * re-enables it — a ceiling is a stop, not a rate limit.
+ * (`FleetService.setPausedByCredential`) but not an owner-level disable.
+ * The ceiling is DAILY: the drained node stays disabled for the rest of
+ * the UTC day, and once midnight UTC has passed
+ * `FleetCostCeilingResetService` puts it back in service on its next
+ * heartbeat (or when the owner opens these settings) — provided the
+ * ceiling is the ONLY reason it is disabled. A node a person disabled,
+ * before or after the trip, stays disabled.
  *
  * Only `fleet_jobs.costCents` is summed: the spend the owner's own
  * machines reported. The account's cloud spend and BYOK usage rows have
@@ -114,10 +125,21 @@ export class FleetCostCeilingService {
         private readonly fleet: FleetService,
         private readonly jobService: FleetJobService,
         @Optional() @Inject(INBOX_PRODUCER) private readonly inbox?: InboxProducer,
+        // The daily reset. APPENDED and @Optional() (positional specs);
+        // unbound, the settings read simply does not sweep.
+        @Optional() private readonly reset?: FleetCostCeilingResetService,
     ) {}
 
-    /** The owner's fleet-wide ceiling as the settings page shows it. */
+    /**
+     * The owner's fleet-wide ceiling as the settings page shows it.
+     *
+     * Sweeps the owner's disabled nodes through the daily reset FIRST, so a
+     * page opened after midnight UTC shows the nodes the ceiling alone had
+     * disabled back in service (and the stale trip cleared) even if they
+     * have not beaten yet. Best-effort: a sweep failure never fails the read.
+     */
     async describeForUser(userId: string, now: Date = new Date()): Promise<FleetCostCeilingView> {
+        if (this.reset) await this.reset.resetDueForUser(userId, now);
         const policy = await this.policies.findByUser(userId);
         const owned = policy?.dailyCeilingCents ?? null;
         const fallback = config.fleet.getDefaultFleetDailyCostCeilingCents();
@@ -171,12 +193,10 @@ export class FleetCostCeilingService {
                 const row = await this.nodes.findById(input.nodeId);
                 node = row && row.userId === input.userId ? row : null;
             }
-            nodeCeiling = node
-                ? (node.dailyCostCeilingCents ?? config.fleet.getDefaultNodeDailyCostCeilingCents())
-                : null;
-            const policy = await this.policies.findByUser(input.userId);
-            fleetCeiling =
-                policy?.dailyCeilingCents ?? config.fleet.getDefaultFleetDailyCostCeilingCents();
+            nodeCeiling = node ? resolveNodeDailyCeilingCents(node) : null;
+            fleetCeiling = resolveFleetDailyCeilingCents(
+                await this.policies.findByUser(input.userId),
+            );
         } catch (error) {
             // Cannot even tell whether a ceiling applies. Fail closed on the
             // reporting node: draining a machine for a lookup hiccup is
@@ -436,7 +456,7 @@ function composeNoticeBody(input: {
     }
     lines.push(
         drained,
-        "It stays disabled until you re-enable it in Fleet settings — the ceiling is a stop, not a rate limit — so raise the ceiling first if today's spend was expected. The day boundary is midnight UTC.",
+        'The ceiling is daily: after midnight UTC every node it alone disabled goes back into service on its next heartbeat, unless a person disabled it too. To resume sooner, raise the ceiling and re-enable the node in Fleet settings.',
         "The figure is the CLI's own estimate (Claude Code prices at API list rates even on a subscription seat; Codex reports no price at all). Nothing was debited from platform credits.",
     );
     if (billedTo) lines.push(`Billed to: ${billedTo}.`);

@@ -29,7 +29,8 @@ export function sandboxQuotaKey(userId: string | undefined): string {
  *   - `ai:sandbox:<userId>` — the visitor's sandbox (`DEMO_AI_REQUESTS_PER_SANDBOX`); the
  *     window is the user's `anonymousExpiresAt`. Over it, or past that TTL (fail closed):
  *     `DemoQuotaExceededError('sandbox')`. Skipped for system work (`userId` undefined) and
- *     for a user with no `anonymousExpiresAt` (an operator, or a row already gone).
+ *     for a user with no `anonymousExpiresAt` (an operator). A `userId` with no user row (a
+ *     sandbox already deleted) fails closed the same way, before anything is counted.
  *   - `ai:min:<YYYY-MM-DDTHH:MM>` — the instance's minute (`DEMO_AI_REQUESTS_PER_MINUTE`,
  *     under OpenRouter's 20/min free limit). Over it: `DemoRateLimitedError` carrying the
  *     milliseconds left in the minute.
@@ -97,13 +98,22 @@ export class DemoAiQuotaService implements DemoAiQuotaPort {
         return (await this.counters.peek(dayKeyOf(now), now)) >= config.demo.aiRequestsPerDay();
     }
 
-    /** The user's `anonymousExpiresAt`, or null when there is none; cached briefly per user. */
+    /**
+     * The user's `anonymousExpiresAt`, or null when it has none (an operator); cached briefly
+     * per user. A user with no row at all (a sandbox the sweeper deleted mid-flight, or an id
+     * that never existed) is no operator: refused with `DemoQuotaExceededError('sandbox')`, as
+     * a sandbox past its TTL is, and the miss is not cached, so a row that appears is served.
+     */
     private async sandboxWindowEnd(userId: string): Promise<Date | null> {
         const cached = this.sandboxWindows.get(userId);
         if (cached && Date.now() - cached.readAt < SANDBOX_WINDOW_CACHE_MS) return cached.endsAt;
 
         const user = await this.users.findById(userId);
-        const endsAt = user?.anonymousExpiresAt ? new Date(user.anonymousExpiresAt) : null;
+        if (!user) {
+            this.sandboxWindows.delete(userId);
+            throw new DemoQuotaExceededError('sandbox');
+        }
+        const endsAt = user.anonymousExpiresAt ? new Date(user.anonymousExpiresAt) : null;
 
         this.sandboxWindows.delete(userId);
         if (this.sandboxWindows.size >= SANDBOX_WINDOW_CACHE_MAX) {

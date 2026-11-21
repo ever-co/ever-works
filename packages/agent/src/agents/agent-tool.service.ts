@@ -1,5 +1,6 @@
 import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
+import { config } from '../config';
 import type { Agent } from '../entities/agent.entity';
 import { AgentScope, AgentStatus, AGENT_PERMISSIONS_DEFAULT } from '../entities/agent.entity';
 import { AgentRepository } from '../database/repositories/agent.repository';
@@ -63,6 +64,7 @@ import {
 import { buildAgentTaskTools, type TaskToolDescriptor } from '../tasks-domain/agent-task-tools';
 import { buildIngestEventTools } from '../ingest/agent-ingest-tools';
 import { buildDigestTools } from '../digest/agent-digest-tools';
+import { buildAgentMemoryTools } from '../services/agent-memory-tools';
 import { buildMeetingTools } from '../meetings/agent-meeting-tools';
 import { buildFleetTools } from '../fleet/agent-fleet-tools';
 import { buildFleetMachineTools } from '../fleet/machine/agent-fleet-machine-tools';
@@ -470,7 +472,13 @@ export class AgentToolService {
             // Wave 9 M2 — thread the run id so pass-through usage events
             // carry per-run cost attribution (the accumulator sums them).
             tools.push(this.buildSearchWebTool(agent, runContext));
-            tools.push(this.buildScreenshotTool(agent, runContext));
+            // Platform demo mode (R41): screenshots are off on a demo, so the model is not
+            // offered the tool at all (calling it would only spend a step and demo AI quota).
+            // The api adapter behind `AGENT_PLUGIN_TOOLS_FACADE` still refuses a capture on a
+            // demo as a backstop. With DEMO unset the toolset is unchanged.
+            if (!config.demo.isEnabled()) {
+                tools.push(this.buildScreenshotTool(agent, runContext));
+            }
             tools.push(this.buildExtractContentTool(agent, runContext));
         }
 
@@ -615,6 +623,17 @@ export class AgentToolService {
             const digest = sources.digest;
             add('digest', () =>
                 buildDigestTools({ userId: agent.userId, digestService: digest.digestService }),
+            );
+        }
+
+        if (sources.memory) {
+            const memory = sources.memory;
+            add('memory', () =>
+                buildAgentMemoryTools({
+                    agent,
+                    facade: memory.facade,
+                    runId: runContext?.runId ?? null,
+                }),
             );
         }
 

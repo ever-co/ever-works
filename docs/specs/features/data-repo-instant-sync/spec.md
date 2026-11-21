@@ -91,10 +91,14 @@ Active when `Work.githubAppInstalled = false` but the platform has read credenti
 
 1. The **same** `dataRepoSyncDispatcherTask` (no separate poller task) handles polling.
 2. Eligibility: `githubAppInstalled = false AND (lastPolledAt IS NULL OR lastPolledAt + syncIntervalMinutes·minutes <= now())`. Default `syncIntervalMinutes = 5`, range 1–60.
-3. For each eligible Work: `git ls-remote <dataRepo> HEAD`. Compare to `Work.lastSyncedDataRepoSha`.
-    - If different → enqueue `dataRepoSyncTask` with `source: 'poll'`.
-    - If same → emit `data-sync.skipped reason=no-changes` (rate-limited: 1 per Work per hour).
+3. For each eligible Work, `runDataSync(workId, 'poll')` reads the data repo's default-branch HEAD through the git provider API (`MarkdownGeneratorService.readDataRepoHeadSha`: repository + latest commit, no clone), inside the per-Work lock, after the retry-backoff and pipeline-running gates. Compare to `Work.lastSyncedDataRepoSha`.
+    - If different (or no SHA recorded yet, or the read failed) → render as in §5.4.
+    - If same → skip the render; emit `data-sync.skipped reason=no-changes` at most once per `skipNoiseWindowMs` (key `data-sync:skip-noise:no-changes:<workId>`, 1 h by default).
 4. `lastPolledAt` is updated regardless.
+
+Webhook and manual syncs never take the `no-changes` skip: a manual sync is how a user forces a re-render (template change, edited main repo) without a data change.
+
+The SHA recorded after a render is the one the render is known to cover: the HEAD read **before** the clone for a separate data repository (a commit that lands mid-render is then rendered by the next poll instead of being recorded as synced), or HEAD read after the push for single-repo storage (it includes the render's own commit).
 
 ### 5.3 The dispatcher task — `dataRepoSyncDispatcherTask`
 
@@ -119,7 +123,7 @@ ORDER BY id
 LIMIT :batch_size;
 ```
 
-For each row, the dispatcher invokes `dataRepoSyncTask.trigger({ workId, source })`. Path B additionally runs `ls-remote` synchronously inside the dispatcher (fast: 1 HTTP req per Work) so it can skip the enqueue when the SHA is unchanged.
+For each row, the dispatcher invokes `dataRepoSyncTask.trigger({ workId, source })`. For Path B the HEAD comparison of §5.2 runs as the first step of the render gate, inside the lock, so a concurrent manual sync cannot race the SHA it compares against.
 
 ### 5.4 The render task — `dataRepoSyncTask`
 

@@ -92,7 +92,7 @@ The **node drawer** on the Fleet page (the details action on a row) renders the 
 
 The **node drawer** on the Fleet page (the details action on a row) renders the same job history: each job's kind, status, attempt count, queued reason, queued / started / completed times and duration, filterable by **All / Failed / Running**.
 
-**Disabling drains.** A disabled node's heartbeats stop being accepted, so it goes quiet immediately rather than at the next sweep. Re-enabling puts it back to `offline` until its next accepted heartbeat proves it alive. Disabling a node that is still `enrolling` revokes its unused token.
+**Disabling drains.** A disabled node leases no new work, but it keeps heartbeating — it stays visible, the jobs it already holds can still report, and a beat never promotes it back to a leasable state (the one exception is the [daily cost-ceiling reset](#daily-cost-ceilings)). Re-enabling puts it back to `offline` until its next accepted heartbeat proves it alive. Disabling a node that is still `enrolling` revokes its unused token.
 
 Everything here is owner-scoped: another account's node id is indistinguishable from one that does not exist.
 
@@ -110,6 +110,20 @@ Four more owner-scoped controls sit on the same registry, all of them on **Setti
 Drain disables **first** and requeues second. The order is deliberate: the node loses the ability to lease the instant its status flips, so a claim released a moment later cannot be re-claimed by the very machine you are draining.
 
 `GET /api/fleet/nodes/:id` returns one node with its recent job history and the failed subset of it — which is what the node drawer shows. `GET /api/fleet/runner-status` is the compact "N of M online" feed behind the runner pill in the dashboard header; cluster-sourced nodes are excluded from it, because the platform never leases work onto them.
+
+### Daily cost ceilings
+
+```
+GET    /api/fleet/cost-ceiling       the fleet-wide ceiling in force, where it comes from, today's spend, the last trip day
+PUT    /api/fleet/cost-ceiling       { dailyCeilingCents } — set (or clear, with null) the fleet-wide ceiling
+PATCH  /api/fleet/nodes/:id          { dailyCostCeilingCents } — set (or clear) one node's ceiling
+```
+
+Two ceilings bound the model spend your own machines report, both per **UTC day**: one per node (its `dailyCostCeilingCents`, else `FLEET_NODE_DAILY_COST_CEILING_USD`) and one across the whole fleet (your value, else `FLEET_DAILY_COST_CEILING_USD`). Unset means no ceiling. After every fleet job completion the day's `fleet_jobs.costCents` are summed from midnight UTC; at or above a ceiling the node — or, for the fleet-wide ceiling, every enrolled node — is **drained** (disabled, its claims returned to the queue) and one Inbox notice is filed per ceiling per day. A ceiling that cannot count (a CLI that reports no price, a sum that fails) fails closed and drains. The figure is the CLI's own estimate, never a platform-credits debit.
+
+**The ceiling resets daily.** After midnight UTC a node that the ceiling **alone** disabled goes back into service on its first heartbeat, or as soon as you open the ceiling settings. It lands on `offline` (`paused` if it was paused when the ceiling tripped) until that heartbeat proves it alive, its trip markers are cleared, and one `node.disable` audit row records it: actor `null`, `via: cost-ceiling`, `reason: "daily reset of a cost-ceiling trip from <day>"`. A node is not handed back while today's spend is already at or above a ceiling that applies to it; the next completion that crosses trips it again the normal way, with a new notice for the new day, so the reset never flaps.
+
+**A disable a person made is never undone.** Whose disable it is comes from the node's own audit trail: the reset acts only when the newest ceiling drain that took the node out of service is newer than every other status write on that node (a PATCH, a drain, a pause, an unenroll) and nobody pressed **Drain all** since. Disabled before the trip, after it, or both — the node stays disabled until you re-enable it. Whatever the reset cannot prove (no audit writer bound, an unreadable row, two status writes with the same timestamp) leaves the node disabled. To resume before midnight, raise the ceiling and re-enable the node.
 
 The whole surface is gated by `FLEET_ENABLED` on the API. When it is off, every `/api/fleet/**` route answers **404**, not 403 — a disabled deployment does not confirm the channel exists. The flag defaults to on.
 
@@ -307,7 +321,7 @@ None of these help when the break is in the protocol itself — when the platfor
 
 ## Capabilities
 
-A node advertises capability tags (up to 16) such as `terminal`, `workspace` or `docker`. These describe what the node can host.
+A node advertises capability tags (up to 32 by default) such as `terminal`, `workspace` or `docker`. These describe what the node can host.
 
 They are not decoration. Tags decide which work a node is even offered — see [Capability targeting](#capability-targeting) — and the full detected set, plus how to pin tags so heartbeats stop overwriting them, is in [The tags a node reports](#the-tags-a-node-reports).
 
@@ -688,6 +702,18 @@ With the `node` runtime selected, every Task run dispatched to an Agent becomes 
 When the node reports, the platform reconciles the result the same way a cloud run is reconciled: the run is marked started when the node leases the job and completed or failed when it reports (with the CLI's final message as the run summary and the acceptance-check verdicts on the run), the pushed task branch becomes a pull request (or is handed to a human when the Agent may not open one) and the Task moves to _In review_, the Agent posts the fleet report to the Task chat, a failure files an Inbox notice, and parked runs on the Work are drained. **Cancelling a run** cancels the fleet job too: a job no node has claimed is dropped; a job a node is executing is flagged, the node's next job heartbeat is refused, and the node aborts the CLI and reports.
 
 Routing preferences (**Settings → Fleet → Execution routing**) decide what happens when no runner is free: wait for one (`local-wait`), fall back to the cloud with a notice (`local-fallback`), or always use the cloud. An Agent can be pinned to one specific node (`PUT /api/fleet/agents/:agentId/node-affinity`); a pinned Agent never runs elsewhere.
+
+### Local AI on a node
+
+A node can run its agent CLI on a **local model server** — llama-swap, Ollama, LM Studio, vLLM or any OpenAI-compatible server on the machine or its LAN — instead of the CLI's cloud seat. The machine's operator configures it on the node (a `localAi` section in `node-config.json`, or `EVER_WORKS_NODE_LOCAL_AI_*` in the node's environment); the platform never chooses it. The full reference is in [`apps/node/README.md`](https://github.com/ever-co/ever-works/blob/develop/apps/node/README.md#local-ai-providers).
+
+- The node probes each provider (health and models only — a probe never generates) and advertises **`local-ai`**, **`local-ai:<kind>`**, **`local-model:<model>`** and, for a CLI bound to a provider that can serve it, **`local-agent:<cli>`** (`local-agent:claude-code`). Every one is withdrawn on the next heartbeat after the provider stops answering.
+- With `agentRuntime` set (`{ "cli": "claude-code", "provider": "gpu", "model": "flashnext" }`), every Task of that CLI the node takes runs on the local provider: Claude Code against a server that speaks the Anthropic Messages API, Codex against one that speaks the OpenAI Responses API. The run reports **`costUsd: 0` with `costBasis: 'local'`**, so it is recorded at 0 cents and counts nothing against a daily cost ceiling; no per-run dollar cap is passed to the CLI (it would price the unknown local model at cloud list rates).
+- A bound CLI whose provider is down **never falls back to the cloud seat**: the node withholds that CLI's `claude-code` / `codex` tag so it is not offered the work, and declines (hands back unsettled) a job it already leased.
+- Extra tags the node cannot detect — `gpu` on a VM whose model server runs on the GPU host — are declared with `extraCapabilities` / `EVER_WORKS_NODE_EXTRA_CAPABILITIES`.
+- Keys are never stored in the config (a file path or an env var name), never logged and never sent to the platform.
+
+Routing an Agent to local AI specifically (requiring `local-agent:claude-code`), and showing the providers' health on the node page, are follow-ups; today an Agent pinned to a bound node runs locally.
 
 ### Suspend safety (lease generations)
 

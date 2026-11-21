@@ -234,7 +234,7 @@ export class FleetController {
     @Get('cost-ceiling')
     @ApiOperation({
         summary:
-            "This account's FLEET-WIDE daily (UTC) model-spend ceiling — the owner's value, the deployment default it falls back to, the day it last drained the fleet, and today's spend across every node. Sums only what the owner's own machines reported, never cloud spend.",
+            "This account's FLEET-WIDE daily (UTC) model-spend ceiling — the owner's value, the deployment default it falls back to, the day it last drained the fleet, and today's spend across every node. Sums only what the owner's own machines reported, never cloud spend. Reading it also runs the daily reset: nodes the ceiling alone disabled on an earlier UTC day are put back in service.",
     })
     @HttpCode(HttpStatus.OK)
     async getCostCeiling(@CurrentUser() auth: AuthenticatedUser): Promise<FleetCostCeilingView> {
@@ -244,7 +244,7 @@ export class FleetController {
     @Put('cost-ceiling')
     @ApiOperation({
         summary:
-            'Set (or clear, with null) the fleet-wide daily model-spend ceiling. Crossing it drains every node of the account until they are re-enabled — a stop, not a rate limit.',
+            'Set (or clear, with null) the fleet-wide daily model-spend ceiling. Crossing it drains every node of the account for the rest of the UTC day; after midnight UTC each node the ceiling alone disabled goes back into service on its next heartbeat. A node a person disabled (PATCH, drain, drain-all) stays disabled.',
     })
     @HttpCode(HttpStatus.OK)
     @Throttle({ long: { limit: 30, ttl: 60_000 } })

@@ -175,6 +175,8 @@ import {
 } from '@ever-works/agent/fleet';
 import { FleetPullRequestService } from '../fleet/session-git/fleet-pull-request.service';
 import { config } from '@ever-works/agent/config';
+// Platform demo mode (R41) — the Agents' screenshot tool is refused on a demo.
+import { DemoFeatureDisabledError } from '@ever-works/agent/demo';
 // Tasks on computers (FL-15 P3) — the hand-off options reader behind `fleet_tasks_handoff_options`
 // (global through FleetTasksApiModule; optional below).
 import { FleetTaskHandoffService } from '../fleet/tasks/fleet-task-handoff.service';
@@ -197,6 +199,7 @@ import {
     AiFacadeService,
     GitFacadeService,
     BrowserAutomationFacadeService,
+    AgentMemoryFacadeService,
 } from '@ever-works/agent/facades';
 // FU-2 — `AgentsController` injects `SkillBindingRepository` (for the
 // `GET /api/agents/:id/skills` rollup) and `PluginUsageRepository` (for
@@ -980,6 +983,13 @@ async function assertRealWriteTarget(
                     viewportHeight,
                     fullPage,
                 }) {
+                    // Platform demo mode (R41): screenshots are off on a demo, as the
+                    // `/api/screenshot` routes and generation's image step are. Refused
+                    // before any provider call; the tool hands the model the refusal as
+                    // its result. With `DEMO` unset this line is inert.
+                    if (config.demo.isEnabled()) {
+                        throw new DemoFeatureDisabledError('screenshots');
+                    }
                     const result = await screenshot.capture(
                         { url, viewportWidth, viewportHeight, fullPage } as any,
                         // Wave 9 M2 — runId feeds per-run cost attribution;
@@ -2533,6 +2543,10 @@ async function assertRealWriteTarget(
                 // APPENDED LAST (positional), optional: unbound (or FLEET_DESKTOP_ENABLED off)
                 // the tool is not offered.
                 { token: FLEET_DESKTOP_READER, optional: true },
+                // Agent memory — backs `memory_search` / `memory_save` through the
+                // `agent-memory` capability facade (Memanto by default). APPENDED LAST
+                // (positional), optional: unbound, the two tools are not offered.
+                { token: AgentMemoryFacadeService, optional: true },
             ],
             useFactory: (
                 tasksService: TasksService,
@@ -2578,6 +2592,7 @@ async function assertRealWriteTarget(
                 fleetUsage?: FleetUsageViewService | null,
                 fleetRunners?: FleetActionsRunnersService | null,
                 fleetDesktop?: FleetDesktopReaderPort | null,
+                agentMemory?: AgentMemoryFacadeService | null,
             ): AgentDomainToolSources => ({
                 // All three membership repositories are bound: the
                 // commentOnTask gate is fail-closed and DENIES every call
@@ -2598,6 +2613,7 @@ async function assertRealWriteTarget(
                 ingest: { repository: ingestedEvents },
                 digest: { digestService: digest },
                 meetings: { repository: meetings },
+                ...(agentMemory ? { memory: { facade: agentMemory } } : {}),
                 fleet: {
                     service: fleet,
                     ...(checkouts ? { checkouts: { service: checkouts } } : {}),

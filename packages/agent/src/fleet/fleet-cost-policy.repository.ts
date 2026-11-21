@@ -72,4 +72,17 @@ export class FleetCostPolicyRepository {
         );
         return (rolled.affected ?? 0) === 1;
     }
+
+    /**
+     * Clear the fleet-wide trip marker once its day is over (the daily
+     * reset). A trip stamped TODAY stays — it is still in force, and it is
+     * the key that keeps today's notice to one. Idempotent, and a no-op for
+     * an owner with no row: it never creates one.
+     */
+    async clearStaleTrip(userId: string, today: string): Promise<void> {
+        await this.repository.update(
+            { userId, trippedOn: Not(today) },
+            { trippedOn: null, trippedAt: null },
+        );
+    }
 }

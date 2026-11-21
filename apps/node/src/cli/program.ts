@@ -113,6 +113,15 @@ import {
 	readSelfUpdateRecord,
 	writeSelfUpdateRecord
 } from '../core/link/self-update';
+import {
+	loadNodeLocalAi,
+	runLocalAiList,
+	runLocalAiProbe,
+	runLocalAiTest,
+	type LocalAiCliDeps,
+	type LocalAiCommandOptions,
+	type LocalAiTestCommandOptions
+} from './local-ai-command';
 
 /**
  * `ever-works-node` CLI.
@@ -125,6 +134,7 @@ import {
  *   unenroll     retire this node and erase the local credential
  *   status       show the local enrollment, credentials redacted
  *   capabilities print the tags this machine would report
+ *   local-ai     list / probe / test the local AI providers (llama-swap, Ollama, …)
  *   doctor       daemon version vs the platform floor, model-CLI compatibility,
  *                disk headroom vs the floor, and what the workspace reaper would do
  *   gc           run the workspace reaper (age / LRU, fail-closed; --dry-run to look)
@@ -236,6 +246,14 @@ export interface CliDeps {
 	helperFs?: HelperFs;
 	/** Desktop view & control (FL-07) — the `helper install` download (tests inject a fake). */
 	helperFetch?: typeof fetch;
+	/**
+	 * The process environment the `local-ai` commands and `capabilities` read
+	 * the `EVER_WORKS_NODE_LOCAL_AI_*` shorthand and `apiKeyEnv` keys from.
+	 * Defaults to `process.env`; tests inject their own.
+	 */
+	env?: Readonly<Record<string, string | undefined>>;
+	/** Local AI — test seam for the provider key-file reader. */
+	readLocalAiKeyFile?: (path: string) => Promise<string | null>;
 }
 
 /**
@@ -1706,6 +1724,19 @@ export async function runStatus(deps: CliDeps): Promise<void> {
 	deps.out(`workspace gc ${describeWorkspaceGc(view.workspaceGc ?? DEFAULT_WORKSPACE_GC_POLICY)}`);
 	// Control 18: what this machine lets a job do, decided here, never by the platform.
 	deps.out(`policy       ${describeExecutionPolicy(view.executionPolicy)}`);
+	// Local AI: what is configured (no probe — `local-ai probe` asks the servers).
+	const localAi = (await loadNodeLocalAi(localAiCliDeps(deps))).monitor;
+	deps.out(
+		`local ai     ${
+			localAi
+				? `${localAi.settings.providers.map((provider) => `${provider.id} (${provider.kind})`).join(', ') || 'no valid provider'}${
+						localAi.settings.agentRuntimes.length > 0
+							? `; runs ${localAi.settings.agentRuntimes.map((runtime) => runtime.cli).join(', ')} locally`
+							: ''
+					}`
+				: 'not configured'
+		}`
+	);
 	// The secret itself is never printed — only whether one is stored.
 	deps.out(`credential   ${view.hasSecret ? 'stored' : 'MISSING'}`);
 	deps.out(`config       ${deps.configPath}`);
@@ -2260,15 +2291,51 @@ export async function runGc(deps: CliDeps, options: GcCommandOptions): Promise<v
 }
 
 export async function runCapabilities(deps: CliDeps): Promise<void> {
-	const description = await describeSelf(deps.io.runner, deps.io.environment, deps.io.version);
+	// Local AI and the operator's extra tags, resolved and probed exactly as
+	// `start` does, so this prints what the running node would advertise.
+	const localAi = await loadNodeLocalAi(localAiCliDeps(deps));
+	if (localAi.monitor) await localAi.monitor.refresh();
+	const environment: CapabilityEnvironment = {
+		...deps.io.environment,
+		...(localAi.monitor ? { localAi: localAi.monitor.capabilityFacts() } : {}),
+		...(localAi.extraCapabilities.length > 0 ? { extraCapabilities: localAi.extraCapabilities } : {})
+	};
+	const description = await describeSelf(deps.io.runner, environment, deps.io.version);
 	deps.out(`platform     ${description.platform}`);
 	deps.out(`version      ${description.version}`);
 	deps.out(`capabilities ${description.capabilities.join(', ')}`);
+	if (localAi.monitor) {
+		const facts = environment.localAi;
+		deps.out(
+			`local ai     ${localAi.monitor
+				.snapshot()
+				.map((status) => `${status.id} (${status.kind}) ${status.status}`)
+				.join(', ')}${
+				facts && facts.unavailableClis.length > 0
+					? ` — withholding ${facts.unavailableClis.join(', ')} (\`ever-works-node local-ai probe\` says why)`
+					: ''
+			}`
+		);
+	}
+	for (const problem of localAi.problems) deps.out(`problem      ${problem}`);
 	// Name the browser explicitly: `browser` is the one tag that commits
 	// this machine to launching a specific executable, and an operator
 	// debugging a failed browser-check needs to know WHICH one.
 	deps.out(`browser      ${deps.io.environment.browserPath ?? '(none found — `browser` not advertised)'}`);
 	deps.out(`display      ${deps.io.environment.hasDisplay ? 'available' : 'headless'}`);
+}
+
+/** The slice of the CLI deps the `local-ai` commands use. */
+export function localAiCliDeps(deps: CliDeps): LocalAiCliDeps {
+	return {
+		fs: deps.fs,
+		configPath: deps.configPath,
+		out: deps.out,
+		env: deps.env ?? process.env,
+		io: { fetchFn: deps.io.fetchFn, logger: deps.io.logger },
+		...(deps.now ? { now: deps.now } : {}),
+		...(deps.readLocalAiKeyFile ? { readKeyFile: deps.readLocalAiKeyFile } : {})
+	};
 }
 
 // ---------------------------------------------------------------------------
@@ -2482,6 +2549,45 @@ export function buildProgram(deps: CliDeps): Command {
 		.description('Print the capability tags this machine reports')
 		.action(async () => {
 			await runCapabilities(deps);
+		});
+
+	// Local AI: model servers on (or next to) this machine — read-only diagnostics.
+	const localAiCommand = program
+		.command('local-ai')
+		.description(
+			'Local AI providers on this machine (llama-swap, Ollama, LM Studio, vLLM, any OpenAI-compatible server): what is configured, whether it answers, which agent CLI runs on it'
+		);
+	localAiCommand
+		.command('list')
+		.description('Show the configured providers, agent bindings and extra tags — no network, keys never shown')
+		.option('--json', 'Emit the configuration as one JSON object')
+		.action(async (options: LocalAiCommandOptions) => {
+			await runLocalAiList(localAiCliDeps(deps), options);
+		});
+	localAiCommand
+		.command('probe')
+		.description(
+			'Ask every provider for its health and models now, and say whether each bound agent CLI could take a Task (exit 1 if not)'
+		)
+		.option('--json', 'Emit the result as one JSON object')
+		.action(async (options: LocalAiCommandOptions) => {
+			await runLocalAiProbe(localAiCliDeps(deps), options);
+		});
+	localAiCommand
+		.command('test')
+		.description(
+			'Send one tiny real request per wire API to a provider, to see which APIs actually work (generates a few tokens locally)'
+		)
+		.option('--provider <id>', 'The provider to test (default: the one an agent CLI is bound to, or the only one)')
+		.option('--model <id>', 'The model to ask (default: the bound or default model)')
+		.option('--api <api>', 'Test only this API: openai-chat, openai-responses or anthropic-messages')
+		.option(
+			'--timeout <seconds>',
+			'Per-request timeout in seconds (default 120: a first request may load the model)'
+		)
+		.option('--json', 'Emit the result as one JSON object')
+		.action(async (options: LocalAiTestCommandOptions) => {
+			await runLocalAiTest(localAiCliDeps(deps), options);
 		});
 
 	program

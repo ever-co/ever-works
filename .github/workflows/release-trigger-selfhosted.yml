@@ -33,6 +33,18 @@ on:
           - self-hosted
           - github-hosted
         default: self-hosted
+      target:
+        description: >-
+          Which Trigger.dev project(s) to deploy. `all` (default) = the platform project and, when the
+          repo variable TRIGGER_DEMO_PROJECT_REF is set, the "Ever Works Demo" project (demo.ever.works,
+          docs/guides/demo-mode.md). `platform-project` or `demo-project` deploys only that one, e.g. the
+          first deploy of a new demo project without redeploying the platform workers.
+        type: choice
+        options:
+          - all
+          - platform-project
+          - demo-project
+        default: all
   workflow_run:
     workflows: ["CI"]
     branches: [main, stage]
@@ -187,7 +199,7 @@ jobs:
           fi
 
       - name: 🚀 Deploy Trigger.dev (self-hosted)
-        if: steps.env.outputs.skip != 'true'
+        if: steps.env.outputs.skip != 'true' && github.event.inputs.target != 'demo-project'
         working-directory: packages/tasks
         env:
           # Self-hosted PAT (repo Actions secret). Keep the cloud token
@@ -217,3 +229,58 @@ jobs:
           CLI_VER="$(node -p "require('@trigger.dev/sdk/package.json').version" 2>/dev/null)"
           echo "Using trigger.dev CLI ${CLI_VER}"
           pnpm dlx "trigger.dev@${CLI_VER}" deploy --env "${{ steps.env.outputs.trigger_env }}"
+
+      # Platform demo (docs/guides/demo-mode.md, ever-co/ever-works#3263): the SAME task bundle, deployed a
+      # second time to the "Ever Works Demo" project on the same self-hosted instance, so the demo's workers run
+      # the demo's code (stage -> its `staging` env for demostage.ever.works, main -> `prod` for demo.ever.works;
+      # demodev has no Trigger). A step of this job, not a second job: it reuses the install and the plugin
+      # builds above instead of repeating ~30 min of build on the runner.
+      # Inert until the repo variable TRIGGER_DEMO_PROJECT_REF is set (rollout step). That project's env MUST set
+      # DEMO=true, or its workers run AI calls without the demo's policy and quotas: the step checks it through the
+      # Trigger.dev API first and refuses to deploy otherwise (fail-closed, scripts/ci/trigger-demo-guard.mjs).
+      # Its concurrency is capped at 2 runs per environment on the instance, so demo runs never crowd out the
+      # platform's runs; the step after it switches the platform's scheduled tasks off in the demo env.
+      # Docker is already logged in to GHCR by the step above; the same TRIGGER_SELFHOSTED_ACCESS_TOKEN must
+      # belong to a member of the org that owns the demo project.
+      - name: 🚀 Deploy Trigger.dev (self-hosted, platform demo project)
+        if: >-
+          ${{ steps.env.outputs.skip != 'true' && vars.TRIGGER_DEMO_PROJECT_REF != '' &&
+              github.event.inputs.target != 'platform-project' }}
+        working-directory: packages/tasks
+        env:
+          TRIGGER_ACCESS_TOKEN: ${{ secrets.TRIGGER_SELFHOSTED_ACCESS_TOKEN }}
+          TRIGGER_API_URL: ${{ (github.event.inputs.runner == 'github-hosted' || vars.TRIGGER_SELFHOSTED_INGRESS_IP != '') && 'https://trigger.ever.co' || vars.TRIGGER_SELFHOSTED_API_URL || 'https://trigger.ever.co' }}
+          TRIGGER_PROJECT_REF: ${{ vars.TRIGGER_DEMO_PROJECT_REF }}
+          TRIGGER_ENV: ${{ steps.env.outputs.trigger_env }}
+          GHCR_DEPLOY_TOKEN: ${{ secrets.GHCR_DEPLOY_TOKEN }}
+        run: |
+          if ! printf '%s' "$TRIGGER_PROJECT_REF" | grep -Eq '^proj_[a-z0-9]+$'; then
+            echo "::error::TRIGGER_DEMO_PROJECT_REF is not a Trigger.dev project ref (proj_...)"; exit 1
+          fi
+          if [ "$TRIGGER_PROJECT_REF" = "proj_ixrpwdtsfolfxlbkgkle" ]; then
+            echo "::error::TRIGGER_DEMO_PROJECT_REF is the platform project; the demo needs its own project"; exit 1
+          fi
+          # Fail-closed: the target env of the demo project must have DEMO on (same parse as the API), or no deploy.
+          node ../../scripts/ci/trigger-demo-guard.mjs check-env
+          # Log in again when the platform deploy step was skipped (target=demo-project).
+          echo "${GHCR_DEPLOY_TOKEN}" | docker login ghcr.io -u evereq --password-stdin
+          CLI_VER="$(node -p "require('@trigger.dev/sdk/package.json').version" 2>/dev/null)"
+          echo "Deploying the platform demo project ${TRIGGER_PROJECT_REF} (env ${TRIGGER_ENV}) with trigger.dev CLI ${CLI_VER}"
+          pnpm dlx "trigger.dev@${CLI_VER}" deploy --env "${TRIGGER_ENV}"
+
+      # The bundle declares ~41 `schedules.task` crons for the PLATFORM (eight every minute). In the demo env, capped
+      # at 2 concurrent runs, they would queue ahead of every visitor's run, so every active declarative schedule
+      # except goal-advance-dispatcher and agent-run-sweeper is deactivated after each demo deploy. Trigger.dev keeps
+      # a deactivated declarative schedule inactive across deploys; one a new deploy adds starts active, hence every
+      # deploy. A failure here fails the job (the deploy itself has landed): re-run it, or run the homelab runbook's
+      # `trigger-demo-env.sh <env> schedules --apply`.
+      - name: 🛑 Platform demo project — switch off the platform's scheduled tasks
+        if: >-
+          ${{ steps.env.outputs.skip != 'true' && vars.TRIGGER_DEMO_PROJECT_REF != '' &&
+              github.event.inputs.target != 'platform-project' }}
+        env:
+          TRIGGER_ACCESS_TOKEN: ${{ secrets.TRIGGER_SELFHOSTED_ACCESS_TOKEN }}
+          TRIGGER_API_URL: ${{ (github.event.inputs.runner == 'github-hosted' || vars.TRIGGER_SELFHOSTED_INGRESS_IP != '') && 'https://trigger.ever.co' || vars.TRIGGER_SELFHOSTED_API_URL || 'https://trigger.ever.co' }}
+          TRIGGER_PROJECT_REF: ${{ vars.TRIGGER_DEMO_PROJECT_REF }}
+          TRIGGER_ENV: ${{ steps.env.outputs.trigger_env }}
+        run: node scripts/ci/trigger-demo-guard.mjs deactivate-schedules

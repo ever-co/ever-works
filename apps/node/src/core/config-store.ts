@@ -4,6 +4,7 @@ import {
 	type AtomicFileOps,
 	type ReplaceFileOptions
 } from './atomic-state-file';
+import { sanitizeStoredLocalAiConfig } from './local-ai/config';
 import type { Logger } from './logger';
 import type { SecretStore } from './secret-store';
 import {
@@ -344,6 +345,17 @@ export function parseConfig(raw: string | null): NodeConfig | null {
 	// OFF, so a hand-edited or truncated value can only ever narrow.
 	if (candidate.executionPolicy && typeof candidate.executionPolicy === 'object') {
 		config.executionPolicy = resolveNodeExecutionPolicy(candidate.executionPolicy);
+	}
+	// Local AI: kept in SHAPE only here (known keys, primitive types, bounded
+	// lists) — the values are validated where problems can be reported
+	// (`resolveLocalAiSettings`), so a bad entry never makes the node read as
+	// "not enrolled".
+	const localAi = sanitizeStoredLocalAiConfig(candidate.localAi);
+	if (localAi) config.localAi = localAi;
+	if (Array.isArray(candidate.extraCapabilities)) {
+		config.extraCapabilities = candidate.extraCapabilities
+			.filter((tag): tag is string => typeof tag === 'string')
+			.slice(0, 32);
 	}
 	if (
 		candidate.unsafe &&

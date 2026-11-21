@@ -261,7 +261,11 @@ import {
 } from '@ever-works/agent/agents';
 import { McpModule, McpToolSource } from '@ever-works/agent/mcp';
 import { ConversationsModule, ConversationMessageService } from '@ever-works/agent/conversations';
-import { BrowserAutomationFacadeService, GitFacadeService } from '@ever-works/agent/facades';
+import {
+    AgentMemoryFacadeService,
+    BrowserAutomationFacadeService,
+    GitFacadeService,
+} from '@ever-works/agent/facades';
 import { InboxModule as AgentInboxModule, InboxService } from '@ever-works/agent/inbox';
 import { PullRequestGateService } from '@ever-works/agent/policy';
 import { WorkRepository } from '@ever-works/agent/database';
@@ -271,6 +275,7 @@ import {
     AppWorksModule as AgentAppWorksModule,
 } from '@ever-works/agent/app-works';
 import { AgentApprovalsService } from '@ever-works/agent/agent-approvals';
+import { DemoFeatureDisabledError } from '@ever-works/agent/demo';
 
 type FactoryProvider = {
     provide?: unknown;
@@ -382,7 +387,24 @@ describe('api-side AgentsModule — domain chat-tool wiring', () => {
             { token: FleetUsageViewService, optional: true }, // 4d4407def (FL-20)
             { token: FleetActionsRunnersService, optional: true }, // f04b78c18 (FL-18 P1)
             { token: FLEET_DESKTOP_READER, optional: true }, // cca91ad1a (FL-07)
+            // Agent memory — `memory_search` / `memory_save` through the
+            // agent-memory facade (Memanto by default). APPENDED LAST, OPTIONAL.
+            { token: AgentMemoryFacadeService, optional: true },
         ]);
+    });
+
+    it('binds the agent-memory facade as the LAST positional service (backs memory_search / memory_save)', () => {
+        const factory = findProvider(AGENT_DOMAIN_TOOL_SOURCES);
+        const inject = factory?.inject ?? [];
+        const bundle = factory?.useFactory?.(...inject.map((_, index) => ({ stub: index }))) as {
+            memory?: { facade?: unknown };
+        };
+        expect(bundle?.memory?.facade).toEqual({ stub: inject.length - 1 });
+        // Unbound (the optional token resolves to null), the tools are simply not offered.
+        const unbound = factory?.useFactory?.(
+            ...inject.map((_, index) => (index === inject.length - 1 ? null : { stub: index })),
+        ) as Record<string, unknown>;
+        expect(unbound).not.toHaveProperty('memory');
     });
 
     it('takes exactly one factory parameter per injected service (the list is positional)', () => {
@@ -553,6 +575,8 @@ describe('api-side AgentsModule — domain chat-tool wiring', () => {
             'ingest',
             'digest',
             'meetings',
+            // Agent memory — `memory_search` / `memory_save`.
+            'memory',
             'fleet',
             // Audit G22 — headless browsing. Bound with only `read`, so the
             // capability's page-driving `act` is unreachable from chat.
@@ -912,6 +936,101 @@ describe('api-side AgentsModule — AGENT_EMAIL_FACADE approve-before-send', () 
             'user-1',
             expect.objectContaining({ inReplyToMessageId: 'msg-in-1' }),
             { origin: 'agent' },
+        );
+    });
+});
+
+/**
+ * Platform demo mode (R41) — screenshots are off on a demo instance: a capture has a
+ * screenshot provider fetch a URL the caller names, and costs a paid provider call. The
+ * Agents' `screenshot` tool reaches `ScreenshotFacadeService.capture` through this adapter,
+ * so the adapter refuses it on a demo with `DemoFeatureDisabledError` (the tool hands the
+ * model the refusal as its result). With `DEMO` unset the capture runs exactly as before.
+ */
+describe('api-side AgentsModule — AGENT_PLUGIN_TOOLS_FACADE screenshot on a demo', () => {
+    type PluginToolsFacade = {
+        screenshot: (input: Record<string, unknown>) => Promise<Record<string, unknown>>;
+        searchWeb: (input: Record<string, unknown>) => Promise<Record<string, unknown>>;
+    };
+
+    const SHOT = {
+        userId: 'user-1',
+        agentId: 'agent-1',
+        workId: 'work-1',
+        runId: 'run-1',
+        url: 'https://example.com',
+        fullPage: true,
+    };
+
+    let savedDemo: string | undefined;
+    beforeEach(() => {
+        savedDemo = process.env.DEMO;
+    });
+    afterEach(() => {
+        if (savedDemo === undefined) delete process.env.DEMO;
+        else process.env.DEMO = savedDemo;
+    });
+
+    const build = () => {
+        const capture = jest.fn().mockResolvedValue({
+            success: true,
+            imageUrl: 'https://cdn.example/shot.png',
+            cacheUrl: null,
+        });
+        const search = jest.fn().mockResolvedValue([]);
+        const facade = findProvider('AGENT_PLUGIN_TOOLS_FACADE')?.useFactory?.(
+            { search },
+            { capture },
+            { extractContent: jest.fn() },
+        ) as PluginToolsFacade;
+        return { facade, capture, search };
+    };
+
+    it('refuses the capture on a demo with DemoFeatureDisabledError, before any provider call', async () => {
+        process.env.DEMO = 'true';
+        const { facade, capture } = build();
+
+        const refusal = facade.screenshot(SHOT);
+
+        await expect(refusal).rejects.toBeInstanceOf(DemoFeatureDisabledError);
+        await expect(refusal).rejects.toMatchObject({ code: 'DEMO_DISABLED', httpStatus: 403 });
+        expect(capture).not.toHaveBeenCalled();
+    });
+
+    it('leaves the other pass-through tools alone on a demo (web search still runs)', async () => {
+        process.env.DEMO = 'true';
+        const { facade, search } = build();
+
+        await expect(facade.searchWeb({ userId: 'user-1', query: 'q' })).resolves.toEqual({
+            results: [],
+        });
+        expect(search).toHaveBeenCalledTimes(1);
+    });
+
+    it('demo off: captures through ScreenshotFacadeService exactly as before', async () => {
+        delete process.env.DEMO;
+        const { facade, capture } = build();
+
+        await expect(facade.screenshot(SHOT)).resolves.toEqual({
+            success: true,
+            imageUrl: 'https://cdn.example/shot.png',
+            cacheUrl: null,
+        });
+        expect(capture).toHaveBeenCalledWith(
+            {
+                url: 'https://example.com',
+                viewportWidth: undefined,
+                viewportHeight: undefined,
+                fullPage: true,
+            },
+            {
+                userId: 'user-1',
+                workId: 'work-1',
+                agentId: 'agent-1',
+                taskId: undefined,
+                runId: 'run-1',
+                missionId: undefined,
+            },
         );
     });
 });

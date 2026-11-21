@@ -1,12 +1,14 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
+import { ArrowRight, Check } from 'lucide-react';
+import { useRouter } from '@/i18n/navigation';
 import { Dialog, DialogContent } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils/cn';
-import { sanitizePrompt } from '@/lib/utils/sanitize';
 import { useMounted } from '@/lib/hooks/use-mounted';
+import { ROUTES } from '@/lib/constants';
 import { useOnboardingFlow, type WizardStep } from './useOnboardingFlow';
 import { WizardFooter } from './WizardFooter';
 import { WelcomeStep } from './steps/WelcomeStep';
@@ -16,7 +18,7 @@ import { PluginsCatalogStep } from './steps/PluginsCatalogStep';
 import { ProfileStep } from './steps/ProfileStep';
 import { RosterStep } from './steps/RosterStep';
 import { CommunicationStep, SLACK_CONNECTOR_PLUGIN_ID } from './steps/CommunicationStep';
-import { CreateWorkStep } from './steps/CreateWorkStep';
+import { CreateWorkStep, type QuickCreateStarted } from './steps/CreateWorkStep';
 import { useTurnstile } from './use-turnstile';
 import { AI_ICONS, DB_ICONS, DEPLOY_ICONS, STORAGE_ICONS } from './brand-icons';
 import { trackOnboardingEvent } from '@/app/actions/onboarding/track';
@@ -36,6 +38,8 @@ import type { OAuthConnectionInfo } from '@/lib/api/plugins-capabilities/oauth';
 import type { GitProviderConnectionInfo } from '@/lib/api/plugins-capabilities/git-providers';
 import type { PluginDeviceAuthStatus } from '@/lib/api/plugins-capabilities/device-auth';
 import { quickCreateSlugFromPrompt } from '@/lib/works/work-slug.shared';
+import { readPromptHandoff } from './prompt-handoff';
+import type { StartedWork } from './generation-console';
 
 export interface EverWorksOnboardingWizardProps {
     readonly open: boolean;
@@ -48,6 +52,12 @@ export interface EverWorksOnboardingWizardProps {
     >;
     readonly initialDeviceAuthStatuses: Record<string, PluginDeviceAuthStatus | null>;
     readonly onClose: () => void;
+    /**
+     * "Open your Work" from the generation console. `href` is where to land
+     * (the Generator tab while it runs). When absent, the wizard closes and
+     * routes there itself.
+     */
+    readonly onOpenWork?: (work: StartedWork, href: string) => void;
 }
 
 /**
@@ -63,8 +73,10 @@ export function EverWorksOnboardingWizard({
     initialConnections,
     initialDeviceAuthStatuses,
     onClose,
+    onOpenWork,
 }: EverWorksOnboardingWizardProps) {
     const mounted = useMounted();
+    const router = useRouter();
 
     const pluginsById = useMemo(() => {
         const map: Record<string, UserPlugin> = {};
@@ -126,55 +138,81 @@ export function EverWorksOnboardingWizard({
     });
 
     // EW-617 G4 + G1 — landing-page hand-off. When the wizard mounts and
-    // the URL carries `?prompt=…` (or hash `#prompt=…`, used as a poor-man's
-    // signed-token transport), seed the wizard state and jump straight to
-    // the final step so the user sees "Generate now" without scrolling
-    // through choices. We do this once per mount; subsequent renders read
-    // from the persisted state.
+    // the URL carries `#prompt=…` (or the older `?prompt=…`), the visitor
+    // already said what they want: they get the prompt-first quick start
+    // (Idea → Generate → Open your Work) with the defaults named, and
+    // "Customize setup" opens the full wizard. This used to jump straight to
+    // step 11 of 11 with every earlier step shown as done, which read as the
+    // wizard skipping itself. Once per mount, and only while open: the
+    // dashboard mounts this wizard closed on every page, and pages such as
+    // `/tasks/new?prompt=…` and `/agents/new?prompt=…` own their `prompt`.
+    //
+    // Security: the prompt is read from an attacker-controllable URL before it
+    // is stored in wizard state, persisted and rendered; `readPromptHandoff`
+    // sanitises and bounds it (control chars stripped, 5000-char cap — the same
+    // limit the contract and QuickCreateWorkDto enforce).
     const promptHydratedRef = useRef(false);
+    const startQuickStart = flow.startQuickStart;
     useEffect(() => {
-        if (!mounted || promptHydratedRef.current) return;
-        if (flow.state.prompt) {
-            // Already hydrated from server state — no URL work needed.
-            promptHydratedRef.current = true;
+        if (!mounted || !open || promptHydratedRef.current) return;
+        if (typeof window === 'undefined') return;
+        promptHydratedRef.current = true;
+        const handoff = readPromptHandoff(window.location.href);
+        if (!handoff) return;
+
+        startQuickStart(handoff.prompt);
+
+        // Strip what the hand-off consumed (prompt, corrId, type) so a reload
+        // doesn't re-trigger it and the prompt doesn't leak to analytics
+        // referers. corrId was already read into `correlationId` above.
+        window.history.replaceState({}, '', handoff.cleanedHref);
+    }, [mounted, open, startQuickStart]);
+
+    // A started generation pins the wizard to its console: leaving the step
+    // would drop the live view, and the Work exists now.
+    const [runBusy, setRunBusy] = useState(false);
+    const [startedWork, setStartedWork] = useState<StartedWork | null>(null);
+    const runLocked = runBusy || startedWork !== null;
+    const finishFlow = flow.finish;
+
+    const openWork = useCallback(
+        (work: StartedWork, href: string) => {
+            if (onOpenWork) {
+                onOpenWork(work, href);
+                return;
+            }
+            onClose();
+            router.push(href);
+        },
+        [onClose, onOpenWork, router],
+    );
+
+    // Closing the dialog once the Work exists goes to the Work, not back to
+    // an empty dashboard.
+    const handleDismiss = useCallback(() => {
+        if (startedWork) {
+            openWork(
+                startedWork,
+                ROUTES.DASHBOARD_WORK_GENERATOR(encodeURIComponent(startedWork.id)),
+            );
             return;
         }
-        if (typeof window === 'undefined') return;
-        const url = new URL(window.location.href);
-        const fromQuery = url.searchParams.get('prompt');
-        const fromHash = readHashParam(url.hash, 'prompt');
-        // Security: the prompt is read verbatim from an attacker-controllable
-        // URL (`?prompt=…` / `#prompt=…`) before it is stored in wizard state,
-        // serialised to the onboarding-state endpoint on every render, and
-        // rendered into the DOM. Bound + sanitise it at ingestion with the
-        // shared sanitiser (strips control chars, caps at the same 5000-char
-        // limit the contract + QuickCreateWorkDto already enforce, preserves
-        // newline formatting). Legitimate hand-off prompts are unaffected; a
-        // malicious multi-megabyte / control-char payload is neutralised.
-        const raw = sanitizePrompt(fromQuery || fromHash || '', 5000);
-        if (!raw) return;
+        onClose();
+    }, [onClose, openWork, startedWork]);
 
-        promptHydratedRef.current = true;
-        flow.setPrompt(raw);
-        // Skip to the final step so the user lands on "Generate now".
-        const createIndex = flow.steps.findIndex((s) => s.kind === 'create-work');
-        if (createIndex >= 0) {
-            flow.jumpTo(createIndex);
-        }
-
-        // Strip the prompt + corrId from the URL so a reload doesn't
-        // re-trigger the hand-off (and so we don't leak the prompt to
-        // analytics referers). corrId stripping keeps the chain to
-        // `landing_prompt_submit` intact for this session but doesn't
-        // persist it across reloads — that's intentional.
-        url.searchParams.delete('prompt');
-        url.searchParams.delete('corrId');
-        if (fromHash) {
-            url.hash = stripHashParam(url.hash, 'prompt');
-            url.hash = stripHashParam(url.hash, 'corrId');
-        }
-        window.history.replaceState({}, '', url.toString());
-    }, [mounted, flow]);
+    // A "Try again" after a failed run starts another generation; onboarding is
+    // completed (and `onboarding_completed` sent) for the first one only.
+    const onboardingCompletedRef = useRef(false);
+    const handleGenerationStarted = useCallback(
+        (work: StartedWork) => {
+            setStartedWork(work);
+            if (onboardingCompletedRef.current) return;
+            onboardingCompletedRef.current = true;
+            // Onboarding is done; the wizard stays open on the console.
+            finishFlow({ close: false });
+        },
+        [finishFlow],
+    );
 
     const refreshConnections = async (pluginId?: string) => {
         const target = pluginId ? plugins.filter((p) => p.pluginId === pluginId) : plugins;
@@ -196,8 +234,59 @@ export function EverWorksOnboardingWizard({
         }
     };
 
+    // EW-617 G4: anonymous + claimed users alike can one-click finish. The
+    // endpoint reads provider defaults from onboarding state.
+    const quickCreate = async (prompt: string): Promise<QuickCreateStarted> => {
+        // EW-617 G7: fetch a fresh Turnstile token right before the call.
+        // Empty when captcha is disabled — server is OK with that.
+        const captchaToken = await turnstile.getToken();
+        // EW-617 G8 — funnel step 3: wizard finished. Fire-and-forget; never
+        // blocks the user flow.
+        void import('@/app/actions/telemetry/funnel').then(({ emitFunnelEventAction }) =>
+            emitFunnelEventAction({
+                event: 'zero_friction.wizard_finished',
+                funnelStep: 3,
+                correlationId,
+                extra: {
+                    isAnonymous: false,
+                    aiChoice: flow.state.ai.choice,
+                    storageChoice: flow.state.storage.choice,
+                    deployChoice: flow.state.deploy.choice,
+                },
+            }),
+        );
+        const { quickCreateWorkAction } = await import('@/app/actions/works/quick-create');
+        const result = await quickCreateWorkAction({
+            slug: slugifyPrompt(prompt),
+            name: deriveNameFromPrompt(prompt),
+            description: prompt.slice(0, 500),
+            prompt,
+            organization: false,
+            deployProvider: flow.state.deploy.choice,
+            storageProvider: flow.state.storage.choice,
+            captchaToken: captchaToken || undefined,
+            correlationId,
+        });
+        if (!result.success) {
+            throw new Error(result.error ?? 'Failed to start generation');
+        }
+        return {
+            workId: result.data?.work.id,
+            workSlug: result.data?.work.slug,
+            workName: result.data?.work.name,
+            generationHistoryId: result.data?.generation.historyId,
+        };
+    };
+
+    const runHandlers: RunHandlers = {
+        onBusyChange: setRunBusy,
+        onGenerationStarted: handleGenerationStarted,
+        onOpenWork: openWork,
+    };
+
     if (!mounted || !open) return null;
 
+    const quickStart = flow.quickStart;
     const stepIndex = flow.stepIndex;
     const progressPercent = Math.round(((stepIndex + 1) / flow.steps.length) * 100);
     const currentStep = flow.currentStep;
@@ -214,69 +303,99 @@ export function EverWorksOnboardingWizard({
     const nextLabel = flow.isLastStep ? 'Finish' : 'Next';
 
     return (
-        <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
+        <Dialog open={open} onOpenChange={(next) => !next && handleDismiss()}>
             <DialogContent className="max-w-5xl p-0 overflow-hidden rounded-lg shadow-2xl">
-                <div className="absolute top-0 left-0 right-0 h-[3px] bg-border dark:bg-border-dark z-10 rounded-t-lg">
-                    <div
-                        className="h-full bg-text dark:bg-white/70 transition-all duration-500 ease-out rounded-t-2xl"
-                        style={{ width: `${progressPercent}%` }}
-                    />
-                </div>
+                {quickStart ? null : (
+                    <div className="absolute top-0 left-0 right-0 h-[3px] bg-border dark:bg-border-dark z-10 rounded-t-lg">
+                        <div
+                            className="h-full w-full origin-left bg-text dark:bg-white/70 transition-transform duration-500 ease-out rounded-t-2xl"
+                            style={{ transform: `scaleX(${progressPercent / 100})` }}
+                        />
+                    </div>
+                )}
 
                 <div className="grid gap-0 md:grid-cols-[260px_1fr] min-h-[88dvh]">
-                    <SideNav
-                        steps={flow.steps}
-                        activeIndex={stepIndex}
-                        onJump={flow.jumpTo}
-                        onClose={onClose}
-                    />
+                    {quickStart ? (
+                        <QuickStartNav
+                            catalog={catalog}
+                            state={flow.state}
+                            stage={startedWork ? 'open' : runBusy ? 'generating' : 'generate'}
+                            fullStepCount={flow.steps.length}
+                            canCustomize={!runLocked}
+                            onCustomize={flow.customizeSetup}
+                            onClose={handleDismiss}
+                        />
+                    ) : (
+                        <SideNav
+                            steps={flow.steps}
+                            activeIndex={stepIndex}
+                            onJump={flow.jumpTo}
+                            locked={runLocked}
+                            onClose={handleDismiss}
+                        />
+                    )}
 
                     <section className="flex flex-col">
                         <div className="flex-1 overflow-y-auto px-8 pt-10 pb-6">
-                            <StepBody
-                                step={currentStep}
-                                flow={flow}
-                                catalog={catalog}
-                                pluginsById={pluginsById}
-                                connections={connections}
-                                deviceAuthStatuses={deviceAuthStatuses}
-                                isStatusLoading={isStatusLoading}
-                                turnstile={turnstile}
-                                correlationId={correlationId}
-                                onPluginConnected={(pluginId) => void refreshConnections(pluginId)}
-                            />
+                            {quickStart ? (
+                                <CreateWorkStep
+                                    onLeave={() => flow.finish()}
+                                    prompt={flow.state.prompt}
+                                    onPromptChange={flow.setPrompt}
+                                    intro="Review or tweak your prompt, then generate. We create the Work with the setup on the left and build its content — you can follow every step below."
+                                    onQuickCreate={flow.state.prompt ? quickCreate : undefined}
+                                    {...runHandlers}
+                                />
+                            ) : (
+                                <StepBody
+                                    step={currentStep}
+                                    flow={flow}
+                                    catalog={catalog}
+                                    pluginsById={pluginsById}
+                                    connections={connections}
+                                    deviceAuthStatuses={deviceAuthStatuses}
+                                    isStatusLoading={isStatusLoading}
+                                    quickCreate={quickCreate}
+                                    runHandlers={runHandlers}
+                                    onPluginConnected={(pluginId) =>
+                                        void refreshConnections(pluginId)
+                                    }
+                                />
+                            )}
                         </div>
-                        <WizardFooter
-                            stepIndex={stepIndex}
-                            totalSteps={flow.steps.length}
-                            canGoBack={flow.canGoBack}
-                            nextLabel={nextLabel}
-                            skipLabel={skipLabel}
-                            showSkip={!flow.isLastStep || isConfigStep}
-                            showNext={!flow.isLastStep}
-                            showRefresh={isConfigStep}
-                            refreshing={isStatusLoading}
-                            onBack={flow.goBack}
-                            onSkip={() => {
-                                if (flow.isLastStep) {
-                                    flow.finish({ dismissed: true });
-                                    return;
-                                }
-                                flow.skip();
-                            }}
-                            onRefresh={() => {
-                                flow.refresh();
-                                const pluginId = pluginIdForStep(currentStep, flow.state);
-                                void refreshConnections(pluginId);
-                            }}
-                            onNext={() => {
-                                if (flow.isLastStep) {
-                                    flow.finish();
-                                    return;
-                                }
-                                flow.goNext();
-                            }}
-                        />
+                        {quickStart ? null : (
+                            <WizardFooter
+                                stepIndex={stepIndex}
+                                totalSteps={flow.steps.length}
+                                canGoBack={flow.canGoBack && !runLocked}
+                                nextLabel={nextLabel}
+                                skipLabel={skipLabel}
+                                showSkip={!flow.isLastStep || isConfigStep}
+                                showNext={!flow.isLastStep}
+                                showRefresh={isConfigStep}
+                                refreshing={isStatusLoading}
+                                onBack={flow.goBack}
+                                onSkip={() => {
+                                    if (flow.isLastStep) {
+                                        flow.finish({ dismissed: true });
+                                        return;
+                                    }
+                                    flow.skip();
+                                }}
+                                onRefresh={() => {
+                                    flow.refresh();
+                                    const pluginId = pluginIdForStep(currentStep, flow.state);
+                                    void refreshConnections(pluginId);
+                                }}
+                                onNext={() => {
+                                    if (flow.isLastStep) {
+                                        flow.finish();
+                                        return;
+                                    }
+                                    flow.goNext();
+                                }}
+                            />
+                        )}
                     </section>
                 </div>
             </DialogContent>
@@ -284,23 +403,171 @@ export function EverWorksOnboardingWizard({
     );
 }
 
+interface RunHandlers {
+    readonly onBusyChange: (busy: boolean) => void;
+    readonly onGenerationStarted: (work: StartedWork) => void;
+    readonly onOpenWork: (work: StartedWork, href: string) => void;
+}
+
 // ─── Subcomponents ─────────────────────────────────────────────────────────
+
+/**
+ * The prompt-first quick start's side panel: a three-stage path instead of
+ * the eleven wizard steps, the defaults the Work will be created with, and
+ * the way into the full wizard.
+ */
+function QuickStartNav({
+    catalog,
+    state,
+    stage,
+    fullStepCount,
+    canCustomize,
+    onCustomize,
+    onClose,
+}: {
+    catalog: OnboardingCatalogResponse;
+    state: ReturnType<typeof useOnboardingFlow>['state'];
+    stage: 'generate' | 'generating' | 'open';
+    fullStepCount: number;
+    canCustomize: boolean;
+    onCustomize: () => void;
+    onClose: () => void;
+}) {
+    const stages: Array<{ label: string; status: 'done' | 'active' | 'todo' }> = [
+        { label: 'Your idea', status: 'done' },
+        {
+            label: stage === 'generating' ? 'Generating' : 'Generate',
+            status: stage === 'open' ? 'done' : 'active',
+        },
+        { label: 'Open your Work', status: stage === 'open' ? 'active' : 'todo' },
+    ];
+    const defaults = [
+        { label: 'AI', value: cardTitle(catalog.ai, state.ai.choice) },
+        { label: 'Git storage', value: cardTitle(catalog.storage, state.storage.choice) },
+        { label: 'Hosting', value: cardTitle(catalog.deploy, state.deploy.choice) },
+    ];
+
+    return (
+        <aside
+            data-testid="onboarding-quick-start"
+            className="relative flex flex-col bg-surface-secondary/50 dark:bg-surface-secondary-dark/60 border-r border-border dark:border-border-dark"
+        >
+            <div className="px-5 pt-8 pb-5">
+                <span className="inline-flex items-center gap-1.5 text-xs font-medium text-text-muted dark:text-text-muted-dark bg-surface-secondary dark:bg-white/5 px-2.5 py-1 rounded-full mb-3">
+                    Quick start
+                </span>
+                <h2 className="text-sm font-semibold text-text dark:text-text-dark leading-snug">
+                    Build from your idea
+                </h2>
+                <p className="text-[11px] leading-relaxed mt-1 text-text-muted dark:text-text-muted-dark">
+                    You started with a prompt, so your Work is set up with the defaults below. You
+                    can change any of them later in Settings.
+                </p>
+            </div>
+            <ol className="px-3 pb-2 space-y-0.5" aria-label="Quick start progress">
+                {stages.map((item, index) => (
+                    <li
+                        key={item.label}
+                        aria-current={item.status === 'active' ? 'step' : undefined}
+                        className={cn(
+                            'flex items-center gap-3 rounded-lg px-3 py-2.5',
+                            item.status === 'active' && 'bg-surface dark:bg-white/5',
+                        )}
+                    >
+                        <span
+                            className={cn(
+                                'flex-shrink-0 w-6 h-6 rounded-full flex items-center justify-center text-[11px] font-semibold',
+                                item.status === 'active'
+                                    ? 'bg-text dark:bg-white text-white dark:text-black'
+                                    : item.status === 'done'
+                                      ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400'
+                                      : 'border border-border dark:border-border-dark text-text-muted dark:text-text-muted-dark',
+                            )}
+                        >
+                            {item.status === 'done' ? (
+                                <Check className="h-3.5 w-3.5" aria-label="done" />
+                            ) : (
+                                index + 1
+                            )}
+                        </span>
+                        <span
+                            className={cn(
+                                'text-sm',
+                                item.status === 'active'
+                                    ? 'font-medium text-text dark:text-text-dark'
+                                    : 'text-text-secondary dark:text-text-secondary-dark',
+                            )}
+                        >
+                            {item.label}
+                        </span>
+                    </li>
+                ))}
+            </ol>
+            <dl
+                data-testid="onboarding-quick-start-defaults"
+                className="mx-5 mt-3 space-y-1.5 rounded-lg border border-border dark:border-border-dark px-3 py-3 text-xs"
+            >
+                {defaults.map((row) => (
+                    <div key={row.label} className="flex items-baseline justify-between gap-3">
+                        <dt className="text-text-muted dark:text-text-muted-dark">{row.label}</dt>
+                        <dd className="truncate text-right text-text dark:text-text-dark">
+                            {row.value}
+                        </dd>
+                    </div>
+                ))}
+            </dl>
+            {canCustomize ? (
+                <div className="px-5 pt-3">
+                    <button
+                        type="button"
+                        data-testid="onboarding-quick-start-customize"
+                        onClick={onCustomize}
+                        className="inline-flex items-center gap-1.5 text-xs font-medium text-text-secondary dark:text-text-secondary-dark hover:text-text dark:hover:text-text-dark hover:underline"
+                    >
+                        Customize setup instead ({fullStepCount} steps)
+                        <ArrowRight className="h-3.5 w-3.5" aria-hidden />
+                    </button>
+                </div>
+            ) : null}
+            <div className="px-3 py-2 mt-auto border-t border-border dark:border-border-dark">
+                <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={onClose}
+                    className="w-4/5 mx-auto text-xs py-2.5 text-text-muted dark:text-text-muted-dark hover:text-text dark:hover:text-text-dark"
+                >
+                    Close
+                </Button>
+            </div>
+        </aside>
+    );
+}
+
+function cardTitle(
+    cards: ReadonlyArray<{ choice: string; title: string }>,
+    choice: string,
+): string {
+    return cards.find((card) => card.choice === choice)?.title ?? choice;
+}
 
 function SideNav({
     steps,
     activeIndex,
     onJump,
+    locked = false,
     onClose,
 }: {
     steps: WizardStep[];
     activeIndex: number;
     onJump: (index: number) => void;
+    /** While a generation runs from the last step, the steps cannot be left. */
+    locked?: boolean;
     onClose: () => void;
 }) {
     return (
         <aside className="relative flex flex-col bg-surface-secondary/50 dark:bg-surface-secondary-dark/60 border-r border-border dark:border-border-dark">
             <div className="px-5 pt-8 pb-5">
-                <span className="inline-flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-widest text-text-muted dark:text-text-muted-dark bg-surface-secondary dark:bg-white/5 px-2.5 py-1 rounded-full mb-3">
+                <span className="inline-flex items-center gap-1.5 text-xs font-medium text-text-muted dark:text-text-muted-dark bg-surface-secondary dark:bg-white/5 px-2.5 py-1 rounded-full mb-3">
                     Setup
                 </span>
                 <h2 className="text-sm font-semibold text-text dark:text-text-dark leading-snug">
@@ -319,8 +586,9 @@ function SideNav({
                             key={step.id}
                             type="button"
                             onClick={() => onJump(index)}
+                            disabled={locked && !isActive}
                             className={cn(
-                                'w-full flex items-center gap-3 rounded-lg px-3 py-2.5 text-left transition-all',
+                                'w-full flex items-center gap-3 rounded-lg px-3 py-2.5 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-60',
                                 isActive
                                     ? 'bg-surface dark:bg-white/5'
                                     : 'hover:bg-surface dark:hover:bg-surface-dark',
@@ -328,7 +596,7 @@ function SideNav({
                         >
                             <span
                                 className={cn(
-                                    'flex-shrink-0 w-6 h-6 rounded-full flex items-center justify-center text-[11px] font-semibold transition-all',
+                                    'flex-shrink-0 w-6 h-6 rounded-full flex items-center justify-center text-[11px] font-semibold transition-colors',
                                     isActive
                                         ? 'bg-text dark:bg-white text-white dark:text-black'
                                         : isPast
@@ -374,8 +642,8 @@ function StepBody({
     connections,
     deviceAuthStatuses,
     isStatusLoading,
-    turnstile,
-    correlationId,
+    quickCreate,
+    runHandlers,
     onPluginConnected,
 }: {
     step: WizardStep;
@@ -385,8 +653,8 @@ function StepBody({
     connections: Record<string, OAuthConnectionInfo | GitProviderConnectionInfo | null>;
     deviceAuthStatuses: Record<string, PluginDeviceAuthStatus | null>;
     isStatusLoading: boolean;
-    turnstile: ReturnType<typeof useTurnstile>;
-    correlationId: string;
+    quickCreate: (prompt: string) => Promise<QuickCreateStarted>;
+    runHandlers: RunHandlers;
     onPluginConnected: (pluginId: string) => void;
 }) {
     switch (step.kind) {
@@ -559,56 +827,8 @@ function StepBody({
                     prompt={flow.state.prompt}
                     onPromptChange={flow.setPrompt}
                     desktopChoice={flow.state.desktop?.choice}
-                    onQuickCreate={
-                        flow.state.prompt
-                            ? async (prompt) => {
-                                  // EW-617 G4: anonymous + claimed users alike
-                                  // can one-click finish. The endpoint reads
-                                  // provider defaults from onboarding state.
-                                  // EW-617 G7: fetch a fresh Turnstile token
-                                  // right before the call. Empty when captcha
-                                  // is disabled — server is OK with that.
-                                  const captchaToken = await turnstile.getToken();
-                                  // EW-617 G8 — funnel step 3: wizard finished.
-                                  // Fire-and-forget; never blocks the user flow.
-                                  void import('@/app/actions/telemetry/funnel').then(
-                                      ({ emitFunnelEventAction }) =>
-                                          emitFunnelEventAction({
-                                              event: 'zero_friction.wizard_finished',
-                                              funnelStep: 3,
-                                              correlationId,
-                                              extra: {
-                                                  isAnonymous: false,
-                                                  aiChoice: flow.state.ai.choice,
-                                                  storageChoice: flow.state.storage.choice,
-                                                  deployChoice: flow.state.deploy.choice,
-                                              },
-                                          }),
-                                  );
-                                  const { quickCreateWorkAction } =
-                                      await import('@/app/actions/works/quick-create');
-                                  const slug = slugifyPrompt(prompt);
-                                  const result = await quickCreateWorkAction({
-                                      slug,
-                                      name: deriveNameFromPrompt(prompt),
-                                      description: prompt.slice(0, 500),
-                                      prompt,
-                                      organization: false,
-                                      deployProvider: flow.state.deploy.choice,
-                                      storageProvider: flow.state.storage.choice,
-                                      captchaToken: captchaToken || undefined,
-                                      correlationId,
-                                  });
-                                  if (!result.success) {
-                                      throw new Error(result.error ?? 'Failed to start generation');
-                                  }
-                                  return {
-                                      workSlug: result.data?.work.slug,
-                                      generationHistoryId: result.data?.generation.historyId,
-                                  };
-                              }
-                            : undefined
-                    }
+                    onQuickCreate={flow.state.prompt ? quickCreate : undefined}
+                    {...runHandlers}
                 />
             );
         default:
@@ -622,10 +842,9 @@ function isConfigKind(kind: WizardStep['kind']): boolean {
     return kind === 'ai-config' || kind === 'storage-config' || kind === 'deploy-config';
 }
 
-// EW-617 G4: extract `prompt=…` from a URL hash fragment. The landing
-// page (G1) hands off via fragment so the prompt never hits the server
-// access logs as a querystring. We parse defensively; bad input returns
-// `null` and we fall back to the existing /works/new flow.
+// EW-617 G8: read `corrId=…` from the URL hash fragment at mount. The
+// landing page (G1) hands off via fragment so nothing reaches server access
+// logs. Bad input returns `null`.
 function readHashParam(hash: string, key: string): string | null {
     if (!hash) return null;
     const raw = hash.startsWith('#') ? hash.slice(1) : hash;
@@ -634,19 +853,6 @@ function readHashParam(hash: string, key: string): string | null {
         return params.get(key);
     } catch {
         return null;
-    }
-}
-
-function stripHashParam(hash: string, key: string): string {
-    if (!hash) return '';
-    const raw = hash.startsWith('#') ? hash.slice(1) : hash;
-    try {
-        const params = new URLSearchParams(raw);
-        params.delete(key);
-        const remaining = params.toString();
-        return remaining ? `#${remaining}` : '';
-    } catch {
-        return hash;
     }
 }
 
