@@ -48,6 +48,7 @@ import type { WorkflowGraphExecutorService } from './workflow-graph-executor.ser
 import type { InboxToolService } from '../inbox/agent-inbox-tools';
 import type { AppChangeToolService } from '../app-works/agent-app-change-tools';
 import type { Work } from '../entities/work.entity';
+import type { AgentMemoryToolFacade } from '../services/agent-memory-tools';
 
 /**
  * Domain chat-tool sources — the ONE injection seam that lets
@@ -110,6 +111,17 @@ export interface AgentIngestToolSource {
 
 export interface AgentDigestToolSource {
     digestService: Pick<DigestService, 'composeDigest'>;
+}
+
+/**
+ * Agent memory — `memory_search` / `memory_save`. Backed by the
+ * `agent-memory` capability facade (`AgentMemoryFacadeService`), so the
+ * tools reach whichever provider the owner / Work resolved (Memanto by
+ * default). Optional like every other sub-bundle: unbound, the tools are
+ * not offered.
+ */
+export interface AgentMemoryToolSource {
+    facade: AgentMemoryToolFacade;
 }
 
 export interface AgentMeetingToolSource {
@@ -413,6 +425,7 @@ export interface AgentDomainToolSources {
     ingest?: AgentIngestToolSource;
     digest?: AgentDigestToolSource;
     meetings?: AgentMeetingToolSource;
+    memory?: AgentMemoryToolSource;
     fleet?: AgentFleetToolSource;
     fleetSessions?: AgentFleetSessionToolSource;
     /** FL-12 P2 — bound only while FLEET_COMMANDS_ENABLED is on. */

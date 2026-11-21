@@ -63,6 +63,7 @@ import {
 import { buildAgentTaskTools, type TaskToolDescriptor } from '../tasks-domain/agent-task-tools';
 import { buildIngestEventTools } from '../ingest/agent-ingest-tools';
 import { buildDigestTools } from '../digest/agent-digest-tools';
+import { buildAgentMemoryTools } from '../services/agent-memory-tools';
 import { buildMeetingTools } from '../meetings/agent-meeting-tools';
 import { buildFleetTools } from '../fleet/agent-fleet-tools';
 import { buildFleetMachineTools } from '../fleet/machine/agent-fleet-machine-tools';
@@ -615,6 +616,17 @@ export class AgentToolService {
             const digest = sources.digest;
             add('digest', () =>
                 buildDigestTools({ userId: agent.userId, digestService: digest.digestService }),
+            );
+        }
+
+        if (sources.memory) {
+            const memory = sources.memory;
+            add('memory', () =>
+                buildAgentMemoryTools({
+                    agent,
+                    facade: memory.facade,
+                    runId: runContext?.runId ?? null,
+                }),
             );
         }
 

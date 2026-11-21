@@ -197,6 +197,7 @@ import {
     AiFacadeService,
     GitFacadeService,
     BrowserAutomationFacadeService,
+    AgentMemoryFacadeService,
 } from '@ever-works/agent/facades';
 // FU-2 — `AgentsController` injects `SkillBindingRepository` (for the
 // `GET /api/agents/:id/skills` rollup) and `PluginUsageRepository` (for
@@ -2533,6 +2534,10 @@ async function assertRealWriteTarget(
                 // APPENDED LAST (positional), optional: unbound (or FLEET_DESKTOP_ENABLED off)
                 // the tool is not offered.
                 { token: FLEET_DESKTOP_READER, optional: true },
+                // Agent memory — backs `memory_search` / `memory_save` through the
+                // `agent-memory` capability facade (Memanto by default). APPENDED LAST
+                // (positional), optional: unbound, the two tools are not offered.
+                { token: AgentMemoryFacadeService, optional: true },
             ],
             useFactory: (
                 tasksService: TasksService,
@@ -2578,6 +2583,7 @@ async function assertRealWriteTarget(
                 fleetUsage?: FleetUsageViewService | null,
                 fleetRunners?: FleetActionsRunnersService | null,
                 fleetDesktop?: FleetDesktopReaderPort | null,
+                agentMemory?: AgentMemoryFacadeService | null,
             ): AgentDomainToolSources => ({
                 // All three membership repositories are bound: the
                 // commentOnTask gate is fail-closed and DENIES every call
@@ -2598,6 +2604,7 @@ async function assertRealWriteTarget(
                 ingest: { repository: ingestedEvents },
                 digest: { digestService: digest },
                 meetings: { repository: meetings },
+                ...(agentMemory ? { memory: { facade: agentMemory } } : {}),
                 fleet: {
                     service: fleet,
                     ...(checkouts ? { checkouts: { service: checkouts } } : {}),
