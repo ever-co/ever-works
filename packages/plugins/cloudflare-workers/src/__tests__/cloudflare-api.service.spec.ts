@@ -43,14 +43,12 @@ describe('CloudflareApiClient', () => {
 	});
 
 	it('returns the deployments of an existing Worker', async () => {
-		const fetchImpl = vi
-			.fn()
-			.mockResolvedValue(
-				json(200, {
-					success: true,
-					result: { deployments: [{ id: 'd1', created_on: '2026-11-20T00:00:00Z' }] }
-				})
-			);
+		const fetchImpl = vi.fn().mockResolvedValue(
+			json(200, {
+				success: true,
+				result: { deployments: [{ id: 'd1', created_on: '2026-11-20T00:00:00Z' }] }
+			})
+		);
 		await expect(client(fetchImpl).getWorkerDeployments('tok', ACCOUNT, 'ew-crm')).resolves.toHaveLength(1);
 	});
 
@@ -77,14 +75,12 @@ describe('CloudflareApiClient', () => {
 	});
 
 	it('attaches a domain with PUT and a JSON body', async () => {
-		const fetchImpl = vi
-			.fn()
-			.mockResolvedValue(
-				json(200, {
-					success: true,
-					result: { id: 'x', hostname: 'www.acme.com', service: 'ew-crm', zone_id: 'z' }
-				})
-			);
+		const fetchImpl = vi.fn().mockResolvedValue(
+			json(200, {
+				success: true,
+				result: { id: 'x', hostname: 'www.acme.com', service: 'ew-crm', zone_id: 'z' }
+			})
+		);
 		const result = await client(fetchImpl).attachWorkerDomain('tok', ACCOUNT, {
 			hostname: 'www.acme.com',
 			service: 'ew-crm',
