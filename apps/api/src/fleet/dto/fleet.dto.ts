@@ -215,7 +215,7 @@ export class UpdateFleetNodeDto {
         minimum: 1,
         maximum: FLEET_MAX_DAILY_COST_CEILING_CENTS,
         description:
-            'Daily (UTC day) model-spend ceiling for this node, in cents; null clears it (inherit the deployment default). Crossing it drains the node until you re-enable it.',
+            'Daily (UTC day) model-spend ceiling for this node, in cents; null clears it (inherit the deployment default). Crossing it drains the node for the rest of the UTC day; after midnight UTC it goes back into service on its next heartbeat unless a person disabled it too.',
     })
     @IsOptional()
     @IsInt()
@@ -318,7 +318,7 @@ export class SetFleetCostCeilingDto {
         minimum: 1,
         maximum: FLEET_MAX_DAILY_COST_CEILING_CENTS,
         description:
-            'Daily (UTC day) model-spend ceiling across every node of this account, in cents; null clears it (inherit the deployment default). Crossing it drains every node until you re-enable them.',
+            'Daily (UTC day) model-spend ceiling across every node of this account, in cents; null clears it (inherit the deployment default). Crossing it drains every node for the rest of the UTC day; after midnight UTC each node the ceiling alone disabled goes back into service on its next heartbeat.',
     })
     @ValidateIf((dto: SetFleetCostCeilingDto) => dto.dailyCeilingCents !== null)
     @IsInt()

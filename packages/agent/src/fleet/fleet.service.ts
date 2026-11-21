@@ -100,6 +100,7 @@ import { FleetAuditService } from './fleet-audit.service';
 import { FleetNodeHealthService } from './fleet-node-health.service';
 import { FleetAccessService, fleetOwnerOnlyBody } from './fleet-access.service';
 import { normalizeDailyCeilingCents } from './fleet-cost-ceiling.shared';
+import { FleetCostCeilingResetService } from './fleet-cost-ceiling-reset.service';
 import {
     CREDENTIAL_MAX_LENGTH,
     CREDENTIAL_MIN_LENGTH,
@@ -511,6 +512,11 @@ export class FleetService {
         // @Optional() for the same positional-construction reason: without
         // it the snapshot is still stored on the row; only history is off.
         @Optional() private readonly healthHistory?: FleetNodeHealthService,
+        // Cost ceilings — the DAILY RESET a disabled node's heartbeat runs.
+        // APPENDED and @Optional() for the same positional-construction
+        // reason: unbound, a ceiling-disabled node simply waits for a person
+        // (or the settings read) to put it back, exactly as before.
+        @Optional() private readonly costCeilingReset?: FleetCostCeilingResetService,
     ) {}
 
     /** Issue a one-time enrollment token for a new node (owner-scoped). */
@@ -708,7 +714,14 @@ export class FleetService {
      * indistinguishable from one that crashed, which is precisely the
      * moment its owner most needs to see it. The beat therefore stamps
      * `lastHeartbeatAt` but PRESERVES the sticky status, so a heartbeat
-     * can never silently un-pause or re-enable a node.
+     * can never silently un-pause or re-enable a node. It preserves it by
+     * not writing `status` at all: a beat that wrote back the `disabled` it
+     * read could land after a concurrent re-enable and undo it.
+     *
+     * The one re-enable a beat DOES perform is the cost ceiling's daily
+     * reset (`FleetCostCeilingResetService`): a node the ceiling alone
+     * disabled on an earlier UTC day is put back in service on its first
+     * beat after midnight UTC. A node a person disabled is never touched.
      *
      * A beat is NOT audited, deliberately: one row per node per 30s is not
      * a trail, it is a firehose that buries the rows an operator came to
@@ -723,23 +736,28 @@ export class FleetService {
         const verified = verifyNodeSecret(nodeId, secret);
         if (!verified) return null;
 
-        const node = await this.repository.findById(verified.nodeId);
-        if (!node) return null;
+        const found = await this.repository.findById(verified.nodeId);
+        if (!found) return null;
         // An enrolling node has no secret yet (the hash column still
         // holds the token hash), so it can never authenticate here.
-        if (node.status === 'enrolling') return null;
+        if (found.status === 'enrolling') return null;
         // Dual-accept (EW-799): a node inside its rotation window may beat
         // with EITHER credential. Without this, a node that rotated
         // mid-beat would go dark until it restarted.
-        if (matchNodeCredential(verified, node) === null) {
+        if (matchNodeCredential(verified, found) === null) {
             return null;
         }
+        // AFTER authentication — an unauthenticated beat must not even
+        // cause the audit read behind the reset.
+        const node = await this.applyCostCeilingDailyReset(found);
 
         const patch: Partial<FleetNode> = {
-            status: FLEET_NODE_STICKY_STATUSES.includes(node.status) ? node.status : 'online',
             // Server-stamped — the node never supplies its own clock.
             lastHeartbeatAt: new Date(),
         };
+        // A sticky status (paused / disabled) is left exactly as stored —
+        // not even written back (see the method docblock).
+        if (!FLEET_NODE_STICKY_STATUSES.includes(node.status)) patch.status = 'online';
         // A PINNED tag set is the operator's, not the machine's: an
         // admin edit that a heartbeat silently reverted seconds later
         // would not be an edit at all. Unpinning hands the tags back.
@@ -907,6 +925,27 @@ export class FleetService {
             recommendedNodeVersion: config.fleet.getRecommendedNodeVersion(),
             agentEnvPassthrough: config.fleetNode.getAgentTaskEnvPassthrough(),
         };
+    }
+
+    /**
+     * The cost ceiling's daily reset, run by a DISABLED node's beat: the
+     * node as it now stands (status lifted when the reset won its
+     * compare-and-set, unchanged otherwise). Never throws and never fails
+     * the beat — liveness is the beat's job, the reset is a passenger.
+     */
+    private async applyCostCeilingDailyReset(node: FleetNode): Promise<FleetNode> {
+        if (!this.costCeilingReset || node.status !== 'disabled') return node;
+        try {
+            const outcome = await this.costCeilingReset.resetIfDue(node);
+            return 'status' in outcome ? ({ ...node, status: outcome.status } as FleetNode) : node;
+        } catch (error) {
+            this.logger.warn(
+                `Fleet cost ceiling: daily reset skipped for node ${node.id}: ${
+                    error instanceof Error ? error.message : String(error)
+                }`,
+            );
+            return node;
+        }
     }
 
     /**

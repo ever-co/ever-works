@@ -64,16 +64,43 @@ describe('startDemo', () => {
         );
     });
 
-    it('lands on the dashboard when the landing scope cannot be read', async () => {
+    it('lands on the dashboard when the landing scope cannot be read, and logs why', async () => {
+        const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
         mocks.startDemo.mockResolvedValue({
             access_token: 'tok',
             user: { id: 'u1' },
             expiresAt: 'x',
         });
-        mocks.getLoginDefaultWorkspaceHref.mockRejectedValue(new Error('scope lookup failed'));
+        const lookupError = new Error('scope lookup failed');
+        mocks.getLoginDefaultWorkspaceHref.mockRejectedValue(lookupError);
 
-        await expect(startDemo({})).resolves.toEqual({ success: true, href: '/' });
-        expect(mocks.setAuthAccessCookie).toHaveBeenCalledWith('tok');
+        try {
+            await expect(startDemo({})).resolves.toEqual({ success: true, href: '/' });
+            expect(mocks.setAuthAccessCookie).toHaveBeenCalledWith('tok');
+            // Not swallowed: logged the way the login twin (`resolveLoginDefaultWorkspaceHref`) does.
+            expect(consoleError).toHaveBeenCalledWith(
+                'Unable to resolve the demo landing workspace',
+                lookupError,
+            );
+        } finally {
+            consoleError.mockRestore();
+        }
+    });
+
+    it('logs nothing when the landing scope resolves', async () => {
+        const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+        mocks.startDemo.mockResolvedValue({
+            access_token: 'tok',
+            user: { id: 'u1' },
+            expiresAt: 'x',
+        });
+
+        try {
+            await startDemo({});
+            expect(consoleError).not.toHaveBeenCalled();
+        } finally {
+            consoleError.mockRestore();
+        }
     });
 
     it('sends no token when the captcha token is empty', async () => {

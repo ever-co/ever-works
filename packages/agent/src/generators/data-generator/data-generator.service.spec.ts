@@ -7,12 +7,12 @@ import { PipelineOrchestratorService } from '../../pipeline';
 import { WorkOperationsService } from '../../work-operations';
 import { CategoryIconService } from '../../services/category-icon';
 import { WorksConfigWriterService } from '../../works-config/services/works-config-writer.service';
-import { DataGeneratorService } from './data-generator.service';
+import { DataGeneratorService, isRepositoryNotFoundError } from './data-generator.service';
 import { DataRepository, RuntimeYamlCompatibilityError } from './data-repository';
 
 describe('DataGeneratorService runtime YAML certification', () => {
     let service: DataGeneratorService;
-    let gitFacade: { cloneOrPull: jest.Mock };
+    let gitFacade: { cloneOrPull: jest.Mock; repositoryExists: jest.Mock };
     let pipelineOrchestrator: { execute: jest.Mock; resumeOrExecute: jest.Mock };
 
     const owner = { id: 'owner-1' } as User;
@@ -31,6 +31,7 @@ describe('DataGeneratorService runtime YAML certification', () => {
     beforeEach(async () => {
         gitFacade = {
             cloneOrPull: jest.fn().mockResolvedValue('C:/tmp/runtime-yaml-test-data'),
+            repositoryExists: jest.fn().mockResolvedValue(true),
         };
         pipelineOrchestrator = {
             execute: jest.fn(),
@@ -108,6 +109,158 @@ describe('DataGeneratorService runtime YAML certification', () => {
 
         expect(pipelineOrchestrator.execute).not.toHaveBeenCalled();
         expect(pipelineOrchestrator.resumeOrExecute).not.toHaveBeenCalled();
+    });
+
+    describe('first create-update generation of a new Work (data repository not created yet)', () => {
+        // What isomorphic-git throws when cloning a GitHub repository that does not exist.
+        const clone404 = () =>
+            Object.assign(new Error('HTTP Error: 404 Not Found'), {
+                code: 'HttpError',
+                data: { statusCode: 404, statusMessage: 'Not Found' },
+            });
+        const createUpdate = {
+            name: work.name,
+            prompt: 'A directory of AI coding tools',
+            generation_method: GenerationMethod.CREATE_UPDATE,
+        } as any;
+
+        it('treats a data repository that does not exist as "no existing data" and runs the pipeline', async () => {
+            gitFacade.cloneOrPull.mockRejectedValue(clone404());
+            gitFacade.repositoryExists.mockResolvedValue(false);
+            const create = jest.spyOn(DataRepository, 'create');
+            pipelineOrchestrator.execute.mockResolvedValue(undefined);
+
+            const result = await service.initialize(work, user, createUpdate);
+
+            expect(result).not.toMatchObject({ error: { code: 'DATA_REPO_FAILED' } });
+            expect(gitFacade.repositoryExists).toHaveBeenCalledWith(
+                'ever-works',
+                'runtime-yaml-test-data',
+                { userId: 'owner-1', providerId: 'github', workId: 'work-1' },
+            );
+            expect(create).not.toHaveBeenCalled();
+            expect(pipelineOrchestrator.execute).toHaveBeenCalledTimes(1);
+        });
+
+        it('also recognises a 404 wrapped in a cause', async () => {
+            gitFacade.cloneOrPull.mockRejectedValue(
+                Object.assign(new Error('Failed to clone repository'), { cause: clone404() }),
+            );
+            gitFacade.repositoryExists.mockResolvedValue(false);
+            pipelineOrchestrator.execute.mockResolvedValue(undefined);
+
+            await service.initialize(work, user, createUpdate);
+
+            expect(pipelineOrchestrator.execute).toHaveBeenCalledTimes(1);
+        });
+
+        it('still fails closed when the repository EXISTS but its corpus is runtime-incompatible', async () => {
+            const compatibilityError = new RuntimeYamlCompatibilityError(
+                'data/broken/broken.yml',
+                'Map keys must be unique',
+            );
+            jest.spyOn(DataRepository, 'create').mockResolvedValue({
+                assertRuntimeCompatible: jest.fn().mockRejectedValue(compatibilityError),
+                getCategories: jest.fn().mockResolvedValue([]),
+                getTags: jest.fn().mockResolvedValue([]),
+                getCollections: jest.fn().mockResolvedValue([]),
+                getReferences: jest.fn().mockResolvedValue([]),
+                getItems: jest.fn().mockResolvedValue([]),
+                getConfig: jest.fn().mockResolvedValue(null),
+            } as unknown as DataRepository);
+
+            await expect(service.initialize(work, user, createUpdate)).resolves.toMatchObject({
+                success: false,
+                error: { code: 'DATA_REPO_FAILED', cause: compatibilityError },
+            });
+            expect(gitFacade.repositoryExists).not.toHaveBeenCalled();
+            expect(pipelineOrchestrator.execute).not.toHaveBeenCalled();
+        });
+
+        it('fails closed when the clone 404s but the provider says the repository exists', async () => {
+            gitFacade.cloneOrPull.mockRejectedValue(clone404());
+            gitFacade.repositoryExists.mockResolvedValue(true);
+
+            await expect(service.initialize(work, user, createUpdate)).resolves.toMatchObject({
+                success: false,
+                error: { code: 'DATA_REPO_FAILED' },
+            });
+            expect(pipelineOrchestrator.execute).not.toHaveBeenCalled();
+        });
+
+        it('fails closed when the existence check itself fails', async () => {
+            gitFacade.cloneOrPull.mockRejectedValue(clone404());
+            gitFacade.repositoryExists.mockRejectedValue(new Error('GitHub API rate limited'));
+
+            await expect(service.initialize(work, user, createUpdate)).resolves.toMatchObject({
+                success: false,
+                error: { code: 'DATA_REPO_FAILED' },
+            });
+            expect(pipelineOrchestrator.execute).not.toHaveBeenCalled();
+        });
+
+        it('does not ask about existence for errors that are not a missing repository', async () => {
+            gitFacade.cloneOrPull.mockRejectedValue(
+                Object.assign(new Error('HTTP Error: 401 Unauthorized'), {
+                    code: 'HttpError',
+                    data: { statusCode: 401 },
+                }),
+            );
+
+            await expect(service.initialize(work, user, createUpdate)).resolves.toMatchObject({
+                success: false,
+                error: { code: 'DATA_REPO_FAILED' },
+            });
+            expect(gitFacade.repositoryExists).not.toHaveBeenCalled();
+        });
+    });
+
+    describe('isRepositoryNotFoundError', () => {
+        it.each([
+            [
+                'isomorphic-git HttpError 404',
+                Object.assign(new Error('x'), { code: 'HttpError', data: { statusCode: 404 } }),
+            ],
+            ['the 404 message', new Error('HTTP Error: 404 Not Found')],
+            [
+                'RepositoryNotReadyError',
+                Object.assign(new Error('x'), { code: 'repository_not_ready' }),
+            ],
+            [
+                'a wrapped 404',
+                Object.assign(new Error('outer'), {
+                    cause: new Error('HTTP Error: 404 Not Found'),
+                }),
+            ],
+        ])('matches %s', (_label, error) => {
+            expect(isRepositoryNotFoundError(error)).toBe(true);
+        });
+
+        it.each([
+            [
+                '401',
+                Object.assign(new Error('HTTP Error: 401 Unauthorized'), {
+                    code: 'HttpError',
+                    data: { statusCode: 401 },
+                }),
+            ],
+            ['403', new Error('HTTP Error: 403 Forbidden')],
+            ['a network error', Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' })],
+            ['a non-error', 'nope'],
+        ])('does not match %s', (_label, error) => {
+            expect(isRepositoryNotFoundError(error)).toBe(false);
+        });
+
+        it('terminates on a cyclic cause chain', () => {
+            const a = new Error('outer') as Error & { cause?: unknown };
+            const b = new Error('inner') as Error & { cause?: unknown };
+            a.cause = b;
+            b.cause = a;
+            expect(isRepositoryNotFoundError(a)).toBe(false);
+
+            b.cause = Object.assign(new Error('HTTP Error: 404 Not Found'), { cause: a });
+            expect(isRepositoryNotFoundError(a)).toBe(true);
+        });
     });
 
     it('keeps ordinary item reads tolerant by skipping generation certification', async () => {

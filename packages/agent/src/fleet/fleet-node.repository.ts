@@ -434,4 +434,35 @@ export class FleetNodeRepository {
         );
         return (rolled.affected ?? 0) === 1;
     }
+
+    /**
+     * Fleet cost accounting — the DAILY RESET's compare-and-set: put a node
+     * the cost ceiling disabled back to `status` (`offline`, or `paused` when
+     * the ceiling had disabled a paused node), but only while it is STILL
+     * `disabled`. True for exactly one caller, which is the one that writes
+     * the audit row — two heartbeats racing the rollover re-enable it once.
+     *
+     * Whether the disable was the ceiling's alone is decided by the caller
+     * (`FleetCostCeilingResetService`) BEFORE this runs; this only makes the
+     * flip itself atomic.
+     */
+    async casLiftCostCeilingDisable(
+        id: string,
+        status: Extract<FleetNodeStatus, 'offline' | 'paused'>,
+    ): Promise<boolean> {
+        const result = await this.repository.update({ id, status: 'disabled' }, { status });
+        return (result.affected ?? 0) === 1;
+    }
+
+    /**
+     * Clear the per-node trip marker once its day is over (the daily reset).
+     * A marker stamped TODAY is left alone: it is the one-notice key of a
+     * trip that is still in force. Idempotent — a NULL never matches `<>`.
+     */
+    async clearStaleDailyCostTrip(id: string, today: string): Promise<void> {
+        await this.repository.update(
+            { id, dailyCostTrippedOn: Not(today) },
+            { dailyCostTrippedOn: null },
+        );
+    }
 }

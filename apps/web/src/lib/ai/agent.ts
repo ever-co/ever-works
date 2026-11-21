@@ -6,6 +6,7 @@ import { selectActiveToolNames } from './tools/tool-selection';
 import { createUserConfirmationCheckFromMessages } from './tools/generated/confirmation';
 import { toModelHistory } from './model-history';
 import { API_URL } from '@/lib/constants';
+import { getDemoConfig } from '@/lib/feature-flags/demo';
 import { sanitizeText } from '@/lib/utils';
 
 const MAX_TOOL_STEPS = 50;
@@ -122,6 +123,11 @@ export async function runAgent({
     currentPageUrl,
     onFinish,
 }: AgentOptions) {
+    // Platform demo mode: started now, read before the tools are built (they take the demo's
+    // retry policy too). `getDemoConfig` never rejects: an unreadable config resolves to its
+    // fail-closed answer.
+    const demoConfig = getDemoConfig();
+
     const provider = createBackendProvider({
         baseURL: `${API_URL}/v1`,
         authToken,
@@ -144,12 +150,16 @@ export async function runAgent({
         : 'The user is on the dashboard.';
 
     const model = provider.chatModel(modelOverride || MODEL_AUTO);
+    const demo = await demoConfig;
     // Security: a gated tool's `confirmed: true` only counts when THIS turn's
     // user message confirms the exact card (tool + arguments) the assistant
     // showed right before it — tool output read in the same turn cannot
     // supply the confirmation, and each card is single-use.
     const allTools = buildChatTools(model, {
         userConfirmed: createUserConfirmationCheckFromMessages(messages),
+        // Platform demo mode: the suggestWorks sub-agent makes one attempt per model call too
+        // (each one spends demo AI quota). With demo off it keeps its own 1 retry.
+        suggestMaxRetries: demo.enabled ? 0 : 1,
     });
 
     // Per-turn tool gating: the full set is large (hand-written + ~280
@@ -165,18 +175,25 @@ export async function runAgent({
         Object.entries(allTools).filter(([name]) => activeSet.has(name)),
     ) as typeof allTools;
 
+    // Security: replayed tool results from earlier turns go through each
+    // tool's `toModelOutput` too (the untrusted fence), not raw.
+    const history = await toModelHistory(
+        messages.filter((message) => !isProviderErrorMessage(message)),
+        allTools,
+    );
+
     return streamText({
         model,
         system: SYSTEM_PROMPT.replace('{context}', context),
-        // Security: replayed tool results from earlier turns go through each
-        // tool's `toModelOutput` too (the untrusted fence), not raw.
-        messages: await toModelHistory(
-            messages.filter((message) => !isProviderErrorMessage(message)),
-            allTools,
-        ),
+        messages: history,
         tools,
         stopWhen: stepCountIs(MAX_TOOL_STEPS),
         onFinish,
+        // Platform demo mode: each attempt is a call the API counts against the sandbox's and
+        // the day's AI quota, and a `DEMO_AI_QUOTA` refusal cannot change on a retry, so on a
+        // demo every model call of the turn (this loop's and the suggestWorks sub-agent's) makes
+        // one attempt. With demo off the SDK's default retries are untouched.
+        ...(demo.enabled ? { maxRetries: 0 } : {}),
     });
 }
 

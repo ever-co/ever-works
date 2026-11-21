@@ -1,3 +1,6 @@
+import { act } from 'react';
+import { hydrateRoot } from 'react-dom/client';
+import { renderToString } from 'react-dom/server';
 import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -93,5 +96,51 @@ describe('DemoStrip', () => {
         renderStrip();
 
         expect(screen.queryByRole('button')).not.toBeInTheDocument();
+    });
+
+    /**
+     * The hours left are read from the clock while rendering, so the server's HTML and the
+     * client's first render can disagree when an hour boundary passes between them (here
+     * "3 h" on the server, "2 h" at hydration). That must not be a hydration error.
+     */
+    describe('hydration across an hour boundary', () => {
+        const EXPIRES_AT = '2026-11-21T12:00:00.000Z';
+
+        afterEach(() => {
+            vi.useRealTimers();
+            document.body.innerHTML = '';
+        });
+
+        it('hydrates the server HTML without a mismatch', async () => {
+            const strip = (
+                <DemoStrip
+                    signUpUrl={SIGN_UP}
+                    expiresAt={EXPIRES_AT}
+                    aiQuotaExhausted={false}
+                    recordedGoalHref={null}
+                />
+            );
+            vi.useFakeTimers({ toFake: ['Date'] });
+            vi.setSystemTime(new Date('2026-11-21T08:59:59.900Z'));
+            const html = renderToString(strip);
+            expect(html).toContain('Demo workspace expires in 3 h');
+
+            const container = document.createElement('div');
+            container.innerHTML = html;
+            document.body.appendChild(container);
+            vi.setSystemTime(new Date('2026-11-21T09:00:00.100Z'));
+            const onRecoverableError = vi.fn();
+            const consoleErrors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+            let root: ReturnType<typeof hydrateRoot> | undefined;
+            await act(async () => {
+                root = hydrateRoot(container, strip, { onRecoverableError });
+            });
+
+            expect(onRecoverableError).not.toHaveBeenCalled();
+            expect(consoleErrors).not.toHaveBeenCalled();
+            consoleErrors.mockRestore();
+            act(() => root?.unmount());
+        });
     });
 });

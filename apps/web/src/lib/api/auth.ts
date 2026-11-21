@@ -124,6 +124,20 @@ export interface AuthResponse {
     user: UserProfile;
 }
 
+/**
+ * Platform demo mode — the profile's `demo` block (`GET /auth/profile/fresh`), what the demo
+ * strip is built from. The one web copy of the API's `DemoProfile` (apps/api
+ * `demo-profile.port.ts`, a separate package).
+ */
+export interface DemoProfile {
+    /** The sandbox's `anonymousExpiresAt`, ISO 8601. */
+    expiresAt: string;
+    /** True once the instance's AI requests for the UTC day are used up. */
+    aiQuotaExhausted: boolean;
+    /** The sandbox's own recorded Goal, or null when it is gone. */
+    recordedGoalId: string | null;
+}
+
 export interface UserProfile {
     id: string;
     username: string;
@@ -140,11 +154,7 @@ export interface UserProfile {
      * Platform demo mode: set on a demo sandbox account of a demo instance (the strip's data);
      * null for everyone else and whenever the demo is off.
      */
-    demo?: {
-        expiresAt: string;
-        aiQuotaExhausted: boolean;
-        recordedGoalId: string | null;
-    } | null;
+    demo?: DemoProfile | null;
     oauthTokens?: Array<{
         provider: string;
         createdAt?: string;

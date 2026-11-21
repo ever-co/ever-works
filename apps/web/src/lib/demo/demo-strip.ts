@@ -1,14 +1,8 @@
 import 'server-only';
 import { ROUTES } from '@/lib/constants';
 import type { DemoStripProps } from '@/components/demo/DemoStrip';
+import type { DemoProfile } from '@/lib/api/auth';
 import { getDemoConfig } from '@/lib/feature-flags/demo';
-
-/** The profile's `demo` block (`GET /auth/profile/fresh`); null for a normal user or demo off. */
-export interface DemoProfile {
-    expiresAt: string;
-    aiQuotaExhausted: boolean;
-    recordedGoalId: string | null;
-}
 
 /**
  * What the dashboard layout hands `<DemoStrip>`, or null for no strip. Null without asking the
