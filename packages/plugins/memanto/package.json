@@ -58,7 +58,7 @@
 			},
 			"license": "AGPL-3.0",
 			"builtIn": true,
-			"autoEnable": false,
+			"autoEnable": true,
 			"visibility": "public",
 			"defaultForCapabilities": [
 				"agent-memory"

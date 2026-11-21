@@ -194,6 +194,18 @@ export interface IAgentMemoryPlugin extends IPlugin {
 	 */
 	buildContext(input: AgentMemoryContextInput): Promise<AgentMemoryContext>;
 
+	/**
+	 * Optional readiness probe used by IMPLICIT provider resolution (the
+	 * default / first-enabled pick). Return false when this scope has no
+	 * backend configured, and the facade falls through to the next enabled
+	 * agent-memory provider instead of routing every recall and save to a
+	 * server that is not there. That is what lets a plugin be both
+	 * `autoEnable` and the capability default without breaking scopes that
+	 * never set it up. Explicit selections (a provider override or the
+	 * Work's active plugin) are never filtered. Absent = always configured.
+	 */
+	isConfigured?(settings?: PluginSettings): boolean | Promise<boolean>;
+
 	// ── Optional governance surface ────────────────────────────────────
 
 	/** Delete a single record by id. Required for GDPR / "forget me" flows. */

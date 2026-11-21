@@ -264,10 +264,10 @@ Agent memory lives in an external agent-memory backend rather than in Postgres �
 
 Two first-party providers ship; enable one from [Plugins](./plugins.md):
 
-| Plugin        | Backend                                                                | When to use it                                                                                                                                                      |
-| ------------- | ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `memanto`     | A [Memanto](https://github.com/moorcheh-ai/memanto) server on Moorcheh | **The default whenever it is enabled.** Semantic, typed memory (fact, decision, preference, …) with no LLM call per write. Needs a Moorcheh key or on-prem licence. |
-| `agentmemory` | An [`agentmemory`](https://github.com/rohitg00/agentmemory) server     | Zero-config and fully offline (keyless BM25 search). Agents use it when it is the only provider enabled.                                                            |
+| Plugin        | Backend                                                                | When to use it                                                                                                                                                                                                                                                  |
+| ------------- | ---------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `memanto`     | A [Memanto](https://github.com/moorcheh-ai/memanto) server on Moorcheh | **The default, and auto-enabled wherever a Memanto server is configured** (`MEMANTO_BASE_URL` on the API turns it on for everyone). Semantic, typed memory (fact, decision, preference, …) with no LLM call per write. Needs a Moorcheh key or on-prem licence. |
+| `agentmemory` | An [`agentmemory`](https://github.com/rohitg00/agentmemory) server     | Zero-config and fully offline (keyless BM25 search). Agents use it when it is the only provider enabled.                                                                                                                                                        |
 
 Memanto has no list of work sessions, so with it the panel above stays empty; the memories themselves are reachable through search, recall and the agents' `memory_search` tool. The comparison behind the default is in the [Memanto plugin](../plugin-system/built-in-plugins.md#memanto-memory) section.
 

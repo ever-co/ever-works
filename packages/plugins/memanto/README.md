@@ -1,7 +1,9 @@
 # @ever-works/memanto-plugin
 
 [Memanto](https://github.com/moorcheh-ai/memanto) implementation of the **agent-memory** capability, and the
-platform's **default agent-memory provider whenever it is enabled**. Agents get typed, semantic long-term memory:
+platform's **default agent-memory provider, auto-enabled wherever a Memanto server is configured**. Set
+`MEMANTO_BASE_URL` (and `MEMANTO_API_KEY`) on the API and every user's agents use it, with nothing to enable by
+hand. Agents get typed, semantic long-term memory:
 
 - every task run opens a memory session and gets relevant memories recalled into its prompt (fenced as untrusted),
 - during a run the Agent can call `memory_search` and `memory_save` itself,
@@ -11,7 +13,7 @@ platform's **default agent-memory provider whenever it is enabled**. Agents get 
 All of that goes through `AgentMemoryFacadeService`, so it works the same with any agent-memory plugin; this package
 is the Memanto backend for it.
 
-## Why Memanto is the default, and why it is not auto-enabled
+## Why Memanto is the default, and how it is activated
 
 Compared on 2026-11-21 (full brief in the workspace research folder
 `projects/ever-works/research/memanto-agent-memory/`). Benchmark numbers are each vendor's own and are **not**
@@ -33,20 +35,25 @@ reversible expiry lifecycle, temporal recall, and published QA-accuracy scores. 
 call per write (which keeps every save cheap and fast), it is the only one that publishes QA accuracy at all. Its
 scores are self-reported and depend on the reader model.
 
-It is **not** auto-enabled, because it is not zero-config:
+It is **auto-enabled and the default**, but it is not zero-config, so it only serves a scope that has a Memanto
+server configured:
 
 - It needs a running Memanto server **and** a Moorcheh backend: either Moorcheh Cloud (`MOORCHEH_API_KEY`, trial
   then paid; memory text leaves your infrastructure) or Moorcheh on-prem, whose **Community Edition licence allows a
   single node and non-commercial use only**. A commercial self-hosted deployment needs Moorcheh Cloud or a Moorcheh
   Enterprise licence.
-- agentmemory therefore stays the zero-config, fully offline option. When only agentmemory is enabled for a scope,
-  agents use it; when Memanto is enabled too, Memanto wins.
+- The plugin reports itself configured (`isConfigured`) once a `baseUrl` or `apiKey` is set, either in its settings
+  for a user or Work, or as `MEMANTO_BASE_URL` / `MEMANTO_API_KEY` on the API. The agent-memory facade skips it
+  everywhere else, so a platform without Memanto behaves exactly as before.
+- Set `MEMANTO_BASE_URL` on the API and **every user and agent uses Memanto**, ahead of agentmemory. Without it,
+  agentmemory stays the zero-config, fully offline option for scopes that enable it.
+- A Work that explicitly selects a provider always gets that provider.
 
 ## Run modes
 
 | Mode                   | Setup                                                                                                                                                                                                                       |
 | ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Local dev              | `pip install memanto` (or `uvx memanto serve`), set `MOORCHEH_API_KEY`, run `memanto serve`. The default `baseUrl` (`http://localhost:8000`) points at it, and Memanto trusts loopback callers, so `apiKey` can stay empty. |
+| Local dev              | `pip install memanto` (or `uvx memanto serve`), set `MOORCHEH_API_KEY`, run `memanto serve`, then start the API with `MEMANTO_BASE_URL=http://localhost:8000`. Memanto trusts loopback callers, so `apiKey` can stay empty. |
 | Self-hosted in cluster | Build `.deploy/docker/memanto/Dockerfile`, apply `.deploy/k8s/memanto.optional.yaml`, set `baseUrl` to `http://memanto.<ns>.svc.cluster.local:8000` and `apiKey` to the server's management key.                            |
 | Elsewhere              | Point `baseUrl` at any reachable Memanto ≥ 0.3.0 and set `apiKey`.                                                                                                                                                          |
 

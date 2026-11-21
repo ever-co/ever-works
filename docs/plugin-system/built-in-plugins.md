@@ -1879,13 +1879,13 @@ data model + state machine + chat thread + recurrence pipeline.
 
 ### Memanto Memory
 
-The **default `agent-memory` provider whenever it is enabled**. Talks to a [Memanto](https://github.com/moorcheh-ai/memanto) server, which stores memory in Moorcheh (Moorcheh Cloud, or a Moorcheh on-prem server). Agents get semantic recall into every task run, the `memory_search` / `memory_save` tools during a run, and the same store behind the `/api/agent-memory/*` endpoints and the Memory Pipeline Modifier.
+The **default `agent-memory` provider, auto-enabled wherever a Memanto server is configured** (set `MEMANTO_BASE_URL` on the API and every user's agents use it). Talks to a [Memanto](https://github.com/moorcheh-ai/memanto) server, which stores memory in Moorcheh (Moorcheh Cloud, or a Moorcheh on-prem server). Agents get semantic recall into every task run, the `memory_search` / `memory_save` tools during a run, and the same store behind the `/api/agent-memory/*` endpoints and the Memory Pipeline Modifier.
 
 | Field        | Value                                     |
 | ------------ | ----------------------------------------- |
 | Plugin ID    | `memanto`                                 |
 | Category     | `utility`                                 |
-| Auto Enable  | No                                        |
+| Auto Enable  | Yes, where a Memanto server is configured |
 | Default for  | `agent-memory` (`defaultForCapabilities`) |
 | Distribution | `registry`                                |
 | Capabilities | `agent-memory`                            |
@@ -1901,7 +1901,7 @@ The **default `agent-memory` provider whenever it is enabled**. Talks to a [Mema
 | `minSimilarity` | number | user  | —                       | —                      | Recall similarity floor (0–1)                                                                                      |
 | `timeoutMs`     | number | user  | `30000`                 | —                      | Per-request timeout                                                                                                |
 
-**Why it is the default, and why it is not auto-enabled.** Memanto gives semantic recall instead of agentmemory's keyless BM25 default, 13 typed memories assigned with no LLM call per write, a reversible expiry lifecycle and temporal recall, and it publishes QA accuracy (LongMemEval-S 89.8%, LoCoMo 87.1%; self-reported and reader-dependent). It is not zero-config, though: it needs a Memanto server plus Moorcheh Cloud (`MOORCHEH_API_KEY`, trial then paid) or Moorcheh on-prem, whose Community Edition licence is single-node and **non-commercial**. So it only becomes the provider for a scope once someone enables it; scopes that only enable agentmemory keep using agentmemory. The full comparison (agentmemory, Mem0, Zep/Graphiti, Letta, Supermemory, Cognee) is in the package README.
+**Why it is the default, and how it is activated.** Memanto gives semantic recall instead of agentmemory's keyless BM25 default, 13 typed memories assigned with no LLM call per write, a reversible expiry lifecycle and temporal recall, and it publishes QA accuracy (LongMemEval-S 89.8%, LoCoMo 87.1%; self-reported and reader-dependent). It is not zero-config, though: it needs a Memanto server plus Moorcheh Cloud (`MOORCHEH_API_KEY`, trial then paid) or Moorcheh on-prem, whose Community Edition licence is single-node and **non-commercial**. So it is auto-enabled but gated: the plugin reports itself configured (`isConfigured`) only once a `baseUrl` or `apiKey` is set (plugin settings, or `MEMANTO_BASE_URL` / `MEMANTO_API_KEY` on the API), and the agent-memory facade skips it everywhere else. With `MEMANTO_BASE_URL` set it serves every user ahead of agentmemory; without it, a platform behaves exactly as before. A Work's explicit provider choice is never overridden. The full comparison (agentmemory, Mem0, Zep/Graphiti, Letta, Supermemory, Cognee) is in the package README.
 
 **Running the server:** `memanto serve` locally (`pip install memanto`, with `MOORCHEH_API_KEY` set), or in Kubernetes: build `.deploy/docker/memanto/Dockerfile` and apply `.deploy/k8s/memanto.optional.yaml` (one replica; Memanto keeps its agent registry and auth sessions on disk). Memanto trusts loopback callers without a key, so run it as its own Service, never as a sidecar in the API pod.
 

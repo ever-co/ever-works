@@ -31,7 +31,8 @@ Memory is **not stored in Postgres.** It lives entirely in an external
 agent-memory REST backend, partitioned by a `project` namespace (derived from the
 Work slug/id). Two first-party backends ship: `@ever-works/memanto-plugin`
 (Memanto server, default `http://localhost:8000`, one Memanto agent per Work —
-the **default provider whenever it is enabled**) and
+the **default provider, auto-enabled wherever a Memanto server is configured** — the
+facade skips it via `isConfigured` elsewhere) and
 `@ever-works/agentmemory-plugin` (`agentmemory` server on `http://localhost:3111`,
 zero-config and fully offline, used when it is the only one enabled). The **only** Postgres surface is a single nullable column,
 `agent_runs.memorySessionId` (migration

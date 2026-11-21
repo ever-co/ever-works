@@ -58,14 +58,38 @@ describe('MemantoPlugin', () => {
 	});
 
 	describe('manifest', () => {
-		it('implements agent-memory and is THE default provider for it, without auto-enabling', () => {
+		it('implements agent-memory, is THE default provider for it, and is auto-enabled', () => {
 			expect(plugin.id).toBe('memanto');
 			expect(plugin.providerName).toBe('memanto');
 			expect(plugin.capabilities).toContain('agent-memory');
 			const manifest = plugin.getManifest();
 			expect(manifest.defaultForCapabilities).toEqual(['agent-memory']);
-			expect(manifest.autoEnable).toBe(false);
+			expect(manifest.autoEnable).toBe(true);
 			expect(manifest.builtIn).toBe(true);
+		});
+
+		it('keeps package.json and getManifest() in agreement on activation', async () => {
+			const { readFile } = await import('node:fs/promises');
+			const pkg = JSON.parse(await readFile(new URL('../../package.json', import.meta.url), 'utf8'));
+			const manifest = plugin.getManifest();
+			expect(pkg.everworks.plugin.autoEnable).toBe(manifest.autoEnable);
+			expect(pkg.everworks.plugin.defaultForCapabilities).toEqual(manifest.defaultForCapabilities);
+		});
+		// isConfigured — the facade only routes to Memanto where a server is set.
+		it('isConfigured is false with no server configured anywhere', () => {
+			expect(plugin.isConfigured({})).toBe(false);
+			expect(plugin.isConfigured(undefined)).toBe(false);
+		});
+
+		it('isConfigured is true once a baseUrl or key is set in the plugin settings', () => {
+			expect(plugin.isConfigured({ baseUrl: 'http://memanto:8000' } as never)).toBe(true);
+			expect(plugin.isConfigured({ apiKey: 'k' } as never)).toBe(true);
+			expect(plugin.isConfigured({ user: { baseUrl: 'http://m:8000' } } as never)).toBe(true);
+		});
+
+		it('isConfigured is true platform-wide when the operator sets MEMANTO_BASE_URL on the API', () => {
+			process.env.MEMANTO_BASE_URL = 'http://memanto.ever-works.svc.cluster.local:8000';
+			expect(plugin.isConfigured({})).toBe(true);
 		});
 
 		it('keeps the key secret and settable from the UI (no x-envVar lock)', () => {

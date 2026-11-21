@@ -29,7 +29,9 @@
 #   export MEMANTO_IMAGE=<registry>/memanto:0.3.0
 #   envsubst < .deploy/k8s/memanto.optional.yaml | kubectl apply -n ever-works -f -
 #
-# Then point the plugin at it (plugin settings, or env on the API Deployment):
+# Then point the plugin at it. Setting the env on the API Deployment turns Memanto
+# on as the agent-memory provider for EVERY user and agent (it is auto-enabled
+# and the default; without a configured server the platform skips it):
 #   baseUrl = http://memanto.ever-works.svc.cluster.local:8000   (MEMANTO_BASE_URL)
 #   apiKey  = $MOORCHEH_API_KEY on cloud, $MEMANTO_SECRET_KEY on-prem (MEMANTO_API_KEY)
 #

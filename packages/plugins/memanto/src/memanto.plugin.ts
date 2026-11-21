@@ -60,19 +60,23 @@ const CONTEXT_CANDIDATES = 30;
 
 /**
  * Memanto plugin — `agent-memory` capability backed by a Memanto server
- * (https://github.com/moorcheh-ai/memanto), and the platform's DEFAULT
- * agent-memory provider whenever it is enabled.
+ * (https://github.com/moorcheh-ai/memanto), and the platform's DEFAULT,
+ * AUTO-ENABLED agent-memory provider wherever a Memanto server is configured.
  *
  * Why it is the preferred default (comparison in the package README and
  * `docs/plugin-system/built-in-plugins.md`): semantic recall over Moorcheh
  * instead of agentmemory's keyless BM25 default, typed memories (13 types:
  * fact, decision, preference, instruction, …) assigned with no LLM call per
  * write, a reversible expiry lifecycle, temporal recall, and published
- * LongMemEval-S / LoCoMo QA scores (89.8% / 87.1%, self-reported). It is
- * NOT auto-enabled: it needs a Memanto server plus a Moorcheh backend —
+ * LongMemEval-S / LoCoMo QA scores (89.8% / 87.1%, self-reported).
+ *
+ * Activation: `autoEnable` + `defaultForCapabilities`, gated by
+ * `isConfigured`. Memanto needs a Memanto server plus a Moorcheh backend —
  * Moorcheh Cloud (`MOORCHEH_API_KEY`, paid beyond the trial) or Moorcheh
- * on-prem, whose Community Edition licence is single-node and
- * non-commercial. agentmemory stays the zero-config, fully offline option.
+ * on-prem, whose Community Edition licence is single-node and non-commercial
+ * — so the facade only routes a scope to it once a server is configured
+ * (MEMANTO_BASE_URL on the API turns it on for everyone). Without one, scopes
+ * keep agentmemory, which stays the zero-config, fully offline option.
  *
  * Mapping (see `memanto-mapping.ts` for the details):
  *   - project (Work id) → one Memanto agent `<agentPrefix>-<projectId>`
@@ -272,7 +276,9 @@ export class MemantoPlugin implements IPlugin, IAgentMemoryPlugin {
 			author: { name: 'Ever Works Team' },
 			license: 'AGPL-3.0',
 			builtIn: true,
-			autoEnable: false,
+			// Auto-enabled AND the default — but only used for a scope once a
+			// Memanto server is configured for it (see isConfigured).
+			autoEnable: true,
 			visibility: 'public',
 			defaultForCapabilities: ['agent-memory'],
 			homepage: 'https://github.com/moorcheh-ai/memanto',
@@ -284,6 +290,20 @@ export class MemantoPlugin implements IPlugin, IAgentMemoryPlugin {
 	}
 
 	// ── IAgentMemoryPlugin ────────────────────────────────────────────
+
+	/**
+	 * Configured = a Memanto server is set for this scope: `baseUrl` or
+	 * `apiKey` in the plugin settings, or MEMANTO_BASE_URL / MEMANTO_API_KEY on
+	 * the API. Unconfigured scopes are skipped by the facade's implicit
+	 * resolution, which is what lets this plugin be `autoEnable` AND the
+	 * agent-memory default: an operator who deploys Memanto and sets
+	 * MEMANTO_BASE_URL turns it on for every user and agent at once, and a
+	 * platform without Memanto keeps whatever provider it had.
+	 */
+	isConfigured(settings?: PluginSettings): boolean {
+		const resolved = this.resolveSettings(settings);
+		return Boolean(resolved.baseUrl || resolved.apiKey);
+	}
 
 	/**
 	 * Memanto has no work-session concept, so the session is an Ever Works id

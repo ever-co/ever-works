@@ -16,9 +16,10 @@ import { AgentmemoryPlugin } from '../../../../plugins/agentmemory/src/agentmemo
 /**
  * Memanto as the default agent-memory provider — platform wiring, end to end.
  *
- * 1. Default resolution (always runs): with BOTH first-party agent-memory
- *    plugins enabled for a scope, the facade picks Memanto from the real
- *    manifests — agentmemory only wins when it is the sole one enabled.
+ * 1. Default resolution (always runs), from the real manifests: Memanto is
+ *    auto-enabled and the default, so once a Memanto server is configured it
+ *    wins over agentmemory; with no Memanto server configured the facade
+ *    skips it (`isConfigured`) and the agentmemory provider keeps serving.
  * 2. Agent path (runs when `MEMANTO_CONTRACT_URL` points at a real Memanto
  *    server): an Agent's `memory_save` / `memory_search` tools and the
  *    run-start recall injection all go tools → facade → default resolution
@@ -64,8 +65,14 @@ const context = {
 } as unknown as PluginContext;
 
 describe('agent-memory default provider = Memanto', () => {
-    it('resolves Memanto when both first-party plugins are enabled (agentmemory listed first)', async () => {
-        const facade = await makeFacade([new AgentmemoryPlugin(), new MemantoPlugin()]);
+    const configured = { baseUrl: 'http://memanto.ever-works.svc.cluster.local:8000' };
+
+    afterEach(() => {
+        delete process.env.MEMANTO_BASE_URL;
+    });
+
+    it('resolves Memanto once a Memanto server is configured (agentmemory listed first)', async () => {
+        const facade = await makeFacade([new AgentmemoryPlugin(), new MemantoPlugin()], configured);
         await expect(facade.getDefaultProvider(undefined, 'user-1')).resolves.toEqual({
             id: 'memanto',
             name: 'memanto',
@@ -75,6 +82,23 @@ describe('agent-memory default provider = Memanto', () => {
             ['memanto', true],
             ['agentmemory', false],
         ]);
+    });
+
+    it('turns Memanto on platform-wide from MEMANTO_BASE_URL alone (no per-user settings)', async () => {
+        process.env.MEMANTO_BASE_URL = 'http://memanto.ever-works.svc.cluster.local:8000';
+        const facade = await makeFacade([new AgentmemoryPlugin(), new MemantoPlugin()]);
+        await expect(facade.getDefaultProvider(undefined, 'user-1')).resolves.toEqual({
+            id: 'memanto',
+            name: 'memanto',
+        });
+    });
+
+    it('skips an auto-enabled but unconfigured Memanto and keeps agentmemory serving', async () => {
+        const facade = await makeFacade([new AgentmemoryPlugin(), new MemantoPlugin()]);
+        await expect(facade.getDefaultProvider(undefined, 'user-1')).resolves.toEqual({
+            id: 'agentmemory',
+            name: 'agentmemory',
+        });
     });
 
     it('still serves agentmemory when it is the only agent-memory plugin enabled', async () => {
