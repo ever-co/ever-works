@@ -20,10 +20,10 @@ import type { User } from '../../entities/user.entity';
 import type { CreateItemsGeneratorDto } from '../../items-generator/dto/create-items-generator.dto';
 import type { CreateWorkDto } from '../../dto/create-work.dto';
 import { DemoFeatureDisabledError } from '../../demo';
-import { EverWorksGitProvider } from '../../ever-works-providers/ever-works-git.provider';
 import type { EverWorksGitHttpFetch } from '../../ever-works-providers/ever-works-git.provider';
 import { WorkGenerationService } from '../work-generation.service';
 import { WorkLifecycleService } from '../work-lifecycle.service';
+import { FetchInjectedEverWorksGit, githubCreates } from './fetch-injected-ever-works-git.fake';
 
 /**
  * Platform demo mode, controller ruling R2 — Generate on the seeded draft
@@ -60,49 +60,6 @@ const operator = {
     email: 'operator@ever.works',
     registrationProvider: 'local',
 } as User;
-
-/**
- * The real provider, its GitHub calls going to `fetchImpl`. It records into a ledger double:
- * on a demo instance with no repository ledger bound it refuses every create (ruling R22).
- */
-class FetchInjectedEverWorksGit extends EverWorksGitProvider {
-    /** The demo topic calls (`PUT …/topics`, Task 10 R27), kept out of `fetchImpl`'s create count. */
-    readonly topicCalls: string[] = [];
-
-    constructor(private readonly fetchImpl: EverWorksGitHttpFetch) {
-        super({ record: jest.fn().mockResolvedValue(undefined) });
-    }
-
-    override createRepository(options: Parameters<EverWorksGitProvider['createRepository']>[0]) {
-        const routed = (async (url: string, init?: RequestInit) => {
-            if (init?.method === 'PUT' && url.endsWith('/topics')) {
-                this.topicCalls.push(url);
-                return new Response(JSON.stringify({ names: ['ever-works-demo'] }), {
-                    status: 200,
-                });
-            }
-            return this.fetchImpl(url, init);
-        }) as EverWorksGitHttpFetch;
-        return super.createRepository({ ...options, fetchImpl: routed });
-    }
-}
-
-function githubCreates(): jest.Mock {
-    return jest.fn(async (_url: string, init: RequestInit) => {
-        const { name } = JSON.parse(init.body as string) as { name: string };
-        return new Response(
-            JSON.stringify({
-                name,
-                owner: { login: ORG },
-                full_name: `${ORG}/${name}`,
-                html_url: `https://github.com/${ORG}/${name}`,
-                clone_url: `https://github.com/${ORG}/${name}.git`,
-                private: true,
-            }),
-            { status: 201, headers: { 'content-type': 'application/json' } },
-        );
-    });
-}
 
 describe('WorkGenerationService.generateItems — the seeded demo draft Work (R2)', () => {
     const ORIGINAL_ENV = { ...process.env };
@@ -142,7 +99,8 @@ describe('WorkGenerationService.generateItems — the seeded demo draft Work (R2
     });
 
     function build() {
-        const fetchImpl = githubCreates();
+        const fetchImpl = githubCreates(ORG);
+        const git = new FetchInjectedEverWorksGit(fetchImpl as unknown as EverWorksGitHttpFetch);
         // The Work owner's account, read when the requester is someone else (the cap is the
         // owner's, not the requester's).
         const users = {
@@ -160,7 +118,7 @@ describe('WorkGenerationService.generateItems — the seeded demo draft Work (R2
             { getWebsiteTemplateIdForNewWork: jest.fn().mockResolvedValue(null) } as never,
             {} as never,
             { assertWithinQuota: jest.fn() } as never,
-            new FetchInjectedEverWorksGit(fetchImpl as unknown as EverWorksGitHttpFetch),
+            git,
             {} as never,
             { emit: jest.fn() } as never,
             { emit: jest.fn(), emitAsync: jest.fn().mockResolvedValue([]) } as never,
@@ -228,6 +186,7 @@ describe('WorkGenerationService.generateItems — the seeded demo draft Work (R2
         return {
             service,
             fetchImpl,
+            git,
             dataGenerator,
             websiteGenerator,
             history,
@@ -280,8 +239,8 @@ describe('WorkGenerationService.generateItems — the seeded demo draft Work (R2
             true,
         );
 
-    it('provisions exactly one demo- repository through EverWorksGitProvider and stores it on the Work', async () => {
-        const { service, fetchImpl, lifecycle } = build();
+    it('provisions exactly one demo- repository through EverWorksGitProvider, tags it and stores it on the Work', async () => {
+        const { service, fetchImpl, git, lifecycle } = build();
         const workId = await seedDraft(lifecycle);
         expect((await works.findById(workId))!.sourceRepository).toBeFalsy();
 
@@ -291,6 +250,8 @@ describe('WorkGenerationService.generateItems — the seeded demo draft Work (R2
         const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
         expect(url).toBe(`https://api.github.com/orgs/${ORG}/repos`);
         expect(JSON.parse(init.body as string)).toMatchObject({ name: DEMO_REPO, private: true });
+        // The provider tags the repository it created with the demo topic (R27), once.
+        expect(git.topicCalls).toEqual([`https://api.github.com/repos/${ORG}/${DEMO_REPO}/topics`]);
 
         const stored = (await works.findById(workId))!;
         expect(stored.owner).toBe(ORG);
@@ -465,12 +426,13 @@ describe('WorkGenerationService.generateItems — the seeded demo draft Work (R2
 
     it('generates as before with the demo off: no provisioning', async () => {
         delete process.env.DEMO;
-        const { service, fetchImpl, lifecycle, seen, dataGenerator } = build();
+        const { service, fetchImpl, git, lifecycle, seen, dataGenerator } = build();
         const workId = await seedDraft(lifecycle);
 
         await generate(service, workId);
 
         expect(fetchImpl).not.toHaveBeenCalled();
+        expect(git.topicCalls).toEqual([]);
         expect(seen.data!.sourceRepository).toBeFalsy();
         // ...and the request is left as sent: no providers named, none added.
         const dto = dataGenerator.initialize.mock.calls[0][2] as CreateItemsGeneratorDto;
