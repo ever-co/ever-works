@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { ArrowRight, FolderPlus, Sparkles } from 'lucide-react';
+import { ArrowRight, FolderPlus } from 'lucide-react';
 import { desktopNextStep, type OnboardingDesktopChoice } from '@ever-works/contracts/api';
 import { Link } from '@/i18n/navigation';
 import { ROUTES } from '@/lib/constants';
@@ -182,7 +182,7 @@ export function CreateWorkStep({
             <div className="flex items-start gap-4">
                 <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-surface-secondary dark:bg-white/5">
                     {hasPrompt ? (
-                        <Sparkles className="w-5 h-5 text-text-secondary dark:text-text-secondary-dark" />
+                        <FolderPlus className="w-5 h-5 text-text-secondary dark:text-text-secondary-dark" />
                     ) : (
                         <FolderPlus className="w-5 h-5 text-text-secondary dark:text-text-secondary-dark" />
                     )}
@@ -246,7 +246,7 @@ export function CreateWorkStep({
                                 className="inline-flex items-center gap-2 rounded-lg bg-black dark:bg-button-primary-dark px-4 py-2.5 text-sm font-medium text-white dark:text-black transition-colors hover:bg-button-primary-hover dark:hover:bg-button-primary-hover-dark disabled:cursor-not-allowed disabled:opacity-60"
                             >
                                 Generate now
-                                <Sparkles className="w-4 h-4" />
+                                <ArrowRight className="w-4 h-4" />
                             </button>
                         ) : null
                     ) : (

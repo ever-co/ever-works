@@ -168,12 +168,12 @@ export function GenerationConsole({
                     >
                         <div
                             className={cn(
-                                'h-full rounded-full transition-[width] duration-700 ease-out',
+                                'h-full w-full origin-left rounded-full transition-transform duration-700 ease-out',
                                 state.phase === 'failed'
                                     ? 'bg-red-500'
                                     : 'bg-text dark:bg-white/80',
                             )}
-                            style={{ width: `${progress}%` }}
+                            style={{ transform: `scaleX(${progress / 100})` }}
                         />
                     </div>
                     {state.itemsProcessed ? (

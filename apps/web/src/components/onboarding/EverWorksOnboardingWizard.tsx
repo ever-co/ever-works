@@ -308,8 +308,8 @@ export function EverWorksOnboardingWizard({
                 {quickStart ? null : (
                     <div className="absolute top-0 left-0 right-0 h-[3px] bg-border dark:bg-border-dark z-10 rounded-t-lg">
                         <div
-                            className="h-full bg-text dark:bg-white/70 transition-all duration-500 ease-out rounded-t-2xl"
-                            style={{ width: `${progressPercent}%` }}
+                            className="h-full w-full origin-left bg-text dark:bg-white/70 transition-transform duration-500 ease-out rounded-t-2xl"
+                            style={{ transform: `scaleX(${progressPercent / 100})` }}
                         />
                     </div>
                 )}
@@ -453,7 +453,7 @@ function QuickStartNav({
             className="relative flex flex-col bg-surface-secondary/50 dark:bg-surface-secondary-dark/60 border-r border-border dark:border-border-dark"
         >
             <div className="px-5 pt-8 pb-5">
-                <span className="inline-flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-widest text-text-muted dark:text-text-muted-dark bg-surface-secondary dark:bg-white/5 px-2.5 py-1 rounded-full mb-3">
+                <span className="inline-flex items-center gap-1.5 text-xs font-medium text-text-muted dark:text-text-muted-dark bg-surface-secondary dark:bg-white/5 px-2.5 py-1 rounded-full mb-3">
                     Quick start
                 </span>
                 <h2 className="text-sm font-semibold text-text dark:text-text-dark leading-snug">
@@ -525,7 +525,7 @@ function QuickStartNav({
                         className="inline-flex items-center gap-1.5 text-xs font-medium text-text-secondary dark:text-text-secondary-dark hover:text-text dark:hover:text-text-dark hover:underline"
                     >
                         Customize setup instead ({fullStepCount} steps)
-                        <ArrowRight className="h-3 w-3" aria-hidden />
+                        <ArrowRight className="h-3.5 w-3.5" aria-hidden />
                     </button>
                 </div>
             ) : null}
@@ -567,7 +567,7 @@ function SideNav({
     return (
         <aside className="relative flex flex-col bg-surface-secondary/50 dark:bg-surface-secondary-dark/60 border-r border-border dark:border-border-dark">
             <div className="px-5 pt-8 pb-5">
-                <span className="inline-flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-widest text-text-muted dark:text-text-muted-dark bg-surface-secondary dark:bg-white/5 px-2.5 py-1 rounded-full mb-3">
+                <span className="inline-flex items-center gap-1.5 text-xs font-medium text-text-muted dark:text-text-muted-dark bg-surface-secondary dark:bg-white/5 px-2.5 py-1 rounded-full mb-3">
                     Setup
                 </span>
                 <h2 className="text-sm font-semibold text-text dark:text-text-dark leading-snug">
@@ -588,7 +588,7 @@ function SideNav({
                             onClick={() => onJump(index)}
                             disabled={locked && !isActive}
                             className={cn(
-                                'w-full flex items-center gap-3 rounded-lg px-3 py-2.5 text-left transition-all disabled:cursor-not-allowed disabled:opacity-60',
+                                'w-full flex items-center gap-3 rounded-lg px-3 py-2.5 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-60',
                                 isActive
                                     ? 'bg-surface dark:bg-white/5'
                                     : 'hover:bg-surface dark:hover:bg-surface-dark',
@@ -596,7 +596,7 @@ function SideNav({
                         >
                             <span
                                 className={cn(
-                                    'flex-shrink-0 w-6 h-6 rounded-full flex items-center justify-center text-[11px] font-semibold transition-all',
+                                    'flex-shrink-0 w-6 h-6 rounded-full flex items-center justify-center text-[11px] font-semibold transition-colors',
                                     isActive
                                         ? 'bg-text dark:bg-white text-white dark:text-black'
                                         : isPast
