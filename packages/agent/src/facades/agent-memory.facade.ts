@@ -9,6 +9,8 @@ import type {
     FacadeOptions,
 } from '@ever-works/plugin';
 import { PLUGIN_CAPABILITIES } from '@ever-works/plugin';
+import type { RegisteredPlugin } from '../plugins/services/plugin-registry.service';
+import { materializePlugin } from '../plugins/services/plugin-operation.util';
 import { PluginRegistryService } from '../plugins/services/plugin-registry.service';
 import { PluginSettingsService } from '../plugins/services/plugin-settings.service';
 import { WorkPluginRepository } from '../plugins/repositories/work-plugin.repository';
@@ -25,8 +27,10 @@ export class AgentMemoryFacadeError extends FacadeError {
  * Facade for the `agent-memory` capability.
  *
  * Routes save/search/context/session operations to the user's resolved
- * agent-memory plugin (default `@ever-works/agentmemory-plugin`, which
- * talks to a local or hosted `agentmemory` REST server).
+ * agent-memory plugin — `@ever-works/memanto-plugin` (Memanto server) is
+ * the default whenever it is enabled; `@ever-works/agentmemory-plugin`
+ * (local or hosted `agentmemory` REST server) serves scopes where it is
+ * the only one enabled.
  *
  * Mirrors the other facades: provider resolution + 4-level settings
  * hierarchy via `BaseFacadeService`. Optional governance methods
@@ -193,6 +197,55 @@ export class AgentMemoryFacadeService extends BaseFacadeService implements IAgen
             return await plugin.listSessions({ ...options, settings });
         } catch (error) {
             throw this.wrap(error, 'listSessions', plugin.id);
+        }
+    }
+
+    /**
+     * Implicit-resolution candidates (default first), minus the providers
+     * that report themselves unconfigured for this scope
+     * (`IAgentMemoryPlugin.isConfigured`). The Memanto plugin is
+     * `autoEnable` + the capability default, so without this gate every
+     * scope with no Memanto server set up would route recall and saves to a
+     * dead endpoint and lose the agentmemory provider it actually enabled.
+     * Explicit choices — `providerOverride` and the Work's active plugin —
+     * do not go through here and are never filtered.
+     */
+    protected override async getEnabledPlugins(
+        workId: string,
+        userId: string,
+    ): Promise<RegisteredPlugin[]> {
+        const enabled = await super.getEnabledPlugins(workId, userId);
+        const out: RegisteredPlugin[] = [];
+        for (const registered of enabled) {
+            if (await this.isConfiguredForScope(registered, { userId, workId }))
+                out.push(registered);
+        }
+        return out;
+    }
+
+    private async isConfiguredForScope(
+        registered: RegisteredPlugin,
+        scope: { userId?: string; workId?: string },
+    ): Promise<boolean> {
+        try {
+            // The registry may hold a lazy proxy, whose every property reads as a
+            // forwarding function — ask the REAL instance whether it has the probe.
+            const plugin = (await materializePlugin(
+                registered.plugin,
+            )) as Partial<IAgentMemoryPlugin>;
+            if (typeof plugin.isConfigured !== 'function') return true;
+            const settings = await this.getResolvedSettings(registered.plugin.id, {
+                userId: scope.userId,
+                workId: scope.workId,
+            } as FacadeOptions);
+            return (await plugin.isConfigured(settings)) !== false;
+        } catch (error) {
+            this.logger.warn(
+                `agent-memory provider "${registered.plugin.id}" readiness probe failed; skipping it for this scope: ${
+                    error instanceof Error ? error.message : String(error)
+                }`,
+            );
+            return false;
         }
     }
 

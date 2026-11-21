@@ -292,7 +292,7 @@ export class AgentMemoryController {
         // delete another user's memory record by id.
         await this.assertWorkEditAccess(auth, query.workId);
         const facadeOptions = this.facadeOptions(auth, query.workId);
-        await this.assertOwnsEntry(entryId, auth, facadeOptions);
+        await this.assertOwnsEntry(entryId, auth, facadeOptions, query.workId);
         try {
             await this.agentMemory.deleteEntry(entryId, facadeOptions);
             return { status: 'success' };
@@ -426,11 +426,17 @@ export class AgentMemoryController {
         entryId: string,
         auth: AuthenticatedUser,
         facadeOptions: FacadeOptions,
+        workId?: string,
     ): Promise<void> {
         let records: readonly { id: string; metadata?: Record<string, unknown> }[];
         try {
+            // Probe the SAME namespace the entry lives in: Work memories are
+            // saved under `projectId = workId` (save() above, and the agent-run
+            // recall path), and providers that partition per project (Memanto:
+            // one agent per Work) would otherwise search the wrong store, miss
+            // the record and fail open.
             const response = await this.agentMemory.searchMemory(
-                { query: '*', limit: 100 },
+                { query: '*', limit: 100, ...(workId ? { projectId: workId } : {}) },
                 facadeOptions,
             );
             records = response.results;

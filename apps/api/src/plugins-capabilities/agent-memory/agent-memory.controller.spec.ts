@@ -376,6 +376,14 @@ describe('AgentMemoryController', () => {
             );
         });
 
+        it('probes the Work memory namespace for the owner stamp when workId is supplied', async () => {
+            await controller.deleteEntry(auth, 'mem-42', { workId: 'work-1' });
+            expect(agentMemory.searchMemory).toHaveBeenCalledWith(
+                { query: '*', limit: 100, projectId: 'work-1' },
+                expect.objectContaining({ userId: 'user-1', workId: 'work-1' }),
+            );
+        });
+
         it('propagates an ownership rejection (cannot forget another user Work entry)', async () => {
             ownership.ensureCanEdit.mockRejectedValueOnce(new Error('not your work'));
             await expect(

@@ -1,11 +1,12 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, expectTypeOf, it, vi } from 'vitest';
+import type { DemoProfile, UserProfile } from '@/lib/api/auth';
 
 const getDemoConfig = vi.hoisted(() => vi.fn());
 vi.mock('@/lib/feature-flags/demo', () => ({ getDemoConfig }));
 
 import { buildDemoStrip } from './demo-strip';
 
-const demo = {
+const demo: DemoProfile = {
     expiresAt: '2026-11-21T08:00:00.000Z',
     aiQuotaExhausted: true,
     recordedGoalId: 'g-1',
@@ -43,6 +44,18 @@ describe('buildDemoStrip', () => {
             expiresAt: demo.expiresAt,
             aiQuotaExhausted: true,
             recordedGoalHref: '/goals/g-1',
+        });
+    });
+
+    it("takes the profile's demo block as it is: one DemoProfile type, the profile's", async () => {
+        // Type-level (checked by `tsc`): the profile field and the builder's input are the
+        // one `DemoProfile` that `lib/api/auth` exports, not copies of its shape.
+        expectTypeOf<UserProfile['demo']>().toEqualTypeOf<DemoProfile | null | undefined>();
+        expectTypeOf(buildDemoStrip).parameter(0).toEqualTypeOf<UserProfile['demo']>();
+
+        const profile: Pick<UserProfile, 'demo'> = { demo };
+        await expect(buildDemoStrip(profile.demo)).resolves.toMatchObject({
+            expiresAt: demo.expiresAt,
         });
     });
 

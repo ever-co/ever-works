@@ -1,99 +1,149 @@
-import { config } from '../index';
+import { config, DEMO_DEFAULTS } from '../index';
 
 describe('config.demo', () => {
-	const saved = { ...process.env };
+    const saved = { ...process.env };
 
-	beforeEach(() => {
-		for (const key of Object.keys(process.env)) {
-			if (key === 'DEMO' || key.startsWith('DEMO_')) delete process.env[key];
-		}
-	});
+    beforeEach(() => {
+        for (const key of Object.keys(process.env)) {
+            if (key === 'DEMO' || key.startsWith('DEMO_')) delete process.env[key];
+        }
+    });
 
-	afterAll(() => {
-		process.env = saved;
-	});
+    afterAll(() => {
+        process.env = saved;
+    });
 
-	describe('isEnabled', () => {
-		it.each(['true', '1', 'YES ', 'Yes', ' TRUE'])('is true for %p', (value) => {
-			process.env.DEMO = value;
-			expect(config.demo.isEnabled()).toBe(true);
-		});
+    describe('isEnabled', () => {
+        it.each(['true', '1', 'YES ', 'Yes', ' TRUE'])('is true for %p', (value) => {
+            process.env.DEMO = value;
+            expect(config.demo.isEnabled()).toBe(true);
+        });
 
-		it.each([undefined, '', 'false', '0', 'no', 'on', 'garbage'])('is false for %p', (value) => {
-			if (value === undefined) delete process.env.DEMO;
-			else process.env.DEMO = value;
-			expect(config.demo.isEnabled()).toBe(false);
-		});
-	});
+        it.each([undefined, '', 'false', '0', 'no', 'on', 'garbage'])(
+            'is false for %p',
+            (value) => {
+                if (value === undefined) delete process.env.DEMO;
+                else process.env.DEMO = value;
+                expect(config.demo.isEnabled()).toBe(false);
+            },
+        );
+    });
 
-	describe('sandboxTtlHours', () => {
-		it('defaults to 24 when unset', () => {
-			expect(config.demo.sandboxTtlHours()).toBe(24);
-		});
+    describe('sandboxTtlHours', () => {
+        it('defaults to 24 when unset', () => {
+            expect(config.demo.sandboxTtlHours()).toBe(24);
+        });
 
-		it.each(['abc', '', '0', '-3', '1.5', '6h'])('falls back to 24 for %p', (value) => {
-			process.env.DEMO_SANDBOX_TTL_HOURS = value;
-			expect(config.demo.sandboxTtlHours()).toBe(24);
-		});
+        it.each(['abc', '', '0', '-3', '1.5', '6h'])('falls back to 24 for %p', (value) => {
+            process.env.DEMO_SANDBOX_TTL_HOURS = value;
+            expect(config.demo.sandboxTtlHours()).toBe(24);
+        });
 
-		it('reads a positive integer', () => {
-			process.env.DEMO_SANDBOX_TTL_HOURS = '6';
-			expect(config.demo.sandboxTtlHours()).toBe(6);
-		});
-	});
+        it('reads a positive integer', () => {
+            process.env.DEMO_SANDBOX_TTL_HOURS = '6';
+            expect(config.demo.sandboxTtlHours()).toBe(6);
+        });
+    });
 
-	describe('signUpUrl', () => {
-		const DEFAULT = 'https://app.ever.works/register';
+    describe('signUpUrl', () => {
+        const DEFAULT = 'https://app.ever.works/register';
 
-		it('defaults when unset', () => {
-			expect(config.demo.signUpUrl()).toBe(DEFAULT);
-		});
+        it('defaults when unset', () => {
+            expect(config.demo.signUpUrl()).toBe(DEFAULT);
+        });
 
-		it.each(['http://x', '/register', 'javascript:alert(1)', 'not a url', ''])('falls back for %p', (value) => {
-			process.env.DEMO_SIGN_UP_URL = value;
-			expect(config.demo.signUpUrl()).toBe(DEFAULT);
-		});
+        it.each(['http://x', '/register', 'javascript:alert(1)', 'not a url', ''])(
+            'falls back for %p',
+            (value) => {
+                process.env.DEMO_SIGN_UP_URL = value;
+                expect(config.demo.signUpUrl()).toBe(DEFAULT);
+            },
+        );
 
-		it('keeps an absolute https URL', () => {
-			process.env.DEMO_SIGN_UP_URL = 'https://app.ever.works/register';
-			expect(config.demo.signUpUrl()).toBe('https://app.ever.works/register');
-			process.env.DEMO_SIGN_UP_URL = 'https://example.com/join';
-			expect(config.demo.signUpUrl()).toBe('https://example.com/join');
-		});
-	});
+        it('keeps an absolute https URL', () => {
+            process.env.DEMO_SIGN_UP_URL = 'https://app.ever.works/register';
+            expect(config.demo.signUpUrl()).toBe('https://app.ever.works/register');
+            process.env.DEMO_SIGN_UP_URL = 'https://example.com/join';
+            expect(config.demo.signUpUrl()).toBe('https://example.com/join');
+        });
+    });
 
-	describe('string accessors', () => {
-		it('githubOrg is empty when unset and trimmed when set', () => {
-			expect(config.demo.githubOrg()).toBe('');
-			process.env.DEMO_GITHUB_ORG = ' ever-works-demo ';
-			expect(config.demo.githubOrg()).toBe('ever-works-demo');
-		});
+    describe('string accessors', () => {
+        it('githubOrg is empty when unset and trimmed when set', () => {
+            expect(config.demo.githubOrg()).toBe('');
+            process.env.DEMO_GITHUB_ORG = ' ever-works-demo ';
+            expect(config.demo.githubOrg()).toBe('ever-works-demo');
+        });
 
-		it('repoPrefix defaults to demo-', () => {
-			expect(config.demo.repoPrefix()).toBe('demo-');
-			process.env.DEMO_REPO_PREFIX = 'try-';
-			expect(config.demo.repoPrefix()).toBe('try-');
-		});
-	});
+        it('repoPrefix defaults to demo-', () => {
+            expect(config.demo.repoPrefix()).toBe('demo-');
+            process.env.DEMO_REPO_PREFIX = 'try-';
+            expect(config.demo.repoPrefix()).toBe('try-');
+        });
+    });
 
-	describe('numeric limits', () => {
-		const cases: Array<[string, () => number, number]> = [
-			['DEMO_AI_REQUESTS_PER_SANDBOX', () => config.demo.aiRequestsPerSandbox(), 120],
-			['DEMO_AI_REQUESTS_PER_DAY', () => config.demo.aiRequestsPerDay(), 900],
-			['DEMO_AI_REQUESTS_PER_MINUTE', () => config.demo.aiRequestsPerMinute(), 18],
-			['DEMO_MAX_WORKS_PER_SANDBOX', () => config.demo.maxWorksPerSandbox(), 3],
-			['DEMO_MAX_ACTIVE_SANDBOXES', () => config.demo.maxActiveSandboxes(), 300],
-			['DEMO_CREATE_PER_IP_PER_HOUR', () => config.demo.createPerIpPerHour(), 5]
-		];
+    describe('numeric limits', () => {
+        const cases: Array<[string, () => number, number]> = [
+            ['DEMO_AI_REQUESTS_PER_SANDBOX', () => config.demo.aiRequestsPerSandbox(), 120],
+            ['DEMO_AI_REQUESTS_PER_DAY', () => config.demo.aiRequestsPerDay(), 900],
+            ['DEMO_AI_REQUESTS_PER_MINUTE', () => config.demo.aiRequestsPerMinute(), 18],
+            ['DEMO_MAX_WORKS_PER_SANDBOX', () => config.demo.maxWorksPerSandbox(), 3],
+            ['DEMO_MAX_ACTIVE_SANDBOXES', () => config.demo.maxActiveSandboxes(), 300],
+            ['DEMO_CREATE_PER_IP_PER_HOUR', () => config.demo.createPerIpPerHour(), 5],
+        ];
 
-		it.each(cases)('%s defaults, accepts a positive integer, rejects garbage', (name, read, fallback) => {
-			expect(read()).toBe(fallback);
-			process.env[name] = '7';
-			expect(read()).toBe(7);
-			for (const bad of ['0', '-1', 'abc', '2.5', '']) {
-				process.env[name] = bad;
-				expect(read()).toBe(fallback);
-			}
-		});
-	});
+        it.each(cases)(
+            '%s defaults, accepts a positive integer, rejects garbage',
+            (name, read, fallback) => {
+                expect(read()).toBe(fallback);
+                process.env[name] = '7';
+                expect(read()).toBe(7);
+                for (const bad of ['0', '-1', 'abc', '2.5', '']) {
+                    process.env[name] = bad;
+                    expect(read()).toBe(fallback);
+                }
+            },
+        );
+    });
+
+    /**
+     * Every `DEMO_*` default lives in one frozen block, declared before `config` reads it; each
+     * accessor falls back to its entry (the values are the ones documented in
+     * docs/guides/demo-mode.md).
+     */
+    describe('DEMO_DEFAULTS', () => {
+        it('holds every demo default, once', () => {
+            expect(DEMO_DEFAULTS).toEqual({
+                sandboxTtlHours: 24,
+                signUpUrl: 'https://app.ever.works/register',
+                repoPrefix: 'demo-',
+                aiRequestsPerSandbox: 120,
+                aiRequestsPerDay: 900,
+                aiRequestsPerMinute: 18,
+                maxWorksPerSandbox: 3,
+                maxActiveSandboxes: 300,
+                createPerIpPerHour: 5,
+            });
+            expect(Object.isFrozen(DEMO_DEFAULTS)).toBe(true);
+        });
+
+        it('is what every accessor answers with its variable unset', () => {
+            expect({
+                sandboxTtlHours: config.demo.sandboxTtlHours(),
+                signUpUrl: config.demo.signUpUrl(),
+                repoPrefix: config.demo.repoPrefix(),
+                aiRequestsPerSandbox: config.demo.aiRequestsPerSandbox(),
+                aiRequestsPerDay: config.demo.aiRequestsPerDay(),
+                aiRequestsPerMinute: config.demo.aiRequestsPerMinute(),
+                maxWorksPerSandbox: config.demo.maxWorksPerSandbox(),
+                maxActiveSandboxes: config.demo.maxActiveSandboxes(),
+                createPerIpPerHour: config.demo.createPerIpPerHour(),
+            }).toEqual(DEMO_DEFAULTS);
+        });
+
+        it('is also the fallback for a blank DEMO_REPO_PREFIX', () => {
+            process.env.DEMO_REPO_PREFIX = '   ';
+            expect(config.demo.repoPrefix()).toBe(DEMO_DEFAULTS.repoPrefix);
+        });
+    });
 });

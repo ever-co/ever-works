@@ -1,7 +1,7 @@
 {
 	"name": "@ever-works/agentmemory-plugin",
 	"version": "1.0.0",
-	"description": "Persistent agent-memory plugin — talks to a local or hosted `agentmemory` server (REST :3111). Default backend for the agent-memory capability shared by Claude Code / Codex / OpenCode / MCP clients.",
+	"description": "Persistent agent-memory plugin — talks to a local or hosted `agentmemory` server (REST :3111). Zero-config, fully offline agent-memory backend shared by Claude Code / Codex / OpenCode / MCP clients.",
 	"author": {
 		"name": "Ever Co. LTD",
 		"email": "ever@ever.co",
@@ -60,9 +60,6 @@
 			"builtIn": true,
 			"autoEnable": false,
 			"visibility": "public",
-			"defaultForCapabilities": [
-				"agent-memory"
-			],
 			"distribution": "registry"
 		}
 	},

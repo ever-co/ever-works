@@ -165,8 +165,8 @@ export {
 } from './notification-channel.facade';
 
 // Agent-Memory Facade — pluggable persistent memory for agents
-// (default plugin `@ever-works/agentmemory-plugin` talks to a local or
-// hosted `agentmemory` REST server on :3111)
+// (default plugin `@ever-works/memanto-plugin` talks to a Memanto server;
+// `@ever-works/agentmemory-plugin` is the zero-config offline alternative)
 export { AgentMemoryFacadeService, AgentMemoryFacadeError } from './agent-memory.facade';
 export { TerminalStreamFacadeService, TerminalStreamFacadeError } from './terminal-stream.facade';
 // Actions runners on computers (FL-18) — GitHub's self-hosted runner API through the GitHub App.

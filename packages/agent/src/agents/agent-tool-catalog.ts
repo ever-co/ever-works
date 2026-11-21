@@ -148,6 +148,7 @@ function stubDomainSources(): AgentDomainToolSources {
         ingest: { repository: stub() },
         digest: { digestService: stub() },
         meetings: { repository: stub() },
+        memory: { facade: stub() },
         // FL-19 — every fleet sub-source, so the Capabilities tab lists every fleet
         // tool the production bundle can offer (services, processes, Docker, ports
         // and previews, health, checkouts, logs, status, operations). The tunnel

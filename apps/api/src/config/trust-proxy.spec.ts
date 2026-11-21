@@ -1,4 +1,4 @@
-import { DEFAULT_TRUST_PROXY_HOPS, resolveTrustProxyHops } from './trust-proxy';
+import { DEFAULT_TRUST_PROXY_HOPS, resolveTrustProxyHops, trustedClientIp } from './trust-proxy';
 
 describe('resolveTrustProxyHops', () => {
     it('documents the default as a single nginx → pod hop', () => {
@@ -77,5 +77,25 @@ describe('resolveTrustProxyHops', () => {
             expect(Number.isInteger(result)).toBe(true);
             expect(result).toBeGreaterThanOrEqual(0);
         }
+    });
+});
+
+describe('trustedClientIp', () => {
+    it('answers req.ip, which Express resolved through trust proxy', () => {
+        const req = { ip: '203.0.113.7', headers: { 'x-forwarded-for': '6.6.6.6, 203.0.113.7' } };
+
+        expect(trustedClientIp(req)).toBe('203.0.113.7');
+    });
+
+    it('falls back to the socket address when req.ip is unset or empty', () => {
+        expect(trustedClientIp({ socket: { remoteAddress: '10.0.0.9' } })).toBe('10.0.0.9');
+        expect(trustedClientIp({ ip: '', socket: { remoteAddress: '10.0.0.9' } })).toBe('10.0.0.9');
+    });
+
+    it('never reads X-Forwarded-For (the client writes its left-most entry)', () => {
+        const forged = { ip: undefined, headers: { 'x-forwarded-for': '6.6.6.6' } };
+
+        expect(trustedClientIp(forged)).toBeNull();
+        expect(trustedClientIp({})).toBeNull();
     });
 });
