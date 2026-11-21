@@ -126,6 +126,8 @@ import { ApiKeyRepository } from '../../database/repositories/api-key.repository
 import { FleetOrganizationDirectory } from '../fleet-organization-directory';
 import { FleetAccessService } from '../fleet-access.service';
 import { NeedsALookService } from '../needs-a-look/needs-a-look.service';
+import { FleetAiCompletionService } from '../ai-completion/fleet-ai-completion.service';
+import { FleetLocalAiPluginServices } from '../ai-completion/fleet-local-ai-plugin-services';
 
 describe('FleetModule', () => {
     const meta = (key: string): unknown[] => Reflect.getMetadata(key, FleetModule) ?? [];
@@ -170,6 +172,9 @@ describe('FleetModule', () => {
             FleetOrganizationDirectory,
             FleetAccessService,
             NeedsALookService,
+            // Local AI completions — the service and the binder of the plugins' relay.
+            FleetAiCompletionService,
+            FleetLocalAiPluginServices,
         ]);
     });
 
@@ -193,6 +198,8 @@ describe('FleetModule', () => {
             FleetNodeHealthService,
             FleetAccessService,
             NeedsALookService,
+            // Local AI completions — the trigger RPC exposes it to the worker's relay.
+            FleetAiCompletionService,
         ]);
     });
 

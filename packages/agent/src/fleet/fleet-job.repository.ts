@@ -637,6 +637,24 @@ export class FleetJobRepository {
         return result.affected ?? candidates.length;
     }
 
+    /**
+     * Local AI completions — NULL one TERMINAL job's `payload` and `result` now
+     * (a prompt and an answer nobody needs once the caller has read it),
+     * stamping `bodiesPurgedAt`. The WHERE re-checks the terminal status, so an
+     * active job is never touched. True when a row was purged.
+     */
+    async purgeTerminalBodiesById(id: string, purgedAt: Date): Promise<boolean> {
+        const result = await this.repository.update(
+            {
+                id,
+                status: In([...FLEET_JOB_TERMINAL_STATUSES]),
+                bodiesPurgedAt: IsNull(),
+            },
+            { payload: null, result: null, bodiesPurgedAt: purgedAt },
+        );
+        return (result.affected ?? 0) > 0;
+    }
+
     async stampCostCents(id: string, costCents: number): Promise<void> {
         await this.repository.update({ id }, { costCents });
     }
