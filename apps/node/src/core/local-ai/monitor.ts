@@ -2,11 +2,11 @@ import type { FleetAgentExecutionProvider } from '@ever-works/contracts';
 import type { FetchLike } from '../fleet-client';
 import type { Logger } from '../logger';
 import { evaluateLocalAiRuntime, type LocalAiAgentBinding } from './agent-binding';
-import { bearerHeaders, LocalAiHttpError, localAiProbeUrl, localAiRequestJson } from './http';
+import { bearerHeaders, LocalAiHttpError, localAiProbeUrl, localAiRequestJson, localAiRequestRaw } from './http';
 import { isUsableLocalModelId, LOCAL_AI_MAX_MODELS } from './providers/openai-compatible';
 import { defaultLocalAiProviderRegistry, type LocalAiProviderRegistry } from './registry';
 import { LocalAiSecretError, readLocalAiApiKey, type LocalAiSecretIo } from './secrets';
-import { localAiCapabilityFacts, type LocalAiCapabilityFacts } from './tags';
+import { localAiCapabilityFacts, type LocalAiCapabilityFacts, type LocalAiCapabilityOptions } from './tags';
 import type { LocalAiProbeContext, LocalAiProviderSettings, LocalAiProviderStatus, LocalAiSettings } from './types';
 
 /**
@@ -98,8 +98,23 @@ export class LocalAiMonitor {
 	}
 
 	/** Capability tags and withheld CLIs from the cached statuses (no probe). */
-	capabilityFacts(): LocalAiCapabilityFacts {
-		return localAiCapabilityFacts(this.settings, this.snapshot(), this.registry);
+	capabilityFacts(options: LocalAiCapabilityOptions = {}): LocalAiCapabilityFacts {
+		return localAiCapabilityFacts(this.settings, this.snapshot(), this.registry, options);
+	}
+
+	/** True when at least one provider answered its last probe (no probe). */
+	hasHealthyProvider(): boolean {
+		return this.snapshot().some((status) => status.status === 'up');
+	}
+
+	/**
+	 * Re-probe ONE provider now, in the background — after a request to it
+	 * failed at the transport, so the next heartbeat (and the lane's lease gate)
+	 * see it down without waiting out the probe interval. Never rejects.
+	 */
+	recheck(providerId: string): Promise<void> {
+		const provider = this.settings.providers.find((candidate) => candidate.id === providerId);
+		return provider ? this.probe([provider]) : Promise.resolve();
 	}
 
 	/** The agent CLIs the operator bound to a local provider (bound, whatever their health). */
@@ -174,6 +189,41 @@ export class LocalAiMonitor {
 				headers: { ...bearerHeaders(key), ...(request.headers ?? {}) },
 				timeoutMs
 			});
+		} catch (error) {
+			if (error instanceof LocalAiHttpError) {
+				throw new LocalAiHttpError(error.failure, this.scrub(error.message, key), error.status);
+			}
+			throw error;
+		}
+	}
+
+	/**
+	 * Relay one request to a provider and read the answer whatever its status
+	 * (`ai-completion`): the key read now, sent in the provider's own request
+	 * only, and scrubbed out of every error. Throws {@link LocalAiHttpError} /
+	 * {@link LocalAiSecretError}. The caller has already checked that `url` is on
+	 * the provider's own origin.
+	 */
+	async forward(
+		provider: LocalAiProviderSettings,
+		request: { url: string; label: string; body: unknown; headers?: Record<string, string> },
+		options: { timeoutMs: number; maxBytes: number; signal?: AbortSignal }
+	): Promise<{ status: number; text: string }> {
+		const key = await this.readKey(provider);
+		try {
+			return await localAiRequestRaw(
+				this.fetchFn,
+				{
+					method: 'POST',
+					url: request.url,
+					label: request.label,
+					body: request.body,
+					headers: { ...(request.headers ?? {}), ...bearerHeaders(key) },
+					timeoutMs: options.timeoutMs,
+					...(options.signal ? { signal: options.signal } : {})
+				},
+				options.maxBytes
+			);
 		} catch (error) {
 			if (error instanceof LocalAiHttpError) {
 				throw new LocalAiHttpError(error.failure, this.scrub(error.message, key), error.status);

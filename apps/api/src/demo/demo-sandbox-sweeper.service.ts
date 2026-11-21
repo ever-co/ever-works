@@ -13,6 +13,7 @@ import {
     EverWorksGitProvider,
     EverWorksGitRequestError,
 } from '@ever-works/agent/ever-works-providers';
+import { getErrorMessage } from '@ever-works/agent/utils';
 import {
     canDeleteLedgerRepo,
     demoRepoDeletionConfig,
@@ -150,7 +151,7 @@ export class DemoSandboxSweeperService {
                     this.logger.debug('Skipping the demo sweep: another instance holds its lock'),
             });
         } catch (error) {
-            this.logger.error(`The demo sweep failed: ${messageOf(error)}`);
+            this.logger.error(`The demo sweep failed: ${getErrorMessage(error)}`);
         }
     }
 
@@ -230,7 +231,10 @@ export class DemoSandboxSweeperService {
         try {
             canary = await this.ledger.newestLiveCanary(config.demo.githubOrg(), now);
         } catch (error) {
-            return this.unproven('unknown', `the canary could not be read: ${messageOf(error)}`);
+            return this.unproven(
+                'unknown',
+                `the canary could not be read: ${getErrorMessage(error)}`,
+            );
         }
         if (!canary || demoRepoTargetRefusal(canary, demoRepoDeletionConfig()) !== null) {
             return this.unproven(
@@ -246,7 +250,7 @@ export class DemoSandboxSweeperService {
         } catch (error) {
             return this.unproven(
                 isTransientGitHubFailure(error) ? 'unknown' : 'untrusted',
-                `the canary ${target} could not be looked up: ${messageOf(error)}`,
+                `the canary ${target} could not be looked up: ${getErrorMessage(error)}`,
             );
         }
         if (liveId !== null && liveId === canary.githubId) return TRUSTED;
@@ -281,7 +285,7 @@ export class DemoSandboxSweeperService {
             );
         } catch (error) {
             summary.failures += 1;
-            this.logger.error(`demo sweep: sandbox ${user.id} failed: ${messageOf(error)}`);
+            this.logger.error(`demo sweep: sandbox ${user.id} failed: ${getErrorMessage(error)}`);
             return 'failed';
         }
     }
@@ -340,7 +344,7 @@ export class DemoSandboxSweeperService {
         try {
             await this.purger.purge(user);
         } catch (error) {
-            await this.recordPurgeFailure(user, messageOf(error), now);
+            await this.recordPurgeFailure(user, getErrorMessage(error), now);
             throw error;
         }
         this.lastPurgeErrors.delete(user.id);
@@ -369,7 +373,7 @@ export class DemoSandboxSweeperService {
             }
         } catch (countError) {
             this.logger.error(
-                `demo sweep: sandbox ${user.id}: its failed purge could not be counted: ${messageOf(countError)}`,
+                `demo sweep: sandbox ${user.id}: its failed purge could not be counted: ${getErrorMessage(countError)}`,
             );
         }
     }
@@ -432,7 +436,7 @@ export class DemoSandboxSweeperService {
             );
         } catch (error) {
             summary.failures += 1;
-            await this.markFailed(row, messageOf(error));
+            await this.markFailed(row, getErrorMessage(error));
         }
     }
 
@@ -461,10 +465,6 @@ export class DemoSandboxSweeperService {
             );
         }
     }
-}
-
-function messageOf(error: unknown): string {
-    return error instanceof Error ? error.message : String(error);
 }
 
 /**

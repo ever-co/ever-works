@@ -617,6 +617,15 @@ export interface WorkerLoopOptions {
 	/** Per-poll idle cadence; absent keeps the fixed `idlePollMs`. */
 	pollCadence?: WorkerPollCadence;
 	/**
+	 * Asked before every lease: a reason this loop must not lease right now,
+	 * or null. The local-AI lane passes "no local AI provider is up", so a
+	 * machine whose model server went away stops claiming completions at once
+	 * rather than at the next heartbeat. Withheld like a resource ceiling: the
+	 * loop reads `throttled` with the reason and keeps ticking. A gate that
+	 * throws is read as closed. Absent = always open.
+	 */
+	leaseGate?: () => string | null;
+	/**
 	 * Fleet usage limits — the model CLIs this node can run an `agent-task`
 	 * with (`claude-code`, `codex`). When EVERY one of them is out of quota
 	 * the lease excludes `agent-task` outright; while only some are, the
@@ -1134,6 +1143,18 @@ export class WorkerLoop {
 		void this.tick();
 	}
 
+	/** The lease gate's answer: null = open; a throwing gate is closed (fail closed). */
+	private readLeaseGate(): string | null {
+		const gate = this.options.leaseGate;
+		if (!gate) return null;
+		try {
+			const reason = gate();
+			return typeof reason === 'string' && reason.length > 0 ? reason : null;
+		} catch (error) {
+			return `lease gate failed: ${error instanceof Error ? error.message : String(error)}`;
+		}
+	}
+
 	/** The idle gap after an empty poll: the cadence's answer, else the fixed interval. */
 	private idleDelayMs(): number {
 		const cadence = this.options.pollCadence;
@@ -1243,6 +1264,15 @@ export class WorkerLoop {
 		}
 		const leaseCapacity = this.limits.maxConcurrentJobs - this.inFlight.size;
 		if (leaseCapacity <= 0) {
+			this.scheduleNext(this.idlePollMs);
+			return;
+		}
+		const gateReason = this.readLeaseGate();
+		if (gateReason !== null) {
+			this.patch({
+				state: this.inFlight.size > 0 ? 'working' : 'throttled',
+				throttleReason: gateReason
+			});
 			this.scheduleNext(this.idlePollMs);
 			return;
 		}

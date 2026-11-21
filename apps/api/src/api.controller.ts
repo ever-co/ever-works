@@ -125,7 +125,10 @@ export class APIController {
             // Public-safe: an https sign-up link and a number of hours. `null`
             // when the demo is off, so the key set never changes.
             demo: config.demo.isEnabled()
-                ? { signUpUrl: config.demo.signUpUrl(), sandboxTtlHours: config.demo.sandboxTtlHours() }
+                ? {
+                      signUpUrl: config.demo.signUpUrl(),
+                      sandboxTtlHours: config.demo.sandboxTtlHours(),
+                  }
                 : null,
         };
     }

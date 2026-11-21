@@ -79,9 +79,16 @@ export interface IPlugin {
 	 * Called by the backend when the user requests connection verification.
 	 * Implement this in plugins that support connection testing (e.g. verifying an API token).
 	 * @param settings - Fully resolved settings (including secrets) for this user.
+	 * @param scope - Who is asking (the user, and the Work for a Work-level check),
+	 *   for a plugin whose answer depends on the caller's own resources (the
+	 *   fleet local AI plugin checks the caller's machines). Optional and
+	 *   additive: every existing implementation ignores it.
 	 * @returns Validation result
 	 */
-	validateConnection?(settings: Record<string, unknown>): Promise<ConnectionValidationResult>;
+	validateConnection?(
+		settings: Record<string, unknown>,
+		scope?: { readonly userId?: string; readonly workId?: string }
+	): Promise<ConnectionValidationResult>;
 }
 
 /**

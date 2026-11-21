@@ -2,11 +2,10 @@ import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import { config } from '../config';
 import {
     DEMO_REPO_LEDGER,
-    DEMO_REPO_LEDGER_UNBOUND_MESSAGE,
     DEMO_REPO_TOPIC,
-    demoRepoLedgerForCreate,
     type DemoRepoLedgerPort,
 } from '../demo/demo-repo-ledger.port';
+import { demoRepoLedgerGate, tagAndRecordDemoRepository } from '../demo/demo-repo-ledger.helpers';
 import { assertDemoRepositoryName } from '../demo/demo-work-policy';
 import { trimEdgeChars } from '../utils/text.utils';
 import {
@@ -72,7 +71,8 @@ interface GitHubErrorApiResponse {
 @Injectable()
 export class EverWorksGitProvider {
     private readonly logger = new Logger(EverWorksGitProvider.name);
-    private ledgerUnboundLogged = false;
+    /** Platform demo mode — the ledger a create records into; says once that none is bound. */
+    private readonly ledgerForCreate = demoRepoLedgerGate(this.logger);
 
     constructor(
         // Platform demo mode — bound by the API's global `DemoModule` only when `DEMO` is
@@ -148,7 +148,7 @@ export class EverWorksGitProvider {
         }
 
         // Platform demo mode — asked before the first GitHub call (ruling R22).
-        const ledger = demoRepoLedgerForCreate(this.ledger, () => this.logLedgerUnboundOnce());
+        const ledger = this.ledgerForCreate(this.ledger);
 
         const visibility = options.visibilityOverride ?? config.everWorks.git.getVisibility();
         const fetchImpl = options.fetchImpl ?? fetch;
@@ -323,9 +323,9 @@ export class EverWorksGitProvider {
     /**
      * A repository GitHub just created (201), on a demo instance (a ledger bound); a no-op with
      * the demo off. It is tagged with the demo topic first (best effort, see
-     * {@link tagDemoRepository}), then recorded in the demo ledger. A repository that cannot be
-     * recorded could never be swept, so the create fails — after an error naming it, for an
-     * operator to remove by hand (the topic finds it).
+     * {@link tagDemoRepository}), then recorded in the demo ledger with the id GitHub's create
+     * answered. A repository that cannot be recorded could never be swept, so the create fails,
+     * after an error naming it ({@link tagAndRecordDemoRepository}).
      */
     private async recordCreated(
         ledger: DemoRepoLedgerPort | undefined,
@@ -334,24 +334,15 @@ export class EverWorksGitProvider {
         github: { pat: string; fetchImpl: EverWorksGitHttpFetch },
     ): Promise<EverWorksGitRepoRef> {
         if (!ledger) return repo;
-        await this.tagDemoRepository(repo, github);
-        const githubId = Number.isSafeInteger(repo.id) ? repo.id : null;
-        try {
-            await ledger.record({
-                sandboxUserId: work.userId,
-                owner: repo.owner,
-                name: repo.repo,
-                githubId,
-            });
-        } catch (error) {
-            this.logger.error(
-                `Created demo repository ${repo.fullName} (id ${String(githubId)}) for user ${work.userId} ` +
-                    `but could not record it in the demo ledger; the sweeper will not delete it: ${
-                        error instanceof Error ? error.message : String(error)
-                    }`,
-            );
-            throw error;
-        }
+        await tagAndRecordDemoRepository({
+            ledger,
+            logger: this.logger,
+            sandboxUserId: work.userId,
+            owner: repo.owner,
+            name: repo.repo,
+            tag: () => this.tagDemoRepository(repo, github),
+            githubId: () => (Number.isSafeInteger(repo.id) ? repo.id : null),
+        });
         return repo;
     }
 
@@ -388,12 +379,6 @@ export class EverWorksGitProvider {
                 }`,
             );
         }
-    }
-
-    private logLedgerUnboundOnce(): void {
-        if (this.ledgerUnboundLogged) return;
-        this.ledgerUnboundLogged = true;
-        this.logger.error(DEMO_REPO_LEDGER_UNBOUND_MESSAGE);
     }
 
     /** The PAT and transport a lookup or delete uses, as `createRepository` resolves them. */

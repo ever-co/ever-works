@@ -1,5 +1,5 @@
 import type { FleetJobKind } from '@ever-works/contracts';
-import { FLEET_AGENT_CREDENTIAL_ENV_NAMES, fleetHelperTarget } from '@ever-works/contracts';
+import { FLEET_AGENT_CREDENTIAL_ENV_NAMES, FLEET_LOCAL_AI_LANE_KINDS, fleetHelperTarget } from '@ever-works/contracts';
 import { BAKED_HELPER_MANIFEST } from './screen/helper/helper-manifest';
 import { nodeHelperSignatureChecker } from './screen/helper/helper-signature';
 import { describeApiBase, resolveApiBase } from './api-base';
@@ -137,6 +137,13 @@ import { SessionHookOverlay } from './sessions/hook-overlay';
 import { SessionStatusPipeline } from './sessions/session-status';
 import type { LocalAiMonitor } from './local-ai/monitor';
 import { setupNodeLocalAi, type NodeLocalAiSetup } from './local-ai/setup';
+import {
+	LOCAL_AI_LANE_LEASE_TTL_SEC,
+	LocalAiLaneCadence,
+	planLocalAiLane,
+	type LocalAiLanePlan
+} from './local-ai/completion-lane';
+import { runAiCompletionJob } from './executors/ai-completion';
 import { spawn as spawnProcess } from 'node:child_process';
 import { homedir as osHomedir, userInfo as osUserInfo } from 'node:os';
 import { posix as posixPath, win32 as win32Path } from 'node:path';
@@ -560,6 +567,17 @@ export interface NodeRuntime {
 	 * the `agent-task` executor (the binding); exposed for the shell.
 	 */
 	localAi: LocalAiMonitor | null;
+	/**
+	 * Local AI completions — the local-AI lane, present when the node serves the
+	 * platform's `ai-completion` jobs (`--work`, a provider configured,
+	 * completions not switched off). Its own worker loop and concurrency,
+	 * outside `--concurrency`; the shell starts and drains it with the other lanes.
+	 */
+	localAiLane?: {
+		worker: WorkerLoop;
+		cadence: LocalAiLaneCadence;
+		concurrency: number;
+	};
 }
 
 /** The provisioner surface the runtime composes over; the real one and every test double satisfy it. */
@@ -1008,6 +1026,16 @@ export function createNodeRuntime(config: NodeConfig, io: NodeIo, options: Creat
 		manage: options.manageEnabled === true,
 		usageScan: options.usageScanEnabled === true
 	};
+	// Local AI completions: the local-AI lane, planned from the consents and the
+	// resolved settings (built below, with the other lanes). Said once, now.
+	const localAiLanePlan: LocalAiLanePlan = planLocalAiLane(consents, localAi?.settings ?? null);
+	if (localAi) {
+		io.logger.info(
+			localAiLanePlan.enabled
+				? `[local-ai] serving the platform's model requests (ai-completion), ${localAiLanePlan.concurrency} at a time, outside --concurrency`
+				: `[local-ai] not serving the platform's model requests — ${localAiLanePlan.reason}`
+		);
+	}
 	// Computer health, second phase (FL-03): this machine's primary interface,
 	// read fresh on every call (a laptop changes networks). Reported on the
 	// beat — hardware address and the opaque network identity, never an
@@ -1603,7 +1631,10 @@ export function createNodeRuntime(config: NodeConfig, io: NodeIo, options: Creat
 		const { linkModuleTags: _previous, ...rest } = environment;
 		const base: CapabilityEnvironment = tags.length > 0 ? { ...rest, linkModuleTags: tags } : rest;
 		// Local AI: from the monitor's CACHE — `describe` refreshes it first.
-		const withLocalAi: CapabilityEnvironment = localAi ? { ...base, localAi: localAi.capabilityFacts() } : base;
+		// `local-ai-completions` only while the local-AI lane exists to serve them.
+		const withLocalAi: CapabilityEnvironment = localAi
+			? { ...base, localAi: localAi.capabilityFacts({ servesCompletions: localAiLanePlan.enabled }) }
+			: base;
 		return usageScanAvailable() ? { ...withLocalAi, usageScan: true } : withLocalAi;
 	};
 	telemetry.consents = () => consents;
@@ -1980,6 +2011,15 @@ export function createNodeRuntime(config: NodeConfig, io: NodeIo, options: Creat
 				// Fleet node link (CONTRACTS R-34): machine jobs belong to the
 				// management lane alone, whatever this process's consents.
 				for (const kind of managementPlan.ownedKinds) if (!excluded.includes(kind)) excluded.push(kind);
+				// Local AI completions belong to the local-AI lane alone. Excluded
+				// only where that lane runs: only then does this node advertise
+				// `local-ai-completions`, which every completion requires, so a node
+				// without the lane is never offered one anyway — and its lease
+				// request stays byte-for-byte what an older platform (whose DTO does
+				// not know the kind) accepts.
+				if (localAiLanePlan.enabled) {
+					for (const kind of FLEET_LOCAL_AI_LANE_KINDS) if (!excluded.includes(kind)) excluded.push(kind);
+				}
 				return excluded.length > 0 ? { excludeKinds: excluded } : {};
 			})(),
 			// Fleet usage limits: the CLIs an agent-task can run with here, so a
@@ -2415,7 +2455,60 @@ export function createNodeRuntime(config: NodeConfig, io: NodeIo, options: Creat
 		runtime.jobClient ??= jobClientFor();
 	}
 
+	// Local AI completions: the local-AI lane, when the plan says this node
+	// serves them. Held by the version floor like every lane.
+	if (localAi && localAiLanePlan.enabled) {
+		const lane = createLocalAiLane(io, options, jobClientFor(), localAi, localAiLanePlan);
+		runtime.localAiLane = lane;
+		holdableLanes.push(lane.worker);
+		lane.worker.onUpgradeRequired((hold) => lifecycle.applyLeaseRefusal(hold.minNodeVersion));
+		runtime.jobClient ??= jobClientFor();
+	}
+
 	return runtime;
+}
+
+/**
+ * Local AI completions — the local-AI lane: its own worker loop leasing ONLY
+ * `ai-completion`, at the operator's completion concurrency and outside
+ * `--concurrency`, asking for work only while a provider is up (the lease
+ * gate), fast-polling while a pipeline is sending requests. Each job is relayed
+ * by {@link runAiCompletionJob} to a healthy provider on this machine.
+ */
+function createLocalAiLane(
+	io: NodeIo,
+	options: CreateNodeRuntimeOptions,
+	jobClient: FleetJobClient,
+	localAi: LocalAiMonitor,
+	plan: Extract<LocalAiLanePlan, { enabled: true }>
+): NonNullable<NodeRuntime['localAiLane']> {
+	const cadence = new LocalAiLaneCadence({ idlePollMs: plan.idlePollMs, ...(io.now ? { now: io.now } : {}) });
+	const worker = new WorkerLoop({
+		client: jobClient,
+		logger: io.logger,
+		limits: clampResourceLimits({ maxConcurrentJobs: plan.concurrency }),
+		leaseTtlSec: LOCAL_AI_LANE_LEASE_TTL_SEC,
+		idlePollMs: plan.idlePollMs,
+		kinds: [...plan.kinds],
+		pollCadence: cadence,
+		leaseGate: () =>
+			localAi.hasHealthyProvider() ? null : 'no local AI provider is up — not asking for completions',
+		...(options.startPaused !== undefined ? { startPaused: options.startPaused } : {}),
+		...(io.scheduler ? { scheduler: io.scheduler } : {}),
+		...(io.now ? { now: io.now } : {}),
+		...(io.monotonicNow ? { monotonicNow: io.monotonicNow } : {})
+	});
+	for (const kind of plan.kinds) {
+		worker.register(kind, (job, signal, lease) =>
+			runAiCompletionJob(job, signal, lease, {
+				monitor: localAi,
+				maxTimeoutMs: plan.maxTimeoutMs,
+				logger: io.logger,
+				...(io.now ? { now: io.now } : {})
+			})
+		);
+	}
+	return { worker, cadence, concurrency: plan.concurrency };
 }
 
 /**

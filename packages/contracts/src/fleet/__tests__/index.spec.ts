@@ -202,6 +202,7 @@ const AGENT_EXECUTION_EXPORTS = [
 	'FLEET_LOCAL_AI_KIND_CAPABILITY_PREFIX',
 	'FLEET_LOCAL_MODEL_CAPABILITY_PREFIX',
 	'FLEET_LOCAL_AGENT_CAPABILITY_PREFIX',
+	'FLEET_LOCAL_AI_COMPLETIONS_CAPABILITY',
 	'fleetLocalAgentCapability',
 	'isFleetLocalAiCapability',
 	'FLEET_AGENT_TASK_MODEL_COST_BASES',
@@ -1702,7 +1703,42 @@ const AGENT_READINESS_EXPORTS = [
 	'emptyFleetNodeRunStats'
 ] as const;
 
+// Local AI completions — `fleet-ai-completion.types.ts`, pinned in
+// `fleet-ai-completion.spec.ts`.
+const AI_COMPLETION_EXPORTS = [
+	'FLEET_AI_COMPLETION_JOB_KIND',
+	'FLEET_LOCAL_AI_LANE_KINDS',
+	'FLEET_LOCAL_AI_LANE_CONSENT',
+	'FLEET_AI_WIRE_APIS',
+	'isFleetAiWireApi',
+	'FLEET_AI_WIRE_API_PATH_SUFFIXES',
+	'fleetAiWireApiForPath',
+	'FLEET_AI_COMPLETION_BODY_ENCODINGS',
+	'FLEET_AI_COMPLETION_MAX_REQUEST_BYTES',
+	'FLEET_AI_COMPLETION_MAX_RESPONSE_BYTES',
+	'FLEET_AI_COMPLETION_MAX_ENCODED_BODY_BYTES',
+	'FLEET_AI_COMPLETION_DEFAULT_TIMEOUT_SEC',
+	'FLEET_AI_COMPLETION_MIN_TIMEOUT_SEC',
+	'FLEET_AI_COMPLETION_MAX_TIMEOUT_SEC',
+	'FLEET_AI_COMPLETION_MAX_MESSAGES',
+	'FLEET_AI_COMPLETION_MAX_TOOLS',
+	'clampFleetAiCompletionTimeoutSec',
+	'fleetLocalModelTagSlug',
+	'fleetLocalModelCapability',
+	'fleetLocalModelFromCapability',
+	'fleetAiCompletionRequiredCapabilities',
+	'isFleetAiCompletionModelId',
+	'normalizeFleetAiCompletionPayload',
+	'FLEET_AI_COMPLETION_STRIPPED_MEMBERS',
+	'validateFleetAiCompletionRequestBody',
+	'normalizeFleetAiCompletionResult',
+	'readFleetAiCompletionUsage',
+	'FLEET_AI_COMPLETION_FAILURES',
+	'isFleetAiCompletionFailure'
+] as const;
+
 const ALL_EXPORTS = [
+	...AI_COMPLETION_EXPORTS,
 	...AGENT_READINESS_EXPORTS,
 	...HEALTH_EXPORTS,
 	...CREDENTIAL_EXPORTS,
@@ -1827,6 +1863,19 @@ const FUNCTION_EXPORTS = [
 	'fleetLocalAgentCapability',
 	'isFleetLocalAiCapability',
 	'isFleetLocalModelResult',
+	'isFleetAiWireApi',
+	'fleetAiWireApiForPath',
+	'clampFleetAiCompletionTimeoutSec',
+	'fleetLocalModelTagSlug',
+	'fleetLocalModelCapability',
+	'fleetLocalModelFromCapability',
+	'fleetAiCompletionRequiredCapabilities',
+	'isFleetAiCompletionModelId',
+	'normalizeFleetAiCompletionPayload',
+	'validateFleetAiCompletionRequestBody',
+	'normalizeFleetAiCompletionResult',
+	'readFleetAiCompletionUsage',
+	'isFleetAiCompletionFailure',
 	'FleetTaskWorkspaceMountError',
 	'normalizeFleetTaskWorkspaceMounts',
 	'isReservedMountDir',
@@ -2357,7 +2406,7 @@ describe('fleet barrel', () => {
 		expect(typeof bag[name]).toBe('function');
 	});
 
-	it('exposes exactly these 1435 runtime symbols', () => {
+	it('exposes exactly these 1465 runtime symbols', () => {
 		// Regression guard in BOTH directions: an `export *` line deleted from
 		// index.ts fails here, and a NEW runtime export added without a spec
 		// also fails here — which forces the author back to cover it.
@@ -2469,12 +2518,16 @@ describe('fleet barrel', () => {
 		// `fleet-agent-readiness.types.ts`, a NEW module, one row below.
 		// → +8 with local AI on fleet nodes: the four tag constants, two tag helpers,
 		// the cost-basis list and its reader, in `fleet-jobs.types.ts` (existing module).
-		expect(Object.keys(fleet)).toHaveLength(1175 + 37 + 5 + 1 + 2 + 52 + 11 + 4 + 70 + 5 + 23 + 16 + 26 + 8);
+		// → +30 with local AI completions: the twenty-nine symbols of
+		// `fleet-ai-completion.types.ts`, a NEW module (one row below), and the
+		// `local-ai-completions` tag in `fleet-jobs.types.ts` (existing module).
+		expect(Object.keys(fleet)).toHaveLength(1175 + 37 + 5 + 1 + 2 + 52 + 11 + 4 + 70 + 5 + 23 + 16 + 26 + 8 + 30);
 	});
 
 	it.each([
 		['fleet-agent-credentials.types.js', 'FLEET_AGENT_CREDENTIAL_FAMILIES'],
 		['fleet-agent-readiness.types.js', 'FLEET_AGENT_READINESS_STATUSES'],
+		['fleet-ai-completion.types.js', 'FLEET_AI_WIRE_APIS'],
 		['fleet-execution-preference.types.js', 'FLEET_EXECUTION_MODES'],
 		['fleet-jobs.types.js', 'FLEET_JOB_STATUSES'],
 		['fleet-node.types.js', 'FLEET_NODE_KINDS'],

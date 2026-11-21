@@ -11,6 +11,34 @@ import type { PluginSettings } from '../../settings/settings.types.js';
 export type AiProviderType = string;
 
 /**
+ * Who an AI call is made for — threaded by the AI facade into every provider
+ * call it makes, for a provider whose endpoint depends on the CALLER rather than
+ * on its settings (the fleet local AI plugin reaches the caller's own machines).
+ * Optional everywhere: a provider that serves everyone from one endpoint
+ * ignores it.
+ */
+export interface AiProviderCallScope {
+	readonly userId?: string;
+	readonly workId?: string;
+}
+
+/** A `fetch`, as an AI SDK / OpenAI client takes one. */
+export type AiProviderFetch = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
+
+/**
+ * How a client that talks to a provider's OpenAI-compatible API ITSELF (a
+ * pipeline building an AI SDK model from `IAiFacade.getProviderConfig`) reaches
+ * a provider that is not a plain URL: every request goes through {@link fetch},
+ * and `baseUrl` / `apiKey` are what the client is configured with (a
+ * placeholder origin the transport understands, and a non-secret token).
+ */
+export interface AiProviderTransport {
+	readonly baseUrl: string;
+	readonly apiKey: string;
+	readonly fetch: AiProviderFetch;
+}
+
+/**
  * AI model capabilities
  */
 export interface AiModelCapabilities {
@@ -147,6 +175,9 @@ export interface ChatCompletionOptions {
 	 * provider plugins are pass-throughs, so no implementer changes.
 	 */
 	readonly signal?: AbortSignal;
+
+	/** Who the call is made for (set by the facade; see {@link AiProviderCallScope}). */
+	readonly scope?: AiProviderCallScope;
 }
 
 /**
@@ -159,6 +190,8 @@ export interface AskJsonCompletionOptions {
 	/** Zod schema for structured output — passed directly to LangChain */
 	readonly schema?: ZodType;
 	readonly settings?: PluginSettings;
+	/** Who the call is made for (set by the facade; see {@link AiProviderCallScope}). */
+	readonly scope?: AiProviderCallScope;
 }
 
 /**
@@ -411,9 +444,10 @@ export interface IAiProviderPlugin extends IPlugin {
 	transcribe?(options: TranscriptionOptions): Promise<TranscriptionResponse>;
 
 	/**
-	 * List available models
+	 * List available models. `scope` is who is asking (the facade passes it),
+	 * for a provider whose models depend on the caller.
 	 */
-	listModels(settings?: PluginSettings): Promise<readonly AiModel[]>;
+	listModels(settings?: PluginSettings, scope?: AiProviderCallScope): Promise<readonly AiModel[]>;
 
 	/**
 	 * Get a specific model
@@ -421,9 +455,22 @@ export interface IAiProviderPlugin extends IPlugin {
 	getModel(modelId: string, settings?: PluginSettings): Promise<AiModel | null>;
 
 	/**
-	 * Check if the provider is available
+	 * Check if the provider is available (for `scope`, when the answer depends on the caller).
 	 */
-	isAvailable(settings?: PluginSettings): Promise<boolean>;
+	isAvailable(settings?: PluginSettings, scope?: AiProviderCallScope): Promise<boolean>;
+
+	/**
+	 * The transport a client must use to reach this provider's OpenAI-compatible
+	 * API ITSELF, when it is not a plain URL (see {@link AiProviderTransport}).
+	 *
+	 * Optional. Absent, or null, means what it always meant: clients call
+	 * `settings.baseUrl` with `settings.apiKey` over the network. The AI facade
+	 * asks for it in `getProviderConfig` and hands it on as `AiProviderConfig.fetch`.
+	 */
+	createTransport?(
+		scope: AiProviderCallScope,
+		settings?: PluginSettings
+	): AiProviderTransport | null | Promise<AiProviderTransport | null>;
 
 	/**
 	 * Get provider capabilities

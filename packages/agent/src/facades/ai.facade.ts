@@ -14,6 +14,7 @@ import type {
     TranscriptionResponse,
     AiRoutingOptions,
     AiModel,
+    AiProviderCallScope,
     AiProviderConfig,
     IAiFacade,
     FacadeOptions,
@@ -465,6 +466,7 @@ export class AiFacadeService extends BaseFacadeService implements IAiFacade {
                 model: attemptedModel,
                 temperature: options?.temperature ?? 0.7,
                 settings,
+                scope: callScope(facadeOptions),
             });
         };
 
@@ -541,7 +543,12 @@ export class AiFacadeService extends BaseFacadeService implements IAiFacade {
         plugin: IAiProviderPlugin,
         prompt: string,
         schema: z.ZodSchema,
-        opts: { model?: string; temperature: number; settings: Record<string, unknown> },
+        opts: {
+            model?: string;
+            temperature: number;
+            settings: Record<string, unknown>;
+            scope: AiProviderCallScope;
+        },
     ): Promise<AskJsonCompletionResponse> {
         if (plugin.askJson) {
             return plugin.askJson(prompt, {
@@ -549,6 +556,7 @@ export class AiFacadeService extends BaseFacadeService implements IAiFacade {
                 temperature: opts.temperature,
                 schema,
                 settings: opts.settings,
+                scope: opts.scope,
             });
         }
 
@@ -566,6 +574,7 @@ export class AiFacadeService extends BaseFacadeService implements IAiFacade {
             temperature: opts.temperature,
             responseFormat: { type: 'json_object' },
             settings: opts.settings,
+            scope: opts.scope,
         });
 
         const content = response.choices[0]?.message?.content;
@@ -706,6 +715,7 @@ export class AiFacadeService extends BaseFacadeService implements IAiFacade {
             ...options,
             model: effectiveModel,
             settings,
+            scope: callScope(facadeOptions),
         };
 
         const startedAt = Date.now();
@@ -809,6 +819,7 @@ export class AiFacadeService extends BaseFacadeService implements IAiFacade {
             model: effectiveModel,
             stream: true,
             settings,
+            scope: callScope(facadeOptions),
         };
 
         let chunkCount = 0;
@@ -1229,7 +1240,7 @@ export class AiFacadeService extends BaseFacadeService implements IAiFacade {
                 settings = freeModelSettings(settings).settings;
                 await this.consumeDemoQuota(facadeOptions, 'interactive');
             }
-            const isAvailable = await plugin.isAvailable(settings);
+            const isAvailable = await plugin.isAvailable(settings, callScope(facadeOptions));
 
             return {
                 success: isAvailable,
@@ -1257,7 +1268,7 @@ export class AiFacadeService extends BaseFacadeService implements IAiFacade {
                 facadeOptions.workId,
             );
             const settings = await this.getResolvedSettings(plugin.id, facadeOptions);
-            return await plugin.listModels(settings);
+            return await plugin.listModels(settings, callScope(facadeOptions));
         } catch (error) {
             this.logger.warn(`Failed to get available models: ${(error as Error).message}`);
             return [];
@@ -1281,13 +1292,24 @@ export class AiFacadeService extends BaseFacadeService implements IAiFacade {
         });
         if (demo) settings = demoProviderConfigSettings(settings);
 
-        const apiKey = this.getSettingTyped<string>(settings, 'apiKey', 'string');
+        // A provider whose API is not a plain URL (the fleet local AI plugin)
+        // hands clients its own transport: its placeholder origin and token
+        // replace the settings', and every request goes through its `fetch`.
+        const transport = demo
+            ? null
+            : ((await plugin.createTransport?.(callScope(facadeOptions), settings)) ?? null);
+        const apiKey = transport
+            ? transport.apiKey
+            : this.getSettingTyped<string>(settings, 'apiKey', 'string');
 
         return {
             providerId: plugin.id,
             providerName: plugin.providerName,
-            baseUrl: this.getSettingTyped<string>(settings, 'baseUrl', 'string'),
+            baseUrl: transport
+                ? transport.baseUrl
+                : this.getSettingTyped<string>(settings, 'baseUrl', 'string'),
             apiKey,
+            ...(transport ? { fetch: transport.fetch } : {}),
             defaultModel: this.getSettingTyped<string>(settings, 'defaultModel', 'string'),
             routing: {
                 simpleModel: this.getSettingTyped<string>(settings, 'simpleModel', 'string'),
@@ -1524,4 +1546,12 @@ function secretSettingKeys(plugin: IAiProviderPlugin): Set<string> {
             .filter(([, property]) => property?.['x-secret'] === true)
             .map(([key]) => key),
     );
+}
+
+/** Who an AI call is made for, as a provider sees it (`AiProviderCallScope`). */
+function callScope(facadeOptions: { userId?: string; workId?: string }): AiProviderCallScope {
+    const scope: { userId?: string; workId?: string } = {};
+    if (facadeOptions.userId) scope.userId = facadeOptions.userId;
+    if (facadeOptions.workId) scope.workId = facadeOptions.workId;
+    return scope;
 }

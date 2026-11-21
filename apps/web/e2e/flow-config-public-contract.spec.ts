@@ -309,7 +309,13 @@ test.describe('Public config contract — /api/config deep integration', () => {
         });
         expect(stale.status(), 'mismatched If-None-Match must serve the fresh body').toBe(200);
         const staleBody = (await stale.json()) as Json;
-        expect(Object.keys(staleBody).sort()).toEqual(['app', 'auth', 'demo', 'features', 'limits']);
+        expect(Object.keys(staleBody).sort()).toEqual([
+            'app',
+            'auth',
+            'demo',
+            'features',
+            'limits',
+        ]);
     });
 
     test('AUTH-INVARIANT: anon ≡ seeded ≡ fresh-registered (byte-identical body + identical ETag)', async ({

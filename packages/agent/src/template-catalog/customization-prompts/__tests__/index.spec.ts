@@ -55,5 +55,90 @@ describe('customization prompt registry', () => {
             expect(MINIMAL_TEMPLATE_CUSTOMIZATION_PROMPT).toMatch(/packages\/\*\*/);
             expect(MINIMAL_TEMPLATE_CUSTOMIZATION_PROMPT).toMatch(/\.content\/\*\*/);
         });
+
+        it('lists every Tailwind directive that gets theme.css rejected', () => {
+            for (const directive of [
+                '@apply',
+                '@tailwind',
+                '@theme',
+                '@source',
+                '@reference',
+                '@plugin',
+                '@config',
+                '@utility',
+                '@variant',
+                '@custom-variant',
+            ]) {
+                expect(MINIMAL_TEMPLATE_CUSTOMIZATION_PROMPT).toContain(`\`${directive}\``);
+            }
+        });
+
+        // The template's apps/web/src/styles/theme.css comment documents these
+        // hooks (directory UI added to directory-web-minimal-template on
+        // 2026-11-21). Keep this list in step with that comment.
+        it('names the hooks of the directory UI so agents can target it', () => {
+            for (const component of [
+                'directory-browser',
+                'search-dialog',
+                'display-settings',
+                'theme-toggle',
+                'mobile-menu',
+                'item-detail',
+                'similar-items',
+                'share-links',
+                'category-cards',
+                'submit-form',
+                'submit-cta',
+                'featured-section',
+                'back-to-top',
+                'legal-page',
+            ]) {
+                expect(MINIMAL_TEMPLATE_CUSTOMIZATION_PROMPT).toContain(
+                    `[data-component="${component}"]`,
+                );
+            }
+            for (const part of [
+                'sidebar',
+                'category-chips',
+                'toolbar',
+                'search',
+                'tag-filter',
+                'sort',
+                'view-toggle',
+                'result-count',
+                'active-filters',
+                'results',
+                'pagination',
+                'search-trigger',
+                'submit',
+                'gallery',
+                'info',
+                'sticky-cta',
+            ]) {
+                expect(MINIMAL_TEMPLATE_CUSTOMIZATION_PROMPT).toContain(`[data-part="${part}"]`);
+            }
+        });
+
+        it('documents the visitor display preferences set on <html>', () => {
+            for (const selector of [
+                'html[data-layout="classic"]',
+                'html[data-layout="grid"]',
+                'html[data-view="grid"]',
+                'html[data-view="list"]',
+                'html[data-view="compact"]',
+                'html[data-width="fixed"]',
+                'html[data-width="full"]',
+                'html[data-pagination="standard"]',
+                'html[data-pagination="infinite"]',
+            ]) {
+                expect(MINIMAL_TEMPLATE_CUSTOMIZATION_PROMPT).toContain(selector);
+            }
+        });
+
+        it('says the directory UI is already themed by the design tokens', () => {
+            expect(MINIMAL_TEMPLATE_CUSTOMIZATION_PROMPT).toMatch(
+                /already (?:styled|themed) (?:from|by) the design tokens/i,
+            );
+        });
     });
 });

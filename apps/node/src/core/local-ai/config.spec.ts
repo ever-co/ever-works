@@ -55,7 +55,8 @@ describe('resolveLocalAiSettings', () => {
 			],
 			agentRuntimes: [{ cli: 'claude-code', provider: 'gpu', model: 'flashnext', smallModel: null }],
 			probeIntervalMs: 60_000,
-			probeTimeoutMs: 5_000
+			probeTimeoutMs: 5_000,
+			completions: { enabled: true, concurrency: 1, maxTimeoutMs: 1_800_000, idlePollMs: 5_000 }
 		});
 	});
 
@@ -285,5 +286,51 @@ describe('stored config', () => {
 		const view = JSON.stringify(redactConfig(parsed));
 		expect(view).toContain('/etc/ever-works-node/local-llm.key');
 		expect(view).not.toContain(base.secret);
+	});
+});
+
+describe('localAi.completions', () => {
+	it('defaults to on, one at a time, the longest budget and a 5 s idle poll', () => {
+		expect(resolve(LLAMA_SWAP).settings?.completions).toEqual({
+			enabled: true,
+			concurrency: 1,
+			maxTimeoutMs: 1_800_000,
+			idlePollMs: 5_000
+		});
+	});
+
+	it('reads the file section and clamps every number', () => {
+		expect(
+			resolve({
+				...LLAMA_SWAP,
+				completions: { enabled: false, concurrency: 99, maxTimeoutSec: 1, idlePollSec: 0 }
+			}).settings?.completions
+		).toEqual({ enabled: false, concurrency: 8, maxTimeoutMs: 10_000, idlePollMs: 1_000 });
+	});
+
+	it('lets the env shorthand switch it and size it, and names a value it cannot read', () => {
+		expect(
+			resolve(LLAMA_SWAP, {
+				[LOCAL_AI_ENV.completions]: 'off',
+				[LOCAL_AI_ENV.completionsConcurrency]: '2'
+			}).settings?.completions
+		).toMatchObject({ enabled: false, concurrency: 2 });
+		const bad = resolve(
+			{ ...LLAMA_SWAP, completions: { enabled: false } },
+			{ [LOCAL_AI_ENV.completions]: 'maybe', [LOCAL_AI_ENV.completionsConcurrency]: 'two' }
+		);
+		expect(bad.settings?.completions).toMatchObject({ enabled: false, concurrency: 1 });
+		expect(bad.problems).toEqual([
+			`${LOCAL_AI_ENV.completions}: "maybe" ignored — use on or off`,
+			`${LOCAL_AI_ENV.completionsConcurrency}: "two" ignored — a whole number from 1 to 8`
+		]);
+	});
+
+	it('keeps the stored section in shape only', () => {
+		expect(
+			sanitizeStoredLocalAiConfig({
+				completions: { enabled: 'yes', concurrency: 2, maxTimeoutSec: '60', idlePollSec: 3, other: 1 }
+			})
+		).toEqual({ completions: { concurrency: 2, idlePollSec: 3 } });
 	});
 });

@@ -10,6 +10,7 @@ import {
 } from '@ever-works/agent/entities';
 import { DEMO_REGISTRATION_PROVIDER } from '@ever-works/agent/demo';
 import { AnonymousUserCleanupService, WorkLifecycleService } from '@ever-works/agent/services';
+import { getErrorMessage } from '@ever-works/agent/utils';
 import { getActiveStorageBackend } from '../uploads/storage-backend.factory';
 import { sandboxQuotaKey } from './demo-ai-quota.service';
 
@@ -150,7 +151,7 @@ export class DemoSandboxPurgeService {
             });
         } catch (error) {
             this.logger.warn(
-                `demo purge: counters of the purged sandbox ${userId} stay (${messageOf(error)})`,
+                `demo purge: counters of the purged sandbox ${userId} stay (${getErrorMessage(error)})`,
             );
         }
     }
@@ -232,7 +233,7 @@ export class DemoSandboxPurgeService {
                 );
             } catch (error) {
                 this.logger.warn(
-                    `demo purge: Work ${work.id} teardown failed (${messageOf(error)}); its row is removed with the sandbox`,
+                    `demo purge: Work ${work.id} teardown failed (${getErrorMessage(error)}); its row is removed with the sandbox`,
                 );
             }
         }
@@ -249,7 +250,7 @@ export class DemoSandboxPurgeService {
             return (await backend.deleteAllByOwner(userId)).deleted;
         } catch (error) {
             this.logger.warn(
-                `demo purge: file clean-up failed for ${userId} (${messageOf(error)})`,
+                `demo purge: file clean-up failed for ${userId} (${getErrorMessage(error)})`,
             );
             return 0;
         }
@@ -270,7 +271,7 @@ export class DemoSandboxPurgeService {
                     failures.delete(table.metadata.tableName);
                 } catch (error) {
                     refused.push(table);
-                    failures.set(table.metadata.tableName, messageOf(error));
+                    failures.set(table.metadata.tableName, getErrorMessage(error));
                 }
             }
             // A pass that removed nothing more cannot be helped by another.
@@ -345,8 +346,4 @@ export class DemoSandboxPurgeService {
             };
         });
     }
-}
-
-function messageOf(error: unknown): string {
-    return error instanceof Error ? error.message : String(error);
 }

@@ -152,6 +152,77 @@ export async function localAiRequestJson(
 	}
 }
 
+/**
+ * Send one request and read the answer WHATEVER its status — the relay's
+ * call (`ai-completion`), where a provider refusing a request (a 400 for a
+ * context that is too long) is an answer to hand back, not an error.
+ *
+ * Bounded like {@link localAiRequestJson}: in time (`timeoutMs`, unref'd), and
+ * in size (`maxBytes`, checked on the text actually read — a body over it
+ * throws `body` without being kept). Throws {@link LocalAiHttpError} for a
+ * timeout, a transport failure, a cancel and an unreadable or oversized body;
+ * the message never carries a byte of either body or a header.
+ */
+export async function localAiRequestRaw(
+	fetchFn: FetchLike,
+	request: LocalAiRequest,
+	maxBytes: number
+): Promise<{ status: number; text: string }> {
+	const controller = new AbortController();
+	const timer = setTimeout(() => controller.abort(), Math.max(1, request.timeoutMs));
+	(timer as { unref?: () => void }).unref?.();
+	const onOuterAbort = (): void => controller.abort();
+	if (request.signal) {
+		if (request.signal.aborted) controller.abort();
+		else request.signal.addEventListener('abort', onOuterAbort, { once: true });
+	}
+	const outerAborted = (): boolean => request.signal?.aborted === true;
+	const timedOut = (): LocalAiHttpError =>
+		new LocalAiHttpError('timeout', `${request.label}: timed out after ${describeMs(request.timeoutMs)}`);
+	try {
+		let response: Awaited<ReturnType<FetchLike>>;
+		try {
+			response = await fetchFn(request.url, {
+				method: request.method,
+				headers: {
+					Accept: 'application/json',
+					...(request.body !== undefined ? { 'Content-Type': 'application/json' } : {}),
+					...(request.headers ?? {})
+				},
+				body: request.body !== undefined ? JSON.stringify(request.body) : '',
+				signal: controller.signal
+			});
+		} catch (error) {
+			if (outerAborted()) throw new LocalAiHttpError('aborted', `${request.label}: cancelled`);
+			if (controller.signal.aborted) throw timedOut();
+			throw new LocalAiHttpError('network', `${request.label}: ${describeTransportError(error)}`);
+		}
+		let text: string;
+		try {
+			text = await response.text();
+		} catch {
+			if (outerAborted()) throw new LocalAiHttpError('aborted', `${request.label}: cancelled`);
+			if (controller.signal.aborted) throw timedOut();
+			throw new LocalAiHttpError(
+				'body',
+				`${request.label}: the response body could not be read`,
+				response.status
+			);
+		}
+		if (Buffer.byteLength(text, 'utf8') > maxBytes) {
+			throw new LocalAiHttpError(
+				'body',
+				`${request.label}: the response is larger than ${maxBytes} bytes`,
+				response.status
+			);
+		}
+		return { status: response.status, text };
+	} finally {
+		clearTimeout(timer);
+		request.signal?.removeEventListener('abort', onOuterAbort);
+	}
+}
+
 function describeMs(ms: number): string {
 	return ms >= 1000 && ms % 1000 === 0 ? `${ms / 1000} s` : `${ms} ms`;
 }

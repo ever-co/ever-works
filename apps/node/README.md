@@ -587,14 +587,71 @@ Without `agentRuntime`, a configured provider is probed and advertised only; eve
 own sign-in as before. This replaces the `claude-local` wrapper some fleet VMs pinned as their Claude
 binary: unpin it (`EVER_WORKS_NODE_CLAUDE_PATH` back to the real `claude`) when you switch.
 
+### Serving the platform's model requests (`ai-completion`)
+
+Started with `--work`, a node with a provider configured also **serves the platform's own model
+requests** — a Work generation (or any AI call) whose AI provider is **Local AI on your computers**
+(the `fleet-local-ai` plugin) runs on this machine's local model, for free. Each request is one
+`ai-completion` fleet job: ONE request body (an OpenAI Chat Completions, OpenAI Responses or
+Anthropic Messages body), offered only to the owner's nodes that advertise the model, sent by the node
+to a **healthy** provider that serves the model and speaks that API, and answered with the provider's
+own response.
+
+It runs in its own **local-AI lane** — a lease loop beside the work lane, with its own concurrency, so
+a GPU node answers completions without taking an Agent's `--concurrency` slot (and an Agent's run never
+waits behind a completion). The work lane never leases `ai-completion`. Nothing to set for the default:
+
+```json
+"localAi": {
+	"providers": [{ "id": "gpu", "kind": "llama-swap", "baseUrl": "http://192.168.1.69:8000", "apiKeyFile": "/etc/ever-works-node/local-llm.key", "defaultModel": "flashnext" }],
+	"completions": { "enabled": true, "concurrency": 1, "maxTimeoutSec": 1800, "idlePollSec": 5 }
+}
+```
+
+| `completions` field | Meaning                                                                                              |
+| ------------------- | ---------------------------------------------------------------------------------------------------- |
+| `enabled`           | Default `true`. `false`: this node never serves the platform's model requests.                       |
+| `concurrency`       | Completions in flight at once (default 1, 1–8): the GPU's share of this node.                        |
+| `maxTimeoutSec`     | The longest this node waits on its provider for one answer (default and max 1800, min 10).           |
+| `idlePollSec`       | How often an idle lane asks for a request (default 5, 1–60); it asks every second while one is busy. |
+
+Or `EVER_WORKS_NODE_LOCAL_AI_COMPLETIONS=off` and `EVER_WORKS_NODE_LOCAL_AI_COMPLETIONS_CONCURRENCY=2`.
+`ever-works-node local-ai list` shows the setting; the start-up log says whether this node serves
+completions and, when it does not, why (`--work` missing, completions off, no provider).
+
+What the relay guarantees:
+
+- **Only to this node's own provider.** The URL is the provider's endpoint for the API
+  (`<root>/v1/chat/completions`, `<root>/v1/responses`, `<root>/v1/messages`, or what the kind's
+  `endpoint()` says — on the provider's own origin, or refused), never anything from the job; the key is
+  read at use time and sent in that one request.
+- **Only what the node advertises.** The model is matched on the provider's served list — the exact id,
+  Ollama's implicit `:latest`, or the `local-model:` tag value the platform knows (`qwen3-8b` →
+  `qwen3:8b`) — within the operator's `models` when declared; a provider that has the model loaded right
+  now (llama-swap's `/running`) wins over one that would have to swap.
+- **Never streams, never logs content.** `stream` is forced off (the platform rebuilds a stream from the
+  answer); the log line per request is job id, API, model, provider id, status, latency and token counts.
+- **Bounded.** Request and answer travel gzip + base64, bounded encoded (200 KiB) and decoded (4 MiB);
+  the provider gets the request's budget clamped to `maxTimeoutSec`; a cancel or a lost lease aborts it.
+- **Hands back what it cannot serve.** A provider that went down since the heartbeat, or that is
+  unreachable at the transport: the job is handed back unsettled (re-offered within a minute, to this
+  node or another), the provider re-probed. A provider that ANSWERS with an error (a context that is too
+  long) is an answer: it goes back with its status.
+- **Free.** The result says `costUsd: 0`, `costBasis: 'local'`.
+
+The lane asks for nothing while no provider is up, and the node advertises **`local-ai-completions`**
+only while the lane runs beside a healthy provider — every `ai-completion` requires it, with `local-ai`
+and the model's `local-model:` tag.
+
 ### Tags
 
-| Tag                   | When                                                                                                                                       |
-| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `local-ai`            | at least one provider answered its probe                                                                                                   |
-| `local-agent:<cli>`   | that CLI is bound and its provider can serve it now                                                                                        |
-| `local-ai:<kind>`     | a healthy provider of that kind                                                                                                            |
-| `local-model:<model>` | a model a healthy provider serves — the bound one first, at most 4; ids slugged into the tag grammar (`qwen3:8b` → `local-model:qwen3-8b`) |
+| Tag                    | When                                                                                                                                       |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `local-ai`             | at least one provider answered its probe                                                                                                   |
+| `local-ai-completions` | this node serves `ai-completion` jobs (`--work`, completions on) and a provider is up                                                      |
+| `local-agent:<cli>`    | that CLI is bound and its provider can serve it now                                                                                        |
+| `local-ai:<kind>`      | a healthy provider of that kind                                                                                                            |
+| `local-model:<model>`  | a model a healthy provider serves — the bound one first, at most 4; ids slugged into the tag grammar (`qwen3:8b` → `local-model:qwen3-8b`) |
 
 At most 8 local-AI tags in all, appended after every older tag. All of them count toward the ONE
 per-node cap (32 by default, the server's `FLEET_MAX_CAPABILITY_TAGS`), in this order: detected tags, link
@@ -647,6 +704,10 @@ up with no other change. An embedder can also pass its own `LocalAiProviderRegis
 
 ## Follow-ups
 
+- **Local AI completions:** a heartbeat hint for pending completions (so an idle lane can poll slower),
+  models whose `local-model:` tag would not fit (a name longer than 20 characters is never advertised —
+  serve it under a shorter alias meanwhile), streaming synthesis for the Responses and Messages APIs,
+  embeddings.
 - **Local AI:** per-Agent routing ("run this Agent on local AI" → require `local-agent:claude-code`),
   a Fleet badge and the provider health on the node page (needs an additive heartbeat field and a
   `fleet_nodes` column — tags only for now), agent readiness that reads a locally bound CLI as ready
