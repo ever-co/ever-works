@@ -92,7 +92,7 @@ The **node drawer** on the Fleet page (the details action on a row) renders the 
 
 The **node drawer** on the Fleet page (the details action on a row) renders the same job history: each job's kind, status, attempt count, queued reason, queued / started / completed times and duration, filterable by **All / Failed / Running**.
 
-**Disabling drains.** A disabled node's heartbeats stop being accepted, so it goes quiet immediately rather than at the next sweep. Re-enabling puts it back to `offline` until its next accepted heartbeat proves it alive. Disabling a node that is still `enrolling` revokes its unused token.
+**Disabling drains.** A disabled node leases no new work, but it keeps heartbeating — it stays visible, the jobs it already holds can still report, and a beat never promotes it back to a leasable state (the one exception is the [daily cost-ceiling reset](#daily-cost-ceilings)). Re-enabling puts it back to `offline` until its next accepted heartbeat proves it alive. Disabling a node that is still `enrolling` revokes its unused token.
 
 Everything here is owner-scoped: another account's node id is indistinguishable from one that does not exist.
 
@@ -110,6 +110,20 @@ Four more owner-scoped controls sit on the same registry, all of them on **Setti
 Drain disables **first** and requeues second. The order is deliberate: the node loses the ability to lease the instant its status flips, so a claim released a moment later cannot be re-claimed by the very machine you are draining.
 
 `GET /api/fleet/nodes/:id` returns one node with its recent job history and the failed subset of it — which is what the node drawer shows. `GET /api/fleet/runner-status` is the compact "N of M online" feed behind the runner pill in the dashboard header; cluster-sourced nodes are excluded from it, because the platform never leases work onto them.
+
+### Daily cost ceilings
+
+```
+GET    /api/fleet/cost-ceiling       the fleet-wide ceiling in force, where it comes from, today's spend, the last trip day
+PUT    /api/fleet/cost-ceiling       { dailyCeilingCents } — set (or clear, with null) the fleet-wide ceiling
+PATCH  /api/fleet/nodes/:id          { dailyCostCeilingCents } — set (or clear) one node's ceiling
+```
+
+Two ceilings bound the model spend your own machines report, both per **UTC day**: one per node (its `dailyCostCeilingCents`, else `FLEET_NODE_DAILY_COST_CEILING_USD`) and one across the whole fleet (your value, else `FLEET_DAILY_COST_CEILING_USD`). Unset means no ceiling. After every fleet job completion the day's `fleet_jobs.costCents` are summed from midnight UTC; at or above a ceiling the node — or, for the fleet-wide ceiling, every enrolled node — is **drained** (disabled, its claims returned to the queue) and one Inbox notice is filed per ceiling per day. A ceiling that cannot count (a CLI that reports no price, a sum that fails) fails closed and drains. The figure is the CLI's own estimate, never a platform-credits debit.
+
+**The ceiling resets daily.** After midnight UTC a node that the ceiling **alone** disabled goes back into service on its first heartbeat, or as soon as you open the ceiling settings. It lands on `offline` (`paused` if it was paused when the ceiling tripped) until that heartbeat proves it alive, its trip markers are cleared, and one `node.disable` audit row records it: actor `null`, `via: cost-ceiling`, `reason: "daily reset of a cost-ceiling trip from <day>"`. A node is not handed back while today's spend is already at or above a ceiling that applies to it; the next completion that crosses trips it again the normal way, with a new notice for the new day, so the reset never flaps.
+
+**A disable a person made is never undone.** Whose disable it is comes from the node's own audit trail: the reset acts only when the newest ceiling drain that took the node out of service is newer than every other status write on that node (a PATCH, a drain, a pause, an unenroll) and nobody pressed **Drain all** since. Disabled before the trip, after it, or both — the node stays disabled until you re-enable it. Whatever the reset cannot prove (no audit writer bound, an unreadable row, two status writes with the same timestamp) leaves the node disabled. To resume before midnight, raise the ceiling and re-enable the node.
 
 The whole surface is gated by `FLEET_ENABLED` on the API. When it is off, every `/api/fleet/**` route answers **404**, not 403 — a disabled deployment does not confirm the channel exists. The flag defaults to on.
 

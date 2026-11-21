@@ -376,7 +376,8 @@ export class FleetNode {
      * `SUM(fleet_jobs.costCents)` for the day; crossing it DRAINS the node
      * (`disabled` + claims requeued) — the same stop the drain endpoint
      * applies, chosen over `paused` because a node can lift its own pause
-     * but not an owner-level disable.
+     * but not an owner-level disable — until midnight UTC, when the daily
+     * reset hands a node the ceiling alone disabled back to service.
      */
     @Column({ type: 'int', nullable: true })
     dailyCostCeilingCents?: number | null;
@@ -386,8 +387,10 @@ export class FleetNode {
      * ceiling. The ONE-NOTICE idempotency key: the trip is a CAS on this
      * column (`FleetNodeRepository.casTripDailyCeiling`), so however many
      * completions cross the ceiling on one day, exactly one of them files
-     * the Inbox notice. Draining itself is repeated on every crossing —
-     * a ceiling is a stop, not a rate limit. Cleared whenever the owner
+     * the Inbox notice. Draining itself is repeated on every crossing, for
+     * the rest of the UTC day. Cleared by the daily reset once that day is
+     * over (`FleetCostCeilingResetService`, which also puts the node back in
+     * service when the ceiling alone disabled it), and whenever the owner
      * changes the ceiling (`FleetService.setDailyCostCeilingForUser`): the
      * next crossing of a NEW ceiling is news again.
      */

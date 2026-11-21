@@ -310,8 +310,9 @@ describe('fleet health signals — Inbox notices', () => {
 
             await beat(service, { workerState: 'paused' });
 
-            // Sticky status preserved (audit A29) AND the marker re-armed.
-            expect(repository.update.mock.calls[0][1].status).toBe('paused');
+            // Sticky status preserved (audit A29) — left as stored, never
+            // written back — AND the marker re-armed.
+            expect(repository.update.mock.calls[0][1]).not.toHaveProperty('status');
             expect(repository.update.mock.calls[0][1].offlineNoticedAt).toBeNull();
         });
     });
