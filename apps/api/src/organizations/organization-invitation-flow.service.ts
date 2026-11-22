@@ -202,11 +202,18 @@ export class OrganizationInvitationFlowService {
                 throw new BadRequestException('user_already_a_member');
             }
             // In the Tenant but not on this Org's roster: adopt them directly
-            // rather than mailing a token they do not need.
-            await this.recordMembership(organization.id, organization.tenantId, existing.id, {
-                invitedById: actorUserId,
-            });
-            throw new BadRequestException('user_added_directly');
+            // rather than mailing a token they do not need, but ONLY when their
+            // email is verified. An unverified account may belong to someone who
+            // merely typed this address at sign-up; it falls through to the
+            // token-by-mail invitation below, which proves mailbox control
+            // (accept() records the roster row for an in-Tenant user and
+            // joinTenant answers 'already_member').
+            if (existing.emailVerified === true) {
+                await this.recordMembership(organization.id, organization.tenantId, existing.id, {
+                    invitedById: actorUserId,
+                });
+                throw new BadRequestException('user_added_directly');
+            }
         }
 
         const issued = await this.invitations.issue({
@@ -267,7 +274,9 @@ export class OrganizationInvitationFlowService {
 
         await this.assertSeatForTenant(tenantId);
 
-        if (existing && inTenant) {
+        // Unverified in-Tenant accounts are not adopted (see invite()): they get the
+        // token-by-mail invitation below instead.
+        if (existing && inTenant && existing.emailVerified === true) {
             try {
                 await this.recordMembership(organization.id, tenantId, existing.id, {
                     invitedById: actorUserId,
