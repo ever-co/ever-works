@@ -17,6 +17,7 @@ import { Public } from '../decorators/public.decorator';
 // `@types/express` (other controllers in apps/api use the same pattern).
 type OAuthRequest = {
     ip?: string;
+    socket?: { remoteAddress?: unknown } | null;
     headers: Record<string, string | string[] | undefined>;
 };
 type OAuthResponse = {
@@ -27,6 +28,7 @@ import { SocialAuthService } from '../services/social-auth.service';
 import { OAuthStateService } from '../services/oauth-state.service';
 import { AUTH_PROVIDER } from '../providers/auth-provider.constants';
 import { AuthProvider } from '../providers/auth-provider.abstract';
+import { trustedClientIp } from '../../config/trust-proxy';
 import { ActivityLogService } from '@ever-works/agent/activity-log';
 import { ActivityActionType, ActivityStatus } from '@ever-works/agent/entities';
 
@@ -119,14 +121,9 @@ export class OAuthController {
         const userAgentHeader = req.headers['user-agent'];
         const userAgent: string | null =
             typeof userAgentHeader === 'string' ? userAgentHeader : null;
-        const xForwardedFor = req.headers['x-forwarded-for'];
-        const ipAddress: string | null =
-            (typeof req.ip === 'string' && req.ip) ||
-            (typeof xForwardedFor === 'string'
-                ? xForwardedFor.split(',')[0].trim()
-                : Array.isArray(xForwardedFor) && typeof xForwardedFor[0] === 'string'
-                  ? xForwardedFor[0]
-                  : null);
+        // Express's `trust proxy` view of the caller, never the client-written left-most
+        // `X-Forwarded-For` entry: it is bound to the session (H-04) and kept in the log.
+        const ipAddress = trustedClientIp(req);
         const user = await this.socialAuthService.authenticate(providerId, code);
         // H-04: bind the OAuth-issued session to the requesting client.
         const result = await this.authProvider.issueSession(user.id, {

@@ -69,6 +69,29 @@ export interface ClaimAccountResponse {
     access_token?: string;
 }
 
+/**
+ * `POST /oauth/:providerId/claim` — save the signed-in anonymous account with a GitHub /
+ * Google identity, from the OAuth callback. Same user id, so its Works stay.
+ */
+export interface OAuthClaimDto {
+    code: string;
+    state: string;
+    /** The temporary account the sealed save intent names; must be the session's user. */
+    expectedUserId: string;
+    emailVerificationCallbackUrl?: string;
+    terms?: TermsAcceptanceClaim[];
+}
+
+/** What the dashboard notice needs, plus the session the API rotated to. */
+export interface OAuthClaimResponse {
+    /**
+     * The fresh session (the anonymous one is revoked). Absent when the API could not issue
+     * one, in which case the anonymous session is kept.
+     */
+    access_token?: string;
+    user: Pick<ClaimAccountResponse, 'id' | 'email' | 'username' | 'emailVerified'>;
+}
+
 export interface LoginDto {
     email: string;
     password: string;
@@ -284,6 +307,24 @@ export const authAPI = {
             data,
             method: 'POST',
             wrapInData: false,
+        });
+    },
+
+    /**
+     * EW-617 — save the signed-in anonymous account with the provider identity the OAuth
+     * callback brought back. Sent from the callback route with the visitor's anonymous
+     * session (`serverFetch` adds it), and the validated `state` forwarded on both channels
+     * the API's C-03 check reads, exactly as `connectOAuthCallback` does.
+     */
+    claimAccountWithOAuth: async (providerId: OAuthProvider, data: OAuthClaimDto) => {
+        return serverMutation<OAuthClaimResponse>({
+            endpoint: `/oauth/${providerId}/claim`,
+            data,
+            method: 'POST',
+            wrapInData: false,
+            headers: { cookie: `ew_oauth_state=${data.state}` },
+            // A top-level navigation to `/api/oauth/:p/callback` carries no workspace selector.
+            publicRouteScope: 'personal',
         });
     },
 

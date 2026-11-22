@@ -90,9 +90,14 @@ emailVerificationCallbackUrl? }` (validated by `ClaimAccountDto`
   warning (its Works stay behind), and signing out of one asks to save
   it first.
 - **FR-G3-10** The claim MUST rotate the session: issue a fresh session
-  for the same user (answered as `access_token`), then revoke the
-  anonymous bearer, which would otherwise end with the anonymous TTL.
-  Failure to issue keeps the anonymous session; the claim still succeeds.
+  for the same user (answered as `access_token`), then end EVERY other
+  credential the temporary account had: every other session row (not only
+  the bearer that asked) and its personal and integration API keys. Fleet
+  run tokens stay (minted per lease for a running Work). The web session
+  cookie can be planted from a sibling subdomain, so a victim may save an
+  attacker's temporary account; the attacker must keep no way in. Both
+  claims share `SavedAccountSessionService`. Failure to issue keeps the
+  anonymous session and ends nothing; the claim still succeeds.
 - **FR-G3-11** The saved account MUST get a real username: the one typed
   (normalized; a taken one answers 409 `{ code: 'username_taken',
 suggestion }` before any write) or one derived from the email's local
@@ -101,6 +106,51 @@ suggestion }` before any write) or one derived from the email's local
   is written on its own before any credential, so a claim racing for the
   same handle loses on the unique index as the same 409 (a derived handle
   is allocated once more), and an email race is the email 409, never a 500. The slug is stable, as on every other rename (`PUT /auth/profile`).
+  Without a typed handle, a real handle the row already has (an earlier
+  attempt that lost the email race, or a rename) is kept; only the
+  `anon-<hex>` placeholder is replaced.
+- **FR-G3-12** Saving with GitHub or Google (2026-11). `/save-account`
+  MUST offer the providers the API has configured (GitHub, Google), behind
+  the same terms checkbox. The round trip is the normal OAuth one (C-03
+  state minted by `GET /api/oauth/:p/url`, mirrored in `oauth_state`) plus
+  an HttpOnly `oauth_save_account` intent: the state, the accepted terms
+  and the signed-in temporary user's id, SEALED with the session cookie's
+  key (iron). Both cookies are `__Host-` in production (Secure, `Path=/`,
+  no Domain), so a Work on a sibling subdomain cannot plant them. The web
+  callback refuses an intent it cannot unseal (error page: no save, no
+  sign-in with that code), sends a matching round trip to
+  `POST /api/oauth/:providerId/claim` with the anonymous session and the
+  sealed user id as `expectedUserId`, and signs every other one in as
+  before. The API MUST then, like `POST /api/auth/claim`:
+    - check the state as the sign-in callback does, and refuse a
+      non-anonymous session (403), an `expectedUserId` that is not the
+      session's user (400, before anything is recorded or spent), a provider
+      other than GitHub / Google (400, idem), or a demo sandbox (403; the
+      route is also in `DEMO_BLOCKED_ROUTES` as social sign-in);
+    - check and record the terms BEFORE the account changes (FR-G3-8: 400
+      unpublished, 503 when recording fails, account untouched);
+    - refuse with 409, before writing anything, when the provider identity
+      (provider + account id) is linked to another user
+      (`PROVIDER_ACCOUNT_ALREADY_LINKED`) or its email belongs to another user,
+      compared case-insensitively (`EMAIL_ALREADY_IN_USE`), or when the
+      account is already connected to a DIFFERENT account of the provider,
+      e.g. through the GitHub App (`OTHER_PROVIDER_ACCOUNT_CONNECTED`). Never
+      merge, never re-point a link. A race that reaches a unique index instead
+      is the same 409, never a 500;
+    - give the account a real username (FR-G3-11) derived from the provider
+      handle, else the email's local part, made unique by
+      `UsernameAllocatorService` and written on its own first; the slug is
+      stable;
+    - in ONE transaction, link the identity to the SAME user id and, in one
+      update, clear `isAnonymous` and `anonymousExpiresAt`, set the email
+      (trimmed, lowercased, as the password claim stores it),
+      `registrationProvider` = the provider and `emailVerified` from the
+      provider (unverified → verification mail). A failure rolls both back
+      (`account` has no foreign key, so a left-over link would outlive the
+      anonymous user and block that identity's sign-in);
+    - rotate the session (FR-G3-10).
+      A later sign-in with the same provider opens this account
+      (`social-claim.keeps-works.spec.ts`).
 
 ### Non-functional requirements
 

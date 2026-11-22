@@ -9,8 +9,15 @@ import { Button } from '@/components/ui/button';
 import { COMPANY_OWNER_WEBSITE, ROUTES } from '@/lib/constants';
 import { PASSWORD_RULES } from '@/app/actions/validation';
 import { isUsableUsername, normalizeUsername, USERNAME_MIN_LENGTH } from '@/lib/anonymous/username';
-import { saveAnonymousAccount, type SaveAccountField } from '@/app/actions/save-account';
+import {
+    saveAnonymousAccount,
+    startSavingWithProvider,
+    type SaveAccountField,
+} from '@/app/actions/save-account';
+import { SocialLoginButtons } from '@/components/auth/social-login';
 import { timeLeft } from '@/lib/anonymous/time-left';
+import type { SaveAccountOAuthError } from '@/lib/anonymous/save-account-oauth';
+import { OAuthProvider } from '@/lib/api/enums';
 import type { TermsAcceptanceDocument } from '@/lib/api/types-only';
 
 export interface SaveAccountFormProps {
@@ -22,6 +29,10 @@ export interface SaveAccountFormProps {
     workNames: string[];
     /** How many Works the account has in all; null when the list could not be read. */
     totalWorks: number | null;
+    /** GitHub / Google, when the API has them configured: they save the account too. */
+    socialProviders?: OAuthProvider[];
+    /** Why the last save with a provider was refused, from the OAuth callback's redirect. */
+    oauthError?: { error: SaveAccountOAuthError; provider: OAuthProvider | null } | null;
 }
 
 type FieldErrors = Partial<Record<SaveAccountField | 'confirmPassword' | 'general', string>>;
@@ -38,11 +49,14 @@ export function SaveAccountForm({
     termsDocuments,
     workNames,
     totalWorks,
+    socialProviders = [],
+    oauthError = null,
 }: SaveAccountFormProps) {
     const t = useTranslations('anonymousAccount.save');
     const tForm = useTranslations('auth.register.form');
     const tRegisterErrors = useTranslations('auth.register.errors');
     const tv = useTranslations('validation.auth');
+    const tSocial = useTranslations('auth.login.socialLogin');
     const router = useRouter();
     const [isPending, startTransition] = useTransition();
     const [isRetrying, startRetry] = useTransition();
@@ -54,7 +68,14 @@ export function SaveAccountForm({
     const [password, setPassword] = useState('');
     const [confirmPassword, setConfirmPassword] = useState('');
     const [acceptedTerms, setAcceptedTerms] = useState(false);
-    const [errors, setErrors] = useState<FieldErrors>({});
+    const [errors, setErrors] = useState<FieldErrors>(() => {
+        if (!oauthError) return {};
+        // The provider name is only shown when the callback named a known one.
+        if (!oauthError.provider) return { general: t('errors.generic') };
+        const provider =
+            oauthError.provider === OAuthProvider.GITHUB ? tSocial('github') : tSocial('google');
+        return { general: t(`errors.oauth.${oauthError.error}`, { provider }) };
+    });
 
     const termsUnavailable = termsDocuments.length === 0;
     const typedUsername = username.trim();
@@ -84,6 +105,15 @@ export function SaveAccountForm({
         }
         return undefined;
     };
+
+    // The documents exactly as displayed: both ways of saving post the same claims.
+    const termsClaims = () =>
+        termsDocuments.map(({ documentId, version, sha256, locale }) => ({
+            documentId,
+            version,
+            sha256,
+            locale,
+        }));
 
     const handleSubmit = (event: React.FormEvent) => {
         event.preventDefault();
@@ -115,12 +145,7 @@ export function SaveAccountForm({
                 email,
                 password,
                 username: trimmedUsername,
-                terms: termsDocuments.map(({ documentId, version, sha256, locale }) => ({
-                    documentId,
-                    version,
-                    sha256,
-                    locale,
-                })),
+                terms: termsClaims(),
             });
             if (result?.reason === 'session_ended') {
                 setSessionEnded(true);
@@ -362,6 +387,46 @@ export function SaveAccountForm({
                     >
                         {isPending ? t('submitting') : t('submit')}
                     </Button>
+
+                    {socialProviders.length > 0 && (
+                        <div className="space-y-3" data-testid="save-account-social">
+                            <div className="flex items-center gap-3">
+                                <span
+                                    aria-hidden="true"
+                                    className="flex-1 border-t border-border dark:border-border-dark"
+                                />
+                                <span className="text-xs text-text-muted dark:text-text-muted-dark">
+                                    {t('orSaveWith')}
+                                </span>
+                                <span
+                                    aria-hidden="true"
+                                    className="flex-1 border-t border-border dark:border-border-dark"
+                                />
+                            </div>
+                            {/*
+                             * The same consent gate as the email path, as on the sign-up form:
+                             * these are type="button", so the checkbox would never stop them.
+                             */}
+                            <SocialLoginButtons
+                                providers={socialProviders}
+                                disabled={!acceptedTerms || termsUnavailable || isPending}
+                                disabledReason={t('providerNeedsTerms')}
+                                connect={async (provider) => {
+                                    const result = await startSavingWithProvider(
+                                        provider,
+                                        termsClaims(),
+                                    );
+                                    // Nothing left to save: the same panel as the email path.
+                                    if (!result.success && result.reason === 'session_ended') {
+                                        setSessionEnded(true);
+                                        return { success: false };
+                                    }
+                                    return result;
+                                }}
+                                onError={(message) => setErrors({ general: message })}
+                            />
+                        </div>
+                    )}
 
                     <p className="text-xs text-text-muted dark:text-text-muted-dark">
                         {t('otherAccount')}

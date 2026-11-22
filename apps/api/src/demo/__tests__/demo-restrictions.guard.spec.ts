@@ -535,6 +535,8 @@ describe('DemoRestrictionsGuard', () => {
             ['POST', '/api/auth/magic-link/redeem', 'magic link sign-in'],
             ['GET', '/api/oauth/github/url', 'social sign-in'],
             ['GET', '/api/oauth/google/callback', 'social sign-in'],
+            // Saving an anonymous account (a demo sandbox is one) with GitHub / Google.
+            ['POST', '/api/oauth/github/claim', 'social sign-in'],
             ['GET', '/api/github-app/setup', 'GitHub App sign-in'],
             ['GET', '/api/github-app/callback', 'GitHub App sign-in'],
             ['POST', '/api/auth/ever-id/authorize', 'Ever ID sign-in'],

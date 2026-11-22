@@ -7,7 +7,10 @@ import { getLocale, getTranslations } from 'next-intl/server';
 import { authAPI, type TermsAcceptanceClaim } from '@/lib/api';
 import type { ClaimAccountResponse } from '@/lib/api/auth';
 import { ApiResponseError } from '@/lib/api/server-api';
-import { setAuthCookies } from '@/lib/auth';
+import { getAuthFromCookie, setAuthCookies } from '@/lib/auth';
+import type { OAuthProvider } from '@/lib/api/enums';
+import { setOAuthSaveAccountCookie, setOAuthStateCookie } from '@/lib/auth/cookies';
+import { isSaveAccountOAuthProvider } from '@/lib/anonymous/save-account-oauth';
 import { redirect } from '@/i18n/navigation';
 import { ROUTES, withAppUrl } from '@/lib/constants';
 import { isEmailUnconfirmed, withUnverifiedEmailNotice } from '@/lib/auth/unverified-email';
@@ -36,6 +39,16 @@ export interface SaveAccountFailure {
      */
     reason?: 'session_ended';
 }
+
+/** The legal documents as the form displayed them; the same shape `register` accepts. */
+const termsClaimsSchema = z.array(
+    z.object({
+        documentId: z.string().min(1),
+        version: z.string().min(1),
+        sha256: z.string().regex(/^[0-9a-f]{64}$/),
+        locale: z.string().min(1),
+    }),
+);
 
 /** The 409 code the API answers for a taken username (`USERNAME_TAKEN_CODE` in apps/api). */
 const USERNAME_TAKEN_CODE = 'username_taken';
@@ -70,16 +83,7 @@ export async function saveAnonymousAccount(input: SaveAccountInput): Promise<Sav
             .string()
             .trim()
             .refine(isUsableUsername, tSave('usernameTooShort', { length: USERNAME_MIN_LENGTH })),
-        terms: z
-            .array(
-                z.object({
-                    documentId: z.string().min(1),
-                    version: z.string().min(1),
-                    sha256: z.string().regex(/^[0-9a-f]{64}$/),
-                    locale: z.string().min(1),
-                }),
-            )
-            .min(1, t('terms.required')),
+        terms: termsClaimsSchema.min(1, t('terms.required')),
     });
 
     const validation = schema.safeParse(
@@ -183,4 +187,56 @@ export async function saveAnonymousAccount(input: SaveAccountInput): Promise<Sav
     // Throws NEXT_REDIRECT.
     redirect({ locale, href });
     return { success: false, error: tSave('generic') };
+}
+
+/**
+ * EW-617 — the start of saving a temporary account with GitHub or Google.
+ *
+ * The same round trip as "Continue with GitHub" on the sign-in page (`connectProvider`): the
+ * API mints the OAuth `state`, it is mirrored into the `oauth_state` cookie, and the browser
+ * goes to the provider. One more HttpOnly cookie, bound to that `state`, marks the trip as a
+ * save and carries the terms the visitor accepted, so the callback route attaches the identity
+ * to THIS account (`POST /oauth/:p/claim`) instead of signing in to another one. Bound to the
+ * state, a save that was abandoned never turns a later sign-in into a save.
+ *
+ * The intent is sealed with the session cookie's key and names the signed-in temporary account,
+ * so nothing but this server can mint one (a cookie tossed from a sibling subdomain is refused at
+ * the callback), and the API checks that account against the session before the code is spent.
+ */
+export async function startSavingWithProvider(
+    provider: OAuthProvider,
+    terms: TermsAcceptanceClaim[],
+): Promise<{ success: true; url: string } | SaveAccountFailure> {
+    const t = await getTranslations('validation.auth');
+    const tSave = await getTranslations('anonymousAccount.save.errors');
+
+    if (!isSaveAccountOAuthProvider(provider)) {
+        return { success: false, error: tSave('providerFailed') };
+    }
+    const claims = termsClaimsSchema
+        .min(1, t('terms.required'))
+        .safeParse(terms, ZOD3_ERROR_MESSAGES);
+    if (!claims.success) {
+        return { success: false, error: claims.error.issues[0].message, field: 'terms' };
+    }
+
+    // The account this save is for: the one signed in now.
+    // Any failure reads as "no session". That also swallows the demo-expiry redirect
+    // getAuthFromCookie() can throw (NEXT_REDIRECT): harmless here, since a demo sandbox never
+    // reaches this action (the page refuses it and the API blocks the route on a demo host).
+    const signedIn = await getAuthFromCookie().catch(() => null);
+    if (!signedIn?.id) {
+        return { success: false, error: tSave('sessionEnded'), reason: 'session_ended' };
+    }
+
+    try {
+        const { url, state } = await authAPI.getOAuthAuthUrl(provider);
+        await setOAuthStateCookie(state);
+        await setOAuthSaveAccountCookie({ state, terms: claims.data, userId: signedIn.id });
+        return { success: true, url };
+    } catch (error) {
+        console.error(`Starting to save the anonymous account with ${provider} failed`, error);
+        // Security: our own words, never the upstream message.
+        return { success: false, error: tSave('providerFailed') };
+    }
 }

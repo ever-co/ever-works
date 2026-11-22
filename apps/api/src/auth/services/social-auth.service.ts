@@ -123,12 +123,28 @@ export class SocialAuthService {
     }
 
     async authenticate(providerId: string, code: string, callbackUrl?: string) {
+        return this.authService.validateSocialUser(
+            await this.fetchSocialUser(providerId, code, callbackUrl),
+        );
+    }
+
+    /**
+     * Exchange the callback `code` and read the provider profile, without
+     * signing anyone in. `authenticate` hands the result to the sign-in
+     * decision; saving an anonymous account (`SocialClaimService`) attaches it
+     * to the signed-in user instead.
+     */
+    async fetchSocialUser(
+        providerId: string,
+        code: string,
+        callbackUrl?: string,
+    ): Promise<SocialAuthUser> {
         const provider = getSocialAuthProviderConfig(providerId);
         const redirectUri = callbackUrl || provider.callbackUrl();
         const tokens = await this.exchangeCodeForTokens(provider.id, code, redirectUri);
         const socialUser = await this.getSocialUser(provider.id, tokens.accessToken);
 
-        return this.authService.validateSocialUser({
+        return {
             ...socialUser,
             provider: provider.id,
             accessToken: tokens.accessToken,
@@ -136,7 +152,7 @@ export class SocialAuthService {
             tokenType: tokens.tokenType,
             scope: tokens.scope,
             expiresAt: tokens.expiresAt,
-        });
+        };
     }
 
     getProviderDisplayName(providerId: string) {
