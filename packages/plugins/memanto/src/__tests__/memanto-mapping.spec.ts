@@ -60,12 +60,88 @@ describe('memanto mapping', () => {
 			expect(decodeTags(tags).metadata.ownerUserId).toBe('u-1');
 		});
 
-		it('skips metadata that cannot be a safe tag and reports it', () => {
+		it('skips metadata that cannot be a tag at all and reports it', () => {
 			const { tags, droppedMetadataKeys } = buildWriteTags({
-				metadata: { note: 'has spaces', nested: { a: 1 }, ok: 'fine' }
+				metadata: { nested: { a: 1 }, 'bad key': 'x', empty: '', leak: 'exfiltrate', ok: 'fine' }
 			});
 			expect(decodeTags(tags).metadata).toEqual({ ok: 'fine' });
-			expect(droppedMetadataKeys.sort()).toEqual(['nested', 'note']);
+			expect(droppedMetadataKeys.sort()).toEqual(['bad key', 'empty', 'leak', 'nested']);
+		});
+
+		it('stores a value with unsafe characters as base64url and restores it exactly', () => {
+			const note = 'has spaces, a comma\nand ünïcode';
+			const { tags, droppedMetadataKeys } = buildWriteTags({ metadata: { note } });
+			expect(droppedMetadataKeys).toEqual([]);
+			for (const t of tags) expect(t).toMatch(/^[^,\x00-\x1f]{1,64}$/);
+			expect(decodeTags(tags).metadata).toEqual({ note });
+		});
+
+		it('splits ingest provenance longer than one tag across parts and joins it back (prod 2026-11-22)', () => {
+			const metadata = {
+				ingestedEventId: 'a3f2c1d0-1111-4222-8333-944455556666',
+				source: 'github',
+				sourceEventId:
+					'push:ever-co/ever-works@0259e030dae28c7dde839d03c9bef3b09fbaa9e0:release/round-6-directory-hub',
+				kind: 'git.push',
+				occurredAt: '2026-11-22T01:25:45.123Z',
+				sourceUrl: 'https://github.com/ever-co/ever-works/pull/3301#issuecomment-7072113907',
+				actorName: 'evereq',
+				subjectType: 'pull_request',
+				subjectExternalId: 'ever-co/ever-works#3301',
+				organizationId: 'org_01HZY3'
+			};
+			const { tags, droppedMetadataKeys } = buildWriteTags({
+				userTags: ['ingested-event', 'source:github', 'kind:git.push', 'work:w1'],
+				metadata,
+				projectTagValue: 'w1'
+			});
+			expect(tags.length).toBeLessThanOrEqual(MEMANTO_MAX_TAGS);
+			for (const t of tags) expect(t.length).toBeLessThanOrEqual(64);
+			expect(droppedMetadataKeys).not.toContain('sourceUrl');
+			expect(droppedMetadataKeys).not.toContain('sourceEventId');
+			const decoded = decodeTags(tags).metadata;
+			expect(decoded.sourceUrl).toBe(metadata.sourceUrl);
+			expect(decoded.sourceEventId).toBe(metadata.sourceEventId);
+			for (const key of Object.keys(metadata) as (keyof typeof metadata)[]) {
+				if (!droppedMetadataKeys.includes(key)) expect(decoded[key]).toBe(metadata[key]);
+			}
+		});
+
+		it('keeps a short safe value as one plain tag (unchanged format)', () => {
+			const { tags } = buildWriteTags({ metadata: { runId: 'run-9' } });
+			expect(tags).toEqual(['ew:runId=run-9']);
+		});
+
+		it('writes all parts of a value or none when the tag budget runs out', () => {
+			const userTags = Array.from({ length: 18 }, (_, i) => `tag${i}`);
+			const sourceUrl = `https://example.com/${'p'.repeat(80)}`;
+			const { tags, droppedMetadataKeys } = buildWriteTags({ userTags, metadata: { sourceUrl } });
+			expect(droppedMetadataKeys).toEqual(['sourceUrl']);
+			expect(tags.some((t) => t.startsWith('ew:sourceUrl'))).toBe(false);
+			expect(decodeTags(tags).metadata).toEqual({});
+		});
+
+		it('drops a value that would need more than six parts', () => {
+			const { droppedMetadataKeys } = buildWriteTags({ metadata: { sourceUrl: `https://x/${'a'.repeat(400)}` } });
+			expect(droppedMetadataKeys).toEqual(['sourceUrl']);
+		});
+
+		it('never restores a value from an incomplete or inconsistent set of parts', () => {
+			const { tags } = buildWriteTags({ metadata: { sourceUrl: `https://example.com/${'q'.repeat(80)}` } });
+			expect(tags.length).toBeGreaterThan(1);
+			expect(decodeTags(tags.slice(1)).metadata).toEqual({});
+			const forged = [...tags, 'ew:sourceUrl.x0.2=AAAA'];
+			expect(decodeTags(forged).metadata).toEqual({});
+		});
+
+		it('does not let a part cut produce an injection-shaped tag Memanto would reject', () => {
+			const value = `${'a'.repeat(40)}/exfiltrated/${'b'.repeat(40)}`;
+			const { tags } = buildWriteTags({ metadata: { sourceUrl: value } });
+			for (const t of tags) expect(t).not.toMatch(/\bexfiltrate\b/i);
+		});
+
+		it('prefers a single plain tag over parts with the same key on read', () => {
+			expect(decodeTags(['ew:runId=a', 'ew:runId.0.1=b']).metadata).toEqual({ runId: 'a' });
 		});
 
 		it('does not encode the fields Memanto stores natively', () => {
