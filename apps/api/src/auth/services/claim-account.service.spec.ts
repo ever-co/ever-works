@@ -123,7 +123,7 @@ describe('ClaimAccountService (EW-617 G3)', () => {
             ctx.service.claim({
                 userId: 'u-1',
                 email: 'jane@example.com',
-                password: 'MySecure123!',
+                password: 'pw',
             }),
         ).rejects.toBeInstanceOf(ConflictException);
         // As the database now sees it: the still-anonymous row holds `jane`.
@@ -135,7 +135,7 @@ describe('ClaimAccountService (EW-617 G3)', () => {
         const retried = await ctx.service.claim({
             userId: 'u-1',
             email: 'jane@example.com',
-            password: 'MySecure123!',
+            password: 'pw',
         });
 
         expect(retried.username).toBe('jane');
@@ -152,7 +152,7 @@ describe('ClaimAccountService (EW-617 G3)', () => {
         const result = await ctx.service.claim({
             userId: 'u-1',
             email: 'jane@example.com',
-            password: 'MySecure123!',
+            password: 'pw',
         });
 
         expect(result.username).toBe('coffee-maps');
