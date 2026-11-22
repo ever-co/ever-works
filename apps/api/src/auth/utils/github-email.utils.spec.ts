@@ -1,5 +1,5 @@
 import { AxiosError } from 'axios';
-import { resolveGitHubAccountEmail } from './github-email.utils';
+import { listVerifiedGitHubEmails, resolveGitHubAccountEmail } from './github-email.utils';
 import { of, throwError } from 'rxjs';
 
 describe('resolveGitHubAccountEmail', () => {
@@ -207,5 +207,71 @@ describe('resolveGitHubAccountEmail', () => {
                 ).rejects.toBe(error);
             },
         );
+    });
+});
+
+describe('listVerifiedGitHubEmails', () => {
+    const httpError = (status: number, headers: Record<string, string> = {}) =>
+        new AxiosError(
+            `Request failed with status code ${status}`,
+            status >= 500 ? AxiosError.ERR_BAD_RESPONSE : AxiosError.ERR_BAD_REQUEST,
+            { headers: {} } as never,
+            {},
+            {
+                status,
+                statusText: 'error',
+                data: {},
+                headers,
+                config: { headers: {} } as never,
+            },
+        );
+
+    it('answers only the VERIFIED addresses, trimmed and lowercased, from GET /user/emails', async () => {
+        const httpService = {
+            get: jest.fn().mockReturnValue(
+                of({
+                    data: [
+                        { email: ' Octo@Example.com ', primary: true, verified: true },
+                        { email: 'unverified@example.com', verified: false },
+                        { email: 'nostate@example.com' },
+                        { email: 'second@example.com', verified: true },
+                    ],
+                }),
+            ),
+        } as any;
+
+        await expect(listVerifiedGitHubEmails(httpService, 'token')).resolves.toEqual([
+            'octo@example.com',
+            'second@example.com',
+        ]);
+        expect(httpService.get).toHaveBeenCalledWith(
+            'https://api.github.com/user/emails',
+            expect.objectContaining({ headers: expect.any(Object) }),
+        );
+    });
+
+    it.each([403, 404])(
+        'a token that cannot read the addresses (%i) confirms none, and warns',
+        async (status) => {
+            const logger = { warn: jest.fn() };
+            const httpService = {
+                get: jest.fn().mockReturnValue(throwError(() => httpError(status))),
+            } as any;
+
+            await expect(
+                listVerifiedGitHubEmails(httpService, 'token', { logger }),
+            ).resolves.toEqual([]);
+            expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining(String(status)));
+        },
+    );
+
+    it.each([
+        ['401', httpError(401)],
+        ['500', httpError(500)],
+        ['a rate-limited 403', httpError(403, { 'x-ratelimit-remaining': '0' })],
+    ])('still throws on %s', async (_label, error) => {
+        const httpService = { get: jest.fn().mockReturnValue(throwError(() => error)) } as any;
+
+        await expect(listVerifiedGitHubEmails(httpService, 'token')).rejects.toBe(error);
     });
 });
