@@ -69,6 +69,23 @@ export interface ClaimAccountResponse {
     access_token?: string;
 }
 
+/**
+ * `POST /oauth/:providerId/claim` — save the signed-in anonymous account with a GitHub /
+ * Google identity, from the OAuth callback. Same user id, so its Works stay.
+ */
+export interface OAuthClaimDto {
+    code: string;
+    state: string;
+    emailVerificationCallbackUrl?: string;
+    terms?: TermsAcceptanceClaim[];
+}
+
+/** A regular session for the saved account, plus what the dashboard notice needs. */
+export interface OAuthClaimResponse {
+    access_token: string;
+    user: ClaimAccountResponse;
+}
+
 export interface LoginDto {
     email: string;
     password: string;
@@ -284,6 +301,24 @@ export const authAPI = {
             data,
             method: 'POST',
             wrapInData: false,
+        });
+    },
+
+    /**
+     * EW-617 — save the signed-in anonymous account with the provider identity the OAuth
+     * callback brought back. Sent from the callback route with the visitor's anonymous
+     * session (`serverFetch` adds it), and the validated `state` forwarded on both channels
+     * the API's C-03 check reads, exactly as `connectOAuthCallback` does.
+     */
+    claimAccountWithOAuth: async (providerId: OAuthProvider, data: OAuthClaimDto) => {
+        return serverMutation<OAuthClaimResponse>({
+            endpoint: `/oauth/${providerId}/claim`,
+            data,
+            method: 'POST',
+            wrapInData: false,
+            headers: { cookie: `ew_oauth_state=${data.state}` },
+            // A top-level navigation to `/api/oauth/:p/callback` carries no workspace selector.
+            publicRouteScope: 'personal',
         });
     },
 

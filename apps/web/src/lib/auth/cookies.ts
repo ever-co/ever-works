@@ -91,6 +91,58 @@ export async function removeOAuthStateCookie() {
 }
 
 // =================
+// OAuth — saving a temporary account (EW-617)
+// =================
+
+/** HttpOnly cookie that marks an OAuth round trip started on `/save-account`. */
+export const OAUTH_SAVE_ACCOUNT_COOKIE_NAME = 'oauth_save_account';
+
+/**
+ * What the save-account page hands to the OAuth callback: the `state` of the round trip it
+ * started, and the legal documents the visitor ticked the box for, exactly as displayed.
+ */
+export interface OAuthSaveAccountIntent {
+    state: string;
+    terms: Array<{ documentId: string; version: string; sha256: string; locale: string }>;
+}
+
+export async function setOAuthSaveAccountCookie(intent: OAuthSaveAccountIntent) {
+    const cookieStore = await cookies();
+    cookieStore.set(
+        OAUTH_SAVE_ACCOUNT_COOKIE_NAME,
+        Buffer.from(JSON.stringify(intent), 'utf8').toString('base64url'),
+        { ...cookieOptions, maxAge: 60 * 10 }, // the same 10 minutes as `oauth_state`
+    );
+}
+
+/** The intent, or null when absent or not in the shape `setOAuthSaveAccountCookie` writes. */
+export async function getOAuthSaveAccountCookie(): Promise<OAuthSaveAccountIntent | null> {
+    const cookieStore = await cookies();
+    const raw = cookieStore.get(OAUTH_SAVE_ACCOUNT_COOKIE_NAME)?.value;
+    if (!raw) {
+        return null;
+    }
+    try {
+        const parsed = JSON.parse(Buffer.from(raw, 'base64url').toString('utf8')) as unknown;
+        if (!parsed || typeof parsed !== 'object') {
+            return null;
+        }
+        const { state, terms } = parsed as Record<string, unknown>;
+        if (typeof state !== 'string' || !state || !Array.isArray(terms)) {
+            return null;
+        }
+        return { state, terms: terms as OAuthSaveAccountIntent['terms'] };
+    } catch {
+        return null;
+    }
+}
+
+export async function removeOAuthSaveAccountCookie() {
+    const cookieStore = await cookies();
+    cookieStore.delete(OAUTH_SAVE_ACCOUNT_COOKIE_NAME);
+}
+
+// =================
 // GitHub App setup — browser binding (10-09 handover item 13)
 // =================
 

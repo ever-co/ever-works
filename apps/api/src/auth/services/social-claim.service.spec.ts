@@ -1,0 +1,313 @@
+jest.mock('@ever-works/agent/database', () => ({
+    UserRepository: class {},
+    AuthAccountRepository: class {},
+}));
+
+import {
+    BadRequestException,
+    ConflictException,
+    ForbiddenException,
+    NotFoundException,
+} from '@nestjs/common';
+import { UserConfirmedEvent } from '../../events';
+import { AuthProvider } from '../../config/constants';
+import type { SocialAuthUser } from '../types/social-auth.types';
+import {
+    SOCIAL_CLAIM_EMAIL_TAKEN_CODE,
+    SOCIAL_CLAIM_IDENTITY_TAKEN_CODE,
+    SocialClaimService,
+} from './social-claim.service';
+
+describe('SocialClaimService (EW-617: save an anonymous account with GitHub / Google)', () => {
+    const anonUser = (overrides: Record<string, unknown> = {}) => ({
+        id: 'anon-1',
+        username: 'anon-deadbeef',
+        email: null,
+        avatar: null,
+        isAnonymous: true,
+        anonymousExpiresAt: new Date('2026-11-25T00:00:00.000Z'),
+        registrationProvider: 'anonymous',
+        emailVerified: false,
+        ...overrides,
+    });
+
+    const githubUser = (overrides: Partial<SocialAuthUser> = {}): SocialAuthUser => ({
+        provider: AuthProvider.GITHUB as SocialAuthUser['provider'],
+        providerUserId: '4242',
+        email: 'Visitor@Example.com',
+        displayName: 'Visitor',
+        username: 'visitor',
+        avatar: 'https://avatars.example/visitor.png',
+        emailVerified: true,
+        accessToken: 'gho_access',
+        refreshToken: null,
+        tokenType: 'bearer',
+        scope: 'read:user,user:email',
+        expiresAt: null,
+        metadata: { login: 'visitor' },
+        ...overrides,
+    });
+
+    const build = (user: Record<string, unknown> | null = anonUser()) => {
+        const userRepository = {
+            findById: jest.fn().mockResolvedValue(user),
+            existsByEmailCaseInsensitive: jest.fn().mockResolvedValue(false),
+            update: jest.fn(async (id: string, data: Record<string, unknown>) => ({
+                ...(user ?? {}),
+                id,
+                ...data,
+            })),
+        };
+        const authAccountRepository = {
+            findProviderAccountByAccountId: jest.fn().mockResolvedValue(null),
+            findProviderAccount: jest.fn().mockResolvedValue(null),
+            upsertProviderAccount: jest.fn().mockResolvedValue({ id: 'acc-1' }),
+            deleteProviderAccount: jest.fn().mockResolvedValue(undefined),
+        };
+        const authService = { sendVerificationEmail: jest.fn().mockResolvedValue(undefined) };
+        const eventEmitter = { emit: jest.fn() };
+        const service = new SocialClaimService(
+            userRepository as never,
+            authAccountRepository as never,
+            authService as never,
+            eventEmitter as never,
+        );
+        return { service, userRepository, authAccountRepository, authService, eventEmitter };
+    };
+
+    const expectNothingWritten = (ctx: ReturnType<typeof build>) => {
+        expect(ctx.authAccountRepository.upsertProviderAccount).not.toHaveBeenCalled();
+        expect(ctx.userRepository.update).not.toHaveBeenCalled();
+        expect(ctx.eventEmitter.emit).not.toHaveBeenCalled();
+        expect(ctx.authService.sendVerificationEmail).not.toHaveBeenCalled();
+    };
+
+    describe('a new identity', () => {
+        it('links it to the SAME user and takes that user out of anonymous mode', async () => {
+            const ctx = build();
+
+            const result = await ctx.service.claim('anon-1', githubUser());
+
+            expect(ctx.authAccountRepository.upsertProviderAccount).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    userId: 'anon-1',
+                    providerId: 'github',
+                    accountId: '4242',
+                    email: 'Visitor@Example.com',
+                    accessToken: 'gho_access',
+                }),
+            );
+            expect(ctx.userRepository.update).toHaveBeenCalledTimes(1);
+            expect(ctx.userRepository.update).toHaveBeenCalledWith(
+                'anon-1',
+                expect.objectContaining({
+                    email: 'Visitor@Example.com',
+                    isAnonymous: false,
+                    anonymousExpiresAt: null,
+                    registrationProvider: 'github',
+                    emailVerified: true,
+                    avatar: 'https://avatars.example/visitor.png',
+                }),
+            );
+            // The handle stays: renaming also moves the slug, and the provider's may be taken.
+            expect(ctx.userRepository.update.mock.calls[0][1]).not.toHaveProperty('username');
+            expect(result).toEqual({
+                id: 'anon-1',
+                email: 'Visitor@Example.com',
+                username: 'anon-deadbeef',
+                emailVerified: true,
+                provider: 'github',
+            });
+        });
+
+        it('links before it flips the account, so a lost race changes nothing', async () => {
+            const ctx = build();
+            const order: string[] = [];
+            ctx.authAccountRepository.upsertProviderAccount.mockImplementation(async () => {
+                order.push('link');
+                return { id: 'acc-1' };
+            });
+            ctx.userRepository.update.mockImplementation(async (id: string, data: object) => {
+                order.push('flip');
+                return { ...anonUser(), id, ...data };
+            });
+
+            await ctx.service.claim('anon-1', githubUser());
+
+            expect(order).toEqual(['link', 'flip']);
+        });
+
+        it('sends the welcome mail a verified social sign-up gets, and no verification mail', async () => {
+            const ctx = build();
+
+            await ctx.service.claim('anon-1', githubUser());
+
+            expect(ctx.eventEmitter.emit).toHaveBeenCalledWith(
+                UserConfirmedEvent.EVENT_NAME,
+                expect.any(UserConfirmedEvent),
+            );
+            expect(ctx.authService.sendVerificationEmail).not.toHaveBeenCalled();
+        });
+
+        it('leaves an address the provider does not vouch for unverified and mails a check', async () => {
+            const ctx = build();
+
+            const result = await ctx.service.claim(
+                'anon-1',
+                githubUser({ provider: AuthProvider.GOOGLE as never, emailVerified: false }),
+                { emailVerificationCallbackUrl: 'https://ever.works/api/auth/verify-email' },
+            );
+
+            expect(ctx.userRepository.update).toHaveBeenCalledWith(
+                'anon-1',
+                expect.objectContaining({ emailVerified: false, registrationProvider: 'google' }),
+            );
+            expect(ctx.authService.sendVerificationEmail).toHaveBeenCalledWith(
+                'anon-1',
+                'https://ever.works/api/auth/verify-email',
+            );
+            expect(ctx.eventEmitter.emit).not.toHaveBeenCalled();
+            expect(result.emailVerified).toBe(false);
+        });
+
+        it('keeps the save when the verification mail fails', async () => {
+            const ctx = build();
+            ctx.authService.sendVerificationEmail.mockRejectedValue(new Error('SMTP down'));
+
+            await expect(
+                ctx.service.claim('anon-1', githubUser({ emailVerified: false })),
+            ).resolves.toMatchObject({ id: 'anon-1', emailVerified: false });
+        });
+
+        it('accepts an identity already linked to this same user (a retried save)', async () => {
+            const ctx = build();
+            ctx.authAccountRepository.findProviderAccountByAccountId.mockResolvedValue({
+                userId: 'anon-1',
+            });
+            ctx.authAccountRepository.findProviderAccount.mockResolvedValue({ userId: 'anon-1' });
+
+            await expect(ctx.service.claim('anon-1', githubUser())).resolves.toMatchObject({
+                id: 'anon-1',
+            });
+            expect(ctx.userRepository.update).toHaveBeenCalled();
+        });
+    });
+
+    describe('an identity or email that belongs to another user: refuse, never merge', () => {
+        it('refuses an identity linked to another user, before anything is written', async () => {
+            const ctx = build();
+            ctx.authAccountRepository.findProviderAccountByAccountId.mockResolvedValue({
+                userId: 'someone-else',
+            });
+
+            const error = await ctx.service.claim('anon-1', githubUser()).catch((e) => e);
+
+            expect(error).toBeInstanceOf(ConflictException);
+            expect((error as ConflictException).getResponse()).toMatchObject({
+                code: SOCIAL_CLAIM_IDENTITY_TAKEN_CODE,
+            });
+            expect(ctx.authAccountRepository.findProviderAccountByAccountId).toHaveBeenCalledWith(
+                'github',
+                '4242',
+            );
+            expectNothingWritten(ctx);
+        });
+
+        it('refuses an email another user has (compared case-insensitively)', async () => {
+            const ctx = build();
+            ctx.userRepository.existsByEmailCaseInsensitive.mockResolvedValue(true);
+
+            const error = await ctx.service.claim('anon-1', githubUser()).catch((e) => e);
+
+            expect(error).toBeInstanceOf(ConflictException);
+            expect((error as ConflictException).getResponse()).toMatchObject({
+                code: SOCIAL_CLAIM_EMAIL_TAKEN_CODE,
+            });
+            expect(ctx.userRepository.existsByEmailCaseInsensitive).toHaveBeenCalledWith(
+                'Visitor@Example.com',
+            );
+            expectNothingWritten(ctx);
+        });
+
+        it('surfaces the link conflict of a concurrent save and leaves the account anonymous', async () => {
+            const ctx = build();
+            ctx.authAccountRepository.upsertProviderAccount.mockRejectedValue(
+                new ConflictException({ code: 'PROVIDER_ACCOUNT_ALREADY_LINKED' }),
+            );
+
+            await expect(ctx.service.claim('anon-1', githubUser())).rejects.toBeInstanceOf(
+                ConflictException,
+            );
+            expect(ctx.userRepository.update).not.toHaveBeenCalled();
+        });
+    });
+
+    describe('accounts that cannot be saved this way', () => {
+        it('refuses a registered account', async () => {
+            const ctx = build(anonUser({ isAnonymous: false, email: 'a@b.c' }));
+
+            await expect(ctx.service.claim('anon-1', githubUser())).rejects.toBeInstanceOf(
+                ForbiddenException,
+            );
+            expect(ctx.authAccountRepository.findProviderAccountByAccountId).not.toHaveBeenCalled();
+            expectNothingWritten(ctx);
+        });
+
+        it('refuses a demo sandbox, which is anonymous too', async () => {
+            const ctx = build(anonUser({ registrationProvider: 'demo' }));
+
+            await expect(ctx.service.claim('anon-1', githubUser())).rejects.toBeInstanceOf(
+                ForbiddenException,
+            );
+            expectNothingWritten(ctx);
+        });
+
+        it('answers 404 for an unknown user', async () => {
+            const ctx = build(null);
+
+            await expect(ctx.service.claim('ghost', githubUser())).rejects.toBeInstanceOf(
+                NotFoundException,
+            );
+        });
+
+        it('refuses a profile without an account id or an email', async () => {
+            const noId = build();
+            await expect(
+                noId.service.claim('anon-1', githubUser({ providerUserId: '  ' })),
+            ).rejects.toBeInstanceOf(BadRequestException);
+            expectNothingWritten(noId);
+
+            const noEmail = build();
+            await expect(
+                noEmail.service.claim('anon-1', githubUser({ email: '' })),
+            ).rejects.toBeInstanceOf(BadRequestException);
+            expectNothingWritten(noEmail);
+        });
+    });
+
+    describe('when the account update fails after the link was written', () => {
+        it('removes the link it created, so no link outlives the anonymous account', async () => {
+            const ctx = build();
+            ctx.userRepository.update.mockRejectedValue(new Error('unique violation'));
+
+            await expect(ctx.service.claim('anon-1', githubUser())).rejects.toThrow(
+                'unique violation',
+            );
+            expect(ctx.authAccountRepository.deleteProviderAccount).toHaveBeenCalledWith(
+                'anon-1',
+                'github',
+            );
+        });
+
+        it('leaves a provider row that existed before this call alone', async () => {
+            const ctx = build();
+            ctx.authAccountRepository.findProviderAccount.mockResolvedValue({ userId: 'anon-1' });
+            ctx.userRepository.update.mockResolvedValue(null as never);
+
+            await expect(ctx.service.claim('anon-1', githubUser())).rejects.toBeInstanceOf(
+                BadRequestException,
+            );
+            expect(ctx.authAccountRepository.deleteProviderAccount).not.toHaveBeenCalled();
+        });
+    });
+});

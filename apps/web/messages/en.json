@@ -13526,6 +13526,8 @@
             "usernameSavedAs": "Saved as {username}",
             "startAgain": "Start again",
             "signIn": "Sign in",
+            "orSaveWith": "Or save it with",
+            "providerNeedsTerms": "Accept the Terms of Service and Privacy Policy above first",
             "errors": {
                 "emailTaken": "This email already has an account. Use another email to keep these Works on this account.",
                 "notTemporary": "This account is already saved, or it cannot be saved here.",
@@ -13535,7 +13537,16 @@
                 "usernameTooShort": "Use at least {length} letters, digits or dashes, or leave the username empty",
                 "usernameTaken": "This username is taken. Pick another one, or leave it empty.",
                 "usernameTakenWithSuggestion": "This username is taken. Try {suggestion}, or leave it empty.",
-                "sessionEnded": "Your temporary session has ended. If you just saved this account, it is saved: confirm your email if asked, then sign in. Otherwise, start again."
+                "sessionEnded": "Your temporary session has ended. If you just saved this account, it is saved: confirm your email if asked, then sign in. Otherwise, start again.",
+                "providerFailed": "Saving with this account could not start. Try again.",
+                "oauth": {
+                    "identity_taken": "This {provider} account already belongs to another account, so nothing was changed. Save this one with another {provider} account or with an email and a password.",
+                    "email_taken": "The email of this {provider} account already has an account, so nothing was changed. Save this one another way.",
+                    "not_temporary": "This account is already saved, or it cannot be saved here.",
+                    "too_many_attempts": "Too many attempts. Wait a while, then try again.",
+                    "rejected": "{provider} did not confirm the sign-in. Try again.",
+                    "failed": "The account could not be saved with {provider}. Try again."
+                }
             }
         },
         "savedSignIn": {
@@ -13544,7 +13555,8 @@
         },
         "saved": {
             "title": "Account saved",
-            "description": "Your Works stay with you. From now on, sign in with your email and password."
+            "description": "Your Works stay with you. From now on, sign in with your email and password.",
+            "descriptionWithProvider": "Your Works stay with you. From now on, sign in with {provider}."
         },
         "reminder": {
             "ready": "Your Work is ready",

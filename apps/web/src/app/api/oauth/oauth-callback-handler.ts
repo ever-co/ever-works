@@ -1,7 +1,13 @@
 import { redirect } from '@/i18n/navigation';
 import { authAPI, AuthResponse } from '@/lib/api';
 import { OAuthProvider } from '@/lib/api/enums';
-import { getOAuthStateCookie, removeOAuthStateCookie, setAuthCookies } from '@/lib/auth';
+import {
+    getOAuthSaveAccountCookie,
+    getOAuthStateCookie,
+    removeOAuthSaveAccountCookie,
+    removeOAuthStateCookie,
+    setAuthCookies,
+} from '@/lib/auth';
 import { getRedirectUrl } from '@/lib/auth/redirect';
 import { ROUTES } from '@/lib/constants';
 import { getLocale } from 'next-intl/server';
@@ -12,6 +18,7 @@ import {
     shouldPromptGithubConnect,
 } from '@/lib/auth/github-connect';
 import { getOAuthRouteErrorCode } from './callback-errors';
+import { saveAccountWithOAuth } from './save-account-callback';
 
 export async function handleOAuthCallback(request: NextRequest, providerId: string) {
     const queryParams = request.nextUrl.searchParams;
@@ -42,6 +49,23 @@ export async function handleOAuthCallback(request: NextRequest, providerId: stri
     }
 
     await removeOAuthStateCookie();
+
+    // EW-617: a round trip started on `/save-account` attaches the identity to the signed-in
+    // temporary account instead of signing in. Only when the intent names THIS state: an
+    // abandoned save must never turn a later sign-in into a save. Single use either way.
+    const saveIntent = await getOAuthSaveAccountCookie();
+    if (saveIntent) {
+        await removeOAuthSaveAccountCookie();
+        if (saveIntent.state === state) {
+            return saveAccountWithOAuth(
+                providerId as OAuthProvider,
+                code,
+                state,
+                saveIntent,
+                locale,
+            );
+        }
+    }
 
     // Forward the validated state to the API exchange call so its own C-03
     // check (`OAuthController.authRedirect`) succeeds — the API expects

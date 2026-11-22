@@ -112,6 +112,16 @@ user.isAnonymous: true }`.
   the account. Without it, the cleanup deletes the user row and its Works
   (DB cascade) after `ANONYMOUS_USER_TTL_DAYS` (default 3); the Works' git
   repositories in the managed org are NOT deleted or archived by it.
+- Or with GitHub / Google from the same page: the OAuth round trip comes
+  back to the web callback, which posts `POST /api/oauth/:providerId/claim`
+  `{ code, state, terms? }` with the anonymous session. Same user id, so the
+  Works stay; a regular session replaces the anonymous one.
+  409 → the provider account (`PROVIDER_ACCOUNT_ALREADY_LINKED`) or its
+  email (`EMAIL_ALREADY_IN_USE`) belongs to another user; nothing changed,
+  `/save-account?oauthError=…` says so. 403 → not anonymous, or a demo
+  sandbox. 400 → state check failed or the provider refused the code.
+  Needs `GH_CLIENT_ID`/`GH_CLIENT_SECRET` (or the Google pair) like social
+  sign-in; with neither configured the page shows only the email form.
 
 ## Rolling back per gap
 

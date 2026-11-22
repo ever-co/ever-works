@@ -101,6 +101,38 @@ suggestion }` before any write) or one derived from the email's local
   is written on its own before any credential, so a claim racing for the
   same handle loses on the unique index as the same 409 (a derived handle
   is allocated once more), and an email race is the email 409, never a 500. The slug is stable, as on every other rename (`PUT /auth/profile`).
+- **FR-G3-12** Saving with GitHub or Google (2026-11). `/save-account`
+  MUST offer the providers the API has configured (GitHub, Google), behind
+  the same terms checkbox. The round trip is the normal OAuth one (C-03
+  state minted by `GET /api/oauth/:p/url`, mirrored in `oauth_state`) plus
+  an HttpOnly `oauth_save_account` cookie bound to THAT state and carrying
+  the accepted terms; the web callback sends only a matching round trip to
+  `POST /api/oauth/:providerId/claim` (with the anonymous session), every
+  other one signs in as before. The API MUST then, like `POST /api/auth/claim`:
+  - check the state as the sign-in callback does, and refuse a
+    non-anonymous session (403) or a demo sandbox (403; the route is also in
+    `DEMO_BLOCKED_ROUTES` as social sign-in);
+  - check and record the terms BEFORE the account changes (FR-G3-8: 400
+    unpublished, 503 when recording fails, account untouched);
+  - refuse with 409, before writing anything, when the provider identity
+    (provider + account id) is linked to another user
+    (`PROVIDER_ACCOUNT_ALREADY_LINKED`) or its email belongs to another user,
+    compared case-insensitively (`EMAIL_ALREADY_IN_USE`). Never merge. A
+    race that reaches a unique index instead is the same 409, never a 500;
+  - give the account a real username (FR-G3-11) derived from the provider
+    handle, else the email's local part, made unique by
+    `UsernameAllocatorService` and written on its own first; the slug is
+    stable;
+  - link the identity to the SAME user id, then in one update clear
+    `isAnonymous` and `anonymousExpiresAt`, set the email,
+    `registrationProvider` = the provider and `emailVerified` from the
+    provider (unverified → verification mail). If that update fails, the
+    link it created is removed again (`account` has no foreign key, so a
+    left-over link would outlive the anonymous user and block that
+    identity's sign-in);
+  - rotate the session (FR-G3-10).
+  A later sign-in with the same provider opens this account
+  (`social-claim.keeps-works.spec.ts`).
 
 ### Non-functional requirements
 

@@ -130,6 +130,9 @@ export const DEMO_BLOCKED_ROUTES: ReadonlyArray<DemoBlockedRoute> = [
     { method: 'POST', path: /^\/api\/auth\/magic-link\/redeem$/i, feature: 'magic link sign-in', scope: 'everyone' },
     { method: 'GET', path: /^\/api\/oauth\/[^/]+\/url$/i, feature: 'social sign-in', scope: 'everyone' },
     { method: 'GET', path: /^\/api\/oauth\/[^/]+\/callback$/i, feature: 'social sign-in', scope: 'everyone' },
+    // Saving an anonymous account with GitHub / Google signs in a new identity too; a demo
+    // sandbox is anonymous, so this also keeps it from leaving the sweeper's reach.
+    { method: 'POST', path: /^\/api\/oauth\/[^/]+\/claim$/i, feature: 'social sign-in', scope: 'everyone' },
     { method: 'GET', path: /^\/api\/github-app\/(setup|callback)$/i, feature: 'GitHub App sign-in', scope: 'everyone' },
     { method: 'POST', path: /^\/api\/auth\/ever-id\/(authorize|callback|sign-up\/confirm)$/i, feature: 'Ever ID sign-in', scope: 'everyone' },
     { method: 'POST', path: /^\/api\/auth\/ever-id\/session$/i, feature: 'Ever ID sign-in', scope: 'everyone' },

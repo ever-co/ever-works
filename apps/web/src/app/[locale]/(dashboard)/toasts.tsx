@@ -8,6 +8,10 @@ import { APP_NAME } from '@/lib/constants';
 import { OAuthProvider } from '@/lib/api/enums';
 import { VERIFY_EMAIL_PARAM, VERIFY_EMAIL_REQUIRED } from '@/lib/auth/unverified-email';
 import { ACCOUNT_SAVED_PARAM } from '@/lib/anonymous/account-saved';
+import {
+    ACCOUNT_SAVED_WITH_PARAM,
+    isSaveAccountOAuthProvider,
+} from '@/lib/anonymous/save-account-oauth';
 
 export default function DashboardToasts() {
     const searchParams = useSearchParams();
@@ -16,6 +20,14 @@ export default function DashboardToasts() {
 
     const isNewUser = searchParams.get('newUser') === 'true';
     const isAccountSaved = searchParams.get(ACCOUNT_SAVED_PARAM) === 'true';
+    // EW-617: saved with GitHub / Google rather than a password. Allow-listed like
+    // `oauth_provider` below, so a crafted URL cannot put its own words in the notice.
+    const savedWithRaw = searchParams.get(ACCOUNT_SAVED_WITH_PARAM);
+    const savedWith = isSaveAccountOAuthProvider(savedWithRaw)
+        ? savedWithRaw === OAuthProvider.GITHUB
+            ? 'GitHub'
+            : 'Google'
+        : null;
     const isVerified = searchParams.get('verified') === 'true';
     // EW-077 / EW-080: set by `register` and `redeemMagicLink` when the session
     // they just minted belongs to an address nobody has confirmed yet.
@@ -134,7 +146,9 @@ export default function DashboardToasts() {
         if (isAccountSaved) {
             toast.success(tSaved('title'), {
                 id: 'account-saved',
-                description: tSaved('description'),
+                description: savedWith
+                    ? tSaved('descriptionWithProvider', { provider: savedWith })
+                    : tSaved('description'),
                 duration: 6000,
             });
         }
@@ -152,6 +166,7 @@ export default function DashboardToasts() {
                 // Remove query params without page refresh
                 const url = new URL(window.location.href);
                 url.searchParams.delete(ACCOUNT_SAVED_PARAM);
+                url.searchParams.delete(ACCOUNT_SAVED_WITH_PARAM);
                 url.searchParams.delete('newUser');
                 url.searchParams.delete('verified');
                 url.searchParams.delete('oauth_connected');
@@ -170,6 +185,7 @@ export default function DashboardToasts() {
         oauthError,
         isEmailUnconfirmed,
         isAccountSaved,
+        savedWith,
         providerLabel,
         t,
         tSaved,
