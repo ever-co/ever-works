@@ -43,6 +43,32 @@ export interface RegisterDto {
     terms?: TermsAcceptanceClaim[];
 }
 
+/**
+ * `POST /auth/claim` — turn the signed-in anonymous (zero-friction) account into a
+ * regular one. The user id does not change, so every Work it owns stays with it.
+ */
+export interface ClaimAccountDto {
+    email: string;
+    password: string;
+    /** Optional handle; without it the API derives a unique one from the email. */
+    username?: string;
+    emailVerificationCallbackUrl?: string;
+    /** What the user ticked the box for on the save-account form; see `RegisterDto.terms`. */
+    terms?: TermsAcceptanceClaim[];
+}
+
+export interface ClaimAccountResponse {
+    id: string;
+    email: string;
+    username: string;
+    emailVerified: boolean;
+    /**
+     * The session the API rotated to (the anonymous one is revoked). Absent when it could not
+     * issue one, in which case the anonymous session is kept.
+     */
+    access_token?: string;
+}
+
 export interface LoginDto {
     email: string;
     password: string;
@@ -151,6 +177,16 @@ export interface UserProfile {
     /** EW-602: self-hosted platform admin flag (gates /admin/usage). */
     isPlatformAdmin?: boolean;
     /**
+     * EW-617: a zero-friction account made from the home-page prompt, with no email or
+     * password yet. `GET /auth/profile/fresh` returns the user row, so these come straight
+     * from it; `POST /auth/claim` sets `isAnonymous` to false and clears the expiry.
+     */
+    isAnonymous?: boolean;
+    /** When the anonymous account and everything it owns is deleted, ISO 8601; null once claimed. */
+    anonymousExpiresAt?: string | null;
+    /** How the account was made: `local`, `github`, `google`, `anonymous`, `demo`, … */
+    registrationProvider?: string;
+    /**
      * Platform demo mode: set on a demo sandbox account of a demo instance (the strip's data);
      * null for everyone else and whenever the demo is off.
      */
@@ -239,6 +275,16 @@ export const authAPI = {
 
     getFreshProfile: async () => {
         return serverFetch<AuthResponse['user']>('/auth/profile/fresh');
+    },
+
+    // EW-617 G3 — keep an anonymous account: attach email + password to the SAME user.
+    claimAccount: async (data: ClaimAccountDto) => {
+        return serverMutation<ClaimAccountResponse>({
+            endpoint: '/auth/claim',
+            data,
+            method: 'POST',
+            wrapInData: false,
+        });
     },
 
     updatePassword: async (data: UpdatePasswordDto) => {

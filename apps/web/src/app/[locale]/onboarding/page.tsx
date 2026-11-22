@@ -14,6 +14,7 @@ import { redirect } from '@/i18n/navigation';
 import { getLocale } from 'next-intl/server';
 import { ROUTES } from '@/lib/constants';
 import { AnonymousOnboardingBootstrap } from './anonymous-bootstrap';
+import { getSaveAccountStripForRequest } from '@/lib/anonymous/save-account-strip';
 
 // EW-617 zero-friction landing target. PUBLIC route: fresh marketing-site
 // visitors arrive at `/onboarding#prompt=…&corrId=…` with no session. For them
@@ -58,11 +59,15 @@ export default async function OnboardingPage() {
     // Authed (logged-in OR already-anonymous). Fetch wizard props exactly as
     // (dashboard)/layout.tsx does; every call degrades to a safe fallback, so an
     // empty/anon catalog still lands the user on the create-work step.
-    const [pluginsResponse, onboardingState, onboardingCatalog] = await Promise.all([
-        pluginsAPI.list().catch(() => ({ plugins: [] as UserPlugin[], total: 0 })),
-        onboardingAPI.getState().catch(() => FALLBACK_STATE),
-        onboardingAPI.getCatalog().catch(() => FALLBACK_CATALOG),
-    ]);
+    const [pluginsResponse, onboardingState, onboardingCatalog, saveAccountStrip] =
+        await Promise.all([
+            pluginsAPI.list().catch(() => ({ plugins: [] as UserPlugin[], total: 0 })),
+            onboardingAPI.getState().catch(() => FALLBACK_STATE),
+            onboardingAPI.getCatalog().catch(() => FALLBACK_CATALOG),
+            // EW-617: where a visitor waits for their first generation, so the strip that
+            // says the account is temporary belongs here too (null for everyone else).
+            getSaveAccountStripForRequest().catch(() => null),
+        ]);
 
     const plugins = pluginsResponse.plugins
         .filter((p) => p.uiHints?.includeInOnboarding)
@@ -90,6 +95,7 @@ export default async function OnboardingPage() {
             plugins={plugins}
             initialConnections={initialConnections}
             initialDeviceAuthStatuses={initialDeviceAuthStatuses}
+            saveAccountStrip={saveAccountStrip}
         />
     );
 }

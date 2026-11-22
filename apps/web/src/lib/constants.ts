@@ -426,6 +426,10 @@ export const ROUTES = {
     // UNAUTHENTICATED by fresh visitors — the page mints an anonymous session
     // client-side, so it MUST be in PUBLIC_ROUTES (mirrors AUTH_MAGIC_LINK).
     ONBOARDING: '/onboarding',
+    // EW-617 G3 — where a temporary (anonymous) account attaches an email and
+    // password and so keeps its Works (`POST /api/auth/claim`). A dashboard page:
+    // only a signed-in anonymous account has anything to save, so NOT public.
+    SAVE_ACCOUNT: '/save-account',
     // Organization-invitation landing page. Reached by a BRAND-NEW person
     // straight from an email, with no account and no session — which is
     // the entire point of the feature. It must be public: the proxy auth

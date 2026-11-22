@@ -104,6 +104,37 @@ run('Memanto live contract', () => {
 		await plugin.closeSession(session.id, settings as never);
 	});
 
+	it('round-trips long and unsafe ingest provenance through real Memanto tag validation', async () => {
+		// The shape event-ingest.service.ts writes; on prod these keys were dropped before parts existed.
+		const provenance = {
+			ownerUserId: 'user-123',
+			ingestedEventId: 'a3f2c1d0-1111-4222-8333-944455556666',
+			source: 'github',
+			sourceEventId: 'push:ever-co/ever-works@0259e030dae28c7dde839d03c9bef3b09fbaa9e0:release/round-6',
+			kind: 'git.push',
+			sourceUrl: 'https://github.com/ever-co/ever-works/pull/3301#issuecomment-7072113907',
+			subjectExternalId: 'ever-co/ever-works#3301',
+			actorName: 'Ever Bot, the second'
+		};
+		const saved = await plugin.saveMemory({
+			content: 'A push to release/round-6 of ever-works landed the directory hub.',
+			tags: ['ingested-event', 'source:github', 'kind:git.push'],
+			metadata: provenance,
+			projectId: 'work-p',
+			settings: settings as never
+		});
+		const found = await plugin.searchMemory({
+			query: 'directory hub push',
+			projectId: 'work-p',
+			settings: settings as never
+		});
+		const hit = found.results.find((r) => r.id === saved.id);
+		expect(hit, JSON.stringify(found.results)).toBeDefined();
+		expect(hit?.metadata).toMatchObject(provenance);
+		expect(hit?.tags).toEqual(['ingested-event', 'source-github', 'kind-git.push']);
+		await plugin.deleteEntry(saved.id, settings as never);
+	});
+
 	it('keeps Works apart — per-Work agents and a pinned shared agent', async () => {
 		await plugin.saveMemory({
 			content: 'Work B uses Postgres 18.',

@@ -15,6 +15,7 @@ import type { GitProviderConnectionInfo } from '@/lib/api/plugins-capabilities/g
 import type { PluginDeviceAuthStatus } from '@/lib/api/plugins-capabilities/device-auth';
 import type { UserPlugin } from '@/lib/api/plugins';
 import { buildDemoStrip } from '@/lib/demo/demo-strip';
+import { buildSaveAccountStrip } from '@/lib/anonymous/save-account-strip';
 import { redirect } from '@/i18n/navigation';
 import { getLocale } from 'next-intl/server';
 import { ROUTES } from '@/lib/constants';
@@ -97,7 +98,12 @@ export default async function DashboardLayout({ children }: { children: React.Re
     ]);
 
     // Platform demo mode: null (and no extra request) unless the profile carries a `demo` block.
-    const demoStrip = await buildDemoStrip(profile?.demo);
+    // EW-617: the temporary-account strip, null (and no extra request) unless the account is
+    // anonymous; never together with the demo strip.
+    const [demoStrip, saveAccountStrip] = await Promise.all([
+        buildDemoStrip(profile?.demo),
+        buildSaveAccountStrip(profile),
+    ]);
 
     const hasGithubConnected =
         profile?.oauthTokens?.some((token) => token.provider === 'github') ?? false;
@@ -143,6 +149,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
             apiVersion={apiVersion}
             jobRuntimeConfigured={jobRuntimeConfigured}
             demoStrip={demoStrip}
+            saveAccountStrip={saveAccountStrip}
             changelogUnreadCount={changelogUnreadCount}
             appLauncherEnabled={appLauncherEnabled}
             fleetHubEnabled={isFleetHubEnabled()}

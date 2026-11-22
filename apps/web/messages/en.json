@@ -13499,6 +13499,72 @@
             "opensInNewTab": "(opens in a new tab)"
         }
     },
+    "anonymousAccount": {
+        "strip": {
+            "message": "You're using a temporary account. Sign up to keep your Works.",
+            "deletedInDays": "Deleted in {days, plural, one {# day} other {# days}} {hours} h",
+            "deletedInHours": "Deleted in {hours} h",
+            "deletedSoon": "Deleted in less than an hour",
+            "action": "Save my account"
+        },
+        "save": {
+            "metaTitle": "Save your account",
+            "title": "Save your account",
+            "intro": "Add an email and a password to keep this account. Nothing moves: your Works, their repositories and your settings stay exactly where they are.",
+            "deadlineDays": "Without it, this account and its Works are deleted in {days, plural, one {# day} other {# days}} {hours} h.",
+            "deadlineHours": "Without it, this account and its Works are deleted in {hours} h.",
+            "deadlineSoon": "Without it, this account and its Works are deleted in less than an hour.",
+            "deadlineUnknown": "Without it, this account and its Works are deleted after a few days.",
+            "worksHeading": "Kept with your account",
+            "worksMore": "and {count} more",
+            "submit": "Save my account",
+            "submitting": "Saving…",
+            "otherAccount": "Signing in to a different account does not move these Works to it.",
+            "usernameLabel": "Username (optional)",
+            "usernamePlaceholder": "jane-doe",
+            "usernameHint": "Leave it empty to get one based on your email. You can change it later.",
+            "usernameSavedAs": "Saved as {username}",
+            "startAgain": "Start again",
+            "signIn": "Sign in",
+            "errors": {
+                "emailTaken": "This email already has an account. Use another email to keep these Works on this account.",
+                "notTemporary": "This account is already saved, or it cannot be saved here.",
+                "tooManyAttempts": "Too many attempts. Wait a while, then try again.",
+                "rejected": "The account could not be saved with these details. Check them and try again.",
+                "generic": "The account could not be saved. Try again.",
+                "usernameTooShort": "Use at least {length} letters, digits or dashes, or leave the username empty",
+                "usernameTaken": "This username is taken. Pick another one, or leave it empty.",
+                "usernameTakenWithSuggestion": "This username is taken. Try {suggestion}, or leave it empty.",
+                "sessionEnded": "Your temporary session has ended. If you just saved this account, it is saved: confirm your email if asked, then sign in. Otherwise, start again."
+            }
+        },
+        "savedSignIn": {
+            "title": "Your account is saved",
+            "body": "Confirm your email if asked, then sign in with your email and password. Your Works are waiting."
+        },
+        "saved": {
+            "title": "Account saved",
+            "description": "Your Works stay with you. From now on, sign in with your email and password."
+        },
+        "reminder": {
+            "ready": "Your Work is ready",
+            "kept": "This Work is on a temporary account",
+            "description": "Save your account to keep it. Temporary accounts are deleted after a few days.",
+            "action": "Save my account"
+        },
+        "login": {
+            "title": "You're signed in to a temporary account",
+            "body": "Signing in to another account leaves this one's Works behind, and they are deleted with it. Save this account first to keep them.",
+            "action": "Save this account first"
+        },
+        "signOut": {
+            "title": "Sign out of a temporary account?",
+            "body": "You cannot get back to a temporary account after signing out, and its Works are deleted with it. Save the account first to keep them.",
+            "save": "Save my account",
+            "confirm": "Sign out anyway",
+            "cancel": "Cancel"
+        }
+    },
     "demo": {
         "login": {
             "title": "Try Ever Works — no sign-up needed",

@@ -103,9 +103,15 @@ user.isAnonymous: true }`.
 
 ### Stage 8 — claim account (G3)
 
-- Authenticated `POST /api/auth/claim` with `{ email, password }`.
+- Authenticated `POST /api/auth/claim` with `{ email, password, terms? }`.
   409 → email already taken by a different user.
-  403 → the caller's session is already non-anonymous.
+  403 → the caller's session is already non-anonymous (or a demo sandbox).
+- Web: the amber "temporary account" strip on every dashboard page links to
+  `/save-account`, which posts this call. After it the strip is gone, the
+  dashboard shows "Account saved", and the nightly cleanup no longer selects
+  the account. Without it, the cleanup deletes the user row and its Works
+  (DB cascade) after `ANONYMOUS_USER_TTL_DAYS` (default 3); the Works' git
+  repositories in the managed org are NOT deleted or archived by it.
 
 ## Rolling back per gap
 
