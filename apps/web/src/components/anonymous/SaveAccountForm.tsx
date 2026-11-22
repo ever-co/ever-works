@@ -3,11 +3,11 @@
 import { useState, useTransition } from 'react';
 import { Folder } from 'lucide-react';
 import { useTranslations } from 'next-intl';
-import { useRouter } from '@/i18n/navigation';
+import { Link, useRouter } from '@/i18n/navigation';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import { COMPANY_OWNER_WEBSITE } from '@/lib/constants';
-import { PASSWORD_RULES } from '@/app/actions/validation';
+import { COMPANY_OWNER_WEBSITE, ROUTES } from '@/lib/constants';
+import { PASSWORD_RULES, VALIDATION_RULES } from '@/app/actions/validation';
 import { saveAnonymousAccount, type SaveAccountField } from '@/app/actions/save-account';
 import { timeLeft } from '@/lib/anonymous/time-left';
 import type { TermsAcceptanceDocument } from '@/lib/api/types-only';
@@ -26,7 +26,8 @@ export interface SaveAccountFormProps {
 type FieldErrors = Partial<Record<SaveAccountField | 'confirmPassword' | 'general', string>>;
 
 /**
- * EW-617 G3 — the save-account form: an email, a password and the terms, posted to
+ * EW-617 G3 — the save-account form: an email, a password, an optional username and the
+ * terms, posted to
  * `saveAnonymousAccount` (`POST /auth/claim`). It reuses the sign-up form's labels, rules
  * and terms handling, so both ways of getting an account read and behave the same, and it
  * names the Works that stay, which is the whole point of the page.
@@ -45,6 +46,10 @@ export function SaveAccountForm({
     const [isPending, startTransition] = useTransition();
     const [isRetrying, startRetry] = useTransition();
     const [email, setEmail] = useState('');
+    const [username, setUsername] = useState('');
+    // The temporary session ended mid-form: nothing is left to save, so the form gives way to
+    // "start again" and "sign in" instead of a "try again" that cannot work.
+    const [sessionEnded, setSessionEnded] = useState(false);
     const [password, setPassword] = useState('');
     const [confirmPassword, setConfirmPassword] = useState('');
     const [acceptedTerms, setAcceptedTerms] = useState(false);
@@ -76,6 +81,16 @@ export function SaveAccountForm({
         event.preventDefault();
         setErrors({});
 
+        const trimmedUsername = username.trim();
+        if (trimmedUsername && trimmedUsername.length < VALIDATION_RULES.USERNAME_MIN_LENGTH) {
+            setErrors({
+                username: t('errors.usernameTooShort', {
+                    length: VALIDATION_RULES.USERNAME_MIN_LENGTH,
+                }),
+            });
+            return;
+        }
+
         const invalidPassword = passwordError(password);
         if (invalidPassword) {
             setErrors({ password: invalidPassword });
@@ -92,16 +107,21 @@ export function SaveAccountForm({
 
         startTransition(async () => {
             // Redirects to the dashboard on success; only a failure comes back.
-            const result = await saveAnonymousAccount(
+            const result = await saveAnonymousAccount({
                 email,
                 password,
-                termsDocuments.map(({ documentId, version, sha256, locale }) => ({
+                username: trimmedUsername,
+                terms: termsDocuments.map(({ documentId, version, sha256, locale }) => ({
                     documentId,
                     version,
                     sha256,
                     locale,
                 })),
-            );
+            });
+            if (result?.reason === 'session_ended') {
+                setSessionEnded(true);
+                return;
+            }
             if (result && !result.success) {
                 setErrors(
                     result.field ? { [result.field]: result.error } : { general: result.error },
@@ -166,145 +186,179 @@ export function SaveAccountForm({
                 </section>
             )}
 
-            <form onSubmit={handleSubmit} className="mt-6 space-y-4" noValidate>
-                {errors.general && (
-                    <div
-                        role="alert"
-                        className="rounded-lg border border-danger/20 bg-danger/10 px-4 py-3 text-sm text-danger"
-                    >
-                        {errors.general}
-                    </div>
-                )}
-
-                {termsUnavailable && (
-                    <div
-                        role="alert"
-                        className="space-y-3 rounded-lg border border-warning/20 bg-warning/10 px-4 py-3 text-sm"
-                    >
-                        <p className="text-text dark:text-text-dark">
-                            {tRegisterErrors('termsUnavailable.message')}
-                        </p>
-                        <Button
-                            type="button"
-                            variant="secondary"
-                            size="sm"
-                            loading={isRetrying}
-                            onClick={() => startRetry(() => router.refresh())}
-                        >
-                            {tRegisterErrors('termsUnavailable.retry')}
+            {sessionEnded ? (
+                <div
+                    role="alert"
+                    data-testid="save-account-session-ended"
+                    className="mt-6 space-y-3 rounded-lg border border-warning/20 bg-warning/10 px-4 py-3 text-sm"
+                >
+                    <p className="text-text dark:text-text-dark">{t('errors.sessionEnded')}</p>
+                    <div className="flex flex-wrap gap-2">
+                        <Button href={ROUTES.ONBOARDING} size="sm">
+                            {t('startAgain')}
+                        </Button>
+                        <Button href={ROUTES.AUTH_LOGIN} size="sm" variant="secondary">
+                            {t('signIn')}
                         </Button>
                     </div>
-                )}
-
-                <Input
-                    type="email"
-                    name="email"
-                    autoComplete="email"
-                    label={tForm('email.label')}
-                    placeholder={tForm('email.placeholder')}
-                    value={email}
-                    onChange={(e) => {
-                        setEmail(e.target.value);
-                        setErrors((prev) => ({ ...prev, email: undefined }));
-                    }}
-                    error={errors.email}
-                    required
-                    disabled={isPending}
-                    className="text-sm"
-                />
-                <Input
-                    type="password"
-                    name="password"
-                    autoComplete="new-password"
-                    label={tForm('password.label')}
-                    placeholder={tForm('password.placeholder')}
-                    value={password}
-                    onChange={(e) => {
-                        setPassword(e.target.value);
-                        setErrors((prev) => ({ ...prev, password: undefined }));
-                    }}
-                    error={errors.password}
-                    helperText={tForm('password.hint')}
-                    required
-                    disabled={isPending}
-                    className="text-sm"
-                />
-                <Input
-                    type="password"
-                    name="confirmPassword"
-                    autoComplete="new-password"
-                    label={tForm('confirmPassword.label')}
-                    placeholder={tForm('confirmPassword.placeholder')}
-                    value={confirmPassword}
-                    onChange={(e) => {
-                        setConfirmPassword(e.target.value);
-                        setErrors((prev) => ({ ...prev, confirmPassword: undefined }));
-                    }}
-                    error={errors.confirmPassword}
-                    required
-                    disabled={isPending}
-                    className="text-sm"
-                />
-
-                <div>
-                    <div className="flex items-start gap-2">
-                        <input
-                            id="save-account-terms"
-                            type="checkbox"
-                            checked={acceptedTerms}
-                            onChange={(e) => {
-                                setAcceptedTerms(e.target.checked);
-                                setErrors((prev) => ({ ...prev, terms: undefined }));
-                            }}
-                            disabled={isPending || termsUnavailable}
-                            aria-invalid={Boolean(errors.terms)}
-                            className="mt-0.5 h-4 w-4 rounded border-border bg-surface-secondary text-primary focus:ring-primary dark:border-border-dark dark:bg-surface-secondary-dark"
-                        />
-                        <label
-                            htmlFor="save-account-terms"
-                            className="text-xs text-text-secondary dark:text-text-secondary-dark"
-                        >
-                            {tForm('terms.text')}{' '}
-                            <a
-                                href={legalHref('tos')}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="text-primary hover:text-primary-hover dark:text-text-dark"
-                            >
-                                {tForm('terms.termsLink')}
-                            </a>{' '}
-                            {tForm('terms.and')}{' '}
-                            <a
-                                href={legalHref('privacy')}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="text-primary hover:text-primary-hover dark:text-text-dark"
-                            >
-                                {tForm('terms.privacyLink')}
-                            </a>
-                        </label>
-                    </div>
-                    {errors.terms && (
-                        <p role="alert" className="mt-1 text-xs text-danger">
-                            {errors.terms}
-                        </p>
-                    )}
                 </div>
+            ) : (
+                <form onSubmit={handleSubmit} className="mt-6 space-y-4" noValidate>
+                    {errors.general && (
+                        <div
+                            role="alert"
+                            className="rounded-lg border border-danger/20 bg-danger/10 px-4 py-3 text-sm text-danger"
+                        >
+                            {errors.general}
+                        </div>
+                    )}
 
-                <Button
-                    type="submit"
-                    fullWidth
-                    loading={isPending}
-                    disabled={termsUnavailable}
-                    data-testid="save-account-submit"
-                >
-                    {isPending ? t('submitting') : t('submit')}
-                </Button>
+                    {termsUnavailable && (
+                        <div
+                            role="alert"
+                            className="space-y-3 rounded-lg border border-warning/20 bg-warning/10 px-4 py-3 text-sm"
+                        >
+                            <p className="text-text dark:text-text-dark">
+                                {tRegisterErrors('termsUnavailable.message')}
+                            </p>
+                            <Button
+                                type="button"
+                                variant="secondary"
+                                size="sm"
+                                loading={isRetrying}
+                                onClick={() => startRetry(() => router.refresh())}
+                            >
+                                {tRegisterErrors('termsUnavailable.retry')}
+                            </Button>
+                        </div>
+                    )}
 
-                <p className="text-xs text-text-muted dark:text-text-muted-dark">
-                    {t('otherAccount')}
-                </p>
-            </form>
+                    <Input
+                        type="email"
+                        name="email"
+                        autoComplete="email"
+                        label={tForm('email.label')}
+                        placeholder={tForm('email.placeholder')}
+                        value={email}
+                        onChange={(e) => {
+                            setEmail(e.target.value);
+                            setErrors((prev) => ({ ...prev, email: undefined }));
+                        }}
+                        error={errors.email}
+                        required
+                        disabled={isPending}
+                        className="text-sm"
+                    />
+                    <Input
+                        type="text"
+                        name="username"
+                        autoComplete="username"
+                        label={t('usernameLabel')}
+                        placeholder={t('usernamePlaceholder')}
+                        value={username}
+                        onChange={(e) => {
+                            setUsername(e.target.value);
+                            setErrors((prev) => ({ ...prev, username: undefined }));
+                        }}
+                        error={errors.username}
+                        helperText={t('usernameHint')}
+                        disabled={isPending}
+                        className="text-sm"
+                    />
+                    <Input
+                        type="password"
+                        name="password"
+                        autoComplete="new-password"
+                        label={tForm('password.label')}
+                        placeholder={tForm('password.placeholder')}
+                        value={password}
+                        onChange={(e) => {
+                            setPassword(e.target.value);
+                            setErrors((prev) => ({ ...prev, password: undefined }));
+                        }}
+                        error={errors.password}
+                        helperText={tForm('password.hint')}
+                        required
+                        disabled={isPending}
+                        className="text-sm"
+                    />
+                    <Input
+                        type="password"
+                        name="confirmPassword"
+                        autoComplete="new-password"
+                        label={tForm('confirmPassword.label')}
+                        placeholder={tForm('confirmPassword.placeholder')}
+                        value={confirmPassword}
+                        onChange={(e) => {
+                            setConfirmPassword(e.target.value);
+                            setErrors((prev) => ({ ...prev, confirmPassword: undefined }));
+                        }}
+                        error={errors.confirmPassword}
+                        required
+                        disabled={isPending}
+                        className="text-sm"
+                    />
+
+                    <div>
+                        <div className="flex items-start gap-2">
+                            <input
+                                id="save-account-terms"
+                                type="checkbox"
+                                checked={acceptedTerms}
+                                onChange={(e) => {
+                                    setAcceptedTerms(e.target.checked);
+                                    setErrors((prev) => ({ ...prev, terms: undefined }));
+                                }}
+                                disabled={isPending || termsUnavailable}
+                                aria-invalid={Boolean(errors.terms)}
+                                className="mt-0.5 h-4 w-4 rounded border-border bg-surface-secondary text-primary focus:ring-primary dark:border-border-dark dark:bg-surface-secondary-dark"
+                            />
+                            <label
+                                htmlFor="save-account-terms"
+                                className="text-xs text-text-secondary dark:text-text-secondary-dark"
+                            >
+                                {tForm('terms.text')}{' '}
+                                <a
+                                    href={legalHref('tos')}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="text-primary hover:text-primary-hover dark:text-text-dark"
+                                >
+                                    {tForm('terms.termsLink')}
+                                </a>{' '}
+                                {tForm('terms.and')}{' '}
+                                <a
+                                    href={legalHref('privacy')}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="text-primary hover:text-primary-hover dark:text-text-dark"
+                                >
+                                    {tForm('terms.privacyLink')}
+                                </a>
+                            </label>
+                        </div>
+                        {errors.terms && (
+                            <p role="alert" className="mt-1 text-xs text-danger">
+                                {errors.terms}
+                            </p>
+                        )}
+                    </div>
+
+                    <Button
+                        type="submit"
+                        fullWidth
+                        loading={isPending}
+                        disabled={termsUnavailable}
+                        data-testid="save-account-submit"
+                    >
+                        {isPending ? t('submitting') : t('submit')}
+                    </Button>
+
+                    <p className="text-xs text-text-muted dark:text-text-muted-dark">
+                        {t('otherAccount')}
+                    </p>
+                </form>
+            )}
         </div>
     );
 }

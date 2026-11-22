@@ -82,7 +82,19 @@ emailVerificationCallbackUrl? }` (validated by `ClaimAccountDto`
   strip covers sign-up there, and the API refuses a demo claim).
   `/register` MUST send a signed-in anonymous visitor to `/save-account`.
   A finished generation on an anonymous account MUST say "Save your
-  account to keep it" once per Work (toast with the same action).
+  account to keep it" once per Work (toast with the same action). The
+  strip also shows inside the wizard on `/onboarding` and on the
+  invitation pages. `/login` shows a temporary account the form with a
+  warning (its Works stay behind), and signing out of one asks to save
+  it first.
+- **FR-G3-10** The claim MUST rotate the session: issue a fresh session
+  for the same user (answered as `access_token`), then revoke the
+  anonymous bearer, which would otherwise end with the anonymous TTL.
+  Failure to issue keeps the anonymous session; the claim still succeeds.
+- **FR-G3-11** The saved account MUST get a real username: the one typed
+  (normalized; a taken one answers 409 `{ code: 'username_taken',
+suggestion }` before any write) or one derived from the email's local
+  part, made unique by `UsernameAllocatorService`. The slug follows.
 
 ### Non-functional requirements
 

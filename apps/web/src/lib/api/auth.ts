@@ -50,6 +50,8 @@ export interface RegisterDto {
 export interface ClaimAccountDto {
     email: string;
     password: string;
+    /** Optional handle; without it the API derives a unique one from the email. */
+    username?: string;
     emailVerificationCallbackUrl?: string;
     /** What the user ticked the box for on the save-account form; see `RegisterDto.terms`. */
     terms?: TermsAcceptanceClaim[];
@@ -60,6 +62,11 @@ export interface ClaimAccountResponse {
     email: string;
     username: string;
     emailVerified: boolean;
+    /**
+     * The session the API rotated to (the anonymous one is revoked). Absent when it could not
+     * issue one, in which case the anonymous session is kept.
+     */
+    access_token?: string;
 }
 
 export interface LoginDto {

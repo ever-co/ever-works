@@ -92,6 +92,14 @@ export function WorkLayoutClient({
         }
     }, [isGenerating, markGenerating, clearGenerating]);
 
+    // EW-617: the save reminder, read through a ref so the status effect below does not list it
+    // in its deps. Listing it re-ran that effect on every identity change, and its cancellation
+    // branch calls router.refresh() each time it runs: an endless refresh loop.
+    const remindRef = useRef(remindToSaveWork);
+    useEffect(() => {
+        remindRef.current = remindToSaveWork;
+    }, [remindToSaveWork]);
+
     useEffect(() => {
         const lastStatus = lastGenerateStatus.current;
         const currentStatus = syncedWork.generateStatus?.status;
@@ -117,7 +125,7 @@ export function WorkLayoutClient({
 
         if (lastStatus !== currentStatus && currentStatus === GenerateStatusType.GENERATED) {
             // EW-617: on a temporary account the "ready" toast carries the save action instead.
-            if (!remindToSaveWork(syncedWork.id, true)) {
+            if (!remindRef.current(syncedWork.id, true)) {
                 toast.success(t('generationCompleted'), {
                     id: 'generation-complete',
                 });
@@ -141,21 +149,10 @@ export function WorkLayoutClient({
         }
 
         lastGenerateStatus.current = currentStatus;
-    }, [
-        router,
-        syncedWork.generateStatus?.status,
-        syncedWork.id,
-        syncsFromDataRepository,
-        t,
-        remindToSaveWork,
-    ]);
+    }, [router, syncedWork.generateStatus?.status, syncedWork.id, syncsFromDataRepository, t]);
 
     // EW-617: a finished Work opened on a temporary account (the onboarding console opens it
     // once generated, so the transition above is never seen here) gets the reminder once.
-    const remindRef = useRef(remindToSaveWork);
-    useEffect(() => {
-        remindRef.current = remindToSaveWork;
-    }, [remindToSaveWork]);
     const openedGenerated = work.generateStatus?.status === GenerateStatusType.GENERATED;
     useEffect(() => {
         if (openedGenerated) remindRef.current(work.id, false);

@@ -13520,12 +13520,21 @@
             "submit": "Save my account",
             "submitting": "Saving…",
             "otherAccount": "Signing in to a different account does not move these Works to it.",
+            "usernameLabel": "Username (optional)",
+            "usernamePlaceholder": "jane-doe",
+            "usernameHint": "Leave it empty to get one based on your email. You can change it later.",
+            "startAgain": "Start again",
+            "signIn": "Sign in",
             "errors": {
                 "emailTaken": "This email already has an account. Use another email to keep these Works on this account.",
                 "notTemporary": "This account is already saved, or it cannot be saved here.",
                 "tooManyAttempts": "Too many attempts. Wait a while, then try again.",
                 "rejected": "The account could not be saved with these details. Check them and try again.",
-                "generic": "The account could not be saved. Try again."
+                "generic": "The account could not be saved. Try again.",
+                "usernameTooShort": "Use at least {length} characters, or leave the username empty",
+                "usernameTaken": "This username is taken. Pick another one, or leave it empty.",
+                "usernameTakenWithSuggestion": "This username is taken. Try {suggestion}, or leave it empty.",
+                "sessionEnded": "Your temporary session has ended, so this account can no longer be saved here. Start again, or sign in if you already have an account."
             }
         },
         "saved": {
@@ -13537,6 +13546,18 @@
             "kept": "This Work is on a temporary account",
             "description": "Save your account to keep it. Temporary accounts are deleted after a few days.",
             "action": "Save my account"
+        },
+        "login": {
+            "title": "You're signed in to a temporary account",
+            "body": "Signing in to another account leaves this one's Works behind, and they are deleted with it. Save this account first to keep them.",
+            "action": "Save this account first"
+        },
+        "signOut": {
+            "title": "Sign out of a temporary account?",
+            "body": "You cannot get back to a temporary account after signing out, and its Works are deleted with it. Save the account first to keep them.",
+            "save": "Save my account",
+            "confirm": "Sign out anyway",
+            "cancel": "Cancel"
         }
     },
     "demo": {

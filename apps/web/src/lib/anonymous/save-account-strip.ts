@@ -32,14 +32,23 @@ export async function buildSaveAccountStrip(
 }
 
 /**
+ * The strip's props for THIS request, for pages outside the dashboard (which reads the
+ * profile once in its own layout): `/onboarding`, the invitation pages, `/login`. Null for a
+ * signed-out visitor without asking the API, and under the same rules as the dashboard.
+ */
+export async function getSaveAccountStripForRequest(): Promise<SaveAccountStripProps | null> {
+    const auth = await getAuthFromRequest();
+    if (!auth.isAuthenticated || auth.isExpired) return null;
+    const profile = await authAPI.getFreshProfile().catch(() => null);
+    return buildSaveAccountStrip(profile);
+}
+
+/**
  * Whether this request is signed in as a temporary account that can be saved. For pages
  * outside the dashboard that must not let such a visitor make a SECOND account: signing up
  * there replaces the session, and the Works stay behind on the anonymous one until the
  * cleanup deletes them. Reads the API only when a session cookie is present.
  */
 export async function hasSavableAnonymousSession(): Promise<boolean> {
-    const auth = await getAuthFromRequest();
-    if (!auth.isAuthenticated || auth.isExpired) return false;
-    const profile = await authAPI.getFreshProfile().catch(() => null);
-    return (await buildSaveAccountStrip(profile)) !== null;
+    return (await getSaveAccountStripForRequest()) !== null;
 }

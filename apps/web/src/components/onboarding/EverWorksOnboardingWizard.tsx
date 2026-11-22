@@ -40,6 +40,8 @@ import type { PluginDeviceAuthStatus } from '@/lib/api/plugins-capabilities/devi
 import { quickCreateSlugFromPrompt } from '@/lib/works/work-slug.shared';
 import { readPromptHandoff } from './prompt-handoff';
 import type { StartedWork } from './generation-console';
+import { SaveAccountStrip } from '@/components/anonymous/SaveAccountStrip';
+import { useAnonymousAccount } from '@/lib/anonymous/anonymous-account-context';
 
 export interface EverWorksOnboardingWizardProps {
     readonly open: boolean;
@@ -77,6 +79,10 @@ export function EverWorksOnboardingWizard({
 }: EverWorksOnboardingWizardProps) {
     const mounted = useMounted();
     const router = useRouter();
+    // EW-617: set only on the standalone /onboarding page for a temporary account. The wizard
+    // is a modal there, so the "save your account" strip sits inside it; the dashboard's copy
+    // of the wizard has no provider and shows none (its own strip is above the header).
+    const saveAccountStrip = useAnonymousAccount();
 
     const pluginsById = useMemo(() => {
         const map: Record<string, UserPlugin> = {};
@@ -305,6 +311,7 @@ export function EverWorksOnboardingWizard({
     return (
         <Dialog open={open} onOpenChange={(next) => !next && handleDismiss()}>
             <DialogContent className="max-w-5xl p-0 overflow-hidden rounded-lg shadow-2xl">
+                {saveAccountStrip && <SaveAccountStrip {...saveAccountStrip} />}
                 {quickStart ? null : (
                     <div className="absolute top-0 left-0 right-0 h-[3px] bg-border dark:bg-border-dark z-10 rounded-t-lg">
                         <div

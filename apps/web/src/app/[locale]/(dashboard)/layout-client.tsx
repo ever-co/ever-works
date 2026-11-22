@@ -581,6 +581,7 @@ export function DashboardLayoutClient({
                                     chatOpen={chatOpen}
                                     onOpenChat={toggleChat}
                                     onInteraction={ensureResizableMode}
+                                    temporaryAccount={saveAccountStrip !== null}
                                 />
 
                                 {/* AI Chat panel — side panel on desktop, full-screen overlay on mobile */}
@@ -784,6 +785,7 @@ export function DashboardLayoutClient({
                                 onSidebarCollapsedChange={handleSidebarCollapsedChange}
                                 chatOpen={chatOpen}
                                 onChatOpenChange={setChatOpen}
+                                temporaryAccount={saveAccountStrip !== null}
                             />
                         </AppLauncherProvider>
                     </CommandPaletteProvider>

@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
     hasEverIdSignOutMarker: vi.fn(),
     getAuthProvidersConfig: vi.fn(),
     isEverIdOffered: vi.fn(),
+    hasSavableAnonymousSession: vi.fn(),
     redirect: vi.fn(() => {
         throw new Error('NEXT_REDIRECT');
     }),
@@ -32,6 +33,9 @@ vi.mock('@/lib/feature-flags/ever-id', () => ({
 }));
 vi.mock('@/lib/feature-flags/demo', () => ({ getDemoConfig: mocks.getDemoConfig }));
 vi.mock('./login-client', () => ({ LoginClient: () => null }));
+vi.mock('@/lib/anonymous/save-account-strip', () => ({
+    hasSavableAnonymousSession: mocks.hasSavableAnonymousSession,
+}));
 
 import { ROUTES } from '@/lib/constants';
 import LoginPage from './page';
@@ -154,5 +158,49 @@ describe('LoginPage — Ever ID props', () => {
         expect(mocks.redirect).toHaveBeenCalledWith({ locale: 'en', href: ROUTES.DASHBOARD });
         expect(mocks.isEverIdOffered).not.toHaveBeenCalled();
         expect(mocks.hasEverIdSignOutMarker).not.toHaveBeenCalled();
+    });
+});
+
+// EW-617: a temporary (anonymous) account used to be bounced to the dashboard like any
+// signed-in visitor, with no word about what signing in to another account does to its Works.
+describe('LoginPage — temporary account', () => {
+    beforeEach(() => {
+        vi.clearAllMocks();
+        mocks.getAuthProvidersConfig.mockResolvedValue({
+            socialProviders: [],
+            magicLinkEnabled: false,
+            everId: EVER_ID_OFF,
+        });
+        mocks.getDemoConfig.mockResolvedValue({ enabled: false, sandboxTtlHours: 24 });
+        mocks.isEverIdOffered.mockResolvedValue(false);
+        mocks.wasSignedOutByEverId.mockReturnValue(false);
+        mocks.hasEverIdSignOutMarker.mockResolvedValue(false);
+    });
+
+    it('shows a temporary account the form with the warning instead of redirecting', async () => {
+        mocks.getAuthFromCookie.mockResolvedValue({ id: 'u-anon' });
+        mocks.hasSavableAnonymousSession.mockResolvedValue(true);
+
+        const props = await renderedClientProps();
+
+        expect(props.temporaryAccount).toBe(true);
+        expect(mocks.redirect).not.toHaveBeenCalled();
+    });
+
+    it('still sends a registered account to the dashboard', async () => {
+        mocks.getAuthFromCookie.mockResolvedValue({ id: 'u-1' });
+        mocks.hasSavableAnonymousSession.mockResolvedValue(false);
+
+        await expect(LoginPage()).rejects.toThrow('NEXT_REDIRECT');
+        expect(mocks.redirect).toHaveBeenCalledWith({ locale: 'en', href: ROUTES.DASHBOARD });
+    });
+
+    it('asks nothing about a temporary account for a signed-out visitor', async () => {
+        mocks.getAuthFromCookie.mockResolvedValue(null);
+
+        const props = await renderedClientProps();
+
+        expect(props.temporaryAccount).toBe(false);
+        expect(mocks.hasSavableAnonymousSession).not.toHaveBeenCalled();
     });
 });

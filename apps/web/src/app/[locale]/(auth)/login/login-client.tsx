@@ -14,6 +14,7 @@ import { REDIRECT_SEARCH_PARAM, ROUTES } from '@/lib/constants';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { OAuthProvider } from '@/lib/api/enums';
 import { DemoLoginCard } from '@/components/demo/DemoLoginCard';
+import { TemporaryAccountLoginNotice } from '@/components/anonymous/TemporaryAccountLoginNotice';
 import { EVER_ID_SIGNED_OUT_PARAM, EVER_ID_SIGNED_OUT_VALUE } from '@/lib/auth/ever-id';
 
 interface LoginClientProps {
@@ -31,6 +32,11 @@ interface LoginClientProps {
      * under "Operator login". `null` (the default) leaves the page exactly as it was.
      */
     demo?: { ttlHours: number } | null;
+    /**
+     * EW-617 — the visitor is signed in to a temporary (anonymous) account: say that signing
+     * in here leaves its Works behind, and offer to save it first. False leaves the page as is.
+     */
+    temporaryAccount?: boolean;
 }
 
 /** APW-12 — S6 / S7 notices: informational, announced politely, never colour alone. */
@@ -111,6 +117,7 @@ export function LoginClient({
     everIdEnabled = false,
     signedOutByEverId = false,
     demo = null,
+    temporaryAccount = false,
 }: LoginClientProps) {
     const searchParams = useSearchParams();
     const t = useTranslations('auth.login');
@@ -424,6 +431,8 @@ export function LoginClient({
             {demo && <DemoLoginCard ttlHours={demo.ttlHours} expired={demoExpired} />}
 
             {everIdNotice && <EverIdSignedOutNotice message={everIdNotice} />}
+
+            {temporaryAccount && <TemporaryAccountLoginNotice />}
 
             {searchParams.get('accountDeleted') === '1' && (
                 <div

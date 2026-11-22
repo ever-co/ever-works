@@ -11,7 +11,11 @@ vi.mock('@/lib/feature-flags/demo', () => ({ getDemoConfig: mocks.getDemoConfig 
 vi.mock('@/lib/api/auth', () => ({ authAPI: { getFreshProfile: mocks.getFreshProfile } }));
 vi.mock('@/lib/auth/middleware', () => ({ getAuthFromRequest: mocks.getAuthFromRequest }));
 
-import { buildSaveAccountStrip, hasSavableAnonymousSession } from './save-account-strip';
+import {
+    buildSaveAccountStrip,
+    getSaveAccountStripForRequest,
+    hasSavableAnonymousSession,
+} from './save-account-strip';
 
 const EXPIRES = '2026-11-24T22:30:45.000Z';
 
@@ -95,5 +99,33 @@ describe('hasSavableAnonymousSession — the /register guard', () => {
 
         mocks.getFreshProfile.mockRejectedValueOnce(new Error('down'));
         await expect(hasSavableAnonymousSession()).resolves.toBe(false);
+    });
+});
+
+describe('getSaveAccountStripForRequest — the strip on pages outside the dashboard', () => {
+    beforeEach(() => {
+        vi.clearAllMocks();
+        mocks.getDemoConfig.mockResolvedValue({ enabled: false });
+    });
+
+    it('is null for a signed-out visitor (or an expired cookie), without asking the API', async () => {
+        mocks.getAuthFromRequest.mockResolvedValueOnce({
+            isAuthenticated: false,
+            isExpired: false,
+        });
+        await expect(getSaveAccountStripForRequest()).resolves.toBeNull();
+        mocks.getAuthFromRequest.mockResolvedValueOnce({ isAuthenticated: true, isExpired: true });
+        await expect(getSaveAccountStripForRequest()).resolves.toBeNull();
+        expect(mocks.getFreshProfile).not.toHaveBeenCalled();
+    });
+
+    it('answers the strip for an anonymous session, under the dashboard rules', async () => {
+        mocks.getAuthFromRequest.mockResolvedValue({ isAuthenticated: true, isExpired: false });
+        mocks.getFreshProfile.mockResolvedValue(anonymous);
+
+        await expect(getSaveAccountStripForRequest()).resolves.toEqual({ expiresAt: EXPIRES });
+
+        mocks.getDemoConfig.mockResolvedValue({ enabled: true });
+        await expect(getSaveAccountStripForRequest()).resolves.toBeNull();
     });
 });

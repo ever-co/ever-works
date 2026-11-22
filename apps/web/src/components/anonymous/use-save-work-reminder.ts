@@ -48,13 +48,17 @@ function rememberReminded(workId: string): void {
  * a word at the right moment.
  */
 export function useSaveWorkReminder(): (workId: string, justFinished: boolean) => boolean {
-    const anonymous = useAnonymousAccount();
+    // A boolean, never the context object: the object is a server prop, so every
+    // router.refresh() delivers a NEW one, and a callback keyed on it changes identity on every
+    // refresh. Callers that list it in an effect's deps would re-run that effect each time
+    // (seen: an endless refresh loop after a cancelled generation).
+    const isAnonymous = useAnonymousAccount() !== null;
     const t = useTranslations('anonymousAccount.reminder');
     const router = useRouter();
 
     return useCallback(
         (workId: string, justFinished: boolean) => {
-            if (!anonymous) return false;
+            if (!isAnonymous) return false;
             if (!justFinished && readReminded().includes(workId)) return false;
             rememberReminded(workId);
 
@@ -75,6 +79,6 @@ export function useSaveWorkReminder(): (workId: string, justFinished: boolean) =
             }, 0);
             return true;
         },
-        [anonymous, router, t],
+        [isAnonymous, router, t],
     );
 }
