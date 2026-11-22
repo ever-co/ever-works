@@ -11,6 +11,8 @@ import type { UserPlugin } from '@/lib/api/plugins';
 import type { OAuthConnectionInfo } from '@/lib/api/plugins-capabilities/oauth';
 import type { GitProviderConnectionInfo } from '@/lib/api/plugins-capabilities/git-providers';
 import type { PluginDeviceAuthStatus } from '@/lib/api/plugins-capabilities/device-auth';
+import { AnonymousAccountContext } from '@/lib/anonymous/anonymous-account-context';
+import type { SaveAccountStripProps } from '@/lib/anonymous/types';
 
 interface Props {
     initialState: OnboardingStateResponse;
@@ -18,6 +20,11 @@ interface Props {
     plugins: ReadonlyArray<UserPlugin>;
     initialConnections: Record<string, OAuthConnectionInfo | GitProviderConnectionInfo | null>;
     initialDeviceAuthStatuses: Record<string, PluginDeviceAuthStatus | null>;
+    /**
+     * EW-617: the temporary-account strip for an anonymous visitor (null for everyone else).
+     * The wizard is a modal here, so the strip goes INSIDE it, where it can be seen and used.
+     */
+    saveAccountStrip?: SaveAccountStripProps | null;
 }
 
 type Leaving = { readonly to: 'dashboard' } | { readonly to: 'work'; readonly name: string };
@@ -68,16 +75,18 @@ export function OnboardingPageClient(props: Props) {
     // extra wiring needed here.
     return (
         <main className="min-h-screen bg-surface dark:bg-surface-dark">
-            <EverWorksOnboardingWizard
-                open
-                initialState={props.initialState}
-                catalog={props.catalog}
-                plugins={props.plugins}
-                initialConnections={props.initialConnections}
-                initialDeviceAuthStatuses={props.initialDeviceAuthStatuses}
-                onClose={handleClose}
-                onOpenWork={handleOpenWork}
-            />
+            <AnonymousAccountContext value={props.saveAccountStrip ?? null}>
+                <EverWorksOnboardingWizard
+                    open
+                    initialState={props.initialState}
+                    catalog={props.catalog}
+                    plugins={props.plugins}
+                    initialConnections={props.initialConnections}
+                    initialDeviceAuthStatuses={props.initialDeviceAuthStatuses}
+                    onClose={handleClose}
+                    onOpenWork={handleOpenWork}
+                />
+            </AnonymousAccountContext>
         </main>
     );
 }

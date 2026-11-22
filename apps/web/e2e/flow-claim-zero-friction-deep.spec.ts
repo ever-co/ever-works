@@ -123,7 +123,7 @@ async function issueInvitation(
 }
 
 test.describe('Claim + zero-friction (deep)', () => {
-    test('anon SESSION TOKEN survives the claim, but the claim itself is one-shot', async ({
+    test('the claim ROTATES the session (anon token revoked, fresh one answered) and is one-shot', async ({
         request,
     }) => {
         // 1. Zero-friction: a throwaway anon session owns a real Work.
@@ -138,8 +138,8 @@ test.describe('Claim + zero-friction (deep)', () => {
         });
         expect(workId).toBeTruthy();
 
-        // 2. Claim the account on that same bearer (no username override → keeps
-        //    the anon username). 200, id unchanged.
+        // 2. Claim the account on that bearer (no username override → one derived
+        //    from the email, never the anon-<hex> handle). 200, id unchanged.
         const email = `survive-${uniqueSuffix()}@test.local`;
         const password = 'SurvivePass1!';
         const claimRes = await request.post(`${API_BASE}/api/auth/claim`, {
@@ -150,32 +150,39 @@ test.describe('Claim + zero-friction (deep)', () => {
         const claimed = await claimRes.json();
         expect(claimed.id).toBe(anon.user.id);
         expect(claimed.email).toBe(email);
-        // No override → username stays the anon username (default-to-current).
-        expect(claimed.username).toBe(anon.user.username);
+        // No override → a handle derived from the email's local part (PR #3300).
+        expect(claimed.username).not.toMatch(ANON_USERNAME_RE);
+        expect(claimed.username).toMatch(/^survive-/);
         expect(claimed.emailVerified).toBe(false);
+        expect(typeof claimed.access_token, 'claim answers the rotated session').toBe('string');
+        const token: string = claimed.access_token;
 
-        // 3. The ORIGINAL anon bearer is STILL VALID — the user stays signed in —
-        //    but the profile has flipped out of anonymous mode on that same token.
-        const after = await profileFresh(request, anon.access_token);
+        // 3. The ORIGINAL anon bearer is revoked at once (session rotation, PR #3300);
+        //    the rotated bearer reads the same row, now out of anonymous mode.
+        const revoked = await request.get(`${API_BASE}/api/auth/profile/fresh`, {
+            headers: authedHeaders(anon.access_token),
+        });
+        expect(revoked.status(), 'the anon bearer is revoked by the claim').toBe(401);
+        const after = await profileFresh(request, token);
         expect(after.id).toBe(anon.user.id);
         expect(after.isAnonymous).toBe(false);
         expect(after.email).toBe(email);
         expect(after.registrationProvider).toBe('local');
         expect(after.anonymousExpiresAt, 'TTL cleared on claim').toBeNull();
 
-        // 4. The Work is still reachable under the SAME (now-credentialed) token —
-        //    ownership never moved (binds by userId, which is unchanged).
+        // 4. The Work is still reachable under the rotated token — ownership never
+        //    moved (binds by userId, which is unchanged).
         const listRes = await request.get(`${API_BASE}/api/works?limit=100`, {
-            headers: authedHeaders(anon.access_token),
+            headers: authedHeaders(token),
         });
         expect(listRes.ok()).toBeTruthy();
         const list = await listRes.json();
         expect((list.works ?? []).map((w: { slug: string }) => w.slug)).toContain(slug);
 
-        // 5. The claim is ONE-SHOT: a SECOND claim on that now non-anon token is
+        // 5. The claim is ONE-SHOT: a SECOND claim on the now non-anon session is
         //    forbidden by the controller-level anonymous-only guard.
         const reClaim = await request.post(`${API_BASE}/api/auth/claim`, {
-            headers: authedHeaders(anon.access_token),
+            headers: authedHeaders(token),
             data: { email: `again-${uniqueSuffix()}@test.local`, password: 'AnotherPass1!' },
         });
         expect(reClaim.status(), 're-claim on a claimed token → 403').toBe(403);

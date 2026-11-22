@@ -13,6 +13,7 @@ import {
     Logger,
     BadRequestException,
     ForbiddenException,
+    ServiceUnavailableException,
     UseInterceptors,
 } from '@nestjs/common';
 import { IntegrationForbiddenGuard } from '../integration/integration-forbidden.guard';
@@ -238,7 +239,7 @@ export class AuthController {
     @ApiOperation({
         summary: 'Create an anonymous (zero-friction) user',
         description:
-            'Mints a temporary User row + session token. The row + its Works are wiped automatically after ANONYMOUS_USER_TTL_DAYS (default 7) days unless the user calls POST /api/auth/claim first.',
+            'Mints a temporary User row + session token. The row + its Works are wiped automatically after ANONYMOUS_USER_TTL_DAYS (default 3) days unless the user calls POST /api/auth/claim first.',
     })
     @ApiResponse({ status: 201, description: 'Anonymous session issued' })
     @ApiResponse({ status: 400, description: 'Captcha verification failed' })
@@ -320,13 +321,17 @@ export class AuthController {
     @ApiOperation({
         summary: 'Claim an anonymous account',
         description:
-            'Converts an anonymous (zero-friction) account into a regular credentialed account. Attaches email + password, clears the TTL, fires verification email. The bearer token from POST /api/auth/anonymous stays valid.',
+            'Converts an anonymous (zero-friction) account into a regular credentialed account. Attaches email + password and a real username (typed, or derived from the email), clears the TTL, fires verification email. Rotates the session: answers a fresh access_token and revokes the anonymous bearer.',
     })
-    @ApiResponse({ status: 200, description: 'Account claimed, verification email sent' })
+    @ApiResponse({
+        status: 200,
+        description: 'Account claimed, verification email sent; carries the new access_token',
+    })
     @ApiResponse({ status: 403, description: 'Account is not anonymous' })
     @ApiResponse({
         status: 409,
-        description: 'Email already in use by a different account',
+        description:
+            'Email already in use by a different account, or username taken (code username_taken + suggestion)',
     })
     async claimAccount(@Request() req, @Body() claimDto: ClaimAccountDto) {
         const userId = req.user?.userId;
@@ -343,6 +348,33 @@ export class AuthController {
             throw new ForbiddenException(
                 'claim is only valid for anonymous (zero-friction) accounts',
             );
+        }
+
+        // Terms first, and recorded BEFORE the account changes. Unlike `register`,
+        // the user id already exists (a claim never changes it), so the acceptance
+        // can be on file before the claim: a 200 then always means "claimed WITH
+        // consent recorded". An unpublished claim refuses (400), and a failure to
+        // record refuses too (503) with the account untouched, so the visitor can
+        // simply retry. The write is idempotent per (user, document, version), so a
+        // claim that later fails (e.g. a taken email) and is retried records once.
+        if (claimDto.terms?.length) {
+            this.termsAcceptanceService.assertClaimsArePublished(claimDto.terms);
+            try {
+                await this.termsAcceptanceService.record(userId, claimDto.terms, {
+                    method: 'signup-checkbox',
+                    ip: req.ip ?? null,
+                    userAgent: req.headers?.['user-agent'] ?? null,
+                });
+            } catch (error) {
+                this.logger.error(
+                    `Failed to record terms acceptance before claiming user ${userId}: ${
+                        error instanceof Error ? error.message : String(error)
+                    }`,
+                );
+                throw new ServiceUnavailableException(
+                    'Could not record the terms acceptance; the account was not changed. Try again.',
+                );
+            }
         }
 
         const claimed = await this.claimAccountService.claim({
@@ -387,7 +419,42 @@ export class AuthController {
             });
         }
 
-        return claimed;
+        // Rotate the session. The anonymous one expires with the anonymous TTL (up
+        // to 3 days from the first visit), so a just-saved account would be signed
+        // out then and, with REQUIRE_EMAIL_VERIFICATION on (the default), could not
+        // sign back in before confirming the address. Issue a regular session for
+        // the same user FIRST, then revoke the anonymous bearer, so a failure in
+        // either step never leaves the caller with no valid session. Both are best
+        // effort: the claim is already committed and must still answer 200.
+        // The accepted trade-off: if the revoke fails, the anonymous bearer stays
+        // valid until its own expiry (at most the anonymous TTL) next to the new
+        // session. Both belong to the same, now regular, user and grant nothing the
+        // new one does not, so availability wins over closing that window.
+        let accessToken: string | undefined;
+        try {
+            accessToken = (
+                await this.authProvider.issueSession(claimed.id, { ipAddress, userAgent })
+            ).access_token;
+        } catch (error) {
+            this.logger.warn(
+                `Claimed user ${claimed.id}: could not issue a fresh session, keeping the anonymous one: ${
+                    error instanceof Error ? error.message : String(error)
+                }`,
+            );
+        }
+        if (accessToken) {
+            try {
+                await this.authProvider.signOut(toHeaders(req.headers || {}));
+            } catch (error) {
+                this.logger.warn(
+                    `Claimed user ${claimed.id}: could not revoke the anonymous session: ${
+                        error instanceof Error ? error.message : String(error)
+                    }`,
+                );
+            }
+        }
+
+        return accessToken ? { ...claimed, access_token: accessToken } : claimed;
     }
 
     // H-17 (partial): per-endpoint throttle on the credential-validation

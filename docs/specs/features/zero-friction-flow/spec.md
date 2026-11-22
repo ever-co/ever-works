@@ -67,6 +67,40 @@ emailVerificationCallbackUrl? }` (validated by `ClaimAccountDto`
   transfer is needed.
 - **FR-G3-7** The endpoint MUST be throttled (default: 10/hour per
   IP) to dampen email-squatting brute force.
+- **FR-G3-8** The endpoint accepts the same optional `terms` claims as
+  `RegisterDto`. When present they MUST be checked against the published
+  corpus and recorded against the (unchanging) user id BEFORE the account
+  changes: an unpublished claim refuses the whole claim (400), and a
+  failure to record refuses it too (503) with the account untouched, so a
+  200 always means the acceptance is on file. An empty list is refused by
+  the DTO.
+- **FR-G3-9** Web (2026-11): while the signed-in account is anonymous,
+  every dashboard page MUST show a non-dismissible strip above the header
+  ("You're using a temporary account…", the real time left from
+  `anonymousExpiresAt`, and a **Save my account** action). The action
+  opens `/save-account` (email, password, terms → `POST /api/auth/claim`),
+  never `/register`, so the Works stay. The strip MUST NOT show to a
+  registered account, a demo sandbox, or on a demo instance (the demo
+  strip covers sign-up there, and the API refuses a demo claim).
+  `/register` MUST send a signed-in anonymous visitor to `/save-account`.
+  A finished generation on an anonymous account MUST say "Save your
+  account to keep it" once per Work (toast with the same action). The
+  strip also shows inside the wizard on `/onboarding` and on the
+  invitation pages. `/login` shows a temporary account the form with a
+  warning (its Works stay behind), and signing out of one asks to save
+  it first.
+- **FR-G3-10** The claim MUST rotate the session: issue a fresh session
+  for the same user (answered as `access_token`), then revoke the
+  anonymous bearer, which would otherwise end with the anonymous TTL.
+  Failure to issue keeps the anonymous session; the claim still succeeds.
+- **FR-G3-11** The saved account MUST get a real username: the one typed
+  (normalized; a taken one answers 409 `{ code: 'username_taken',
+suggestion }` before any write) or one derived from the email's local
+  part, made unique by `UsernameAllocatorService`. A typed handle with
+  nothing usable ("!!!") is a 400, never a silent random one. The handle
+  is written on its own before any credential, so a claim racing for the
+  same handle loses on the unique index as the same 409 (a derived handle
+  is allocated once more), and an email race is the email 409, never a 500. The slug is stable, as on every other rename (`PUT /auth/profile`).
 
 ### Non-functional requirements
 

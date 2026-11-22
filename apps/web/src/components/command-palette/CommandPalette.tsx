@@ -9,6 +9,10 @@ import { toast } from 'sonner';
 import { logout } from '@/app/actions/auth';
 import { useChatContextOptional } from '@/components/ai/ChatProvider';
 import { EverIdSignOutDialog, useEverIdSignOut } from '@/components/auth/EverIdSignOutDialog';
+import {
+    TemporaryAccountSignOutDialog,
+    useTemporaryAccountSignOut,
+} from '@/components/anonymous/TemporaryAccountSignOutDialog';
 import { usePathname, useRouter } from '@/i18n/navigation';
 import { withWorkspaceHref } from '@/i18n/navigation-client';
 import { ROUTES } from '@/lib/constants';
@@ -79,6 +83,8 @@ export interface CommandPaletteProps {
     onSidebarCollapsedChange?: (collapsed: boolean) => void;
     chatOpen?: boolean;
     onChatOpenChange?: (open: boolean) => void;
+    /** EW-617: a temporary (anonymous) account; "Sign out" asks to save it first. */
+    temporaryAccount?: boolean;
 }
 
 const ORGANIZATION_PREFIX = /^\/org\/[^/]+(\/.*)?$/;
@@ -122,6 +128,7 @@ export function CommandPalette({
     onSidebarCollapsedChange,
     chatOpen,
     onChatOpenChange,
+    temporaryAccount = false,
 }: CommandPaletteProps) {
     const palette = useCommandPalette();
     const { openAppLauncher } = useAppLauncher();
@@ -140,6 +147,9 @@ export function CommandPalette({
     // APW-12 (Ever ID): "Sign out" asks about Ever ID first for a session opened
     // with it (S7); every other session signs out exactly as before.
     const { offerEverIdSignOut, dialogProps: everIdSignOutDialogProps } = useEverIdSignOut();
+    // EW-617: a temporary account is asked to save itself before signing out.
+    const { offerSaveFirst, dialogProps: temporarySignOutDialogProps } =
+        useTemporaryAccountSignOut(temporaryAccount);
 
     const [query, setQuery] = useState('');
     const [filter, setFilter] = useState<PaletteFilter | null>(null);
@@ -214,13 +224,15 @@ export function CommandPalette({
             chatOpen,
             setChatOpen: onChatOpenChange,
             copyLink,
-            signOut: () =>
+            signOut: () => {
+                if (offerSaveFirst()) return;
                 startTransition(() => {
                     void (async () => {
                         if (await offerEverIdSignOut()) return;
                         await logout();
                     })();
-                }),
+                });
+            },
             switchOrganization: (slug) => {
                 persistActiveOrganization(slug)
                     .then(() => navigateToWorkspaceDashboard({ kind: 'organization', slug }))
@@ -634,6 +646,7 @@ export function CommandPalette({
             {/* APW-12 — rendered beside the palette so it outlives it: the palette
                 closes when "Sign out" runs, the sign-out question must not. */}
             <EverIdSignOutDialog {...everIdSignOutDialogProps} />
+            <TemporaryAccountSignOutDialog {...temporarySignOutDialogProps} />
         </>
     );
 }

@@ -438,6 +438,11 @@
 			"source": "router"
 		},
 		{
+			"path": "/:locale/save-account",
+			"file": "apps/web/src/app/[locale]/(dashboard)/save-account/page.tsx",
+			"source": "router"
+		},
+		{
 			"path": "/:locale/schedules",
 			"file": "apps/web/src/app/[locale]/(dashboard)/schedules/page.tsx",
 			"source": "router"

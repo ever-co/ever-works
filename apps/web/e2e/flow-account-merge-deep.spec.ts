@@ -178,11 +178,15 @@ test.describe('Account merge / link-providers — deep integration', () => {
         expect(claimed.id, 'claim must preserve userId (merge in place)').toBe(anonId);
         expect(claimed.email).toBe(email);
         expect(claimed.username).toBe(newUsername);
+        // The claim ROTATES the session (PR #3300): it answers the bearer to use from
+        // now on, and the anon one is revoked.
+        const claimedToken: string = claimed.access_token;
+        expect(claimedToken, 'claim answers the rotated session').toBeTruthy();
 
         // The Work the anon created MUST survive the merge with the same id and
         // the same owning userId — only the human-readable `owner` is relabeled.
         const listWorks = await request.get(`${API_BASE}/api/works`, {
-            headers: authedHeaders(token),
+            headers: authedHeaders(claimedToken),
         });
         expect(listWorks.status(), 'works list post-merge').toBe(200);
         const works = (await listWorks.json())?.works ?? [];
@@ -192,8 +196,12 @@ test.describe('Account merge / link-providers — deep integration', () => {
         // owner label flips off the anonymous handle.
         expect(survivor.owner).not.toBe(anonUsername);
 
-        // The original anon bearer is STILL valid (controller doc: token stays valid).
-        const profile = await freshProfile(request, token);
+        // The original anon bearer is revoked; the rotated one reads the merged row.
+        const revoked = await request.get(`${API_BASE}/api/auth/profile/fresh`, {
+            headers: authedHeaders(token),
+        });
+        expect(revoked.status(), 'the anon bearer is revoked by the claim').toBe(401);
+        const profile = await freshProfile(request, claimedToken);
         expect(profile.id).toBe(anonId);
         expect(profile.isAnonymous, 'claimed user is no longer anonymous').toBe(false);
         expect(profile.email).toBe(email);
@@ -317,8 +325,17 @@ test.describe('Account merge / link-providers — deep integration', () => {
         test.skip(first.status() === 429, 'claim throttled');
         expect(first.status(), `first claim ${first.status()}`).toBe(200);
 
-        const second = await request.post(`${API_BASE}/api/auth/claim`, {
+        // The anon bearer died with the claim (session rotation, PR #3300) → 401…
+        const withOldBearer = await request.post(`${API_BASE}/api/auth/claim`, {
             headers: authedHeaders(token),
+            data: { email: `stale-${suffix}@test.local`, password: 'TestPass1!secure' },
+        });
+        test.skip(withOldBearer.status() === 429, 'claim throttled');
+        expect(withOldBearer.status(), 'the revoked anon bearer cannot claim').toBe(401);
+
+        // …and the rotated bearer belongs to a permanent account → 403.
+        const second = await request.post(`${API_BASE}/api/auth/claim`, {
+            headers: authedHeaders((await first.json()).access_token),
             data: { email: `twice-${suffix}@test.local`, password: 'TestPass1!secure' },
         });
         test.skip(second.status() === 429, 'claim throttled');

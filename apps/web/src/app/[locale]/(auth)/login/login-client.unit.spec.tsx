@@ -208,3 +208,42 @@ describe('LoginClient — demo mode', () => {
         expect(screen.getByTestId('demo-card')).toHaveTextContent('expired=true');
     });
 });
+
+// EW-617: a temporary account sees the form with a warning, and a just-saved account whose new
+// session could not be stored lands here told that it IS saved.
+describe('LoginClient — temporary accounts', () => {
+    beforeEach(() => {
+        mocks.search = new URLSearchParams();
+    });
+
+    afterEach(() => cleanup());
+
+    it('shows neither notice by default', () => {
+        render(<LoginClient availableSocialProviders={[]} magicLinkEnabled={false} />);
+
+        expect(screen.queryByTestId('temporary-account-login-notice')).not.toBeInTheDocument();
+        expect(screen.queryByTestId('account-saved-sign-in-notice')).not.toBeInTheDocument();
+    });
+
+    it('warns a temporary account that its Works stay behind, with the save link', () => {
+        render(
+            <LoginClient availableSocialProviders={[]} magicLinkEnabled={false} temporaryAccount />,
+        );
+
+        const notice = screen.getByTestId('temporary-account-login-notice');
+        expect(notice).toHaveTextContent("You're signed in to a temporary account");
+        expect(screen.getByRole('link', { name: 'Save this account first' })).toHaveAttribute(
+            'href',
+            '/save-account',
+        );
+    });
+
+    it('says the account is saved when sent here after saving (?accountSaved=true)', () => {
+        mocks.search = new URLSearchParams('accountSaved=true');
+        render(<LoginClient availableSocialProviders={[]} magicLinkEnabled={false} />);
+
+        expect(screen.getByTestId('account-saved-sign-in-notice')).toHaveTextContent(
+            'Your account is saved',
+        );
+    });
+});

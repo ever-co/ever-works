@@ -59,8 +59,12 @@ import { API_BASE, authedHeaders, registerUserViaAPI } from './helpers/api';
  *        ?includeSecrets=true → includesSecrets:true. Auth required (401).
  *   GET  /api/account/sync/status → 200 { configured:false, hasOAuth:false }.
  *   POST /api/auth/claim (anon bearer) → 200 { id (UNCHANGED), email, username
- *        (anon username unless overridden), emailVerified:false }. Flips
- *        isAnonymous→false, registrationProvider→'local', clears TTL. A
+ *        (the override, else one derived from the email — never the anon
+ *        handle), emailVerified:false, access_token }. Flips isAnonymous→false,
+ *        registrationProvider→'local', clears TTL, leaves the slug as it was.
+ *        ROTATES the session (PR #3300): the anon bearer is revoked (401) and
+ *        `access_token` is the session to use from then on, so every test
+ *        below swaps `anon.token` for it right after a successful claim. A
  *        register-born (non-anon) caller → 403. No/garbage bearer → 401.
  *   PUT  /api/auth/profile → 200 full fresh user { id, username (updated), slug
  *        (STABLE — minted at anon birth, unaffected by username changes),
@@ -237,6 +241,8 @@ test.describe('Anonymous → claim → account-upgrade continuity chain (EW-617 
         });
         expect(claim.status(), 'claim → 200').toBe(200);
         expect((await claim.json()).id, 'claim keeps the same row id').toBe(anon.userId);
+        // Session rotated on claim (PR #3300): the anon bearer is revoked; carry on with the new one.
+        anon.token = (await claim.json()).access_token;
 
         // The wizard state is IDENTICAL after the upgrade — no reset, no loss.
         const after = await getState(request, anon.token);
@@ -274,6 +280,8 @@ test.describe('Anonymous → claim → account-upgrade continuity chain (EW-617 
             data: { email: uniqueEmail('audit'), password: 'AuditKeep1!' },
         });
         expect(claim.status()).toBe(200);
+        // Session rotated on claim (PR #3300): the anon bearer is revoked; carry on with the new one.
+        anon.token = (await claim.json()).access_token;
 
         // The upgraded account's trail carries the WHOLE history — the pre-claim
         // anon rows are NOT orphaned or renamed, and every row is still the same
@@ -332,18 +340,21 @@ test.describe('Anonymous → claim → account-upgrade continuity chain (EW-617 
             data: { email, password: 'ExportKeep1!' },
         });
         expect(claim.status()).toBe(200);
+        // Session rotated on claim (PR #3300): the anon bearer is revoked; carry on with the new one.
+        anon.token = (await claim.json()).access_token;
 
         // AFTER: the SAME snapshot now carries the claimed email; the Work is
-        // still present (ownership binds by the unchanged userId); the anon
-        // username is retained (no override was passed).
+        // still present (ownership binds by the unchanged userId); with no override
+        // the handle is derived from the email, never the anon one (PR #3300).
         const after = await exportAccount(request, anon.token);
         expect(
             String(after.data.profile.email).toLowerCase(),
             'export email flips to claimed',
         ).toBe(email.toLowerCase());
-        expect(String(after.data.profile.username), 'username retained without override').toMatch(
-            ANON_USERNAME_RE,
-        );
+        expect(
+            String(after.data.profile.username),
+            'no override → a handle derived from the email, not the anon one',
+        ).not.toMatch(ANON_USERNAME_RE);
         expect(
             after.data.works.map((w) => w.slug),
             'the pre-claim Work survives in the post-claim export',
@@ -363,14 +374,16 @@ test.describe('Anonymous → claim → account-upgrade continuity chain (EW-617 
         test.skip(!anon, 'anonymous mint throttled — skipping');
         if (!anon) return;
 
-        // Claim WITHOUT a username override → username stays the anon handle.
+        // Claim WITHOUT a username override → a handle derived from the email (PR #3300).
         const claim = await request.post(`${API_BASE}/api/auth/claim`, {
             headers: authedHeaders(anon.token),
             data: { email: uniqueEmail('profile'), password: 'ProfileKeep1!' },
         });
         expect(claim.status()).toBe(200);
-        expect((await claim.json()).username, 'no override → anon username kept').toBe(
-            anon.username,
+        // Session rotated on claim (PR #3300): the anon bearer is revoked; carry on with the new one.
+        anon.token = (await claim.json()).access_token;
+        expect((await claim.json()).username, 'no override → not the anon handle').not.toMatch(
+            ANON_USERNAME_RE,
         );
 
         // Now rename via the profile surface.
@@ -420,6 +433,8 @@ test.describe('Anonymous → claim → account-upgrade continuity chain (EW-617 
             data: { email, password: firstPassword },
         });
         expect(claim.status()).toBe(200);
+        // Session rotated on claim (PR #3300): the anon bearer is revoked; carry on with the new one.
+        anon.token = (await claim.json()).access_token;
 
         // Rotate the just-attached credential (proves it really was set).
         const secondPassword = 'SecondClaim2!';
@@ -472,6 +487,8 @@ test.describe('Anonymous → claim → account-upgrade continuity chain (EW-617 
             data: { email: uniqueEmail('complete'), password: 'CompleteKeep1!' },
         });
         expect(claim.status()).toBe(200);
+        // Session rotated on claim (PR #3300): the anon bearer is revoked; carry on with the new one.
+        anon.token = (await claim.json()).access_token;
 
         // The completion timestamp survives the upgrade untouched.
         const afterState = await getState(request, anon.token);
@@ -499,6 +516,8 @@ test.describe('Anonymous → claim → account-upgrade continuity chain (EW-617 
             data: { email: uniqueEmail('mutable'), password: 'MutableKeep1!' },
         });
         expect(claim.status()).toBe(200);
+        // Session rotated on claim (PR #3300): the anon bearer is revoked; carry on with the new one.
+        anon.token = (await claim.json()).access_token;
 
         // A PATCH AFTER the claim still lands and deep-merges over the carried state.
         const postPatch = await request.patch(`${API_BASE}/api/onboarding/state`, {
@@ -529,7 +548,7 @@ test.describe('Anonymous → claim → account-upgrade continuity chain (EW-617 
         });
         const work = await createWorkAsAnon(request, anon.token, 'Headline Chain Work');
 
-        // CLAIM, then discard the anon bearer entirely and LOG IN afresh — the
+        // CLAIM (which revokes the anon bearer), then LOG IN afresh — the
         // real acid test that the upgraded credentials own all the state.
         const email = uniqueEmail('headline');
         const password = 'HeadlineChain1!';
@@ -538,6 +557,8 @@ test.describe('Anonymous → claim → account-upgrade continuity chain (EW-617 
             data: { email, password },
         });
         expect(claim.status()).toBe(200);
+        // Session rotated on claim (PR #3300): the anon bearer is revoked; carry on with the new one.
+        anon.token = (await claim.json()).access_token;
 
         const login = await request.post(`${API_BASE}/api/auth/login`, {
             data: { email, password },
@@ -593,6 +614,8 @@ test.describe('Anonymous → claim → account-upgrade continuity chain (EW-617 
             data: { email: uniqueEmail('iso'), password: 'IsoUpgrade1!' },
         });
         expect(claim.status()).toBe(200);
+        // Session rotated on claim (PR #3300): the anon bearer is revoked; carry on with the new one.
+        anon.token = (await claim.json()).access_token;
 
         // A totally separate registered stranger must never see the Work in
         // their own list, their own export, or a direct GET.
@@ -630,6 +653,8 @@ test.describe('Anonymous → claim → account-upgrade continuity chain (EW-617 
         const claimed = await claim.json();
         expect(claimed.id, 'still the same row').toBe(anon.userId);
         expect(claimed.username, 'override applied on claim').toBe(overrideName);
+        // Session rotated on claim (PR #3300): the anon bearer is revoked; carry on with the new one.
+        anon.token = claimed.access_token;
 
         // The override is reflected in the fresh profile and the export snapshot.
         const fresh = await request

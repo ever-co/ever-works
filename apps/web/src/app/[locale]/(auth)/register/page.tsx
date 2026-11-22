@@ -7,6 +7,9 @@ import { authAPI, type TermsAcceptanceDocument } from '@/lib/api';
 import { getDemoConfig } from '@/lib/feature-flags/demo';
 import { DemoRegisterPanel } from '@/components/demo/DemoRegisterPanel';
 import { EVER_ID_ANONYMOUS_DISTINCT_ID, isEverIdOffered } from '@/lib/feature-flags/ever-id';
+import { hasSavableAnonymousSession } from '@/lib/anonymous/save-account-strip';
+import { redirect } from '@/i18n/navigation';
+import { ROUTES } from '@/lib/constants';
 
 export async function generateMetadata(): Promise<Metadata> {
     const t = await getTranslations('metadata.pages');
@@ -31,6 +34,12 @@ export default async function RegisterPage({
     // are really created plus the one-click demo, and skip the form entirely.
     if (demo.enabled) {
         return <DemoRegisterPanel signUpUrl={demo.signUpUrl} ttlHours={demo.sandboxTtlHours} />;
+    }
+    // EW-617: signed in on a temporary account? Signing up here would make a second account
+    // and leave the Works behind on this one, so save this one instead (same user id).
+    if (await hasSavableAnonymousSession()) {
+        redirect({ href: ROUTES.SAVE_ACCOUNT, locale: await getLocale() });
+        return null;
     }
     // APW-12 — the flag is evaluated only when an administrator enabled Ever ID.
     const everIdEnabled = await isEverIdOffered(everId, EVER_ID_ANONYMOUS_DISTINCT_ID);

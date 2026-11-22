@@ -404,11 +404,19 @@ test.describe('flow: account deletion — initiate/confirm/grace + anonymization
             data: { email: claimEmail, password: claimPassword, username: `claimed${Date.now()}` },
         });
         expect(claimRes.status(), 'anonymous account claimed successfully').toBeLessThan(300);
+        // The claim rotates the session (PR #3300): the anon bearer is revoked, and the
+        // claim answers the session to use from now on.
+        const claimedToken: string = (await claimRes.json()).access_token;
+        expect(claimedToken, 'claim answers the rotated session').toBeTruthy();
+        const anonAfter = await request.get(`${API_BASE}/api/auth/profile/fresh`, {
+            headers: authedHeaders(anonToken),
+        });
+        expect(anonAfter.status(), 'the anon bearer is revoked by the claim').toBe(401);
 
         // Post-claim the profile is permanent: the grace clock is cancelled.
         const claimedProfile = await (
             await request.get(`${API_BASE}/api/auth/profile/fresh`, {
-                headers: authedHeaders(anonToken),
+                headers: authedHeaders(claimedToken),
             })
         ).json();
         expect(claimedProfile.isAnonymous, 'no longer anonymous after claim').toBe(false);
