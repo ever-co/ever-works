@@ -2,7 +2,12 @@ import 'server-only';
 import type { ResponseCookie } from 'next/dist/compiled/@edge-runtime/cookies';
 import { cookies } from 'next/headers';
 import { EVER_ID_LIMITS } from '@ever-works/contracts';
-import { getRedirectCookie, isPublicUrlHttps, removeRedirectCookie } from './cookies';
+import {
+    getRedirectCookie,
+    hostOnlyCookieName,
+    isPublicUrlHttps,
+    removeRedirectCookie,
+} from './cookies';
 import { decrypt, encrypt } from './crypto';
 import { toEverIdReturnTo } from './ever-id';
 
@@ -97,7 +102,10 @@ async function writeCookie(name: string, value: string): Promise<void> {
         throw new EverIdCookieTooLargeError();
     }
     const cookieStore = await cookies();
-    cookieStore.set(name, value, cookieOptions());
+    // `__Host-` on HTTPS (R-16): a sibling subdomain cannot plant a transaction, intent, pending
+    // value or logout state. The constants stay the plain names; every read, write and clear maps
+    // them here.
+    cookieStore.set(hostOnlyCookieName(name), value, cookieOptions());
 }
 
 async function clearCookies(...names: string[]): Promise<void> {
@@ -106,13 +114,13 @@ async function clearCookies(...names: string[]): Promise<void> {
     for (const name of names) {
         // Same attributes as the write (minus `maxAge`, which would override the
         // expiry `delete` sets), so the browser matches and removes that cookie.
-        cookieStore.delete({ name, httpOnly, secure, sameSite, path });
+        cookieStore.delete({ name: hostOnlyCookieName(name), httpOnly, secure, sameSite, path });
     }
 }
 
 async function readCookie(name: string): Promise<string | undefined> {
     const cookieStore = await cookies();
-    const value = cookieStore.get(name)?.value;
+    const value = cookieStore.get(hostOnlyCookieName(name))?.value;
     return value ? value : undefined;
 }
 

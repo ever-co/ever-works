@@ -1,4 +1,4 @@
-import { GITHUB_APP_SETUP_COOKIE_NAME, githubAppSetupCookieOptions } from '@/lib/auth/cookies';
+import { githubAppSetupCookieName, githubAppSetupCookieOptions } from '@/lib/auth/cookies';
 import { API_URL, ROUTES } from '@/lib/constants';
 import { publicUrl } from '@/lib/public-origin';
 import { NextRequest, NextResponse } from 'next/server';
@@ -55,7 +55,7 @@ export async function GET(request: NextRequest) {
     // cookie to the API, which checks it against the hash inside the state.
     const redirect = NextResponse.redirect(redirectUrl);
     redirect.cookies.set(
-        GITHUB_APP_SETUP_COOKIE_NAME,
+        githubAppSetupCookieName(),
         data.binding,
         githubAppSetupCookieOptions(
             typeof data.bindingTtlSeconds === 'number' ? data.bindingTtlSeconds : 600,

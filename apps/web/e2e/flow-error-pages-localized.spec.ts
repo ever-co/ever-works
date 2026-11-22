@@ -1,5 +1,6 @@
 import { test, expect, type Browser, type BrowserContext } from '@playwright/test';
 import { API_BASE } from './helpers/api';
+import { isSessionCookieName, sessionCookieNameFor } from './helpers/auth';
 
 /**
  * Localized error pages — COMPLEX cross-feature INTEGRATION flows.
@@ -78,7 +79,7 @@ const BOUNDARY_COPY: Record<string, RegExp> = {
  */
 async function seededAuthToken(context: BrowserContext): Promise<string | undefined> {
     const cookies = await context.cookies();
-    return cookies.find((c) => c.name === 'everworks_auth_token')?.value;
+    return cookies.find((c) => isSessionCookieName(c.name))?.value;
 }
 
 /**
@@ -97,7 +98,14 @@ async function localedContext(
     const host = new URL(origin).hostname;
     const ctx = await browser.newContext({ storageState: { cookies: [], origins: [] } });
     await ctx.addCookies([
-        { name: 'everworks_auth_token', value: authToken, domain: host, path: '/' },
+        // `__Host-` on an HTTPS base URL (R-16), which also needs Secure.
+        {
+            name: sessionCookieNameFor(origin),
+            value: authToken,
+            domain: host,
+            path: '/',
+            secure: new URL(origin).protocol === 'https:',
+        },
         { name: 'NEXT_LOCALE', value: locale, domain: host, path: '/' },
     ]);
     return ctx;

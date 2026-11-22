@@ -1,28 +1,20 @@
 import 'server-only';
 import { ResponseCookie } from 'next/dist/compiled/@edge-runtime/cookies';
-import { cookies } from 'next/headers';
+import { cookies, headers } from 'next/headers';
 import { encrypt, decrypt } from './crypto';
+import { isPublicUrlHttps, legacyAuthCookieFallback } from './cookie-policy';
 
+// Decided from the configured public URL only (`./cookie-policy.ts`); re-exported so every
+// caller of `@/lib/auth/cookies` keeps importing it from here.
+export { isPublicUrlHttps };
+
+/**
+ * The session cookie's PLAIN name: the only one on http (dev, e2e), and the legacy one on HTTPS,
+ * where the live name is `__Host-everworks_auth_token` (`authCookieName()`). R-16: user Works and
+ * apps live on sibling hosts (`<slug>.ever.works`), which can plant a plain-name cookie with
+ * `Domain=ever.works` and sign a visitor in to the attacker's account (login CSRF).
+ */
 export const AUTH_COOKIE_NAME = 'everworks_auth_token';
-
-// M-21: in preview / staging deploys that serve over HTTPS but happen to
-// run with NODE_ENV !== 'production', the previous `secure: NODE_ENV ===
-// 'production'` flag would let the cookie travel over HTTP. Anchor on the
-// public URL scheme instead so any HTTPS deploy gets the secure flag.
-// `WEB_URL` is already required at boot for the API; mirror that here.
-// Exported so the Ever ID flow cookies (`./ever-id-cookies.ts`) take their
-// `secure` flag from exactly the same rule.
-export function isPublicUrlHttps(): boolean {
-    const url = process.env.WEB_URL || process.env.NEXT_PUBLIC_WEB_URL;
-    if (url) {
-        try {
-            return new URL(url).protocol === 'https:';
-        } catch {
-            // fall through
-        }
-    }
-    return process.env.NODE_ENV === 'production';
-}
 
 const cookieOptions: Partial<ResponseCookie> = {
     httpOnly: true,
@@ -32,15 +24,108 @@ const cookieOptions: Partial<ResponseCookie> = {
     path: '/',
 };
 
+/**
+ * A cookie name that only this exact host can set (R-16). In production (HTTPS) the `__Host-`
+ * prefix makes the browser accept the cookie only with Secure, `Path=/` and no `Domain`, so a
+ * page on a sibling subdomain (a user's Work on `{slug}.ever.works`) cannot plant one with
+ * `Domain=ever.works` ("cookie tossing"). Plain on http localhost (dev, e2e), where browsers
+ * refuse a `__Host-` cookie. Decided from the configured public URL only (`isPublicUrlHttps`),
+ * never from a request header. Every cookie named with it must be set with Secure, `Path=/` and
+ * no Domain (`cookieOptions` has all three).
+ */
+export function hostOnlyCookieName(name: string): string {
+    return isPublicUrlHttps() ? `__Host-${name}` : name;
+}
+
+/**
+ * Deletes a cookie with the attributes it was set with. A bare `delete(name)` sends no Secure
+ * attribute, and a browser ignores that for a `__Host-` cookie, so it would linger.
+ */
+async function expireCookie(name: string) {
+    const cookieStore = await cookies();
+    cookieStore.set(name, '', { ...cookieOptions, maxAge: 0 });
+}
+
+// =================
+// Session cookie (R-16)
+// =================
+
+/** The live session cookie name: `__Host-everworks_auth_token` on HTTPS, plain on http. */
+export function authCookieName(): string {
+    return hostOnlyCookieName(AUTH_COOKIE_NAME);
+}
+
+/**
+ * Whether the plain session cookie name still works on HTTPS: read as a fallback when there is no
+ * `__Host-` cookie (nobody signed in before the rename is signed out by it), and written as a
+ * mirror next to the `__Host-` one (a pod still on the previous release during a rolling deploy
+ * reads only the plain name). It has a hard end in code (`AUTH_COOKIE_LEGACY_FALLBACK_UNTIL`,
+ * default `LEGACY_AUTH_COOKIE_DEFAULT_UNTIL`), `AUTH_COOKIE_LEGACY_FALLBACK=false` ends it sooner,
+ * and it never applies on http, where the plain name IS the live one (`./cookie-policy.ts`).
+ */
+export function legacyAuthCookieFallbackEnabled(): boolean {
+    return legacyAuthCookieFallback().active;
+}
+
+/**
+ * How many cookies called `name` a raw `Cookie` header carries. A browser sends both a host-only
+ * cookie and one a sibling subdomain set with `Domain=ever.works` under the same name, and the
+ * cookie APIs keep only one of them (the last), so a tossed cookie could win over the visitor's
+ * own. Two or more plain session cookies is therefore never trusted (I2b).
+ */
+export function countCookieName(cookieHeader: string | null | undefined, name: string): number {
+    if (!cookieHeader) return 0;
+    let count = 0;
+    for (const part of cookieHeader.split(';')) {
+        const eq = part.indexOf('=');
+        if ((eq < 0 ? part : part.slice(0, eq)).trim() === name) count += 1;
+    }
+    return count;
+}
+
 export async function setAuthAccessCookie(token: string) {
     const cookieStore = await cookies();
     const encryptedToken = await encrypt(token);
-    cookieStore.set(AUTH_COOKIE_NAME, encryptedToken, cookieOptions);
+    cookieStore.set(authCookieName(), encryptedToken, cookieOptions);
+    if (authCookieName() === AUTH_COOKIE_NAME) return;
+    if (legacyAuthCookieFallbackEnabled()) {
+        // Rolling-deploy skew: a pod still on the previous release reads only the plain name, so
+        // while the fallback is on the session is mirrored there too, or a visitor who signed in
+        // on a new pod would look signed out on an old one. New pods read `__Host-` first and
+        // ignore the mirror, so it adds nothing a tossed cookie could use.
+        cookieStore.set(AUTH_COOKIE_NAME, encryptedToken, cookieOptions);
+    } else if (cookieStore.get(AUTH_COOKIE_NAME)) {
+        // Fallback off: no plain-name cookie is written, and a left-over one is expired.
+        cookieStore.set(AUTH_COOKIE_NAME, '', { ...cookieOptions, maxAge: 0 });
+    }
+}
+
+/**
+ * The sealed session cookie's value: the `__Host-` one when it exists (a plain-name cookie next to
+ * it is ignored, whoever planted it), else, while the fallback is on, a legacy plain-name one.
+ * Reads only: the proxy moves a legacy cookie to the new name (`reconcileLegacyAuthCookie`), since a
+ * render cannot write cookies.
+ */
+async function readSealedAuthCookie(): Promise<string | undefined> {
+    const cookieStore = await cookies();
+    const current = cookieStore.get(authCookieName())?.value;
+    if (current) return current;
+    if (!legacyAuthCookieFallbackEnabled()) return undefined;
+    const legacy = cookieStore.get(AUTH_COOKIE_NAME)?.value;
+    if (!legacy) return undefined;
+    // Never trust a plain session name that appears more than once (a tossed Domain cookie next to
+    // the visitor's own): which one the cookie API kept is not ours to choose. Fail closed when the
+    // raw header cannot be read.
+    try {
+        const raw = (await headers()).get('cookie');
+        return countCookieName(raw, AUTH_COOKIE_NAME) === 1 ? legacy : undefined;
+    } catch {
+        return undefined;
+    }
 }
 
 export async function getAuthAccessCookie() {
-    const cookieStore = await cookies();
-    const encryptedValue = cookieStore.get(AUTH_COOKIE_NAME)?.value;
+    const encryptedValue = await readSealedAuthCookie();
     if (!encryptedValue) return undefined;
 
     try {
@@ -51,9 +136,75 @@ export async function getAuthAccessCookie() {
     }
 }
 
+/** Signs out on this browser: the live cookie and, on HTTPS, a legacy plain-name one. */
 export async function removeAuthAccessCookie() {
-    const cookieStore = await cookies();
-    cookieStore.delete(AUTH_COOKIE_NAME);
+    await expireCookie(authCookieName());
+    if (authCookieName() !== AUTH_COOKIE_NAME) {
+        await expireCookie(AUTH_COOKIE_NAME);
+    }
+}
+
+type RequestCookieReader = {
+    cookies: { get(name: string): { value: string } | undefined };
+    headers: { get(name: string): string | null };
+};
+type ResponseCookieWriter = {
+    cookies: { set(name: string, value: string, options?: Partial<ResponseCookie>): unknown };
+};
+
+/**
+ * What the proxy does with the plain session name for a request the auth gate let through
+ * (the only place a page request can write cookies):
+ *
+ * - `migrated`: while the fallback is on and there is no `__Host-` cookie yet, the same sealed
+ *   value is copied to `__Host-everworks_auth_token`. The plain cookie is KEPT: a pod still on
+ *   the previous release (rolling deploy, or a rollback) reads only the plain name. Once the
+ *   `__Host-` cookie exists, new pods ignore the plain one. Never when the plain name appears
+ *   more than once.
+ * - `mirrored`: while the fallback is on, a `__Host-` cookie with NO plain cookie next to it (the
+ *   plain one aged out: a migrated cookie keeps the expiry of the original sign-in) gets its plain
+ *   mirror back, with a fresh lifetime, so a rollback still finds the session. A request carries
+ *   no cookie expiry, so "older" is only seen once the browser has dropped it. A plain cookie with
+ *   a different value is left alone: it is either newer (a pod on the previous release wrote it)
+ *   or planted, and an old pod must not be handed the `__Host-` session in its place.
+ * - `expired`: once the fallback is over (end date or flag) on HTTPS, a left-over host-only plain
+ *   cookie is expired. (A tossed `Domain=` one cannot be cleared from here; it is ignored.)
+ * - `none`: nothing to do.
+ */
+export function reconcileLegacyAuthCookie(
+    request: RequestCookieReader,
+    response: ResponseCookieWriter,
+): 'migrated' | 'mirrored' | 'expired' | 'none' {
+    if (!response.cookies) return 'none';
+    const name = authCookieName();
+    if (name === AUTH_COOKIE_NAME) return 'none';
+    const legacy = request.cookies.get(AUTH_COOKIE_NAME)?.value;
+    if (!legacyAuthCookieFallbackEnabled()) {
+        if (!legacy) return 'none';
+        response.cookies.set(AUTH_COOKIE_NAME, '', { ...cookieOptions, maxAge: 0 });
+        return 'expired';
+    }
+    const current = request.cookies.get(name)?.value;
+    if (current) {
+        if (legacy) return 'none';
+        response.cookies.set(AUTH_COOKIE_NAME, current, cookieOptions);
+        return 'mirrored';
+    }
+    if (!legacy) return 'none';
+    if (countCookieName(request.headers.get('cookie'), AUTH_COOKIE_NAME) !== 1) return 'none';
+    response.cookies.set(name, legacy, cookieOptions);
+    return 'migrated';
+}
+
+/**
+ * Expires every session cookie name on a response (the proxy's signed-out gate): the live one
+ * and, on HTTPS, a legacy plain-name one, each with the attributes it was set with.
+ */
+export function expireAuthCookies(response: ResponseCookieWriter): void {
+    response.cookies.set(authCookieName(), '', { ...cookieOptions, maxAge: 0 });
+    if (authCookieName() !== AUTH_COOKIE_NAME) {
+        response.cookies.set(AUTH_COOKIE_NAME, '', { ...cookieOptions, maxAge: 0 });
+    }
 }
 
 // =================
@@ -71,26 +222,6 @@ export async function removeAuthAccessCookies() {
 // =================
 // OAuth
 // =================
-
-/**
- * A cookie name that only this exact host can set. In production (HTTPS) the `__Host-` prefix
- * makes the browser accept the cookie only with Secure, `Path=/` and no `Domain`, so a page on
- * a sibling subdomain (a user's Work on `{slug}.ever.works`) cannot plant one with
- * `Domain=ever.works` ("cookie tossing"). Plain on http localhost (dev, e2e), where browsers
- * refuse a `__Host-` cookie. `cookieOptions` already has Secure, `Path=/` and no Domain.
- */
-function hostOnlyCookieName(name: string): string {
-    return isPublicUrlHttps() ? `__Host-${name}` : name;
-}
-
-/**
- * Deletes a cookie with the attributes it was set with. A bare `delete(name)` sends no Secure
- * attribute, and a browser ignores that for a `__Host-` cookie, so it would linger.
- */
-async function expireCookie(name: string) {
-    const cookieStore = await cookies();
-    cookieStore.set(name, '', { ...cookieOptions, maxAge: 0 });
-}
 
 /** The host-scoped mirror of the OAuth `state` (C-03); `__Host-oauth_state` in production. */
 export function oauthStateCookieName(): string {
@@ -216,8 +347,18 @@ export async function removeOAuthSaveAccountCookie() {
 // GitHub App setup — browser binding (10-09 handover item 13)
 // =================
 
-/** HttpOnly cookie holding the setup's browser-binding nonce, scoped to the App routes. */
+/** The plain name of the setup's browser-binding nonce cookie (the live one on http). */
 export const GITHUB_APP_SETUP_COOKIE_NAME = 'ew_github_app_setup';
+
+/**
+ * The binding nonce's cookie name: `__Host-ew_github_app_setup` on HTTPS (R-16), so a sibling
+ * subdomain cannot plant its own setup binding. `__Host-` requires `Path=/`, so on HTTPS the cookie
+ * is no longer scoped to `/api/github-app` (it is HttpOnly, lives at most 15 minutes, and only the
+ * two App routes read it); on http it keeps the old name and path, unchanged.
+ */
+export function githubAppSetupCookieName(): string {
+    return hostOnlyCookieName(GITHUB_APP_SETUP_COOKIE_NAME);
+}
 
 /** The cookie's options: Lax so GitHub's top-level redirect back carries it. */
 export function githubAppSetupCookieOptions(maxAgeSeconds: number): Partial<ResponseCookie> {
@@ -225,7 +366,7 @@ export function githubAppSetupCookieOptions(maxAgeSeconds: number): Partial<Resp
         httpOnly: true,
         secure: isPublicUrlHttps(),
         sameSite: 'lax',
-        path: '/api/github-app',
+        path: isPublicUrlHttps() ? '/' : '/api/github-app',
         maxAge: Math.max(60, Math.min(maxAgeSeconds, 60 * 15)),
     };
 }
@@ -234,9 +375,14 @@ export function githubAppSetupCookieOptions(maxAgeSeconds: number): Partial<Resp
 // Redirects
 // =================
 
+/** Where to go after signing in; `__Host-redirect_url` on HTTPS (R-16). */
+export function redirectCookieName(): string {
+    return hostOnlyCookieName('redirect_url');
+}
+
 export async function setRedirectCookie(url: string) {
     const cookieStore = await cookies();
-    cookieStore.set('redirect_url', url, {
+    cookieStore.set(redirectCookieName(), url, {
         ...cookieOptions,
         maxAge: 60 * 10, // 10 minute expiry
     });
@@ -244,10 +390,9 @@ export async function setRedirectCookie(url: string) {
 
 export async function getRedirectCookie() {
     const cookieStore = await cookies();
-    return cookieStore.get('redirect_url')?.value;
+    return cookieStore.get(redirectCookieName())?.value;
 }
 
 export async function removeRedirectCookie() {
-    const cookieStore = await cookies();
-    cookieStore.delete('redirect_url');
+    await expireCookie(redirectCookieName());
 }

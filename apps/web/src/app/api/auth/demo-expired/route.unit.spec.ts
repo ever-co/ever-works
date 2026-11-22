@@ -26,7 +26,14 @@ const jar = vi.hoisted(() => {
             get: (name: string) =>
                 values.has(name) ? { name, value: values.get(name)! } : undefined,
             has: (name: string) => values.has(name),
-            set: (name: string, value: string) => {
+            set: (name: string, value: string, options?: { maxAge?: number }) => {
+                // Expiring with Max-Age=0 (how the session cookie is removed now, so the
+                // `__Host-` name is removed too) is a delete, as the browser treats it.
+                if (options?.maxAge === 0) {
+                    deletes.push(name);
+                    values.delete(name);
+                    return;
+                }
                 values.set(name, value);
             },
             delete: (arg: string | { name: string }) => {

@@ -98,3 +98,25 @@ export async function loginViaAPI(
 
     return res.json();
 }
+
+/**
+ * The web session cookie's names (R-16): `everworks_auth_token` on http (dev, CI e2e) and the
+ * legacy name on HTTPS, `__Host-everworks_auth_token` on HTTPS. A spec that reads or plants the
+ * session cookie by name goes through these, so it also runs against an HTTPS base URL.
+ */
+export const SESSION_COOKIE_NAMES = [
+    'everworks_auth_token',
+    '__Host-everworks_auth_token',
+] as const;
+
+/** Whether a cookie is the web session cookie, under either name. */
+export function isSessionCookieName(name: string): boolean {
+    return (SESSION_COOKIE_NAMES as readonly string[]).includes(name);
+}
+
+/** The name the web sets the session cookie under for this origin. */
+export function sessionCookieNameFor(origin: string): string {
+    return new URL(origin).protocol === 'https:'
+        ? '__Host-everworks_auth_token'
+        : 'everworks_auth_token';
+}

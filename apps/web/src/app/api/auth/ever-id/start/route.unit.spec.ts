@@ -66,7 +66,7 @@ vi.mock('@/i18n/navigation', () => ({
 }));
 vi.mock('@/lib/auth', () => ({
     getAuthFromCookie: signedInMock,
-    getRedirectCookie: async () => jar.values.get('redirect_url'),
+    getRedirectCookie: async () => jar.values.get('__Host-redirect_url'),
 }));
 vi.mock('@/lib/auth/providers', () => ({ getEverIdAvailability: availabilityMock }));
 vi.mock('@/lib/feature-flags/posthog-client', () => ({ getPostHogClient: () => flag.client }));
@@ -230,9 +230,9 @@ describe('GET /api/auth/ever-id/start — on, signed out: the authorization the 
     it('keeps the transaction in the flow’s own cookies, with its attributes', async () => {
         await run();
 
-        expect(jar.values.get('ew_everid_txn')).toBe(TRANSACTION);
-        expect(jar.values.get('ew_everid_intent')).toBe('sign-in');
-        for (const name of ['ew_everid_txn', 'ew_everid_intent']) {
+        expect(jar.values.get('__Host-ew_everid_txn')).toBe(TRANSACTION);
+        expect(jar.values.get('__Host-ew_everid_intent')).toBe('sign-in');
+        for (const name of ['__Host-ew_everid_txn', '__Host-ew_everid_intent']) {
             expect(jar.options.get(name)).toEqual({
                 httpOnly: true,
                 secure: true,
@@ -242,7 +242,10 @@ describe('GET /api/auth/ever-id/start — on, signed out: the authorization the 
             });
         }
         // The two cookies of a sign-in, and no other.
-        expect([...jar.values.keys()].sort()).toEqual(['ew_everid_intent', 'ew_everid_txn']);
+        expect([...jar.values.keys()].sort()).toEqual([
+            '__Host-ew_everid_intent',
+            '__Host-ew_everid_txn',
+        ]);
     });
 
     it('writes the cookies exactly as the sign-in button does', async () => {
@@ -270,13 +273,13 @@ describe('GET /api/auth/ever-id/start — on, signed out: the authorization the 
             });
 
         const first = await run();
-        expect(jar.values.get('ew_everid_txn')).toBe('txn-1');
+        expect(jar.values.get('__Host-ew_everid_txn')).toBe('txn-1');
         const second = await run();
 
         expect(authorizeMock).toHaveBeenCalledTimes(2);
         expect(first.headers.get('Location')).toBe(`${PROVIDER_URL}&n=1`);
         expect(second.headers.get('Location')).toBe(`${PROVIDER_URL}&n=2`);
-        expect(jar.values.get('ew_everid_txn')).toBe('txn-2');
+        expect(jar.values.get('__Host-ew_everid_txn')).toBe('txn-2');
     });
 
     it('sends a return path of this site on to the API', async () => {
@@ -318,7 +321,7 @@ describe('GET /api/auth/ever-id/start — on, signed out: the authorization the 
     });
 
     it('falls back to a relative destination the app stored before sign-in, as the button does', async () => {
-        jar.values.set('redirect_url', '/org-invite/tok');
+        jar.values.set('__Host-redirect_url', '/org-invite/tok');
 
         await run();
 
@@ -326,7 +329,7 @@ describe('GET /api/auth/ever-id/start — on, signed out: the authorization the 
     });
 
     it('never forwards an absolute stored destination', async () => {
-        jar.values.set('redirect_url', 'https://evil.example/phish');
+        jar.values.set('__Host-redirect_url', 'https://evil.example/phish');
 
         await run();
 
@@ -334,7 +337,7 @@ describe('GET /api/auth/ever-id/start — on, signed out: the authorization the 
     });
 
     it('an explicit return path wins over the stored one', async () => {
-        jar.values.set('redirect_url', '/org-invite/tok');
+        jar.values.set('__Host-redirect_url', '/org-invite/tok');
 
         await run('?return=/works/42');
 
@@ -357,8 +360,8 @@ describe('GET /api/auth/ever-id/start — on, signed in: straight to the destina
 
     function expectNoAuthorization() {
         expect(authorizeMock).not.toHaveBeenCalled();
-        expect(jar.values.has('ew_everid_txn')).toBe(false);
-        expect(jar.values.has('ew_everid_intent')).toBe(false);
+        expect(jar.values.has('__Host-ew_everid_txn')).toBe(false);
+        expect(jar.values.has('__Host-ew_everid_intent')).toBe(false);
     }
 
     it('lands on the normal post-sign-in page when the link names no path', async () => {
@@ -398,10 +401,10 @@ describe('GET /api/auth/ever-id/start — on, signed in: straight to the destina
     });
 
     it('does not use the destination stored for a sign-in: nobody is signing in', async () => {
-        jar.values.set('redirect_url', '/org-invite/tok');
+        jar.values.set('__Host-redirect_url', '/org-invite/tok');
 
         expectRedirect(await run(), '/');
-        expect(jar.values.get('redirect_url')).toBe('/org-invite/tok');
+        expect(jar.values.get('__Host-redirect_url')).toBe('/org-invite/tok');
     });
 });
 

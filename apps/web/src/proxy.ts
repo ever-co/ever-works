@@ -2,7 +2,12 @@ import createMiddleware from 'next-intl/middleware';
 import { routing } from './i18n/routing';
 import { NextRequest, NextResponse } from 'next/server';
 import { ALLOWED_REDIRECT_URLS, LOCALES, PUBLIC_ROUTES, ROUTES } from './lib/constants';
-import { AUTH_COOKIE_NAME } from './lib/auth/cookies';
+import {
+    AUTH_COOKIE_NAME,
+    authCookieName,
+    expireAuthCookies,
+    reconcileLegacyAuthCookie,
+} from './lib/auth/cookies';
 import { resolveApiCspHost, resolveApiCspSocketSources } from './lib/csp-api-sources';
 import { match } from 'path-to-regexp';
 import { getAuthFromRequest } from './lib/auth';
@@ -338,8 +343,10 @@ export default async function proxy(req: NextRequest) {
             : new URL(handoffSignIn ?? ROUTES.AUTH_LOGIN, req.url);
         const response = NextResponse.redirect(target);
 
-        if (req.cookies.has(AUTH_COOKIE_NAME)) {
-            response.cookies.delete(AUTH_COOKIE_NAME);
+        // Both names (R-16), each with the attributes it was set with: a bare delete sends no
+        // Secure attribute, which a browser ignores for a `__Host-` cookie.
+        if (req.cookies.has(authCookieName()) || req.cookies.has(AUTH_COOKIE_NAME)) {
+            expireAuthCookies(response);
         }
 
         return applySecurityHeaders(response);
@@ -350,6 +357,10 @@ export default async function proxy(req: NextRequest) {
     // the auth gate above stays, and the response still gets no-store /
     // no-referrer.
     const response = applySecurityHeaders(intlResponse);
+    // R-16: a signed-in visitor still on the legacy plain-name session cookie moves to
+    // `__Host-everworks_auth_token` here, once, while the fallback lasts; after its end a
+    // left-over plain cookie is expired (the only place this request can write cookies).
+    reconcileLegacyAuthCookie(req, response);
     return isAccountDeletionPage(pathname) ? applyAccountDeletionHeaders(response) : response;
 }
 
