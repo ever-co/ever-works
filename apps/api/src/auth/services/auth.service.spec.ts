@@ -21,7 +21,10 @@ import { BadRequestException, ConflictException, UnauthorizedException } from '@
 import * as bcrypt from 'bcrypt';
 import { createHash } from 'crypto';
 import { AuthService } from './auth.service';
-import { EXISTING_ACCOUNT_EMAIL_UNVERIFIED_CODE } from './social-link-errors';
+import {
+    EXISTING_ACCOUNT_EMAIL_UNVERIFIED_CODE,
+    EXISTING_ACCOUNT_EMAIL_UNVERIFIED_MESSAGE,
+} from './social-link-errors';
 import type { UserRepository, AuthAccountRepository } from '@ever-works/agent/database';
 import type { EventEmitter2 } from '@nestjs/event-emitter';
 import {
@@ -472,7 +475,7 @@ describe('AuthService', () => {
                         status: 409,
                         response: expect.objectContaining({
                             code: EXISTING_ACCOUNT_EMAIL_UNVERIFIED_CODE,
-                            message: expect.stringContaining('has not been verified'),
+                            message: EXISTING_ACCOUNT_EMAIL_UNVERIFIED_MESSAGE,
                         }),
                     });
                     expect(userRepo.updateForSocialAuth).not.toHaveBeenCalled();

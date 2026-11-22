@@ -1,3 +1,4 @@
+import { HttpModule } from '@nestjs/axios';
 import { Module } from '@nestjs/common';
 import {
     ONBOARDING_ACCOUNT_UPSERT,
@@ -41,6 +42,8 @@ import { UsersModule } from '../users/users.module';
 @Module({
     imports: [
         FacadesModule,
+        // `OnboardingAccountAdapter` reads the caller's verified GitHub emails.
+        HttpModule,
         DatabaseModule,
         WorkModule,
         AuthModule,

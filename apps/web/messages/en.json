@@ -16,7 +16,7 @@
                 "invalidState": "Invalid authorization state. Please try signing in again.",
                 "unsupportedProvider": "This authentication provider is not supported.",
                 "providerConflict": "This provider account is already linked to another user. Please use a different account or contact support if this is unexpected.",
-                "existingAccountUnverified": "An account with this email already exists, but its email has not been verified. Sign in the way you created it, or verify its email first.",
+                "existingAccountUnverified": "An account with this email already exists, but its email has never been verified, so we can't link this sign-in to it. If you created it, sign in the way you did then. If you didn't, contact support.",
                 "callbackFailed": "Failed to complete authentication. Please try again."
             },
             "resetPassword": {

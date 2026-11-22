@@ -7,6 +7,7 @@ vi.mock('@/lib/api', async () => {
 });
 
 import { ApiResponseError } from '@/lib/api/server-api';
+import messages from '../../../../messages/en.json';
 import { getOAuthRouteErrorCode } from './callback-errors';
 
 /**
@@ -59,5 +60,15 @@ describe('getOAuthRouteErrorCode', () => {
                 'oauth_callback',
             ),
         ).toBe('oauth_callback');
+    });
+
+    // Verifying evicts nobody: the person who opened the account keeps their session, password
+    // and links. So the page never tells the reader, who may be the address's real owner, to
+    // verify an account they may not have created.
+    it('the page message never asks the reader to verify that account', () => {
+        const text = messages.auth.error.oauth.existingAccountUnverified;
+
+        expect(text).toContain('contact support');
+        expect(text).not.toMatch(/verify (it|its|the|this|that|your)/i);
     });
 });

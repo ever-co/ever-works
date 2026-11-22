@@ -11,10 +11,17 @@ import { ConflictException } from '@nestjs/common';
  */
 export const EXISTING_ACCOUNT_EMAIL_UNVERIFIED_CODE = 'EXISTING_ACCOUNT_EMAIL_UNVERIFIED';
 
+/**
+ * Never suggests verifying that account: the person reading it may not be the one who opened
+ * it, and verifying evicts nobody (its creator keeps their session, password and links), so
+ * it would complete the hijack instead of preventing it.
+ */
+export const EXISTING_ACCOUNT_EMAIL_UNVERIFIED_MESSAGE =
+    "An account with this email already exists, but its email has never been verified, so we can't link this sign-in to it. If you created it, sign in the way you did then. If you didn't, contact support.";
+
 export function existingAccountEmailUnverified(): ConflictException {
     return new ConflictException({
         code: EXISTING_ACCOUNT_EMAIL_UNVERIFIED_CODE,
-        message:
-            'An account with this email already exists but its email has not been verified. Sign in the way you created it, or verify its email first.',
+        message: EXISTING_ACCOUNT_EMAIL_UNVERIFIED_MESSAGE,
     });
 }

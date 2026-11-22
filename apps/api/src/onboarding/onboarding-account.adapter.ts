@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { HttpService } from '@nestjs/axios';
 import { Injectable, Logger } from '@nestjs/common';
 import {
     AuthAccountRepository,
@@ -6,6 +7,7 @@ import {
     UserRepository,
 } from '@ever-works/agent/database';
 import type { OnboardingAccountUpsert } from '@ever-works/agent/onboarding';
+import { listVerifiedGitHubEmails } from '@src/auth/utils/github-email.utils';
 import { UsernameAllocatorService } from '@src/users/services/username-allocator.service';
 
 /**
@@ -13,10 +15,18 @@ import { UsernameAllocatorService } from '@src/users/services/username-allocator
  *
  * Mirrors the existing `GitHubAppOnboardingService.findOrCreateLocalUser`
  * pattern: looks up the link table → falls back to the auth account by
- * provider account id → falls back to email → creates a fresh user when
- * nothing matches. Either way we end up with a user row plus an
+ * provider account id → falls back to a VERIFIED email → creates a fresh
+ * user when nothing matches. Either way we end up with a user row plus an
  * `auth_accounts` row that records the GitHub identity and the latest
  * access token (encrypted at rest by the repository).
+ *
+ * The email the caller sends (`POST /api/onboarding` is public) is only a
+ * claim. It joins an existing user only when GitHub reports it verified for
+ * the caller's own account AND that user's email is verified; otherwise the
+ * new account gets the noreply address, and the claimed email stays only on
+ * the onboarding row (`contactEmail`). A GitHub provider account or App user
+ * link the user already has for a DIFFERENT GitHub identity is never
+ * re-pointed at the caller's.
  *
  * The resulting `accountId` is the User UUID — the same value used as
  * `userId` everywhere else in the platform.
@@ -30,6 +40,7 @@ export class OnboardingAccountAdapter implements OnboardingAccountUpsert {
         private readonly authAccounts: AuthAccountRepository,
         private readonly githubLinks: GitHubAppUserLinkRepository,
         private readonly usernameAllocator: UsernameAllocatorService,
+        private readonly httpService: HttpService,
     ) {}
 
     async upsertFromGithub(input: {
@@ -52,15 +63,31 @@ export class OnboardingAccountAdapter implements OnboardingAccountUpsert {
             }
         }
 
-        if (!user && input.email) {
-            user = await this.users.findByEmail(input.email);
+        // Set only when GitHub confirms the claimed address for the caller's account.
+        let verifiedEmail: string | null = null;
+        if (!user && input.email?.trim()) {
+            verifiedEmail = await this.verifiedEmailOfCaller(input.email, input.accessToken);
+            if (verifiedEmail) {
+                const byEmail = await this.users.findByEmail(input.email.trim());
+                if (byEmail?.emailVerified) {
+                    user = byEmail;
+                } else if (byEmail) {
+                    // Someone opened that account with the address and never verified it:
+                    // joining it would hand the caller's GitHub identity and Work to it, and
+                    // it to the caller (pre-hijacking). A separate account instead.
+                    this.logger.warn(
+                        `onboarding.email_match_refused userId=${byEmail.id} reason=account_email_unverified`,
+                    );
+                }
+            }
         }
 
         if (!user) {
             const username = await this.resolveUniqueUsername(
                 input.login || `agent-${input.githubUserId}`,
             );
-            const email = input.email || `agent-${input.githubUserId}@users.noreply.ever.works`;
+            // Never the caller's claimed email: unverified, it would squat someone's address.
+            const email = `agent-${input.githubUserId}@users.noreply.ever.works`;
             user = await this.users.create({
                 username,
                 email,
@@ -76,50 +103,97 @@ export class OnboardingAccountAdapter implements OnboardingAccountUpsert {
             this.logger.log(`onboarding.account_linked userId=${user.id} login=${input.login}`);
         }
 
-        await this.authAccounts
-            .upsertProviderAccount({
-                userId: user.id,
-                providerId: 'github',
-                accountId: input.githubUserId,
-                username: input.login,
-                email: input.email ?? null,
-                accessToken: input.accessToken,
-                refreshToken: null,
-                accessTokenExpiresAt: null,
-                refreshTokenExpiresAt: null,
-                scope: null,
-                tokenType: 'Bearer',
-                metadata: {
-                    providerUserId: input.githubUserId,
-                    login: input.login,
-                    onboardingChannel: 'agent-zero-friction',
-                },
-            } as any)
-            .catch((err) => {
-                this.logger.warn(
-                    `onboarding.account_link_failed userId=${user!.id} reason=${describeError(err)}`,
-                );
-            });
+        // `upsertProviderAccount` is keyed by (userId, providerId): a `github` row the user
+        // already has for another GitHub identity would be re-pointed at this caller's id and
+        // token. Keep it, and skip.
+        const githubAccount = await this.authAccounts
+            .findProviderAccount(user.id, 'github')
+            .catch(() => null);
+        if (githubAccount && githubAccount.accountId !== input.githubUserId) {
+            this.logger.warn(
+                `onboarding.account_link_skipped userId=${user.id} reason=other_github_identity`,
+            );
+        } else {
+            await this.authAccounts
+                .upsertProviderAccount({
+                    userId: user.id,
+                    providerId: 'github',
+                    accountId: input.githubUserId,
+                    username: input.login,
+                    email: verifiedEmail,
+                    accessToken: input.accessToken,
+                    refreshToken: null,
+                    accessTokenExpiresAt: null,
+                    refreshTokenExpiresAt: null,
+                    scope: null,
+                    tokenType: 'Bearer',
+                    metadata: {
+                        providerUserId: input.githubUserId,
+                        login: input.login,
+                        onboardingChannel: 'agent-zero-friction',
+                    },
+                } as any)
+                .catch((err) => {
+                    this.logger.warn(
+                        `onboarding.account_link_failed userId=${user!.id} reason=${describeError(err)}`,
+                    );
+                });
+        }
 
-        await this.githubLinks
-            .upsertLink({
-                userId: user.id,
-                githubUserId: input.githubUserId,
-                githubLogin: input.login,
-                githubNodeId: null,
-                accessToken: input.accessToken,
-                refreshToken: null,
-                accessTokenExpiresAt: null,
-                refreshTokenExpiresAt: null,
-                scope: null,
-            } as any)
-            .catch((err) => {
-                this.logger.warn(
-                    `onboarding.gh_link_failed userId=${user!.id} reason=${describeError(err)}`,
-                );
-            });
+        // `upsertLink` updates the user's existing link in place, whatever GitHub user it names.
+        const appLink = await this.githubLinks.findByUserId(user.id).catch(() => null);
+        if (appLink && appLink.githubUserId !== input.githubUserId) {
+            this.logger.warn(
+                `onboarding.gh_link_skipped userId=${user.id} reason=other_github_identity`,
+            );
+        } else {
+            await this.githubLinks
+                .upsertLink({
+                    userId: user.id,
+                    githubUserId: input.githubUserId,
+                    githubLogin: input.login,
+                    githubNodeId: null,
+                    accessToken: input.accessToken,
+                    refreshToken: null,
+                    accessTokenExpiresAt: null,
+                    refreshTokenExpiresAt: null,
+                    scope: null,
+                } as any)
+                .catch((err) => {
+                    this.logger.warn(
+                        `onboarding.gh_link_failed userId=${user!.id} reason=${describeError(err)}`,
+                    );
+                });
+        }
 
         return { accountId: user.id };
+    }
+
+    /**
+     * The claimed address, lowercased, when GitHub reports it VERIFIED for the account behind
+     * the caller's token (`GET /user/emails`, as the social sign-in reads it); otherwise null.
+     * A token that cannot read the addresses, or a failed call, confirms nothing: the caller
+     * then gets a separate account rather than somebody else's.
+     */
+    private async verifiedEmailOfCaller(
+        email: string,
+        accessToken: string,
+    ): Promise<string | null> {
+        const claimed = email.trim().toLowerCase();
+        let verified: string[];
+        try {
+            verified = await listVerifiedGitHubEmails(this.httpService, accessToken, {
+                logger: this.logger,
+            });
+        } catch (err) {
+            this.logger.warn(`onboarding.email_check_failed reason=${describeError(err)}`);
+            return null;
+        }
+        if (!verified.includes(claimed)) {
+            this.logger.debug('onboarding.email_not_verified_for_caller: not matched by email');
+            return null;
+        }
+        return claimed;
     }
 
     /**
