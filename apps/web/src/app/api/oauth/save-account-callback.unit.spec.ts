@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
  * EW-617 — the OAuth callback half of saving a temporary account with GitHub / Google.
@@ -153,6 +153,50 @@ describe('handleOAuthCallback routes a save-account round trip to the save', () 
         expect(mocks.redirect).toHaveBeenCalledWith({
             locale: 'en',
             href: '/auth/error?error=oauth_invalid_state',
+        });
+    });
+});
+
+describe('handleOAuthCallback: a refused sign-in', () => {
+    let consoleError: ReturnType<typeof vi.spyOn>;
+
+    beforeEach(() => {
+        vi.clearAllMocks();
+        // `loginOauth` logs the cause; keep the run quiet.
+        consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+        mocks.getOAuthStateCookie.mockResolvedValue('s-1');
+        mocks.readOAuthSaveAccountCookie.mockResolvedValue({ status: 'none' });
+    });
+
+    afterEach(() => {
+        consoleError.mockRestore();
+    });
+
+    // The API refuses to link a verified Google / GitHub sign-in into an existing account whose
+    // own email was never verified (pre-hijacking guard): its own message, and no session.
+    it('lands on its own error when the existing account email is unverified', async () => {
+        mocks.connectOAuthCallback.mockRejectedValue(
+            new ApiResponseError('unverified', 409, 'EXISTING_ACCOUNT_EMAIL_UNVERIFIED'),
+        );
+
+        await handleOAuthCallback(callbackRequest('s-1'), 'google');
+
+        expect(mocks.setAuthCookies).not.toHaveBeenCalled();
+        expect(mocks.redirect).toHaveBeenCalledWith({
+            locale: 'en',
+            href: '/auth/error?error=oauth_existing_account_unverified',
+        });
+    });
+
+    it('keeps the provider-conflict error for any other 409', async () => {
+        mocks.connectOAuthCallback.mockRejectedValue(new ApiResponseError('conflict', 409));
+
+        await handleOAuthCallback(callbackRequest('s-1'), 'github');
+
+        expect(mocks.setAuthCookies).not.toHaveBeenCalled();
+        expect(mocks.redirect).toHaveBeenCalledWith({
+            locale: 'en',
+            href: '/auth/error?error=oauth_provider_conflict',
         });
     });
 });

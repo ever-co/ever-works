@@ -42,6 +42,8 @@ function AuthErrorContent() {
                 return t('oauth.unsupportedProvider');
             case 'oauth_provider_conflict':
                 return t('oauth.providerConflict');
+            case 'oauth_existing_account_unverified':
+                return t('oauth.existingAccountUnverified');
             case 'oauth_callback':
                 return t('oauth.callbackFailed');
             case 'invalid_credentials':
@@ -85,6 +87,7 @@ function AuthErrorContent() {
             case 'oauth_invalid_state':
             case 'oauth_unsupported_provider':
             case 'oauth_provider_conflict':
+            case 'oauth_existing_account_unverified':
             case 'oauth_callback':
                 return (
                     <svg

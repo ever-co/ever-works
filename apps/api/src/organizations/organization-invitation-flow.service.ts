@@ -73,8 +73,10 @@ export type OrganizationMemberView = {
  *    answered again and nothing is sent twice;
  *  - `already_member`: the person is already a member (the Tenant owner is a
  *    member of every Organization of the Tenant);
- *  - `added`: the person already belongs to the Tenant, so they joined this
- *    roster directly, exactly as `invite()` adopts them, and got no email.
+ *  - `added`: the person already belongs to the Tenant and their email is
+ *    verified, so they joined this roster directly, exactly as `invite()`
+ *    adopts them, and got no email. An unverified in-Tenant person is not
+ *    adopted: they get the token invitation (`invited`) instead.
  *
  * The invitation never carries its token (it exists only inside the email).
  */
@@ -202,11 +204,18 @@ export class OrganizationInvitationFlowService {
                 throw new BadRequestException('user_already_a_member');
             }
             // In the Tenant but not on this Org's roster: adopt them directly
-            // rather than mailing a token they do not need.
-            await this.recordMembership(organization.id, organization.tenantId, existing.id, {
-                invitedById: actorUserId,
-            });
-            throw new BadRequestException('user_added_directly');
+            // rather than mailing a token they do not need, but ONLY when their
+            // email is verified. An unverified account may belong to someone who
+            // merely typed this address at sign-up; it falls through to the
+            // token-by-mail invitation below, which proves mailbox control
+            // (accept() records the roster row for an in-Tenant user and
+            // joinTenant answers 'already_member').
+            if (existing.emailVerified === true) {
+                await this.recordMembership(organization.id, organization.tenantId, existing.id, {
+                    invitedById: actorUserId,
+                });
+                throw new BadRequestException('user_added_directly');
+            }
         }
 
         const issued = await this.invitations.issue({
@@ -231,8 +240,10 @@ export class OrganizationInvitationFlowService {
      *  - a member (or the Tenant owner) is answered as `already_member`;
      *  - an invitation still pending for the email is answered again
      *    (`pending`), even when a concurrent call won the race to issue it;
-     *  - a person already in the Tenant joins the roster directly (`added`),
-     *    the same adoption `invite()` performs, and gets no email.
+     *  - a person already in the Tenant whose email is verified joins the roster
+     *    directly (`added`), the same adoption `invite()` performs, and gets no
+     *    email; an unverified one gets the token invitation (`invited`) instead,
+     *    since the token proves they control the mailbox.
      *
      * Only the `member` role is issued: invitations carry no other role yet,
      * and promotion stays the Tenant owner's step in the app (EW-P2-6).
@@ -267,7 +278,9 @@ export class OrganizationInvitationFlowService {
 
         await this.assertSeatForTenant(tenantId);
 
-        if (existing && inTenant) {
+        // Unverified in-Tenant accounts are not adopted (see invite()): they get the
+        // token-by-mail invitation below instead.
+        if (existing && inTenant && existing.emailVerified === true) {
             try {
                 await this.recordMembership(organization.id, tenantId, existing.id, {
                     invitedById: actorUserId,

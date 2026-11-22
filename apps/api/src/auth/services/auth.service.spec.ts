@@ -21,6 +21,10 @@ import { BadRequestException, ConflictException, UnauthorizedException } from '@
 import * as bcrypt from 'bcrypt';
 import { createHash } from 'crypto';
 import { AuthService } from './auth.service';
+import {
+    EXISTING_ACCOUNT_EMAIL_UNVERIFIED_CODE,
+    EXISTING_ACCOUNT_EMAIL_UNVERIFIED_MESSAGE,
+} from './social-link-errors';
 import type { UserRepository, AuthAccountRepository } from '@ever-works/agent/database';
 import type { EventEmitter2 } from '@nestjs/event-emitter';
 import {
@@ -381,7 +385,7 @@ describe('AuthService', () => {
                     id: 'u-1',
                     email: 'sa@b.co',
                     isActive: true,
-                    emailVerified: false,
+                    emailVerified: true,
                 } as any);
                 userRepo.updateForSocialAuth.mockResolvedValue({ id: 'u-1' } as any);
                 authAccountRepo.upsertProviderAccount.mockResolvedValue({} as any);
@@ -391,6 +395,9 @@ describe('AuthService', () => {
                 expect(userRepo.updateForSocialAuth).toHaveBeenCalledWith(
                     'u-1',
                     expect.objectContaining({ emailVerified: true }),
+                );
+                expect(authAccountRepo.upsertProviderAccount).toHaveBeenCalledWith(
+                    expect.objectContaining({ userId: 'u-1', accountId: 'gh-1' }),
                 );
             });
 
@@ -436,6 +443,197 @@ describe('AuthService', () => {
                 expect(userRepo.create).not.toHaveBeenCalled();
                 expect(userRepo.updateForSocialAuth).not.toHaveBeenCalled();
                 expect(authAccountRepo.upsertProviderAccount).not.toHaveBeenCalled();
+            });
+        });
+
+        // Account pre-hijacking: someone opens an account with the victim's address and never
+        // verifies it (password registration, a social sign-up whose provider reports the
+        // address unverified, an anonymous account saved with it). The victim's later verified
+        // Google / GitHub sign-in must not be linked into that account.
+        describe('a new identity joins an existing user by email only when BOTH emails are verified', () => {
+            it.each([
+                ['false', false],
+                ['null', null],
+                ['missing', undefined],
+            ])(
+                'refuses (409, writing nothing) when the existing user emailVerified is %s',
+                async (_label, emailVerified) => {
+                    authAccountRepo.findProviderAccountByAccountId.mockResolvedValue(null);
+                    userRepo.findByEmailForSocialAuth.mockResolvedValue({
+                        id: 'u-attacker',
+                        email: 'sa@b.co',
+                        isActive: true,
+                        emailVerified,
+                    } as any);
+
+                    const attempt = service.validateSocialUser(
+                        socialUser({ providerUserId: 'gh-victim', emailVerified: true }) as any,
+                    );
+
+                    await expect(attempt).rejects.toBeInstanceOf(ConflictException);
+                    await expect(attempt).rejects.toMatchObject({
+                        status: 409,
+                        response: expect.objectContaining({
+                            code: EXISTING_ACCOUNT_EMAIL_UNVERIFIED_CODE,
+                            message: EXISTING_ACCOUNT_EMAIL_UNVERIFIED_MESSAGE,
+                        }),
+                    });
+                    expect(userRepo.updateForSocialAuth).not.toHaveBeenCalled();
+                    expect(userRepo.update).not.toHaveBeenCalled();
+                    expect(userRepo.create).not.toHaveBeenCalled();
+                    expect(authAccountRepo.upsertProviderAccount).not.toHaveBeenCalled();
+                    expect(emitter.emit).not.toHaveBeenCalled();
+                },
+            );
+
+            it('refuses the same way when the provider gave no account id to look a link up by', async () => {
+                userRepo.findByEmailForSocialAuth.mockResolvedValue({
+                    id: 'u-attacker',
+                    email: 'sa@b.co',
+                    isActive: true,
+                    emailVerified: false,
+                } as any);
+
+                await expect(
+                    service.validateSocialUser(socialUser({ providerUserId: '' }) as any),
+                ).rejects.toMatchObject({
+                    status: 409,
+                    response: expect.objectContaining({
+                        code: EXISTING_ACCOUNT_EMAIL_UNVERIFIED_CODE,
+                    }),
+                });
+                expect(authAccountRepo.findProviderAccountByAccountId).not.toHaveBeenCalled();
+                expect(userRepo.updateForSocialAuth).not.toHaveBeenCalled();
+                expect(authAccountRepo.upsertProviderAccount).not.toHaveBeenCalled();
+            });
+
+            it('keeps the older 401 when the provider email is unverified too (that rule decides first)', async () => {
+                authAccountRepo.findProviderAccountByAccountId.mockResolvedValue(null);
+                userRepo.findByEmailForSocialAuth.mockResolvedValue({
+                    id: 'u-1',
+                    email: 'sa@b.co',
+                    isActive: true,
+                    emailVerified: false,
+                } as any);
+
+                await expect(
+                    service.validateSocialUser(socialUser({ emailVerified: false }) as any),
+                ).rejects.toThrow(
+                    new UnauthorizedException(
+                        'Unable to link this social account because the provider email is not verified',
+                    ),
+                );
+                expect(userRepo.updateForSocialAuth).not.toHaveBeenCalled();
+                expect(authAccountRepo.upsertProviderAccount).not.toHaveBeenCalled();
+            });
+
+            it('still links a verified provider email into a VERIFIED existing user, as before', async () => {
+                authAccountRepo.findProviderAccountByAccountId.mockResolvedValue(null);
+                userRepo.findByEmailForSocialAuth.mockResolvedValue({
+                    id: 'u-owner',
+                    email: 'sa@b.co',
+                    isActive: true,
+                    username: 'owner',
+                    avatar: 'old.png',
+                    emailVerified: true,
+                } as any);
+                const updated = { id: 'u-owner', email: 'sa@b.co', emailVerified: true };
+                userRepo.updateForSocialAuth.mockResolvedValue(updated as any);
+                authAccountRepo.upsertProviderAccount.mockResolvedValue({} as any);
+
+                const result = await service.validateSocialUser(socialUser() as any);
+
+                expect(result).toBe(updated);
+                expect(userRepo.create).not.toHaveBeenCalled();
+                expect(userRepo.updateForSocialAuth).toHaveBeenCalledWith(
+                    'u-owner',
+                    expect.objectContaining({
+                        emailVerified: true,
+                        registrationProvider: 'github',
+                        lastLoginAt: expect.any(Date),
+                    }),
+                );
+                expect(authAccountRepo.upsertProviderAccount).toHaveBeenCalledWith(
+                    expect.objectContaining({
+                        userId: 'u-owner',
+                        providerId: 'github',
+                        accountId: 'gh-1',
+                    }),
+                );
+            });
+
+            it('an identity already linked to the user signs in although BOTH emails are unverified (unchanged)', async () => {
+                authAccountRepo.findProviderAccountByAccountId.mockResolvedValue({
+                    id: 'acc-1',
+                    userId: 'u-1',
+                    providerId: 'github',
+                    accountId: 'gh-1',
+                } as any);
+                userRepo.findByIdForSocialAuth.mockResolvedValue({
+                    id: 'u-1',
+                    email: 'sa@b.co',
+                    isActive: true,
+                    emailVerified: false,
+                } as any);
+                const updated = { id: 'u-1', email: 'sa@b.co', emailVerified: false };
+                userRepo.updateForSocialAuth.mockResolvedValue(updated as any);
+                authAccountRepo.upsertProviderAccount.mockResolvedValue({} as any);
+
+                const result = await service.validateSocialUser(
+                    socialUser({ emailVerified: false }) as any,
+                );
+
+                expect(result).toBe(updated);
+                expect(userRepo.findByEmailForSocialAuth).not.toHaveBeenCalled();
+                expect(userRepo.updateForSocialAuth).toHaveBeenCalledWith(
+                    'u-1',
+                    expect.objectContaining({ emailVerified: false }),
+                );
+                expect(authAccountRepo.upsertProviderAccount).toHaveBeenCalledWith(
+                    expect.objectContaining({ userId: 'u-1', accountId: 'gh-1' }),
+                );
+            });
+
+            it('a linked identity with the same, now verified, email still verifies the user (unchanged)', async () => {
+                authAccountRepo.findProviderAccountByAccountId.mockResolvedValue({
+                    id: 'acc-1',
+                    userId: 'u-1',
+                } as any);
+                userRepo.findByIdForSocialAuth.mockResolvedValue({
+                    id: 'u-1',
+                    email: 'SA@b.co',
+                    isActive: true,
+                    emailVerified: false,
+                } as any);
+                userRepo.updateForSocialAuth.mockResolvedValue({ id: 'u-1' } as any);
+                authAccountRepo.upsertProviderAccount.mockResolvedValue({} as any);
+
+                await service.validateSocialUser(socialUser() as any);
+
+                expect(userRepo.updateForSocialAuth).toHaveBeenCalledWith(
+                    'u-1',
+                    expect.objectContaining({ emailVerified: true }),
+                );
+            });
+
+            it('creates a new user when no account has the email (unchanged)', async () => {
+                authAccountRepo.findProviderAccountByAccountId.mockResolvedValue(null);
+                userRepo.findByEmailForSocialAuth.mockResolvedValue(null);
+                const created = { id: 'u-new', email: 'sa@b.co' };
+                userRepo.create.mockResolvedValue(created as any);
+                authAccountRepo.upsertProviderAccount.mockResolvedValue({} as any);
+                jest.spyOn(bcrypt, 'hash').mockResolvedValue('hashed' as never);
+
+                const result = await service.validateSocialUser(socialUser() as any);
+
+                expect(result).toBe(created);
+                expect(userRepo.create).toHaveBeenCalledWith(
+                    expect.objectContaining({ email: 'sa@b.co', emailVerified: true }),
+                );
+                expect(userRepo.updateForSocialAuth).not.toHaveBeenCalled();
+                expect(authAccountRepo.upsertProviderAccount).toHaveBeenCalledWith(
+                    expect.objectContaining({ userId: 'u-new', accountId: 'gh-1' }),
+                );
             });
         });
 

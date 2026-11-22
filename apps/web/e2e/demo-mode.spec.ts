@@ -3,7 +3,7 @@ import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { expect, test, type BrowserContext, type Cookie, type Page } from '@playwright/test';
 import { makeTestUser } from './helpers/api';
-import { loginViaUI } from './helpers/auth';
+import { loginViaUI, isSessionCookieName } from './helpers/auth';
 
 /**
  * Platform demo mode, end to end against a running instance (Task 14).
@@ -502,8 +502,8 @@ test.describe('platform demo mode: DEMO on', { tag: '@demo-on' }, () => {
         await expect(page.getByTestId('demo-strip')).toHaveCount(0);
         // The stale session cookie went on the way (`/api/auth/demo-expired`): a render cannot
         // remove it, and left in place it sent the visitor of every other page back here.
-        const sessionCookies = (await page.context().cookies()).filter(
-            (cookie) => cookie.name === 'everworks_auth_token',
+        const sessionCookies = (await page.context().cookies()).filter((cookie) =>
+            isSessionCookieName(cookie.name),
         );
         expect(sessionCookies).toEqual([]);
 

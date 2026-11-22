@@ -62,8 +62,15 @@ import { renderPreviewHostPage, type PreviewHostPage } from './preview-host.page
  *  6. advance the tunnel's counters and idle clock (never an audit row).
  */
 
-/** Cookies of the web tier that must never reach a tunnelled server, whatever the domain set-up. */
-const PLATFORM_COOKIE_NAMES: readonly string[] = ['everworks_auth_token'];
+/**
+ * Cookies of the web tier that must never reach a tunnelled server, whatever the domain set-up:
+ * the web's session cookie under its plain name (http, and the legacy name on HTTPS) and its
+ * `__Host-` name on HTTPS (R-16, `apps/web/src/lib/auth/cookies.ts`).
+ */
+const PLATFORM_COOKIE_NAMES: readonly string[] = [
+    'everworks_auth_token',
+    '__Host-everworks_auth_token',
+];
 
 const METHODS: ReadonlySet<string> = new Set(FLEET_PORT_TUNNEL_METHODS);
 const TUNNEL_PATH = /^\/p\/([0-9a-fA-F-]{36})(\/.*)?$/;

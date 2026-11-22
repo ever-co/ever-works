@@ -176,7 +176,8 @@ describe('GET /api/github-app/callback', () => {
             const request = new NextRequest(
                 `${INTERNAL_ORIGIN}/api/github-app/callback?code=c&state=s`,
                 {
-                    headers: { cookie: 'ew_github_app_setup=nonce-1' },
+                    // `__Host-` on HTTPS (R-16).
+                    headers: { cookie: '__Host-ew_github_app_setup=nonce-1' },
                 },
             );
 
@@ -187,8 +188,23 @@ describe('GET /api/github-app/callback', () => {
                 'nonce-1',
             );
             const cleared = response.headers.get('set-cookie') ?? '';
-            expect(cleared).toContain('ew_github_app_setup=');
+            expect(cleared).toContain('__Host-ew_github_app_setup=');
             expect(cleared).toMatch(/Max-Age=0/i);
+        });
+
+        it('ignores a plain-name binding cookie on HTTPS (what a sibling subdomain could plant)', async () => {
+            const fetchMock = apiAnswers({ access_token: 'tok', installationId: '169597044' });
+            const request = new NextRequest(
+                `${INTERNAL_ORIGIN}/api/github-app/callback?code=c&state=s`,
+                { headers: { cookie: 'ew_github_app_setup=planted' } },
+            );
+
+            await GET(request);
+
+            const init = fetchMock.mock.calls[0][1] as RequestInit;
+            expect(
+                (init.headers as Record<string, string>)['X-Ever-Works-Setup-Binding'],
+            ).toBeUndefined();
         });
 
         it('sends no binding header when the browser has no cookie (the API then refuses)', async () => {

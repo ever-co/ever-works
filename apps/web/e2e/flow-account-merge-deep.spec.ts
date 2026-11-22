@@ -14,7 +14,9 @@ import { loadSeededTestUser } from './helpers/seeded-test-user';
  *       step. This is the closest thing to a real "account merge" the product ships.
  *   (B) DUPLICATE-EMAIL-ACROSS-PROVIDERS  — AuthService.validateSocialUser() looks
  *       up the existing user BY EMAIL and LINKS the social provider onto that same
- *       row (one email ⇒ one user, the social login merges in). The email-uniqueness
+ *       row (one email ⇒ one user, the social login merges in) — only when BOTH the
+ *       provider's email and that row's own email are verified; otherwise it is a 409
+ *       `EXISTING_ACCOUNT_EMAIL_UNVERIFIED` and nothing is linked. The email-uniqueness
  *       invariant is enforced identically across local-register, claim, and social.
  *   (C) UNLINK / DISCONNECT PROVIDER  — DELETE /api/oauth/:providerId
  *       (plugins-capabilities OAuthController) tears down a connected provider; the

@@ -116,3 +116,40 @@ export async function resolveGitHubAccountEmail(
         emailVerified: preferredEmail?.verified === true,
     };
 }
+
+/**
+ * Every address GitHub reports as VERIFIED for the account behind `accessToken`, trimmed and
+ * lowercased: the same `GET /user/emails` answer, and the same `verified` flag, that
+ * {@link resolveGitHubAccountEmail} uses for the social sign-in.
+ *
+ * A token that may not read the addresses (the 403/404 a missing `user:email` scope or
+ * "Email addresses" permission gives) answers an empty list, so nothing can be matched by
+ * email with it. Anything else (a bad token, throttling, a GitHub outage) still throws.
+ */
+export async function listVerifiedGitHubEmails(
+    httpService: HttpService,
+    accessToken: string,
+    options: Pick<ResolveGitHubAccountEmailOptions, 'logger'> = {},
+): Promise<string[]> {
+    try {
+        const { data } = await firstValueFrom(
+            httpService.get<GitHubEmailResponse[]>('https://api.github.com/user/emails', {
+                headers: createGitHubOAuthHeaders(accessToken),
+            }),
+        );
+        return (data || [])
+            .filter((item) => item?.verified === true && typeof item.email === 'string')
+            .map((item) => item.email.trim().toLowerCase())
+            .filter(Boolean);
+    } catch (error) {
+        const status = missingEmailPermissionStatus(error);
+        if (status === undefined) {
+            throw error;
+        }
+        options.logger?.warn(
+            `GitHub GET /user/emails answered ${status}: the token cannot read the ` +
+                "account's email addresses, so none of them counts as verified.",
+        );
+        return [];
+    }
+}

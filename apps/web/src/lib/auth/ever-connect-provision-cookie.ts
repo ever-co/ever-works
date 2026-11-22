@@ -1,6 +1,6 @@
 import 'server-only';
 import { cookies } from 'next/headers';
-import { isPublicUrlHttps } from './cookies';
+import { hostOnlyCookieName, isPublicUrlHttps } from './cookies';
 import { decrypt, encrypt } from './crypto';
 
 /**
@@ -10,6 +10,11 @@ import { decrypt, encrypt } from './crypto';
  * seconds (the longest such a request lives). It never goes into an address.
  */
 export const EVER_CONNECT_PROVISION_COOKIE = 'ew_provision';
+
+/** The live name: `__Host-ew_provision` on HTTPS (R-16), so a sibling subdomain cannot plant one. */
+function provisionCookieName(): string {
+    return hostOnlyCookieName(EVER_CONNECT_PROVISION_COOKIE);
+}
 
 const MAX_AGE_SECONDS = 900;
 
@@ -40,7 +45,7 @@ export async function setProvisionCookie(state: ProvisionCookieState): Promise<v
         ...state,
     };
     const store = await cookies();
-    store.set(EVER_CONNECT_PROVISION_COOKIE, await encrypt(JSON.stringify(stored)), {
+    store.set(provisionCookieName(), await encrypt(JSON.stringify(stored)), {
         ...options(),
         maxAge: MAX_AGE_SECONDS,
     });
@@ -49,7 +54,7 @@ export async function setProvisionCookie(state: ProvisionCookieState): Promise<v
 /** The state, or `null` when there is none, it expired or it cannot be read. */
 export async function readProvisionCookie(): Promise<ProvisionCookieState | null> {
     const store = await cookies();
-    const sealed = store.get(EVER_CONNECT_PROVISION_COOKIE)?.value;
+    const sealed = store.get(provisionCookieName())?.value;
     if (!sealed) return null;
     try {
         const parsed = JSON.parse(await decrypt(sealed)) as Partial<Stored>;
@@ -71,5 +76,5 @@ export async function readProvisionCookie(): Promise<ProvisionCookieState | null
 
 export async function clearProvisionCookie(): Promise<void> {
     const store = await cookies();
-    store.delete({ name: EVER_CONNECT_PROVISION_COOKIE, ...options() });
+    store.delete({ name: provisionCookieName(), ...options() });
 }

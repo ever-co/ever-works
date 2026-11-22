@@ -79,3 +79,63 @@ describe('instrumentation register() — ALLOWED_REDIRECT_URLS prod guard', () =
         expect(warned).not.toMatch(/ALLOWED_REDIRECT_URLS is not set/i);
     });
 });
+
+describe('instrumentation register() — R-16 legacy session cookie fallback', () => {
+    beforeEach(() => {
+        process.env = { ...ORIGINAL_ENV };
+        process.env.NEXT_RUNTIME = 'nodejs';
+        process.env.COOKIE_SECRET = VALID_SECRET;
+        process.env.ALLOWED_REDIRECT_URLS = 'app.ever.works';
+        process.env.WEB_URL = 'https://app.ever.works';
+        delete process.env.AUTH_SECRET;
+        delete process.env.AUTH_COOKIE_LEGACY_FALLBACK;
+        delete process.env.AUTH_COOKIE_LEGACY_FALLBACK_UNTIL;
+        vi.useFakeTimers({ toFake: ['Date'] });
+        vi.setSystemTime(new Date('2026-11-22T12:00:00.000Z'));
+    });
+
+    afterEach(() => {
+        vi.useRealTimers();
+        process.env = { ...ORIGINAL_ENV };
+        vi.restoreAllMocks();
+    });
+
+    function logged(spy: { mock: { calls: unknown[][] } }): string {
+        return spy.mock.calls
+            .flat()
+            .map((arg) => String(arg))
+            .join('\n');
+    }
+
+    it('logs one line at start with the effective end', async () => {
+        const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {});
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+        const register = await loadRegister();
+        await register();
+
+        const lines = infoSpy.mock.calls
+            .map((call) => String(call[0]))
+            .filter((line) => line.startsWith('[auth-cookie]'));
+        expect(lines).toEqual([
+            '[auth-cookie] session cookie: __Host-everworks_auth_token; legacy fallback ON until 2026-12-06T00:00:00.000Z (AUTH_COOKIE_LEGACY_FALLBACK_UNTIL)',
+        ]);
+        expect(logged(warnSpy)).not.toContain('[auth-cookie]');
+    });
+
+    it('warns once on an unknown AUTH_COOKIE_LEGACY_FALLBACK value', async () => {
+        process.env.AUTH_COOKIE_LEGACY_FALLBACK = 'flase';
+        vi.spyOn(console, 'info').mockImplementation(() => {});
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+        const register = await loadRegister();
+        await register();
+
+        const warnings = warnSpy.mock.calls
+            .map((call) => String(call[0]))
+            .filter((line) => line.startsWith('[auth-cookie]'));
+        expect(warnings).toEqual([
+            '[auth-cookie] AUTH_COOKIE_LEGACY_FALLBACK="flase" is not a known value (use true or false); treating it as on',
+        ]);
+    });
+});

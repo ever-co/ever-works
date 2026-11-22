@@ -30,7 +30,9 @@ const jar = vi.hoisted(() => {
             },
             set: (name: string, value: string, options?: Record<string, unknown>) => {
                 sets.push({ name, value, options });
-                values.set(name, { value, options });
+                // A browser drops a cookie set with Max-Age=0 (how a __Host- cookie is expired).
+                if (options?.maxAge === 0) values.delete(name);
+                else values.set(name, { value, options });
             },
             delete: (arg: string | Record<string, unknown>) => {
                 const options = typeof arg === 'string' ? { name: arg } : arg;
@@ -77,7 +79,10 @@ describe('Ever ID cookies — attributes (T22)', () => {
 
         await setEverIdTransaction('sealed-transaction', 'sign-in');
 
-        expect(jar.sets.map((s) => s.name)).toEqual(['ew_everid_txn', 'ew_everid_intent']);
+        expect(jar.sets.map((s) => s.name)).toEqual([
+            '__Host-ew_everid_txn',
+            '__Host-ew_everid_intent',
+        ]);
         for (const set of jar.sets) {
             expect(set.options).toMatchObject({
                 httpOnly: true,
@@ -87,8 +92,8 @@ describe('Ever ID cookies — attributes (T22)', () => {
                 secure: true,
             });
         }
-        expect(jar.values.get('ew_everid_txn')?.value).toBe('sealed-transaction');
-        expect(jar.values.get('ew_everid_intent')?.value).toBe('sign-in');
+        expect(jar.values.get('__Host-ew_everid_txn')?.value).toBe('sealed-transaction');
+        expect(jar.values.get('__Host-ew_everid_intent')?.value).toBe('sign-in');
     });
 
     it('takes `secure` from the public URL scheme, like the session cookie', async () => {
@@ -108,12 +113,15 @@ describe('Ever ID cookies — attributes (T22)', () => {
 
         const names = jar.sets.map((s) => s.name).sort();
         expect(names).toEqual(
+            // `__Host-` on HTTPS (R-16); the constants keep the plain names.
             [
                 mod.EVER_ID_INTENT_COOKIE,
                 mod.EVER_ID_LOGOUT_STATE_COOKIE,
                 mod.EVER_ID_PENDING_COOKIE,
                 mod.EVER_ID_TXN_COOKIE,
-            ].sort(),
+            ]
+                .map((name) => `__Host-${name}`)
+                .sort(),
         );
         for (const set of jar.sets) {
             expect(set.options).toMatchObject({ httpOnly: true, sameSite: 'lax', path: '/' });
@@ -141,23 +149,26 @@ describe('Ever ID cookies — transaction (cleared on every read)', () => {
         });
 
         const cleared = jar.deletes.map((d) => d.name);
-        expect(cleared).toEqual(['ew_everid_txn', 'ew_everid_intent']);
+        expect(cleared).toEqual(['__Host-ew_everid_txn', '__Host-ew_everid_intent']);
         for (const deleted of jar.deletes) expect(deleted).toMatchObject({ path: '/' });
-        expect(jar.values.has('ew_everid_txn')).toBe(false);
-        expect(jar.values.has('ew_everid_intent')).toBe(false);
+        expect(jar.values.has('__Host-ew_everid_txn')).toBe(false);
+        expect(jar.values.has('__Host-ew_everid_intent')).toBe(false);
     });
 
     it('clears both even when there is nothing to read', async () => {
         const { takeEverIdTransaction } = await load();
 
         await expect(takeEverIdTransaction()).resolves.toEqual({ transaction: null, intent: null });
-        expect(jar.deletes.map((d) => d.name)).toEqual(['ew_everid_txn', 'ew_everid_intent']);
+        expect(jar.deletes.map((d) => d.name)).toEqual([
+            '__Host-ew_everid_txn',
+            '__Host-ew_everid_intent',
+        ]);
     });
 
     it('ignores an intent that is not one of the two the flow writes', async () => {
         const { takeEverIdTransaction } = await load();
-        jar.values.set('ew_everid_txn', { value: 't' });
-        jar.values.set('ew_everid_intent', { value: 'admin' });
+        jar.values.set('__Host-ew_everid_txn', { value: 't' });
+        jar.values.set('__Host-ew_everid_intent', { value: 'admin' });
 
         await expect(takeEverIdTransaction()).resolves.toEqual({ transaction: 't', intent: null });
     });
@@ -179,7 +190,7 @@ describe('Ever ID cookies — pending confirmation', () => {
 
         await setEverIdPending(PENDING);
 
-        const raw = jar.values.get('ew_everid_pending')?.value ?? '';
+        const raw = jar.values.get('__Host-ew_everid_pending')?.value ?? '';
         expect(raw.length).toBeGreaterThan(0);
         expect(raw).not.toContain('alice');
         expect(raw).not.toContain('example.com');
@@ -216,7 +227,7 @@ describe('Ever ID cookies — pending confirmation', () => {
     it('answers null for a tampered or foreign value', async () => {
         const { readEverIdPending } = await load();
         vi.spyOn(console, 'error').mockImplementation(() => {});
-        jar.values.set('ew_everid_pending', { value: 'not-a-sealed-value' });
+        jar.values.set('__Host-ew_everid_pending', { value: 'not-a-sealed-value' });
 
         await expect(readEverIdPending('signUp')).resolves.toBeNull();
     });
@@ -235,7 +246,7 @@ describe('Ever ID cookies — pending confirmation', () => {
         await expect(
             setEverIdPending({ ...PENDING, pending: 'p'.repeat(4_000) }),
         ).rejects.toBeInstanceOf(EverIdCookieTooLargeError);
-        expect(jar.values.has('ew_everid_pending')).toBe(false);
+        expect(jar.values.has('__Host-ew_everid_pending')).toBe(false);
     });
 
     it('a realistic pending value stays well inside the 4 KB cookie limit', async () => {
@@ -249,7 +260,7 @@ describe('Ever ID cookies — pending confirmation', () => {
             accountEmail: `${'c'.repeat(64)}@${'d'.repeat(180)}.example`,
         });
 
-        const raw = jar.values.get('ew_everid_pending')?.value ?? '';
+        const raw = jar.values.get('__Host-ew_everid_pending')?.value ?? '';
         expect(raw.length).toBeLessThan(4_000);
     });
 
@@ -259,9 +270,9 @@ describe('Ever ID cookies — pending confirmation', () => {
 
         await clearEverIdPending();
 
-        expect(jar.values.has('ew_everid_pending')).toBe(false);
+        expect(jar.values.has('__Host-ew_everid_pending')).toBe(false);
         expect(jar.deletes).toEqual([
-            expect.objectContaining({ name: 'ew_everid_pending', path: '/' }),
+            expect.objectContaining({ name: '__Host-ew_everid_pending', path: '/' }),
         ]);
     });
 });
@@ -282,12 +293,12 @@ describe('Ever ID cookies — sign-out state', () => {
 
         await expect(takeEverIdLogoutState()).resolves.toBe('state-abc');
         await expect(takeEverIdLogoutState()).resolves.toBeNull();
-        expect(jar.deletes.every((d) => d.name === 'ew_everid_logout_state')).toBe(true);
+        expect(jar.deletes.every((d) => d.name === '__Host-ew_everid_logout_state')).toBe(true);
     });
 
     it('ignores an implausibly long state', async () => {
         const { takeEverIdLogoutState } = await load();
-        jar.values.set('ew_everid_logout_state', { value: 's'.repeat(513) });
+        jar.values.set('__Host-ew_everid_logout_state', { value: 's'.repeat(513) });
 
         await expect(takeEverIdLogoutState()).resolves.toBeNull();
     });
@@ -314,22 +325,24 @@ describe('resolveEverIdReturnTo — where a completed sign-in lands', () => {
 
     it('spends the stored relative destination it lands on, and only that one', async () => {
         const { resolveEverIdReturnTo } = await load();
-        jar.values.set('redirect_url', { value: '/org-invite/tok' });
+        jar.values.set('__Host-redirect_url', { value: '/org-invite/tok' });
 
         await expect(resolveEverIdReturnTo('/works', '/')).resolves.toBe('/works');
-        expect(jar.values.has('redirect_url')).toBe(true);
+        expect(jar.values.has('__Host-redirect_url')).toBe(true);
 
         await expect(resolveEverIdReturnTo('/org-invite/tok', '/')).resolves.toBe(
             '/org-invite/tok',
         );
-        expect(jar.values.has('redirect_url')).toBe(false);
+        expect(jar.values.has('__Host-redirect_url')).toBe(false);
     });
 
     it('never touches an absolute stored destination', async () => {
         const { resolveEverIdReturnTo } = await load();
-        jar.values.set('redirect_url', { value: 'http://localhost:44663/callback' });
+        jar.values.set('__Host-redirect_url', { value: 'http://localhost:44663/callback' });
 
         await expect(resolveEverIdReturnTo(null, '/')).resolves.toBe('/');
-        expect(jar.values.get('redirect_url')?.value).toBe('http://localhost:44663/callback');
+        expect(jar.values.get('__Host-redirect_url')?.value).toBe(
+            'http://localhost:44663/callback',
+        );
     });
 });

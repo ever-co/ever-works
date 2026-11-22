@@ -64,12 +64,15 @@ describe('GET /api/github-app/setup', () => {
         const url = locationOf(response);
 
         expect(url.toString()).toBe(authorize);
-        // Item 13: the setup is bound to THIS browser by an HttpOnly cookie
-        // scoped to the App routes, which the callback forwards to the API.
+        // Item 13: the setup is bound to THIS browser by an HttpOnly cookie, which the callback
+        // forwards to the API. On HTTPS it is `__Host-` (R-16): a sibling subdomain cannot plant
+        // one, which requires Secure, Path=/ and no Domain.
         const cookie = response.headers.get('set-cookie') ?? '';
-        expect(cookie).toContain('ew_github_app_setup=nonce-1');
+        expect(cookie).toContain('__Host-ew_github_app_setup=nonce-1');
         expect(cookie.toLowerCase()).toContain('httponly');
-        expect(cookie).toContain('Path=/api/github-app');
+        expect(cookie.toLowerCase()).toContain('secure');
+        expect(cookie).toContain('Path=/;');
+        expect(cookie.toLowerCase()).not.toContain('domain=');
         expect(cookie.toLowerCase()).toContain('samesite=lax');
         const calledUrl = new URL(String(fetchMock.mock.calls[0][0]));
         expect(calledUrl.pathname).toMatch(/\/github-app\/setup$/);

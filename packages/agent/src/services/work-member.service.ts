@@ -166,6 +166,18 @@ export class WorkMemberService {
             });
         }
 
+        // An unverified account may belong to someone who merely typed this address at
+        // sign-up (registration yields a usable session). Adding it would hand the Work
+        // to a squatter instead of the real owner of the mailbox.
+        if (invitee.emailVerified !== true) {
+            throw new BadRequestException({
+                status: 'error',
+                code: 'InviteeEmailNotVerified',
+                message:
+                    "This person's account hasn't verified its email address yet, so it can't be added. Ask them to verify their email, then invite them again.",
+            });
+        }
+
         const inviter = await this.userRepository.findById(userId);
 
         const member = await this.memberRepository.addMember(workId, invitee.id, dto.role, userId);
