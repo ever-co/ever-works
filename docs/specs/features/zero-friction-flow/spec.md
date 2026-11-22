@@ -101,6 +101,9 @@ suggestion }` before any write) or one derived from the email's local
   is written on its own before any credential, so a claim racing for the
   same handle loses on the unique index as the same 409 (a derived handle
   is allocated once more), and an email race is the email 409, never a 500. The slug is stable, as on every other rename (`PUT /auth/profile`).
+  Without a typed handle, a real handle the row already has (an earlier
+  attempt that lost the email race, or a rename) is kept; only the
+  `anon-<hex>` placeholder is replaced.
 - **FR-G3-12** Saving with GitHub or Google (2026-11). `/save-account`
   MUST offer the providers the API has configured (GitHub, Google), behind
   the same terms checkbox. The round trip is the normal OAuth one (C-03
