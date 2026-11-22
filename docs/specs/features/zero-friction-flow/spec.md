@@ -69,9 +69,11 @@ emailVerificationCallbackUrl? }` (validated by `ClaimAccountDto`
   IP) to dampen email-squatting brute force.
 - **FR-G3-8** The endpoint accepts the same optional `terms` claims as
   `RegisterDto`. When present they MUST be checked against the published
-  corpus BEFORE the account changes (an unpublished claim refuses the
-  whole claim) and recorded against the same user id afterwards; a
-  recording failure is logged and does not undo the claim.
+  corpus and recorded against the (unchanging) user id BEFORE the account
+  changes: an unpublished claim refuses the whole claim (400), and a
+  failure to record refuses it too (503) with the account untouched, so a
+  200 always means the acceptance is on file. An empty list is refused by
+  the DTO.
 - **FR-G3-9** Web (2026-11): while the signed-in account is anonymous,
   every dashboard page MUST show a non-dismissible strip above the header
   ("You're using a temporary account…", the real time left from
