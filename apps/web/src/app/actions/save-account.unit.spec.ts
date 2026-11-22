@@ -16,13 +16,28 @@ const mocks = vi.hoisted(() => ({
     refresh: vi.fn(),
     revalidatePath: vi.fn(),
     setAuthCookies: vi.fn(),
+    getAuthFromCookie: vi.fn(),
+    getOAuthAuthUrl: vi.fn(),
+    setOAuthStateCookie: vi.fn(),
+    setOAuthSaveAccountCookie: vi.fn(),
 }));
 
 vi.mock('next/cache', () => ({ refresh: mocks.refresh, revalidatePath: mocks.revalidatePath }));
 vi.mock('@/lib/api', () => ({
-    authAPI: { claimAccount: mocks.claimAccount, register: mocks.register },
+    authAPI: {
+        claimAccount: mocks.claimAccount,
+        register: mocks.register,
+        getOAuthAuthUrl: mocks.getOAuthAuthUrl,
+    },
 }));
-vi.mock('@/lib/auth', () => ({ setAuthCookies: mocks.setAuthCookies }));
+vi.mock('@/lib/auth/cookies', () => ({
+    setOAuthStateCookie: mocks.setOAuthStateCookie,
+    setOAuthSaveAccountCookie: mocks.setOAuthSaveAccountCookie,
+}));
+vi.mock('@/lib/auth', () => ({
+    setAuthCookies: mocks.setAuthCookies,
+    getAuthFromCookie: mocks.getAuthFromCookie,
+}));
 vi.mock('next-intl/server', () => ({
     getTranslations: async () => (key: string) => key,
     getLocale: async () => 'en',
@@ -30,7 +45,12 @@ vi.mock('next-intl/server', () => ({
 vi.mock('@/i18n/navigation', () => ({ redirect: mocks.redirect }));
 
 import { ApiResponseError } from '@/lib/api/server-api';
-import { saveAnonymousAccount, type SaveAccountInput } from './save-account';
+import {
+    saveAnonymousAccount,
+    startSavingWithProvider,
+    type SaveAccountInput,
+} from './save-account';
+import { OAuthProvider } from '@/lib/api/enums';
 
 const TERMS = [
     { documentId: 'tos:default', version: '2026-01-01', sha256: 'a'.repeat(64), locale: 'en' },
@@ -241,5 +261,73 @@ describe('saveAnonymousAccount', () => {
             success: false,
             error: 'generic',
         });
+    });
+});
+
+/**
+ * `startSavingWithProvider` — the start of saving with GitHub / Google (EW-617). It must start
+ * the SAME C-03 round trip as sign-in, and mark it as a save bound to that very state, with the
+ * terms the form showed, so the callback attaches the identity to this account.
+ */
+describe('startSavingWithProvider', () => {
+    beforeEach(() => {
+        vi.clearAllMocks();
+        mocks.getOAuthAuthUrl.mockResolvedValue({
+            url: 'https://github.com/login/oauth/authorize?state=s-1',
+            state: 's-1',
+        });
+        mocks.getAuthFromCookie.mockResolvedValue({ id: 'anon-1', isAnonymous: true });
+    });
+
+    it('mirrors the state and binds the save intent, with the terms, to that state', async () => {
+        const result = await startSavingWithProvider(OAuthProvider.GITHUB, TERMS);
+
+        expect(result).toEqual({
+            success: true,
+            url: 'https://github.com/login/oauth/authorize?state=s-1',
+        });
+        expect(mocks.getOAuthAuthUrl).toHaveBeenCalledWith('github');
+        expect(mocks.setOAuthStateCookie).toHaveBeenCalledWith('s-1');
+        expect(mocks.setOAuthSaveAccountCookie).toHaveBeenCalledWith({
+            state: 's-1',
+            terms: TERMS,
+            // Sealed for the account signed in now; the callback and the API check it.
+            userId: 'anon-1',
+        });
+    });
+
+    it('refuses to start without the terms, before asking the API', async () => {
+        const result = await startSavingWithProvider(OAuthProvider.GOOGLE, []);
+
+        expect(result).toEqual({ success: false, error: 'terms.required', field: 'terms' });
+        expect(mocks.getOAuthAuthUrl).not.toHaveBeenCalled();
+        expect(mocks.setOAuthSaveAccountCookie).not.toHaveBeenCalled();
+    });
+
+    it('starts nothing when no session is left: the form shows "session ended"', async () => {
+        mocks.getAuthFromCookie.mockResolvedValue(null);
+
+        const result = await startSavingWithProvider(OAuthProvider.GITHUB, TERMS);
+
+        expect(result).toEqual({ success: false, error: 'sessionEnded', reason: 'session_ended' });
+        expect(mocks.getOAuthAuthUrl).not.toHaveBeenCalled();
+        expect(mocks.setOAuthSaveAccountCookie).not.toHaveBeenCalled();
+    });
+
+    it('offers only GitHub and Google', async () => {
+        const result = await startSavingWithProvider(OAuthProvider.FACEBOOK, TERMS);
+
+        expect(result).toEqual({ success: false, error: 'providerFailed' });
+        expect(mocks.getOAuthAuthUrl).not.toHaveBeenCalled();
+    });
+
+    it('answers its own words when the API cannot start the round trip, and sets nothing', async () => {
+        mocks.getOAuthAuthUrl.mockRejectedValue(new ApiResponseError('client id missing', 400));
+
+        const result = await startSavingWithProvider(OAuthProvider.GITHUB, TERMS);
+
+        expect(result).toEqual({ success: false, error: 'providerFailed' });
+        expect(mocks.setOAuthStateCookie).not.toHaveBeenCalled();
+        expect(mocks.setOAuthSaveAccountCookie).not.toHaveBeenCalled();
     });
 });

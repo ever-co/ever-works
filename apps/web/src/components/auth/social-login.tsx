@@ -32,12 +32,24 @@ interface SocialLoginButtonsProps {
     disabled?: boolean;
     /** Shown when `disabled`, so the buttons are not mysteriously inert. */
     disabledReason?: string;
+    /**
+     * Starts the round trip for a provider and answers the URL to send the browser to.
+     * Defaults to signing in (`connectProvider`); `/save-account` passes its own, which
+     * marks the trip as saving the temporary account instead.
+     */
+    connect?: (
+        provider: OAuthProvider,
+    ) => Promise<{ success: boolean; url?: string; error?: string }>;
+    /** Told when `connect` fails, with its message; without it the failure is only logged. */
+    onError?: (message: string) => void;
 }
 
 export function SocialLoginButtons({
     providers,
     disabled = false,
     disabledReason,
+    connect = connectProvider,
+    onError,
 }: SocialLoginButtonsProps) {
     const t = useTranslations('auth.login');
     const [isPending, startTransition] = useTransition();
@@ -56,9 +68,12 @@ export function SocialLoginButtons({
     const handleConnectProvider = async (provider: OAuthProvider) => {
         startTransition(() => {
             void (async () => {
-                const response = await connectProvider(provider);
+                const response = await connect(provider);
                 if (!response.success || !response.url) {
                     console.error(response.error || 'Failed to connect provider');
+                    if (response.error) {
+                        onError?.(response.error);
+                    }
                     return;
                 }
 

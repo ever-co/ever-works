@@ -103,6 +103,13 @@ export class ClaimAccountService {
             return normalized;
         }
 
+        // A real handle the row already has is kept; only the `anon-<hex>` placeholder is
+        // replaced. That is a retry after an earlier attempt of this claim wrote the handle and
+        // then lost the email race (the allocator counts the row's own handle as taken, so it
+        // would hand out `jane-2`), or a temporary account the visitor already renamed.
+        // `reserveUsername` re-allocates with an empty handle, which never matches here.
+        if (user.username && !/^anon-/i.test(user.username)) return user.username;
+
         // Normalized once, so the floor check and the handle allocated agree.
         const local = this.usernames.normalize(email.split('@')[0] ?? '');
         const base = local.length >= USERNAME_MIN_LENGTH ? local : `${local}-user`;
@@ -178,8 +185,13 @@ export class ClaimAccountService {
         let username = await this.resolveUsername(user, normalizedEmail, input.username);
 
         // 1. The handle, on its own and first (see `reserveUsername`). The account is still
-        //    anonymous after it, so a later failure leaves a retryable claim (its own handle
-        //    passes the check above), never credentials on a half-claimed row.
+        //    anonymous after it, so a later failure leaves a retryable claim: the retry keeps
+        //    this handle (a typed one equal to it passes the availability check, and the
+        //    derived path keeps a real handle the row already has).
+        //    One leftover is accepted: a claim that loses the email race at step 3 has already
+        //    stored a password hash (step 2) on the still-anonymous row. Harmless: password
+        //    sign-in is by email and the row has none, a retry overwrites the hash, and the
+        //    nightly cleanup deletes the row if it is never claimed.
         if (username !== user.username) {
             username = await this.reserveUsername(
                 user.id,

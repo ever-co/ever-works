@@ -215,6 +215,57 @@ export class ClaimAccountDto {
     terms?: TermsAcceptanceClaimDto[];
 }
 
+/**
+ * `POST /api/oauth/:providerId/claim` — save the signed-in anonymous account with
+ * a GitHub / Google identity. The web callback route posts what the provider sent
+ * back (`code`, `state`) together with the terms the save-account form displayed.
+ */
+export class OAuthClaimDto {
+    @ApiProperty({ description: 'Authorization code from the OAuth provider' })
+    @IsString()
+    @IsNotEmpty()
+    @MaxLength(2048)
+    code: string;
+
+    @ApiProperty({
+        description:
+            'The state minted by GET /api/oauth/:providerId/url; must match the ew_oauth_state cookie',
+    })
+    @IsString()
+    @IsNotEmpty()
+    @MaxLength(512)
+    state: string;
+
+    /**
+     * The anonymous user the save was started for, from the web's sealed save intent. It must be
+     * the session's user: the web cannot be made to post a save for a session that did not
+     * start it (a cookie tossed from a sibling subdomain), and the API checks it again before
+     * the code is spent.
+     */
+    @ApiProperty({ description: 'User id the save was started for; must be the caller' })
+    @IsString()
+    @IsNotEmpty()
+    @MaxLength(64)
+    expectedUserId: string;
+
+    @ApiPropertyOptional({
+        description:
+            'Callback URL for the verification mail, sent only when the provider does not vouch for the email',
+    })
+    @IsString()
+    @IsOptional()
+    emailVerificationCallbackUrl?: string;
+
+    /** Same contract as `ClaimAccountDto.terms`: checked before, recorded after. */
+    @ApiPropertyOptional({ type: () => [TermsAcceptanceClaimDto] })
+    @IsOptional()
+    @IsArray()
+    @ArrayNotEmpty({ message: 'Terms acceptance, when supplied, must list at least one document' })
+    @ValidateNested({ each: true })
+    @Type(() => TermsAcceptanceClaimDto)
+    terms?: TermsAcceptanceClaimDto[];
+}
+
 export class OAuthCallbackDto {
     @ApiProperty({ description: 'Authorization code from OAuth provider' })
     @IsString()
