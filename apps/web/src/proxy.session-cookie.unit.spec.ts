@@ -5,7 +5,8 @@ import { BROWSER_WORKSPACE_SCOPE_HEADER } from './lib/workspace-scope';
 /**
  * R-16 — the proxy is where a legacy plain-name session cookie moves to
  * `__Host-everworks_auth_token` (a render cannot write cookies), and where the signed-out gate
- * expires both names. Loaded with an HTTPS public URL, as in production.
+ * expires both names. Loaded with an HTTPS public URL, as in production, and a clock before the
+ * fallback's default end (2026-12-06T00:00:00Z).
  */
 
 const { getAuthFromRequestMock, intlMock } = vi.hoisted(() => ({
@@ -17,12 +18,16 @@ const { getAuthFromRequestMock, intlMock } = vi.hoisted(() => ({
 vi.mock('next-intl/middleware', () => ({ default: () => intlMock }));
 vi.mock('./lib/auth', () => ({ getAuthFromRequest: getAuthFromRequestMock }));
 
-async function loadProxy(env: Record<string, string> = {}) {
+async function loadProxyModule(env: Record<string, string> = {}) {
     vi.resetModules();
     vi.stubEnv('WEB_URL', 'https://app.example');
     vi.stubEnv('COOKIE_SECRET', 'x'.repeat(48));
     for (const [key, value] of Object.entries(env)) vi.stubEnv(key, value);
-    return (await import('./proxy')).default;
+    return import('./proxy');
+}
+
+async function loadProxy(env: Record<string, string> = {}) {
+    return (await loadProxyModule(env)).default;
 }
 
 function request(path: string, cookie: string): NextRequest {
@@ -37,12 +42,20 @@ function setCookies(response: Response): string[] {
     return headers.getSetCookie ? headers.getSetCookie() : [headers.get('set-cookie') ?? ''];
 }
 
+/** The session cookie lines of a response. */
+function sessionCookieLines(response: Response): string[] {
+    return setCookies(response).filter((line) => line.includes('everworks_auth_token='));
+}
+
 describe('proxy — session cookie (R-16)', () => {
     beforeEach(() => {
         vi.clearAllMocks();
+        vi.useFakeTimers({ toFake: ['Date'] });
+        vi.setSystemTime(new Date('2026-11-22T12:00:00.000Z'));
     });
 
     afterEach(() => {
+        vi.useRealTimers();
         vi.unstubAllEnvs();
     });
 
@@ -109,6 +122,72 @@ describe('proxy — session cookie (R-16)', () => {
             expect(line).toMatch(/Max-Age=0/i);
             expect(line).toMatch(/Secure/i);
             expect(line).toContain('Path=/');
+        }
+    });
+
+    // I2b: the visitor's own plain cookie and a tossed `Domain=` one arrive under the same name.
+    it('does not migrate when the plain name appears more than once', async () => {
+        getAuthFromRequestMock.mockResolvedValue({ isAuthenticated: true, isExpired: false });
+        const proxy = await loadProxy();
+
+        const response = await proxy(
+            request('/missions', 'everworks_auth_token=mine; everworks_auth_token=tossed'),
+        );
+
+        expect(sessionCookieLines(response)).toEqual([]);
+    });
+
+    it('after the end date, expires a left-over plain cookie next to the __Host- one', async () => {
+        vi.setSystemTime(new Date('2026-12-06T00:00:00.000Z'));
+        getAuthFromRequestMock.mockResolvedValue({ isAuthenticated: true, isExpired: false });
+        const proxy = await loadProxy();
+
+        const response = await proxy(
+            request('/missions', '__Host-everworks_auth_token=current; everworks_auth_token=old'),
+        );
+
+        const lines = sessionCookieLines(response);
+        expect(lines).toHaveLength(1);
+        expect(lines[0]).toMatch(/^everworks_auth_token=;/);
+        expect(lines[0]).toMatch(/Max-Age=0/i);
+        expect(lines[0]).toMatch(/Secure/i);
+        expect(lines[0]).toContain('Path=/');
+        expect(response.status).toBe(200);
+    });
+
+    // M4: the move happens only behind the auth gate, on a page response. Public pages, `/api/*`,
+    // `/_next` and dotted assets return before it (and the matcher keeps most of them out anyway).
+    it.each([
+        '/login',
+        '/register',
+        '/api/auth/session',
+        '/_next/static/chunks/app.js',
+        '/logo-light.png',
+    ])('never migrates on %s, even for a signed-in visitor on the legacy cookie', async (path) => {
+        getAuthFromRequestMock.mockResolvedValue({ isAuthenticated: true, isExpired: false });
+        const proxy = await loadProxy();
+
+        const response = await proxy(request(path, 'everworks_auth_token=sealed-legacy'));
+
+        expect(sessionCookieLines(response)).toEqual([]);
+        expect(getAuthFromRequestMock).not.toHaveBeenCalled();
+    });
+
+    it('the matcher keeps /api, /_next and dotted assets out of the proxy, but not pages or .md routes', async () => {
+        const { config } = await loadProxyModule();
+        const matcher = new RegExp(`^${config.matcher}$`);
+
+        for (const skipped of [
+            '/api/auth/session',
+            '/_next/static/chunks/app.js',
+            '/_vercel/insights/script.js',
+            '/favicon.ico',
+            '/logo-light.png',
+        ]) {
+            expect(matcher.test(skipped), skipped).toBe(false);
+        }
+        for (const matched of ['/missions', '/works/1', '/works/1/kb/guides/intro.md']) {
+            expect(matcher.test(matched), matched).toBe(true);
         }
     });
 });

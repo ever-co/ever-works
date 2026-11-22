@@ -1,7 +1,12 @@
 import 'server-only';
 import { ResponseCookie } from 'next/dist/compiled/@edge-runtime/cookies';
-import { cookies } from 'next/headers';
+import { cookies, headers } from 'next/headers';
 import { encrypt, decrypt } from './crypto';
+import { isPublicUrlHttps, legacyAuthCookieFallback } from './cookie-policy';
+
+// Decided from the configured public URL only (`./cookie-policy.ts`); re-exported so every
+// caller of `@/lib/auth/cookies` keeps importing it from here.
+export { isPublicUrlHttps };
 
 /**
  * The session cookie's PLAIN name: the only one on http (dev, e2e), and the legacy one on HTTPS,
@@ -10,25 +15,6 @@ import { encrypt, decrypt } from './crypto';
  * `Domain=ever.works` and sign a visitor in to the attacker's account (login CSRF).
  */
 export const AUTH_COOKIE_NAME = 'everworks_auth_token';
-
-// M-21: in preview / staging deploys that serve over HTTPS but happen to
-// run with NODE_ENV !== 'production', the previous `secure: NODE_ENV ===
-// 'production'` flag would let the cookie travel over HTTP. Anchor on the
-// public URL scheme instead so any HTTPS deploy gets the secure flag.
-// `WEB_URL` is already required at boot for the API; mirror that here.
-// Exported so the Ever ID flow cookies (`./ever-id-cookies.ts`) take their
-// `secure` flag from exactly the same rule.
-export function isPublicUrlHttps(): boolean {
-    const url = process.env.WEB_URL || process.env.NEXT_PUBLIC_WEB_URL;
-    if (url) {
-        try {
-            return new URL(url).protocol === 'https:';
-        } catch {
-            // fall through
-        }
-    }
-    return process.env.NODE_ENV === 'production';
-}
 
 const cookieOptions: Partial<ResponseCookie> = {
     httpOnly: true,
@@ -73,20 +59,28 @@ export function authCookieName(): string {
  * Whether the plain session cookie name still works on HTTPS: read as a fallback when there is no
  * `__Host-` cookie (nobody signed in before the rename is signed out by it), and written as a
  * mirror next to the `__Host-` one (a pod still on the previous release during a rolling deploy
- * reads only the plain name). On (the default) until `AUTH_COOKIE_LEGACY_FALLBACK` is `false` /
- * `0` / `off` / `no`, which is safe 7 days (the session cookie's lifetime) after the rollout has
- * finished: every session written since has a `__Host-` cookie too. Meaningless on http, where the
- * plain name IS the live one.
+ * reads only the plain name). It has a hard end in code (`AUTH_COOKIE_LEGACY_FALLBACK_UNTIL`,
+ * default `LEGACY_AUTH_COOKIE_DEFAULT_UNTIL`), `AUTH_COOKIE_LEGACY_FALLBACK=false` ends it sooner,
+ * and it never applies on http, where the plain name IS the live one (`./cookie-policy.ts`).
  */
 export function legacyAuthCookieFallbackEnabled(): boolean {
-    if (!isPublicUrlHttps()) return false;
-    const flag = process.env.AUTH_COOKIE_LEGACY_FALLBACK?.trim().toLowerCase();
-    return !(flag === 'false' || flag === '0' || flag === 'off' || flag === 'no');
+    return legacyAuthCookieFallback().active;
 }
 
-/** The session cookie's attributes, for code that writes a response's cookies directly (proxy). */
-export function authCookieOptions(): Partial<ResponseCookie> {
-    return { ...cookieOptions };
+/**
+ * How many cookies called `name` a raw `Cookie` header carries. A browser sends both a host-only
+ * cookie and one a sibling subdomain set with `Domain=ever.works` under the same name, and the
+ * cookie APIs keep only one of them (the last), so a tossed cookie could win over the visitor's
+ * own. Two or more plain session cookies is therefore never trusted (I2b).
+ */
+export function countCookieName(cookieHeader: string | null | undefined, name: string): number {
+    if (!cookieHeader) return 0;
+    let count = 0;
+    for (const part of cookieHeader.split(';')) {
+        const eq = part.indexOf('=');
+        if ((eq < 0 ? part : part.slice(0, eq)).trim() === name) count += 1;
+    }
+    return count;
 }
 
 export async function setAuthAccessCookie(token: string) {
@@ -109,17 +103,25 @@ export async function setAuthAccessCookie(token: string) {
 /**
  * The sealed session cookie's value: the `__Host-` one when it exists (a plain-name cookie next to
  * it is ignored, whoever planted it), else, while the fallback is on, a legacy plain-name one.
- * Reads only: the proxy moves a legacy cookie to the new name (`migrateLegacyAuthCookie`), since a
+ * Reads only: the proxy moves a legacy cookie to the new name (`reconcileLegacyAuthCookie`), since a
  * render cannot write cookies.
  */
 async function readSealedAuthCookie(): Promise<string | undefined> {
     const cookieStore = await cookies();
     const current = cookieStore.get(authCookieName())?.value;
     if (current) return current;
-    if (legacyAuthCookieFallbackEnabled()) {
-        return cookieStore.get(AUTH_COOKIE_NAME)?.value || undefined;
+    if (!legacyAuthCookieFallbackEnabled()) return undefined;
+    const legacy = cookieStore.get(AUTH_COOKIE_NAME)?.value;
+    if (!legacy) return undefined;
+    // Never trust a plain session name that appears more than once (a tossed Domain cookie next to
+    // the visitor's own): which one the cookie API kept is not ours to choose. Fail closed when the
+    // raw header cannot be read.
+    try {
+        const raw = (await headers()).get('cookie');
+        return countCookieName(raw, AUTH_COOKIE_NAME) === 1 ? legacy : undefined;
+    } catch {
+        return undefined;
     }
-    return undefined;
 }
 
 export async function getAuthAccessCookie() {
@@ -142,31 +144,44 @@ export async function removeAuthAccessCookie() {
     }
 }
 
-type RequestCookieReader = { cookies: { get(name: string): { value: string } | undefined } };
+type RequestCookieReader = {
+    cookies: { get(name: string): { value: string } | undefined };
+    headers: { get(name: string): string | null };
+};
 type ResponseCookieWriter = {
     cookies: { set(name: string, value: string, options?: Partial<ResponseCookie>): unknown };
 };
 
 /**
- * The one-time move of a legacy plain-name session cookie to `__Host-everworks_auth_token`, in
- * the proxy (where a response's cookies can be written). Only while the fallback is on, only
- * when there is no `__Host-` cookie yet (once there is, the plain name is ignored for good), and
- * only for a request the auth gate let through. Re-sets the same sealed value under the new name
- * and KEEPS the plain one: while the fallback is on, a pod still on the previous release (rolling
- * deploy) reads only the plain name, and expiring it there would sign the visitor out on that
- * pod. Once the `__Host-` cookie exists, new pods ignore the plain one. Returns whether it moved.
+ * What the proxy does with the plain session name for a request the auth gate let through
+ * (the only place a page request can write cookies):
+ *
+ * - `migrated`: while the fallback is on and there is no `__Host-` cookie yet, the same sealed
+ *   value is copied to `__Host-everworks_auth_token`. The plain cookie is KEPT: a pod still on
+ *   the previous release (rolling deploy) reads only the plain name. Once the `__Host-` cookie
+ *   exists, new pods ignore the plain one. Never when the plain name appears more than once.
+ * - `expired`: once the fallback is over (end date or flag) on HTTPS, a left-over host-only plain
+ *   cookie is expired. (A tossed `Domain=` one cannot be cleared from here; it is ignored.)
+ * - `none`: nothing to do.
  */
-export function migrateLegacyAuthCookie(
+export function reconcileLegacyAuthCookie(
     request: RequestCookieReader,
     response: ResponseCookieWriter,
-): boolean {
-    if (!legacyAuthCookieFallbackEnabled() || !response.cookies) return false;
+): 'migrated' | 'expired' | 'none' {
+    if (!response.cookies) return 'none';
     const name = authCookieName();
-    if (request.cookies.get(name)?.value) return false;
+    if (name === AUTH_COOKIE_NAME) return 'none';
     const legacy = request.cookies.get(AUTH_COOKIE_NAME)?.value;
-    if (!legacy) return false;
+    if (!legacyAuthCookieFallbackEnabled()) {
+        if (!legacy) return 'none';
+        response.cookies.set(AUTH_COOKIE_NAME, '', { ...cookieOptions, maxAge: 0 });
+        return 'expired';
+    }
+    if (request.cookies.get(name)?.value) return 'none';
+    if (!legacy) return 'none';
+    if (countCookieName(request.headers.get('cookie'), AUTH_COOKIE_NAME) !== 1) return 'none';
     response.cookies.set(name, legacy, cookieOptions);
-    return true;
+    return 'migrated';
 }
 
 /**

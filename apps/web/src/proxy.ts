@@ -6,7 +6,7 @@ import {
     AUTH_COOKIE_NAME,
     authCookieName,
     expireAuthCookies,
-    migrateLegacyAuthCookie,
+    reconcileLegacyAuthCookie,
 } from './lib/auth/cookies';
 import { resolveApiCspHost, resolveApiCspSocketSources } from './lib/csp-api-sources';
 import { match } from 'path-to-regexp';
@@ -358,8 +358,9 @@ export default async function proxy(req: NextRequest) {
     // no-referrer.
     const response = applySecurityHeaders(intlResponse);
     // R-16: a signed-in visitor still on the legacy plain-name session cookie moves to
-    // `__Host-everworks_auth_token` here, once (the only place this request can write cookies).
-    migrateLegacyAuthCookie(req, response);
+    // `__Host-everworks_auth_token` here, once, while the fallback lasts; after its end a
+    // left-over plain cookie is expired (the only place this request can write cookies).
+    reconcileLegacyAuthCookie(req, response);
     return isAccountDeletionPage(pathname) ? applyAccountDeletionHeaders(response) : response;
 }
 
