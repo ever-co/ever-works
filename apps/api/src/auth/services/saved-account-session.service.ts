@@ -66,16 +66,14 @@ export class SavedAccountSessionService {
         }
 
         try {
-            await this.dataSource
-                .getRepository(ApiKey)
-                .update(
-                    {
-                        userId,
-                        kind: In([PERSONAL_API_KEY_KIND, INTEGRATION_API_KEY_KIND]),
-                        isActive: true,
-                    },
-                    { isActive: false },
-                );
+            await this.dataSource.getRepository(ApiKey).update(
+                {
+                    userId,
+                    kind: In([PERSONAL_API_KEY_KIND, INTEGRATION_API_KEY_KIND]),
+                    isActive: true,
+                },
+                { isActive: false },
+            );
         } catch (error) {
             this.logger.warn(
                 `User ${userId} saved ${how}: could not deactivate its API keys: ${message(error)}`,
