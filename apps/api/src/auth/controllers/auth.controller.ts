@@ -320,13 +320,17 @@ export class AuthController {
     @ApiOperation({
         summary: 'Claim an anonymous account',
         description:
-            'Converts an anonymous (zero-friction) account into a regular credentialed account. Attaches email + password, clears the TTL, fires verification email. The bearer token from POST /api/auth/anonymous stays valid.',
+            'Converts an anonymous (zero-friction) account into a regular credentialed account. Attaches email + password and a real username (typed, or derived from the email), clears the TTL, fires verification email. Rotates the session: answers a fresh access_token and revokes the anonymous bearer.',
     })
-    @ApiResponse({ status: 200, description: 'Account claimed, verification email sent' })
+    @ApiResponse({
+        status: 200,
+        description: 'Account claimed, verification email sent; carries the new access_token',
+    })
     @ApiResponse({ status: 403, description: 'Account is not anonymous' })
     @ApiResponse({
         status: 409,
-        description: 'Email already in use by a different account',
+        description:
+            'Email already in use by a different account, or username taken (code username_taken + suggestion)',
     })
     async claimAccount(@Request() req, @Body() claimDto: ClaimAccountDto) {
         const userId = req.user?.userId;
@@ -414,7 +418,38 @@ export class AuthController {
             });
         }
 
-        return claimed;
+        // Rotate the session. The anonymous one expires with the anonymous TTL (up
+        // to 3 days from the first visit), so a just-saved account would be signed
+        // out then and, with REQUIRE_EMAIL_VERIFICATION on (the default), could not
+        // sign back in before confirming the address. Issue a regular session for
+        // the same user FIRST, then revoke the anonymous bearer, so a failure in
+        // either step never leaves the caller with no valid session. Both are best
+        // effort: the claim is already committed and must still answer 200.
+        let accessToken: string | undefined;
+        try {
+            accessToken = (
+                await this.authProvider.issueSession(claimed.id, { ipAddress, userAgent })
+            ).access_token;
+        } catch (error) {
+            this.logger.warn(
+                `Claimed user ${claimed.id}: could not issue a fresh session, keeping the anonymous one: ${
+                    error instanceof Error ? error.message : String(error)
+                }`,
+            );
+        }
+        if (accessToken) {
+            try {
+                await this.authProvider.signOut(toHeaders(req.headers || {}));
+            } catch (error) {
+                this.logger.warn(
+                    `Claimed user ${claimed.id}: could not revoke the anonymous session: ${
+                        error instanceof Error ? error.message : String(error)
+                    }`,
+                );
+            }
+        }
+
+        return accessToken ? { ...claimed, access_token: accessToken } : claimed;
     }
 
     // H-17 (partial): per-endpoint throttle on the credential-validation

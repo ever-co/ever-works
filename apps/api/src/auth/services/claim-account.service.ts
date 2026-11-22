@@ -11,7 +11,14 @@ import { UserRepository } from '@ever-works/agent/database';
 import { AUTH_PROVIDER } from '../providers/auth-provider.constants';
 import { AuthProvider } from '../providers/auth-provider.abstract';
 import { AuthSyncService } from '../providers/auth-sync.service';
+import { UsernameAllocatorService } from '../../users/services/username-allocator.service';
 import { AuthService } from './auth.service';
+
+/** Machine-readable code on the 409 a taken username answers, so the form can say so. */
+export const USERNAME_TAKEN_CODE = 'username_taken';
+
+/** The username floor `ClaimAccountDto` and `RegisterDto` enforce. */
+const USERNAME_MIN_LENGTH = 3;
 
 export interface ClaimAccountInput {
     userId: string;
@@ -37,14 +44,15 @@ export interface ClaimAccountInput {
  *     (`AuthProvider.setPassword`) so the new account can sign in via
  *     `/login`.
  *  4. Flip `is_anonymous=false`, clear `anonymous_expires_at`, persist
- *     the email + (optional) new username, set
- *     `registration_provider='local'`.
+ *     the email + a real username (the one typed, or one derived from
+ *     the email; never the `anon-<hex>` handle) and the matching slug,
+ *     set `registration_provider='local'`.
  *  5. Delegate to `AuthService.sendVerificationEmail` so the
  *     verification mail goes through the existing pipeline.
  *
- * The original anon session token stays valid — the user remains
- * signed in. Works ownership is by `userId`, which doesn't change, so
- * no Work transfer step is needed.
+ * The session is rotated by the controller (a fresh one replaces the
+ * anonymous one, which expires with the anonymous TTL). Works ownership
+ * is by `userId`, which doesn't change, so no Work transfer step is needed.
  */
 @Injectable()
 export class ClaimAccountService {
@@ -56,7 +64,55 @@ export class ClaimAccountService {
         private readonly authService: AuthService,
         @Inject(AUTH_PROVIDER)
         private readonly authProvider: AuthProvider,
+        private readonly usernames: UsernameAllocatorService,
     ) {}
+
+    /**
+     * The handle the saved account goes by. An anonymous account is called `anon-<hex>`,
+     * which is what the owner saw in the sidebar after saving, so a claim always names it:
+     *
+     *  - a username the visitor typed, normalized the way every handle is (lowercase,
+     *    `[a-z0-9-]`), and refused with a 409 + a free suggestion when another account or an
+     *    Organization already uses it, BEFORE anything is written (it used to surface as a
+     *    500 from the unique index);
+     *  - otherwise one derived from the email's local part, made unique by the allocator.
+     *
+     * The slug becomes the same value: the allocator checks usernames, user slugs and
+     * Organization slugs alike, and the entity's rule is that a rename updates both.
+     */
+    private async resolveUsername(
+        user: { username: string },
+        email: string,
+        requested?: string,
+    ): Promise<string> {
+        const desired = requested?.trim();
+        if (desired) {
+            const normalized = this.usernames.normalize(desired);
+            if (normalized.length < USERNAME_MIN_LENGTH) {
+                throw new BadRequestException(
+                    `Username must be at least ${USERNAME_MIN_LENGTH} characters`,
+                );
+            }
+            if (normalized === user.username.toLowerCase()) return normalized;
+            const { available, suggestion } = await this.usernames.suggest(normalized);
+            if (!available) {
+                throw new ConflictException({
+                    statusCode: 409,
+                    message: 'Username is already taken',
+                    code: USERNAME_TAKEN_CODE,
+                    suggestion,
+                });
+            }
+            return normalized;
+        }
+
+        const localPart = email.split('@')[0] ?? '';
+        const base =
+            this.usernames.normalize(localPart).length >= USERNAME_MIN_LENGTH
+                ? localPart
+                : `${localPart}-user`;
+        return this.usernames.allocateUsername(base);
+    }
 
     async claim(input: ClaimAccountInput): Promise<{
         id: string;
@@ -81,10 +137,8 @@ export class ClaimAccountService {
             );
         }
 
-        const username = input.username?.trim() || user.username;
-        if (username.length < 3) {
-            throw new BadRequestException('Username must be at least 3 characters');
-        }
+        // Before any write: a taken username answers 409 with the account untouched.
+        const username = await this.resolveUsername(user, normalizedEmail, input.username);
 
         // 1. Hash + persist credentials via Better Auth's adapter so the
         //    user can sign in via /api/auth/login like any other account.
@@ -99,6 +153,7 @@ export class ClaimAccountService {
         const updated = await this.userRepository.update(user.id, {
             email: normalizedEmail,
             username,
+            slug: username,
             password: passwordHash,
             isAnonymous: false,
             anonymousExpiresAt: null,

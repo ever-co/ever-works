@@ -195,6 +195,75 @@ describe('AuthController', () => {
             );
         });
 
+        describe('session rotation (the anonymous session dies with the anonymous TTL)', () => {
+            const anonReq = () => ({
+                user: { userId: 'u-anon-1', isAnonymous: true },
+                ip: '1.2.3.4',
+                headers: { 'user-agent': 'jest-agent', authorization: 'Bearer anon-token' },
+            });
+            const claimed = {
+                id: 'u-anon-1',
+                email: 'jane@example.com',
+                username: 'jane',
+                emailVerified: false,
+            };
+            const body = { email: 'jane@example.com', password: 'MySecure123!' };
+
+            beforeEach(() => claimAccount.claim.mockResolvedValue(claimed));
+
+            it('issues a fresh session for the SAME user, then revokes the anonymous bearer', async () => {
+                const order: string[] = [];
+                authProvider.issueSession.mockImplementation(async () => {
+                    order.push('issue');
+                    return { access_token: 'fresh-token', user: { id: 'u-anon-1' } } as any;
+                });
+                authProvider.signOut.mockImplementation(async () => {
+                    order.push('revoke');
+                });
+
+                const result = await (controller as any).claimAccount(anonReq(), body);
+
+                expect(order).toEqual(['issue', 'revoke']);
+                expect(authProvider.issueSession).toHaveBeenCalledWith('u-anon-1', {
+                    ipAddress: '1.2.3.4',
+                    userAgent: 'jest-agent',
+                });
+                const revokedHeaders = authProvider.signOut.mock.calls[0][0] as Headers;
+                expect(revokedHeaders.get('authorization')).toBe('Bearer anon-token');
+                expect(result).toEqual({ ...claimed, access_token: 'fresh-token' });
+            });
+
+            it('keeps the claim and the anonymous session when issuing fails', async () => {
+                authProvider.issueSession.mockRejectedValue(new Error('db down'));
+
+                const result = await (controller as any).claimAccount(anonReq(), body);
+
+                expect(result).toEqual(claimed);
+                expect(authProvider.signOut).not.toHaveBeenCalled();
+            });
+
+            it('still answers the fresh token when revoking the old one fails', async () => {
+                authProvider.issueSession.mockResolvedValue({
+                    access_token: 'fresh-token',
+                    user: { id: 'u-anon-1' },
+                } as any);
+                authProvider.signOut.mockRejectedValue(new Error('gone'));
+
+                await expect(
+                    (controller as any).claimAccount(anonReq(), body),
+                ).resolves.toMatchObject({ access_token: 'fresh-token' });
+            });
+
+            it('rotates nothing when the claim is refused', async () => {
+                claimAccount.claim.mockRejectedValue(new Error('409'));
+
+                await expect((controller as any).claimAccount(anonReq(), body)).rejects.toThrow();
+
+                expect(authProvider.issueSession).not.toHaveBeenCalled();
+                expect(authProvider.signOut).not.toHaveBeenCalled();
+            });
+        });
+
         describe('terms acceptance (save-account form)', () => {
             const terms = [
                 {

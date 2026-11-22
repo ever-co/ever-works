@@ -1,12 +1,13 @@
 import { DataSource } from 'typeorm';
-import { ENTITIES, UserRepository } from '@ever-works/agent/database';
-import { User, Work } from '@ever-works/agent/entities';
+import { ENTITIES, OrganizationRepository, UserRepository } from '@ever-works/agent/database';
+import { Organization, User, Work } from '@ever-works/agent/entities';
 // The file, not the `@ever-works/agent/services` barrel: the barrel reaches this app's
 // AuthModule (and Better Auth's ESM build) through `work.module`, which no Jest run can load.
 // Same deep-import pattern as `demo/__tests__/demo-sandbox-purge.spec.ts`.
 import { AnonymousUserCleanupService } from '../../../../../packages/agent/src/services/anonymous-user-cleanup.service';
 import { AnonymousAuthService } from './anonymous-auth.service';
 import { ClaimAccountService } from './claim-account.service';
+import { UsernameAllocatorService } from '../../users/services/username-allocator.service';
 
 /**
  * EW-617 — the save-account action must KEEP the visitor's Works. Proven end to end on a
@@ -42,8 +43,14 @@ describe('Claiming an anonymous account keeps its Works (real database)', () => 
             { getCredentialPasswordHash: jest.fn().mockResolvedValue('hashed-pw') } as never,
             { sendVerificationEmail: jest.fn().mockResolvedValue(undefined) } as never,
             { setPassword: jest.fn().mockResolvedValue(undefined) } as never,
+            new UsernameAllocatorService(
+                users,
+                new OrganizationRepository(dataSource.getRepository(Organization)),
+            ),
         );
-        cleanup = new AnonymousUserCleanupService(users);
+        // Same class at run time; the cast bridges the agent package's built and source
+        // declarations, which ts-jest sees as two types once the package has been built.
+        cleanup = new AnonymousUserCleanupService(users as never);
     });
 
     afterEach(async () => {
@@ -87,6 +94,9 @@ describe('Claiming an anonymous account keeps its Works (real database)', () => 
             isAnonymous: false,
             email: 'visitor@example.com',
             registrationProvider: 'local',
+            // A real handle now, not the anon-<hex> one, and the slug follows it.
+            username: 'visitor',
+            slug: 'visitor',
         });
         expect(row?.anonymousExpiresAt ?? null).toBeNull();
 
