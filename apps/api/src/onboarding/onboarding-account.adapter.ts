@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { HttpService } from '@nestjs/axios';
 import { Injectable, Logger } from '@nestjs/common';
+import { isAxiosError } from 'axios';
 import {
     AuthAccountRepository,
     GitHubAppUserLinkRepository,
@@ -34,6 +35,9 @@ import { UsernameAllocatorService } from '@src/users/services/username-allocator
 @Injectable()
 export class OnboardingAccountAdapter implements OnboardingAccountUpsert {
     private readonly logger = new Logger(OnboardingAccountAdapter.name);
+
+    /** Wait before the one retry of a transient `GET /user/emails` failure. */
+    private readonly emailCheckRetryDelayMs = 500;
 
     constructor(
         private readonly users: UserRepository,
@@ -105,13 +109,17 @@ export class OnboardingAccountAdapter implements OnboardingAccountUpsert {
 
         // `upsertProviderAccount` is keyed by (userId, providerId): a `github` row the user
         // already has for another GitHub identity would be re-pointed at this caller's id and
-        // token. Keep it, and skip.
-        const githubAccount = await this.authAccounts
-            .findProviderAccount(user.id, 'github')
-            .catch(() => null);
-        if (githubAccount && githubAccount.accountId !== input.githubUserId) {
+        // token. Keep it, and skip. A failed lookup skips too: it cannot rule that out.
+        const githubAccountSkip = await this.otherIdentitySkipReason(
+            () =>
+                this.authAccounts
+                    .findProviderAccount(user!.id, 'github')
+                    .then((row) => row?.accountId ?? null),
+            input.githubUserId,
+        );
+        if (githubAccountSkip) {
             this.logger.warn(
-                `onboarding.account_link_skipped userId=${user.id} reason=other_github_identity`,
+                `onboarding.account_link_skipped userId=${user.id} reason=${githubAccountSkip}`,
             );
         } else {
             await this.authAccounts
@@ -141,11 +149,13 @@ export class OnboardingAccountAdapter implements OnboardingAccountUpsert {
         }
 
         // `upsertLink` updates the user's existing link in place, whatever GitHub user it names.
-        const appLink = await this.githubLinks.findByUserId(user.id).catch(() => null);
-        if (appLink && appLink.githubUserId !== input.githubUserId) {
-            this.logger.warn(
-                `onboarding.gh_link_skipped userId=${user.id} reason=other_github_identity`,
-            );
+        const appLinkSkip = await this.otherIdentitySkipReason(
+            () =>
+                this.githubLinks.findByUserId(user!.id).then((link) => link?.githubUserId ?? null),
+            input.githubUserId,
+        );
+        if (appLinkSkip) {
+            this.logger.warn(`onboarding.gh_link_skipped userId=${user.id} reason=${appLinkSkip}`);
         } else {
             await this.githubLinks
                 .upsertLink({
@@ -170,23 +180,54 @@ export class OnboardingAccountAdapter implements OnboardingAccountUpsert {
     }
 
     /**
+     * Why the identity write must be skipped (`other_github_identity`, or `lookup_failed`
+     * when the user's current one cannot be read), or null when it may go ahead: the user has
+     * no such row yet, or it already names this identity. Fails closed.
+     */
+    private async otherIdentitySkipReason(
+        currentIdentity: () => Promise<string | null>,
+        githubUserId: string,
+    ): Promise<'other_github_identity' | 'lookup_failed' | null> {
+        let current: string | null;
+        try {
+            current = await currentIdentity();
+        } catch (err) {
+            this.logger.warn(`onboarding.identity_lookup_failed reason=${describeError(err)}`);
+            return 'lookup_failed';
+        }
+        return current !== null && current !== githubUserId ? 'other_github_identity' : null;
+    }
+
+    /**
      * The claimed address, lowercased, when GitHub reports it VERIFIED for the account behind
      * the caller's token (`GET /user/emails`, as the social sign-in reads it); otherwise null.
      * A token that cannot read the addresses, or a failed call, confirms nothing: the caller
      * then gets a separate account rather than somebody else's.
+     *
+     * A transient failure (5xx, 429 or a rate-limited 403, a timeout or a dropped connection)
+     * is retried once. If it still fails, the caller gets a separate account, logged as
+     * `onboarding.email_check_unavailable` so an operator can find and merge it later: no
+     * reconciler retries an onboarding whose account was already created.
      */
     private async verifiedEmailOfCaller(
         email: string,
         accessToken: string,
     ): Promise<string | null> {
         const claimed = email.trim().toLowerCase();
+        const list = () =>
+            listVerifiedGitHubEmails(this.httpService, accessToken, { logger: this.logger });
         let verified: string[];
         try {
-            verified = await listVerifiedGitHubEmails(this.httpService, accessToken, {
-                logger: this.logger,
+            verified = await list().catch(async (err) => {
+                if (!isTransientGitHubError(err)) throw err;
+                await new Promise((resolve) => setTimeout(resolve, this.emailCheckRetryDelayMs));
+                return list();
             });
         } catch (err) {
-            this.logger.warn(`onboarding.email_check_failed reason=${describeError(err)}`);
+            const code = isTransientGitHubError(err)
+                ? 'onboarding.email_check_unavailable'
+                : 'onboarding.email_check_failed';
+            this.logger.warn(`${code} reason=${describeError(err)}`);
             return null;
         }
         if (!verified.includes(claimed)) {
@@ -234,6 +275,22 @@ export class OnboardingAccountAdapter implements OnboardingAccountUpsert {
 // Security: strip known GitHub token patterns from error messages before logging to prevent
 // credential fragments leaking into log aggregators (Sentry, Datadog) via Octokit error text.
 const GITHUB_TOKEN_PATTERN = /\b(?:ghp_|gho_|ghs_|github_pat_)[A-Za-z0-9_]{10,}\b/g;
+
+/**
+ * A GitHub failure worth one retry: no answer at all (a timeout, a dropped connection), a
+ * 5xx, a 429, or a 403 carrying GitHub's rate-limit markers.
+ */
+function isTransientGitHubError(err: unknown): boolean {
+    if (!isAxiosError(err)) return false;
+    const response = err.response;
+    if (!response) return true;
+    if (response.status >= 500 || response.status === 429) return true;
+    const headers = response.headers ?? {};
+    return (
+        response.status === 403 &&
+        (String(headers['x-ratelimit-remaining']) === '0' || headers['retry-after'] != null)
+    );
+}
 
 function describeError(err: unknown): string {
     const raw = err instanceof Error ? err.message : String(err);

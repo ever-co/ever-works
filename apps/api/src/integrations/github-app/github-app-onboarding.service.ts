@@ -508,11 +508,18 @@ export class GitHubAppOnboardingService {
             const isPlaceholderEmail =
                 !user.email || user.email.endsWith('@users.noreply.ever.works');
             const nextEmail = input.email && isPlaceholderEmail ? input.email : user.email;
+            // Only a verified address that IS the user's address can verify it, as in
+            // `AuthService.validateSocialUser`. Reached by identity, GitHub may verify another
+            // address of the account; that must not verify this one (or the pre-hijack guard
+            // above is undone by the next App setup).
+            const sameEmail =
+                !!input.email &&
+                (nextEmail ?? '').trim().toLowerCase() === input.email.trim().toLowerCase();
             user = await repos.users.update(user.id, {
                 username: user.username || input.login,
                 avatar: input.avatarUrl || user.avatar,
                 email: nextEmail,
-                emailVerified: user.emailVerified || (input.email ? input.emailVerified : false),
+                emailVerified: user.emailVerified || (input.emailVerified && sameEmail),
                 registrationProvider: 'github',
                 lastLoginAt: new Date(),
             });

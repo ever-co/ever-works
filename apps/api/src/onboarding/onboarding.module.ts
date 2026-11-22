@@ -42,8 +42,9 @@ import { UsersModule } from '../users/users.module';
 @Module({
     imports: [
         FacadesModule,
-        // `OnboardingAccountAdapter` reads the caller's verified GitHub emails.
-        HttpModule,
+        // `OnboardingAccountAdapter` reads the caller's verified GitHub emails. Bounded, since
+        // `POST /api/onboarding` is public and waits on that call.
+        HttpModule.register({ timeout: 10_000 }),
         DatabaseModule,
         WorkModule,
         AuthModule,

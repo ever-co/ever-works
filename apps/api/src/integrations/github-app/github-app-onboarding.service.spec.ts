@@ -859,6 +859,86 @@ describe('GitHubAppOnboardingService', () => {
                 expect(ctx.userRepository.create).not.toHaveBeenCalled();
             });
 
+            // Only a verified address that IS the user's address verifies it (as in
+            // `AuthService.validateSocialUser`). Otherwise an account opened with someone's
+            // address, then tied to the opener's GitHub, turns verified on the next App setup
+            // and the pre-hijack guard no longer stops the real owner's sign-in from joining it.
+            it.each([
+                [
+                    'a DIFFERENT verified GitHub address leaves it unverified',
+                    'other@example.com',
+                    false,
+                ],
+                ['the SAME address, verified by GitHub, verifies it', ' Owner@Example.COM ', true],
+            ])(
+                'an identity-matched user with an unverified email: %s',
+                async (_label, githubEmail, expected) => {
+                    const ctx = arrange();
+                    ctx.gitHubAppService.getAuthenticatedGithubUser.mockResolvedValue({
+                        githubUserId: '4242',
+                        login: 'octo-owner',
+                        email: githubEmail,
+                        emailVerified: true,
+                        avatarUrl: null,
+                        nodeId: 'NODE_4242',
+                    });
+                    ctx.userLinkRepository.findByGithubUserId.mockResolvedValue({
+                        userId: existingUser.id,
+                        githubUserId: '4242',
+                    });
+                    ctx.userRepository.findById.mockResolvedValue({
+                        ...existingUser,
+                        emailVerified: false,
+                    });
+
+                    await ctx.service.completeUserAuth({
+                        binding: BINDING,
+                        code: 'code',
+                        state: ctx.state,
+                    });
+
+                    expect(ctx.userRepository.update).toHaveBeenCalledWith(
+                        existingUser.id,
+                        expect.objectContaining({
+                            email: 'owner@example.com',
+                            emailVerified: expected,
+                        }),
+                    );
+                },
+            );
+
+            it('a placeholder email replaced by the verified GitHub address is verified with it', async () => {
+                const ctx = arrange();
+                ctx.gitHubAppService.getAuthenticatedGithubUser.mockResolvedValue({
+                    githubUserId: '4242',
+                    login: 'octo-owner',
+                    email: 'owner@example.com',
+                    emailVerified: true,
+                    avatarUrl: null,
+                    nodeId: 'NODE_4242',
+                });
+                ctx.userLinkRepository.findByGithubUserId.mockResolvedValue({
+                    userId: existingUser.id,
+                    githubUserId: '4242',
+                });
+                ctx.userRepository.findById.mockResolvedValue({
+                    ...existingUser,
+                    email: 'github-app-4242@users.noreply.ever.works',
+                    emailVerified: false,
+                });
+
+                await ctx.service.completeUserAuth({
+                    binding: BINDING,
+                    code: 'code',
+                    state: ctx.state,
+                });
+
+                expect(ctx.userRepository.update).toHaveBeenCalledWith(
+                    existingUser.id,
+                    expect.objectContaining({ email: 'owner@example.com', emailVerified: true }),
+                );
+            });
+
             it('never creates a duplicate user when the `github` auth account exists but its user cannot be loaded', async () => {
                 const ctx = arrange();
                 ctx.userLinkRepository.findByGithubUserId.mockResolvedValue(null);

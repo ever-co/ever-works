@@ -6,6 +6,20 @@ import { of, throwError } from 'rxjs';
 import { OnboardingAccountAdapter } from './onboarding-account.adapter';
 
 describe('OnboardingAccountAdapter', () => {
+    // Logger spies are restored even when an assertion fails, so they never leak into later tests.
+    afterEach(() => {
+        jest.restoreAllMocks();
+    });
+
+    const httpError = (status: number, headers: Record<string, string> = {}) =>
+        new AxiosError(
+            `Request failed with status code ${status}`,
+            status >= 500 ? AxiosError.ERR_BAD_RESPONSE : AxiosError.ERR_BAD_REQUEST,
+            { headers: {} } as never,
+            {},
+            { status, statusText: 'error', data: {}, headers, config: { headers: {} } as never },
+        );
+    const warnings = (spy: jest.SpyInstance) => spy.mock.calls.map((c) => String(c[0])).join('\n');
     type Mocks = {
         users: {
             findById: jest.Mock;
@@ -122,6 +136,8 @@ describe('OnboardingAccountAdapter', () => {
             mocks.usernameAllocator as any,
             mocks.httpService as any,
         );
+        // No real wait before the one retry of a transient GitHub failure.
+        (adapter as unknown as { emailCheckRetryDelayMs: number }).emailCheckRetryDelayMs = 0;
         return { adapter, mocks };
     };
 
@@ -251,10 +267,9 @@ describe('OnboardingAccountAdapter', () => {
             expect(mocks.users.findByEmail).toHaveBeenCalledWith('octo@example.com');
             // The caller's own verified address, on the caller's own new account.
             expectSeparateAccount(mocks, result, 'octo@example.com');
-            expect(warnSpy.mock.calls.map((c) => String(c[0])).join('\n')).toContain(
+            expect(warnings(warnSpy)).toContain(
                 'email_match_refused userId=squatter reason=account_email_unverified',
             );
-            warnSpy.mockRestore();
         });
 
         it.each([
@@ -286,7 +301,65 @@ describe('OnboardingAccountAdapter', () => {
 
             expect(mocks.users.findByEmail).not.toHaveBeenCalled();
             expectSeparateAccount(mocks, result);
-            warnSpy.mockRestore();
+            expect(warnings(warnSpy)).not.toContain('email_check_unavailable');
+        });
+
+        it('retries a transient failure once, and matches when the retry answers', async () => {
+            const { adapter, mocks } = create({
+                userByEmail: { id: 'owner', emailVerified: true },
+            });
+            mocks.httpService.get
+                .mockReset()
+                .mockReturnValueOnce(throwError(() => httpError(503)))
+                .mockReturnValueOnce(of({ data: [{ email: 'octo@example.com', verified: true }] }));
+
+            const result = await adapter.upsertFromGithub(baseInput);
+
+            expect(mocks.httpService.get).toHaveBeenCalledTimes(2);
+            expect(result.accountId).toBe('owner');
+            expect(mocks.users.create).not.toHaveBeenCalled();
+        });
+
+        it.each([
+            ['a 5xx', httpError(502)],
+            ['a 429', httpError(429)],
+            ['a rate-limited 403', httpError(403, { 'x-ratelimit-remaining': '0' })],
+            [
+                'a timeout',
+                new AxiosError('timeout of 10000ms exceeded', AxiosError.ECONNABORTED, {
+                    headers: {},
+                } as never),
+            ],
+        ])(
+            'still failing after the one retry (%s), it gives a separate account logged as email_check_unavailable',
+            async (_label, error) => {
+                const { adapter, mocks } = create({
+                    githubEmails: error,
+                    userByEmail: { id: 'owner', emailVerified: true },
+                });
+                const warnSpy = jest.spyOn(require('@nestjs/common').Logger.prototype, 'warn');
+
+                const result = await adapter.upsertFromGithub(baseInput);
+
+                expect(mocks.httpService.get).toHaveBeenCalledTimes(2);
+                expect(mocks.users.findByEmail).not.toHaveBeenCalled();
+                expectSeparateAccount(mocks, result);
+                expect(warnings(warnSpy)).toContain('onboarding.email_check_unavailable');
+            },
+        );
+
+        it('does not retry a failure that is not transient', async () => {
+            const { adapter, mocks } = create({
+                githubEmails: httpError(401),
+                userByEmail: { id: 'owner', emailVerified: true },
+            });
+            const warnSpy = jest.spyOn(require('@nestjs/common').Logger.prototype, 'warn');
+
+            const result = await adapter.upsertFromGithub(baseInput);
+
+            expect(mocks.httpService.get).toHaveBeenCalledTimes(1);
+            expectSeparateAccount(mocks, result);
+            expect(warnings(warnSpy)).toContain('onboarding.email_check_failed');
         });
     });
 
@@ -307,12 +380,34 @@ describe('OnboardingAccountAdapter', () => {
             expect(mocks.githubLinks.findByUserId).toHaveBeenCalledWith('owner');
             expect(mocks.authAccounts.upsertProviderAccount).not.toHaveBeenCalled();
             expect(mocks.githubLinks.upsertLink).not.toHaveBeenCalled();
-            const warnings = warnSpy.mock.calls.map((c) => String(c[0])).join('\n');
-            expect(warnings).toContain(
+            expect(warnings(warnSpy)).toContain(
                 'account_link_skipped userId=owner reason=other_github_identity',
             );
-            expect(warnings).toContain('gh_link_skipped userId=owner reason=other_github_identity');
-            warnSpy.mockRestore();
+            expect(warnings(warnSpy)).toContain(
+                'gh_link_skipped userId=owner reason=other_github_identity',
+            );
+        });
+
+        it('skips both writes when the current identity cannot be read (fails closed)', async () => {
+            const { adapter, mocks } = create({
+                link: { userId: 'linked' },
+                userById: { id: 'linked' },
+            });
+            mocks.authAccounts.findProviderAccount.mockRejectedValue(new Error('db unavailable'));
+            mocks.githubLinks.findByUserId.mockRejectedValue(new Error('db unavailable'));
+            const warnSpy = jest.spyOn(require('@nestjs/common').Logger.prototype, 'warn');
+
+            const result = await adapter.upsertFromGithub(baseInput);
+
+            expect(result.accountId).toBe('linked');
+            expect(mocks.authAccounts.upsertProviderAccount).not.toHaveBeenCalled();
+            expect(mocks.githubLinks.upsertLink).not.toHaveBeenCalled();
+            expect(warnings(warnSpy)).toContain(
+                'account_link_skipped userId=linked reason=lookup_failed',
+            );
+            expect(warnings(warnSpy)).toContain(
+                'gh_link_skipped userId=linked reason=lookup_failed',
+            );
         });
 
         it('applies to identity-first matches too, and still refreshes rows for the SAME identity', async () => {
@@ -492,7 +587,6 @@ describe('OnboardingAccountAdapter', () => {
         expect(mocks.githubLinks.upsertLink).toHaveBeenCalled();
         expect(warnSpy).toHaveBeenCalled();
         expect(String(warnSpy.mock.calls[0][0])).toContain('account_link_failed');
-        warnSpy.mockRestore();
     });
 
     it('swallows errors from githubLinks.upsertLink (logs warn, returns accountId)', async () => {
@@ -507,7 +601,6 @@ describe('OnboardingAccountAdapter', () => {
         expect(String(warnSpy.mock.calls[0][0])).toContain('gh_link_failed');
         // describeError fallback for non-Error values: String(err)
         expect(String(warnSpy.mock.calls[0][0])).toContain('plain string error');
-        warnSpy.mockRestore();
     });
 
     it('logs account_created when a new user is provisioned', async () => {
@@ -521,7 +614,6 @@ describe('OnboardingAccountAdapter', () => {
         expect(msg).toContain('account_created');
         expect(msg).toContain('userId=new-user-id');
         expect(msg).toContain('login=octocat');
-        logSpy.mockRestore();
     });
 
     it('logs account_linked when an existing user is reused', async () => {
@@ -536,6 +628,5 @@ describe('OnboardingAccountAdapter', () => {
         const msgs = logSpy.mock.calls.map((c) => String(c[0])).join('\n');
         expect(msgs).toContain('account_linked');
         expect(msgs).toContain('userId=preexisting');
-        logSpy.mockRestore();
     });
 });
