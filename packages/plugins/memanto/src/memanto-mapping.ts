@@ -50,6 +50,12 @@ const META_VALUE_SAFE = /^[A-Za-z0-9_.:@/+-]+$/;
 /** Key charset. No `.` or `-`, so `<key>.<i>.<n>` can never be mistaken for a plain key. */
 const META_KEY_CHARS = 'A-Za-z0-9_';
 const META_KEY_SAFE = new RegExp(`^[${META_KEY_CHARS}]+$`);
+/** Keys that would reach Object.prototype when assigned on a plain object. */
+const FORBIDDEN_META_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+
+function isMetaKey(key: string): boolean {
+	return META_KEY_SAFE.test(key) && !FORBIDDEN_META_KEYS.has(key);
+}
 const BASE64URL = /^[A-Za-z0-9_-]+$/;
 
 export const META_TAG_PREFIX = 'ew:';
@@ -149,7 +155,7 @@ function metaValueString(value: unknown): string | null {
  * cannot be stored (not a scalar, injection-shaped, or too long).
  */
 function encodeMetaTags(key: string, value: unknown): string[] | null {
-	if (!META_KEY_SAFE.test(key)) return null;
+	if (!isMetaKey(key)) return null;
 	const v = metaValueString(value);
 	// The WHOLE value is checked first; the per-part check below is extra, never a replacement.
 	if (!v || INJECTION_WORD.test(v)) return null;
@@ -168,7 +174,9 @@ function encodeMetaTags(key: string, value: unknown): string[] | null {
 	const tags: string[] = [];
 	for (let i = 0; i < n; i++) {
 		const part = body.slice(i * room, (i + 1) * room);
-		// A cut can turn `exfiltrated` into a part ending in `exfiltrate`, which Memanto would reject.
+		// A cut can turn `exfiltrated` into a part ending in `exfiltrate`, which Memanto would reject
+		// (and the whole write with it). The base64url alphabet can spell it too, so a rare valid
+		// value is dropped here on purpose: a lost key beats a lost memory.
 		if (INJECTION_WORD.test(part)) return null;
 		tags.push(`${META_TAG_PREFIX}${key}.${marker}${i}.${n}=${part}`);
 	}
@@ -241,10 +249,12 @@ export function decodeTags(raw: readonly string[] | undefined): {
 			const value = body.slice(eq + 1);
 			const part = META_PART_NAME.exec(name);
 			if (!part) {
-				metadata[name] = value;
+				// Only keys the writer could have produced; never `__proto__` & co.
+				if (isMetaKey(name)) metadata[name] = value;
 				continue;
 			}
 			const [, key, x, index, count] = part;
+			if (!isMetaKey(key)) continue;
 			const entry = parted.get(key) ?? { encoded: x === 'x', count: Number(count), parts: new Map() };
 			// Parts that disagree on encoding or count belong to no single value.
 			if (entry.encoded !== (x === 'x') || entry.count !== Number(count)) entry.count = -1;
@@ -259,7 +269,7 @@ export function decodeTags(raw: readonly string[] | undefined): {
 		}
 	}
 	for (const [key, { encoded, count, parts }] of parted) {
-		if (count < 1 || parts.size !== count || key in metadata) continue;
+		if (count < 1 || parts.size !== count || Object.prototype.hasOwnProperty.call(metadata, key)) continue;
 		const pieces: string[] = [];
 		for (let i = 0; i < count; i++) {
 			const piece = parts.get(i);

@@ -95,7 +95,7 @@ The tag budget (20) goes to the owner stamp and the other priority keys first, t
 keys `sourceUrl` / `sourceEventId` / `ingestedEventId` (Memory source facets and chat citations read them), then the
 rest. A value whose parts do not all fit is dropped whole and logged. Keys may use only `[A-Za-z0-9_]`. Every value
 is checked as a whole against Memanto's whitespace-free injection pattern (`exfiltrate`), and every part again, since
-Memanto rejects a whole write over one bad tag.
+Memanto rejects a whole write over one bad tag. A base64url part can spell that word by chance, so a rare valid value is dropped: a lost key beats a lost memory. Keys `__proto__`, `constructor` and `prototype` are never written or read.
 
 **Sessions and replicas.** Memanto allows one live session token per agent, and every activate invalidates the
 previous one. The client keeps the current token in the plugin cache (shared by every API replica when the cache is

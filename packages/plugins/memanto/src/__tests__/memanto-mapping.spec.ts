@@ -176,6 +176,21 @@ describe('memanto mapping', () => {
 			}
 		});
 
+		it('never assigns prototype keys from stored tags, plain or parted', () => {
+			const decoded = decodeTags([
+				'ew:__proto__=x',
+				'ew:constructor=y',
+				'ew:prototype.0.1=z',
+				'ew:bad-key=w',
+				'ew:ok=1'
+			]).metadata;
+			expect(decoded).toEqual({ ok: '1' });
+			expect(Object.getPrototypeOf(decoded)).toBe(Object.prototype);
+			expect(buildWriteTags({ metadata: { constructor: 'c', ok: '1' } }).droppedMetadataKeys).toEqual([
+				'constructor'
+			]);
+		});
+
 		it('prefers a single plain tag over parts with the same key on read', () => {
 			expect(decodeTags(['ew:runId=a', 'ew:runId.0.1=b']).metadata).toEqual({ runId: 'a' });
 		});
