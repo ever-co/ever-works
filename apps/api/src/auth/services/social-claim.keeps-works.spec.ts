@@ -1,6 +1,11 @@
 import { DataSource } from 'typeorm';
-import { AuthAccountRepository, ENTITIES, UserRepository } from '@ever-works/agent/database';
-import { AuthAccount, User, Work } from '@ever-works/agent/entities';
+import {
+    AuthAccountRepository,
+    ENTITIES,
+    OrganizationRepository,
+    UserRepository,
+} from '@ever-works/agent/database';
+import { AuthAccount, Organization, User, Work } from '@ever-works/agent/entities';
 // The file, not the `@ever-works/agent/services` barrel: see `claim-account.keeps-works.spec.ts`.
 import { AnonymousUserCleanupService } from '../../../../../packages/agent/src/services/anonymous-user-cleanup.service';
 import { AuthProvider } from '../../config/constants';
@@ -8,6 +13,7 @@ import type { SocialAuthUser } from '../types/social-auth.types';
 import { AnonymousAuthService } from './anonymous-auth.service';
 import { AuthService } from './auth.service';
 import { SocialClaimService } from './social-claim.service';
+import { UsernameAllocatorService } from '../../users/services/username-allocator.service';
 
 /**
  * EW-617 — saving a temporary account with GitHub / Google must KEEP its Works, like the
@@ -45,7 +51,16 @@ describe('Saving an anonymous account with a social identity keeps its Works (re
 
         anonymousAuth = new AnonymousAuthService(users, dataSource, {} as never);
         authService = new AuthService(users, accounts, events as never);
-        socialClaim = new SocialClaimService(users, accounts, authService, events as never);
+        socialClaim = new SocialClaimService(
+            users,
+            accounts,
+            authService,
+            events as never,
+            new UsernameAllocatorService(
+                users,
+                new OrganizationRepository(dataSource.getRepository(Organization)),
+            ),
+        );
         // The service is deep-imported from source (see the import), while `users` is typed by
         // `@ever-works/agent/database`, which resolves to the BUILT declarations once
         // packages/agent is built. Same class at runtime; two declarations to the type checker.
@@ -99,6 +114,8 @@ describe('Saving an anonymous account with a social identity keeps its Works (re
     it('keeps the same user and its Works through the cleanup, and GitHub signs in to it later', async () => {
         const userId = await mintAnonymousWithWorks(['my-directory', 'my-landing-page']);
 
+        const slugBefore = (await users.findById(userId))?.slug;
+
         const saved = await socialClaim.claim(userId, githubProfile());
 
         expect(saved.id).toBe(userId);
@@ -108,6 +125,9 @@ describe('Saving an anonymous account with a social identity keeps its Works (re
             email: 'visitor@example.com',
             registrationProvider: 'github',
             emailVerified: true,
+            // A real handle from the provider in place of `anon-<hex>`; the slug is stable.
+            username: 'visitor',
+            slug: slugBefore,
         });
         expect(row?.anonymousExpiresAt ?? null).toBeNull();
         expect(await accounts.findProviderAccountByAccountId('github', '4242')).toMatchObject({
@@ -179,5 +199,22 @@ describe('Saving an anonymous account with a social identity keeps its Works (re
 
         expect(await users.findById(anonId)).toMatchObject({ isAnonymous: true });
         expect(await accounts.findProviderAccountByAccountId('github', '4242')).toBeNull();
+    });
+
+    it('gives a free variant of the provider handle when another account has it', async () => {
+        await users.create({
+            username: 'visitor',
+            email: 'someone@example.com',
+            registrationProvider: 'local',
+            emailVerified: true,
+            isActive: true,
+        });
+        const userId = await mintAnonymousWithWorks(['kept']);
+
+        const saved = await socialClaim.claim(userId, githubProfile());
+
+        expect(saved.username).not.toBe('visitor');
+        expect(saved.username.startsWith('visitor')).toBe(true);
+        expect((await users.findById(userId))?.username).toBe(saved.username);
     });
 });

@@ -11,6 +11,7 @@ import {
     Post,
     Req,
     Res,
+    ServiceUnavailableException,
     UnauthorizedException,
     UseGuards,
 } from '@nestjs/common';
@@ -26,6 +27,7 @@ import { SocialClaimService } from '../services/social-claim.service';
 import { TermsAcceptanceService } from '../../terms/terms-acceptance.service';
 import { AUTH_PROVIDER } from '../providers/auth-provider.constants';
 import { AuthProvider } from '../providers/auth-provider.abstract';
+import { toHeaders } from '../providers/request-headers';
 import { trustedClientIp } from '../../config/trust-proxy';
 
 // Duck-typed like `OAuthController`: the API does not depend on `@types/express`.
@@ -50,6 +52,11 @@ type ClaimResponse = {
  * exchanged. On a demo host the global `DemoRestrictionsGuard` (an `APP_GUARD` that
  * `DemoModule` registers when `DEMO=true`, so it needs no `@UseGuards` here) refuses the route
  * through its `DEMO_BLOCKED_ROUTES` row (social sign-in, everyone).
+ *
+ * Same contract as `POST /api/auth/claim` (FR-G3-8, FR-G3-10): the terms are on file BEFORE
+ * the account changes (a failure to record refuses with 503, account untouched), and the
+ * session is rotated afterwards (a fresh one is answered as `access_token`, then the anonymous
+ * bearer is revoked; both best effort, the save already stands).
  */
 @ApiTags('Auth')
 @Controller('api/oauth')
@@ -75,9 +82,12 @@ export class OAuthClaimController {
     @ApiOperation({
         summary: 'Save an anonymous account with a social identity',
         description:
-            'Exchanges the OAuth callback code and attaches the provider identity to the signed-in anonymous account (same user id, so its Works stay), takes it out of anonymous mode, records the terms and issues a regular session. Refuses with 409, and changes nothing, when the identity or its email already belongs to another account.',
+            'Records the terms, exchanges the OAuth callback code and attaches the provider identity to the signed-in anonymous account (same user id, so its Works stay), gives it a real username, takes it out of anonymous mode, then rotates the session: answers a fresh access_token and revokes the anonymous bearer. Refuses with 409, and changes nothing, when the identity or its email already belongs to another account.',
     })
-    @ApiResponse({ status: 200, description: 'Account saved; a regular session is returned' })
+    @ApiResponse({
+        status: 200,
+        description: 'Account saved; carries the new access_token (absent if none could be issued)',
+    })
     @ApiResponse({
         status: 400,
         description: 'State check failed or the provider refused the code',
@@ -87,6 +97,7 @@ export class OAuthClaimController {
         status: 409,
         description: 'The provider identity or its email already belongs to another account',
     })
+    @ApiResponse({ status: 503, description: 'The terms could not be recorded; nothing changed' })
     async claim(
         @Param('providerId') providerId: string,
         @Body() body: OAuthClaimDto,
@@ -118,9 +129,34 @@ export class OAuthClaimController {
             );
         }
 
-        // Before the code is spent and before the account changes, as `register` does.
+        const userAgentHeader = req.headers['user-agent'];
+        const userAgent = typeof userAgentHeader === 'string' ? userAgentHeader : null;
+        // Express's `trust proxy` view of the caller, never the client-written left-most
+        // `X-Forwarded-For` entry: the session, the terms record and the log all keep it.
+        const ipAddress = trustedClientIp(req);
+
+        // Terms first, on file BEFORE the code is spent or the account changes, as the password
+        // claim does: an unpublished claim is a 400, a failure to record a 503, the account
+        // untouched either way. Idempotent per (user, document, version), so a save that later
+        // fails (a taken identity) and is retried records once.
         if (body.terms?.length) {
             this.termsAcceptanceService.assertClaimsArePublished(body.terms);
+            try {
+                await this.termsAcceptanceService.record(userId, body.terms, {
+                    method: 'signup-checkbox',
+                    ip: ipAddress,
+                    userAgent,
+                });
+            } catch (error) {
+                this.logger.error(
+                    `Failed to record terms acceptance before saving user ${userId} with ${providerId}: ${
+                        error instanceof Error ? error.message : String(error)
+                    }`,
+                );
+                throw new ServiceUnavailableException(
+                    'Could not record the terms acceptance; the account was not changed. Try again.',
+                );
+            }
         }
 
         const socialUser = await this.socialAuthService.fetchSocialUser(providerId, body.code);
@@ -128,32 +164,32 @@ export class OAuthClaimController {
             emailVerificationCallbackUrl: body.emailVerificationCallbackUrl,
         });
 
-        const userAgentHeader = req.headers['user-agent'];
-        const userAgent = typeof userAgentHeader === 'string' ? userAgentHeader : null;
-        // Express's `trust proxy` view of the caller, never the client-written left-most
-        // `X-Forwarded-For` entry: the session, the terms record and the log all keep it.
-        const ipAddress = trustedClientIp(req);
-
-        // Logged and swallowed like `register` and the password claim: the claims were checked
-        // above, the account is saved, and the write is idempotent.
-        if (body.terms?.length) {
+        // Rotate the session, as the password claim does: a regular session for the same user
+        // FIRST, then revoke the anonymous bearer (it would otherwise live on until the
+        // anonymous TTL), so a failure in either step never leaves the caller with no valid
+        // session. Both are best effort: the save is committed and still answers 200.
+        let accessToken: string | undefined;
+        try {
+            accessToken = (await this.authProvider.issueSession(saved.id, { ipAddress, userAgent }))
+                .access_token;
+        } catch (error) {
+            this.logger.warn(
+                `User ${saved.id} saved with ${providerId}: could not issue a fresh session, keeping the anonymous one: ${
+                    error instanceof Error ? error.message : String(error)
+                }`,
+            );
+        }
+        if (accessToken) {
             try {
-                await this.termsAcceptanceService.record(saved.id, body.terms, {
-                    method: 'signup-checkbox',
-                    ip: ipAddress,
-                    userAgent,
-                });
+                await this.authProvider.signOut(toHeaders(req.headers || {}));
             } catch (error) {
-                this.logger.error(
-                    `Failed to record terms acceptance for user ${saved.id} saved with ${providerId}: ${
+                this.logger.warn(
+                    `User ${saved.id} saved with ${providerId}: could not revoke the anonymous session: ${
                         error instanceof Error ? error.message : String(error)
                     }`,
                 );
             }
         }
-
-        // A regular session: the anonymous one ends when the anonymous account would have.
-        const session = await this.authProvider.issueSession(saved.id, { ipAddress, userAgent });
 
         this.activityLogService
             .log({
@@ -169,7 +205,7 @@ export class OAuthClaimController {
             .catch(() => {});
 
         return {
-            access_token: session.access_token,
+            ...(accessToken ? { access_token: accessToken } : {}),
             user: {
                 id: saved.id,
                 email: saved.email,

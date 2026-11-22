@@ -1,6 +1,7 @@
 jest.mock('@ever-works/agent/database', () => ({
     UserRepository: class {},
     AuthAccountRepository: class {},
+    OrganizationRepository: class {},
 }));
 
 import {
@@ -9,6 +10,7 @@ import {
     ForbiddenException,
     NotFoundException,
 } from '@nestjs/common';
+import { QueryFailedError } from 'typeorm';
 import { UserConfirmedEvent } from '../../events';
 import { AuthProvider } from '../../config/constants';
 import type { SocialAuthUser } from '../types/social-auth.types';
@@ -49,14 +51,15 @@ describe('SocialClaimService (EW-617: save an anonymous account with GitHub / Go
     });
 
     const build = (user: Record<string, unknown> | null = anonUser()) => {
+        // The row as the writes leave it, so a later write's result carries an earlier one.
+        let row: Record<string, unknown> = { ...(user ?? {}) };
         const userRepository = {
             findById: jest.fn().mockResolvedValue(user),
             existsByEmailCaseInsensitive: jest.fn().mockResolvedValue(false),
-            update: jest.fn(async (id: string, data: Record<string, unknown>) => ({
-                ...(user ?? {}),
-                id,
-                ...data,
-            })),
+            update: jest.fn(async (id: string, data: Record<string, unknown>): Promise<any> => {
+                row = { ...row, id, ...data };
+                return row;
+            }),
         };
         const authAccountRepository = {
             findProviderAccountByAccountId: jest.fn().mockResolvedValue(null),
@@ -66,13 +69,32 @@ describe('SocialClaimService (EW-617: save an anonymous account with GitHub / Go
         };
         const authService = { sendVerificationEmail: jest.fn().mockResolvedValue(undefined) };
         const eventEmitter = { emit: jest.fn() };
+        // The real allocator's normalize; availability is the test's to decide.
+        const usernames = {
+            normalize: jest.fn((input: string) =>
+                input
+                    .toLowerCase()
+                    .replace(/[^a-z0-9-]+/g, '-')
+                    .replace(/-+/g, '-')
+                    .replace(/^-|-$/g, ''),
+            ),
+            allocateUsername: jest.fn(async (base: string) => base),
+        };
         const service = new SocialClaimService(
             userRepository as never,
             authAccountRepository as never,
             authService as never,
             eventEmitter as never,
+            usernames as never,
         );
-        return { service, userRepository, authAccountRepository, authService, eventEmitter };
+        return {
+            service,
+            userRepository,
+            authAccountRepository,
+            authService,
+            eventEmitter,
+            usernames,
+        };
     };
 
     const expectNothingWritten = (ctx: ReturnType<typeof build>) => {
@@ -97,8 +119,13 @@ describe('SocialClaimService (EW-617: save an anonymous account with GitHub / Go
                     accessToken: 'gho_access',
                 }),
             );
-            expect(ctx.userRepository.update).toHaveBeenCalledTimes(1);
-            expect(ctx.userRepository.update).toHaveBeenCalledWith(
+            // The handle on its own first, then the flip in one update.
+            expect(ctx.userRepository.update).toHaveBeenCalledTimes(2);
+            expect(ctx.userRepository.update).toHaveBeenNthCalledWith(1, 'anon-1', {
+                username: 'visitor',
+            });
+            expect(ctx.userRepository.update).toHaveBeenNthCalledWith(
+                2,
                 'anon-1',
                 expect.objectContaining({
                     email: 'Visitor@Example.com',
@@ -109,18 +136,20 @@ describe('SocialClaimService (EW-617: save an anonymous account with GitHub / Go
                     avatar: 'https://avatars.example/visitor.png',
                 }),
             );
-            // The handle stays: renaming also moves the slug, and the provider's may be taken.
-            expect(ctx.userRepository.update.mock.calls[0][1]).not.toHaveProperty('username');
+            // The slug is never written: it stays as it is, as on every rename.
+            for (const [, data] of ctx.userRepository.update.mock.calls) {
+                expect(data).not.toHaveProperty('slug');
+            }
             expect(result).toEqual({
                 id: 'anon-1',
                 email: 'Visitor@Example.com',
-                username: 'anon-deadbeef',
+                username: 'visitor',
                 emailVerified: true,
                 provider: 'github',
             });
         });
 
-        it('links before it flips the account, so a lost race changes nothing', async () => {
+        it('names it, then links, then flips: a lost race leaves a retryable anonymous account', async () => {
             const ctx = build();
             const order: string[] = [];
             ctx.authAccountRepository.upsertProviderAccount.mockImplementation(async () => {
@@ -128,13 +157,34 @@ describe('SocialClaimService (EW-617: save an anonymous account with GitHub / Go
                 return { id: 'acc-1' };
             });
             ctx.userRepository.update.mockImplementation(async (id: string, data: object) => {
-                order.push('flip');
+                order.push('isAnonymous' in data ? 'flip' : 'username');
                 return { ...anonUser(), id, ...data };
             });
 
             await ctx.service.claim('anon-1', githubUser());
 
-            expect(order).toEqual(['link', 'flip']);
+            expect(order).toEqual(['username', 'link', 'flip']);
+        });
+
+        it('derives the handle from the email when the provider gives none usable', async () => {
+            const ctx = build();
+
+            const result = await ctx.service.claim(
+                'anon-1',
+                githubUser({ username: '!!!', email: 'Jane.Doe@Example.com' }),
+            );
+
+            expect(ctx.usernames.allocateUsername).toHaveBeenCalledWith('jane-doe');
+            expect(result.username).toBe('jane-doe');
+        });
+
+        it('keeps a handle a half-finished earlier save already gave it', async () => {
+            const ctx = build(anonUser({ username: 'visitor' }));
+
+            await ctx.service.claim('anon-1', githubUser());
+
+            expect(ctx.usernames.allocateUsername).not.toHaveBeenCalled();
+            expect(ctx.userRepository.update).toHaveBeenCalledTimes(1);
         });
 
         it('sends the welcome mail a verified social sign-up gets, and no verification mail', async () => {
@@ -238,7 +288,10 @@ describe('SocialClaimService (EW-617: save an anonymous account with GitHub / Go
             await expect(ctx.service.claim('anon-1', githubUser())).rejects.toBeInstanceOf(
                 ConflictException,
             );
-            expect(ctx.userRepository.update).not.toHaveBeenCalled();
+            // Only the handle was written; the account was never taken out of anonymous mode.
+            expect(
+                ctx.userRepository.update.mock.calls.some(([, data]) => 'isAnonymous' in data),
+            ).toBe(false);
         });
     });
 
@@ -285,14 +338,90 @@ describe('SocialClaimService (EW-617: save an anonymous account with GitHub / Go
         });
     });
 
+    /** A unique-index violation as the drivers raise it (Postgres 23505). */
+    const uniqueViolation = () =>
+        new QueryFailedError(
+            'UPDATE "users" SET ...',
+            [],
+            Object.assign(new Error('duplicate key value violates unique constraint'), {
+                code: '23505',
+            }),
+        );
+
+    /** The username write succeeds; the flip (the write that has `isAnonymous`) does `flip`. */
+    const failTheFlip = (ctx: ReturnType<typeof build>, flip: () => Promise<unknown>) =>
+        ctx.userRepository.update.mockImplementation(async (id: string, data: object) =>
+            'isAnonymous' in data ? flip() : { ...anonUser(), id, ...data },
+        );
+
+    describe('races that reach a unique index answer 409, never 500', () => {
+        it('a save racing for the same email loses as the email 409, and removes its link', async () => {
+            const ctx = build();
+            failTheFlip(ctx, async () => {
+                throw uniqueViolation();
+            });
+
+            const error = await ctx.service.claim('anon-1', githubUser()).catch((e) => e);
+
+            expect(error).toBeInstanceOf(ConflictException);
+            expect((error as ConflictException).getResponse()).toMatchObject({
+                code: SOCIAL_CLAIM_EMAIL_TAKEN_CODE,
+            });
+            expect(ctx.authAccountRepository.deleteProviderAccount).toHaveBeenCalledWith(
+                'anon-1',
+                'github',
+            );
+        });
+
+        it('a save racing for the same identity loses on the link index as the identity 409', async () => {
+            const ctx = build();
+            ctx.authAccountRepository.upsertProviderAccount.mockRejectedValue(uniqueViolation());
+
+            const error = await ctx.service.claim('anon-1', githubUser()).catch((e) => e);
+
+            expect(error).toBeInstanceOf(ConflictException);
+            expect((error as ConflictException).getResponse()).toMatchObject({
+                code: SOCIAL_CLAIM_IDENTITY_TAKEN_CODE,
+            });
+            // Still anonymous: only the handle was written.
+            expect(
+                ctx.userRepository.update.mock.calls.some(([, data]) => 'isAnonymous' in data),
+            ).toBe(false);
+        });
+
+        it('a lost race for the handle allocates once more, a second loss is username_taken', async () => {
+            const once = build();
+            once.userRepository.update
+                .mockRejectedValueOnce(uniqueViolation())
+                .mockImplementation(async (id: string, data: object) => ({
+                    ...anonUser(),
+                    id,
+                    ...data,
+                }));
+            await expect(once.service.claim('anon-1', githubUser())).resolves.toMatchObject({
+                id: 'anon-1',
+            });
+            expect(once.usernames.allocateUsername).toHaveBeenCalledTimes(2);
+
+            const twice = build();
+            twice.userRepository.update.mockRejectedValue(uniqueViolation());
+            const error = await twice.service.claim('anon-1', githubUser()).catch((e) => e);
+            expect(error).toBeInstanceOf(ConflictException);
+            expect((error as ConflictException).getResponse()).toMatchObject({
+                code: 'username_taken',
+            });
+            expect(twice.authAccountRepository.upsertProviderAccount).not.toHaveBeenCalled();
+        });
+    });
+
     describe('when the account update fails after the link was written', () => {
         it('removes the link it created, so no link outlives the anonymous account', async () => {
             const ctx = build();
-            ctx.userRepository.update.mockRejectedValue(new Error('unique violation'));
+            failTheFlip(ctx, async () => {
+                throw new Error('db down');
+            });
 
-            await expect(ctx.service.claim('anon-1', githubUser())).rejects.toThrow(
-                'unique violation',
-            );
+            await expect(ctx.service.claim('anon-1', githubUser())).rejects.toThrow('db down');
             expect(ctx.authAccountRepository.deleteProviderAccount).toHaveBeenCalledWith(
                 'anon-1',
                 'github',
@@ -302,7 +431,7 @@ describe('SocialClaimService (EW-617: save an anonymous account with GitHub / Go
         it('leaves a provider row that existed before this call alone', async () => {
             const ctx = build();
             ctx.authAccountRepository.findProviderAccount.mockResolvedValue({ userId: 'anon-1' });
-            ctx.userRepository.update.mockResolvedValue(null as never);
+            failTheFlip(ctx, async () => null);
 
             await expect(ctx.service.claim('anon-1', githubUser())).rejects.toBeInstanceOf(
                 BadRequestException,

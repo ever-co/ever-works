@@ -156,14 +156,10 @@ describe('saveAccountWithOAuth', () => {
         });
     });
 
-    it('re-reads the layout so the strip goes at once, then redirects', async () => {
-        const order: string[] = [];
+    it('keeps the anonymous cookie when the API kept the anonymous session (no token)', async () => {
         mocks.claimAccountWithOAuth.mockResolvedValue({
-            access_token: 't',
-            user: { id: 'a', email: 'v@x.co', username: 'a', emailVerified: true },
+            user: { id: 'a', email: 'v@x.co', username: 'visitor', emailVerified: true },
         });
-        mocks.revalidatePath.mockImplementation(() => order.push('revalidate'));
-        mocks.redirect.mockImplementation(() => order.push('redirect'));
 
         await saveAccountWithOAuth(
             OAuthProvider.GITHUB,
@@ -173,14 +169,71 @@ describe('saveAccountWithOAuth', () => {
             'en',
         );
 
-        expect(mocks.revalidatePath).toHaveBeenCalledWith('/', 'layout');
-        expect(order).toEqual(['revalidate', 'redirect']);
+        expect(mocks.setAuthCookies).not.toHaveBeenCalled();
+        expect(mocks.redirect).toHaveBeenCalledWith({
+            locale: 'en',
+            href: '/?accountSaved=true&savedWith=github',
+        });
+    });
+
+    it('sends a saved visitor whose new cookie could not be set to sign in, never to retry', async () => {
+        mocks.claimAccountWithOAuth.mockResolvedValue({
+            access_token: 'fresh',
+            user: { id: 'a', email: 'v@x.co', username: 'visitor', emailVerified: true },
+        });
+        mocks.setAuthCookies.mockRejectedValueOnce(new Error('cookies() unavailable'));
+
+        await saveAccountWithOAuth(
+            OAuthProvider.GITHUB,
+            'c',
+            's',
+            { state: 's', terms: TERMS },
+            'en',
+        );
+
+        expect(mocks.redirect).toHaveBeenCalledWith({
+            locale: 'en',
+            href: '/login?accountSaved=true',
+        });
+    });
+
+    it('sends an ended temporary session (401) to sign in: there is nothing left to save', async () => {
+        mocks.claimAccountWithOAuth.mockRejectedValue(new ApiResponseError('Unauthorized', 401));
+
+        await saveAccountWithOAuth(
+            OAuthProvider.GITHUB,
+            'c',
+            's',
+            { state: 's', terms: TERMS },
+            'en',
+        );
+
+        expect(mocks.redirect).toHaveBeenCalledWith({ locale: 'en', href: '/login' });
+    });
+
+    it('drops no cache: the callback is a full navigation, so the dashboard renders fresh', async () => {
+        mocks.claimAccountWithOAuth.mockResolvedValue({
+            access_token: 't',
+            user: { id: 'a', email: 'v@x.co', username: 'a', emailVerified: true },
+        });
+
+        await saveAccountWithOAuth(
+            OAuthProvider.GITHUB,
+            'c',
+            's',
+            { state: 's', terms: TERMS },
+            'en',
+        );
+
+        expect(mocks.revalidatePath).not.toHaveBeenCalled();
     });
 
     it.each([
         [new ApiResponseError('linked', 409, 'PROVIDER_ACCOUNT_ALREADY_LINKED'), 'identity_taken'],
         [new ApiResponseError('email', 409, 'EMAIL_ALREADY_IN_USE'), 'email_taken'],
         [new ApiResponseError('conflict', 409), 'identity_taken'],
+        [new ApiResponseError('handle', 409, 'username_taken'), 'failed'],
+        [new ApiResponseError('terms store down', 503), 'failed'],
         [new ApiResponseError('not anonymous', 403), 'not_temporary'],
         [new ApiResponseError('slow down', 429), 'too_many_attempts'],
         [new ApiResponseError('invalid_grant', 400), 'rejected'],
@@ -202,9 +255,8 @@ describe('saveAccountWithOAuth', () => {
             locale: 'en',
             href: `/save-account?oauthError=${expected}&provider=github`,
         });
-        // A refused save keeps the anonymous session and re-reads nothing.
+        // A refused save keeps the anonymous session.
         expect(mocks.setAuthCookies).not.toHaveBeenCalled();
-        expect(mocks.revalidatePath).not.toHaveBeenCalled();
     });
 
     it('never posts a provider the page does not offer', async () => {

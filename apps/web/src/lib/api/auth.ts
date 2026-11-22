@@ -80,10 +80,14 @@ export interface OAuthClaimDto {
     terms?: TermsAcceptanceClaim[];
 }
 
-/** A regular session for the saved account, plus what the dashboard notice needs. */
+/** What the dashboard notice needs, plus the session the API rotated to. */
 export interface OAuthClaimResponse {
-    access_token: string;
-    user: ClaimAccountResponse;
+    /**
+     * The fresh session (the anonymous one is revoked). Absent when the API could not issue
+     * one, in which case the anonymous session is kept.
+     */
+    access_token?: string;
+    user: Pick<ClaimAccountResponse, 'id' | 'email' | 'username' | 'emailVerified'>;
 }
 
 export interface LoginDto {

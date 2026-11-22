@@ -11,7 +11,12 @@ jest.mock('../../terms/terms-acceptance.service', () => ({
     TermsAcceptanceService: class TermsAcceptanceService {},
 }));
 
-import { BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
+import {
+    BadRequestException,
+    ConflictException,
+    ForbiddenException,
+    ServiceUnavailableException,
+} from '@nestjs/common';
 import { OAuthClaimController } from './oauth-claim.controller';
 import { OAuthStateService } from '../services/oauth-state.service';
 
@@ -33,7 +38,7 @@ describe('OAuthClaimController (POST /api/oauth/:providerId/claim)', () => {
     let socialClaim: { claim: jest.Mock };
     let terms: { assertClaimsArePublished: jest.Mock; record: jest.Mock };
     let activityLog: { log: jest.Mock };
-    let authProvider: { issueSession: jest.Mock };
+    let authProvider: { issueSession: jest.Mock; signOut: jest.Mock };
     let controller: OAuthClaimController;
 
     const socialUser = { provider: 'github', providerUserId: '4242', email: 'v@example.com' };
@@ -58,7 +63,10 @@ describe('OAuthClaimController (POST /api/oauth/:providerId/claim)', () => {
             record: jest.fn().mockResolvedValue([]),
         };
         activityLog = { log: jest.fn().mockResolvedValue(undefined) };
-        authProvider = { issueSession: jest.fn().mockResolvedValue({ access_token: 'fresh' }) };
+        authProvider = {
+            issueSession: jest.fn().mockResolvedValue({ access_token: 'fresh' }),
+            signOut: jest.fn().mockResolvedValue(undefined),
+        };
         controller = new OAuthClaimController(
             socialAuth as never,
             socialClaim as never,
@@ -91,13 +99,17 @@ describe('OAuthClaimController (POST /api/oauth/:providerId/claim)', () => {
             state,
             req: {
                 ip: '203.0.113.5',
-                headers: { 'user-agent': 'UA', cookie: setCookie.split(';')[0] },
+                headers: {
+                    'user-agent': 'UA',
+                    cookie: setCookie.split(';')[0],
+                    authorization: 'Bearer anon-token',
+                },
                 user,
             },
         };
     }
 
-    it('saves the signed-in anonymous user with the provider identity and issues a regular session', async () => {
+    it('saves the signed-in anonymous user with the provider identity and rotates the session', async () => {
         const { state, req } = signedIn();
         const res = makeRes();
 
@@ -127,6 +139,13 @@ describe('OAuthClaimController (POST /api/oauth/:providerId/claim)', () => {
             ipAddress: '203.0.113.5',
             userAgent: 'UA',
         });
+        // Rotation: the fresh session first, then the anonymous bearer the web forwarded is revoked.
+        expect(authProvider.signOut).toHaveBeenCalledTimes(1);
+        const revoked = authProvider.signOut.mock.calls[0][0] as Headers;
+        expect(revoked.get('authorization')).toBe('Bearer anon-token');
+        expect(authProvider.issueSession.mock.invocationCallOrder[0]).toBeLessThan(
+            authProvider.signOut.mock.invocationCallOrder[0],
+        );
         expect(result).toEqual({
             access_token: 'fresh',
             user: {
@@ -147,7 +166,32 @@ describe('OAuthClaimController (POST /api/oauth/:providerId/claim)', () => {
         expect(String(res._headers['set-cookie'])).toContain('Max-Age=0');
     });
 
-    it('checks the terms before the code is spent or the account changes', async () => {
+    it('records the terms BEFORE the code is spent or the account changes', async () => {
+        const { state, req } = signedIn();
+
+        await controller.claim('github', { code: 'c', state, terms: TERMS }, req, makeRes());
+
+        expect(terms.record.mock.invocationCallOrder[0]).toBeLessThan(
+            socialAuth.fetchSocialUser.mock.invocationCallOrder[0],
+        );
+        expect(terms.record.mock.invocationCallOrder[0]).toBeLessThan(
+            socialClaim.claim.mock.invocationCallOrder[0],
+        );
+    });
+
+    it('refuses with 503, account untouched and code unspent, when the terms cannot be recorded', async () => {
+        terms.record.mockRejectedValue(new Error('db blip'));
+        const { state, req } = signedIn();
+
+        await expect(
+            controller.claim('github', { code: 'c', state, terms: TERMS }, req, makeRes()),
+        ).rejects.toBeInstanceOf(ServiceUnavailableException);
+        expect(socialAuth.fetchSocialUser).not.toHaveBeenCalled();
+        expect(socialClaim.claim).not.toHaveBeenCalled();
+        expect(authProvider.issueSession).not.toHaveBeenCalled();
+    });
+
+    it('refuses unpublished terms before the code is spent or the account changes', async () => {
         terms.assertClaimsArePublished.mockImplementation(() => {
             throw new BadRequestException('unpublished');
         });
@@ -158,6 +202,7 @@ describe('OAuthClaimController (POST /api/oauth/:providerId/claim)', () => {
         ).rejects.toBeInstanceOf(BadRequestException);
         expect(socialAuth.fetchSocialUser).not.toHaveBeenCalled();
         expect(socialClaim.claim).not.toHaveBeenCalled();
+        expect(terms.record).not.toHaveBeenCalled();
     });
 
     it('refuses a state the browser does not hold, before anything else (C-03)', async () => {
@@ -181,7 +226,7 @@ describe('OAuthClaimController (POST /api/oauth/:providerId/claim)', () => {
         expect(socialAuth.fetchSocialUser).not.toHaveBeenCalled();
     });
 
-    it('passes a 409 from the service through and issues no session', async () => {
+    it('passes a 409 from the service through, issues no session and revokes nothing', async () => {
         socialClaim.claim.mockRejectedValue(
             new ConflictException({ code: 'PROVIDER_ACCOUNT_ALREADY_LINKED' }),
         );
@@ -190,8 +235,8 @@ describe('OAuthClaimController (POST /api/oauth/:providerId/claim)', () => {
         await expect(
             controller.claim('github', { code: 'c', state, terms: TERMS }, req, makeRes()),
         ).rejects.toBeInstanceOf(ConflictException);
-        expect(terms.record).not.toHaveBeenCalled();
         expect(authProvider.issueSession).not.toHaveBeenCalled();
+        expect(authProvider.signOut).not.toHaveBeenCalled();
         expect(activityLog.log).not.toHaveBeenCalled();
     });
 
@@ -220,8 +265,24 @@ describe('OAuthClaimController (POST /api/oauth/:providerId/claim)', () => {
         );
     });
 
-    it('keeps a saved account saved when recording the terms fails', async () => {
-        terms.record.mockRejectedValue(new Error('db blip'));
+    it('keeps the anonymous session (no token, nothing revoked) when no fresh one can be issued', async () => {
+        authProvider.issueSession.mockRejectedValue(new Error('session store down'));
+        const { state, req } = signedIn();
+
+        const result = await controller.claim(
+            'github',
+            { code: 'c', state, terms: TERMS },
+            req,
+            makeRes(),
+        );
+
+        expect(result).not.toHaveProperty('access_token');
+        expect(result.user).toMatchObject({ id: 'anon-1' });
+        expect(authProvider.signOut).not.toHaveBeenCalled();
+    });
+
+    it('still answers the fresh token when revoking the anonymous one fails', async () => {
+        authProvider.signOut.mockRejectedValue(new Error('revoke failed'));
         const { state, req } = signedIn();
 
         await expect(
