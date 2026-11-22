@@ -7,7 +7,8 @@ import { Link, useRouter } from '@/i18n/navigation';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { COMPANY_OWNER_WEBSITE, ROUTES } from '@/lib/constants';
-import { PASSWORD_RULES, VALIDATION_RULES } from '@/app/actions/validation';
+import { PASSWORD_RULES } from '@/app/actions/validation';
+import { isUsableUsername, normalizeUsername, USERNAME_MIN_LENGTH } from '@/lib/anonymous/username';
 import { saveAnonymousAccount, type SaveAccountField } from '@/app/actions/save-account';
 import { timeLeft } from '@/lib/anonymous/time-left';
 import type { TermsAcceptanceDocument } from '@/lib/api/types-only';
@@ -56,6 +57,13 @@ export function SaveAccountForm({
     const [errors, setErrors] = useState<FieldErrors>({});
 
     const termsUnavailable = termsDocuments.length === 0;
+    const typedUsername = username.trim();
+    const usernamePreview =
+        typedUsername &&
+        isUsableUsername(typedUsername) &&
+        normalizeUsername(typedUsername) !== typedUsername
+            ? normalizeUsername(typedUsername)
+            : null;
     const left = timeLeft(expiresAt);
     const moreWorks = totalWorks !== null ? Math.max(0, totalWorks - workNames.length) : 0;
 
@@ -82,12 +90,8 @@ export function SaveAccountForm({
         setErrors({});
 
         const trimmedUsername = username.trim();
-        if (trimmedUsername && trimmedUsername.length < VALIDATION_RULES.USERNAME_MIN_LENGTH) {
-            setErrors({
-                username: t('errors.usernameTooShort', {
-                    length: VALIDATION_RULES.USERNAME_MIN_LENGTH,
-                }),
-            });
+        if (!isUsableUsername(trimmedUsername)) {
+            setErrors({ username: t('errors.usernameTooShort', { length: USERNAME_MIN_LENGTH }) });
             return;
         }
 
@@ -261,7 +265,12 @@ export function SaveAccountForm({
                             setErrors((prev) => ({ ...prev, username: undefined }));
                         }}
                         error={errors.username}
-                        helperText={t('usernameHint')}
+                        // Says what the API will save ("Jane Doe" → "jane-doe") before submit.
+                        helperText={
+                            usernamePreview
+                                ? t('usernameSavedAs', { username: usernamePreview })
+                                : t('usernameHint')
+                        }
                         disabled={isPending}
                         className="text-sm"
                     />

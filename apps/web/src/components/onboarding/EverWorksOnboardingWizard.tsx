@@ -313,7 +313,13 @@ export function EverWorksOnboardingWizard({
             <DialogContent className="max-w-5xl p-0 overflow-hidden rounded-lg shadow-2xl">
                 {saveAccountStrip && <SaveAccountStrip {...saveAccountStrip} />}
                 {quickStart ? null : (
-                    <div className="absolute top-0 left-0 right-0 h-[3px] bg-border dark:bg-border-dark z-10 rounded-t-lg">
+                    <div
+                        className={cn(
+                            'left-0 right-0 h-[3px] bg-border dark:bg-border-dark z-10',
+                            // Under the strip when there is one, instead of painting over its top edge.
+                            saveAccountStrip ? 'relative' : 'absolute top-0 rounded-t-lg',
+                        )}
+                    >
                         <div
                             className="h-full w-full origin-left bg-text dark:bg-white/70 transition-transform duration-500 ease-out rounded-t-2xl"
                             style={{ transform: `scaleX(${progressPercent / 100})` }}

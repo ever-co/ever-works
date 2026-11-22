@@ -67,6 +67,27 @@ describe('SaveAccountForm', () => {
         );
     });
 
+    it('says what a typed username will be saved as', async () => {
+        renderForm();
+
+        await userEvent.type(screen.getByLabelText('Username (optional)'), 'Jane Doe');
+
+        expect(screen.getByText('Saved as jane-doe')).toBeInTheDocument();
+    });
+
+    it('refuses a username with nothing usable before submit, without calling the server', async () => {
+        renderForm();
+
+        await fillAndSubmit('!!!');
+
+        expect(
+            await screen.findByText(
+                'Use at least 3 letters, digits or dashes, or leave the username empty',
+            ),
+        ).toBeInTheDocument();
+        expect(mocks.save).not.toHaveBeenCalled();
+    });
+
     it('shows a taken username under the username field', async () => {
         mocks.save.mockResolvedValue({
             success: false,

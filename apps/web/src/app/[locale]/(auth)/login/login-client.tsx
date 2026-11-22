@@ -14,7 +14,11 @@ import { REDIRECT_SEARCH_PARAM, ROUTES } from '@/lib/constants';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { OAuthProvider } from '@/lib/api/enums';
 import { DemoLoginCard } from '@/components/demo/DemoLoginCard';
-import { TemporaryAccountLoginNotice } from '@/components/anonymous/TemporaryAccountLoginNotice';
+import {
+    AccountSavedSignInNotice,
+    TemporaryAccountLoginNotice,
+} from '@/components/anonymous/TemporaryAccountLoginNotice';
+import { ACCOUNT_SAVED_PARAM } from '@/lib/anonymous/account-saved';
 import { EVER_ID_SIGNED_OUT_PARAM, EVER_ID_SIGNED_OUT_VALUE } from '@/lib/auth/ever-id';
 
 interface LoginClientProps {
@@ -433,6 +437,8 @@ export function LoginClient({
             {everIdNotice && <EverIdSignedOutNotice message={everIdNotice} />}
 
             {temporaryAccount && <TemporaryAccountLoginNotice />}
+
+            {searchParams.get(ACCOUNT_SAVED_PARAM) === 'true' && <AccountSavedSignInNotice />}
 
             {searchParams.get('accountDeleted') === '1' && (
                 <div

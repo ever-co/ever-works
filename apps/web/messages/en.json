@@ -13523,6 +13523,7 @@
             "usernameLabel": "Username (optional)",
             "usernamePlaceholder": "jane-doe",
             "usernameHint": "Leave it empty to get one based on your email. You can change it later.",
+            "usernameSavedAs": "Saved as {username}",
             "startAgain": "Start again",
             "signIn": "Sign in",
             "errors": {
@@ -13531,11 +13532,15 @@
                 "tooManyAttempts": "Too many attempts. Wait a while, then try again.",
                 "rejected": "The account could not be saved with these details. Check them and try again.",
                 "generic": "The account could not be saved. Try again.",
-                "usernameTooShort": "Use at least {length} characters, or leave the username empty",
+                "usernameTooShort": "Use at least {length} letters, digits or dashes, or leave the username empty",
                 "usernameTaken": "This username is taken. Pick another one, or leave it empty.",
                 "usernameTakenWithSuggestion": "This username is taken. Try {suggestion}, or leave it empty.",
-                "sessionEnded": "Your temporary session has ended, so this account can no longer be saved here. Start again, or sign in if you already have an account."
+                "sessionEnded": "Your temporary session has ended. If you just saved this account, it is saved: confirm your email if asked, then sign in. Otherwise, start again."
             }
+        },
+        "savedSignIn": {
+            "title": "Your account is saved",
+            "body": "Confirm your email if asked, then sign in with your email and password. Your Works are waiting."
         },
         "saved": {
             "title": "Account saved",

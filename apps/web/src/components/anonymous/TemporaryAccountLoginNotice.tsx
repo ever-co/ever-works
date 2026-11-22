@@ -27,3 +27,21 @@ export function TemporaryAccountLoginNotice() {
         </div>
     );
 }
+
+/**
+ * EW-617 — shown on the sign-in page when an account was saved but its new session could not
+ * be stored: the account IS saved, so the visitor signs in with the credentials they just
+ * chose instead of being told to try again.
+ */
+export function AccountSavedSignInNotice() {
+    const t = useTranslations('anonymousAccount.savedSignIn');
+    return (
+        <div
+            role="status"
+            data-testid="account-saved-sign-in-notice"
+            className="mb-4 rounded-lg border border-success/20 bg-success/10 px-4 py-3 text-sm text-text dark:text-text-dark"
+        >
+            <span className="font-medium">{t('title')}</span> {t('body')}
+        </div>
+    );
+}

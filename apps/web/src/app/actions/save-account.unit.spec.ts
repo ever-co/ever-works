@@ -150,6 +150,7 @@ describe('saveAnonymousAccount', () => {
         ['a short password', { password: 'short1' }, 'password', 'password.minLength'],
         ['no lowercase letter', { password: 'ABCDEFG123' }, 'password', 'password.lowercase'],
         ['a 2-character username', { username: 'jd' }, 'username', 'usernameTooShort'],
+        ['a username with nothing usable', { username: '!!!' }, 'username', 'usernameTooShort'],
         ['no terms', { terms: [] }, 'terms', 'terms.required'],
     ])('refuses %s before calling the API', async (_label, overrides, field, key) => {
         const result = await saveAnonymousAccount(input(overrides as Partial<SaveAccountInput>));
@@ -188,6 +189,39 @@ describe('saveAnonymousAccount', () => {
             error: 'usernameTakenWithSuggestion',
             field: 'username',
         });
+    });
+
+    it('sends the normalized handle the API would make of it', async () => {
+        await saveAnonymousAccount(input({ username: 'Jane Doe' }));
+
+        expect(mocks.claimAccount.mock.calls[0][0]).toMatchObject({ username: 'jane-doe' });
+    });
+
+    it("puts the API's username refusal (400) on the username field", async () => {
+        mocks.claimAccount.mockRejectedValue(
+            new ApiResponseError('Username must be at least 3 characters', 400),
+        );
+
+        await expect(saveAnonymousAccount(input({ username: 'abc' }))).resolves.toEqual({
+            success: false,
+            error: 'usernameTooShort',
+            field: 'username',
+        });
+    });
+
+    // Review of #3300: once the API answered 200 the account IS saved. A failure to store the
+    // rotated session must not read as "try again" (a retry would only meet the revoked one).
+    it('treats a saved account whose cookie cannot be stored as saved: off to sign in', async () => {
+        mocks.setAuthCookies.mockRejectedValue(new Error('cookies() unavailable'));
+
+        await saveAnonymousAccount(input());
+
+        expect(mocks.redirect).toHaveBeenCalledTimes(1);
+        expect(mocks.redirect).toHaveBeenCalledWith({
+            locale: 'en',
+            href: '/login?accountSaved=true',
+        });
+        expect(mocks.refresh).not.toHaveBeenCalled();
     });
 
     it('tells an ended temporary session apart from "try again"', async () => {

@@ -5,13 +5,15 @@ import { z } from 'zod';
 import { ZOD3_ERROR_MESSAGES } from '@ever-works/plugin/helpers';
 import { getLocale, getTranslations } from 'next-intl/server';
 import { authAPI, type TermsAcceptanceClaim } from '@/lib/api';
+import type { ClaimAccountResponse } from '@/lib/api/auth';
 import { ApiResponseError } from '@/lib/api/server-api';
 import { setAuthCookies } from '@/lib/auth';
 import { redirect } from '@/i18n/navigation';
 import { ROUTES, withAppUrl } from '@/lib/constants';
 import { isEmailUnconfirmed, withUnverifiedEmailNotice } from '@/lib/auth/unverified-email';
 import { ACCOUNT_SAVED_PARAM } from '@/lib/anonymous/account-saved';
-import { PASSWORD_RULES, VALIDATION_RULES } from './validation';
+import { isUsableUsername, normalizeUsername, USERNAME_MIN_LENGTH } from '@/lib/anonymous/username';
+import { PASSWORD_RULES } from './validation';
 
 export type SaveAccountField = 'email' | 'password' | 'username' | 'terms';
 
@@ -62,13 +64,12 @@ export async function saveAnonymousAccount(input: SaveAccountInput): Promise<Sav
             .regex(PASSWORD_RULES.LOWERCASE, t('password.lowercase'))
             .regex(PASSWORD_RULES.NUMBER_OR_SPECIAL, t('password.numberOrSpecial'))
             .regex(PASSWORD_RULES.NOT_STARTING_WITH_DOT_OR_NEWLINE, t('password.cannotStartWith')),
+        // The API's own rule (normalized, >= 3, an ASCII letter or digit), so "!!!" is
+        // refused here instead of silently becoming a random handle.
         username: z
             .string()
             .trim()
-            .refine(
-                (value) => value === '' || value.length >= VALIDATION_RULES.USERNAME_MIN_LENGTH,
-                tSave('usernameTooShort', { length: VALIDATION_RULES.USERNAME_MIN_LENGTH }),
-            ),
+            .refine(isUsableUsername, tSave('usernameTooShort', { length: USERNAME_MIN_LENGTH })),
         terms: z
             .array(
                 z.object({
@@ -101,21 +102,17 @@ export async function saveAnonymousAccount(input: SaveAccountInput): Promise<Sav
         };
     }
 
-    let emailVerified: boolean | undefined;
+    let claimed: ClaimAccountResponse;
     try {
-        const claimed = await authAPI.claimAccount({
+        claimed = await authAPI.claimAccount({
             email: validation.data.email,
             password: validation.data.password,
-            ...(validation.data.username ? { username: validation.data.username } : {}),
+            ...(validation.data.username
+                ? { username: normalizeUsername(validation.data.username) }
+                : {}),
             terms: validation.data.terms,
             emailVerificationCallbackUrl: withAppUrl(ROUTES.API_AUTH_VERIFY_EMAIL),
         });
-        emailVerified = claimed.emailVerified;
-        // The API answers a fresh session for the same user and revokes the anonymous one.
-        // Without a token (it could not issue one) the anonymous cookie stays valid.
-        if (claimed.access_token) {
-            await setAuthCookies(claimed.access_token);
-        }
     } catch (error) {
         console.error('Saving the anonymous account failed', error);
         const status = error instanceof ApiResponseError ? error.statusCode : undefined;
@@ -144,13 +141,36 @@ export async function saveAnonymousAccount(input: SaveAccountInput): Promise<Sav
             return { success: false, error: tSave('tooManyAttempts') };
         }
         if (status === 400) {
+            // Matched, never forwarded: the API's username refusals name the field.
+            if (error instanceof ApiResponseError && /username/i.test(error.message)) {
+                return {
+                    success: false,
+                    error: tSave('usernameTooShort', { length: USERNAME_MIN_LENGTH }),
+                    field: 'username',
+                };
+            }
             return { success: false, error: tSave('rejected') };
         }
         return { success: false, error: tSave('generic') };
     }
 
+    // From here on the account IS saved: nothing below may report a failure. The API rotated
+    // the session (the anonymous one is revoked); store the new one. If that cannot be
+    // stored, the visitor is signed out but saved, so they are told so and sent to sign in,
+    // never to "try again" (a retry would only find the revoked session).
+    const locale = await getLocale();
+    if (claimed.access_token) {
+        try {
+            await setAuthCookies(claimed.access_token);
+        } catch (error) {
+            console.error('Account saved, but the new session cookie could not be set', error);
+            redirect({ locale, href: `${ROUTES.AUTH_LOGIN}?${ACCOUNT_SAVED_PARAM}=true` });
+            return { success: false, error: tSave('generic') };
+        }
+    }
+
     let href = `${ROUTES.DASHBOARD}?${ACCOUNT_SAVED_PARAM}=true`;
-    if (isEmailUnconfirmed({ emailVerified })) {
+    if (isEmailUnconfirmed({ emailVerified: claimed.emailVerified })) {
         href = withUnverifiedEmailNotice(href);
     }
 
@@ -161,6 +181,6 @@ export async function saveAnonymousAccount(input: SaveAccountInput): Promise<Sav
     refresh();
 
     // Throws NEXT_REDIRECT.
-    redirect({ locale: await getLocale(), href });
+    redirect({ locale, href });
     return { success: false, error: tSave('generic') };
 }
