@@ -247,8 +247,13 @@ test.describe('Claim + zero-friction', () => {
         expect(claimed.username).toBe(newUsername);
         expect(claimed.emailVerified).toBe(false);
 
-        // 3. The profile flips out of anonymous mode on the SAME token.
-        const after = await profileFresh(request, anon.access_token);
+        // 3. The claim ROTATES the session (PR #3300): the anon bearer is revoked, and
+        //    the bearer it answers reads the same row, now out of anonymous mode.
+        const revoked = await request.get(`${API_BASE}/api/auth/profile/fresh`, {
+            headers: authedHeaders(anon.access_token),
+        });
+        expect(revoked.status(), 'the anon bearer is revoked by the claim').toBe(401);
+        const after = await profileFresh(request, claimed.access_token);
         expect(after.id).toBe(anon.user.id);
         expect(after.isAnonymous).toBe(false);
         expect(after.email).toBe(email);

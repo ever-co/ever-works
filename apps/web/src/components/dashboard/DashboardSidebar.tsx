@@ -47,6 +47,10 @@ import {
 } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { EverIdSignOutDialog, useEverIdSignOut } from '@/components/auth/EverIdSignOutDialog';
+import {
+    TemporaryAccountSignOutDialog,
+    useTemporaryAccountSignOut,
+} from '@/components/anonymous/TemporaryAccountSignOutDialog';
 import { HumanAgentIcon } from '@/components/icons/HumanAgentIcon';
 import { Button } from '@/components/ui/button';
 import { Tooltip } from '@/components/ui/tooltip';
@@ -84,6 +88,8 @@ interface DashboardSidebarProps {
     chatOpen?: boolean;
     onOpenChat?: () => void;
     onInteraction?: () => void;
+    /** EW-617: the signed-in account is a temporary (anonymous) one; sign-out asks to save it first. */
+    temporaryAccount?: boolean;
 }
 
 function ConditionalTooltip({
@@ -114,6 +120,7 @@ export function DashboardSidebar({
     chatOpen,
     onOpenChat,
     onInteraction,
+    temporaryAccount = false,
 }: DashboardSidebarProps) {
     const pathname = usePathname();
     const router = useRouter();
@@ -133,8 +140,12 @@ export function DashboardSidebar({
     // APW-12 (Ever ID): a session opened with Ever ID first asks whether to sign
     // out of Ever ID too (S7). Every other session signs out exactly as before.
     const { offerEverIdSignOut, dialogProps: everIdSignOutDialogProps } = useEverIdSignOut();
+    // EW-617: a temporary account has nothing to sign back in with, so it is asked to save first.
+    const { offerSaveFirst, dialogProps: temporarySignOutDialogProps } =
+        useTemporaryAccountSignOut(temporaryAccount);
 
     const handleLogout = async () => {
+        if (offerSaveFirst()) return;
         startTransition(() => {
             void (async () => {
                 if (await offerEverIdSignOut()) return;
@@ -730,6 +741,7 @@ export function DashboardSidebar({
 
             {/* APW-12 — "Sign out of Ever Works?" for sessions opened with Ever ID. */}
             <EverIdSignOutDialog {...everIdSignOutDialogProps} />
+            <TemporaryAccountSignOutDialog {...temporarySignOutDialogProps} />
         </aside>
     );
 }

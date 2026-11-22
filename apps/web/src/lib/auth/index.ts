@@ -57,6 +57,7 @@ function normalizeJwtUser(user: JwtPayload): AuthUser {
         avatar: user.avatar,
         provider: user.provider,
         isActive: user.isActive,
+        isAnonymous: user.isAnonymous === true,
     };
 }
 
@@ -67,6 +68,9 @@ function normalizeProfileUser(user: UserProfile): AuthUser {
         username: user.username,
         emailVerified: user.emailVerified ?? false,
         avatar: user.avatar ?? null,
+        // EW-617: `GET /auth/profile` reports it for a session, so a page can tell a temporary
+        // account apart without asking the API again.
+        isAnonymous: user.isAnonymous === true,
     };
 }
 

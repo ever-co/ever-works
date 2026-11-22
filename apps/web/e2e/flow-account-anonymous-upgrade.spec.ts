@@ -37,8 +37,12 @@ import { API_BASE, authedHeaders, registerUserViaAPI } from './helpers/api';
  *        to a DIFFERENT anon. (GET /api/works/slug/:slug is a separate route
  *        that 404s for these freshly-created slugs — use the id route.)
  *   POST /api/auth/claim (anon bearer) → 200 { id (UNCHANGED), email, username,
- *        emailVerified:false }. Flips isAnonymous→false, registrationProvider→
- *        'local', clears anonymousExpiresAt. The original bearer STAYS valid.
+ *        emailVerified:false, access_token }. Flips isAnonymous→false,
+ *        registrationProvider→'local', clears anonymousExpiresAt. ROTATES the
+ *        session (PR #3300): `access_token` is a fresh session for the same row
+ *        and the original anon bearer is revoked (401 from then on). The
+ *        username becomes the override, or one derived from the email (never
+ *        the anon-<hex> handle); the slug stays as it was.
  *        Negative matrix:
  *          - no Authorization      → 401 Unauthorized
  *          - non-anon (registered) → 403 'claim is only valid for anonymous …'
@@ -233,10 +237,16 @@ test.describe('Anonymous account → real-identity upgrade (EW-617 G2/G3)', () =
         expect(claimed.id, 'claim does NOT mint a new row — id is unchanged').toBe(anon.userId);
         expect(String(claimed.email).toLowerCase()).toBe(email.toLowerCase());
         expect(claimed.emailVerified, 'claimed account starts unverified').toBe(false);
+        expect(claimed.username, 'a real handle, never the anon-<hex> one').not.toMatch(
+            /^anon-[0-9a-f]{8}$/,
+        );
+        // The session is rotated: the claim answers the fresh bearer to use from now on.
+        expect(typeof claimed.access_token, 'claim answers the rotated session').toBe('string');
+        const token: string = claimed.access_token;
 
         // Identity flipped to permanent: isAnonymous=false, provider=local, TTL cleared.
         const freshAfter = await request
-            .get(`${API_BASE}/api/auth/profile/fresh`, { headers: authedHeaders(anon.token) })
+            .get(`${API_BASE}/api/auth/profile/fresh`, { headers: authedHeaders(token) })
             .then((r) => r.json());
         expect(freshAfter.id, 'still the same row after claim').toBe(anon.userId);
         expect(freshAfter.isAnonymous, 'no longer anonymous').toBe(false);
@@ -246,7 +256,7 @@ test.describe('Anonymous account → real-identity upgrade (EW-617 G2/G3)', () =
 
         // Ownership carried over: the pre-claim Work is STILL owned post-claim.
         const listAfter = await request
-            .get(`${API_BASE}/api/works`, { headers: authedHeaders(anon.token) })
+            .get(`${API_BASE}/api/works`, { headers: authedHeaders(token) })
             .then((r) => r.json());
         const ownedAfter = (listAfter.works ?? []).find((w: { id: string }) => w.id === work.id);
         expect(
@@ -259,7 +269,7 @@ test.describe('Anonymous account → real-identity upgrade (EW-617 G2/G3)', () =
         expect(ownedAfter.userRole).toBe('owner');
     });
 
-    test('FLOW 3 — claimed credentials sign in via /login and the FRESH session still sees the pre-claim Work; the original anon bearer stays valid', async ({
+    test('FLOW 3 — claimed credentials sign in via /login and the FRESH session still sees the pre-claim Work; the original anon bearer is revoked', async ({
         request,
     }) => {
         test.setTimeout(90_000);
@@ -277,11 +287,17 @@ test.describe('Anonymous account → real-identity upgrade (EW-617 G2/G3)', () =
         });
         expect(claimRes.status()).toBe(200);
 
-        // The ORIGINAL anon bearer is still a valid session after claim.
-        const stillValid = await request.get(`${API_BASE}/api/auth/profile`, {
+        // The session is ROTATED: the original anon bearer is revoked at once, and the
+        // bearer the claim answered works (same row, no longer anonymous).
+        const revoked = await request.get(`${API_BASE}/api/auth/profile`, {
             headers: authedHeaders(anon.token),
         });
-        expect(stillValid.status(), 'original anon bearer survives the claim').toBe(200);
+        expect(revoked.status(), 'original anon bearer is revoked by the claim').toBe(401);
+        const rotated = await request.get(`${API_BASE}/api/auth/profile`, {
+            headers: authedHeaders((await claimRes.json()).access_token),
+        });
+        expect(rotated.status(), 'the rotated bearer is a valid session').toBe(200);
+        expect((await rotated.json()).isAnonymous).toBe(false);
 
         // LOGIN with the freshly-claimed creds (DTO is whitelisted to {email,password}).
         const loginRes = await request.post(`${API_BASE}/api/auth/login`, {
@@ -359,8 +375,17 @@ test.describe('Anonymous account → real-identity upgrade (EW-617 G2/G3)', () =
             data: { email: ownEmail, password: 'OneWayDoor1!' },
         });
         expect(firstClaim.status(), 'first claim succeeds').toBe(200);
-        const reClaim = await request.post(`${API_BASE}/api/auth/claim`, {
+        // The anon bearer died with the claim (session rotation) → 401…
+        const withOldBearer = await request.post(`${API_BASE}/api/auth/claim`, {
             headers: authedHeaders(anon.token),
+            data: { email: uniqueEmail('twice'), password: 'OneWayDoor2!' },
+        });
+        expect(withOldBearer.status(), 'the revoked anon bearer cannot claim again → 401').toBe(
+            401,
+        );
+        // …and the rotated bearer belongs to a permanent account → 403.
+        const reClaim = await request.post(`${API_BASE}/api/auth/claim`, {
+            headers: authedHeaders((await firstClaim.json()).access_token),
             data: { email: uniqueEmail('twice'), password: 'OneWayDoor2!' },
         });
         expect(reClaim.status(), 're-claiming a now-permanent account → 403').toBe(403);
@@ -504,7 +529,9 @@ test.describe('Anonymous account → real-identity upgrade (EW-617 G2/G3)', () =
         });
         expect(claim.status()).toBe(200);
         const fresh = await request
-            .get(`${API_BASE}/api/auth/profile/fresh`, { headers: authedHeaders(anon.token) })
+            .get(`${API_BASE}/api/auth/profile/fresh`, {
+                headers: authedHeaders((await claim.json()).access_token),
+            })
             .then((r) => r.json());
         expect(fresh.isAnonymous, 'claimed account is no longer in the anon population').toBe(
             false,

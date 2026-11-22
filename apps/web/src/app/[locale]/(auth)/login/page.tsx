@@ -9,6 +9,7 @@ import { getAuthProvidersConfig } from '@/lib/auth/providers';
 import { hasEverIdSignOutMarker } from '@/lib/auth/ever-id-signed-out';
 import { getDemoConfig } from '@/lib/feature-flags/demo';
 import { EVER_ID_ANONYMOUS_DISTINCT_ID, isEverIdOffered } from '@/lib/feature-flags/ever-id';
+import { hasSavableAnonymousSession } from '@/lib/anonymous/save-account-strip';
 
 export async function generateMetadata(): Promise<Metadata> {
     const t = await getTranslations('metadata.pages');
@@ -23,7 +24,13 @@ export default async function LoginPage() {
         getDemoConfig(),
     ]);
     const user = await getAuthFromCookieOnSignIn();
-    if (user) {
+    // EW-617: a temporary (anonymous) account is NOT bounced to the dashboard: it may sign in
+    // to another account here, but is told first that this account's Works stay behind.
+    // Only an anonymous session (already known from the profile read above) costs the one
+    // extra read that applies the strip's rules (demo exclusions); nobody else pays for it.
+    const temporaryAccount =
+        user?.isAnonymous === true ? await hasSavableAnonymousSession() : false;
+    if (user && !temporaryAccount) {
         return redirect({ locale, href: ROUTES.DASHBOARD });
     }
 
@@ -52,6 +59,7 @@ export default async function LoginPage() {
                 everIdEnabled={everIdEnabled}
                 signedOutByEverId={signedOutByEverId}
                 demo={demo.enabled ? { ttlHours: demo.sandboxTtlHours } : null}
+                temporaryAccount={temporaryAccount}
             />
         </Suspense>
     );

@@ -47,6 +47,9 @@ import type { ApiVersion } from '@/lib/api/version';
 import { DemoErrorToaster } from '@/components/demo/DemoErrorToaster';
 import { DemoSignUpUrlContext } from '@/lib/demo/demo-sign-up-url';
 import { DemoStrip, type DemoStripProps } from '@/components/demo/DemoStrip';
+import { SaveAccountStrip } from '@/components/anonymous/SaveAccountStrip';
+import { AnonymousAccountContext } from '@/lib/anonymous/anonymous-account-context';
+import type { SaveAccountStripProps } from '@/lib/anonymous/types';
 import { JobRuntimeDegradedBanner } from '@/components/dashboard/JobRuntimeDegradedBanner';
 import { ScrollTopOnNavigate } from '@/components/dashboard/ScrollTopOnNavigate';
 import { FleetHubFlagProvider } from '@/components/fleet/FleetHubFlagProvider';
@@ -73,6 +76,11 @@ interface DashboardLayoutClientProps {
     jobRuntimeConfigured?: boolean | null;
     /** Platform demo mode: the demo strip's props for a demo account; null = no strip. */
     demoStrip?: DemoStripProps | null;
+    /**
+     * EW-617: the temporary-account strip's props for an anonymous account that can still be
+     * saved; null = no strip (registered, demo). Also the anonymous-account context's value.
+     */
+    saveAccountStrip?: SaveAccountStripProps | null;
     /** What's new (AW-14) — unread product changelog entries; null = unknown (no badge). */
     changelogUnreadCount?: number | null;
     /**
@@ -140,6 +148,7 @@ export function DashboardLayoutClient({
     apiVersion,
     jobRuntimeConfigured = null,
     demoStrip = null,
+    saveAccountStrip = null,
     changelogUnreadCount = null,
     appLauncherEnabled = false,
     fleetHubEnabled = false,
@@ -572,6 +581,7 @@ export function DashboardLayoutClient({
                                     chatOpen={chatOpen}
                                     onOpenChat={toggleChat}
                                     onInteraction={ensureResizableMode}
+                                    temporaryAccount={saveAccountStrip !== null}
                                 />
 
                                 {/* AI Chat panel — side panel on desktop, full-screen overlay on mobile */}
@@ -692,6 +702,7 @@ export function DashboardLayoutClient({
                                             <DemoStrip {...demoStrip} />
                                         </>
                                     )}
+                                    {saveAccountStrip && <SaveAccountStrip {...saveAccountStrip} />}
                                     <DashboardHeader
                                         user={user}
                                         onMenuClick={() => setSidebarOpen(!sidebarOpen)}
@@ -730,7 +741,11 @@ export function DashboardLayoutClient({
                                                     open={chatOpen}
                                                     setOpen={setChatOpen}
                                                 >
-                                                    {children}
+                                                    <AnonymousAccountContext
+                                                        value={saveAccountStrip}
+                                                    >
+                                                        {children}
+                                                    </AnonymousAccountContext>
                                                 </ChatPanelProvider>
                                             </div>
                                         </HelpCenterProvider>
@@ -770,6 +785,7 @@ export function DashboardLayoutClient({
                                 onSidebarCollapsedChange={handleSidebarCollapsedChange}
                                 chatOpen={chatOpen}
                                 onChatOpenChange={setChatOpen}
+                                temporaryAccount={saveAccountStrip !== null}
                             />
                         </AppLauncherProvider>
                     </CommandPaletteProvider>
