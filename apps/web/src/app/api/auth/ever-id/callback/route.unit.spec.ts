@@ -32,8 +32,10 @@ const jar = vi.hoisted(() => {
         store: {
             get: (name: string) =>
                 values.has(name) ? { name, value: values.get(name)! } : undefined,
-            set: (name: string, value: string) => {
-                values.set(name, value);
+            set: (name: string, value: string, options?: { maxAge?: number }) => {
+                // A browser drops a cookie set with Max-Age=0 (how a __Host- cookie is expired).
+                if (options?.maxAge === 0) values.delete(name);
+                else values.set(name, value);
             },
             delete: (arg: string | { name: string }) => {
                 const name = typeof arg === 'string' ? arg : arg.name;
@@ -84,8 +86,8 @@ function request(params: Record<string, string>) {
 const PROVIDER_ANSWER = { code: SECRETS.code, state: SECRETS.state };
 
 function startedWith(intent: 'sign-in' | 'connect' | null) {
-    jar.values.set('ew_everid_txn', SECRETS.transaction);
-    if (intent) jar.values.set('ew_everid_intent', intent);
+    jar.values.set('__Host-ew_everid_txn', SECRETS.transaction);
+    if (intent) jar.values.set('__Host-ew_everid_intent', intent);
 }
 
 async function run(params: Record<string, string>) {
@@ -107,9 +109,11 @@ function expectNoSecrets(href: string) {
 
 /** FR-9: both transaction cookies were cleared, whatever happened. */
 function expectTransactionCleared() {
-    expect(jar.deletes).toEqual(expect.arrayContaining(['ew_everid_txn', 'ew_everid_intent']));
-    expect(jar.values.has('ew_everid_txn')).toBe(false);
-    expect(jar.values.has('ew_everid_intent')).toBe(false);
+    expect(jar.deletes).toEqual(
+        expect.arrayContaining(['__Host-ew_everid_txn', '__Host-ew_everid_intent']),
+    );
+    expect(jar.values.has('__Host-ew_everid_txn')).toBe(false);
+    expect(jar.values.has('__Host-ew_everid_intent')).toBe(false);
 }
 
 const ORIGINAL_ENV = { ...process.env };
@@ -172,7 +176,7 @@ describe('GET /api/auth/ever-id/callback — outcomes (plan §6.3)', () => {
 
     it('signedIn: spends the stored relative destination it lands on', async () => {
         startedWith('sign-in');
-        jar.values.set('redirect_url', '/org-invite/tok');
+        jar.values.set('__Host-redirect_url', '/org-invite/tok');
         callbackMock.mockResolvedValue({
             outcome: 'signedIn',
             access_token: SECRETS.accessToken,
@@ -183,7 +187,7 @@ describe('GET /api/auth/ever-id/callback — outcomes (plan §6.3)', () => {
         const { href } = await run(PROVIDER_ANSWER);
 
         expect(href).toBe('/org-invite/tok');
-        expect(jar.values.has('redirect_url')).toBe(false);
+        expect(jar.values.has('__Host-redirect_url')).toBe(false);
     });
 
     it('forwards the provider’s `iss` when it sent one (FR-12)', async () => {

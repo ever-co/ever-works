@@ -7,6 +7,7 @@ import {
     chatSendButton,
     isAiProviderConfigured,
 } from './helpers/chat';
+import { isSessionCookieName } from './helpers/auth';
 
 /**
  * AI Chat — SSE STREAMING-EVENTS contract, real INTEGRATION end-to-end.
@@ -100,7 +101,7 @@ async function seededToken(request: APIRequestContext): Promise<string> {
 /** The `everworks_auth_token` cookie value carried by the stored storageState. */
 async function authCookieToken(page: Page): Promise<string | null> {
     const cookies = await page.context().cookies();
-    return cookies.find((c) => c.name === 'everworks_auth_token')?.value ?? null;
+    return cookies.find((c) => isSessionCookieName(c.name))?.value ?? null;
 }
 
 function userBubble(page: Page, text: string) {
