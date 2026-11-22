@@ -242,6 +242,15 @@ describe('AuthController', () => {
                 expect(authProvider.signOut).not.toHaveBeenCalled();
             });
 
+            it('answers the claim without a token, and revokes nothing, when issuing yields none', async () => {
+                authProvider.issueSession.mockResolvedValue({ user: { id: 'u-anon-1' } } as any);
+
+                const result = await (controller as any).claimAccount(anonReq(), body);
+
+                expect(result).toEqual(claimed);
+                expect(authProvider.signOut).not.toHaveBeenCalled();
+            });
+
             it('still answers the fresh token when revoking the old one fails', async () => {
                 authProvider.issueSession.mockResolvedValue({
                     access_token: 'fresh-token',

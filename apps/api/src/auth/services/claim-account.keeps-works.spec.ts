@@ -4,6 +4,8 @@ import { Organization, User, Work } from '@ever-works/agent/entities';
 // The file, not the `@ever-works/agent/services` barrel: the barrel reaches this app's
 // AuthModule (and Better Auth's ESM build) through `work.module`, which no Jest run can load.
 // Same deep-import pattern as `demo/__tests__/demo-sandbox-purge.spec.ts`.
+// TODO: import it from a public entry point once the agent package exposes one that does not
+// pull in the API's AuthModule (then drop the `users as never` cast below too).
 import { AnonymousUserCleanupService } from '../../../../../packages/agent/src/services/anonymous-user-cleanup.service';
 import { AnonymousAuthService } from './anonymous-auth.service';
 import { ClaimAccountService } from './claim-account.service';

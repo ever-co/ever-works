@@ -240,6 +240,19 @@ describe('ClaimAccountService (EW-617 G3)', () => {
             expect(written(ctx).username).toBe('jane-2');
         });
 
+        it('normalizes a local part with characters outside [a-z0-9-] before allocating', async () => {
+            const ctx = buildService();
+            ctx.findByIdResults['u-1'] = anonUser();
+
+            await ctx.service.claim({
+                userId: 'u-1',
+                email: 'Jane.Doe+tag@example.com',
+                password: 'MySecure123!',
+            });
+
+            expect(written(ctx).username).toBe('jane-doe-tag');
+        });
+
         it('pads a local part shorter than the 3-character floor', async () => {
             const ctx = buildService();
             ctx.findByIdResults['u-1'] = anonUser();

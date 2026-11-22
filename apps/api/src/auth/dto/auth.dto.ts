@@ -202,7 +202,9 @@ export class ClaimAccountDto {
      * up, so it records the same acceptance `RegisterDto.terms` does; without it
      * a claimed account would be the one kind of account with no record of what
      * it accepted. Optional for the same reason as there: machine-driven claims
-     * that never showed a checkbox are not forced to invent one.
+     * that never showed a checkbox are not forced to invent one. An EMPTY list is
+     * refused here (`@ArrayNotEmpty`, 400 from the ValidationPipe), so the
+     * controller only ever sees "not sent" or a non-empty list.
      */
     @ApiPropertyOptional({ type: () => [TermsAcceptanceClaimDto] })
     @IsOptional()
