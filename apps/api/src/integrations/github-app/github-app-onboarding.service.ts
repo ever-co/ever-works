@@ -21,6 +21,7 @@ import {
     UnauthorizedException,
 } from '@nestjs/common';
 import { config } from '@src/config/constants';
+import { existingAccountEmailUnverified } from '@src/auth/services/social-link-errors';
 import * as bcrypt from 'bcrypt';
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { GitHubAppService, type GitHubInstallationResponse } from './github-app.service';
@@ -475,6 +476,13 @@ export class GitHubAppOnboardingService {
                 throw new UnauthorizedException(
                     'Unable to link this GitHub App user because the provider email is not verified',
                 );
+            }
+            // Same rule as the OAuth sign-in (`AuthService.validateSocialUser`): a new GitHub
+            // identity joins an existing user by email only when that user's own email is
+            // verified too, or whoever created the account with this address keeps using it
+            // after the owner signs in (pre-hijacking). Refused before anything is written.
+            if (user && !user.emailVerified) {
+                throw existingAccountEmailUnverified();
             }
         }
 

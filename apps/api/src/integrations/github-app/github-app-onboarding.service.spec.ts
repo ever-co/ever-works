@@ -382,17 +382,17 @@ describe('GitHubAppOnboardingService', () => {
                 issuedAt: Date.now(),
                 redirectTo: '/settings/github-app',
             });
+            // Its own email verified too: an unverified one is refused (pre-hijack test below).
             const existingUser = {
                 id: 'user-1',
                 username: 'existing-user',
                 email: 'user@example.com',
-                emailVerified: false,
+                emailVerified: true,
                 registrationProvider: 'local',
                 avatar: null,
             };
             const updatedUser = {
                 ...existingUser,
-                emailVerified: true,
                 registrationProvider: 'github',
             };
             const installation = {
@@ -458,6 +458,58 @@ describe('GitHubAppOnboardingService', () => {
                 existingUser.id,
                 'gh-user-1',
             );
+        });
+
+        it('PRE-HIJACK GUARD: refuses (409, writing nothing) a verified GitHub email that matches a user whose own email is unverified', async () => {
+            const {
+                service,
+                gitHubAppService,
+                installationRepository,
+                userLinkRepository,
+                authAccountRepository,
+                userRepository,
+            } = createService();
+            const state = signBound(service, {
+                installationId: '12345',
+                issuedAt: Date.now(),
+            });
+
+            gitHubAppService.exchangeUserCode.mockResolvedValue({
+                access_token: 'token',
+                scope: 'read:user',
+            });
+            gitHubAppService.getAuthenticatedGithubUser.mockResolvedValue({
+                githubUserId: 'gh-victim',
+                login: 'victim',
+                email: 'user@example.com',
+                emailVerified: true,
+                avatarUrl: null,
+                nodeId: null,
+            });
+            userLinkRepository.findByGithubUserId.mockResolvedValue(null);
+            authAccountRepository.findProviderAccountByAccountId.mockResolvedValue(null);
+            // Opened by someone else with this address and never verified.
+            userRepository.findByEmail.mockResolvedValue({
+                id: 'user-attacker',
+                email: 'user@example.com',
+                emailVerified: false,
+            });
+
+            const attempt = service.completeUserAuth({ binding: BINDING, code: 'code', state });
+
+            await expect(attempt).rejects.toBeInstanceOf(ConflictException);
+            await expect(attempt).rejects.toMatchObject({
+                status: 409,
+                response: expect.objectContaining({
+                    code: 'EXISTING_ACCOUNT_EMAIL_UNVERIFIED',
+                }),
+            });
+            expect(userRepository.update).not.toHaveBeenCalled();
+            expect(userRepository.create).not.toHaveBeenCalled();
+            expect(authAccountRepository.upsertProviderAccount).not.toHaveBeenCalled();
+            expect(userLinkRepository.upsertLink).not.toHaveBeenCalled();
+            expect(installationRepository.upsertFromGithub).not.toHaveBeenCalled();
+            expect(installationRepository.claimOwnershipIfUnassigned).not.toHaveBeenCalled();
         });
 
         it('preserves an existing installation owner during callback completion', async () => {
