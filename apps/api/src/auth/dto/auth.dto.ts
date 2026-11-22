@@ -173,7 +173,8 @@ export class ClaimAccountDto {
     password: string;
 
     @ApiPropertyOptional({
-        description: 'Username to use after claim (defaults to current anon username)',
+        description:
+            'Username for the saved account, normalized like every handle (lowercase, [a-z0-9-]); a taken one answers 409 { code: username_taken, suggestion }. Without it, a unique one is derived from the email. The slug is not changed.',
     })
     @IsString()
     @IsOptional()

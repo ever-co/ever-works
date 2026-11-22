@@ -9,6 +9,7 @@ import {
     ForbiddenException,
     NotFoundException,
 } from '@nestjs/common';
+import { QueryFailedError } from 'typeorm';
 import { ClaimAccountService, USERNAME_TAKEN_CODE } from './claim-account.service';
 import { UsernameAllocatorService } from '../../users/services/username-allocator.service';
 
@@ -21,6 +22,8 @@ describe('ClaimAccountService (EW-617 G3)', () => {
         const takenUsernames: Record<string, unknown> = {};
         const takenSlugs: Record<string, unknown> = {};
         const takenOrgSlugs: Record<string, unknown> = {};
+        // Lets a test make one write lose a race on a unique index, as the database would.
+        let failUpdate: (data: any) => unknown = () => undefined;
 
         const userRepository = {
             findById: jest.fn(async (id: string) => findByIdResults[id] ?? null),
@@ -30,9 +33,14 @@ describe('ClaimAccountService (EW-617 G3)', () => {
             ),
             findBySlug: jest.fn(async (slug: string) => takenSlugs[slug] ?? null),
             update: jest.fn(async (id: string, data: any) => {
+                const failure = failUpdate(data);
+                if (failure) throw failure;
                 updates.push({ id, ...data });
-                const base = findByIdResults[id] ?? { id };
-                return { ...base, ...data };
+                // Persisted like the real repository: a later write returns the row with
+                // every earlier one applied.
+                const row = { ...(findByIdResults[id] ?? { id }), ...data };
+                findByIdResults[id] = row;
+                return row;
             }),
         } as any;
 
@@ -74,6 +82,9 @@ describe('ClaimAccountService (EW-617 G3)', () => {
             takenUsernames,
             takenSlugs,
             takenOrgSlugs,
+            failUpdatesWhere: (fn: (data: any) => unknown) => {
+                failUpdate = fn;
+            },
         };
     };
 
@@ -88,6 +99,18 @@ describe('ClaimAccountService (EW-617 G3)', () => {
         ...overrides,
     });
 
+    /** Every field the claim wrote, across its writes. */
+    const written = (ctx: { updates: any[] }) => Object.assign({}, ...ctx.updates);
+
+    const uniqueViolation = () =>
+        new QueryFailedError(
+            'UPDATE "users" SET ...',
+            [],
+            Object.assign(new Error('duplicate key value violates unique constraint'), {
+                code: '23505',
+            }),
+        );
+
     it('flips the anon user to a regular account and fires verification email', async () => {
         const ctx = buildService();
         ctx.findByIdResults['u-1'] = anonUser();
@@ -101,17 +124,18 @@ describe('ClaimAccountService (EW-617 G3)', () => {
         // Password set via auth provider
         expect(ctx.authProvider.setPassword).toHaveBeenCalledWith('u-1', 'MySecure123!');
 
-        // User row updated atomically
-        expect(ctx.updates).toHaveLength(1);
-        const updatePayload = ctx.updates[0];
+        // Two writes: the handle on its own first, then the flip in a single update.
+        expect(ctx.updates).toHaveLength(2);
+        // Never the anon-<hex> handle: derived from the email. The slug is never touched,
+        // as on every other rename.
+        expect(ctx.updates[0]).toEqual({ id: 'u-1', username: 'jane' });
+        const updatePayload = ctx.updates[1];
         expect(updatePayload.email).toBe('jane@example.com'); // normalized
         expect(updatePayload.isAnonymous).toBe(false);
         expect(updatePayload.anonymousExpiresAt).toBeNull();
         expect(updatePayload.registrationProvider).toBe('local');
         expect(updatePayload.emailVerified).toBe(false);
-        // Never the anon-<hex> handle: derived from the email, and the slug follows it.
-        expect(updatePayload.username).toBe('jane');
-        expect(updatePayload.slug).toBe('jane');
+        expect(written(ctx)).not.toHaveProperty('slug');
 
         // Verification email pipeline kicked off
         expect(ctx.authService.sendVerificationEmail).toHaveBeenCalledWith('u-1', undefined);
@@ -136,8 +160,8 @@ describe('ClaimAccountService (EW-617 G3)', () => {
             username: 'jane-doe',
         });
 
-        expect(ctx.updates[0].username).toBe('jane-doe');
-        expect(ctx.updates[0].slug).toBe('jane-doe');
+        expect(written(ctx).username).toBe('jane-doe');
+        expect(written(ctx)).not.toHaveProperty('slug');
     });
 
     describe('username (the sidebar showed anon-<hex> after saving)', () => {
@@ -155,7 +179,7 @@ describe('ClaimAccountService (EW-617 G3)', () => {
 
             await claim(ctx, { username: '  Jane Doe ' });
 
-            expect(ctx.updates[0]).toMatchObject({ username: 'jane-doe', slug: 'jane-doe' });
+            expect(written(ctx).username).toBe('jane-doe');
         });
 
         it.each([
@@ -181,6 +205,19 @@ describe('ClaimAccountService (EW-617 G3)', () => {
             },
         );
 
+        it.each([['!!!'], ['--'], ['ab!']])(
+            'refuses a typed %p that normalizes to nothing usable (never a silent u-<hex>)',
+            async (typed) => {
+                const ctx = buildService();
+                ctx.findByIdResults['u-1'] = anonUser();
+
+                await expect(claim(ctx, { username: typed })).rejects.toBeInstanceOf(
+                    BadRequestException,
+                );
+                expect(ctx.updates).toHaveLength(0);
+            },
+        );
+
         it('keeps a typed username equal to its own current handle', async () => {
             const ctx = buildService();
             ctx.findByIdResults['u-1'] = anonUser();
@@ -188,7 +225,9 @@ describe('ClaimAccountService (EW-617 G3)', () => {
 
             await claim(ctx, { username: 'anon-deadbeef' });
 
-            expect(ctx.updates[0].username).toBe('anon-deadbeef');
+            // Nothing to rename: only the flip is written, the handle stays.
+            expect(ctx.updates).toHaveLength(1);
+            expect(written(ctx)).not.toHaveProperty('username');
         });
 
         it('derives a free one from the email when the obvious one is taken', async () => {
@@ -198,7 +237,7 @@ describe('ClaimAccountService (EW-617 G3)', () => {
 
             await claim(ctx);
 
-            expect(ctx.updates[0]).toMatchObject({ username: 'jane-2', slug: 'jane-2' });
+            expect(written(ctx).username).toBe('jane-2');
         });
 
         it('pads a local part shorter than the 3-character floor', async () => {
@@ -211,7 +250,77 @@ describe('ClaimAccountService (EW-617 G3)', () => {
                 password: 'MySecure123!',
             });
 
-            expect(ctx.updates[0].username).toBe('jo-user');
+            expect(written(ctx).username).toBe('jo-user');
+        });
+
+        describe('a claim racing this one (the check cannot see it; the unique index can)', () => {
+            it('answers a typed handle lost at the database with the 409, before any credential', async () => {
+                const ctx = buildService();
+                ctx.findByIdResults['u-1'] = anonUser();
+                ctx.failUpdatesWhere((data) => {
+                    if (data.username !== 'jane-doe') return undefined;
+                    ctx.takenUsernames['jane-doe'] = { id: 'the-winner' };
+                    return uniqueViolation();
+                });
+
+                const error = await claim(ctx, { username: 'jane-doe' }).catch((e) => e);
+
+                expect(error).toBeInstanceOf(ConflictException);
+                expect(error.getResponse()).toMatchObject({
+                    code: USERNAME_TAKEN_CODE,
+                    suggestion: 'jane-doe-2',
+                });
+                expect(ctx.authProvider.setPassword).not.toHaveBeenCalled();
+                expect(ctx.updates).toHaveLength(0);
+            });
+
+            it('allocates a derived handle once more when the first one is lost', async () => {
+                const ctx = buildService();
+                ctx.findByIdResults['u-1'] = anonUser();
+                ctx.failUpdatesWhere((data) => {
+                    if (data.username !== 'jane') return undefined;
+                    ctx.takenUsernames['jane'] = { id: 'the-winner' };
+                    return uniqueViolation();
+                });
+
+                const result = await claim(ctx);
+
+                expect(result.username).toBe('jane-2');
+                expect(ctx.updates[0]).toEqual({ id: 'u-1', username: 'jane-2' });
+                expect(ctx.authProvider.setPassword).toHaveBeenCalledTimes(1);
+            });
+
+            it('answers the 409 when the second derived handle is lost too', async () => {
+                const ctx = buildService();
+                ctx.findByIdResults['u-1'] = anonUser();
+                ctx.failUpdatesWhere((data) => {
+                    if (!('username' in data)) return undefined;
+                    ctx.takenUsernames[data.username] = { id: 'a-winner' };
+                    return uniqueViolation();
+                });
+
+                await expect(claim(ctx)).rejects.toBeInstanceOf(ConflictException);
+                expect(ctx.authProvider.setPassword).not.toHaveBeenCalled();
+            });
+
+            it('answers an email lost at the database with the email 409, not a 500', async () => {
+                const ctx = buildService();
+                ctx.findByIdResults['u-1'] = anonUser();
+                ctx.failUpdatesWhere((data) => ('email' in data ? uniqueViolation() : undefined));
+
+                const error = await claim(ctx).catch((e) => e);
+
+                expect(error).toBeInstanceOf(ConflictException);
+                expect(error.message).toMatch(/Email is already in use/);
+            });
+
+            it('lets any other database failure through', async () => {
+                const ctx = buildService();
+                ctx.findByIdResults['u-1'] = anonUser();
+                ctx.failUpdatesWhere(() => new Error('connection reset'));
+
+                await expect(claim(ctx)).rejects.toThrow('connection reset');
+            });
         });
     });
 
@@ -287,7 +396,8 @@ describe('ClaimAccountService (EW-617 G3)', () => {
             password: 'MySecure123!',
         });
 
-        expect(ctx.updates).toHaveLength(1);
+        // The handle, then the flip.
+        expect(ctx.updates).toHaveLength(2);
     });
 
     it('does not throw if the verification email fails (logged + continued)', async () => {
@@ -317,9 +427,10 @@ describe('ClaimAccountService (EW-617 G3)', () => {
             }),
         ).rejects.toThrow(BadRequestException);
 
-        // The credential set was attempted but no User update should happen
+        // The credential set was attempted; only the handle was written, and the account is
+        // still anonymous (never flipped), so the visitor can simply retry.
         expect(ctx.authProvider.setPassword).toHaveBeenCalled();
-        expect(ctx.updates).toHaveLength(0);
+        expect(ctx.updates).toEqual([{ id: 'u-1', username: 'jane' }]);
     });
 
     it('passes through the email verification callback URL', async () => {

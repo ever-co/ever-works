@@ -96,7 +96,11 @@ emailVerificationCallbackUrl? }` (validated by `ClaimAccountDto`
 - **FR-G3-11** The saved account MUST get a real username: the one typed
   (normalized; a taken one answers 409 `{ code: 'username_taken',
 suggestion }` before any write) or one derived from the email's local
-  part, made unique by `UsernameAllocatorService`. The slug follows.
+  part, made unique by `UsernameAllocatorService`. A typed handle with
+  nothing usable ("!!!") is a 400, never a silent random one. The handle
+  is written on its own before any credential, so a claim racing for the
+  same handle loses on the unique index as the same 409 (a derived handle
+  is allocated once more), and an email race is the email 409, never a 500. The slug is stable, as on every other rename (`PUT /auth/profile`).
 
 ### Non-functional requirements
 

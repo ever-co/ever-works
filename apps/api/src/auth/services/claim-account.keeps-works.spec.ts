@@ -81,6 +81,7 @@ describe('Claiming an anonymous account keeps its Works (real database)', () => 
 
     it('keeps the same user, its Works, and takes it out of the cleanup for good', async () => {
         const userId = await mintAnonymousWithWorks(['my-directory', 'my-landing-page']);
+        const slugBefore = (await users.findById(userId))!.slug;
 
         const claimed = await claim.claim({
             userId,
@@ -94,9 +95,9 @@ describe('Claiming an anonymous account keeps its Works (real database)', () => 
             isAnonymous: false,
             email: 'visitor@example.com',
             registrationProvider: 'local',
-            // A real handle now, not the anon-<hex> one, and the slug follows it.
+            // A real handle now, not the anon-<hex> one. The slug is stable, as on every rename.
             username: 'visitor',
-            slug: 'visitor',
+            slug: slugBefore,
         });
         expect(row?.anonymousExpiresAt ?? null).toBeNull();
 

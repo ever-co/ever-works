@@ -8,6 +8,7 @@ import {
     NotFoundException,
 } from '@nestjs/common';
 import { UserRepository } from '@ever-works/agent/database';
+import { isUniqueConstraintError } from '@ever-works/agent/utils';
 import { AUTH_PROVIDER } from '../providers/auth-provider.constants';
 import { AuthProvider } from '../providers/auth-provider.abstract';
 import { AuthSyncService } from '../providers/auth-sync.service';
@@ -45,7 +46,8 @@ export interface ClaimAccountInput {
  *     `/login`.
  *  4. Flip `is_anonymous=false`, clear `anonymous_expires_at`, persist
  *     the email + a real username (the one typed, or one derived from
- *     the email; never the `anon-<hex>` handle) and the matching slug,
+ *     the email; never the `anon-<hex>` handle), written on its own first
+ *     so a race for the handle is a 409, not a 500; the slug is stable;
  *     set `registration_provider='local'`.
  *  5. Delegate to `AuthService.sendVerificationEmail` so the
  *     verification mail goes through the existing pipeline.
@@ -77,8 +79,8 @@ export class ClaimAccountService {
      *    500 from the unique index);
      *  - otherwise one derived from the email's local part, made unique by the allocator.
      *
-     * The slug becomes the same value: the allocator checks usernames, user slugs and
-     * Organization slugs alike, and the entity's rule is that a rename updates both.
+     * The slug stays as it is, as on every other rename (`PUT /auth/profile`): nothing routes
+     * by a user's slug, and repositories keep the names they were created with.
      */
     private async resolveUsername(
         user: { username: string },
@@ -88,21 +90,16 @@ export class ClaimAccountService {
         const desired = requested?.trim();
         if (desired) {
             const normalized = this.usernames.normalize(desired);
-            if (normalized.length < USERNAME_MIN_LENGTH) {
+            // The allocator falls back to a random `u-<hex>` for input with no ASCII letter
+            // or digit ("!!!"); a typed handle must never silently become one, so it is refused.
+            if (!/[a-z0-9]/i.test(desired) || normalized.length < USERNAME_MIN_LENGTH) {
                 throw new BadRequestException(
                     `Username must be at least ${USERNAME_MIN_LENGTH} characters`,
                 );
             }
             if (normalized === user.username.toLowerCase()) return normalized;
             const { available, suggestion } = await this.usernames.suggest(normalized);
-            if (!available) {
-                throw new ConflictException({
-                    statusCode: 409,
-                    message: 'Username is already taken',
-                    code: USERNAME_TAKEN_CODE,
-                    suggestion,
-                });
-            }
+            if (!available) throw this.usernameTaken(suggestion);
             return normalized;
         }
 
@@ -110,6 +107,47 @@ export class ClaimAccountService {
         const local = this.usernames.normalize(email.split('@')[0] ?? '');
         const base = local.length >= USERNAME_MIN_LENGTH ? local : `${local}-user`;
         return this.usernames.allocateUsername(base);
+    }
+
+    private usernameTaken(suggestion?: string): ConflictException {
+        return new ConflictException({
+            statusCode: 409,
+            message: 'Username is already taken',
+            code: USERNAME_TAKEN_CODE,
+            suggestion,
+        });
+    }
+
+    /**
+     * Write the new handle on its own, BEFORE any credential is touched. The availability
+     * check above cannot see a claim racing it for the same free handle; the database can
+     * (the unique index on `lower(username)`), so its violation is answered here as the
+     * same 409 instead of a 500, with nothing else changed. A derived handle gets one more
+     * allocation (the winner's handle is now visible to it); a typed one is the visitor's
+     * choice, so they get the 409 and a fresh suggestion.
+     */
+    private async reserveUsername(
+        userId: string,
+        username: string,
+        retry: { email: string } | null,
+    ): Promise<string> {
+        try {
+            await this.userRepository.update(userId, { username });
+            return username;
+        } catch (error) {
+            if (!isUniqueConstraintError(error)) throw error;
+            if (!retry) {
+                throw this.usernameTaken((await this.usernames.suggest(username)).suggestion);
+            }
+            const next = await this.resolveUsername({ username: '' }, retry.email);
+            try {
+                await this.userRepository.update(userId, { username: next });
+                return next;
+            } catch (again) {
+                if (!isUniqueConstraintError(again)) throw again;
+                throw this.usernameTaken();
+            }
+        }
     }
 
     async claim(input: ClaimAccountInput): Promise<{
@@ -136,9 +174,21 @@ export class ClaimAccountService {
         }
 
         // Before any write: a taken username answers 409 with the account untouched.
-        const username = await this.resolveUsername(user, normalizedEmail, input.username);
+        const typed = Boolean(input.username?.trim());
+        let username = await this.resolveUsername(user, normalizedEmail, input.username);
 
-        // 1. Hash + persist credentials via Better Auth's adapter so the
+        // 1. The handle, on its own and first (see `reserveUsername`). The account is still
+        //    anonymous after it, so a later failure leaves a retryable claim (its own handle
+        //    passes the check above), never credentials on a half-claimed row.
+        if (username !== user.username) {
+            username = await this.reserveUsername(
+                user.id,
+                username,
+                typed ? null : { email: normalizedEmail },
+            );
+        }
+
+        // 2. Hash + persist credentials via Better Auth's adapter so the
         //    user can sign in via /api/auth/login like any other account.
         await this.authProvider.setPassword(user.id, input.password);
         const passwordHash = await this.authSyncService.getCredentialPasswordHash(user.id);
@@ -146,24 +196,32 @@ export class ClaimAccountService {
             throw new BadRequestException('Failed to attach credentials');
         }
 
-        // 2. Flip the user out of anonymous mode in a single update so
-        //    code racing on isAnonymous sees a consistent shape.
-        const updated = await this.userRepository.update(user.id, {
-            email: normalizedEmail,
-            username,
-            slug: username,
-            password: passwordHash,
-            isAnonymous: false,
-            anonymousExpiresAt: null,
-            registrationProvider: 'local',
-            emailVerified: false,
-        });
+        // 3. Flip the user out of anonymous mode in a single update so
+        //    code racing on isAnonymous sees a consistent shape. A claim racing
+        //    this one for the same email loses on the unique index: the same 409
+        //    as the check above, not a 500.
+        let updated: Awaited<ReturnType<UserRepository['update']>>;
+        try {
+            updated = await this.userRepository.update(user.id, {
+                email: normalizedEmail,
+                password: passwordHash,
+                isAnonymous: false,
+                anonymousExpiresAt: null,
+                registrationProvider: 'local',
+                emailVerified: false,
+            });
+        } catch (error) {
+            if (!isUniqueConstraintError(error)) throw error;
+            throw new ConflictException(
+                'Email is already in use by another account. Please sign in with the existing account instead.',
+            );
+        }
 
         if (!updated) {
             throw new BadRequestException('Failed to update user');
         }
 
-        // 3. Verification email goes through the existing pipeline.
+        // 4. Verification email goes through the existing pipeline.
         //    Catch here so a flaky mailer doesn't break the claim —
         //    the user can request a resend via /api/auth/send-verification.
         try {
