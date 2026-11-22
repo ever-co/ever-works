@@ -40,7 +40,7 @@ const FUTURE = new Date(Date.now() + 3 * 86_400_000);
 
 function build(
     opts: {
-        existingUser?: { id: string; tenantId: string | null } | null;
+        existingUser?: { id: string; tenantId: string | null; emailVerified?: boolean } | null;
         rosterRow?: boolean;
         pending?: Array<{ id: string; emailNormalized: string; tokenExpiresAt: Date }>;
         issueConflict?: boolean;
@@ -214,7 +214,7 @@ describe('OrganizationInvitationFlowService.inviteForIntegration', () => {
 
     it('adds a person of the Tenant who is not on this roster directly (no email), like invite()', async () => {
         const { service, members, mail, invitations } = build({
-            existingUser: { id: 'u-colleague', tenantId: 'ten-1' },
+            existingUser: { id: 'u-colleague', tenantId: 'ten-1', emailVerified: true },
         });
         const outcome = await service.inviteForIntegration(
             'org-1',
@@ -236,7 +236,7 @@ describe('OrganizationInvitationFlowService.inviteForIntegration', () => {
 
     it('answers already_member when a concurrent call added the person to the roster first', async () => {
         const { service, members } = build({
-            existingUser: { id: 'u-colleague', tenantId: 'ten-1' },
+            existingUser: { id: 'u-colleague', tenantId: 'ten-1', emailVerified: true },
         });
         // Not on the roster when checked, nor when the write re-checks; there once the insert lost.
         members.findByOrgAndUser
@@ -262,7 +262,7 @@ describe('OrganizationInvitationFlowService.inviteForIntegration', () => {
 
     it('still surfaces a roster write that fails for another reason', async () => {
         const { service, members } = build({
-            existingUser: { id: 'u-colleague', tenantId: 'ten-1' },
+            existingUser: { id: 'u-colleague', tenantId: 'ten-1', emailVerified: true },
         });
         members.create.mockRejectedValueOnce(new Error('connection reset'));
         await expect(
@@ -306,5 +306,40 @@ describe('OrganizationInvitationFlowService.inviteForIntegration', () => {
             service.inviteForIntegration('org-1', 'u-actor', 'newcomer@example.com'),
         ).rejects.toThrow(/SMTP/);
         expect(invitations.revoke).toHaveBeenCalledWith('org-1', 'inv-new');
+    });
+
+    it('does NOT adopt an unverified person of the Tenant: the token-by-mail invitation is issued instead', async () => {
+        const { service, members, mail, invitations } = build({
+            existingUser: { id: 'u-squat', tenantId: 'ten-1', emailVerified: false },
+        });
+        const outcome = await service.inviteForIntegration('org-1', 'u-actor', 'squat@example.com');
+        expect(outcome.status).toBe('invited');
+        expect(members.create).not.toHaveBeenCalled();
+        expect(invitations.issue).toHaveBeenCalledTimes(1);
+        expect(mail.sendOrganizationInvitation).toHaveBeenCalledTimes(1);
+    });
+
+    it('invite(): adopts a verified person of the Tenant directly (user_added_directly, no email)', async () => {
+        const { service, members, mail, invitations } = build({
+            existingUser: { id: 'u-colleague', tenantId: 'ten-1', emailVerified: true },
+        });
+        await expect(
+            service.invite('org-1', 'u-actor', 'colleague@example.com'),
+        ).rejects.toMatchObject({ message: 'user_added_directly' });
+        expect(members.create).toHaveBeenCalledWith(
+            expect.objectContaining({ userId: 'u-colleague', organizationId: 'org-1' }),
+        );
+        expect(invitations.issue).not.toHaveBeenCalled();
+        expect(mail.sendOrganizationInvitation).not.toHaveBeenCalled();
+    });
+
+    it('invite(): does NOT adopt an unverified person of the Tenant, mails a token instead', async () => {
+        const { service, members, mail, invitations } = build({
+            existingUser: { id: 'u-squat', tenantId: 'ten-1', emailVerified: false },
+        });
+        await service.invite('org-1', 'u-actor', 'squat@example.com');
+        expect(members.create).not.toHaveBeenCalled();
+        expect(invitations.issue).toHaveBeenCalledTimes(1);
+        expect(mail.sendOrganizationInvitation).toHaveBeenCalledTimes(1);
     });
 });

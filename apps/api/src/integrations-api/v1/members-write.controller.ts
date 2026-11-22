@@ -80,8 +80,9 @@ function resultOf(outcome: IntegrationInviteOutcome): Record<string, unknown> {
  * invitation — the email-bound token, the normal invitation email, the seat check — sent by the
  * act-as user, else the key's owner. Idempotent per email: a pending invitation is answered again
  * (`200 pending`), a member is answered as one (`200 already_member`), and a person already in the
- * Tenant joins the roster directly (`201 added`, records `organization.member.added`); a new
- * invitation answers `201 invited`. The token never leaves the email.
+ * Tenant with a verified email joins the roster directly (`201 added`, records
+ * `organization.member.added`); an unverified one, like a new person, gets the token invitation
+ * (`201 invited`). The token never leaves the email.
  */
 @ApiTags('Integrations API v1')
 @Controller('api/integrations/v1')

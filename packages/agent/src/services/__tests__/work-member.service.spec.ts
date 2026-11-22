@@ -53,6 +53,7 @@ describe('WorkMemberService', () => {
             username: 'user-one',
             email: 'user-one@example.com',
             avatar: 'https://example.com/avatar.png',
+            emailVerified: true,
             ...overrides,
         }) as User;
 
@@ -293,6 +294,61 @@ describe('WorkMemberService', () => {
                 },
             });
             expect(memberRepository.addMember).not.toHaveBeenCalled();
+        });
+
+        it('refuses an invitee whose email is unverified: 400, no addMember, no event', async () => {
+            ownershipService.ensureCanManageMembers.mockResolvedValue({ work: buildWork() });
+            userRepository.findByEmail.mockResolvedValue(
+                buildUser({ id: 'u-2', emailVerified: false }),
+            );
+            memberRepository.findMember.mockResolvedValue(null);
+            const recordEvent = jest.spyOn(service as any, 'recordMemberEvent');
+
+            const promise = service.inviteMember('w-1', 'u-1', {
+                email: 'invitee@example.com',
+                role: WorkMemberRole.EDITOR,
+            });
+            await expect(promise).rejects.toBeInstanceOf(BadRequestException);
+            await expect(promise).rejects.toMatchObject({
+                response: {
+                    status: 'error',
+                    code: 'InviteeEmailNotVerified',
+                    message:
+                        "This person's account hasn't verified its email address yet, so it can't be added. Ask them to verify their email, then invite them again.",
+                },
+            });
+            expect(memberRepository.addMember).not.toHaveBeenCalled();
+            expect(recordEvent).not.toHaveBeenCalled();
+            expect(userRepository.findById).not.toHaveBeenCalled();
+        });
+
+        it('adds a verified invitee and records the added event', async () => {
+            ownershipService.ensureCanManageMembers.mockResolvedValue({ work: buildWork() });
+            userRepository.findByEmail.mockResolvedValue(
+                buildUser({ id: 'u-2', emailVerified: true }),
+            );
+            memberRepository.findMember.mockResolvedValue(null);
+            userRepository.findById.mockResolvedValue(buildUser({ id: 'u-1' }));
+            memberRepository.addMember.mockResolvedValue(buildMember({ id: 'new-m' }));
+            memberRepository.findById.mockResolvedValue(buildMember({ id: 'new-m' }));
+            const recordEvent = jest.spyOn(service as any, 'recordMemberEvent');
+
+            await service.inviteMember('w-1', 'u-1', {
+                email: 'invitee@example.com',
+                role: WorkMemberRole.VIEWER,
+            });
+
+            expect(memberRepository.addMember).toHaveBeenCalledWith(
+                'w-1',
+                'u-2',
+                WorkMemberRole.VIEWER,
+                'u-1',
+            );
+            expect(recordEvent).toHaveBeenCalledWith(
+                'w-1',
+                'work.member.added',
+                expect.objectContaining({ userId: 'u-2', role: WorkMemberRole.VIEWER }),
+            );
         });
 
         it('short-circuits when ensureCanManageMembers rejects', async () => {
