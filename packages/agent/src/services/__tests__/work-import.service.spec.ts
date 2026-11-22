@@ -8,7 +8,7 @@ jest.mock('@src/generators/website-generator/website-generator.service', () => (
     WebsiteGeneratorService: class WebsiteGeneratorService {},
 }));
 
-import { WorkImportService } from '../work-import.service';
+import { WorkImportService, linkedRepositoryRoles } from '../work-import.service';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
 import { ImportSourceTypeEnum, ImportWorkDto } from '@src/dto/import-work.dto';
@@ -1097,5 +1097,93 @@ describe('WorkImportService.dispatchImportTask — T22 tenant runtime binding ca
         });
         expect(payload.providerId).toBeNull();
         expect(payload.credentialVersion).toBeNull();
+    });
+});
+
+describe('linked repository roles', () => {
+    it('records the data repo when the name-derived slug differs from its base name', () => {
+        expect(
+            linkedRepositoryRoles('awesome-to-do-apps', {
+                owner: 'ever-works',
+                repo: 'awesome-todo-apps-data',
+            }),
+        ).toEqual({ data: { owner: 'ever-works', repo: 'awesome-todo-apps-data' } });
+    });
+
+    it('records the website repo the same way', () => {
+        expect(
+            linkedRepositoryRoles('awesome-to-do-apps', {
+                owner: 'ever-works',
+                repo: 'awesome-todo-apps-website',
+            }),
+        ).toEqual({ website: { owner: 'ever-works', repo: 'awesome-todo-apps-website' } });
+    });
+
+    it.each([
+        ['matching data repo', 'ever-works', 'ever-works-data'],
+        ['matching website repo', 'ever-works', 'ever-works-website'],
+        ['repo of no known role', 'compare-cloud-pricing', 'Compare-Cloud-Pricing'],
+    ])('records nothing for a %s', (_label, slug, repo) => {
+        expect(linkedRepositoryRoles(slug, { owner: 'ever-works', repo })).toBeUndefined();
+    });
+
+    function createService() {
+        const workRepository = { update: jest.fn().mockResolvedValue(undefined) };
+        const generationHistoryRepository = {
+            createEntry: jest.fn().mockResolvedValue({ id: 'history-1' }),
+            updateEntry: jest.fn().mockResolvedValue(undefined),
+        };
+        const service = new WorkImportService(
+            workRepository as any,
+            generationHistoryRepository as any,
+            {} as any,
+            {} as any,
+            {} as any,
+            {} as any,
+            {} as any,
+            {} as any,
+            {} as any,
+            createWorksConfigRestoreServiceMock() as any,
+            {} as any,
+            {} as any,
+            { emit: jest.fn() } as any,
+        );
+        return { service, workRepository };
+    }
+
+    const user = { id: 'user-1', username: 'evereq' } as any;
+    const link = (service: WorkImportService, slug: string, repo: string) =>
+        (service as any).handleLinkExisting(
+            { id: 'work-1', slug },
+            {
+                sourceUrl: `https://github.com/ever-works/${repo}`,
+                sourceType: ImportSourceTypeEnum.LINK_EXISTING,
+                name: 'Awesome To-Do Apps',
+            },
+            { owner: 'ever-works', repo },
+            user,
+        );
+
+    it('stores the data role on a linked Work whose slug differs from the data repo', async () => {
+        const { service, workRepository } = createService();
+
+        await link(service, 'awesome-to-do-apps', 'awesome-todo-apps-data');
+
+        const [, update] = workRepository.update.mock.calls[0];
+        expect(update.sourceRepository).toMatchObject({
+            owner: 'ever-works',
+            repo: 'awesome-todo-apps-data',
+            type: ImportSourceTypeEnum.LINK_EXISTING,
+            relatedRepositories: { data: { owner: 'ever-works', repo: 'awesome-todo-apps-data' } },
+        });
+    });
+
+    it('leaves the source record as before when the names already match', async () => {
+        const { service, workRepository } = createService();
+
+        await link(service, 'awesome-crm', 'awesome-crm-data');
+
+        const [, update] = workRepository.update.mock.calls[0];
+        expect(update.sourceRepository).not.toHaveProperty('relatedRepositories');
     });
 });

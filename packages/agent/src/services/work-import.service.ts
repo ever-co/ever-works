@@ -42,6 +42,7 @@ import {
     GitRepoDto,
 } from '@src/dto/import-work.dto';
 import { Work, ImportSourceType, SourceRepository } from '@src/entities/work.entity';
+import type { RelatedRepositories } from '@src/entities/work.entity';
 import { User } from '@src/entities/user.entity';
 import { WorkGenerationCompletedEvent } from '@src/events';
 import { buildImportStatsUpdate } from '@src/work-operations';
@@ -72,6 +73,30 @@ function shouldReuseAwesomeReadmeRepository(
         dto.sourceType === ImportSourceTypeEnum.AWESOME_README &&
         dto.awesomeReadmeImportMode === 'reuse_source'
     );
+}
+
+/**
+ * The role a linked repository plays, recorded only when its name differs from the name the Work would
+ * derive for that role (`<slug>-data`, `<slug>-website`).
+ *
+ * A linked Work's slug comes from its NAME, so it can differ from the repositories' own base name:
+ * "Awesome To-Do Apps" → `awesome-to-do-apps`, linked to `awesome-todo-apps-data`. Without the role,
+ * `Work.getRelatedRepository` falls back to the derived `awesome-to-do-apps-data`, a repository that does
+ * not exist, and every data-repo consumer (markdown regeneration, sync, push webhooks) fails with
+ * "Repository not found". When the names already match, nothing is recorded and nothing changes.
+ */
+export function linkedRepositoryRoles(
+    slug: string,
+    linked: { owner: string; repo: string },
+): RelatedRepositories | undefined {
+    const target = { owner: linked.owner, repo: linked.repo };
+    if (linked.repo.endsWith('-data') && linked.repo !== `${slug}-data`) {
+        return { data: target };
+    }
+    if (linked.repo.endsWith('-website') && linked.repo !== `${slug}-website`) {
+        return { website: target };
+    }
+    return undefined;
 }
 
 function repositoriesMatch(
@@ -1182,20 +1207,25 @@ export class WorkImportService {
         auth?: SourceRepository['auth'],
     ): Promise<ImportWorkResponseDto> {
         const now = new Date();
+        const sourceRepository: SourceRepository = {
+            url: dto.sourceUrl,
+            owner: parsed.owner,
+            repo: parsed.repo,
+            type: ImportSourceTypeEnum.LINK_EXISTING as ImportSourceType,
+            importedAt: now,
+            auth,
+        };
+        const relatedRepositories = linkedRepositoryRoles(work.slug, parsed);
+        if (relatedRepositories) {
+            sourceRepository.relatedRepositories = relatedRepositories;
+        }
 
         await this.workRepository.update(work.id, {
             generateStatus: {
                 status: GenerateStatusType.GENERATED,
                 step: 'linked',
             },
-            sourceRepository: {
-                url: dto.sourceUrl,
-                owner: parsed.owner,
-                repo: parsed.repo,
-                type: ImportSourceTypeEnum.LINK_EXISTING as ImportSourceType,
-                importedAt: now,
-                auth,
-            },
+            sourceRepository,
         });
 
         const history = await this.generationHistoryRepository.createEntry({
