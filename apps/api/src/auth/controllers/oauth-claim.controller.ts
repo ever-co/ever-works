@@ -129,6 +129,9 @@ export class OAuthClaimController {
             );
         }
 
+        // An unknown provider is a 400 here, before anything is recorded or spent.
+        const providerName = this.socialAuthService.getProviderDisplayName(providerId);
+
         const userAgentHeader = req.headers['user-agent'];
         const userAgent = typeof userAgentHeader === 'string' ? userAgentHeader : null;
         // Express's `trust proxy` view of the caller, never the client-written left-most
@@ -197,7 +200,7 @@ export class OAuthClaimController {
                 actionType: ActivityActionType.USER_LOGIN,
                 action: 'user.account_claimed',
                 status: ActivityStatus.COMPLETED,
-                summary: `Anonymous user saved the account with ${this.socialAuthService.getProviderDisplayName(providerId)}`,
+                summary: `Anonymous user saved the account with ${providerName}`,
                 ipAddress,
                 userAgent,
                 metadata: { provider: saved.provider },

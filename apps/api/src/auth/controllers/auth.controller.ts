@@ -363,7 +363,9 @@ export class AuthController {
             try {
                 await this.termsAcceptanceService.record(userId, claimDto.terms, {
                     method: 'signup-checkbox',
-                    ip: req.ip ?? null,
+                    // The same address the session and the log get (`trust proxy`, else the
+                    // socket), never the client-written `X-Forwarded-For`.
+                    ip: trustedClientIp(req),
                     userAgent: req.headers?.['user-agent'] ?? null,
                 });
             } catch (error) {

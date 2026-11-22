@@ -205,6 +205,19 @@ describe('OAuthClaimController (POST /api/oauth/:providerId/claim)', () => {
         expect(terms.record).not.toHaveBeenCalled();
     });
 
+    it('refuses an unknown provider with 400 before anything is recorded or spent', async () => {
+        socialAuth.getProviderDisplayName.mockImplementation(() => {
+            throw new BadRequestException('Unsupported OAuth provider: discord');
+        });
+        const { state, req } = signedIn();
+
+        await expect(
+            controller.claim('discord', { code: 'c', state, terms: TERMS }, req, makeRes()),
+        ).rejects.toBeInstanceOf(BadRequestException);
+        expect(terms.record).not.toHaveBeenCalled();
+        expect(socialAuth.fetchSocialUser).not.toHaveBeenCalled();
+    });
+
     it('refuses a state the browser does not hold, before anything else (C-03)', async () => {
         const { req } = signedIn();
         const res = makeRes();

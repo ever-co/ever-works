@@ -171,7 +171,7 @@ describe('AuthController', () => {
             );
         });
 
-        it('never logs a client-written x-forwarded-for when req.ip is missing', async () => {
+        it('never records or logs a client-written x-forwarded-for when req.ip is missing', async () => {
             claimAccount.claim.mockResolvedValue({
                 id: 'u-anon-1',
                 email: 'jane@example.com',
@@ -185,9 +185,25 @@ describe('AuthController', () => {
                     socket: { remoteAddress: '10.0.0.9' },
                     headers: { 'user-agent': 'UA', 'x-forwarded-for': '6.6.6.6' },
                 },
-                { email: 'jane@example.com', password: 'pw' },
+                {
+                    email: 'jane@example.com',
+                    password: 'pw',
+                    terms: [
+                        {
+                            documentId: 'tos:ever-works',
+                            version: '1.0.0',
+                            sha256: 'a'.repeat(64),
+                            locale: 'en',
+                        },
+                    ],
+                },
             );
 
+            expect(termsAcceptance.record).toHaveBeenCalledWith(
+                'u-anon-1',
+                expect.any(Array),
+                expect.objectContaining({ ip: '10.0.0.9' }),
+            );
             expect(activityLog.log).toHaveBeenCalledWith(
                 expect.objectContaining({ action: 'user.account_claimed', ipAddress: '10.0.0.9' }),
             );
