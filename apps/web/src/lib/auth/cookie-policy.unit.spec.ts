@@ -4,6 +4,7 @@ import {
     describeLegacyAuthCookieFallback,
     isPublicUrlHttps,
     legacyAuthCookieFallback,
+    parseLegacyFallbackUntil,
 } from './cookie-policy';
 
 /**
@@ -75,10 +76,64 @@ describe('legacyAuthCookieFallback — the end date', () => {
         expect(policy.until).toBe(LEGACY_AUTH_COOKIE_DEFAULT_UNTIL);
         expect(policy.warnings).toEqual([
             expect.stringContaining(
-                'AUTH_COOKIE_LEGACY_FALLBACK_UNTIL="next tuesday" is not a date',
+                'AUTH_COOKIE_LEGACY_FALLBACK_UNTIL="next tuesday" is not an ISO 8601 date',
             ),
         ]);
     });
+});
+
+// Minor 2 (R60): only an unambiguous instant moves the end. Date.parse alone takes "0", "1" or
+// "2026", rolls 02-30 over to March, and reads a time without an offset as the pod's local time.
+describe('parseLegacyFallbackUntil — strict ISO 8601', () => {
+    it.each([
+        ['2026-12-20', '2026-12-20T00:00:00.000Z'],
+        ['2026-12-20T00:00:00Z', '2026-12-20T00:00:00.000Z'],
+        ['2026-12-20T10:30Z', '2026-12-20T10:30:00.000Z'],
+        ['2026-12-20T10:30:15.250Z', '2026-12-20T10:30:15.250Z'],
+        ['2026-12-20T01:00:00+01:00', '2026-12-20T00:00:00.000Z'],
+        ['2026-12-19T19:00:00-05:00', '2026-12-20T00:00:00.000Z'],
+        ['2028-02-29', '2028-02-29T00:00:00.000Z'],
+    ])('reads %j as %s', (raw, iso) => {
+        expect(new Date(parseLegacyFallbackUntil(raw)!).toISOString()).toBe(iso);
+    });
+
+    it.each([
+        '0',
+        '1',
+        '2026',
+        '2026-12',
+        '20261220',
+        '2026-12-20T00:00:00',
+        '2026-12-20T00:00',
+        '2026-12-20 00:00:00Z',
+        '2026-12-20t00:00:00z',
+        '2026-12-20T00:00:00+0100',
+        '2026-02-30',
+        '2027-02-29',
+        '2026-13-01',
+        '2026-12-20T24:00:00Z',
+        '2026-12-20T00:60:00Z',
+        '2026-12-20T00:00:00+25:00',
+        'Dec 20 2026',
+        'next tuesday',
+    ])('refuses %j', (raw) => {
+        expect(parseLegacyFallbackUntil(raw)).toBeNull();
+    });
+
+    it.each(['0', '2026', '2026-12-20T00:00:00'])(
+        'an ambiguous AUTH_COOKIE_LEGACY_FALLBACK_UNTIL=%j keeps the default end and warns',
+        (raw) => {
+            const policy = legacyAuthCookieFallback(
+                env({ AUTH_COOKIE_LEGACY_FALLBACK_UNTIL: raw }),
+                BEFORE_DEFAULT_END,
+            );
+
+            expect(policy.until).toBe(LEGACY_AUTH_COOKIE_DEFAULT_UNTIL);
+            expect(policy.active).toBe(true);
+            expect(policy.warnings).toHaveLength(1);
+            expect(policy.warnings[0]).toContain(`AUTH_COOKIE_LEGACY_FALLBACK_UNTIL="${raw}"`);
+        },
+    );
 });
 
 describe('legacyAuthCookieFallback — the switch', () => {

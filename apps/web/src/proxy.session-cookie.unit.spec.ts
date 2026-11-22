@@ -93,6 +93,21 @@ describe('proxy — session cookie (R-16)', () => {
         );
     });
 
+    it('puts the plain mirror back for a __Host- visitor who has none, while the fallback is on', async () => {
+        getAuthFromRequestMock.mockResolvedValue({ isAuthenticated: true, isExpired: false });
+        const proxy = await loadProxy();
+
+        const response = await proxy(request('/missions', '__Host-everworks_auth_token=current'));
+
+        const lines = sessionCookieLines(response);
+        expect(lines).toHaveLength(1);
+        expect(lines[0].startsWith('everworks_auth_token=current;')).toBe(true);
+        expect(lines[0]).toMatch(/Max-Age=604800/i);
+        expect(lines[0]).toMatch(/Secure/i);
+        expect(lines[0]).toContain('Path=/');
+        expect(lines[0]).not.toMatch(/Domain=/i);
+    });
+
     it('does not move anything with AUTH_COOKIE_LEGACY_FALLBACK=false', async () => {
         getAuthFromRequestMock.mockResolvedValue({ isAuthenticated: true, isExpired: false });
         const proxy = await loadProxy({ AUTH_COOKIE_LEGACY_FALLBACK: 'false' });

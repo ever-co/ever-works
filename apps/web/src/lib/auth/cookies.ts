@@ -158,8 +158,15 @@ type ResponseCookieWriter = {
  *
  * - `migrated`: while the fallback is on and there is no `__Host-` cookie yet, the same sealed
  *   value is copied to `__Host-everworks_auth_token`. The plain cookie is KEPT: a pod still on
- *   the previous release (rolling deploy) reads only the plain name. Once the `__Host-` cookie
- *   exists, new pods ignore the plain one. Never when the plain name appears more than once.
+ *   the previous release (rolling deploy, or a rollback) reads only the plain name. Once the
+ *   `__Host-` cookie exists, new pods ignore the plain one. Never when the plain name appears
+ *   more than once.
+ * - `mirrored`: while the fallback is on, a `__Host-` cookie with NO plain cookie next to it (the
+ *   plain one aged out: a migrated cookie keeps the expiry of the original sign-in) gets its plain
+ *   mirror back, with a fresh lifetime, so a rollback still finds the session. A request carries
+ *   no cookie expiry, so "older" is only seen once the browser has dropped it. A plain cookie with
+ *   a different value is left alone: it is either newer (a pod on the previous release wrote it)
+ *   or planted, and an old pod must not be handed the `__Host-` session in its place.
  * - `expired`: once the fallback is over (end date or flag) on HTTPS, a left-over host-only plain
  *   cookie is expired. (A tossed `Domain=` one cannot be cleared from here; it is ignored.)
  * - `none`: nothing to do.
@@ -167,7 +174,7 @@ type ResponseCookieWriter = {
 export function reconcileLegacyAuthCookie(
     request: RequestCookieReader,
     response: ResponseCookieWriter,
-): 'migrated' | 'expired' | 'none' {
+): 'migrated' | 'mirrored' | 'expired' | 'none' {
     if (!response.cookies) return 'none';
     const name = authCookieName();
     if (name === AUTH_COOKIE_NAME) return 'none';
@@ -177,7 +184,12 @@ export function reconcileLegacyAuthCookie(
         response.cookies.set(AUTH_COOKIE_NAME, '', { ...cookieOptions, maxAge: 0 });
         return 'expired';
     }
-    if (request.cookies.get(name)?.value) return 'none';
+    const current = request.cookies.get(name)?.value;
+    if (current) {
+        if (legacy) return 'none';
+        response.cookies.set(AUTH_COOKIE_NAME, current, cookieOptions);
+        return 'mirrored';
+    }
     if (!legacy) return 'none';
     if (countCookieName(request.headers.get('cookie'), AUTH_COOKIE_NAME) !== 1) return 'none';
     response.cookies.set(name, legacy, cookieOptions);

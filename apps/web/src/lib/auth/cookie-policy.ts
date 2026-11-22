@@ -30,6 +30,40 @@ export function isPublicUrlHttps(env: NodeJS.ProcessEnv = process.env): boolean 
 export const LEGACY_AUTH_COOKIE_DEFAULT_UNTIL = '2026-12-06T00:00:00.000Z';
 
 const FLAG_OFF = new Set(['false', '0', 'off', 'no']);
+const ISO_DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
+const ISO_DATE_TIME =
+    /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d{1,3})?)?(Z|[+-]\d{2}:\d{2})$/;
+
+function isCalendarDate(year: number, month: number, day: number): boolean {
+    if (month < 1 || month > 12 || day < 1) return false;
+    return day <= new Date(Date.UTC(year, month, 0)).getUTCDate();
+}
+
+/**
+ * `AUTH_COOKIE_LEGACY_FALLBACK_UNTIL` as an instant, or null when it is not one of exactly two
+ * shapes: a plain date `YYYY-MM-DD` (UTC midnight) or a full ISO 8601 date-time with `Z` or an
+ * explicit `±HH:MM` offset (`2026-12-06T00:00:00Z`, `2026-12-06T01:00+01:00`). `Date.parse` alone
+ * would take `0`, `1` or `2026`, roll `02-30` over to March, and read a time with no offset as the
+ * pod's local time.
+ */
+export function parseLegacyFallbackUntil(raw: string): number | null {
+    const date = ISO_DATE.exec(raw);
+    if (date) {
+        const [year, month, day] = date.slice(1, 4).map(Number);
+        return isCalendarDate(year, month, day) ? Date.UTC(year, month - 1, day) : null;
+    }
+    const dateTime = ISO_DATE_TIME.exec(raw);
+    if (!dateTime) return null;
+    const [year, month, day, hour, minute] = dateTime.slice(1, 6).map(Number);
+    const second = Number(dateTime[6] ?? '0');
+    const offset = dateTime[7];
+    if (!isCalendarDate(year, month, day) || hour > 23 || minute > 59 || second > 59) return null;
+    if (offset !== 'Z' && (Number(offset.slice(1, 3)) > 23 || Number(offset.slice(4, 6)) > 59)) {
+        return null;
+    }
+    const instant = Date.parse(raw);
+    return Number.isNaN(instant) ? null : instant;
+}
 const FLAG_ON = new Set(['', 'true', '1', 'on', 'yes']);
 
 export interface LegacyAuthCookieFallback {
@@ -49,8 +83,9 @@ export interface LegacyAuthCookieFallback {
  * - only on HTTPS (on http the plain name IS the live one);
  * - `AUTH_COOKIE_LEGACY_FALLBACK` = `false` / `0` / `off` / `no` ends it early; `true` / `1` /
  *   `on` / `yes` or unset leaves it on; any other value leaves it on and is reported (M3);
- * - it ends for good at `AUTH_COOKIE_LEGACY_FALLBACK_UNTIL` (an ISO 8601 date), default
- *   {@link LEGACY_AUTH_COOKIE_DEFAULT_UNTIL}; an unreadable date falls back to the default and is
+ * - it ends for good at `AUTH_COOKIE_LEGACY_FALLBACK_UNTIL` ({@link parseLegacyFallbackUntil}:
+ *   `YYYY-MM-DD` as UTC midnight, or a date-time with `Z` / an offset), default
+ *   {@link LEGACY_AUTH_COOKIE_DEFAULT_UNTIL}; any other value falls back to the default and is
  *   reported. A later date extends it, an earlier one ends it sooner.
  */
 export function legacyAuthCookieFallback(
@@ -62,10 +97,10 @@ export function legacyAuthCookieFallback(
     const rawUntil = env.AUTH_COOKIE_LEGACY_FALLBACK_UNTIL?.trim();
     let untilMs = Date.parse(LEGACY_AUTH_COOKIE_DEFAULT_UNTIL);
     if (rawUntil) {
-        const parsed = Date.parse(rawUntil);
-        if (Number.isNaN(parsed)) {
+        const parsed = parseLegacyFallbackUntil(rawUntil);
+        if (parsed === null) {
             warnings.push(
-                `AUTH_COOKIE_LEGACY_FALLBACK_UNTIL="${rawUntil}" is not a date; using ${LEGACY_AUTH_COOKIE_DEFAULT_UNTIL}`,
+                `AUTH_COOKIE_LEGACY_FALLBACK_UNTIL="${rawUntil}" is not an ISO 8601 date (YYYY-MM-DD) or date-time with Z or an offset; using ${LEGACY_AUTH_COOKIE_DEFAULT_UNTIL}`,
             );
         } else {
             untilMs = parsed;

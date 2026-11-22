@@ -114,6 +114,18 @@ describe('proxy with real sealed session cookies (R-16)', () => {
         expect(sessionCookieLines(response)).toEqual([]);
     });
 
+    it('re-mirrors a sealed __Host- session under the plain name when the plain one aged out', async () => {
+        const { proxy, encrypt } = await load();
+        const sealed = await encrypt(sessionToken('user-1'));
+
+        const response = await run(proxy, '/missions', `__Host-everworks_auth_token=${sealed}`);
+
+        expect(response.status).toBe(200);
+        const lines = sessionCookieLines(response);
+        expect(lines).toHaveLength(1);
+        expect(lines[0].startsWith(`everworks_auth_token=${sealed};`)).toBe(true);
+    });
+
     // I2b: a tossed `Domain=` cookie next to the visitor's own plain one. Neither is trusted; the
     // visitor signs in again (and then has a `__Host-` cookie, which a tossed one cannot beat).
     it('refuses a plain session name sent twice: no sign-in on it and no migration', async () => {

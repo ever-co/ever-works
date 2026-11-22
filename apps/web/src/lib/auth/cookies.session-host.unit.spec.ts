@@ -378,6 +378,51 @@ describe('reconcileLegacyAuthCookie (proxy, once)', () => {
         },
     );
 
+    // Minor 1 (R60): a migrated plain cookie keeps the expiry of the original sign-in. When the
+    // browser drops it, the next page visit puts the mirror back, so a rollback still finds it.
+    it('puts the plain mirror back next to a __Host- cookie that has none, while the fallback is on', async () => {
+        const cookies = await load('https://app.ever.works');
+        const pair = proxyPair({ '__Host-everworks_auth_token': 'current' });
+
+        expect(cookies.reconcileLegacyAuthCookie(pair.request, pair.response)).toBe('mirrored');
+        expect(pair.written).toEqual([
+            {
+                name: 'everworks_auth_token',
+                value: 'current',
+                options: expect.objectContaining({
+                    secure: true,
+                    path: '/',
+                    httpOnly: true,
+                    maxAge: 60 * 60 * 24 * 7,
+                }),
+            },
+        ]);
+        expect(pair.written[0].options).not.toHaveProperty('domain');
+    });
+
+    it('does not re-mirror over a plain cookie with another value (newer from an old pod, or planted)', async () => {
+        const cookies = await load('https://app.ever.works');
+        const pair = proxyPair({
+            '__Host-everworks_auth_token': 'current',
+            everworks_auth_token: 'other',
+        });
+
+        expect(cookies.reconcileLegacyAuthCookie(pair.request, pair.response)).toBe('none');
+        expect(pair.written).toEqual([]);
+    });
+
+    it.each([
+        ['the flag is off', 'false', '2026-11-22T12:00:00.000Z'],
+        ['the end date passed', undefined, '2026-12-06T00:00:00.000Z'],
+    ])('does not re-mirror once %s', async (_why, flag, now) => {
+        vi.setSystemTime(new Date(now));
+        const cookies = await load('https://app.ever.works', flag);
+        const pair = proxyPair({ '__Host-everworks_auth_token': 'current' });
+
+        expect(cookies.reconcileLegacyAuthCookie(pair.request, pair.response)).toBe('none');
+        expect(pair.written).toEqual([]);
+    });
+
     it('after the end, does nothing without a plain cookie', async () => {
         vi.setSystemTime(new Date('2026-12-07T00:00:00.000Z'));
         const cookies = await load('https://app.ever.works');
