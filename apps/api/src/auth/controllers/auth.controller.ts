@@ -47,6 +47,7 @@ import { ActivityLogService } from '@ever-works/agent/activity-log';
 import { ActivityActionType, ActivityStatus } from '@ever-works/agent/entities';
 import { AUTH_PROVIDER } from '../providers/auth-provider.constants';
 import { AuthProvider } from '../providers/auth-provider.abstract';
+import { trustedClientIp } from '../../config/trust-proxy';
 import { Inject } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { toHeaders } from '../providers/request-headers';
@@ -385,11 +386,9 @@ export class AuthController {
             emailVerificationCallbackUrl: claimDto.emailVerificationCallbackUrl,
         });
 
-        const ipAddress =
-            (typeof req.ip === 'string' && req.ip) ||
-            (typeof req.headers['x-forwarded-for'] === 'string'
-                ? (req.headers['x-forwarded-for'] as string).split(',')[0].trim()
-                : null);
+        // Express's `trust proxy` view of the caller, never the client-written left-most
+        // `X-Forwarded-For` entry (the terms record above already reads `req.ip` only).
+        const ipAddress = trustedClientIp(req);
         const userAgent =
             typeof req.headers['user-agent'] === 'string'
                 ? (req.headers['user-agent'] as string)

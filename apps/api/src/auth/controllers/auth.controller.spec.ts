@@ -171,6 +171,28 @@ describe('AuthController', () => {
             );
         });
 
+        it('never logs a client-written x-forwarded-for when req.ip is missing', async () => {
+            claimAccount.claim.mockResolvedValue({
+                id: 'u-anon-1',
+                email: 'jane@example.com',
+                username: 'anon-x',
+                emailVerified: false,
+            });
+
+            await (controller as any).claimAccount(
+                {
+                    user: { userId: 'u-anon-1', isAnonymous: true },
+                    socket: { remoteAddress: '10.0.0.9' },
+                    headers: { 'user-agent': 'UA', 'x-forwarded-for': '6.6.6.6' },
+                },
+                { email: 'jane@example.com', password: 'pw' },
+            );
+
+            expect(activityLog.log).toHaveBeenCalledWith(
+                expect.objectContaining({ action: 'user.account_claimed', ipAddress: '10.0.0.9' }),
+            );
+        });
+
         it('passes through emailVerificationCallbackUrl when provided', async () => {
             claimAccount.claim.mockResolvedValue({
                 id: 'u-1',
