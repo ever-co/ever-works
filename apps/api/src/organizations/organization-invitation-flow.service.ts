@@ -73,8 +73,10 @@ export type OrganizationMemberView = {
  *    answered again and nothing is sent twice;
  *  - `already_member`: the person is already a member (the Tenant owner is a
  *    member of every Organization of the Tenant);
- *  - `added`: the person already belongs to the Tenant, so they joined this
- *    roster directly, exactly as `invite()` adopts them, and got no email.
+ *  - `added`: the person already belongs to the Tenant and their email is
+ *    verified, so they joined this roster directly, exactly as `invite()`
+ *    adopts them, and got no email. An unverified in-Tenant person is not
+ *    adopted: they get the token invitation (`invited`) instead.
  *
  * The invitation never carries its token (it exists only inside the email).
  */
@@ -238,8 +240,10 @@ export class OrganizationInvitationFlowService {
      *  - a member (or the Tenant owner) is answered as `already_member`;
      *  - an invitation still pending for the email is answered again
      *    (`pending`), even when a concurrent call won the race to issue it;
-     *  - a person already in the Tenant joins the roster directly (`added`),
-     *    the same adoption `invite()` performs, and gets no email.
+     *  - a person already in the Tenant whose email is verified joins the roster
+     *    directly (`added`), the same adoption `invite()` performs, and gets no
+     *    email; an unverified one gets the token invitation (`invited`) instead,
+     *    since the token proves they control the mailbox.
      *
      * Only the `member` role is issued: invitations carry no other role yet,
      * and promotion stays the Tenant owner's step in the app (EW-P2-6).

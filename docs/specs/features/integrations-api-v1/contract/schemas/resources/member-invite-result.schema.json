@@ -2,7 +2,7 @@
 	"$schema": "https://json-schema.org/draft/2020-12/schema",
 	"$id": "https://ever.works/schemas/integrations/v1/resources/member-invite-result.schema.json",
 	"title": "Member invite result (CR-13, POST /members/invite)",
-	"description": "What inviting a person into the pinned organization did. `invited` (201): a new invitation was issued and emailed. `pending` (200): an invitation for that email was still pending and is answered again; nothing is sent twice. `already_member` (200): the person is a member (the tenant owner is a member of every organization). `added` (201): the person already belonged to the tenant and joined this roster directly, with no email (records organization.member.added). The invitation token never appears here: it exists only inside the email.",
+	"description": "What inviting a person into the pinned organization did. `invited` (201): a new invitation was issued and emailed. `pending` (200): an invitation for that email was still pending and is answered again; nothing is sent twice. `already_member` (200): the person is a member (the tenant owner is a member of every organization). `added` (201): the person already belonged to the tenant with a verified email and joined this roster directly, with no email (records organization.member.added). A person in the tenant whose email is not verified is not added directly: they get the normal invitation (`invited`). The invitation token never appears here: it exists only inside the email.",
 	"type": "object",
 	"required": ["status", "invitation", "userId"],
 	"properties": {
