@@ -1122,9 +1122,27 @@ describe('linked repository roles', () => {
     it.each([
         ['matching data repo', 'ever-works', 'ever-works-data'],
         ['matching website repo', 'ever-works', 'ever-works-website'],
+        ['matching data repo in another case', 'awesome-to-do-apps', 'Awesome-To-Do-Apps-Data'],
         ['repo of no known role', 'compare-cloud-pricing', 'Compare-Cloud-Pricing'],
     ])('records nothing for a %s', (_label, slug, repo) => {
         expect(linkedRepositoryRoles(slug, { owner: 'ever-works', repo })).toBeUndefined();
+    });
+
+    it('treats the role suffix case-insensitively and keeps the repo name as given', () => {
+        expect(
+            linkedRepositoryRoles('awesome-to-do-apps', {
+                owner: 'ever-works',
+                repo: 'Awesome-Todo-Apps-Data',
+            }),
+        ).toEqual({ data: { owner: 'ever-works', repo: 'Awesome-Todo-Apps-Data' } });
+    });
+
+    it('records a data repo whose name is the slug itself (the derived name would be `<slug>-data`)', () => {
+        expect(
+            linkedRepositoryRoles('acme-data', { owner: 'ever-works', repo: 'acme-data' }),
+        ).toEqual({
+            data: { owner: 'ever-works', repo: 'acme-data' },
+        });
     });
 
     function createService() {

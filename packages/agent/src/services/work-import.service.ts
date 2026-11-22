@@ -89,11 +89,15 @@ export function linkedRepositoryRoles(
     slug: string,
     linked: { owner: string; repo: string },
 ): RelatedRepositories | undefined {
+    // GitHub repository names are case-insensitive: `Awesome-Todo-Apps-Data` is a data repo too, and
+    // `Awesome-To-Do-Apps-Data` already resolves as the derived `awesome-to-do-apps-data`.
+    const name = linked.repo.toLowerCase();
+    const derived = slug.toLowerCase();
     const target = { owner: linked.owner, repo: linked.repo };
-    if (linked.repo.endsWith('-data') && linked.repo !== `${slug}-data`) {
+    if (name.endsWith('-data') && name !== `${derived}-data`) {
         return { data: target };
     }
-    if (linked.repo.endsWith('-website') && linked.repo !== `${slug}-website`) {
+    if (name.endsWith('-website') && name !== `${derived}-website`) {
         return { website: target };
     }
     return undefined;
