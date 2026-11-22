@@ -13,6 +13,7 @@ import {
     Logger,
     BadRequestException,
     ForbiddenException,
+    ServiceUnavailableException,
     UseInterceptors,
 } from '@nestjs/common';
 import { IntegrationForbiddenGuard } from '../integration/integration-forbidden.guard';
@@ -349,11 +350,31 @@ export class AuthController {
             );
         }
 
-        // Same order as `register`: check the terms claims BEFORE the account
-        // changes, so a malformed or unpublished claim refuses the whole claim
-        // instead of leaving a claimed account with no acceptance on file.
+        // Terms first, and recorded BEFORE the account changes. Unlike `register`,
+        // the user id already exists (a claim never changes it), so the acceptance
+        // can be on file before the claim: a 200 then always means "claimed WITH
+        // consent recorded". An unpublished claim refuses (400), and a failure to
+        // record refuses too (503) with the account untouched, so the visitor can
+        // simply retry. The write is idempotent per (user, document, version), so a
+        // claim that later fails (e.g. a taken email) and is retried records once.
         if (claimDto.terms?.length) {
             this.termsAcceptanceService.assertClaimsArePublished(claimDto.terms);
+            try {
+                await this.termsAcceptanceService.record(userId, claimDto.terms, {
+                    method: 'signup-checkbox',
+                    ip: req.ip ?? null,
+                    userAgent: req.headers?.['user-agent'] ?? null,
+                });
+            } catch (error) {
+                this.logger.error(
+                    `Failed to record terms acceptance before claiming user ${userId}: ${
+                        error instanceof Error ? error.message : String(error)
+                    }`,
+                );
+                throw new ServiceUnavailableException(
+                    'Could not record the terms acceptance; the account was not changed. Try again.',
+                );
+            }
         }
 
         const claimed = await this.claimAccountService.claim({
@@ -363,26 +384,6 @@ export class AuthController {
             username: claimDto.username,
             emailVerificationCallbackUrl: claimDto.emailVerificationCallbackUrl,
         });
-
-        // Record the acceptance against the same user id (a claim never changes
-        // it). Logged and swallowed like `register`: the claims were validated
-        // above, so a failure here is infrastructure, and the account is already
-        // claimed. The write is idempotent, so a later retry is safe.
-        if (claimDto.terms?.length) {
-            try {
-                await this.termsAcceptanceService.record(claimed.id, claimDto.terms, {
-                    method: 'signup-checkbox',
-                    ip: req.ip ?? null,
-                    userAgent: req.headers?.['user-agent'] ?? null,
-                });
-            } catch (error) {
-                this.logger.error(
-                    `Failed to record terms acceptance for claimed user ${claimed.id}: ${
-                        error instanceof Error ? error.message : String(error)
-                    }`,
-                );
-            }
-        }
 
         const ipAddress =
             (typeof req.ip === 'string' && req.ip) ||
@@ -425,6 +426,10 @@ export class AuthController {
         // the same user FIRST, then revoke the anonymous bearer, so a failure in
         // either step never leaves the caller with no valid session. Both are best
         // effort: the claim is already committed and must still answer 200.
+        // The accepted trade-off: if the revoke fails, the anonymous bearer stays
+        // valid until its own expiry (at most the anonymous TTL) next to the new
+        // session. Both belong to the same, now regular, user and grant nothing the
+        // new one does not, so availability wins over closing that window.
         let accessToken: string | undefined;
         try {
             accessToken = (

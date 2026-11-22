@@ -11,7 +11,7 @@ jest.mock('@ever-works/agent/services', () => ({
 }));
 
 import 'reflect-metadata';
-import { BadRequestException } from '@nestjs/common';
+import { BadRequestException, ServiceUnavailableException } from '@nestjs/common';
 import { THROTTLER_LIMIT, THROTTLER_TTL } from '@nestjs/throttler/dist/throttler.constants';
 import { AuthController } from './auth.controller';
 import { IS_PUBLIC_KEY } from '../decorators/public.decorator';
@@ -288,10 +288,16 @@ describe('AuthController', () => {
                 });
             });
 
-            it('checks the claims before claiming and records them against the SAME user id', async () => {
+            // AI review: a 200 must never mean "claimed with no consent on file", so the
+            // acceptance is recorded BEFORE the account changes (the user id already exists).
+            it('checks and records the claims against the SAME user id BEFORE claiming', async () => {
                 const order: string[] = [];
                 termsAcceptance.assertClaimsArePublished.mockImplementation(() => {
                     order.push('assert');
+                });
+                termsAcceptance.record.mockImplementation(async () => {
+                    order.push('record');
+                    return [];
                 });
                 claimAccount.claim.mockImplementation(async () => {
                     order.push('claim');
@@ -309,7 +315,7 @@ describe('AuthController', () => {
                     terms,
                 });
 
-                expect(order).toEqual(['assert', 'claim']);
+                expect(order).toEqual(['assert', 'record', 'claim']);
                 expect(termsAcceptance.record).toHaveBeenCalledWith('u-anon-1', terms, {
                     method: 'signup-checkbox',
                     ip: '1.2.3.4',
@@ -334,7 +340,7 @@ describe('AuthController', () => {
                 expect(termsAcceptance.record).not.toHaveBeenCalled();
             });
 
-            it('still answers the claim when recording fails (the account is already claimed)', async () => {
+            it('refuses with 503 and leaves the account untouched when recording fails', async () => {
                 termsAcceptance.record.mockRejectedValue(new Error('db down'));
 
                 await expect(
@@ -343,7 +349,10 @@ describe('AuthController', () => {
                         password: 'MySecure123!',
                         terms,
                     }),
-                ).resolves.toMatchObject({ id: 'u-anon-1' });
+                ).rejects.toThrow(ServiceUnavailableException);
+
+                expect(claimAccount.claim).not.toHaveBeenCalled();
+                expect(authProvider.issueSession).not.toHaveBeenCalled();
             });
 
             it('records nothing when no terms were sent (machine-driven claim)', async () => {

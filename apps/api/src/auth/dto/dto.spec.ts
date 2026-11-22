@@ -3,7 +3,13 @@ import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
 
 import { CreateApiKeyDto } from './api-key.dto';
-import { LoginDto, OAuthCallbackDto, RegisterDto, UpdatePasswordDto } from './auth.dto';
+import {
+    ClaimAccountDto,
+    LoginDto,
+    OAuthCallbackDto,
+    RegisterDto,
+    UpdatePasswordDto,
+} from './auth.dto';
 import {
     ForgotPasswordDto,
     ResendVerificationDto,
@@ -18,6 +24,43 @@ const constraintsFor = (
 ) => errs.find((e) => e.property === property)?.constraints ?? {};
 
 describe('apps/api auth DTO validation', () => {
+    // EW-617: the save-account form posts the same terms claims as sign-up. An empty array is
+    // refused here (400 from the global ValidationPipe), so the controller's `terms?.length`
+    // branch only ever sees "no terms sent" or a non-empty list.
+    describe('ClaimAccountDto.terms', () => {
+        const claim = {
+            email: 'jane@example.com',
+            password: 'MySecure123!',
+        };
+        const term = {
+            documentId: 'tos:ever-works',
+            version: '1.0.2',
+            sha256: 'a'.repeat(64),
+            locale: 'en',
+        };
+
+        it('accepts no terms (machine-driven claim) and a published-shaped list', async () => {
+            expect(await validate(plainToInstance(ClaimAccountDto, claim))).toHaveLength(0);
+            expect(
+                await validate(plainToInstance(ClaimAccountDto, { ...claim, terms: [term] })),
+            ).toHaveLength(0);
+        });
+
+        it('refuses an empty list instead of letting it skip the checks', async () => {
+            const errors = await validate(
+                plainToInstance(ClaimAccountDto, { ...claim, terms: [] }),
+            );
+            expect(errors.map((e) => e.property)).toEqual(['terms']);
+        });
+
+        it('refuses a malformed digest inside the list', async () => {
+            const errors = await validate(
+                plainToInstance(ClaimAccountDto, { ...claim, terms: [{ ...term, sha256: 'x' }] }),
+            );
+            expect(errors.map((e) => e.property)).toEqual(['terms']);
+        });
+    });
+
     describe('RegisterDto', () => {
         const valid = {
             username: 'johndoe',

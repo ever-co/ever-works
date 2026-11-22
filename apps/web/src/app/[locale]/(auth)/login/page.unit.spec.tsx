@@ -178,7 +178,7 @@ describe('LoginPage — temporary account', () => {
     });
 
     it('shows a temporary account the form with the warning instead of redirecting', async () => {
-        mocks.getAuthFromCookie.mockResolvedValue({ id: 'u-anon' });
+        mocks.getAuthFromCookie.mockResolvedValue({ id: 'u-anon', isAnonymous: true });
         mocks.hasSavableAnonymousSession.mockResolvedValue(true);
 
         const props = await renderedClientProps();
@@ -187,12 +187,19 @@ describe('LoginPage — temporary account', () => {
         expect(mocks.redirect).not.toHaveBeenCalled();
     });
 
-    it('still sends a registered account to the dashboard', async () => {
-        mocks.getAuthFromCookie.mockResolvedValue({ id: 'u-1' });
-        mocks.hasSavableAnonymousSession.mockResolvedValue(false);
+    it('still sends a registered account to the dashboard, without the extra read', async () => {
+        mocks.getAuthFromCookie.mockResolvedValue({ id: 'u-1', isAnonymous: false });
 
         await expect(LoginPage()).rejects.toThrow('NEXT_REDIRECT');
         expect(mocks.redirect).toHaveBeenCalledWith({ locale: 'en', href: ROUTES.DASHBOARD });
+        expect(mocks.hasSavableAnonymousSession).not.toHaveBeenCalled();
+    });
+
+    it('sends an anonymous session the strip rules refuse (demo) to the dashboard', async () => {
+        mocks.getAuthFromCookie.mockResolvedValue({ id: 'u-demo', isAnonymous: true });
+        mocks.hasSavableAnonymousSession.mockResolvedValue(false);
+
+        await expect(LoginPage()).rejects.toThrow('NEXT_REDIRECT');
     });
 
     it('asks nothing about a temporary account for a signed-out visitor', async () => {

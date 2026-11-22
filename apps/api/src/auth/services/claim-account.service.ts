@@ -106,11 +106,9 @@ export class ClaimAccountService {
             return normalized;
         }
 
-        const localPart = email.split('@')[0] ?? '';
-        const base =
-            this.usernames.normalize(localPart).length >= USERNAME_MIN_LENGTH
-                ? localPart
-                : `${localPart}-user`;
+        // Normalized once, so the floor check and the handle allocated agree.
+        const local = this.usernames.normalize(email.split('@')[0] ?? '');
+        const base = local.length >= USERNAME_MIN_LENGTH ? local : `${local}-user`;
         return this.usernames.allocateUsername(base);
     }
 

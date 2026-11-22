@@ -26,7 +26,10 @@ export default async function LoginPage() {
     const user = await getAuthFromCookieOnSignIn();
     // EW-617: a temporary (anonymous) account is NOT bounced to the dashboard: it may sign in
     // to another account here, but is told first that this account's Works stay behind.
-    const temporaryAccount = user ? await hasSavableAnonymousSession() : false;
+    // Only an anonymous session (already known from the profile read above) costs the one
+    // extra read that applies the strip's rules (demo exclusions); nobody else pays for it.
+    const temporaryAccount =
+        user?.isAnonymous === true ? await hasSavableAnonymousSession() : false;
     if (user && !temporaryAccount) {
         return redirect({ locale, href: ROUTES.DASHBOARD });
     }

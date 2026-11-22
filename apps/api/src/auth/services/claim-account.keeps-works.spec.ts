@@ -102,7 +102,7 @@ describe('Claiming an anonymous account keeps its Works (real database)', () => 
 
         const summary = await cleanup.purgeExpired(longAfterExpiry());
 
-        expect(summary.scanned).toBe(0);
+        expect(summary).toMatchObject({ deleted: 0, failed: 0 });
         expect(await users.findById(userId)).not.toBeNull();
         expect((await worksOf(userId)).map((work) => work.slug)).toEqual([
             'my-directory',
