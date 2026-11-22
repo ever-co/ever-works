@@ -26,10 +26,12 @@ import { SocialClaimService } from '../services/social-claim.service';
 import { TermsAcceptanceService } from '../../terms/terms-acceptance.service';
 import { AUTH_PROVIDER } from '../providers/auth-provider.constants';
 import { AuthProvider } from '../providers/auth-provider.abstract';
+import { trustedClientIp } from '../../config/trust-proxy';
 
 // Duck-typed like `OAuthController`: the API does not depend on `@types/express`.
 type ClaimRequest = {
     ip?: string;
+    socket?: { remoteAddress?: unknown } | null;
     headers: Record<string, string | string[] | undefined>;
     user?: { userId?: string; isAnonymous?: boolean } | null;
 };
@@ -45,7 +47,9 @@ type ClaimResponse = {
  * `@Public`: the global `AuthSessionGuard` resolves the anonymous bearer the web forwards, and
  * that session, not anything in the body, decides which account is saved. The `state` goes
  * through the same C-03 check as `GET /api/oauth/:providerId/callback` before the code is
- * exchanged. `DemoRestrictionsGuard` refuses the route on a demo host (social sign-in).
+ * exchanged. On a demo host the global `DemoRestrictionsGuard` (an `APP_GUARD` that
+ * `DemoModule` registers when `DEMO=true`, so it needs no `@UseGuards` here) refuses the route
+ * through its `DEMO_BLOCKED_ROUTES` row (social sign-in, everyone).
  */
 @ApiTags('Auth')
 @Controller('api/oauth')
@@ -126,10 +130,9 @@ export class OAuthClaimController {
 
         const userAgentHeader = req.headers['user-agent'];
         const userAgent = typeof userAgentHeader === 'string' ? userAgentHeader : null;
-        const xForwardedFor = req.headers['x-forwarded-for'];
-        const ipAddress =
-            (typeof req.ip === 'string' && req.ip) ||
-            (typeof xForwardedFor === 'string' ? xForwardedFor.split(',')[0].trim() : null);
+        // Express's `trust proxy` view of the caller, never the client-written left-most
+        // `X-Forwarded-For` entry: the session, the terms record and the log all keep it.
+        const ipAddress = trustedClientIp(req);
 
         // Logged and swallowed like `register` and the password claim: the claims were checked
         // above, the account is saved, and the write is idempotent.

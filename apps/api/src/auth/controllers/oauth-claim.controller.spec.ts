@@ -195,6 +195,31 @@ describe('OAuthClaimController (POST /api/oauth/:providerId/claim)', () => {
         expect(activityLog.log).not.toHaveBeenCalled();
     });
 
+    it('never records a client-written X-Forwarded-For address (trust proxy decides req.ip)', async () => {
+        const { state, req } = signedIn();
+        const spoofed = {
+            ...req,
+            ip: undefined,
+            socket: { remoteAddress: '10.0.0.7' },
+            headers: { ...req.headers, 'x-forwarded-for': '6.6.6.6' },
+        };
+
+        await controller.claim('github', { code: 'c', state, terms: TERMS }, spoofed, makeRes());
+
+        expect(authProvider.issueSession).toHaveBeenCalledWith('anon-1', {
+            ipAddress: '10.0.0.7',
+            userAgent: 'UA',
+        });
+        expect(terms.record).toHaveBeenCalledWith(
+            'anon-1',
+            TERMS,
+            expect.objectContaining({ ip: '10.0.0.7' }),
+        );
+        expect(activityLog.log).toHaveBeenCalledWith(
+            expect.objectContaining({ ipAddress: '10.0.0.7' }),
+        );
+    });
+
     it('keeps a saved account saved when recording the terms fails', async () => {
         terms.record.mockRejectedValue(new Error('db blip'));
         const { state, req } = signedIn();
