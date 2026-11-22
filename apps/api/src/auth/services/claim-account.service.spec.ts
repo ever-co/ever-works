@@ -111,6 +111,54 @@ describe('ClaimAccountService (EW-617 G3)', () => {
             }),
         );
 
+    // Re-review of #3300 (Minor b): a claim that wrote its derived handle and then lost the
+    // email race left the row named `jane`. The allocator counts that row's own handle as
+    // taken, so a retry used to rename it to `jane-2`; it now keeps the real handle it has.
+    it('keeps the handle an earlier attempt wrote when the claim is retried', async () => {
+        const ctx = buildService();
+        ctx.findByIdResults['u-1'] = anonUser();
+        ctx.failUpdatesWhere((data) => (data.isAnonymous === false ? uniqueViolation() : null));
+
+        await expect(
+            ctx.service.claim({
+                userId: 'u-1',
+                email: 'jane@example.com',
+                password: 'pw',
+            }),
+        ).rejects.toBeInstanceOf(ConflictException);
+        // As the database now sees it: the still-anonymous row holds `jane`.
+        expect(ctx.findByIdResults['u-1']).toMatchObject({ username: 'jane', isAnonymous: true });
+        ctx.takenUsernames['jane'] = ctx.findByIdResults['u-1'];
+        ctx.failUpdatesWhere(() => null);
+        ctx.updates.length = 0;
+
+        const retried = await ctx.service.claim({
+            userId: 'u-1',
+            email: 'jane@example.com',
+            password: 'pw',
+        });
+
+        expect(retried.username).toBe('jane');
+        // No second handle write: only the flip.
+        expect(ctx.updates).toHaveLength(1);
+        expect(ctx.updates[0]).not.toHaveProperty('username');
+    });
+
+    it('keeps a handle the visitor gave the temporary account before saving it', async () => {
+        const ctx = buildService();
+        ctx.findByIdResults['u-1'] = anonUser({ username: 'coffee-maps' });
+        ctx.takenUsernames['coffee-maps'] = ctx.findByIdResults['u-1'];
+
+        const result = await ctx.service.claim({
+            userId: 'u-1',
+            email: 'jane@example.com',
+            password: 'pw',
+        });
+
+        expect(result.username).toBe('coffee-maps');
+        expect(written(ctx)).not.toHaveProperty('username');
+    });
+
     it('flips the anon user to a regular account and fires verification email', async () => {
         const ctx = buildService();
         ctx.findByIdResults['u-1'] = anonUser();

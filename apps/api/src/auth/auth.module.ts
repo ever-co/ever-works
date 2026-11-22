@@ -3,6 +3,8 @@ import { HttpModule } from '@nestjs/axios';
 import { AuthService } from './services/auth.service';
 import { AnonymousAuthService } from './services/anonymous-auth.service';
 import { ClaimAccountService } from './services/claim-account.service';
+import { SocialClaimService } from './services/social-claim.service';
+import { SavedAccountSessionService } from './services/saved-account-session.service';
 import { ApiKeyService } from './services/api-key.service';
 import { IntegrationKeyService } from './services/integration-key.service';
 import { IntegrationForbiddenGuard } from './integration/integration-forbidden.guard';
@@ -11,6 +13,7 @@ import { ZeroFrictionFunnelService } from '@ever-works/agent/services';
 import { AuthController } from './controllers/auth.controller';
 import { ApiKeysController } from './controllers/api-keys.controller';
 import { OAuthController } from './controllers/oauth.controller';
+import { OAuthClaimController } from './controllers/oauth-claim.controller';
 import { AUTH_PROVIDER, AUTH_RUNTIME_INSTANCE } from './providers/auth-provider.constants';
 import { AuthProviderService } from './providers/auth-provider.service';
 import { AuthSyncService } from './providers/auth-sync.service';
@@ -59,6 +62,10 @@ import { UsernameAllocatorService } from '../users/services/username-allocator.s
         AuthService,
         AnonymousAuthService,
         ClaimAccountService,
+        // EW-617: save an anonymous account with GitHub / Google (POST /api/oauth/:p/claim).
+        SocialClaimService,
+        // EW-617: ends every credential of a temporary account when it is saved (both claims).
+        SavedAccountSessionService,
         ApiKeyService,
         // EW-P1-2 — integration keys (create / list / revoke) and the guard that
         // keeps integration keys off session-only controllers.
@@ -123,6 +130,7 @@ import { UsernameAllocatorService } from '../users/services/username-allocator.s
     ],
     controllers: [
         OAuthController,
+        OAuthClaimController,
         AuthController,
         ApiKeysController,
         TermsController,

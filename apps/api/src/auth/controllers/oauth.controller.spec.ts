@@ -182,7 +182,10 @@ describe('OAuthController', () => {
             expect(String(res._headers['set-cookie'])).toContain('Max-Age=0');
         });
 
-        it('falls back to x-forwarded-for when req.ip is missing', async () => {
+        // The left-most X-Forwarded-For entry is whatever the client wrote. Express's
+        // `trust proxy` already folds the trusted hops into `req.ip`; without it the
+        // socket address is the caller, never the header (see `trustedClientIp`).
+        it('never binds or logs a client-written x-forwarded-for when req.ip is missing', async () => {
             socialAuth.authenticate.mockResolvedValue({ id: 'u2' } as any);
             socialAuth.getProviderDisplayName.mockReturnValue('Google');
             authProvider.issueSession.mockResolvedValue({ access_token: 't' } as any);
@@ -190,13 +193,18 @@ describe('OAuthController', () => {
                 ip: undefined as any,
                 headers: { 'user-agent': 'UA', 'x-forwarded-for': '198.51.100.7' },
             });
+            req.socket = { remoteAddress: '10.0.0.9' };
             const res = makeRes();
 
             await controller.authRedirect('google', 'code', state, req, res);
 
+            expect(authProvider.issueSession).toHaveBeenCalledWith('u2', {
+                ipAddress: '10.0.0.9',
+                userAgent: 'UA',
+            });
             expect(activityLog.log).toHaveBeenCalledWith(
                 expect.objectContaining({
-                    ipAddress: '198.51.100.7',
+                    ipAddress: '10.0.0.9',
                     userAgent: 'UA',
                     action: 'user.login.google',
                 }),
