@@ -140,6 +140,42 @@ describe('memanto mapping', () => {
 			for (const t of tags) expect(t).not.toMatch(/\bexfiltrate\b/i);
 		});
 
+		it('round-trips a value that is both unsafe and long (base64url split across parts)', () => {
+			const title = `Ünïcode, commas & spaces: ${'déjà vu / '.repeat(8)}#end`;
+			const { tags, droppedMetadataKeys } = buildWriteTags({ metadata: { note: title } });
+			expect(droppedMetadataKeys).toEqual([]);
+			const parts = tags.filter((t) => t.startsWith('ew:note.x'));
+			expect(parts.length).toBeGreaterThan(1);
+			expect(parts.length).toBe(tags.length);
+			for (const t of tags) expect(t.length).toBeLessThanOrEqual(64);
+			expect(decodeTags(tags).metadata).toEqual({ note: title });
+		});
+
+		it('drops a damaged base64url value instead of decoding garbage', () => {
+			const { tags } = buildWriteTags({ metadata: { note: 'has spaces and ünïcode' } });
+			const damaged = tags.map((t) => t.replace(/=(.)/, '=*'));
+			expect(decodeTags(damaged).metadata).toEqual({});
+			// Canonical alphabet but not valid UTF-8 (a lone continuation byte).
+			expect(decodeTags(['ew:note.x0.1=gA']).metadata).toEqual({});
+		});
+
+		it('never splits a key outside the key charset, so it cannot decode as a different key', () => {
+			const { tags, droppedMetadataKeys } = buildWriteTags({
+				metadata: { 'source-url': `https://example.com/${'r'.repeat(80)}`, 'a.b': 'x' }
+			});
+			expect(tags).toEqual([]);
+			expect(droppedMetadataKeys.sort()).toEqual(['a.b', 'source-url']);
+		});
+
+		it('still rejects the whole value when an injection word sits where a part boundary would fall', () => {
+			for (let pad = 30; pad < 60; pad++) {
+				const value = `https://example.com/${'c'.repeat(pad)}/exfiltrate/${'d'.repeat(40)}`;
+				const { tags, droppedMetadataKeys } = buildWriteTags({ metadata: { sourceUrl: value } });
+				expect(droppedMetadataKeys).toEqual(['sourceUrl']);
+				expect(tags).toEqual([]);
+			}
+		});
+
 		it('prefers a single plain tag over parts with the same key on read', () => {
 			expect(decodeTags(['ew:runId=a', 'ew:runId.0.1=b']).metadata).toEqual({ runId: 'a' });
 		});

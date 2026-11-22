@@ -47,7 +47,10 @@ const AGENT_ID_UNSAFE = /[^A-Za-z0-9_-]+/g;
 const INJECTION_WORD = /\bexfiltrate\b/i;
 /** Metadata values we are willing to encode: no whitespace, commas or control chars. */
 const META_VALUE_SAFE = /^[A-Za-z0-9_.:@/+-]+$/;
-const META_KEY_SAFE = /^[A-Za-z0-9_]+$/;
+/** Key charset. No `.` or `-`, so `<key>.<i>.<n>` can never be mistaken for a plain key. */
+const META_KEY_CHARS = 'A-Za-z0-9_';
+const META_KEY_SAFE = new RegExp(`^[${META_KEY_CHARS}]+$`);
+const BASE64URL = /^[A-Za-z0-9_-]+$/;
 
 export const META_TAG_PREFIX = 'ew:';
 export const SESSION_TAG_PREFIX = 'ew.session.';
@@ -69,7 +72,23 @@ const PROVENANCE_META_KEYS = ['sourceUrl', 'sourceEventId', 'ingestedEventId'];
  * half the 20-tag budget. One digit keeps the part header a fixed width.
  */
 const MAX_META_PARTS = 6;
-const META_PART_NAME = /^([A-Za-z0-9_]+)\.(x?)(\d)\.(\d)$/;
+const META_PART_NAME = new RegExp(`^([${META_KEY_CHARS}]+)\\.(x?)(\\d)\\.(\\d)$`);
+
+/**
+ * Strict base64url → UTF-8: `null` unless the text is canonical base64url
+ * (it re-encodes to itself) of valid UTF-8. `Buffer.from` alone skips bad
+ * characters silently, which would turn a damaged part into garbage metadata.
+ */
+function decodeBase64urlStrict(text: string): string | null {
+	if (!BASE64URL.test(text)) return null;
+	const bytes = Buffer.from(text, 'base64url');
+	if (bytes.toString('base64url') !== text) return null;
+	try {
+		return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+	} catch {
+		return null;
+	}
+}
 
 /** Reserved metadata keys that map onto first-class Memanto fields instead of tags. */
 const FIELD_META_KEYS = new Set(['memoryType', 'title', 'confidence']);
@@ -132,6 +151,7 @@ function metaValueString(value: unknown): string | null {
 function encodeMetaTags(key: string, value: unknown): string[] | null {
 	if (!META_KEY_SAFE.test(key)) return null;
 	const v = metaValueString(value);
+	// The WHOLE value is checked first; the per-part check below is extra, never a replacement.
 	if (!v || INJECTION_WORD.test(v)) return null;
 	const plain = META_VALUE_SAFE.test(v);
 	if (plain) {
@@ -248,7 +268,8 @@ export function decodeTags(raw: readonly string[] | undefined): {
 		}
 		if (pieces.length !== count) continue;
 		const joined = pieces.join('');
-		metadata[key] = encoded ? Buffer.from(joined, 'base64url').toString('utf8') : joined;
+		const value = encoded ? decodeBase64urlStrict(joined) : joined;
+		if (value) metadata[key] = value;
 	}
 	return { tags, metadata, sessionId, projectTagValue };
 }
