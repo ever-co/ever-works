@@ -169,4 +169,34 @@ describe('the save intent is sealed and names its account', () => {
 
         expect(await cookies.readOAuthSaveAccountCookie()).toEqual({ status: 'invalid' });
     });
+
+    it('reads a seal this server made for another purpose as invalid', async () => {
+        const cookies = await load('https://app.ever.works');
+        jar.values.set('__Host-oauth_save_account', {
+            value: await sealData(
+                JSON.stringify({
+                    v: 1,
+                    purpose: 'ever-connect-provision',
+                    exp: Math.floor(Date.now() / 1000) + 600,
+                    ...INTENT,
+                }),
+                { password: SECRET, ttl: 0 },
+            ),
+        });
+
+        expect(await cookies.readOAuthSaveAccountCookie()).toEqual({ status: 'invalid' });
+    });
+
+    it('reads an expired seal as invalid, even if the browser kept the cookie', async () => {
+        const cookies = await load('https://app.ever.works');
+        const now = Date.now();
+        await cookies.setOAuthSaveAccountCookie(INTENT);
+
+        const spy = vi.spyOn(Date, 'now').mockReturnValue(now + 11 * 60 * 1000);
+        try {
+            expect(await cookies.readOAuthSaveAccountCookie()).toEqual({ status: 'invalid' });
+        } finally {
+            spy.mockRestore();
+        }
+    });
 });

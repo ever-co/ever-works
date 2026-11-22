@@ -138,19 +138,35 @@ export interface OAuthSaveAccountIntent {
     userId: string;
 }
 
+/** How long a save intent lives: the same 10 minutes as the state. */
+const OAUTH_SAVE_ACCOUNT_TTL_SECONDS = 60 * 10;
+/**
+ * Bound into the seal, as `ever-connect-provision-cookie.ts` does: a value this server sealed for
+ * another purpose (the same key seals the session cookie) never reads as a save intent, and a
+ * seal past `exp` is refused even if the browser kept the cookie.
+ */
+const OAUTH_SAVE_ACCOUNT_PURPOSE = 'oauth-save-account';
+
 export async function setOAuthSaveAccountCookie(intent: OAuthSaveAccountIntent) {
     const cookieStore = await cookies();
-    cookieStore.set(oauthSaveAccountCookieName(), await encrypt(JSON.stringify(intent)), {
+    const sealed = {
+        v: 1,
+        purpose: OAUTH_SAVE_ACCOUNT_PURPOSE,
+        exp: Math.floor(Date.now() / 1000) + OAUTH_SAVE_ACCOUNT_TTL_SECONDS,
+        ...intent,
+    };
+    cookieStore.set(oauthSaveAccountCookieName(), await encrypt(JSON.stringify(sealed)), {
         ...cookieOptions,
-        maxAge: 60 * 10, // the same 10 minutes as the state
+        maxAge: OAUTH_SAVE_ACCOUNT_TTL_SECONDS,
     });
 }
 
 /**
  * The save intent of this round trip:
  * - `none`: no save was started (a normal sign-in);
- * - `invalid`: a cookie is there but this server did not seal it, or it is not in the shape it
- *   writes (forged, tossed from a sibling subdomain, or tampered). Never act on it;
+ * - `invalid`: a cookie is there but this server did not seal it, sealed it for another purpose,
+ *   it expired, or it is not in the shape it writes (forged, tossed from a sibling subdomain, or
+ *   tampered). Never act on it;
  * - `valid`: the sealed intent.
  */
 export type OAuthSaveAccountCookie =
@@ -169,8 +185,12 @@ export async function readOAuthSaveAccountCookie(): Promise<OAuthSaveAccountCook
         if (!parsed || typeof parsed !== 'object') {
             return { status: 'invalid' };
         }
-        const { state, terms, userId } = parsed as Record<string, unknown>;
+        const { v, purpose, exp, state, terms, userId } = parsed as Record<string, unknown>;
         if (
+            v !== 1 ||
+            purpose !== OAUTH_SAVE_ACCOUNT_PURPOSE ||
+            typeof exp !== 'number' ||
+            exp <= Math.floor(Date.now() / 1000) ||
             typeof state !== 'string' ||
             !state ||
             !Array.isArray(terms) ||

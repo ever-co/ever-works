@@ -221,6 +221,9 @@ export async function startSavingWithProvider(
     }
 
     // The account this save is for: the one signed in now.
+    // Any failure reads as "no session". That also swallows the demo-expiry redirect
+    // getAuthFromCookie() can throw (NEXT_REDIRECT): harmless here, since a demo sandbox never
+    // reaches this action (the page refuses it and the API blocks the route on a demo host).
     const signedIn = await getAuthFromCookie().catch(() => null);
     if (!signedIn?.id) {
         return { success: false, error: tSave('sessionEnded'), reason: 'session_ended' };

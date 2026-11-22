@@ -18,7 +18,38 @@ import {
     ServiceUnavailableException,
 } from '@nestjs/common';
 import { OAuthClaimController } from './oauth-claim.controller';
+import { createHash } from 'node:crypto';
 import { OAuthStateService } from '../services/oauth-state.service';
+import { SavedAccountSessionService } from '../services/saved-account-session.service';
+
+/**
+ * The session table as rows, so "the other session is gone" is the same lookup the session
+ * guard makes (a bearer with no row is a 401), and the real `SavedAccountSessionService` runs.
+ */
+function sessionTable() {
+    const rows: Array<{ id: string; userId: string; tokenHash: string | null }> = [];
+    const hash = (token: string) => createHash('sha256').update(token, 'utf8').digest('hex');
+    const repo = {
+        find: jest.fn(async ({ where }: { where: { userId: string } }) =>
+            rows.filter((row) => row.userId === where.userId),
+        ),
+        delete: jest.fn(async (ids: string[]) => {
+            for (const id of ids) {
+                const index = rows.findIndex((row) => row.id === id);
+                if (index >= 0) rows.splice(index, 1);
+            }
+        }),
+        update: jest.fn(async () => ({ affected: 0 })),
+    };
+    return {
+        repo,
+        dataSource: { getRepository: () => repo },
+        add: (userId: string, token: string) =>
+            rows.push({ id: `s${rows.length + 1}`, userId, tokenHash: hash(token) }),
+        /** Whether this bearer still has a session row (else the guard answers 401). */
+        authenticates: (token: string) => rows.some((row) => row.tokenHash === hash(token)),
+    };
+}
 
 describe('OAuthClaimController (POST /api/oauth/:providerId/claim)', () => {
     const TERMS = [
@@ -38,7 +69,8 @@ describe('OAuthClaimController (POST /api/oauth/:providerId/claim)', () => {
     let socialClaim: { claim: jest.Mock };
     let terms: { assertClaimsArePublished: jest.Mock; record: jest.Mock };
     let activityLog: { log: jest.Mock };
-    let authProvider: { issueSession: jest.Mock; signOut: jest.Mock };
+    let authProvider: { issueSession: jest.Mock };
+    let sessions: ReturnType<typeof sessionTable>;
     let controller: OAuthClaimController;
 
     const socialUser = { provider: 'github', providerUserId: '4242', email: 'v@example.com' };
@@ -63,9 +95,12 @@ describe('OAuthClaimController (POST /api/oauth/:providerId/claim)', () => {
             record: jest.fn().mockResolvedValue([]),
         };
         activityLog = { log: jest.fn().mockResolvedValue(undefined) };
+        sessions = sessionTable();
         authProvider = {
-            issueSession: jest.fn().mockResolvedValue({ access_token: 'fresh' }),
-            signOut: jest.fn().mockResolvedValue(undefined),
+            issueSession: jest.fn(async (userId: string) => {
+                sessions.add(userId, 'fresh');
+                return { access_token: 'fresh' };
+            }),
         };
         controller = new OAuthClaimController(
             socialAuth as never,
@@ -73,7 +108,7 @@ describe('OAuthClaimController (POST /api/oauth/:providerId/claim)', () => {
             oauthState,
             terms as never,
             activityLog as never,
-            authProvider as never,
+            new SavedAccountSessionService(authProvider as never, sessions.dataSource as never),
         );
     });
 
@@ -140,12 +175,9 @@ describe('OAuthClaimController (POST /api/oauth/:providerId/claim)', () => {
             ipAddress: '203.0.113.5',
             userAgent: 'UA',
         });
-        // Rotation: the fresh session first, then the anonymous bearer the web forwarded is revoked.
-        expect(authProvider.signOut).toHaveBeenCalledTimes(1);
-        const revoked = authProvider.signOut.mock.calls[0][0] as Headers;
-        expect(revoked.get('authorization')).toBe('Bearer anon-token');
+        // Rotation: the fresh session first, then every other session of the account ends.
         expect(authProvider.issueSession.mock.invocationCallOrder[0]).toBeLessThan(
-            authProvider.signOut.mock.invocationCallOrder[0],
+            sessions.repo.find.mock.invocationCallOrder[0],
         );
         expect(result).toEqual({
             access_token: 'fresh',
@@ -319,7 +351,7 @@ describe('OAuthClaimController (POST /api/oauth/:providerId/claim)', () => {
             ),
         ).rejects.toBeInstanceOf(ConflictException);
         expect(authProvider.issueSession).not.toHaveBeenCalled();
-        expect(authProvider.signOut).not.toHaveBeenCalled();
+        expect(sessions.repo.delete).not.toHaveBeenCalled();
         expect(activityLog.log).not.toHaveBeenCalled();
     });
 
@@ -366,11 +398,37 @@ describe('OAuthClaimController (POST /api/oauth/:providerId/claim)', () => {
 
         expect(result).not.toHaveProperty('access_token');
         expect(result.user).toMatchObject({ id: 'anon-1' });
-        expect(authProvider.signOut).not.toHaveBeenCalled();
+        expect(sessions.repo.delete).not.toHaveBeenCalled();
     });
 
-    it('still answers the fresh token when revoking the anonymous one fails', async () => {
-        authProvider.signOut.mockRejectedValue(new Error('revoke failed'));
+    it('ends every other session of the saved account: a second one gets 401 afterwards', async () => {
+        // The anonymous bearer that asked, and a SECOND session of the same temporary account
+        // (e.g. an attacker's, if the session cookie was planted from a sibling subdomain).
+        sessions.add('anon-1', 'anon-token');
+        sessions.add('anon-1', 'second-token');
+        sessions.add('someone-else', 'other-user-token');
+        const { state, req } = signedIn();
+
+        const result = await controller.claim(
+            'github',
+            { code: 'c', expectedUserId: 'anon-1', state, terms: TERMS },
+            req,
+            makeRes(),
+        );
+
+        expect(result).toMatchObject({ access_token: 'fresh' });
+        expect(sessions.authenticates('fresh')).toBe(true);
+        expect(sessions.authenticates('anon-token')).toBe(false);
+        expect(sessions.authenticates('second-token')).toBe(false);
+        expect(sessions.authenticates('other-user-token')).toBe(true);
+        expect(sessions.repo.update).toHaveBeenCalledWith(
+            expect.objectContaining({ userId: 'anon-1', isActive: true }),
+            { isActive: false },
+        );
+    });
+
+    it('still answers the fresh token when ending the other sessions fails', async () => {
+        sessions.repo.delete.mockRejectedValue(new Error('revoke failed'));
         const { state, req } = signedIn();
 
         await expect(

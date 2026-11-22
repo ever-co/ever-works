@@ -90,9 +90,14 @@ emailVerificationCallbackUrl? }` (validated by `ClaimAccountDto`
   warning (its Works stay behind), and signing out of one asks to save
   it first.
 - **FR-G3-10** The claim MUST rotate the session: issue a fresh session
-  for the same user (answered as `access_token`), then revoke the
-  anonymous bearer, which would otherwise end with the anonymous TTL.
-  Failure to issue keeps the anonymous session; the claim still succeeds.
+  for the same user (answered as `access_token`), then end EVERY other
+  credential the temporary account had: every other session row (not only
+  the bearer that asked) and its personal and integration API keys. Fleet
+  run tokens stay (minted per lease for a running Work). The web session
+  cookie can be planted from a sibling subdomain, so a victim may save an
+  attacker's temporary account; the attacker must keep no way in. Both
+  claims share `SavedAccountSessionService`. Failure to issue keeps the
+  anonymous session and ends nothing; the claim still succeeds.
 - **FR-G3-11** The saved account MUST get a real username: the one typed
   (normalized; a taken one answers 409 `{ code: 'username_taken',
 suggestion }` before any write) or one derived from the email's local

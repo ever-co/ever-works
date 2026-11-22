@@ -2,6 +2,7 @@ import {
     BadRequestException,
     ConflictException,
     ForbiddenException,
+    HttpException,
     Injectable,
     Logger,
     NotFoundException,
@@ -150,55 +151,60 @@ export class SocialClaimService {
         // 2. The link and the flip, in one transaction (see the class comment).
         // Only a provider that vouches for the address verifies it, as on social sign-up.
         const emailVerified = socialUser.emailVerified !== false;
-        const updated = await this.dataSource.transaction(async (manager) => {
-            const accounts = this.authAccountRepository.withManager(manager);
-            const users = this.userRepository.withManager(manager);
-            // `upsertProviderAccount` refuses an identity another user holds; a race past that
-            // check reaches the unique index, which is the same refusal.
-            try {
-                await accounts.upsertProviderAccount({
-                    userId: user.id,
-                    providerId: socialUser.provider,
-                    accountId,
-                    username: socialUser.username || undefined,
-                    email,
-                    accessToken: socialUser.accessToken,
-                    refreshToken: socialUser.refreshToken || null,
-                    tokenType: socialUser.tokenType || 'Bearer',
-                    accessTokenExpiresAt: socialUser.expiresAt || null,
-                    scope: socialUser.scope || null,
-                    metadata: {
-                        providerUserId: socialUser.providerUserId,
-                        ...(socialUser.metadata || {}),
-                    },
-                });
-            } catch (error) {
-                if (!isUniqueConstraintError(error)) throw error;
-                throw this.identityTaken();
-            }
+        let updated: Awaited<ReturnType<UserRepository['update']>>;
+        try {
+            updated = await this.dataSource.transaction(async (manager) => {
+                const accounts = this.authAccountRepository.withManager(manager);
+                const users = this.userRepository.withManager(manager);
+                // `upsertProviderAccount` refuses an identity another user holds; a race past that
+                // check reaches the unique index, which is the same refusal.
+                try {
+                    await accounts.upsertProviderAccount({
+                        userId: user.id,
+                        providerId: socialUser.provider,
+                        accountId,
+                        username: socialUser.username || undefined,
+                        email,
+                        accessToken: socialUser.accessToken,
+                        refreshToken: socialUser.refreshToken || null,
+                        tokenType: socialUser.tokenType || 'Bearer',
+                        accessTokenExpiresAt: socialUser.expiresAt || null,
+                        scope: socialUser.scope || null,
+                        metadata: {
+                            providerUserId: socialUser.providerUserId,
+                            ...(socialUser.metadata || {}),
+                        },
+                    });
+                } catch (error) {
+                    if (!isUniqueConstraintError(error)) throw error;
+                    throw this.identityTaken();
+                }
 
-            // One update, so code racing on `isAnonymous` sees a consistent shape. A save
-            // racing this one for the same email loses on the unique index: the same 409.
-            let row: Awaited<ReturnType<UserRepository['update']>> | null;
-            try {
-                row = await users.update(user.id, {
-                    email,
-                    avatar: socialUser.avatar || user.avatar,
-                    isAnonymous: false,
-                    anonymousExpiresAt: null,
-                    registrationProvider: socialUser.provider,
-                    emailVerified,
-                    lastLoginAt: new Date(),
-                });
-            } catch (error) {
-                if (!isUniqueConstraintError(error)) throw error;
-                throw this.emailTaken();
-            }
-            if (!row) {
-                throw new BadRequestException('Failed to update user');
-            }
-            return row;
-        });
+                // One update, so code racing on `isAnonymous` sees a consistent shape. A save
+                // racing this one for the same email loses on the unique index: the same 409.
+                let row: Awaited<ReturnType<UserRepository['update']>> | null;
+                try {
+                    row = await users.update(user.id, {
+                        email,
+                        avatar: socialUser.avatar || user.avatar,
+                        isAnonymous: false,
+                        anonymousExpiresAt: null,
+                        registrationProvider: socialUser.provider,
+                        emailVerified,
+                        lastLoginAt: new Date(),
+                    });
+                } catch (error) {
+                    if (!isUniqueConstraintError(error)) throw error;
+                    throw this.emailTaken();
+                }
+                if (!row) {
+                    throw new BadRequestException('Failed to update user');
+                }
+                return row;
+            });
+        } catch (error) {
+            throw await this.afterRollback(error, socialUser.provider, accountId, user.id);
+        }
 
         if (emailVerified) {
             // The same welcome a verified social sign-up gets.
@@ -260,6 +266,37 @@ export class SocialClaimService {
             message: 'Username is already taken',
             code: USERNAME_TAKEN_CODE,
         });
+    }
+
+    /**
+     * What a failed link-and-flip transaction means, decided after it rolled back.
+     *
+     * Our own refusals (the 409s and the 400 above) pass through. A database error is asked about
+     * again here because on Postgres it may not be the real one: a racing save that inserted the
+     * same `(providerId, accountId)` first makes this INSERT fail with 23505, which aborts the
+     * whole transaction, so `upsertProviderAccount`'s own follow-up lookup (the one that names the
+     * conflict) fails with 25P02 "current transaction is aborted" instead, and TypeORM opens no
+     * savepoint inside a transaction. Outside it, the racer's committed link is visible: if
+     * another user now holds the identity, the answer is the identity 409, never a 500. Anything
+     * else is rethrown as it was. SQLite never aborts the transaction, so it answers the 409
+     * inside it already.
+     */
+    private async afterRollback(
+        error: unknown,
+        providerId: string,
+        accountId: string,
+        userId: string,
+    ): Promise<unknown> {
+        if (error instanceof HttpException) {
+            return error;
+        }
+        const holder = await this.authAccountRepository
+            .findProviderAccountByAccountId(providerId, accountId)
+            .catch(() => null);
+        if (holder && holder.userId !== userId) {
+            return this.identityTaken();
+        }
+        return error;
     }
 
     private identityTaken(): ConflictException {

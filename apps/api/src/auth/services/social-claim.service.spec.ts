@@ -414,6 +414,51 @@ describe('SocialClaimService (EW-617: save an anonymous account with GitHub / Go
             ).toBe(false);
         });
 
+        /** A driver error as TypeORM raises it (`code` copied from the driver error). */
+        const pgError = (code: string, message: string) =>
+            new QueryFailedError(
+                'INSERT INTO "account" ...',
+                [],
+                Object.assign(new Error(message), { code }),
+            );
+
+        it('Postgres: an aborted transaction (23505, then 25P02 on the lookup) is the identity 409', async () => {
+            const ctx = build();
+            // What `upsertProviderAccount` does on Postgres inside the transaction: its INSERT hits
+            // the racer's committed row (23505), which aborts the transaction, so its own follow-up
+            // lookup that would name the conflict fails with 25P02 instead.
+            ctx.authAccountRepository.upsertProviderAccount.mockImplementation(async () => {
+                try {
+                    throw pgError('23505', 'duplicate key value violates unique constraint');
+                } catch {
+                    throw pgError(
+                        '25P02',
+                        'current transaction is aborted, commands ignored until end of transaction block',
+                    );
+                }
+            });
+            // Nobody held the identity at the check; after the rollback the racer's link is there.
+            ctx.authAccountRepository.findProviderAccountByAccountId
+                .mockResolvedValueOnce(null)
+                .mockResolvedValueOnce({ userId: 'racer' });
+
+            const error = await ctx.service.claim('anon-1', githubUser()).catch((e) => e);
+
+            expect(error).toBeInstanceOf(ConflictException);
+            expect((error as ConflictException).getResponse()).toMatchObject({
+                code: SOCIAL_CLAIM_IDENTITY_TAKEN_CODE,
+            });
+            expect(ctx.writesInTransaction).toEqual([]);
+        });
+
+        it('rethrows a database failure that no other account explains', async () => {
+            const ctx = build();
+            const failure = pgError('25P02', 'current transaction is aborted');
+            ctx.authAccountRepository.upsertProviderAccount.mockRejectedValue(failure);
+
+            await expect(ctx.service.claim('anon-1', githubUser())).rejects.toBe(failure);
+        });
+
         it('a lost race for the handle allocates once more, a second loss is username_taken', async () => {
             const once = build();
             once.userRepository.update

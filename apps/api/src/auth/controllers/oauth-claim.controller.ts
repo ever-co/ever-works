@@ -5,7 +5,6 @@ import {
     ForbiddenException,
     HttpCode,
     HttpStatus,
-    Inject,
     Logger,
     Param,
     Post,
@@ -25,9 +24,7 @@ import { OAuthStateService } from '../services/oauth-state.service';
 import { SocialAuthService } from '../services/social-auth.service';
 import { SocialClaimService } from '../services/social-claim.service';
 import { TermsAcceptanceService } from '../../terms/terms-acceptance.service';
-import { AUTH_PROVIDER } from '../providers/auth-provider.constants';
-import { AuthProvider } from '../providers/auth-provider.abstract';
-import { toHeaders } from '../providers/request-headers';
+import { SavedAccountSessionService } from '../services/saved-account-session.service';
 import { trustedClientIp } from '../../config/trust-proxy';
 
 /** The providers a temporary account can be saved with (the web offers the same two). */
@@ -73,8 +70,7 @@ export class OAuthClaimController {
         private readonly oauthState: OAuthStateService,
         private readonly termsAcceptanceService: TermsAcceptanceService,
         private readonly activityLogService: ActivityLogService,
-        @Inject(AUTH_PROVIDER)
-        private readonly authProvider: AuthProvider,
+        private readonly savedAccountSession: SavedAccountSessionService,
     ) {}
 
     @Post(':providerId/claim')
@@ -181,32 +177,14 @@ export class OAuthClaimController {
             emailVerificationCallbackUrl: body.emailVerificationCallbackUrl,
         });
 
-        // Rotate the session, as the password claim does: a regular session for the same user
-        // FIRST, then revoke the anonymous bearer (it would otherwise live on until the
-        // anonymous TTL), so a failure in either step never leaves the caller with no valid
-        // session. Both are best effort: the save is committed and still answers 200.
-        let accessToken: string | undefined;
-        try {
-            accessToken = (await this.authProvider.issueSession(saved.id, { ipAddress, userAgent }))
-                .access_token;
-        } catch (error) {
-            this.logger.warn(
-                `User ${saved.id} saved with ${providerId}: could not issue a fresh session, keeping the anonymous one: ${
-                    error instanceof Error ? error.message : String(error)
-                }`,
-            );
-        }
-        if (accessToken) {
-            try {
-                await this.authProvider.signOut(toHeaders(req.headers || {}));
-            } catch (error) {
-                this.logger.warn(
-                    `User ${saved.id} saved with ${providerId}: could not revoke the anonymous session: ${
-                        error instanceof Error ? error.message : String(error)
-                    }`,
-                );
-            }
-        }
+        // Rotate the session as the password claim does: a fresh session first, then every other
+        // session row and the account's personal / integration API keys are ended
+        // (`SavedAccountSessionService`). Best effort: the save is committed and answers 200.
+        const accessToken = await this.savedAccountSession.rotate(
+            saved.id,
+            { ipAddress, userAgent },
+            `with ${providerId}`,
+        );
 
         this.activityLogService
             .log({

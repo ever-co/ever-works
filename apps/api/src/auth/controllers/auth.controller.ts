@@ -28,6 +28,7 @@ import {
 import { AuthService } from '../services/auth.service';
 import { AnonymousAuthService } from '../services/anonymous-auth.service';
 import { ClaimAccountService } from '../services/claim-account.service';
+import { SavedAccountSessionService } from '../services/saved-account-session.service';
 import { CaptchaVerifierService } from '../services/captcha-verifier.service';
 import { ZeroFrictionFunnelService } from '@ever-works/agent/services';
 import { ZERO_FRICTION_FUNNEL_EVENTS } from '@ever-works/contracts/telemetry';
@@ -74,6 +75,7 @@ export class AuthController {
         private readonly termsAcceptanceService: TermsAcceptanceService,
         @Inject(AUTH_PROVIDER)
         private readonly authProvider: AuthProvider,
+        private readonly savedAccountSession: SavedAccountSessionService,
     ) {}
 
     /**
@@ -420,40 +422,15 @@ export class AuthController {
             });
         }
 
-        // Rotate the session. The anonymous one expires with the anonymous TTL (up
-        // to 3 days from the first visit), so a just-saved account would be signed
-        // out then and, with REQUIRE_EMAIL_VERIFICATION on (the default), could not
-        // sign back in before confirming the address. Issue a regular session for
-        // the same user FIRST, then revoke the anonymous bearer, so a failure in
-        // either step never leaves the caller with no valid session. Both are best
-        // effort: the claim is already committed and must still answer 200.
-        // The accepted trade-off: if the revoke fails, the anonymous bearer stays
-        // valid until its own expiry (at most the anonymous TTL) next to the new
-        // session. Both belong to the same, now regular, user and grant nothing the
-        // new one does not, so availability wins over closing that window.
-        let accessToken: string | undefined;
-        try {
-            accessToken = (
-                await this.authProvider.issueSession(claimed.id, { ipAddress, userAgent })
-            ).access_token;
-        } catch (error) {
-            this.logger.warn(
-                `Claimed user ${claimed.id}: could not issue a fresh session, keeping the anonymous one: ${
-                    error instanceof Error ? error.message : String(error)
-                }`,
-            );
-        }
-        if (accessToken) {
-            try {
-                await this.authProvider.signOut(toHeaders(req.headers || {}));
-            } catch (error) {
-                this.logger.warn(
-                    `Claimed user ${claimed.id}: could not revoke the anonymous session: ${
-                        error instanceof Error ? error.message : String(error)
-                    }`,
-                );
-            }
-        }
+        // Rotate the session, and end every other credential the temporary account had: a fresh
+        // session first, then every other session row and its personal / integration API keys
+        // (`SavedAccountSessionService`). Best effort: the claim is committed and answers 200; if
+        // no session can be issued, nothing is ended and the caller keeps the anonymous one.
+        const accessToken = await this.savedAccountSession.rotate(
+            claimed.id,
+            { ipAddress, userAgent },
+            'with a password',
+        );
 
         return accessToken ? { ...claimed, access_token: accessToken } : claimed;
     }
