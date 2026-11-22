@@ -1,0 +1,79 @@
+# Deploys apps/directory-hub (the MCP hub across all Ever Works directories) to Cloudflare Workers at
+# https://directories.ever.works. Manual dispatch only for now (spec docs/specs/features/directory-hub, task T-15).
+#
+# Runs in the `directory-hub` environment. Keep the two secrets there, not at repository level:
+# - DIRECTORY_HUB_CLOUDFLARE_TOKEN: Workers Scripts write on the account, Workers Routes write on the ever.works zone;
+# - CLOUDFLARE_ACCOUNT_ID.
+# Restrict the environment's deployment branches to `main` (Settings > Environments). The `if:` below repeats that, but
+# only the environment rule binds a branch that edits this file. Live deploys follow the board rule (workspace
+# MAINTENANCE.md). Rollback: re-run this workflow on the previous commit, or `wrangler rollback`.
+name: Deploy directory hub
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-directory-hub
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: github.ref == 'refs/heads/main'
+    environment: directory-hub
+    # GitHub-hosted on purpose: the Cloudflare token never reaches a self-hosted runner.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: apps/directory-hub
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v3
+        with:
+          version: 10.33.3
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+          cache: pnpm
+
+      - name: Install the hub's dev dependencies
+        working-directory: .
+        run: pnpm install --frozen-lockfile --filter ever-works-directory-hub
+
+      - name: Test, type-check and lint
+        run: |
+          pnpm test
+          pnpm type-check
+          pnpm lint
+
+      - name: Check the deploy secrets
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.DIRECTORY_HUB_CLOUDFLARE_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            echo "::error::Set the DIRECTORY_HUB_CLOUDFLARE_TOKEN and CLOUDFLARE_ACCOUNT_ID repository secrets first."
+            exit 1
+          fi
+
+      - name: Deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.DIRECTORY_HUB_CLOUDFLARE_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          WRANGLER_SEND_METRICS: 'false'
+        run: npx --yes wrangler@4.166.0 deploy
+
+      - name: Smoke test
+        run: |
+          set -e
+          curl -fsS --max-time 20 https://directories.ever.works/.well-known/mcp.json > /dev/null
+          curl -fsS --max-time 30 -X POST https://directories.ever.works/mcp \
+            -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
+            -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | grep -q '"search_all"'
+          echo "directories.ever.works answers"
