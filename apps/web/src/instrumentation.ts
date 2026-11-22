@@ -27,6 +27,16 @@ export async function register() {
         );
     }
 
+    // R-16: say in the pod log how long the legacy plain-name session cookie still works, and
+    // flag a misconfigured switch or end date (an unknown value silently keeps it on).
+    const { describeLegacyAuthCookieFallback, legacyAuthCookieFallback } =
+        await import('./lib/auth/cookie-policy');
+    const legacyFallback = legacyAuthCookieFallback();
+    console.info(describeLegacyAuthCookieFallback(legacyFallback));
+    for (const warning of legacyFallback.warnings) {
+        console.warn(`[auth-cookie] ${warning}`);
+    }
+
     // ALLOWED_REDIRECT_URLS: in production this env var has no safe default.
     // `lib/constants.ts` falls back to `localhost,127.0.0.1` when it is unset,
     // which means `addSessionTokenToUrl` silently refuses to attach session

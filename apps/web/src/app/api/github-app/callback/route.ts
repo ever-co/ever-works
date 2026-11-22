@@ -1,5 +1,5 @@
 import { setAuthCookies } from '@/lib/auth';
-import { GITHUB_APP_SETUP_COOKIE_NAME, githubAppSetupCookieOptions } from '@/lib/auth/cookies';
+import { githubAppSetupCookieName, githubAppSetupCookieOptions } from '@/lib/auth/cookies';
 import { API_URL, ROUTES } from '@/lib/constants';
 import { publicOriginFor } from '@/lib/public-origin';
 import { NextRequest, NextResponse } from 'next/server';
@@ -24,7 +24,7 @@ export async function GET(request: NextRequest) {
     const publicOrigin = publicOriginFor(request);
     // Item 13: the binding cookie is single-use — cleared on every outcome.
     const clearBinding = (res: NextResponse): NextResponse => {
-        res.cookies.set(GITHUB_APP_SETUP_COOKIE_NAME, '', {
+        res.cookies.set(githubAppSetupCookieName(), '', {
             ...githubAppSetupCookieOptions(60),
             maxAge: 0,
         });
@@ -37,7 +37,7 @@ export async function GET(request: NextRequest) {
             ),
         );
 
-    const binding = request.cookies.get(GITHUB_APP_SETUP_COOKIE_NAME)?.value;
+    const binding = request.cookies.get(githubAppSetupCookieName())?.value;
     const response = await fetch(callbackUrl.toString(), {
         method: 'GET',
         headers: {

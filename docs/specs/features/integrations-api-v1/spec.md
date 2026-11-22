@@ -748,8 +748,8 @@ the app (§6.6). It is **idempotent per email** and answers
 [`member-invite-result`](./contract/schemas/resources/member-invite-result.schema.json) `{status, invitation, userId}`:
 `201 invited` (a new invitation, emailed), `200 pending` (one still pending is answered again; nothing is sent twice,
 also when a concurrent call won the race), `200 already_member` (the Tenant owner counts as a member of every
-Organization), `201 added` (a person already in the Tenant joins this roster directly, with no email, and
-`organization.member.added` is recorded). The token never appears in a response.
+Organization), `201 added` (a person already in the Tenant with a verified email joins this roster directly, with no email, and
+`organization.member.added` is recorded; an unverified one gets the token invitation, `201 invited`). The token never appears in a response.
 
 ## 18. Changes in `v1-draft.16` (CR-14, review fixes)
 

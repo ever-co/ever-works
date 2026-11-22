@@ -38,6 +38,7 @@ import { ForgotPasswordDto, ResendVerificationDto } from '../dto/email-verificat
 import { RequestMagicLinkDto } from '../dto/magic-link.dto';
 import { UpdateProfileDto } from '../dto/update-profile.dto';
 import type { SocialAuthUser } from '../types/social-auth.types';
+import { existingAccountEmailUnverified } from './social-link-errors';
 
 @Injectable()
 export class AuthService {
@@ -275,6 +276,18 @@ export class AuthService {
                 throw new UnauthorizedException(
                     'Unable to link this social account because the provider email is not verified',
                 );
+            }
+
+            // A NEW provider identity joins an existing user by email only when BOTH addresses
+            // are verified: the provider's (checked above) and the user's own. Anyone can open
+            // an account with someone else's address and never verify it; linking the real
+            // owner's verified identity into it would let that creator keep using the account
+            // the owner now signs in to (pre-hijacking). Refused before anything is written.
+            if (!linkedToThisAccount && !user.emailVerified) {
+                this.logger.warn(
+                    `Refused to link a ${socialUser.provider} sign-in into user ${user.id}: its email is not verified`,
+                );
+                throw existingAccountEmailUnverified();
             }
 
             // Only a verified address that IS the user's address can verify it.
