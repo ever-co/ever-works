@@ -246,4 +246,14 @@ describe('LoginClient — temporary accounts', () => {
             'Your account is saved',
         );
     });
+
+    it('shows a temporary account only its own warning, never "saved" too (?accountSaved=true)', () => {
+        mocks.search = new URLSearchParams('accountSaved=true');
+        render(
+            <LoginClient availableSocialProviders={[]} magicLinkEnabled={false} temporaryAccount />,
+        );
+
+        expect(screen.getByTestId('temporary-account-login-notice')).toBeInTheDocument();
+        expect(screen.queryByTestId('account-saved-sign-in-notice')).not.toBeInTheDocument();
+    });
 });

@@ -438,7 +438,14 @@ export function LoginClient({
 
             {temporaryAccount && <TemporaryAccountLoginNotice />}
 
-            {searchParams.get(ACCOUNT_SAVED_PARAM) === 'true' && <AccountSavedSignInNotice />}
+            {/*
+             * Only for a visitor who is NOT on a temporary account: a temporary one that opens
+             * `?accountSaved=true` would otherwise read "temporary account" and "your account is
+             * saved" at once. The temporary-account warning is the one that is true for them.
+             */}
+            {!temporaryAccount && searchParams.get(ACCOUNT_SAVED_PARAM) === 'true' && (
+                <AccountSavedSignInNotice />
+            )}
 
             {searchParams.get('accountDeleted') === '1' && (
                 <div
