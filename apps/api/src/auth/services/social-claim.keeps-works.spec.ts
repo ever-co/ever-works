@@ -46,7 +46,10 @@ describe('Saving an anonymous account with a social identity keeps its Works (re
         anonymousAuth = new AnonymousAuthService(users, dataSource, {} as never);
         authService = new AuthService(users, accounts, events as never);
         socialClaim = new SocialClaimService(users, accounts, authService, events as never);
-        cleanup = new AnonymousUserCleanupService(users);
+        // The service is deep-imported from source (see the import), while `users` is typed by
+        // `@ever-works/agent/database`, which resolves to the BUILT declarations once
+        // packages/agent is built. Same class at runtime; two declarations to the type checker.
+        cleanup = new AnonymousUserCleanupService(users as never);
     });
 
     afterEach(async () => {
