@@ -86,7 +86,6 @@ describe('session cookie names and attributes', () => {
 
         await cookies.setAuthAccessCookie('token-1');
 
-        expect(jar.sets).toHaveLength(1);
         expect(jar.sets[0].name).toBe('__Host-everworks_auth_token');
         expect(jar.sets[0].options).toMatchObject({ secure: true, path: '/', httpOnly: true });
         expect(jar.sets[0].options).not.toHaveProperty('domain');
@@ -104,8 +103,26 @@ describe('session cookie names and attributes', () => {
         expect(await cookies.getAuthAccessCookie()).toBe('token-1');
     });
 
-    it('a fresh sign-in on HTTPS expires a legacy plain-name cookie with matching attributes', async () => {
+    // Rolling deploy: for a few minutes old pods (plain name only) and new pods serve side by side.
+    it('mirrors the session under the plain name while the fallback is on, so an old pod still sees it', async () => {
         const cookies = await load('https://app.ever.works');
+
+        await cookies.setAuthAccessCookie('token-1');
+
+        expect(jar.sets.map((s) => s.name)).toEqual([
+            '__Host-everworks_auth_token',
+            'everworks_auth_token',
+        ]);
+        // What a pod on the previous release reads: the plain name, the same sealed session.
+        const { decrypt } = await import('./crypto');
+        expect(await decrypt(jar.values.get('everworks_auth_token')!.value)).toBe('token-1');
+        expect(jar.values.get('everworks_auth_token')!.value).toBe(
+            jar.values.get('__Host-everworks_auth_token')!.value,
+        );
+    });
+
+    it('with the fallback off, writes only __Host- and expires a left-over plain cookie', async () => {
+        const cookies = await load('https://app.ever.works', 'false');
         jar.values.set('everworks_auth_token', { value: 'old' });
 
         await cookies.setAuthAccessCookie('token-1');
@@ -162,7 +179,7 @@ describe('migrateLegacyAuthCookie (proxy, once)', () => {
         process.env = { ...ORIGINAL_ENV };
     });
 
-    it('moves the same sealed value to __Host- and expires the host-only legacy cookie', async () => {
+    it('copies the same sealed value to __Host- and KEEPS the plain one (old pods still read it)', async () => {
         const cookies = await load('https://app.ever.works');
         const pair = proxyPair({ everworks_auth_token: 'sealed-legacy' });
 
@@ -173,11 +190,6 @@ describe('migrateLegacyAuthCookie (proxy, once)', () => {
                 name: '__Host-everworks_auth_token',
                 value: 'sealed-legacy',
                 options: expect.objectContaining({ secure: true, path: '/', httpOnly: true }),
-            },
-            {
-                name: 'everworks_auth_token',
-                value: '',
-                options: expect.objectContaining({ maxAge: 0, path: '/' }),
             },
         ]);
         expect(pair.written[0].options).not.toHaveProperty('domain');

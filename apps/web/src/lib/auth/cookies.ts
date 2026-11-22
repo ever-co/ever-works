@@ -70,10 +70,13 @@ export function authCookieName(): string {
 }
 
 /**
- * Whether a legacy plain-name session cookie is still honoured on HTTPS, so nobody signed in
- * before the rename is signed out by it. On (the default) until `AUTH_COOKIE_LEGACY_FALLBACK` is
- * `false` / `0` / `off` / `no`, which is safe once every legacy cookie has expired (the session
- * cookie lives 7 days). Meaningless on http, where the plain name IS the live one.
+ * Whether the plain session cookie name still works on HTTPS: read as a fallback when there is no
+ * `__Host-` cookie (nobody signed in before the rename is signed out by it), and written as a
+ * mirror next to the `__Host-` one (a pod still on the previous release during a rolling deploy
+ * reads only the plain name). On (the default) until `AUTH_COOKIE_LEGACY_FALLBACK` is `false` /
+ * `0` / `off` / `no`, which is safe 7 days (the session cookie's lifetime) after the rollout has
+ * finished: every session written since has a `__Host-` cookie too. Meaningless on http, where the
+ * plain name IS the live one.
  */
 export function legacyAuthCookieFallbackEnabled(): boolean {
     if (!isPublicUrlHttps()) return false;
@@ -90,8 +93,15 @@ export async function setAuthAccessCookie(token: string) {
     const cookieStore = await cookies();
     const encryptedToken = await encrypt(token);
     cookieStore.set(authCookieName(), encryptedToken, cookieOptions);
-    // A fresh sign-in on HTTPS leaves no legacy plain-name cookie behind to fall back to.
-    if (authCookieName() !== AUTH_COOKIE_NAME && cookieStore.get(AUTH_COOKIE_NAME)) {
+    if (authCookieName() === AUTH_COOKIE_NAME) return;
+    if (legacyAuthCookieFallbackEnabled()) {
+        // Rolling-deploy skew: a pod still on the previous release reads only the plain name, so
+        // while the fallback is on the session is mirrored there too, or a visitor who signed in
+        // on a new pod would look signed out on an old one. New pods read `__Host-` first and
+        // ignore the mirror, so it adds nothing a tossed cookie could use.
+        cookieStore.set(AUTH_COOKIE_NAME, encryptedToken, cookieOptions);
+    } else if (cookieStore.get(AUTH_COOKIE_NAME)) {
+        // Fallback off: no plain-name cookie is written, and a left-over one is expired.
         cookieStore.set(AUTH_COOKIE_NAME, '', { ...cookieOptions, maxAge: 0 });
     }
 }
@@ -142,7 +152,9 @@ type ResponseCookieWriter = {
  * the proxy (where a response's cookies can be written). Only while the fallback is on, only
  * when there is no `__Host-` cookie yet (once there is, the plain name is ignored for good), and
  * only for a request the auth gate let through. Re-sets the same sealed value under the new name
- * and expires the host-only legacy cookie. Returns whether it moved one.
+ * and KEEPS the plain one: while the fallback is on, a pod still on the previous release (rolling
+ * deploy) reads only the plain name, and expiring it there would sign the visitor out on that
+ * pod. Once the `__Host-` cookie exists, new pods ignore the plain one. Returns whether it moved.
  */
 export function migrateLegacyAuthCookie(
     request: RequestCookieReader,
@@ -154,7 +166,6 @@ export function migrateLegacyAuthCookie(
     const legacy = request.cookies.get(AUTH_COOKIE_NAME)?.value;
     if (!legacy) return false;
     response.cookies.set(name, legacy, cookieOptions);
-    response.cookies.set(AUTH_COOKIE_NAME, '', { ...cookieOptions, maxAge: 0 });
     return true;
 }
 

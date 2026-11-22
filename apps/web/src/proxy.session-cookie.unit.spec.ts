@@ -58,8 +58,8 @@ describe('proxy — session cookie (R-16)', () => {
         expect(moved).toMatch(/Secure/i);
         expect(moved).toContain('Path=/');
         expect(moved).not.toMatch(/Domain=/i);
-        const expired = lines.find((line) => line.startsWith('everworks_auth_token='));
-        expect(expired).toMatch(/Max-Age=0/i);
+        // The plain cookie stays: a pod still on the previous release (rolling deploy) reads it.
+        expect(lines.some((line) => line.startsWith('everworks_auth_token='))).toBe(false);
         // Signed in throughout: no redirect to sign-in.
         expect(response.status).toBe(200);
     });
