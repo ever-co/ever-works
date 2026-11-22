@@ -19,6 +19,10 @@ import {
     TemporaryAccountLoginNotice,
 } from '@/components/anonymous/TemporaryAccountLoginNotice';
 import { ACCOUNT_SAVED_PARAM } from '@/lib/anonymous/account-saved';
+import {
+    ACCOUNT_SAVED_WITH_PARAM,
+    isSaveAccountOAuthProvider,
+} from '@/lib/anonymous/save-account-oauth';
 import { EVER_ID_SIGNED_OUT_PARAM, EVER_ID_SIGNED_OUT_VALUE } from '@/lib/auth/ever-id';
 
 interface LoginClientProps {
@@ -113,6 +117,12 @@ function MagicLinkSuccessMessage({ email, onResend }: { email: string; onResend:
             </button>
         </div>
     );
+}
+
+/** GitHub / Google for an allow-listed `savedWith` value; anything else is no provider. */
+function savedWithProviderName(value: string | null): string | null {
+    if (!isSaveAccountOAuthProvider(value)) return null;
+    return value === OAuthProvider.GITHUB ? 'GitHub' : 'Google';
 }
 
 export function LoginClient({
@@ -444,7 +454,10 @@ export function LoginClient({
              * saved" at once. The temporary-account warning is the one that is true for them.
              */}
             {!temporaryAccount && searchParams.get(ACCOUNT_SAVED_PARAM) === 'true' && (
-                <AccountSavedSignInNotice />
+                <AccountSavedSignInNotice
+                    // Allow-listed: a crafted URL cannot put its own words in the notice.
+                    provider={savedWithProviderName(searchParams.get(ACCOUNT_SAVED_WITH_PARAM))}
+                />
             )}
 
             {searchParams.get('accountDeleted') === '1' && (

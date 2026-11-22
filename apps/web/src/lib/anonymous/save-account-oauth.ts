@@ -35,11 +35,13 @@ export function saveAccountOAuthErrorHref(
 /**
  * Why a save with a provider failed. `identity_taken` and `email_taken` are the API's 409s:
  * the provider account, or its email, already belongs to another account, which is never
- * merged into this one.
+ * merged into this one. `other_identity`: this account is already connected to a different
+ * account of the provider (e.g. through the GitHub App), which a save would replace.
  */
 export const SAVE_ACCOUNT_OAUTH_ERRORS = [
     'identity_taken',
     'email_taken',
+    'other_identity',
     'not_temporary',
     'too_many_attempts',
     'rejected',

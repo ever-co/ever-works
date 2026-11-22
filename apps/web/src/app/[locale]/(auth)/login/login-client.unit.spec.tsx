@@ -247,6 +247,24 @@ describe('LoginClient — temporary accounts', () => {
         );
     });
 
+    it('tells a GitHub / Google saver to sign in with it, not with a password (savedWith)', () => {
+        mocks.search = new URLSearchParams('accountSaved=true&savedWith=github');
+        render(<LoginClient availableSocialProviders={[]} magicLinkEnabled={false} />);
+
+        const notice = screen.getByTestId('account-saved-sign-in-notice');
+        expect(notice).toHaveTextContent('Sign in with GitHub.');
+        expect(notice).not.toHaveTextContent('email and password');
+    });
+
+    it('falls back to the email-and-password wording for an unknown savedWith value', () => {
+        mocks.search = new URLSearchParams('accountSaved=true&savedWith=evil.example');
+        render(<LoginClient availableSocialProviders={[]} magicLinkEnabled={false} />);
+
+        const notice = screen.getByTestId('account-saved-sign-in-notice');
+        expect(notice).toHaveTextContent('email and password');
+        expect(notice).not.toHaveTextContent('evil');
+    });
+
     it('shows a temporary account only its own warning, never "saved" too (?accountSaved=true)', () => {
         mocks.search = new URLSearchParams('accountSaved=true');
         render(

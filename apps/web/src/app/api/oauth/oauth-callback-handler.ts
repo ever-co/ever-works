@@ -2,8 +2,8 @@ import { redirect } from '@/i18n/navigation';
 import { authAPI, AuthResponse } from '@/lib/api';
 import { OAuthProvider } from '@/lib/api/enums';
 import {
-    getOAuthSaveAccountCookie,
     getOAuthStateCookie,
+    readOAuthSaveAccountCookie,
     removeOAuthSaveAccountCookie,
     removeOAuthStateCookie,
     setAuthCookies,
@@ -51,17 +51,29 @@ export async function handleOAuthCallback(request: NextRequest, providerId: stri
     await removeOAuthStateCookie();
 
     // EW-617: a round trip started on `/save-account` attaches the identity to the signed-in
-    // temporary account instead of signing in. Only when the intent names THIS state: an
-    // abandoned save must never turn a later sign-in into a save. Single use either way.
-    const saveIntent = await getOAuthSaveAccountCookie();
-    if (saveIntent) {
+    // temporary account instead of signing in. The intent is sealed by this server and names the
+    // account it is for; the API re-checks that account against the session before the code is
+    // spent. Single use either way.
+    const saveIntent = await readOAuthSaveAccountCookie();
+    if (saveIntent.status !== 'none') {
         await removeOAuthSaveAccountCookie();
-        if (saveIntent.state === state) {
+        if (saveIntent.status === 'invalid') {
+            // Not sealed here: forged, or tossed from a sibling subdomain together with a state
+            // and an attacker's code. Never save, and never fall through to signing in with that
+            // code either.
+            return redirect({
+                locale,
+                href: ROUTES.AUTH_ERROR + '?error=oauth_invalid_state',
+            });
+        }
+        // Only the round trip it was minted for: an abandoned save never turns a later sign-in
+        // into a save.
+        if (saveIntent.intent.state === state) {
             return saveAccountWithOAuth(
                 providerId as OAuthProvider,
                 code,
                 state,
-                saveIntent,
+                saveIntent.intent,
                 locale,
             );
         }

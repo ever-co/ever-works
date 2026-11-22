@@ -411,9 +411,18 @@ export function SaveAccountForm({
                                 providers={socialProviders}
                                 disabled={!acceptedTerms || termsUnavailable || isPending}
                                 disabledReason={t('providerNeedsTerms')}
-                                connect={(provider) =>
-                                    startSavingWithProvider(provider, termsClaims())
-                                }
+                                connect={async (provider) => {
+                                    const result = await startSavingWithProvider(
+                                        provider,
+                                        termsClaims(),
+                                    );
+                                    // Nothing left to save: the same panel as the email path.
+                                    if (!result.success && result.reason === 'session_ended') {
+                                        setSessionEnded(true);
+                                        return { success: false };
+                                    }
+                                    return result;
+                                }}
                                 onError={(message) => setErrors({ general: message })}
                             />
                         </div>

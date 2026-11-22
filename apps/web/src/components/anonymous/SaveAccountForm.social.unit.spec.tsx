@@ -124,6 +124,22 @@ describe('SaveAccountForm — saving with GitHub / Google (EW-617)', () => {
         expect(await screen.findByRole('alert')).toHaveTextContent('could not start');
     });
 
+    it('shows the "session ended" panel when no temporary session is left to save', async () => {
+        mocks.startSavingWithProvider.mockResolvedValue({
+            success: false,
+            error: 'ended',
+            reason: 'session_ended',
+        });
+        renderForm();
+        fireEvent.click(screen.getByRole('checkbox'));
+
+        await act(async () => {
+            fireEvent.click(providerButton('github'));
+        });
+
+        expect(await screen.findByTestId('save-account-session-ended')).toBeInTheDocument();
+    });
+
     it('says why the callback refused the save, naming the provider', () => {
         renderForm({ oauthError: { error: 'identity_taken', provider: OAuthProvider.GITHUB } });
 

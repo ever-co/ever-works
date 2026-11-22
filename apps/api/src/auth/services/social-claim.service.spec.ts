@@ -17,6 +17,7 @@ import type { SocialAuthUser } from '../types/social-auth.types';
 import {
     SOCIAL_CLAIM_EMAIL_TAKEN_CODE,
     SOCIAL_CLAIM_IDENTITY_TAKEN_CODE,
+    SOCIAL_CLAIM_OTHER_IDENTITY_CODE,
     SocialClaimService,
 } from './social-claim.service';
 
@@ -36,7 +37,7 @@ describe('SocialClaimService (EW-617: save an anonymous account with GitHub / Go
     const githubUser = (overrides: Partial<SocialAuthUser> = {}): SocialAuthUser => ({
         provider: AuthProvider.GITHUB as SocialAuthUser['provider'],
         providerUserId: '4242',
-        email: 'Visitor@Example.com',
+        email: 'visitor@example.com',
         displayName: 'Visitor',
         username: 'visitor',
         avatar: 'https://avatars.example/visitor.png',
@@ -53,19 +54,38 @@ describe('SocialClaimService (EW-617: save an anonymous account with GitHub / Go
     const build = (user: Record<string, unknown> | null = anonUser()) => {
         // The row as the writes leave it, so a later write's result carries an earlier one.
         let row: Record<string, unknown> = { ...(user ?? {}) };
+        // Whether a write ran inside `dataSource.transaction`, as the real one would scope it.
+        let inTransaction = false;
+        const writesInTransaction: string[] = [];
         const userRepository = {
             findById: jest.fn().mockResolvedValue(user),
             existsByEmailCaseInsensitive: jest.fn().mockResolvedValue(false),
             update: jest.fn(async (id: string, data: Record<string, unknown>): Promise<any> => {
+                if (inTransaction)
+                    writesInTransaction.push('isAnonymous' in data ? 'flip' : 'username');
                 row = { ...row, id, ...data };
                 return row;
             }),
+            withManager: jest.fn(() => userRepository),
         };
         const authAccountRepository = {
             findProviderAccountByAccountId: jest.fn().mockResolvedValue(null),
             findProviderAccount: jest.fn().mockResolvedValue(null),
-            upsertProviderAccount: jest.fn().mockResolvedValue({ id: 'acc-1' }),
-            deleteProviderAccount: jest.fn().mockResolvedValue(undefined),
+            upsertProviderAccount: jest.fn(async () => {
+                if (inTransaction) writesInTransaction.push('link');
+                return { id: 'acc-1' };
+            }),
+            withManager: jest.fn(() => authAccountRepository),
+        };
+        const dataSource = {
+            transaction: jest.fn(async (work: (manager: unknown) => Promise<unknown>) => {
+                inTransaction = true;
+                try {
+                    return await work('tx-manager');
+                } finally {
+                    inTransaction = false;
+                }
+            }),
         };
         const authService = { sendVerificationEmail: jest.fn().mockResolvedValue(undefined) };
         const eventEmitter = { emit: jest.fn() };
@@ -86,8 +106,11 @@ describe('SocialClaimService (EW-617: save an anonymous account with GitHub / Go
             authService as never,
             eventEmitter as never,
             usernames as never,
+            dataSource as never,
         );
         return {
+            dataSource,
+            writesInTransaction,
             service,
             userRepository,
             authAccountRepository,
@@ -115,7 +138,7 @@ describe('SocialClaimService (EW-617: save an anonymous account with GitHub / Go
                     userId: 'anon-1',
                     providerId: 'github',
                     accountId: '4242',
-                    email: 'Visitor@Example.com',
+                    email: 'visitor@example.com',
                     accessToken: 'gho_access',
                 }),
             );
@@ -128,7 +151,7 @@ describe('SocialClaimService (EW-617: save an anonymous account with GitHub / Go
                 2,
                 'anon-1',
                 expect.objectContaining({
-                    email: 'Visitor@Example.com',
+                    email: 'visitor@example.com',
                     isAnonymous: false,
                     anonymousExpiresAt: null,
                     registrationProvider: 'github',
@@ -142,7 +165,7 @@ describe('SocialClaimService (EW-617: save an anonymous account with GitHub / Go
             }
             expect(result).toEqual({
                 id: 'anon-1',
-                email: 'Visitor@Example.com',
+                email: 'visitor@example.com',
                 username: 'visitor',
                 emailVerified: true,
                 provider: 'github',
@@ -234,7 +257,10 @@ describe('SocialClaimService (EW-617: save an anonymous account with GitHub / Go
             ctx.authAccountRepository.findProviderAccountByAccountId.mockResolvedValue({
                 userId: 'anon-1',
             });
-            ctx.authAccountRepository.findProviderAccount.mockResolvedValue({ userId: 'anon-1' });
+            ctx.authAccountRepository.findProviderAccount.mockResolvedValue({
+                userId: 'anon-1',
+                accountId: '4242',
+            });
 
             await expect(ctx.service.claim('anon-1', githubUser())).resolves.toMatchObject({
                 id: 'anon-1',
@@ -274,7 +300,7 @@ describe('SocialClaimService (EW-617: save an anonymous account with GitHub / Go
                 code: SOCIAL_CLAIM_EMAIL_TAKEN_CODE,
             });
             expect(ctx.userRepository.existsByEmailCaseInsensitive).toHaveBeenCalledWith(
-                'Visitor@Example.com',
+                'visitor@example.com',
             );
             expectNothingWritten(ctx);
         });
@@ -355,7 +381,7 @@ describe('SocialClaimService (EW-617: save an anonymous account with GitHub / Go
         );
 
     describe('races that reach a unique index answer 409, never 500', () => {
-        it('a save racing for the same email loses as the email 409, and removes its link', async () => {
+        it('a save racing for the same email loses as the email 409, inside the transaction', async () => {
             const ctx = build();
             failTheFlip(ctx, async () => {
                 throw uniqueViolation();
@@ -367,10 +393,9 @@ describe('SocialClaimService (EW-617: save an anonymous account with GitHub / Go
             expect((error as ConflictException).getResponse()).toMatchObject({
                 code: SOCIAL_CLAIM_EMAIL_TAKEN_CODE,
             });
-            expect(ctx.authAccountRepository.deleteProviderAccount).toHaveBeenCalledWith(
-                'anon-1',
-                'github',
-            );
+            // The link was written in the same transaction, so the 409 rolls it back with the
+            // flip (proven on a real database in social-claim.keeps-works.spec.ts).
+            expect(ctx.writesInTransaction).toEqual(['link']);
         });
 
         it('a save racing for the same identity loses on the link index as the identity 409', async () => {
@@ -414,29 +439,71 @@ describe('SocialClaimService (EW-617: save an anonymous account with GitHub / Go
         });
     });
 
-    describe('when the account update fails after the link was written', () => {
-        it('removes the link it created, so no link outlives the anonymous account', async () => {
+    describe('the link and the flip are one transaction', () => {
+        it('writes the link and the flip inside it, the handle before it', async () => {
+            const ctx = build();
+
+            await ctx.service.claim('anon-1', githubUser());
+
+            expect(ctx.dataSource.transaction).toHaveBeenCalledTimes(1);
+            expect(ctx.writesInTransaction).toEqual(['link', 'flip']);
+            expect(ctx.authAccountRepository.withManager).toHaveBeenCalledWith('tx-manager');
+            expect(ctx.userRepository.withManager).toHaveBeenCalledWith('tx-manager');
+        });
+
+        it('lets a failed flip fail the whole transaction', async () => {
             const ctx = build();
             failTheFlip(ctx, async () => {
                 throw new Error('db down');
             });
 
             await expect(ctx.service.claim('anon-1', githubUser())).rejects.toThrow('db down');
-            expect(ctx.authAccountRepository.deleteProviderAccount).toHaveBeenCalledWith(
-                'anon-1',
-                'github',
-            );
+            expect(ctx.eventEmitter.emit).not.toHaveBeenCalled();
         });
 
-        it('leaves a provider row that existed before this call alone', async () => {
+        it('answers 400 when the flip updates nothing', async () => {
             const ctx = build();
-            ctx.authAccountRepository.findProviderAccount.mockResolvedValue({ userId: 'anon-1' });
             failTheFlip(ctx, async () => null);
 
             await expect(ctx.service.claim('anon-1', githubUser())).rejects.toBeInstanceOf(
                 BadRequestException,
             );
-            expect(ctx.authAccountRepository.deleteProviderAccount).not.toHaveBeenCalled();
         });
+    });
+
+    describe('another account of the provider already connected (e.g. the GitHub App)', () => {
+        it('refuses with 409 and writes nothing, instead of re-pointing that link', async () => {
+            const ctx = build();
+            ctx.authAccountRepository.findProviderAccount.mockResolvedValue({
+                userId: 'anon-1',
+                accountId: '999',
+            });
+
+            const error = await ctx.service.claim('anon-1', githubUser()).catch((e) => e);
+
+            expect(error).toBeInstanceOf(ConflictException);
+            expect((error as ConflictException).getResponse()).toMatchObject({
+                code: SOCIAL_CLAIM_OTHER_IDENTITY_CODE,
+            });
+            expectNothingWritten(ctx);
+        });
+    });
+
+    it('stores the provider email trimmed and lowercased, as the password claim does', async () => {
+        const ctx = build();
+
+        const result = await ctx.service.claim(
+            'anon-1',
+            githubUser({ email: '  Visitor@Example.COM ' }),
+        );
+
+        expect(ctx.userRepository.existsByEmailCaseInsensitive).toHaveBeenCalledWith(
+            'visitor@example.com',
+        );
+        expect(ctx.userRepository.update).toHaveBeenLastCalledWith(
+            'anon-1',
+            expect.objectContaining({ email: 'visitor@example.com' }),
+        );
+        expect(result.email).toBe('visitor@example.com');
     });
 });

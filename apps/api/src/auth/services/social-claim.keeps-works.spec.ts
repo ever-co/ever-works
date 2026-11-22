@@ -60,6 +60,7 @@ describe('Saving an anonymous account with a social identity keeps its Works (re
                 users,
                 new OrganizationRepository(dataSource.getRepository(Organization)),
             ),
+            dataSource,
         );
         // The service is deep-imported from source (see the import), while `users` is typed by
         // `@ever-works/agent/database`, which resolves to the BUILT declarations once
@@ -116,7 +117,11 @@ describe('Saving an anonymous account with a social identity keeps its Works (re
 
         const slugBefore = (await users.findById(userId))?.slug;
 
-        const saved = await socialClaim.claim(userId, githubProfile());
+        // The provider's casing is stored lowercased, as the password claim stores it.
+        const saved = await socialClaim.claim(
+            userId,
+            githubProfile({ email: 'Visitor@Example.com' }),
+        );
 
         expect(saved.id).toBe(userId);
         const row = await users.findById(userId);
@@ -216,5 +221,52 @@ describe('Saving an anonymous account with a social identity keeps its Works (re
         expect(saved.username).not.toBe('visitor');
         expect(saved.username.startsWith('visitor')).toBe(true);
         expect((await users.findById(userId))?.username).toBe(saved.username);
+    });
+
+    it('rolls the link back with the flip when a racing save takes the email (one transaction)', async () => {
+        const anonId = await mintAnonymousWithWorks(['raced-work']);
+        // The racer committed between this save's check and its flip: the check saw nothing,
+        // the unique index on users.email sees the row.
+        await users.create({
+            username: 'racer',
+            email: 'visitor@example.com',
+            registrationProvider: 'local',
+            emailVerified: true,
+            isActive: true,
+        });
+        jest.spyOn(users, 'existsByEmailCaseInsensitive').mockResolvedValueOnce(false);
+
+        await expect(socialClaim.claim(anonId, githubProfile())).rejects.toMatchObject({
+            status: 409,
+            response: expect.objectContaining({ code: 'EMAIL_ALREADY_IN_USE' }),
+        });
+
+        expect(await users.findById(anonId)).toMatchObject({ isAnonymous: true, email: null });
+        // The link written in the same transaction is gone with it.
+        expect(await accounts.findProviderAccount(anonId, 'github')).toBeNull();
+        expect(await accounts.findProviderAccountByAccountId('github', '4242')).toBeNull();
+    });
+
+    it('refuses to re-point a GitHub link the account already has for another GitHub user', async () => {
+        const anonId = await mintAnonymousWithWorks(['connected-work']);
+        // As the GitHub App onboarding leaves an anonymous account that connected GitHub.
+        await accounts.upsertProviderAccount({
+            userId: anonId,
+            providerId: 'github',
+            accountId: '999',
+            email: 'other@example.com',
+            accessToken: 'ghu_app',
+        });
+
+        await expect(socialClaim.claim(anonId, githubProfile())).rejects.toMatchObject({
+            status: 409,
+            response: expect.objectContaining({ code: 'OTHER_PROVIDER_ACCOUNT_CONNECTED' }),
+        });
+
+        expect(await accounts.findProviderAccount(anonId, 'github')).toMatchObject({
+            accountId: '999',
+            accessToken: 'ghu_app',
+        });
+        expect(await users.findById(anonId)).toMatchObject({ isAnonymous: true });
     });
 });

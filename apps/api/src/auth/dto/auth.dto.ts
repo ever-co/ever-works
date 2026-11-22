@@ -236,6 +236,18 @@ export class OAuthClaimDto {
     @MaxLength(512)
     state: string;
 
+    /**
+     * The anonymous user the save was started for, from the web's sealed save intent. It must be
+     * the session's user: the web cannot be made to post a save for a session that did not
+     * start it (a cookie tossed from a sibling subdomain), and the API checks it again before
+     * the code is spent.
+     */
+    @ApiProperty({ description: 'User id the save was started for; must be the caller' })
+    @IsString()
+    @IsNotEmpty()
+    @MaxLength(64)
+    expectedUserId: string;
+
     @ApiPropertyOptional({
         description:
             'Callback URL for the verification mail, sent only when the provider does not vouch for the email',

@@ -72,9 +72,34 @@ export async function removeAuthAccessCookies() {
 // OAuth
 // =================
 
+/**
+ * A cookie name that only this exact host can set. In production (HTTPS) the `__Host-` prefix
+ * makes the browser accept the cookie only with Secure, `Path=/` and no `Domain`, so a page on
+ * a sibling subdomain (a user's Work on `{slug}.ever.works`) cannot plant one with
+ * `Domain=ever.works` ("cookie tossing"). Plain on http localhost (dev, e2e), where browsers
+ * refuse a `__Host-` cookie. `cookieOptions` already has Secure, `Path=/` and no Domain.
+ */
+function hostOnlyCookieName(name: string): string {
+    return isPublicUrlHttps() ? `__Host-${name}` : name;
+}
+
+/**
+ * Deletes a cookie with the attributes it was set with. A bare `delete(name)` sends no Secure
+ * attribute, and a browser ignores that for a `__Host-` cookie, so it would linger.
+ */
+async function expireCookie(name: string) {
+    const cookieStore = await cookies();
+    cookieStore.set(name, '', { ...cookieOptions, maxAge: 0 });
+}
+
+/** The host-scoped mirror of the OAuth `state` (C-03); `__Host-oauth_state` in production. */
+export function oauthStateCookieName(): string {
+    return hostOnlyCookieName('oauth_state');
+}
+
 export async function setOAuthStateCookie(state: string) {
     const cookieStore = await cookies();
-    cookieStore.set('oauth_state', state, {
+    cookieStore.set(oauthStateCookieName(), state, {
         ...cookieOptions,
         maxAge: 60 * 10, // 10 minute expiry
     });
@@ -82,64 +107,89 @@ export async function setOAuthStateCookie(state: string) {
 
 export async function getOAuthStateCookie() {
     const cookieStore = await cookies();
-    return cookieStore.get('oauth_state')?.value;
+    return cookieStore.get(oauthStateCookieName())?.value;
 }
 
 export async function removeOAuthStateCookie() {
-    const cookieStore = await cookies();
-    cookieStore.delete('oauth_state');
+    await expireCookie(oauthStateCookieName());
 }
 
 // =================
 // OAuth — saving a temporary account (EW-617)
 // =================
 
-/** HttpOnly cookie that marks an OAuth round trip started on `/save-account`. */
-export const OAUTH_SAVE_ACCOUNT_COOKIE_NAME = 'oauth_save_account';
+/**
+ * HttpOnly cookie that marks an OAuth round trip started on `/save-account`;
+ * `__Host-oauth_save_account` in production.
+ */
+export function oauthSaveAccountCookieName(): string {
+    return hostOnlyCookieName('oauth_save_account');
+}
 
 /**
  * What the save-account page hands to the OAuth callback: the `state` of the round trip it
- * started, and the legal documents the visitor ticked the box for, exactly as displayed.
+ * started, the legal documents the visitor ticked the box for (exactly as displayed), and the
+ * temporary account it is FOR. Sealed with the key that encrypts the session cookie, so nobody
+ * but this server can mint one; the callback checks the user against the session server-side.
  */
 export interface OAuthSaveAccountIntent {
     state: string;
     terms: Array<{ documentId: string; version: string; sha256: string; locale: string }>;
+    userId: string;
 }
 
 export async function setOAuthSaveAccountCookie(intent: OAuthSaveAccountIntent) {
     const cookieStore = await cookies();
-    cookieStore.set(
-        OAUTH_SAVE_ACCOUNT_COOKIE_NAME,
-        Buffer.from(JSON.stringify(intent), 'utf8').toString('base64url'),
-        { ...cookieOptions, maxAge: 60 * 10 }, // the same 10 minutes as `oauth_state`
-    );
+    cookieStore.set(oauthSaveAccountCookieName(), await encrypt(JSON.stringify(intent)), {
+        ...cookieOptions,
+        maxAge: 60 * 10, // the same 10 minutes as the state
+    });
 }
 
-/** The intent, or null when absent or not in the shape `setOAuthSaveAccountCookie` writes. */
-export async function getOAuthSaveAccountCookie(): Promise<OAuthSaveAccountIntent | null> {
+/**
+ * The save intent of this round trip:
+ * - `none`: no save was started (a normal sign-in);
+ * - `invalid`: a cookie is there but this server did not seal it, or it is not in the shape it
+ *   writes (forged, tossed from a sibling subdomain, or tampered). Never act on it;
+ * - `valid`: the sealed intent.
+ */
+export type OAuthSaveAccountCookie =
+    | { status: 'none' }
+    | { status: 'invalid' }
+    | { status: 'valid'; intent: OAuthSaveAccountIntent };
+
+export async function readOAuthSaveAccountCookie(): Promise<OAuthSaveAccountCookie> {
     const cookieStore = await cookies();
-    const raw = cookieStore.get(OAUTH_SAVE_ACCOUNT_COOKIE_NAME)?.value;
+    const raw = cookieStore.get(oauthSaveAccountCookieName())?.value;
     if (!raw) {
-        return null;
+        return { status: 'none' };
     }
     try {
-        const parsed = JSON.parse(Buffer.from(raw, 'base64url').toString('utf8')) as unknown;
+        const parsed = JSON.parse(await decrypt(raw)) as unknown;
         if (!parsed || typeof parsed !== 'object') {
-            return null;
+            return { status: 'invalid' };
         }
-        const { state, terms } = parsed as Record<string, unknown>;
-        if (typeof state !== 'string' || !state || !Array.isArray(terms)) {
-            return null;
+        const { state, terms, userId } = parsed as Record<string, unknown>;
+        if (
+            typeof state !== 'string' ||
+            !state ||
+            !Array.isArray(terms) ||
+            typeof userId !== 'string' ||
+            !userId
+        ) {
+            return { status: 'invalid' };
         }
-        return { state, terms: terms as OAuthSaveAccountIntent['terms'] };
+        return {
+            status: 'valid',
+            intent: { state, terms: terms as OAuthSaveAccountIntent['terms'], userId },
+        };
     } catch {
-        return null;
+        return { status: 'invalid' };
     }
 }
 
 export async function removeOAuthSaveAccountCookie() {
-    const cookieStore = await cookies();
-    cookieStore.delete(OAUTH_SAVE_ACCOUNT_COOKIE_NAME);
+    await expireCookie(oauthSaveAccountCookieName());
 }
 
 // =================

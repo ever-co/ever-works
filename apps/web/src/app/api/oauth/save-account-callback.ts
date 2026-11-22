@@ -17,6 +17,8 @@ import { ROUTES, withAppUrl } from '@/lib/constants';
 /** The API's codes for "this belongs to another account" (`SocialClaimService`). */
 const IDENTITY_TAKEN_CODE = 'PROVIDER_ACCOUNT_ALREADY_LINKED';
 const EMAIL_TAKEN_CODE = 'EMAIL_ALREADY_IN_USE';
+/** The account is already connected to a different account of this provider. */
+const OTHER_IDENTITY_CODE = 'OTHER_PROVIDER_ACCOUNT_CONNECTED';
 /** Two saves racing for one derived handle, twice (`USERNAME_TAKEN_CODE` in apps/api). */
 const USERNAME_TAKEN_CODE = 'username_taken';
 
@@ -27,6 +29,9 @@ export function saveAccountOAuthErrorFor(error: unknown): SaveAccountOAuthError 
     }
     if (error.code === EMAIL_TAKEN_CODE) {
         return 'email_taken';
+    }
+    if (error.code === OTHER_IDENTITY_CODE) {
+        return 'other_identity';
     }
     // Nothing the visitor chose: trying again allocates another handle.
     if (error.code === USERNAME_TAKEN_CODE) {
@@ -82,6 +87,9 @@ export async function saveAccountWithOAuth(
         saved = await authAPI.claimAccountWithOAuth(provider, {
             code,
             state,
+            // The account the sealed intent was minted for; the API refuses it unless it is the
+            // session's own user, before the code is spent.
+            expectedUserId: intent.userId,
             terms: intent.terms.length > 0 ? intent.terms : undefined,
             emailVerificationCallbackUrl: withAppUrl(ROUTES.API_AUTH_VERIFY_EMAIL),
         });
@@ -106,7 +114,11 @@ export async function saveAccountWithOAuth(
             await setAuthCookies(saved.access_token);
         } catch (error) {
             console.error('Account saved, but the new session cookie could not be set', error);
-            return redirect({ locale, href: `${ROUTES.AUTH_LOGIN}?${ACCOUNT_SAVED_PARAM}=true` });
+            return redirect({
+                locale,
+                // Which way it now signs in, so the page does not say "email and password".
+                href: `${ROUTES.AUTH_LOGIN}?${ACCOUNT_SAVED_PARAM}=true&${ACCOUNT_SAVED_WITH_PARAM}=${provider}`,
+            });
         }
     }
 

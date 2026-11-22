@@ -18,7 +18,7 @@ const mocks = vi.hoisted(() => ({
     setAuthCookies: vi.fn(),
     getOAuthStateCookie: vi.fn(),
     removeOAuthStateCookie: vi.fn(),
-    getOAuthSaveAccountCookie: vi.fn(),
+    readOAuthSaveAccountCookie: vi.fn(),
     removeOAuthSaveAccountCookie: vi.fn(),
 }));
 
@@ -39,7 +39,7 @@ vi.mock('@/lib/auth/cookies', () => ({ setAuthCookies: mocks.setAuthCookies }));
 vi.mock('@/lib/auth', () => ({
     getOAuthStateCookie: mocks.getOAuthStateCookie,
     removeOAuthStateCookie: mocks.removeOAuthStateCookie,
-    getOAuthSaveAccountCookie: mocks.getOAuthSaveAccountCookie,
+    readOAuthSaveAccountCookie: mocks.readOAuthSaveAccountCookie,
     removeOAuthSaveAccountCookie: mocks.removeOAuthSaveAccountCookie,
     setAuthCookies: mocks.setAuthCookies,
 }));
@@ -61,6 +61,12 @@ const TERMS = [
     { documentId: 'tos:default', version: '2026-01-01', sha256: 'a'.repeat(64), locale: 'en' },
 ];
 
+/** A save intent this server sealed for the signed-in temporary account `anon-1`. */
+const sealed = (state: string) => ({
+    status: 'valid' as const,
+    intent: { state, terms: TERMS, userId: 'anon-1' },
+});
+
 const callbackRequest = (state: string) =>
     ({
         nextUrl: { searchParams: new URLSearchParams({ code: 'code-1', state }) },
@@ -78,13 +84,15 @@ describe('handleOAuthCallback routes a save-account round trip to the save', () 
     });
 
     it('saves THIS account when the intent names this state, and never signs in', async () => {
-        mocks.getOAuthSaveAccountCookie.mockResolvedValue({ state: 's-1', terms: TERMS });
+        mocks.readOAuthSaveAccountCookie.mockResolvedValue(sealed('s-1'));
 
         await handleOAuthCallback(callbackRequest('s-1'), 'github');
 
         expect(mocks.claimAccountWithOAuth).toHaveBeenCalledWith('github', {
             code: 'code-1',
             state: 's-1',
+            // The account the sealed intent names; the API refuses any other session.
+            expectedUserId: 'anon-1',
             terms: TERMS,
             emailVerificationCallbackUrl: expect.stringContaining('/api/auth/verify-email'),
         });
@@ -98,7 +106,7 @@ describe('handleOAuthCallback routes a save-account round trip to the save', () 
     });
 
     it('signs in as before when an abandoned save names another state', async () => {
-        mocks.getOAuthSaveAccountCookie.mockResolvedValue({ state: 'old-state', terms: TERMS });
+        mocks.readOAuthSaveAccountCookie.mockResolvedValue(sealed('old-state'));
 
         await handleOAuthCallback(callbackRequest('s-1'), 'github');
 
@@ -109,7 +117,7 @@ describe('handleOAuthCallback routes a save-account round trip to the save', () 
     });
 
     it('signs in as before when there is no save intent', async () => {
-        mocks.getOAuthSaveAccountCookie.mockResolvedValue(null);
+        mocks.readOAuthSaveAccountCookie.mockResolvedValue({ status: 'none' });
 
         await handleOAuthCallback(callbackRequest('s-1'), 'google');
 
@@ -118,8 +126,26 @@ describe('handleOAuthCallback routes a save-account round trip to the save', () 
         expect(mocks.removeOAuthSaveAccountCookie).not.toHaveBeenCalled();
     });
 
+    // R56: a Work on a sibling subdomain plants oauth_state=S and a save intent of its own,
+    // then sends the victim to the callback with the attacker's code. The intent is not sealed
+    // by this server, so nothing is saved, and the attacker's code is not used to sign in either.
+    it('never claims, and never signs in, with a save cookie this server did not seal', async () => {
+        mocks.readOAuthSaveAccountCookie.mockResolvedValue({ status: 'invalid' });
+
+        await handleOAuthCallback(callbackRequest('s-1'), 'github');
+
+        expect(mocks.claimAccountWithOAuth).not.toHaveBeenCalled();
+        expect(mocks.connectOAuthCallback).not.toHaveBeenCalled();
+        expect(mocks.setAuthCookies).not.toHaveBeenCalled();
+        expect(mocks.removeOAuthSaveAccountCookie).toHaveBeenCalled();
+        expect(mocks.redirect).toHaveBeenCalledWith({
+            locale: 'en',
+            href: '/auth/error?error=oauth_invalid_state',
+        });
+    });
+
     it('checks the state before anything else, save or not', async () => {
-        mocks.getOAuthSaveAccountCookie.mockResolvedValue({ state: 'forged', terms: TERMS });
+        mocks.readOAuthSaveAccountCookie.mockResolvedValue(sealed('forged'));
 
         await handleOAuthCallback(callbackRequest('forged'), 'github');
 
@@ -146,7 +172,7 @@ describe('saveAccountWithOAuth', () => {
             OAuthProvider.GOOGLE,
             'c',
             's',
-            { state: 's', terms: TERMS },
+            { state: 's', terms: TERMS, userId: 'anon-1' },
             'en',
         );
 
@@ -165,7 +191,7 @@ describe('saveAccountWithOAuth', () => {
             OAuthProvider.GITHUB,
             'c',
             's',
-            { state: 's', terms: TERMS },
+            { state: 's', terms: TERMS, userId: 'anon-1' },
             'en',
         );
 
@@ -187,13 +213,13 @@ describe('saveAccountWithOAuth', () => {
             OAuthProvider.GITHUB,
             'c',
             's',
-            { state: 's', terms: TERMS },
+            { state: 's', terms: TERMS, userId: 'anon-1' },
             'en',
         );
 
         expect(mocks.redirect).toHaveBeenCalledWith({
             locale: 'en',
-            href: '/login?accountSaved=true',
+            href: '/login?accountSaved=true&savedWith=github',
         });
     });
 
@@ -204,7 +230,7 @@ describe('saveAccountWithOAuth', () => {
             OAuthProvider.GITHUB,
             'c',
             's',
-            { state: 's', terms: TERMS },
+            { state: 's', terms: TERMS, userId: 'anon-1' },
             'en',
         );
 
@@ -221,7 +247,7 @@ describe('saveAccountWithOAuth', () => {
             OAuthProvider.GITHUB,
             'c',
             's',
-            { state: 's', terms: TERMS },
+            { state: 's', terms: TERMS, userId: 'anon-1' },
             'en',
         );
 
@@ -233,6 +259,7 @@ describe('saveAccountWithOAuth', () => {
         [new ApiResponseError('email', 409, 'EMAIL_ALREADY_IN_USE'), 'email_taken'],
         [new ApiResponseError('conflict', 409), 'identity_taken'],
         [new ApiResponseError('handle', 409, 'username_taken'), 'failed'],
+        [new ApiResponseError('other', 409, 'OTHER_PROVIDER_ACCOUNT_CONNECTED'), 'other_identity'],
         [new ApiResponseError('terms store down', 503), 'failed'],
         [new ApiResponseError('not anonymous', 403), 'not_temporary'],
         [new ApiResponseError('slow down', 429), 'too_many_attempts'],
@@ -246,7 +273,7 @@ describe('saveAccountWithOAuth', () => {
             OAuthProvider.GITHUB,
             'c',
             's',
-            { state: 's', terms: TERMS },
+            { state: 's', terms: TERMS, userId: 'anon-1' },
             'en',
         );
 
@@ -264,7 +291,7 @@ describe('saveAccountWithOAuth', () => {
             OAuthProvider.LINKEDIN,
             'c',
             's',
-            { state: 's', terms: TERMS },
+            { state: 's', terms: TERMS, userId: 'anon-1' },
             'en',
         );
 

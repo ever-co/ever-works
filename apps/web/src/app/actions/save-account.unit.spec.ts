@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
     refresh: vi.fn(),
     revalidatePath: vi.fn(),
     setAuthCookies: vi.fn(),
+    getAuthFromCookie: vi.fn(),
     getOAuthAuthUrl: vi.fn(),
     setOAuthStateCookie: vi.fn(),
     setOAuthSaveAccountCookie: vi.fn(),
@@ -33,7 +34,10 @@ vi.mock('@/lib/auth/cookies', () => ({
     setOAuthStateCookie: mocks.setOAuthStateCookie,
     setOAuthSaveAccountCookie: mocks.setOAuthSaveAccountCookie,
 }));
-vi.mock('@/lib/auth', () => ({ setAuthCookies: mocks.setAuthCookies }));
+vi.mock('@/lib/auth', () => ({
+    setAuthCookies: mocks.setAuthCookies,
+    getAuthFromCookie: mocks.getAuthFromCookie,
+}));
 vi.mock('next-intl/server', () => ({
     getTranslations: async () => (key: string) => key,
     getLocale: async () => 'en',
@@ -272,6 +276,7 @@ describe('startSavingWithProvider', () => {
             url: 'https://github.com/login/oauth/authorize?state=s-1',
             state: 's-1',
         });
+        mocks.getAuthFromCookie.mockResolvedValue({ id: 'anon-1', isAnonymous: true });
     });
 
     it('mirrors the state and binds the save intent, with the terms, to that state', async () => {
@@ -286,6 +291,8 @@ describe('startSavingWithProvider', () => {
         expect(mocks.setOAuthSaveAccountCookie).toHaveBeenCalledWith({
             state: 's-1',
             terms: TERMS,
+            // Sealed for the account signed in now; the callback and the API check it.
+            userId: 'anon-1',
         });
     });
 
@@ -293,6 +300,16 @@ describe('startSavingWithProvider', () => {
         const result = await startSavingWithProvider(OAuthProvider.GOOGLE, []);
 
         expect(result).toEqual({ success: false, error: 'terms.required', field: 'terms' });
+        expect(mocks.getOAuthAuthUrl).not.toHaveBeenCalled();
+        expect(mocks.setOAuthSaveAccountCookie).not.toHaveBeenCalled();
+    });
+
+    it('starts nothing when no session is left: the form shows "session ended"', async () => {
+        mocks.getAuthFromCookie.mockResolvedValue(null);
+
+        const result = await startSavingWithProvider(OAuthProvider.GITHUB, TERMS);
+
+        expect(result).toEqual({ success: false, error: 'sessionEnded', reason: 'session_ended' });
         expect(mocks.getOAuthAuthUrl).not.toHaveBeenCalled();
         expect(mocks.setOAuthSaveAccountCookie).not.toHaveBeenCalled();
     });

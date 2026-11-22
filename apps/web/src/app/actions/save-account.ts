@@ -7,7 +7,7 @@ import { getLocale, getTranslations } from 'next-intl/server';
 import { authAPI, type TermsAcceptanceClaim } from '@/lib/api';
 import type { ClaimAccountResponse } from '@/lib/api/auth';
 import { ApiResponseError } from '@/lib/api/server-api';
-import { setAuthCookies } from '@/lib/auth';
+import { getAuthFromCookie, setAuthCookies } from '@/lib/auth';
 import type { OAuthProvider } from '@/lib/api/enums';
 import { setOAuthSaveAccountCookie, setOAuthStateCookie } from '@/lib/auth/cookies';
 import { isSaveAccountOAuthProvider } from '@/lib/anonymous/save-account-oauth';
@@ -198,6 +198,10 @@ export async function saveAnonymousAccount(input: SaveAccountInput): Promise<Sav
  * save and carries the terms the visitor accepted, so the callback route attaches the identity
  * to THIS account (`POST /oauth/:p/claim`) instead of signing in to another one. Bound to the
  * state, a save that was abandoned never turns a later sign-in into a save.
+ *
+ * The intent is sealed with the session cookie's key and names the signed-in temporary account,
+ * so nothing but this server can mint one (a cookie tossed from a sibling subdomain is refused at
+ * the callback), and the API checks that account against the session before the code is spent.
  */
 export async function startSavingWithProvider(
     provider: OAuthProvider,
@@ -216,10 +220,16 @@ export async function startSavingWithProvider(
         return { success: false, error: claims.error.issues[0].message, field: 'terms' };
     }
 
+    // The account this save is for: the one signed in now.
+    const signedIn = await getAuthFromCookie().catch(() => null);
+    if (!signedIn?.id) {
+        return { success: false, error: tSave('sessionEnded'), reason: 'session_ended' };
+    }
+
     try {
         const { url, state } = await authAPI.getOAuthAuthUrl(provider);
         await setOAuthStateCookie(state);
-        await setOAuthSaveAccountCookie({ state, terms: claims.data });
+        await setOAuthSaveAccountCookie({ state, terms: claims.data, userId: signedIn.id });
         return { success: true, url };
     } catch (error) {
         console.error(`Starting to save the anonymous account with ${provider} failed`, error);

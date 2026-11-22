@@ -76,6 +76,8 @@ export interface ClaimAccountResponse {
 export interface OAuthClaimDto {
     code: string;
     state: string;
+    /** The temporary account the sealed save intent names; must be the session's user. */
+    expectedUserId: string;
     emailVerificationCallbackUrl?: string;
     terms?: TermsAcceptanceClaim[];
 }

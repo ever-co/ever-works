@@ -30,6 +30,9 @@ import { AuthProvider } from '../providers/auth-provider.abstract';
 import { toHeaders } from '../providers/request-headers';
 import { trustedClientIp } from '../../config/trust-proxy';
 
+/** The providers a temporary account can be saved with (the web offers the same two). */
+const SAVE_WITH_PROVIDERS: ReadonlySet<string> = new Set(['github', 'google']);
+
 // Duck-typed like `OAuthController`: the API does not depend on `@types/express`.
 type ClaimRequest = {
     ip?: string;
@@ -129,7 +132,18 @@ export class OAuthClaimController {
             );
         }
 
-        // An unknown provider is a 400 here, before anything is recorded or spent.
+        // Bound to the session that started it: the web sealed the anonymous user's id into the
+        // save intent and posts it back. Another id means the intent is not this session's (a
+        // cookie tossed from a sibling subdomain): refused before anything is recorded or spent.
+        if (body.expectedUserId !== userId) {
+            throw new BadRequestException('This save was started for another account');
+        }
+
+        // Only GitHub and Google save an account; anything else is a 400 here, before anything
+        // is recorded or spent.
+        if (!SAVE_WITH_PROVIDERS.has(providerId)) {
+            throw new BadRequestException(`Saving with ${providerId} is not supported`);
+        }
         const providerName = this.socialAuthService.getProviderDisplayName(providerId);
 
         const userAgentHeader = req.headers['user-agent'];

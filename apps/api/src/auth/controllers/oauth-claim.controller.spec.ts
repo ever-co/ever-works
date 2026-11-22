@@ -118,6 +118,7 @@ describe('OAuthClaimController (POST /api/oauth/:providerId/claim)', () => {
             {
                 code: 'code-1',
                 state,
+                expectedUserId: 'anon-1',
                 terms: TERMS,
                 emailVerificationCallbackUrl: 'https://ever.works/api/auth/verify-email',
             },
@@ -169,7 +170,12 @@ describe('OAuthClaimController (POST /api/oauth/:providerId/claim)', () => {
     it('records the terms BEFORE the code is spent or the account changes', async () => {
         const { state, req } = signedIn();
 
-        await controller.claim('github', { code: 'c', state, terms: TERMS }, req, makeRes());
+        await controller.claim(
+            'github',
+            { code: 'c', expectedUserId: 'anon-1', state, terms: TERMS },
+            req,
+            makeRes(),
+        );
 
         expect(terms.record.mock.invocationCallOrder[0]).toBeLessThan(
             socialAuth.fetchSocialUser.mock.invocationCallOrder[0],
@@ -184,7 +190,12 @@ describe('OAuthClaimController (POST /api/oauth/:providerId/claim)', () => {
         const { state, req } = signedIn();
 
         await expect(
-            controller.claim('github', { code: 'c', state, terms: TERMS }, req, makeRes()),
+            controller.claim(
+                'github',
+                { code: 'c', expectedUserId: 'anon-1', state, terms: TERMS },
+                req,
+                makeRes(),
+            ),
         ).rejects.toBeInstanceOf(ServiceUnavailableException);
         expect(socialAuth.fetchSocialUser).not.toHaveBeenCalled();
         expect(socialClaim.claim).not.toHaveBeenCalled();
@@ -198,11 +209,50 @@ describe('OAuthClaimController (POST /api/oauth/:providerId/claim)', () => {
         const { state, req } = signedIn();
 
         await expect(
-            controller.claim('github', { code: 'c', state, terms: TERMS }, req, makeRes()),
+            controller.claim(
+                'github',
+                { code: 'c', expectedUserId: 'anon-1', state, terms: TERMS },
+                req,
+                makeRes(),
+            ),
         ).rejects.toBeInstanceOf(BadRequestException);
         expect(socialAuth.fetchSocialUser).not.toHaveBeenCalled();
         expect(socialClaim.claim).not.toHaveBeenCalled();
         expect(terms.record).not.toHaveBeenCalled();
+    });
+
+    it('refuses a save intent bound to another account before anything is recorded or spent', async () => {
+        // A save cookie tossed from a sibling subdomain carries the attacker's user id, never
+        // this session's: the API checks the binding again, server-side.
+        const { state, req } = signedIn();
+
+        await expect(
+            controller.claim(
+                'github',
+                { code: 'c', state, expectedUserId: 'attacker-anon', terms: TERMS },
+                req,
+                makeRes(),
+            ),
+        ).rejects.toBeInstanceOf(BadRequestException);
+        expect(terms.record).not.toHaveBeenCalled();
+        expect(socialAuth.fetchSocialUser).not.toHaveBeenCalled();
+        expect(socialClaim.claim).not.toHaveBeenCalled();
+    });
+
+    it('saves only with GitHub or Google: another configured provider is a 400 first', async () => {
+        const { state, req } = signedIn();
+
+        await expect(
+            controller.claim(
+                'facebook',
+                { code: 'c', expectedUserId: 'anon-1', state, terms: TERMS },
+                req,
+                makeRes(),
+            ),
+        ).rejects.toBeInstanceOf(BadRequestException);
+        expect(socialAuth.getProviderDisplayName).not.toHaveBeenCalled();
+        expect(terms.record).not.toHaveBeenCalled();
+        expect(socialAuth.fetchSocialUser).not.toHaveBeenCalled();
     });
 
     it('refuses an unknown provider with 400 before anything is recorded or spent', async () => {
@@ -212,7 +262,12 @@ describe('OAuthClaimController (POST /api/oauth/:providerId/claim)', () => {
         const { state, req } = signedIn();
 
         await expect(
-            controller.claim('discord', { code: 'c', state, terms: TERMS }, req, makeRes()),
+            controller.claim(
+                'discord',
+                { code: 'c', expectedUserId: 'anon-1', state, terms: TERMS },
+                req,
+                makeRes(),
+            ),
         ).rejects.toBeInstanceOf(BadRequestException);
         expect(terms.record).not.toHaveBeenCalled();
         expect(socialAuth.fetchSocialUser).not.toHaveBeenCalled();
@@ -223,7 +278,12 @@ describe('OAuthClaimController (POST /api/oauth/:providerId/claim)', () => {
         const res = makeRes();
 
         await expect(
-            controller.claim('github', { code: 'c', state: 'attacker-state' }, req, res),
+            controller.claim(
+                'github',
+                { code: 'c', expectedUserId: 'anon-1', state: 'attacker-state' },
+                req,
+                res,
+            ),
         ).rejects.toThrow(/OAuth state verification failed/);
         expect(socialAuth.fetchSocialUser).not.toHaveBeenCalled();
         expect(socialClaim.claim).not.toHaveBeenCalled();
@@ -234,7 +294,12 @@ describe('OAuthClaimController (POST /api/oauth/:providerId/claim)', () => {
         const { state, req } = signedIn({ userId: 'u-registered', isAnonymous: false });
 
         await expect(
-            controller.claim('github', { code: 'c', state }, req, makeRes()),
+            controller.claim(
+                'github',
+                { code: 'c', expectedUserId: 'anon-1', state },
+                req,
+                makeRes(),
+            ),
         ).rejects.toBeInstanceOf(ForbiddenException);
         expect(socialAuth.fetchSocialUser).not.toHaveBeenCalled();
     });
@@ -246,7 +311,12 @@ describe('OAuthClaimController (POST /api/oauth/:providerId/claim)', () => {
         const { state, req } = signedIn();
 
         await expect(
-            controller.claim('github', { code: 'c', state, terms: TERMS }, req, makeRes()),
+            controller.claim(
+                'github',
+                { code: 'c', expectedUserId: 'anon-1', state, terms: TERMS },
+                req,
+                makeRes(),
+            ),
         ).rejects.toBeInstanceOf(ConflictException);
         expect(authProvider.issueSession).not.toHaveBeenCalled();
         expect(authProvider.signOut).not.toHaveBeenCalled();
@@ -262,7 +332,12 @@ describe('OAuthClaimController (POST /api/oauth/:providerId/claim)', () => {
             headers: { ...req.headers, 'x-forwarded-for': '6.6.6.6' },
         };
 
-        await controller.claim('github', { code: 'c', state, terms: TERMS }, spoofed, makeRes());
+        await controller.claim(
+            'github',
+            { code: 'c', expectedUserId: 'anon-1', state, terms: TERMS },
+            spoofed,
+            makeRes(),
+        );
 
         expect(authProvider.issueSession).toHaveBeenCalledWith('anon-1', {
             ipAddress: '10.0.0.7',
@@ -284,7 +359,7 @@ describe('OAuthClaimController (POST /api/oauth/:providerId/claim)', () => {
 
         const result = await controller.claim(
             'github',
-            { code: 'c', state, terms: TERMS },
+            { code: 'c', expectedUserId: 'anon-1', state, terms: TERMS },
             req,
             makeRes(),
         );
@@ -299,7 +374,12 @@ describe('OAuthClaimController (POST /api/oauth/:providerId/claim)', () => {
         const { state, req } = signedIn();
 
         await expect(
-            controller.claim('github', { code: 'c', state, terms: TERMS }, req, makeRes()),
+            controller.claim(
+                'github',
+                { code: 'c', expectedUserId: 'anon-1', state, terms: TERMS },
+                req,
+                makeRes(),
+            ),
         ).resolves.toMatchObject({ access_token: 'fresh' });
     });
 });
