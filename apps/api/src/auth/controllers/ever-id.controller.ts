@@ -63,6 +63,7 @@ import { everIdError } from '../services/ever-id-errors';
 import { EverIdLinkingService } from '../services/ever-id-linking.service';
 import { EverIdSessionService } from '../services/ever-id-session.service';
 import { EverIdSignInService } from '../services/ever-id-sign-in.service';
+import { trustedClientIp } from '../../config/trust-proxy';
 
 /**
  * Platform administrators only — and a non-administrator is told the route does
@@ -115,13 +116,10 @@ export interface EverIdAdminStatus {
 
 function requestContext(req: {
     ip?: unknown;
+    socket?: { remoteAddress?: unknown } | null;
     headers?: Record<string, unknown>;
 }): EverIdRequestContext {
-    const forwarded = req.headers?.['x-forwarded-for'];
-    const ipAddress =
-        (typeof req.ip === 'string' && req.ip) ||
-        (typeof forwarded === 'string' ? forwarded.split(',')[0].trim() : null) ||
-        null;
+    const ipAddress = trustedClientIp(req);
     const userAgent = req.headers?.['user-agent'];
     return { ipAddress, userAgent: typeof userAgent === 'string' ? userAgent : null };
 }

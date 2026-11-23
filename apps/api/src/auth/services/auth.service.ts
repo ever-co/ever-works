@@ -393,6 +393,19 @@ export class AuthService {
             throw new BadRequestException('Verification token expired');
         }
 
+        // Already verified (e.g. by accepting an organization invitation, which proves the
+        // mailbox): an UNEXPIRED old link stays harmless and idempotent (expiry above still
+        // applies, so a stale link never becomes a non-expiring sign-in). Drop the pending token and
+        // answer the same success, WITHOUT a second UserConfirmedEvent (welcome mail,
+        // activity-log entry, user-research dispatch).
+        if (user.emailVerified) {
+            await this.userRepository.update(user.id, {
+                emailVerificationToken: null,
+                emailVerificationExpires: null,
+            });
+            return user;
+        }
+
         await this.userRepository.update(user.id, {
             emailVerified: true,
             emailVerificationToken: null,

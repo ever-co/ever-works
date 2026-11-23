@@ -45,6 +45,7 @@ import { UploadsService } from './uploads.service';
 import { PresignUploadDto } from './dto/presign-upload.dto';
 import { ScopeContextService } from '../scope/scope-context.service';
 import { ApiKeyService } from '../auth/services/api-key.service';
+import { trustedClientIp } from '../config/trust-proxy';
 
 const MAX_UPLOAD_BYTES = Number(process.env.UPLOADS_MAX_BYTES) || 5 * 1024 * 1024;
 
@@ -654,11 +655,7 @@ export class UploadsController {
         const ownershipScope: OwnershipScope = { tenantId: null, organizationId: null };
         this.scopeContext.setScope(ownershipScope);
 
-        const ipAddress =
-            (typeof req.ip === 'string' && req.ip) ||
-            (typeof req.headers['x-forwarded-for'] === 'string'
-                ? (req.headers['x-forwarded-for'] as string).split(',')[0].trim()
-                : null);
+        const ipAddress = trustedClientIp(req);
         const userAgent =
             typeof req.headers['user-agent'] === 'string'
                 ? (req.headers['user-agent'] as string)
