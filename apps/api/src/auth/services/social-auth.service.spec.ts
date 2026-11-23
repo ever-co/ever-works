@@ -457,6 +457,38 @@ describe('SocialAuthService', () => {
             );
         });
 
+        it('LinkedIn: a mixed-case email is returned trimmed and lower-cased', async () => {
+            httpService.post.mockReturnValueOnce(of({ data: { access_token: 'li' } }));
+            httpService.get.mockReturnValueOnce(
+                of({
+                    data: { sub: 'li-9', email: ' Jane.Doe@Example.COM ', email_verified: true },
+                }),
+            );
+            authService.validateSocialUser.mockResolvedValue('ok');
+
+            await service.authenticate(AuthProvider.LINKEDIN, 'c');
+
+            expect(authService.validateSocialUser).toHaveBeenCalledWith(
+                expect.objectContaining({ email: 'jane.doe@example.com' }),
+            );
+        });
+
+        it('Facebook: a mixed-case email is returned trimmed and lower-cased', async () => {
+            httpService.post.mockReturnValueOnce(
+                of({ data: { access_token: 'fb', token_type: 'bearer' } }),
+            );
+            httpService.get.mockReturnValueOnce(
+                of({ data: { id: 'fb-9', name: 'FB', email: ' Jane.Doe@Example.COM ' } }),
+            );
+            authService.validateSocialUser.mockResolvedValue('ok');
+
+            await service.authenticate(AuthProvider.FACEBOOK, 'c');
+
+            expect(authService.validateSocialUser).toHaveBeenCalledWith(
+                expect.objectContaining({ email: 'jane.doe@example.com', emailVerified: false }),
+            );
+        });
+
         it('GitHub: a mixed-case email is returned lower-cased', async () => {
             httpService.post.mockReturnValueOnce(
                 of({ data: { access_token: 'gh', token_type: 'bearer', scope: 'repo' } }),

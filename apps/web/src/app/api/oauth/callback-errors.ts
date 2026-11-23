@@ -7,6 +7,11 @@ const PROVIDER_CONFLICT_CODE = 'PROVIDER_ACCOUNT_ALREADY_LINKED';
  * the generic conflict below.
  */
 const EXISTING_ACCOUNT_UNVERIFIED_CODE = 'EXISTING_ACCOUNT_EMAIL_UNVERIFIED';
+/**
+ * Several accounts differ only in email case, so the API refused to pick one (409). Not a
+ * provider-link conflict, so it shows the generic sign-in failure.
+ */
+const SOCIAL_EMAIL_AMBIGUOUS_CODE = 'SOCIAL_EMAIL_AMBIGUOUS';
 const ACCOUNT_LOCKED_SNIPPET = 'suspended';
 
 export type OAuthRouteErrorCode =
@@ -27,6 +32,9 @@ export function getOAuthRouteErrorCode(
     if (error instanceof ApiResponseError) {
         if (error.code === EXISTING_ACCOUNT_UNVERIFIED_CODE) {
             return 'oauth_existing_account_unverified';
+        }
+        if (error.code === SOCIAL_EMAIL_AMBIGUOUS_CODE) {
+            return fallback;
         }
         if (error.code === PROVIDER_CONFLICT_CODE || error.statusCode === 409) {
             return 'oauth_provider_conflict';
