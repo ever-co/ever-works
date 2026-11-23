@@ -93,11 +93,27 @@ export class UserRepository {
     async existsByEmailCaseInsensitive(email: string): Promise<boolean> {
         const trimmed = typeof email === 'string' ? email.trim() : '';
         if (!trimmed) return false;
-        const count = await this.repository
-            .createQueryBuilder('user')
-            .where('lower(user.email) = lower(:email)', { email: trimmed })
-            .getCount();
+        const count = await this.emailCaseInsensitiveQuery(trimmed).getCount();
         return count > 0;
+    }
+
+    /** The one place the case-insensitive email predicate lives (parameter-bound, portable `lower()`). */
+    private emailCaseInsensitiveQuery(trimmed: string) {
+        return this.repository
+            .createQueryBuilder('user')
+            .where('lower(user.email) = lower(:email)', { email: trimmed });
+    }
+
+    /**
+     * The trimmed email when a case-insensitive FALLBACK may run for it, else null.
+     * Blank input never queries, and non-ASCII input is exact-match only: SQLite folds
+     * ASCII only while Postgres and JS fold by locale / Unicode rules, so the fallback
+     * would otherwise behave differently per database.
+     */
+    private fallbackEmail(email: string): string | null {
+        const trimmed = typeof email === 'string' ? email.trim() : '';
+        if (!trimmed) return null;
+        return [...trimmed].every((ch) => ch.charCodeAt(0) < 128) ? trimmed : null;
     }
 
     async findByEmail(email: string): Promise<User | null> {
@@ -110,17 +126,28 @@ export class UserRepository {
      * The single user whose email equals `email` ignoring case and surrounding
      * whitespace, or null when none matches OR several do (case-variant duplicates
      * exist because the unique index is case-sensitive). Never guesses between
-     * candidates. Portable: `lower()` runs on both Postgres and SQLite.
+     * candidates. ASCII input only (see fallbackEmail).
      */
     async findUniqueByEmailCaseInsensitive(email: string): Promise<User | null> {
-        const trimmed = typeof email === 'string' ? email.trim() : '';
+        const trimmed = this.fallbackEmail(email);
         if (!trimmed) return null;
-        const matches = await this.repository
-            .createQueryBuilder('user')
-            .where('lower(user.email) = lower(:email)', { email: trimmed })
+        const matches = await this.emailCaseInsensitiveQuery(trimmed).take(2).getMany();
+        return matches.length === 1 ? matches[0] : null;
+    }
+
+    /**
+     * Social sign-in fallback after an exact `findByEmailForSocialAuth` miss: up to two
+     * users (social-auth columns only) whose email matches ignoring case, so the caller
+     * can tell 0 (create) from 1 (decide the join) from 2+ (ambiguous, refuse).
+     * ASCII input only (see fallbackEmail); otherwise [].
+     */
+    async findByEmailCaseInsensitiveForSocialAuth(email: string): Promise<User[]> {
+        const trimmed = this.fallbackEmail(email);
+        if (!trimmed) return [];
+        return this.emailCaseInsensitiveQuery(trimmed)
+            .select(SOCIAL_AUTH_USER_SELECT)
             .take(2)
             .getMany();
-        return matches.length === 1 ? matches[0] : null;
     }
 
     async findByEmailForSocialAuth(email: string): Promise<User | null> {
