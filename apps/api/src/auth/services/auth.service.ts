@@ -38,7 +38,7 @@ import { ForgotPasswordDto, ResendVerificationDto } from '../dto/email-verificat
 import { RequestMagicLinkDto } from '../dto/magic-link.dto';
 import { UpdateProfileDto } from '../dto/update-profile.dto';
 import type { SocialAuthUser } from '../types/social-auth.types';
-import { existingAccountEmailUnverified } from './social-link-errors';
+import { existingAccountEmailUnverified, socialEmailAmbiguous } from './social-link-errors';
 
 @Injectable()
 export class AuthService {
@@ -204,7 +204,7 @@ export class AuthService {
     }
 
     async validateSocialUser(socialUser: SocialAuthUser) {
-        const isTrustedEmail = socialUser.emailVerified !== false;
+        const isTrustedEmail = socialUser.emailVerified === true;
         const displayName = socialUser.displayName || socialUser.email.split('@')[0];
 
         // The provider IDENTITY decides first, the email second (self-build
@@ -240,6 +240,19 @@ export class AuthService {
         }
         if (!user) {
             user = await this.userRepository.findByEmailForSocialAuth(socialUser.email);
+        }
+        if (!user) {
+            // An exact miss may still be an account stored in another case (the unique
+            // index is case-sensitive). Exactly one is that account, and the both-verified
+            // rule below decides the join; two or more are ambiguous, and creating a third
+            // variant would only deepen the split.
+            const variants = await this.userRepository.findByEmailCaseInsensitiveForSocialAuth(
+                socialUser.email,
+            );
+            if (variants.length > 1) {
+                throw socialEmailAmbiguous();
+            }
+            user = variants[0] ?? null;
         }
 
         if (!user) {

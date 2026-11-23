@@ -150,7 +150,7 @@ export class SocialClaimService {
 
         // 2. The link and the flip, in one transaction (see the class comment).
         // Only a provider that vouches for the address verifies it, as on social sign-up.
-        const emailVerified = socialUser.emailVerified !== false;
+        const emailVerified = socialUser.emailVerified === true;
         let updated: Awaited<ReturnType<UserRepository['update']>>;
         try {
             updated = await this.dataSource.transaction(async (manager) => {
