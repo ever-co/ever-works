@@ -162,6 +162,8 @@ import {
  * for more is silently clamped, here and again inside `capDiffFiles`.
  */
 const MAX_DIFF_FILES = DEFAULT_DIFF_MAX_FILES;
+/** Upper bound for `GET /tasks/board/column?offset=` (a page index, not a row id). */
+const MAX_BOARD_COLUMN_OFFSET = 1_000_000;
 const MAX_DIFF_BYTES = DEFAULT_DIFF_MAX_BYTES;
 
 /**
@@ -765,7 +767,13 @@ export class TasksController {
                 `Unknown ${input.layout ?? 'status'} board column: ${key || '(missing)'}`,
             );
         }
-        const offset = Math.max(0, parseInt(query.offset ?? '0', 10) || 0);
+        // Bounded both ways: an absurdly large value (`1e23`, past what the
+        // database accepts as OFFSET) would otherwise reach the query and 500;
+        // past the cap the column is simply empty, like any offset past its end.
+        const offset = Math.min(
+            MAX_BOARD_COLUMN_OFFSET,
+            Math.max(0, parseInt(query.offset ?? '0', 10) || 0),
+        );
         return this.requireBoard().getColumn(
             auth.userId,
             input,
