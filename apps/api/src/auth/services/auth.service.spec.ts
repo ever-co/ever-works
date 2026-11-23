@@ -855,6 +855,38 @@ describe('AuthService', () => {
             expect(result).toBe(updated);
         });
 
+        it('an already-verified user with an EXPIRED token is still refused, untouched', async () => {
+            userRepo.findOne.mockResolvedValue({
+                id: 'u',
+                emailVerified: true,
+                emailVerificationExpires: new Date(Date.now() - 1000),
+            } as any);
+
+            await expect(service.verifyEmail('t')).rejects.toThrow('Verification token expired');
+
+            expect(userRepo.update).not.toHaveBeenCalled();
+            expect(emitter.emit).not.toHaveBeenCalled();
+        });
+
+        it('an already-verified user: clears the token, succeeds, emits nothing', async () => {
+            const user = {
+                id: 'u',
+                emailVerified: true,
+                emailVerificationExpires: new Date(Date.now() + 1000),
+            };
+            userRepo.findOne.mockResolvedValue(user as any);
+            userRepo.update.mockResolvedValue({} as any);
+
+            const result = await service.verifyEmail('t');
+
+            expect(userRepo.update).toHaveBeenCalledWith('u', {
+                emailVerificationToken: null,
+                emailVerificationExpires: null,
+            });
+            expect(emitter.emit).not.toHaveBeenCalled();
+            expect(result).toBe(user);
+        });
+
         it('throws when updated user disappears', async () => {
             userRepo.findOne.mockResolvedValue({ id: 'u' } as any);
             userRepo.findById.mockResolvedValue(null);

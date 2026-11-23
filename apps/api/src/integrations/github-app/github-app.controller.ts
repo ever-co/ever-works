@@ -17,6 +17,7 @@ import { AUTH_PROVIDER } from '@src/auth/providers/auth-provider.constants';
 import { GitHubAppCallbackQueryDto, GitHubAppSetupQueryDto } from './dto/github-app.dto';
 import { GitHubAppOnboardingService } from './github-app-onboarding.service';
 import { GitHubAppSyncService } from './github-app-sync.service';
+import { trustedClientIp } from '../../config/trust-proxy';
 
 /** Header the web tier forwards the setup's browser-binding cookie in (lower-case, as Node exposes it). */
 export const GITHUB_APP_SETUP_BINDING_HEADER = 'x-ever-works-setup-binding';
@@ -53,11 +54,7 @@ export class GitHubAppController {
             binding: typeof bindingHeader === 'string' ? bindingHeader : null,
         });
         // H-04: bind the GitHub-App-issued session to the requesting client.
-        const ipAddress =
-            (typeof req.ip === 'string' && req.ip) ||
-            (typeof req.headers['x-forwarded-for'] === 'string'
-                ? (req.headers['x-forwarded-for'] as string).split(',')[0].trim()
-                : null);
+        const ipAddress = trustedClientIp(req);
         const userAgent =
             typeof req.headers['user-agent'] === 'string'
                 ? (req.headers['user-agent'] as string)
