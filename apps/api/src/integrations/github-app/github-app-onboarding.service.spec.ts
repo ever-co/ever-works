@@ -7,6 +7,10 @@ import {
 import { AxiosError } from 'axios';
 import { createHash } from 'node:crypto';
 import { of, throwError } from 'rxjs';
+import {
+    SOCIAL_EMAIL_AMBIGUOUS_CODE,
+    SOCIAL_EMAIL_AMBIGUOUS_MESSAGE,
+} from '@src/auth/services/social-link-errors';
 import { GitHubAppOnboardingService } from './github-app-onboarding.service';
 import { GitHubAppService } from './github-app.service';
 
@@ -72,6 +76,9 @@ describe('GitHubAppOnboardingService', () => {
         const userRepository = {
             findById: jest.fn(),
             findByEmail: jest.fn(),
+            // The case-insensitive fallback after an exact miss: no case variant by default.
+            findByEmailCaseInsensitiveForSocialAuth: jest.fn().mockResolvedValue([]),
+            existsByEmailCaseInsensitive: jest.fn().mockResolvedValue(false),
             findByUsername: jest.fn(),
             findByUsernameCaseInsensitive: jest.fn(),
             findBySlug: jest.fn(),
@@ -1008,6 +1015,297 @@ describe('GitHubAppOnboardingService', () => {
                     expect.objectContaining({ email: 'owner@example.com', emailVerified: false }),
                 );
                 expect(result.user.id).toBe('user-new');
+            });
+        });
+
+        // The unique index on `users.email` is case-sensitive. GitHub reports the address in
+        // the case its owner typed, so the exact lookup missed a stored `jane@example.com`
+        // for `Jane@Example.com` and created a second, verified, user in that case. Now:
+        // stored in lower case, exact match first, then a unique case-insensitive match
+        // (the OAuth sign-in's rule), and two or more case variants are refused.
+        describe('a GitHub email in another case than the stored one', () => {
+            const installation = {
+                id: 'installation-row-1',
+                installationId: '12345',
+                accountLogin: 'acme',
+                accountType: 'Organization',
+                targetType: 'Organization',
+            };
+            const storedUser = {
+                id: 'user-jane',
+                username: 'jane',
+                email: 'jane@example.com',
+                emailVerified: true,
+                registrationProvider: 'local',
+                avatar: null,
+            };
+
+            const arrange = (
+                github: { email: string | null; emailVerified?: boolean; githubUserId?: string } = {
+                    email: 'Jane@Example.com',
+                },
+            ) => {
+                const ctx = createService();
+                const state = signBound(ctx.service, {
+                    installationId: '12345',
+                    issuedAt: Date.now(),
+                });
+                ctx.gitHubAppService.exchangeUserCode.mockResolvedValue({
+                    access_token: 'ghu_token',
+                    scope: '',
+                });
+                ctx.gitHubAppService.getAuthenticatedGithubUser.mockResolvedValue({
+                    githubUserId: github.githubUserId ?? '5151',
+                    login: 'jane-gh',
+                    email: github.email,
+                    emailVerified: github.emailVerified ?? true,
+                    avatarUrl: null,
+                    nodeId: 'NODE_5151',
+                });
+                ctx.userLinkRepository.findByGithubUserId.mockResolvedValue(null);
+                ctx.authAccountRepository.findProviderAccountByAccountId.mockResolvedValue(null);
+                ctx.userRepository.findByEmail.mockResolvedValue(null);
+                ctx.userRepository.create.mockImplementation(async (data: object) => ({
+                    id: 'user-new',
+                    ...data,
+                }));
+                ctx.userRepository.update.mockImplementation(async (id: string, patch: object) => ({
+                    ...storedUser,
+                    ...patch,
+                    id,
+                }));
+                ctx.installationRepository.upsertFromGithub.mockResolvedValue(installation);
+                ctx.installationRepository.claimOwnershipIfUnassigned.mockResolvedValue(
+                    installation,
+                );
+                const complete = () =>
+                    ctx.service.completeUserAuth({ binding: BINDING, code: 'code', state });
+                return { ...ctx, complete };
+            };
+
+            const expectNothingWritten = (ctx: ReturnType<typeof arrange>) => {
+                expect(ctx.userRepository.create).not.toHaveBeenCalled();
+                expect(ctx.userRepository.update).not.toHaveBeenCalled();
+                expect(ctx.authAccountRepository.upsertProviderAccount).not.toHaveBeenCalled();
+                expect(ctx.userLinkRepository.upsertLink).not.toHaveBeenCalled();
+                expect(ctx.installationRepository.upsertFromGithub).not.toHaveBeenCalled();
+                expect(
+                    ctx.installationRepository.claimOwnershipIfUnassigned,
+                ).not.toHaveBeenCalled();
+            };
+
+            it('finds the stored lower-case user by the exact lookup of the normalised address', async () => {
+                const ctx = arrange();
+                ctx.userRepository.findByEmail.mockImplementation(async (email: string) =>
+                    email === 'jane@example.com' ? storedUser : null,
+                );
+
+                const result = await ctx.complete();
+
+                expect(ctx.userRepository.findByEmail).toHaveBeenCalledWith('jane@example.com');
+                expect(ctx.userRepository.create).not.toHaveBeenCalled();
+                expect(result.user.id).toBe(storedUser.id);
+                expect(ctx.userRepository.update).toHaveBeenCalledWith(
+                    storedUser.id,
+                    expect.objectContaining({ email: 'jane@example.com' }),
+                );
+                expect(ctx.authAccountRepository.upsertProviderAccount).toHaveBeenCalledWith(
+                    expect.objectContaining({ userId: storedUser.id, accountId: '5151' }),
+                );
+                expect(ctx.installationRepository.claimOwnershipIfUnassigned).toHaveBeenCalledWith(
+                    '12345',
+                    storedUser.id,
+                    '5151',
+                );
+            });
+
+            it('finds the one user stored in a third case through the case-insensitive fallback', async () => {
+                const ctx = arrange({ email: 'Jane@Example.com' });
+                const legacy = { ...storedUser, email: 'JANE@example.com' };
+                ctx.userRepository.findByEmailCaseInsensitiveForSocialAuth.mockResolvedValue([
+                    legacy,
+                ]);
+
+                const result = await ctx.complete();
+
+                // Exact on the normalised address, then exact on the address as GitHub sent it.
+                expect(ctx.userRepository.findByEmail).toHaveBeenNthCalledWith(
+                    1,
+                    'jane@example.com',
+                );
+                expect(ctx.userRepository.findByEmail).toHaveBeenNthCalledWith(
+                    2,
+                    'Jane@Example.com',
+                );
+                expect(
+                    ctx.userRepository.findByEmailCaseInsensitiveForSocialAuth,
+                ).toHaveBeenCalledWith('jane@example.com');
+                expect(ctx.userRepository.create).not.toHaveBeenCalled();
+                expect(result.user.id).toBe(storedUser.id);
+                // An existing (non-placeholder) address is never rewritten.
+                expect(ctx.userRepository.update).toHaveBeenCalledWith(
+                    storedUser.id,
+                    expect.objectContaining({ email: 'JANE@example.com', emailVerified: true }),
+                );
+            });
+
+            it('still refuses (409, writing nothing) a case-variant user whose own email is unverified', async () => {
+                const ctx = arrange();
+                ctx.userRepository.findByEmailCaseInsensitiveForSocialAuth.mockResolvedValue([
+                    { ...storedUser, email: 'jane@EXAMPLE.com', emailVerified: false },
+                ]);
+
+                const attempt = ctx.complete();
+
+                await expect(attempt).rejects.toBeInstanceOf(ConflictException);
+                await expect(attempt).rejects.toMatchObject({
+                    status: 409,
+                    response: expect.objectContaining({
+                        code: 'EXISTING_ACCOUNT_EMAIL_UNVERIFIED',
+                    }),
+                });
+                expectNothingWritten(ctx);
+            });
+
+            it('still refuses (401, writing nothing) an UNVERIFIED GitHub email that matches a case-variant user', async () => {
+                const ctx = arrange({ email: 'Jane@Example.com', emailVerified: false });
+                ctx.userRepository.findByEmail.mockImplementation(async (email: string) =>
+                    email === 'jane@example.com' ? storedUser : null,
+                );
+
+                await expect(ctx.complete()).rejects.toBeInstanceOf(UnauthorizedException);
+                expectNothingWritten(ctx);
+            });
+
+            it('refuses two or more case variants with SOCIAL_EMAIL_AMBIGUOUS, naming no address, and creates nothing', async () => {
+                const ctx = arrange();
+                ctx.userRepository.findByEmailCaseInsensitiveForSocialAuth.mockResolvedValue([
+                    { ...storedUser, id: 'user-a', email: 'JANE@example.com' },
+                    { ...storedUser, id: 'user-b', email: 'jane@EXAMPLE.COM' },
+                ]);
+
+                const attempt = ctx.complete();
+
+                await expect(attempt).rejects.toBeInstanceOf(ConflictException);
+                await expect(attempt).rejects.toMatchObject({
+                    status: 409,
+                    response: {
+                        code: SOCIAL_EMAIL_AMBIGUOUS_CODE,
+                        message: SOCIAL_EMAIL_AMBIGUOUS_MESSAGE,
+                    },
+                });
+                expect(SOCIAL_EMAIL_AMBIGUOUS_MESSAGE).not.toMatch(/@|\d/);
+                expectNothingWritten(ctx);
+            });
+
+            it('creates a never-seen GitHub user with the trimmed, lower-cased address', async () => {
+                const ctx = arrange({ email: '  Jane@Example.COM ' });
+
+                const result = await ctx.complete();
+
+                expect(ctx.userRepository.create).toHaveBeenCalledTimes(1);
+                expect(ctx.userRepository.create).toHaveBeenCalledWith(
+                    expect.objectContaining({ email: 'jane@example.com', emailVerified: true }),
+                );
+                expect(result.user.id).toBe('user-new');
+            });
+
+            it.each([
+                ['missing', null],
+                ['blank', '   '],
+            ])(
+                'creates with the noreply placeholder, unverified, when the email is %s',
+                async (_label, email) => {
+                    const ctx = arrange({ email, githubUserId: '6262' });
+
+                    await ctx.complete();
+
+                    expect(ctx.userRepository.findByEmail).not.toHaveBeenCalled();
+                    expect(ctx.userRepository.create).toHaveBeenCalledWith(
+                        expect.objectContaining({
+                            email: 'github-app-6262@users.noreply.ever.works',
+                            emailVerified: false,
+                        }),
+                    );
+                },
+            );
+
+            // A non-ASCII address never reaches the case-insensitive fallback (the repository
+            // runs it for ASCII only), so an older row stored in GitHub's own case is still
+            // found exactly, and every check it faced before still applies.
+            it('still matches a non-ASCII address stored in the case GitHub sends, and still refuses it unverified', async () => {
+                const ctx = arrange({ email: 'José@Example.com' });
+                ctx.userRepository.findByEmail.mockImplementation(async (email: string) =>
+                    email === 'José@Example.com'
+                        ? { ...storedUser, email: 'José@Example.com', emailVerified: false }
+                        : null,
+                );
+
+                await expect(ctx.complete()).rejects.toMatchObject({
+                    status: 409,
+                    response: expect.objectContaining({
+                        code: 'EXISTING_ACCOUNT_EMAIL_UNVERIFIED',
+                    }),
+                });
+                expect(ctx.userRepository.findByEmail).toHaveBeenNthCalledWith(
+                    1,
+                    'josé@example.com',
+                );
+                expectNothingWritten(ctx);
+            });
+
+            describe('a user reached by its GitHub identity with a placeholder email', () => {
+                const arrangePlaceholder = (email: string) => {
+                    const ctx = arrange({ email, githubUserId: '4242' });
+                    ctx.userLinkRepository.findByGithubUserId.mockResolvedValue({
+                        userId: storedUser.id,
+                        githubUserId: '4242',
+                    });
+                    ctx.userRepository.findById.mockResolvedValue({
+                        ...storedUser,
+                        email: 'github-app-4242@users.noreply.ever.works',
+                        emailVerified: false,
+                    });
+                    return ctx;
+                };
+
+                it('replaces the placeholder with the lower-cased address, verified with it', async () => {
+                    const ctx = arrangePlaceholder(' Jane@Example.COM ');
+
+                    await ctx.complete();
+
+                    expect(ctx.userRepository.existsByEmailCaseInsensitive).toHaveBeenCalledWith(
+                        'jane@example.com',
+                    );
+                    expect(ctx.userRepository.update).toHaveBeenCalledWith(
+                        storedUser.id,
+                        expect.objectContaining({
+                            email: 'jane@example.com',
+                            emailVerified: true,
+                        }),
+                    );
+                    // Identity first: the email lookups never ran.
+                    expect(ctx.userRepository.findByEmail).not.toHaveBeenCalled();
+                    expect(
+                        ctx.userRepository.findByEmailCaseInsensitiveForSocialAuth,
+                    ).not.toHaveBeenCalled();
+                });
+
+                it('keeps the placeholder, unverified, when another account uses the address in any case', async () => {
+                    const ctx = arrangePlaceholder('Jane@Example.com');
+                    ctx.userRepository.existsByEmailCaseInsensitive.mockResolvedValue(true);
+
+                    await ctx.complete();
+
+                    expect(ctx.userRepository.update).toHaveBeenCalledWith(
+                        storedUser.id,
+                        expect.objectContaining({
+                            email: 'github-app-4242@users.noreply.ever.works',
+                            emailVerified: false,
+                        }),
+                    );
+                    expect(ctx.userRepository.create).not.toHaveBeenCalled();
+                });
             });
         });
 
