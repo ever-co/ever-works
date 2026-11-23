@@ -122,6 +122,25 @@ describe('OrganizationInvitationFlowService.accept - email verification', () => 
         expect(eventEmitter.emit).not.toHaveBeenCalled();
     });
 
+    it('never verifies an unverified user whose email differs from the invitation', async () => {
+        const { service, users, eventEmitter } = build({ user: { email: 'other@example.com' } });
+
+        await service.accept('tok', 'u-1');
+
+        expect(users.update).not.toHaveBeenCalled();
+        expect(eventEmitter.emit).not.toHaveBeenCalled();
+    });
+
+    it('never verifies when joinTenant throws', async () => {
+        const { service, users, tenantBootstrap, eventEmitter } = build();
+        tenantBootstrap.joinTenant.mockRejectedValue(new Error('already in another tenant'));
+
+        await expect(service.accept('tok', 'u-1')).rejects.toThrow('another tenant');
+
+        expect(users.update).not.toHaveBeenCalled();
+        expect(eventEmitter.emit).not.toHaveBeenCalled();
+    });
+
     it('never verifies when the claim is lost', async () => {
         const { service, users, invitations } = build();
         invitations.tryAccept.mockResolvedValue(false);
