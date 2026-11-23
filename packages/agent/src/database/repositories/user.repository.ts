@@ -106,6 +106,23 @@ export class UserRepository {
         });
     }
 
+    /**
+     * The single user whose email equals `email` ignoring case and surrounding
+     * whitespace, or null when none matches OR several do (case-variant duplicates
+     * exist because the unique index is case-sensitive). Never guesses between
+     * candidates. Portable: `lower()` runs on both Postgres and SQLite.
+     */
+    async findUniqueByEmailCaseInsensitive(email: string): Promise<User | null> {
+        const trimmed = typeof email === 'string' ? email.trim() : '';
+        if (!trimmed) return null;
+        const matches = await this.repository
+            .createQueryBuilder('user')
+            .where('lower(user.email) = lower(:email)', { email: trimmed })
+            .take(2)
+            .getMany();
+        return matches.length === 1 ? matches[0] : null;
+    }
+
     async findByEmailForSocialAuth(email: string): Promise<User | null> {
         return this.repository
             .createQueryBuilder('user')
