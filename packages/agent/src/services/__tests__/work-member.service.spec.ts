@@ -15,6 +15,7 @@ describe('WorkMemberService', () => {
     };
     let userRepository: {
         findByEmail: jest.Mock;
+        findUniqueByEmailCaseInsensitive: jest.Mock;
         findById: jest.Mock;
     };
     let ownershipService: {
@@ -34,6 +35,7 @@ describe('WorkMemberService', () => {
         };
         userRepository = {
             findByEmail: jest.fn(),
+            findUniqueByEmailCaseInsensitive: jest.fn().mockResolvedValue(null),
             findById: jest.fn(),
         };
         ownershipService = {
@@ -320,6 +322,66 @@ describe('WorkMemberService', () => {
             expect(memberRepository.addMember).not.toHaveBeenCalled();
             expect(recordEvent).not.toHaveBeenCalled();
             expect(userRepository.findById).not.toHaveBeenCalled();
+        });
+
+        describe('case-insensitive invitee lookup', () => {
+            const invite = (email: string) =>
+                service.inviteMember('w-1', 'u-1', { email, role: WorkMemberRole.EDITOR });
+
+            beforeEach(() => {
+                ownershipService.ensureCanManageMembers.mockResolvedValue({ work: buildWork() });
+                memberRepository.findMember.mockResolvedValue(null);
+                userRepository.findByEmail.mockResolvedValue(null);
+            });
+
+            it('adds the single verified user whose email differs only in case', async () => {
+                userRepository.findUniqueByEmailCaseInsensitive.mockResolvedValue(
+                    buildUser({ id: 'u-2', emailVerified: true }),
+                );
+                memberRepository.addMember.mockResolvedValue(buildMember({ id: 'm-1', userId: 'u-2' }));
+                memberRepository.findById.mockResolvedValue(buildMember({ id: 'm-1', userId: 'u-2' }));
+                userRepository.findById.mockResolvedValue(buildUser({ id: 'u-1' }));
+
+                await invite('Jane@Example.com');
+
+                expect(userRepository.findUniqueByEmailCaseInsensitive).toHaveBeenCalledWith(
+                    'Jane@Example.com',
+                );
+                expect(memberRepository.addMember).toHaveBeenCalled();
+            });
+
+            it('answers not found when the case-insensitive match is ambiguous (repository returns null)', async () => {
+                userRepository.findUniqueByEmailCaseInsensitive.mockResolvedValue(null);
+
+                await expect(invite('Jane@Example.com')).rejects.toMatchObject({
+                    response: { message: "User with email 'Jane@Example.com' not found" },
+                });
+                expect(memberRepository.addMember).not.toHaveBeenCalled();
+            });
+
+            it('still refuses an unverified user found by a different-case email', async () => {
+                userRepository.findUniqueByEmailCaseInsensitive.mockResolvedValue(
+                    buildUser({ id: 'u-2', emailVerified: false }),
+                );
+
+                await expect(invite('Jane@Example.com')).rejects.toMatchObject({
+                    response: { code: 'InviteeEmailNotVerified' },
+                });
+                expect(memberRepository.addMember).not.toHaveBeenCalled();
+            });
+
+            it('prefers the exact match and never runs the fallback', async () => {
+                userRepository.findByEmail.mockResolvedValue(
+                    buildUser({ id: 'u-2', emailVerified: true }),
+                );
+                memberRepository.addMember.mockResolvedValue(buildMember({ id: 'm-1', userId: 'u-2' }));
+                memberRepository.findById.mockResolvedValue(buildMember({ id: 'm-1', userId: 'u-2' }));
+                userRepository.findById.mockResolvedValue(buildUser({ id: 'u-1' }));
+
+                await invite('jane@example.com');
+
+                expect(userRepository.findUniqueByEmailCaseInsensitive).not.toHaveBeenCalled();
+            });
         });
 
         it('adds a verified invitee and records the added event', async () => {

@@ -25,6 +25,8 @@ describe('getOAuthRouteErrorCode', () => {
             new ApiResponseError('linked', 409, 'PROVIDER_ACCOUNT_ALREADY_LINKED'),
             'oauth_provider_conflict',
         ],
+        // Ambiguous case-variant accounts: a 409, but the generic failure, not a provider conflict.
+        [new ApiResponseError('ambiguous', 409, 'SOCIAL_EMAIL_AMBIGUOUS'), 'oauth_callback'],
         // Any other 409 (a dangling link, a record conflict) stays a provider conflict.
         [new ApiResponseError('conflict', 409), 'oauth_provider_conflict'],
         [

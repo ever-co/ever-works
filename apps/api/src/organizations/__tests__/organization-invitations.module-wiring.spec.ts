@@ -63,6 +63,9 @@ const EXPECTED_COLLABORATORS = [
     // Domain events (EW-P1-1 B2) — `organization.member.*` recording,
     // `@Optional()` and appended last.
     'DomainEventPublisher',
+    // Welcome mail on the verification flip (#3319): `EventEmitter2`, `@Optional()` and appended last.
+    // `eventemitter2` exports that name as an alias of its class `EventEmitter`, which is the runtime name.
+    'EventEmitter',
 ];
 
 describe('Organization invitations — module wiring', () => {

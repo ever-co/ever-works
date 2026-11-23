@@ -243,6 +243,24 @@ describe('SocialClaimService (EW-617: save an anonymous account with GitHub / Go
             expect(result.emailVerified).toBe(false);
         });
 
+        it('treats a missing emailVerified flag as unverified and mails a check', async () => {
+            const ctx = build();
+
+            const result = await ctx.service.claim(
+                'anon-1',
+                githubUser({ emailVerified: undefined }),
+                { emailVerificationCallbackUrl: 'https://ever.works/api/auth/verify-email' },
+            );
+
+            expect(ctx.userRepository.update).toHaveBeenCalledWith(
+                'anon-1',
+                expect.objectContaining({ emailVerified: false }),
+            );
+            expect(ctx.authService.sendVerificationEmail).toHaveBeenCalled();
+            expect(ctx.eventEmitter.emit).not.toHaveBeenCalled();
+            expect(result.emailVerified).toBe(false);
+        });
+
         it('keeps the save when the verification mail fails', async () => {
             const ctx = build();
             ctx.authService.sendVerificationEmail.mockRejectedValue(new Error('SMTP down'));

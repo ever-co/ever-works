@@ -25,3 +25,20 @@ export function existingAccountEmailUnverified(): ConflictException {
         message: EXISTING_ACCOUNT_EMAIL_UNVERIFIED_MESSAGE,
     });
 }
+
+/**
+ * Several accounts differ only in the case of their email, so the provider's address cannot
+ * be matched to one of them. Refused rather than guessed, and never created as another variant.
+ * The message names no account and no variant; the web shows its generic sign-in error.
+ */
+export const SOCIAL_EMAIL_AMBIGUOUS_CODE = 'SOCIAL_EMAIL_AMBIGUOUS';
+
+export const SOCIAL_EMAIL_AMBIGUOUS_MESSAGE =
+    "We couldn't sign you in with this account automatically. Please contact support.";
+
+export function socialEmailAmbiguous(): ConflictException {
+    return new ConflictException({
+        code: SOCIAL_EMAIL_AMBIGUOUS_CODE,
+        message: SOCIAL_EMAIL_AMBIGUOUS_MESSAGE,
+    });
+}

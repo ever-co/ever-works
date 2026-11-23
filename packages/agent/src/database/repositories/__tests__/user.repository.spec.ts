@@ -108,6 +108,97 @@ describe('UserRepository', () => {
         });
     });
 
+    describe('case-insensitive email fallbacks', () => {
+        const mockMatchesBuilder = (rows: User[]) => {
+            const queryBuilder = {
+                select: jest.fn().mockReturnThis(),
+                where: jest.fn().mockReturnThis(),
+                take: jest.fn().mockReturnThis(),
+                getMany: jest.fn().mockResolvedValue(rows),
+                getCount: jest.fn().mockResolvedValue(rows.length),
+            };
+            repository.createQueryBuilder.mockReturnValue(queryBuilder as any);
+            return queryBuilder;
+        };
+        const a = { id: 'a' } as User;
+        const b = { id: 'b' } as User;
+
+        describe('findUniqueByEmailCaseInsensitive', () => {
+            it.each([
+                ['one match', [a], a],
+                ['two matches (case-variant duplicates)', [a, b], null],
+                ['no match', [], null],
+            ])('%s', async (_label, rows, expected) => {
+                mockMatchesBuilder(rows as User[]);
+                await expect(service.findUniqueByEmailCaseInsensitive('x@y.com')).resolves.toBe(
+                    expected,
+                );
+            });
+
+            it('binds the trimmed value as a parameter and fetches at most two rows', async () => {
+                const qb = mockMatchesBuilder([a]);
+                await service.findUniqueByEmailCaseInsensitive('  Jane@Example.COM  ');
+                expect(repository.createQueryBuilder).toHaveBeenCalledWith('user');
+                expect(qb.where).toHaveBeenCalledWith('lower(user.email) = lower(:email)', {
+                    email: 'Jane@Example.COM',
+                });
+                expect(qb.take).toHaveBeenCalledWith(2);
+            });
+
+            it.each([[''], ['   '], ['Jörg@x.de']])(
+                'never queries for blank or non-ASCII input (%j)',
+                async (input) => {
+                    await expect(
+                        service.findUniqueByEmailCaseInsensitive(input),
+                    ).resolves.toBeNull();
+                    expect(repository.createQueryBuilder).not.toHaveBeenCalled();
+                },
+            );
+        });
+
+        describe('findByEmailCaseInsensitiveForSocialAuth', () => {
+            it.each([[[a]], [[a, b]], [[]]])('returns the rows found (%j)', async (rows) => {
+                mockMatchesBuilder(rows as User[]);
+                await expect(
+                    service.findByEmailCaseInsensitiveForSocialAuth('x@y.com'),
+                ).resolves.toEqual(rows);
+            });
+
+            it('uses the narrow social-auth projection, the trimmed bound value and take(2)', async () => {
+                const qb = mockMatchesBuilder([a]);
+                await service.findByEmailCaseInsensitiveForSocialAuth(' Jane@Example.COM ');
+                expect(qb.where).toHaveBeenCalledWith('lower(user.email) = lower(:email)', {
+                    email: 'Jane@Example.COM',
+                });
+                expect(qb.select).toHaveBeenCalledWith(
+                    expect.arrayContaining(['user.id', 'user.email', 'user.isActive']),
+                );
+                expect(qb.select.mock.calls[0][0]).not.toContain('user.password');
+                expect(qb.take).toHaveBeenCalledWith(2);
+            });
+
+            it.each([[''], ['   '], ['Jörg@x.de']])(
+                'never queries for blank or non-ASCII input (%j)',
+                async (input) => {
+                    await expect(
+                        service.findByEmailCaseInsensitiveForSocialAuth(input),
+                    ).resolves.toEqual([]);
+                    expect(repository.createQueryBuilder).not.toHaveBeenCalled();
+                },
+            );
+        });
+
+        describe('existsByEmailCaseInsensitive (shared predicate)', () => {
+            it('counts with the same trimmed, bound predicate', async () => {
+                const qb = mockMatchesBuilder([a]);
+                await expect(service.existsByEmailCaseInsensitive(' A@b.co ')).resolves.toBe(true);
+                expect(qb.where).toHaveBeenCalledWith('lower(user.email) = lower(:email)', {
+                    email: 'A@b.co',
+                });
+            });
+        });
+    });
+
     describe('findByEmailForSocialAuth', () => {
         it('uses a narrow social-auth projection by email', async () => {
             const row = { id: 'u1', email: 'a@b.com' } as User;

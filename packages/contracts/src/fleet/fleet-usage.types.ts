@@ -725,10 +725,16 @@ export function formatFleetUsageCents(cents: number | null): string | null {
 	return `$${(cents / 100).toFixed(2)}`;
 }
 
-/** Compact token count: `912`, `61 k`, `18.4 M` (thin non-breaking spaces are the UI's job). */
+/**
+ * Compact token count: `912`, `61 k`, `18.4 M` (thin non-breaking spaces are the
+ * UI's job). A count that ROUNDS up to the next unit is written in that unit
+ * (`999 500` is `1 M`, never `1000 k`).
+ */
 export function formatFleetUsageTokens(value: number): string {
 	if (!Number.isFinite(value) || value < 1000) return String(Math.max(0, Math.round(value || 0)));
-	if (value < 1_000_000) return `${Math.round(value / 1000)} k`;
-	if (value < 1_000_000_000) return `${(value / 1_000_000).toFixed(1).replace(/\.0$/, '')} M`;
+	const thousands = Math.round(value / 1000);
+	if (thousands < 1000) return `${thousands} k`;
+	const millions = (value / 1_000_000).toFixed(1);
+	if (Number(millions) < 1000) return `${millions.replace(/\.0$/, '')} M`;
 	return `${(value / 1_000_000_000).toFixed(1).replace(/\.0$/, '')} B`;
 }

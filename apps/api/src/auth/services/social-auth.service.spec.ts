@@ -394,16 +394,16 @@ describe('SocialAuthService', () => {
             );
         });
 
-        it('Google: emailVerified defaults to true unless explicitly false', async () => {
+        it.each([
+            ['true', true, true],
+            ["'true'", 'true', true],
+            ['false', false, false],
+            ["'false'", 'false', false],
+            ['missing', undefined, false],
+        ])('Google: email_verified=%s -> verified=%s', async (_label, flag, expected) => {
             httpService.post.mockReturnValueOnce(of({ data: { access_token: 'g' } }));
             httpService.get.mockReturnValueOnce(
-                of({
-                    data: {
-                        sub: 'sub-1',
-                        email: 'g@google.test',
-                        // email_verified missing
-                    },
-                }),
+                of({ data: { sub: 'sub-1', email: 'g@google.test', email_verified: flag } }),
             );
             authService.validateSocialUser.mockResolvedValue('ok');
 
@@ -411,13 +411,105 @@ describe('SocialAuthService', () => {
 
             expect(authService.validateSocialUser).toHaveBeenCalledWith(
                 expect.objectContaining({
-                    emailVerified: true,
+                    emailVerified: expected,
                     providerUserId: 'sub-1',
                     username: 'g',
                     displayName: 'g',
                     avatar: null,
                     metadata: { sub: 'sub-1' },
                 }),
+            );
+        });
+
+        it.each([
+            ['true', true, true],
+            ["'true'", 'true', true],
+            ['false', false, false],
+            ["'false'", 'false', false],
+            ['missing', undefined, false],
+        ])('LinkedIn: email_verified=%s -> verified=%s', async (_label, flag, expected) => {
+            httpService.post.mockReturnValueOnce(of({ data: { access_token: 'li' } }));
+            httpService.get.mockReturnValueOnce(
+                of({ data: { sub: 'li-sub-x', email: 'x@li.test', email_verified: flag } }),
+            );
+            authService.validateSocialUser.mockResolvedValue('ok');
+
+            await service.authenticate(AuthProvider.LINKEDIN, 'c');
+
+            expect(authService.validateSocialUser).toHaveBeenCalledWith(
+                expect.objectContaining({ emailVerified: expected, providerUserId: 'li-sub-x' }),
+            );
+        });
+
+        it('Google: a mixed-case email is returned trimmed and lower-cased', async () => {
+            httpService.post.mockReturnValueOnce(of({ data: { access_token: 'g' } }));
+            httpService.get.mockReturnValueOnce(
+                of({
+                    data: { sub: 'sub-9', email: ' Jane.Doe@Example.COM ', email_verified: true },
+                }),
+            );
+            authService.validateSocialUser.mockResolvedValue('ok');
+
+            await service.authenticate(AuthProvider.GOOGLE, 'c');
+
+            expect(authService.validateSocialUser).toHaveBeenCalledWith(
+                expect.objectContaining({ email: 'jane.doe@example.com', emailVerified: true }),
+            );
+        });
+
+        it('LinkedIn: a mixed-case email is returned trimmed and lower-cased', async () => {
+            httpService.post.mockReturnValueOnce(of({ data: { access_token: 'li' } }));
+            httpService.get.mockReturnValueOnce(
+                of({
+                    data: { sub: 'li-9', email: ' Jane.Doe@Example.COM ', email_verified: true },
+                }),
+            );
+            authService.validateSocialUser.mockResolvedValue('ok');
+
+            await service.authenticate(AuthProvider.LINKEDIN, 'c');
+
+            expect(authService.validateSocialUser).toHaveBeenCalledWith(
+                expect.objectContaining({ email: 'jane.doe@example.com' }),
+            );
+        });
+
+        it('Facebook: a mixed-case email is returned trimmed and lower-cased', async () => {
+            httpService.post.mockReturnValueOnce(
+                of({ data: { access_token: 'fb', token_type: 'bearer' } }),
+            );
+            httpService.get.mockReturnValueOnce(
+                of({ data: { id: 'fb-9', name: 'FB', email: ' Jane.Doe@Example.COM ' } }),
+            );
+            authService.validateSocialUser.mockResolvedValue('ok');
+
+            await service.authenticate(AuthProvider.FACEBOOK, 'c');
+
+            expect(authService.validateSocialUser).toHaveBeenCalledWith(
+                expect.objectContaining({ email: 'jane.doe@example.com', emailVerified: false }),
+            );
+        });
+
+        it('GitHub: a mixed-case email is returned lower-cased', async () => {
+            httpService.post.mockReturnValueOnce(
+                of({ data: { access_token: 'gh', token_type: 'bearer', scope: 'repo' } }),
+            );
+            httpService.get
+                .mockReturnValueOnce(
+                    of({
+                        data: { id: 7, login: 'octo', email: 'Octo@GitHub.test', type: 'User' },
+                    }),
+                )
+                .mockReturnValueOnce(
+                    of({
+                        data: [{ email: 'Octo@GitHub.test', primary: true, verified: true }],
+                    }),
+                );
+            authService.validateSocialUser.mockResolvedValue({ user: { id: 'u1' } });
+
+            await service.authenticate(AuthProvider.GITHUB, 'c');
+
+            expect(authService.validateSocialUser).toHaveBeenCalledWith(
+                expect.objectContaining({ email: 'octo@github.test', emailVerified: true }),
             );
         });
 
@@ -560,6 +652,7 @@ describe('SocialAuthService', () => {
                         given_name: 'Ignored',
                         family_name: 'Ignored',
                         email: 'top@li.test',
+                        email_verified: true,
                     },
                 }),
             );
