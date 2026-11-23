@@ -441,6 +441,46 @@ describe('SocialAuthService', () => {
             );
         });
 
+        it('Google: a mixed-case email is returned trimmed and lower-cased', async () => {
+            httpService.post.mockReturnValueOnce(of({ data: { access_token: 'g' } }));
+            httpService.get.mockReturnValueOnce(
+                of({
+                    data: { sub: 'sub-9', email: ' Jane.Doe@Example.COM ', email_verified: true },
+                }),
+            );
+            authService.validateSocialUser.mockResolvedValue('ok');
+
+            await service.authenticate(AuthProvider.GOOGLE, 'c');
+
+            expect(authService.validateSocialUser).toHaveBeenCalledWith(
+                expect.objectContaining({ email: 'jane.doe@example.com', emailVerified: true }),
+            );
+        });
+
+        it('GitHub: a mixed-case email is returned lower-cased', async () => {
+            httpService.post.mockReturnValueOnce(
+                of({ data: { access_token: 'gh', token_type: 'bearer', scope: 'repo' } }),
+            );
+            httpService.get
+                .mockReturnValueOnce(
+                    of({
+                        data: { id: 7, login: 'octo', email: 'Octo@GitHub.test', type: 'User' },
+                    }),
+                )
+                .mockReturnValueOnce(
+                    of({
+                        data: [{ email: 'Octo@GitHub.test', primary: true, verified: true }],
+                    }),
+                );
+            authService.validateSocialUser.mockResolvedValue({ user: { id: 'u1' } });
+
+            await service.authenticate(AuthProvider.GITHUB, 'c');
+
+            expect(authService.validateSocialUser).toHaveBeenCalledWith(
+                expect.objectContaining({ email: 'octo@github.test', emailVerified: true }),
+            );
+        });
+
         it('Google: explicit email_verified=false propagates', async () => {
             httpService.post.mockReturnValueOnce(of({ data: { access_token: 'g' } }));
             httpService.get.mockReturnValueOnce(

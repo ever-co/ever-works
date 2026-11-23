@@ -74,6 +74,14 @@ function isProviderEmailVerified(flag: boolean | string | undefined | null): boo
     return flag === true || flag === 'true';
 }
 
+/**
+ * Stored emails are lower case (the unique index is case-sensitive), so a provider
+ * address typed as "Jane@Example.com" must be looked up and saved as "jane@example.com".
+ */
+function normalizeProviderEmail(email: string): string {
+    return email.trim().toLowerCase();
+}
+
 /** Which upstream OAuth call failed — surfaced in the safe client message. */
 type UpstreamStep = 'token exchange' | 'user profile request';
 
@@ -267,7 +275,7 @@ export class SocialAuthService {
 
         return {
             providerUserId: String(data.id),
-            email,
+            email: normalizeProviderEmail(email),
             displayName,
             username: data.login || displayName,
             avatar: data.avatar_url || null,
@@ -302,7 +310,7 @@ export class SocialAuthService {
 
         return {
             providerUserId: data.sub,
-            email: data.email,
+            email: normalizeProviderEmail(data.email),
             displayName,
             username: displayName,
             avatar: data.picture || null,
@@ -338,7 +346,7 @@ export class SocialAuthService {
 
         return {
             providerUserId: data.id,
-            email: data.email,
+            email: normalizeProviderEmail(data.email),
             displayName,
             username: displayName,
             avatar: data.picture?.data?.url || null,
@@ -372,7 +380,7 @@ export class SocialAuthService {
 
         return {
             providerUserId: data.sub,
-            email: data.email,
+            email: normalizeProviderEmail(data.email),
             displayName,
             username: displayName,
             avatar: data.picture || null,

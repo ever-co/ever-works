@@ -560,6 +560,40 @@ describe('AuthService', () => {
                 expect(authAccountRepo.upsertProviderAccount).not.toHaveBeenCalled();
             });
 
+            it('a lower-cased provider email finds the existing lowercase user, and joins only when both are verified', async () => {
+                authAccountRepo.findProviderAccountByAccountId.mockResolvedValue(null);
+                userRepo.findByEmailForSocialAuth.mockResolvedValue({
+                    id: 'u-owner',
+                    email: 'sa@b.co',
+                    isActive: true,
+                    emailVerified: true,
+                } as any);
+                userRepo.updateForSocialAuth.mockResolvedValue({ id: 'u-owner' } as any);
+                authAccountRepo.upsertProviderAccount.mockResolvedValue({} as any);
+
+                await service.validateSocialUser(socialUser({ email: 'sa@b.co' }) as any);
+
+                expect(userRepo.findByEmailForSocialAuth).toHaveBeenCalledWith('sa@b.co');
+                expect(userRepo.create).not.toHaveBeenCalled();
+                expect(userRepo.updateForSocialAuth).toHaveBeenCalled();
+            });
+
+            it('a lower-cased provider email still refuses an UNVERIFIED existing user', async () => {
+                authAccountRepo.findProviderAccountByAccountId.mockResolvedValue(null);
+                userRepo.findByEmailForSocialAuth.mockResolvedValue({
+                    id: 'u-unverified',
+                    email: 'sa@b.co',
+                    isActive: true,
+                    emailVerified: false,
+                } as any);
+
+                await expect(
+                    service.validateSocialUser(socialUser({ email: 'sa@b.co' }) as any),
+                ).rejects.toBeDefined();
+                expect(userRepo.updateForSocialAuth).not.toHaveBeenCalled();
+                expect(userRepo.create).not.toHaveBeenCalled();
+            });
+
             it('still links a verified provider email into a VERIFIED existing user, as before', async () => {
                 authAccountRepo.findProviderAccountByAccountId.mockResolvedValue(null);
                 userRepo.findByEmailForSocialAuth.mockResolvedValue({
