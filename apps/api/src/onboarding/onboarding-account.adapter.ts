@@ -8,6 +8,7 @@ import {
     UserRepository,
 } from '@ever-works/agent/database';
 import type { OnboardingAccountUpsert } from '@ever-works/agent/onboarding';
+import { findAccountByEmail } from '@src/auth/services/account-email-match';
 import { listVerifiedGitHubEmails } from '@src/auth/utils/github-email.utils';
 import { UsernameAllocatorService } from '@src/users/services/username-allocator.service';
 
@@ -72,7 +73,11 @@ export class OnboardingAccountAdapter implements OnboardingAccountUpsert {
         if (!user && input.email?.trim()) {
             verifiedEmail = await this.verifiedEmailOfCaller(input.email, input.accessToken);
             if (verifiedEmail) {
-                const byEmail = await this.users.findByEmail(input.email.trim());
+                // Exact first, then a unique case-insensitive match, as in the OAuth sign-in: a
+                // claimed `Jane@Example.com` finds the stored `jane@example.com` instead of
+                // creating a separate account and binding the GitHub identity to it. Accounts
+                // that differ only in case are refused (SOCIAL_EMAIL_AMBIGUOUS) before any write.
+                const byEmail = await findAccountByEmail(this.users, input.email);
                 if (byEmail?.emailVerified) {
                     user = byEmail;
                 } else if (byEmail) {
