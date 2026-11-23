@@ -29,7 +29,7 @@ interface OAuthTokenResult {
 interface GoogleUserInfo {
     sub: string;
     email: string;
-    email_verified?: boolean;
+    email_verified?: boolean | string;
     name?: string;
     picture?: string;
 }
@@ -61,9 +61,17 @@ interface LinkedInUserInfo {
     given_name?: string;
     family_name?: string;
     email?: string;
-    email_verified?: boolean;
+    email_verified?: boolean | string;
     picture?: string;
     locale?: string;
+}
+
+/**
+ * Fail closed: only an explicit `true` (or the string 'true', which some OIDC
+ * endpoints send) vouches for the address. A missing flag is NOT verified.
+ */
+function isProviderEmailVerified(flag: boolean | string | undefined | null): boolean {
+    return flag === true || flag === 'true';
 }
 
 /** Which upstream OAuth call failed — surfaced in the safe client message. */
@@ -298,7 +306,7 @@ export class SocialAuthService {
             displayName,
             username: displayName,
             avatar: data.picture || null,
-            emailVerified: data.email_verified !== false,
+            emailVerified: isProviderEmailVerified(data.email_verified),
             metadata: {
                 sub: data.sub,
             },
@@ -368,7 +376,7 @@ export class SocialAuthService {
             displayName,
             username: displayName,
             avatar: data.picture || null,
-            emailVerified: data.email_verified !== false,
+            emailVerified: isProviderEmailVerified(data.email_verified),
             metadata: {
                 sub: data.sub,
                 locale: data.locale,

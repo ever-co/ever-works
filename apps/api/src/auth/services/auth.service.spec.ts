@@ -253,6 +253,39 @@ describe('AuthService', () => {
             );
         });
 
+        it('treats a missing emailVerified flag as unverified (no UserConfirmedEvent)', async () => {
+            userRepo.findByEmailForSocialAuth.mockResolvedValue(null);
+            userRepo.create.mockResolvedValue({ id: 'u-new', email: 'x' } as any);
+            authAccountRepo.upsertProviderAccount.mockResolvedValue({} as any);
+            jest.spyOn(bcrypt, 'hash').mockResolvedValue('h' as never);
+
+            await service.validateSocialUser(socialUser({ emailVerified: undefined }) as any);
+
+            expect(emitter.emit).not.toHaveBeenCalled();
+            expect(userRepo.create).toHaveBeenCalledWith(
+                expect.objectContaining({ emailVerified: false }),
+            );
+        });
+
+        it('refuses to link into an existing user when the provider omits emailVerified', async () => {
+            authAccountRepo.findProviderAccountByAccountId.mockResolvedValue(null);
+            userRepo.findByEmailForSocialAuth.mockResolvedValue({
+                id: 'u-victim',
+                email: 'sa@b.co',
+                isActive: true,
+                emailVerified: true,
+            } as any);
+            authAccountRepo.findProviderAccount.mockResolvedValue(null);
+
+            await expect(
+                service.validateSocialUser(socialUser({ emailVerified: undefined }) as any),
+            ).rejects.toThrow(
+                'Unable to link this social account because the provider email is not verified',
+            );
+            expect(userRepo.updateForSocialAuth).not.toHaveBeenCalled();
+            expect(authAccountRepo.upsertProviderAccount).not.toHaveBeenCalled();
+        });
+
         it('falls back to email-prefix when displayName/username missing', async () => {
             userRepo.findByEmailForSocialAuth.mockResolvedValue(null);
             userRepo.create.mockResolvedValue({ id: 'u-new' } as any);

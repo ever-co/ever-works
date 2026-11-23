@@ -204,7 +204,7 @@ export class AuthService {
     }
 
     async validateSocialUser(socialUser: SocialAuthUser) {
-        const isTrustedEmail = socialUser.emailVerified !== false;
+        const isTrustedEmail = socialUser.emailVerified === true;
         const displayName = socialUser.displayName || socialUser.email.split('@')[0];
 
         // The provider IDENTITY decides first, the email second (self-build

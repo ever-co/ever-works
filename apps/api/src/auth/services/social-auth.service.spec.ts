@@ -394,16 +394,16 @@ describe('SocialAuthService', () => {
             );
         });
 
-        it('Google: emailVerified defaults to true unless explicitly false', async () => {
+        it.each([
+            ['true', true, true],
+            ["'true'", 'true', true],
+            ['false', false, false],
+            ["'false'", 'false', false],
+            ['missing', undefined, false],
+        ])('Google: email_verified=%s -> verified=%s', async (_label, flag, expected) => {
             httpService.post.mockReturnValueOnce(of({ data: { access_token: 'g' } }));
             httpService.get.mockReturnValueOnce(
-                of({
-                    data: {
-                        sub: 'sub-1',
-                        email: 'g@google.test',
-                        // email_verified missing
-                    },
-                }),
+                of({ data: { sub: 'sub-1', email: 'g@google.test', email_verified: flag } }),
             );
             authService.validateSocialUser.mockResolvedValue('ok');
 
@@ -411,13 +411,33 @@ describe('SocialAuthService', () => {
 
             expect(authService.validateSocialUser).toHaveBeenCalledWith(
                 expect.objectContaining({
-                    emailVerified: true,
+                    emailVerified: expected,
                     providerUserId: 'sub-1',
                     username: 'g',
                     displayName: 'g',
                     avatar: null,
                     metadata: { sub: 'sub-1' },
                 }),
+            );
+        });
+
+        it.each([
+            ['true', true, true],
+            ["'true'", 'true', true],
+            ['false', false, false],
+            ["'false'", 'false', false],
+            ['missing', undefined, false],
+        ])('LinkedIn: email_verified=%s -> verified=%s', async (_label, flag, expected) => {
+            httpService.post.mockReturnValueOnce(of({ data: { access_token: 'li' } }));
+            httpService.get.mockReturnValueOnce(
+                of({ data: { sub: 'li-sub-x', email: 'x@li.test', email_verified: flag } }),
+            );
+            authService.validateSocialUser.mockResolvedValue('ok');
+
+            await service.authenticate(AuthProvider.LINKEDIN, 'c');
+
+            expect(authService.validateSocialUser).toHaveBeenCalledWith(
+                expect.objectContaining({ emailVerified: expected, providerUserId: 'li-sub-x' }),
             );
         });
 
@@ -560,6 +580,7 @@ describe('SocialAuthService', () => {
                         given_name: 'Ignored',
                         family_name: 'Ignored',
                         email: 'top@li.test',
+                        email_verified: true,
                     },
                 }),
             );
