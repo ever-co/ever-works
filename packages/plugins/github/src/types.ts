@@ -43,9 +43,16 @@ export interface GitHubActionSecret {
 	readonly updated_at: string;
 }
 
-export const ACTIVE_WORKFLOW_NAMES = ['Vercel Deployment', 'Production deployment'] as const;
+/**
+ * The deploy workflows a website repository keeps enabled; `enableDeploymentWorkflows` disables every other one.
+ * Each deploy provider's dispatched workflow must be listed here, or its deploy disables the very workflow it is
+ * about to dispatch ("Cannot trigger a 'workflow_dispatch' on a disabled workflow"): seen on production 2026-11-22
+ * for the Cloudflare Workers provider (`deploy_cloudflare.yaml`).
+ */
+export const ACTIVE_WORKFLOW_NAMES = ['Vercel Deployment', 'Production deployment', 'Cloudflare deployment'] as const;
 export const ACTIVE_WORKFLOW_FILES = [
 	'.github/workflows/deploy_vercel.yaml',
 	'.github/workflows/deploy_prod.yaml',
-	'.github/workflows/deploy_k8s.yaml'
+	'.github/workflows/deploy_k8s.yaml',
+	'.github/workflows/deploy_cloudflare.yaml'
 ] as const;
