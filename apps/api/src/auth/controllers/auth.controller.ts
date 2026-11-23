@@ -248,11 +248,7 @@ export class AuthController {
     @ApiResponse({ status: 400, description: 'Captcha verification failed' })
     @ApiResponse({ status: 429, description: 'Rate limit exceeded for this IP' })
     async anonymous(@Request() req, @Body() body?: CreateAnonymousDto) {
-        const ipAddress =
-            (typeof req.ip === 'string' && req.ip) ||
-            (typeof req.headers['x-forwarded-for'] === 'string'
-                ? (req.headers['x-forwarded-for'] as string).split(',')[0].trim()
-                : null);
+        const ipAddress = trustedClientIp(req);
         const userAgent =
             typeof req.headers['user-agent'] === 'string'
                 ? (req.headers['user-agent'] as string)
@@ -472,7 +468,7 @@ export class AuthController {
     @ApiResponse({ status: 401, description: 'Invalid credentials' })
     async login(@Request() req, @Body() loginDto: LoginDto) {
         const userAgent = req.headers['user-agent'];
-        const ipAddress = req.ip || req.headers['x-forwarded-for'];
+        const ipAddress = trustedClientIp(req);
         const result = await this.authProvider.signInEmail(
             loginDto.email,
             loginDto.password,
@@ -518,7 +514,7 @@ export class AuthController {
     @ApiResponse({ status: 200, description: 'Successfully logged out from all devices' })
     async logoutAll(@Request() req) {
         const userAgent = req.headers['user-agent'];
-        const ipAddress = req.ip || req.headers['x-forwarded-for'];
+        const ipAddress = trustedClientIp(req);
         await this.authProvider.signOutAll(req.user.userId);
         // L-03: forensic audit-log entry for a fleet-wide sign-out. Useful
         // when investigating "all my sessions were killed" support tickets
@@ -683,11 +679,7 @@ export class AuthController {
     async verifyEmail(@Body() verifyEmailDto: VerifyEmailDto, @Request() req) {
         const user = await this.authService.verifyEmail(verifyEmailDto.token);
         // H-04: bind the new session to the requesting client.
-        const ipAddress =
-            (typeof req.ip === 'string' && req.ip) ||
-            (typeof req.headers['x-forwarded-for'] === 'string'
-                ? (req.headers['x-forwarded-for'] as string).split(',')[0].trim()
-                : null);
+        const ipAddress = trustedClientIp(req);
         const userAgent =
             typeof req.headers['user-agent'] === 'string'
                 ? (req.headers['user-agent'] as string)
@@ -820,11 +812,7 @@ export class AuthController {
     @ApiResponse({ status: 400, description: 'Invalid or expired token' })
     async redeemMagicLink(@Body() dto: RedeemMagicLinkDto, @Request() req) {
         const user = await this.authService.redeemMagicLink(dto.token);
-        const ipAddress =
-            (typeof req.ip === 'string' && req.ip) ||
-            (typeof req.headers['x-forwarded-for'] === 'string'
-                ? (req.headers['x-forwarded-for'] as string).split(',')[0].trim()
-                : null);
+        const ipAddress = trustedClientIp(req);
         const userAgent =
             typeof req.headers['user-agent'] === 'string'
                 ? (req.headers['user-agent'] as string)

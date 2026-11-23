@@ -508,14 +508,15 @@ describe('AuthController', () => {
             );
         });
 
-        it('falls back to x-forwarded-for first hop when req.ip is missing', async () => {
+        it('records req.ip, never a client-written x-forwarded-for entry', async () => {
             anonymousAuth.createAnonymousUser.mockResolvedValue({
                 access_token: 'tok',
                 user: { id: 'u', email: null, username: 'anon-x', isAnonymous: true },
             } as any);
 
             const req = {
-                headers: { 'x-forwarded-for': ' 8.8.8.8 , 9.9.9.9 ' },
+                ip: '8.8.8.8',
+                headers: { 'x-forwarded-for': '6.6.6.6, 9.9.9.9' },
             };
 
             await (controller as any).anonymous(req);
@@ -787,10 +788,13 @@ describe('AuthController', () => {
             });
         });
 
-        it('falls back to x-forwarded-for when req.ip is empty', async () => {
+        it('logs req.ip, never x-forwarded-for', async () => {
             authProvider.signInEmail.mockResolvedValue({ user: { id: 'u1' } } as any);
 
-            const req: any = { headers: { 'user-agent': 'UA', 'x-forwarded-for': '5.6.7.8' } };
+            const req: any = {
+                ip: '5.6.7.8',
+                headers: { 'user-agent': 'UA', 'x-forwarded-for': '6.6.6.6' },
+            };
             await controller.login(req, { email: 'a@b.co', password: 'pw' } as any);
 
             expect(activityLog.log).toHaveBeenCalledWith(

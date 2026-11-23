@@ -151,8 +151,8 @@ describe('GitHubAppController', () => {
             expect(result.installationId).toBe('inst-1');
         });
 
-        // H-04: x-forwarded-for fallback when req.ip isn't set (proxy/LB).
-        it('falls back to x-forwarded-for first hop when req.ip is absent', async () => {
+        // H-04: the session binds to req.ip (resolved by Express trust proxy), never the header.
+        it('binds the session to req.ip, ignoring a client-written x-forwarded-for', async () => {
             const { controller, onboardingService, authProvider } = createController();
             onboardingService.completeUserAuth.mockResolvedValue({
                 user: { id: 'u1' },
@@ -163,8 +163,9 @@ describe('GitHubAppController', () => {
             await controller.callback(
                 { code: 'c', state: 's' } as any,
                 {
+                    ip: '198.51.100.7',
                     headers: {
-                        'x-forwarded-for': '198.51.100.7, 10.0.0.1',
+                        'x-forwarded-for': '6.6.6.6, 10.0.0.1',
                         'user-agent': 'curl/8',
                     },
                 } as any,
