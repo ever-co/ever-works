@@ -7,6 +7,7 @@ import {
     Logger,
     Optional,
 } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import {
     buildMemberSnapshot,
     DomainEventPublisher,
@@ -38,6 +39,7 @@ import { SEAT_GUARD, type SeatGuard } from '@ever-works/agent/agents';
 import { TenantBootstrapService } from '../scope/tenant-bootstrap.service';
 import { MailService } from '../mail/mail.service';
 import { config } from '../config/constants';
+import { UserConfirmedEvent } from '../events';
 import { OrganizationMembershipService } from './organization-membership.service';
 
 /**
@@ -148,6 +150,9 @@ export class OrganizationInvitationFlowService {
         // Domain events (EW-P1-1 B2) — `organization.member.added` / `.removed`,
         // recorded right after the roster write. Appended LAST + @Optional.
         @Optional() private readonly domainEvents?: DomainEventPublisher,
+        // Welcome mail on the verification flip, as `POST /auth/verify-email` sends it.
+        // Appended LAST + @Optional, like `domainEvents`.
+        @Optional() private readonly eventEmitter?: EventEmitter2,
     ) {}
 
     /**
@@ -519,6 +524,8 @@ export class OrganizationInvitationFlowService {
             throw error;
         }
 
+        await this.verifyEmailOnAccept(user, invitation.email);
+
         this.logger.log(
             `User ${userId} accepted invitation ${invitation.id} into org ${organization.id}`,
         );
@@ -528,6 +535,39 @@ export class OrganizationInvitationFlowService {
             organizationSlug: organization.slug,
             joined: outcome === 'joined',
         };
+    }
+
+    /**
+     * Accepting proves the mailbox: the raw token was only ever mailed to the
+     * invitation address, and `findConsumable` bound the redeemer's own address to it.
+     * So an unverified user whose address IS the invitation address becomes verified.
+     * Mirrors `AuthService.verifyEmail` on the false -> true flip (flag + welcome event),
+     * minus its token handling. Best effort: the accept is already committed, so a
+     * failure here is logged, never turned into a failed accept.
+     */
+    private async verifyEmailOnAccept(
+        user: { id: string; email?: string | null; emailVerified?: boolean | null },
+        invitationEmail: string | null | undefined,
+    ): Promise<void> {
+        if (user.emailVerified) return;
+        const normalise = (value: string | null | undefined) => (value ?? '').trim().toLowerCase();
+        if (!normalise(user.email) || normalise(user.email) !== normalise(invitationEmail)) return;
+        try {
+            await this.users.update(user.id, { emailVerified: true });
+            const updated = await this.users.findById(user.id);
+            if (updated) {
+                this.eventEmitter?.emit(
+                    UserConfirmedEvent.EVENT_NAME,
+                    new UserConfirmedEvent(updated, `${config.webAppUrl()}/works/new`),
+                );
+            }
+        } catch (error) {
+            this.logger.warn(
+                `Could not mark ${user.id} email-verified after accepting an invitation: ${
+                    error instanceof Error ? error.message : String(error)
+                }`,
+            );
+        }
     }
 
     /**

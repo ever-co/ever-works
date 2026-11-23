@@ -151,6 +151,7 @@ function isQuickCreateRetryTarget(status: string | null | undefined): boolean {
 }
 // EW-P2-4 — validates the works-list `kind` filter.
 import { getWorkCapabilities, WORK_KINDS } from '@ever-works/contracts';
+import { trustedClientIp } from '../config/trust-proxy';
 import { AuthenticatedUser } from '@src/auth/types/auth.types';
 import { GenerateWorkDetailDto } from './dto/generate-detail.dto';
 import { MarketplaceInstallClaimService } from './marketplace-install-claim.service';
@@ -499,10 +500,7 @@ export class WorksController {
     }> {
         // EW-617 G7: captcha gate. No-ops in dev when CAPTCHA_PROVIDER is unset.
         if (this.captchaVerifier.isEnabled()) {
-            const fwd = req?.headers?.['x-forwarded-for'];
-            const ipAddress =
-                (typeof req?.ip === 'string' && req.ip) ||
-                (typeof fwd === 'string' ? fwd.split(',')[0].trim() : null);
+            const ipAddress = trustedClientIp(req ?? {});
             const result = await this.captchaVerifier.verify({
                 token: dto.captchaToken,
                 remoteIp: ipAddress,
