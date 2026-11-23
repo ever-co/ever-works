@@ -156,6 +156,20 @@ describe('SubdomainAllocator', () => {
         expect(result.subdomain).toBe('www-cafe');
     });
 
+    it.each(['mcp', 'lb', 'api-dev', 'appstage'])(
+        'rejects the shared reserved label %s and falls through to the suffixed candidate',
+        async (slug) => {
+            const repo = makeRepo();
+            const probe = makeProbe(async () => false);
+            const alloc = new SubdomainAllocator(repo, makeDnsService(probe));
+
+            const work = makeWork({ slug, id: 'cafebabe-0000-0000-0000-000000000000' });
+            const result = await alloc.allocate(work, probe);
+
+            expect(result.subdomain).toBe(`${slug}-cafe`);
+        },
+    );
+
     it('treats a provider-side recordExists collision as taken', async () => {
         const repo = makeRepo();
         const probe = makeProbe(async (host) => host === 'ai-coding.ever.works');

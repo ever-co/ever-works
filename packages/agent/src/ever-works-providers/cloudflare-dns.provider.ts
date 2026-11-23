@@ -6,6 +6,11 @@ import type {
     DnsRemoveRecordInput,
     IDnsOperations,
 } from '@ever-works/plugin';
+import {
+    DnsRecordConflictError,
+    isReservedSubdomainLabel,
+    sameDnsContent,
+} from './managed-subdomain-guard';
 
 /**
  * EW-617 G5 — Cloudflare DNS provider for `*.ever.works`.
@@ -57,6 +62,20 @@ export interface CloudflareDnsConfig {
     targetHostname: string;
     /** Optional base URL override (tests, staging mirror). */
     apiBaseUrl?: string;
+    /**
+     * Whether this provider may repoint or delete a record whose content is NOT `targetHostname`.
+     *
+     * `false` (the default) is for the platform zone, which also holds the platform's own hosts:
+     * a record aimed anywhere but the managed target belongs to something else, so `ensureRecord`,
+     * `ensureWorkSubdomain`, `removeRecord` and `removeWorkSubdomain` throw
+     * `DnsRecordConflictError` instead of changing it. A missing record is still created and a
+     * record already on the managed target is still updated or deleted.
+     *
+     * `true` only for a zone in which every name this provider writes is a label it allocated
+     * itself and whose target legitimately moves (the apps zone: each App's record follows its
+     * ingress address).
+     */
+    manageForeignRecords?: boolean;
 }
 
 export interface DnsRecordSnapshot {
@@ -104,23 +123,30 @@ export class CloudflareDnsProvider implements IDnsOperations {
     /**
      * Ensure a CNAME record exists pointing `<slug>.<rootDomain>` at
      * the configured target hostname. Idempotent: if a matching CNAME
-     * already exists, returns it; if a stale record (different target)
-     * exists, updates it in place. Always returns a snapshot for the
-     * caller to log / persist.
+     * already exists, returns it; a missing record is created. A CNAME
+     * aimed anywhere else is not this Work's record (it is one of the
+     * zone's other hosts), so it is never repointed: this throws
+     * `DnsRecordConflictError` (see `manageForeignRecords`). A reserved
+     * platform label is refused outright. Always returns a snapshot
+     * for the caller to log / persist.
      */
     async ensureWorkSubdomain(slug: string): Promise<DnsRecordSnapshot> {
         this.assertSlug(slug);
         const fqdn = `${slug}.${this.config.rootDomain}`;
         const target = this.config.targetHostname;
         const proxied = requiresProxy(target);
+        if (isReservedSubdomainLabel(slug)) {
+            throw new Error(`Refusing to manage reserved platform subdomain ${fqdn}`);
+        }
 
         const existing = await this.findRecord(fqdn);
         if (existing) {
-            if (existing.content === target && existing.type === 'CNAME') {
+            if (sameDnsContent(existing.content, target) && existing.type === 'CNAME') {
                 this.logger.log(`CloudflareDns CNAME already in sync ${fqdn} -> ${target}`);
                 return existing;
             }
-            // Drifted record: same name, different content/type. Update.
+            this.assertManagedRecord(fqdn, existing);
+            // Drifted record this provider manages (manageForeignRecords). Update.
             const updated = await this.patchRecord(existing.id, {
                 type: 'CNAME',
                 name: fqdn,
@@ -145,14 +171,22 @@ export class CloudflareDnsProvider implements IDnsOperations {
         return created;
     }
 
-    /** Remove the CNAME for a Work — no-op if it never existed. */
+    /**
+     * Remove the CNAME for a Work — no-op if it never existed. Refuses a
+     * reserved platform label and a record that is not on the managed target.
+     */
     async removeWorkSubdomain(slug: string): Promise<void> {
         this.assertSlug(slug);
         const fqdn = `${slug}.${this.config.rootDomain}`;
+        if (isReservedSubdomainLabel(slug)) {
+            throw new Error(`Refusing to remove reserved platform subdomain ${fqdn}`);
+        }
         const existing = await this.findRecord(fqdn);
         if (!existing) {
             return;
         }
+        // Never delete one of the zone's other hosts that shares the slug.
+        this.assertManagedRecord(fqdn, existing);
         await this.deleteRecord(existing.id);
         this.logger.log(`CloudflareDns CNAME deleted ${fqdn}`);
     }
@@ -169,6 +203,9 @@ export class CloudflareDnsProvider implements IDnsOperations {
      * Idempotent create-or-update for any host the caller specifies.
      * Generalizes `ensureWorkSubdomain` (which is restricted to slug-shaped
      * hosts under the managed `rootDomain`) to arbitrary hosts + A/CNAME.
+     * An existing record is only repointed when this provider manages it
+     * (`manageForeignRecords`); otherwise this throws `DnsRecordConflictError`
+     * and sends no write.
      */
     async ensureRecord(input: DnsEnsureRecordInput): Promise<DnsRecordSnapshotContract> {
         // Augment low: normalize once and use the normalized form everywhere
@@ -179,12 +216,13 @@ export class CloudflareDnsProvider implements IDnsOperations {
         const ttl = input.ttl ?? 1;
         const existing = await this.findRecord(host, input.type);
         if (existing) {
-            if (existing.content === input.target && existing.type === input.type) {
+            if (sameDnsContent(existing.content, input.target) && existing.type === input.type) {
                 this.logger.log(
                     `CloudflareDns ${input.type} already in sync ${host} -> ${input.target}`,
                 );
                 return existing as DnsRecordSnapshotContract;
             }
+            this.assertManagedRecord(host, existing);
             const updated = await this.patchAnyRecord(existing.id, {
                 type: input.type,
                 name: host,
@@ -212,6 +250,8 @@ export class CloudflareDnsProvider implements IDnsOperations {
      * Idempotent delete for any host. No-op when the record does not exist.
      * When `input.type` is omitted, probes BOTH CNAME and A so a caller that
      * doesn't know the original record type still removes it (Augment low).
+     * A record this provider does not manage is left in place and this
+     * throws `DnsRecordConflictError` (see `manageForeignRecords`).
      */
     async removeRecord(input: DnsRemoveRecordInput): Promise<void> {
         const host = this.normalizeHost(input.host);
@@ -219,6 +259,7 @@ export class CloudflareDnsProvider implements IDnsOperations {
         for (const type of typesToProbe) {
             const existing = await this.findRecord(host, type);
             if (existing) {
+                this.assertManagedRecord(host, existing);
                 await this.deleteRecord(existing.id);
                 this.logger.log(
                     `CloudflareDns ${existing.type} deleted ${host} (id=${existing.id})`,
@@ -228,17 +269,21 @@ export class CloudflareDnsProvider implements IDnsOperations {
     }
 
     /**
-     * Uniqueness probe — `true` iff any A/CNAME record exists for `host` in
-     * the managed zone, regardless of who owns it. Used by
-     * `SubdomainAllocator` to detect collisions before persisting a claim.
+     * Uniqueness probe — `true` iff any CNAME, A or AAAA record exists for
+     * `host` in the managed zone, regardless of who owns it. Used by
+     * `SubdomainAllocator` and the explicit rename to detect collisions
+     * before persisting a claim.
      */
     async recordExists(host: string): Promise<boolean> {
         const normalized = this.normalizeHost(host);
-        // Probe CNAME first (the common case for managed subdomains), then A.
-        const cname = await this.findRecord(normalized, 'CNAME');
-        if (cname) return true;
-        const a = await this.findRecord(normalized, 'A');
-        return a !== null;
+        // CNAME first (the common case for managed subdomains), then A, then
+        // AAAA: a Workers custom domain or route appears in the zone only as
+        // a proxied `AAAA 100::` record. Exact-name lookups, so a wildcard
+        // record never makes a name look taken.
+        for (const type of ['CNAME', 'A', 'AAAA'] as const) {
+            if (await this.findRecord(normalized, type)) return true;
+        }
+        return false;
     }
 
     /** Zone root domain managed by this provider (e.g. `'ever.works'`). */
@@ -247,6 +292,20 @@ export class CloudflareDnsProvider implements IDnsOperations {
     }
 
     // Internal helpers ------------------------------------------------------
+
+    /**
+     * Refuse to repoint or delete `record` unless this provider manages it:
+     * it already points at the managed target, or the whole zone is managed
+     * (`manageForeignRecords`).
+     */
+    private assertManagedRecord(host: string, record: { type: string; content: string }): void {
+        if (this.config.manageForeignRecords === true) return;
+        if (sameDnsContent(record.content, this.config.targetHostname)) return;
+        this.logger.warn(
+            `CloudflareDns refused to change ${host}: it points at ${record.content}, not the managed target`,
+        );
+        throw new DnsRecordConflictError(host, record.type, record.content);
+    }
 
     private assertSlug(slug: string): void {
         if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) {
@@ -276,9 +335,10 @@ export class CloudflareDnsProvider implements IDnsOperations {
         return trimmed;
     }
 
+    /** `AAAA` is probed (`recordExists`) but never written by this provider. */
     private async findRecord(
         name: string,
-        type: DnsRecordType = 'CNAME',
+        type: DnsRecordType | 'AAAA' = 'CNAME',
     ): Promise<DnsRecordSnapshot | null> {
         const url = new URL(`${this.baseUrl}/zones/${this.config.zoneId}/dns_records`);
         url.searchParams.set('name', name);

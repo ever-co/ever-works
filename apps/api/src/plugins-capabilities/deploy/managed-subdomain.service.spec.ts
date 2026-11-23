@@ -4,6 +4,10 @@ jest.mock('@ever-works/agent/database', () => ({
 jest.mock('@ever-works/agent/ever-works-providers', () => ({
     EverWorksDnsService: class {},
     SubdomainAllocator: class {},
+    // The real reserved list + conflict error: a dependency-free module.
+    ...jest.requireActual(
+        '../../../../../packages/agent/src/ever-works-providers/managed-subdomain-guard',
+    ),
 }));
 jest.mock('@ever-works/agent/entities', () => ({
     Work: class {},
@@ -14,10 +18,14 @@ import {
     ConflictException,
     InternalServerErrorException,
     NotFoundException,
+    ServiceUnavailableException,
 } from '@nestjs/common';
 import { ManagedSubdomainService } from './managed-subdomain.service';
 import type { WorkRepository } from '@ever-works/agent/database';
-import type { EverWorksDnsService } from '@ever-works/agent/ever-works-providers';
+import {
+    DnsRecordConflictError,
+    type EverWorksDnsService,
+} from '@ever-works/agent/ever-works-providers';
 
 describe('ManagedSubdomainService', () => {
     let workRepository: {
@@ -33,6 +41,8 @@ describe('ManagedSubdomainService', () => {
     };
     let dnsService: { getProvider: jest.Mock };
     let service: ManagedSubdomainService;
+    /** Hostnames with an A/CNAME record in the fake zone the provider mock reads and writes. */
+    let zone: Set<string>;
 
     const buildWork = (overrides: Record<string, unknown> = {}) => ({
         id: '11111111-1111-1111-1111-111111111111',
@@ -57,11 +67,17 @@ describe('ManagedSubdomainService', () => {
             findByManagedSubdomain: jest.fn().mockResolvedValue(null),
             update: jest.fn().mockResolvedValue(undefined),
         };
+        zone = new Set(['my-site.ever.works', 'old-name.ever.works']);
         provider = {
             rootDomain: jest.fn().mockReturnValue('ever.works'),
-            recordExists: jest.fn().mockResolvedValue(true),
-            ensureRecord: jest.fn().mockResolvedValue({ id: 'rec-1' }),
-            removeRecord: jest.fn().mockResolvedValue(undefined),
+            recordExists: jest.fn(async (host: string) => zone.has(host)),
+            ensureRecord: jest.fn(async ({ host }: { host: string }) => {
+                zone.add(host);
+                return { id: 'rec-1' };
+            }),
+            removeRecord: jest.fn(async ({ host }: { host: string }) => {
+                zone.delete(host);
+            }),
         };
         dnsService = { getProvider: jest.fn().mockReturnValue(provider) };
         service = new ManagedSubdomainService(
@@ -350,6 +366,99 @@ describe('ManagedSubdomainService', () => {
             });
         });
 
+        it('refuses with 409 a hostname that already exists in the zone, before any write', async () => {
+            // One of the zone's other hosts, not claimed by any Work in the DB.
+            zone.add('existing-host.ever.works');
+            workRepository.findById.mockResolvedValue(buildWork({ managedSubdomain: 'old-name' }));
+
+            await expect(service.update('work-1', 'existing-host')).rejects.toMatchObject({
+                status: 409,
+                response: { message: expect.stringContaining('already in use') },
+            });
+
+            expect(provider.recordExists).toHaveBeenCalledWith('existing-host.ever.works');
+            // No PATCH/PUT of the existing record, no cleanup, no DB claim.
+            expect(provider.ensureRecord).not.toHaveBeenCalled();
+            expect(provider.removeRecord).not.toHaveBeenCalled();
+            expect(workRepository.update).not.toHaveBeenCalled();
+            expect(zone.has('old-name.ever.works')).toBe(true);
+        });
+
+        it("treats the Work's own current record as OK (idempotent, no probe, no write)", async () => {
+            const work = buildWork({ managedSubdomain: 'my-site' });
+            workRepository.findById.mockResolvedValue(work);
+
+            const result = await service.update('work-1', ' My-Site ');
+
+            expect(result).toMatchObject({ subdomain: 'my-site', recordOk: true });
+            // The only zone read is getState's health probe.
+            expect(provider.recordExists).toHaveBeenCalledTimes(1);
+            expect(provider.ensureRecord).not.toHaveBeenCalled();
+            expect(provider.removeRecord).not.toHaveBeenCalled();
+            expect(workRepository.update).not.toHaveBeenCalled();
+        });
+
+        it.each(['mcp', 'lb', 'api-dev', 'appstage', 'docs-stage'])(
+            'rejects the reserved name %s with 400 before touching the zone',
+            async (reserved) => {
+                workRepository.findById.mockResolvedValue(buildWork());
+
+                await expect(service.update('work-1', reserved)).rejects.toBeInstanceOf(
+                    BadRequestException,
+                );
+                expect(provider.recordExists).not.toHaveBeenCalled();
+                expect(provider.ensureRecord).not.toHaveBeenCalled();
+                expect(workRepository.update).not.toHaveBeenCalled();
+            },
+        );
+
+        it('fails closed (503) when the zone cannot be read', async () => {
+            workRepository.findById.mockResolvedValue(buildWork({ managedSubdomain: 'old-name' }));
+            provider.recordExists.mockRejectedValue(new Error('cf api down'));
+
+            await expect(service.update('work-1', 'new-name')).rejects.toBeInstanceOf(
+                ServiceUnavailableException,
+            );
+            expect(provider.removeRecord).not.toHaveBeenCalled();
+            expect(provider.ensureRecord).not.toHaveBeenCalled();
+            expect(workRepository.update).not.toHaveBeenCalled();
+        });
+
+        it('maps a provider refusal to repoint (record appeared after the probe) to 409 and rolls back', async () => {
+            const workBefore = buildWork({ managedSubdomain: null });
+            workRepository.findById.mockResolvedValue(workBefore);
+            provider.ensureRecord.mockRejectedValue(
+                new DnsRecordConflictError('late.ever.works', 'CNAME', 'other.example.net'),
+            );
+
+            await expect(service.update('work-1', 'late')).rejects.toBeInstanceOf(
+                ConflictException,
+            );
+            expect(workRepository.update).toHaveBeenNthCalledWith(1, workBefore.id, {
+                managedSubdomain: 'late',
+            });
+            expect(workRepository.update).toHaveBeenNthCalledWith(2, workBefore.id, {
+                managedSubdomain: null,
+            });
+        });
+
+        it('never deletes the old record when the old label is a reserved platform name', async () => {
+            // A claim persisted before reserved names were enforced on this path.
+            zone.add('mcp.ever.works');
+            const workBefore = buildWork({ managedSubdomain: 'mcp' });
+            workRepository.findById
+                .mockResolvedValueOnce(workBefore)
+                .mockResolvedValueOnce({ ...workBefore, managedSubdomain: 'new-name' });
+
+            await service.update('work-1', 'new-name');
+
+            expect(provider.removeRecord).not.toHaveBeenCalled();
+            expect(zone.has('mcp.ever.works')).toBe(true);
+            expect(workRepository.update).toHaveBeenCalledWith(workBefore.id, {
+                managedSubdomain: 'new-name',
+            });
+        });
+
         it('rolls back to null when ensureRecord fails on first-time allocation', async () => {
             const workBefore = buildWork({ managedSubdomain: null });
             workRepository.findById.mockResolvedValue(workBefore);
@@ -393,6 +502,31 @@ describe('ManagedSubdomainService', () => {
             expect(provider.ensureRecord).not.toHaveBeenCalled();
             expect(provider.removeRecord).not.toHaveBeenCalled();
             expect(result.subdomain).toBe('new-name');
+        });
+
+        it('refuses with 409 a hostname that already exists in the zone (the deploy would take it over)', async () => {
+            zone.add('existing-host.ever.works');
+            workRepository.findById.mockResolvedValue(
+                buildWork({ deployProvider: 'cloudflare', managedSubdomain: 'old-name' }),
+            );
+
+            await expect(service.update('work-1', 'existing-host')).rejects.toBeInstanceOf(
+                ConflictException,
+            );
+            expect(workRepository.update).not.toHaveBeenCalled();
+        });
+
+        it('renames without a zone probe when no DNS provider is configured', async () => {
+            dnsService.getProvider.mockReturnValue(null);
+            const workBefore = buildWork({ deployProvider: 'cloudflare', managedSubdomain: null });
+            workRepository.findById.mockResolvedValue(workBefore);
+
+            await service.update('work-1', 'new-name');
+
+            expect(provider.recordExists).not.toHaveBeenCalled();
+            expect(workRepository.update).toHaveBeenCalledWith(workBefore.id, {
+                managedSubdomain: 'new-name',
+            });
         });
 
         it('still rejects a label claimed by another work', async () => {

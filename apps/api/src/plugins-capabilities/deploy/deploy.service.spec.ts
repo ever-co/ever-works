@@ -33,6 +33,7 @@ jest.mock('@ever-works/agent/events', () => ({
 }));
 
 import { DeployService } from './deploy.service';
+import { DnsRecordConflictError } from '@ever-works/agent/ever-works-providers';
 
 /**
  * Tests focused on the capability-driven contract changes:
@@ -1685,6 +1686,70 @@ describe('DeployService — plugin-driven dispatch + secrets', () => {
                 delete process.env.K8S_MANAGED_SUBDOMAIN;
                 delete process.env.EVER_WORKS_DEPLOY_LB_HOSTNAME;
             }
+        });
+
+        describe('EW-734 allocator + a record the zone holds for another host', () => {
+            const k8sPlugin = () => ({
+                id: 'k8s',
+                getWorkflowFilenames: () => ['deploy_k8s.yaml'],
+                getDeploymentSecrets,
+            });
+
+            beforeEach(() => {
+                process.env.K8S_MANAGED_SUBDOMAIN = 'true';
+                process.env.EVER_WORKS_DEPLOY_LB_HOSTNAME = 'lb.ever.works';
+            });
+            afterEach(() => {
+                delete process.env.K8S_MANAGED_SUBDOMAIN;
+                delete process.env.EVER_WORKS_DEPLOY_LB_HOSTNAME;
+            });
+
+            function setUp(ensureRecord: jest.Mock) {
+                const built = buildService({ plugin: k8sPlugin(), deployProvider: 'k8s' });
+                built.dnsService.getProvider.mockReturnValue({ ensureRecord });
+                built.subdomainAllocator.allocate.mockResolvedValueOnce({
+                    subdomain: 'taken',
+                    fqdn: 'taken.ever.works',
+                    rootDomain: 'ever.works',
+                    allocated: false,
+                });
+                return built;
+            }
+
+            it('keeps the host off the Ingress when the provider refuses to repoint it', async () => {
+                const ensureRecord = jest
+                    .fn()
+                    .mockRejectedValue(
+                        new DnsRecordConflictError(
+                            'taken.ever.works',
+                            'CNAME',
+                            'other-host.example.net',
+                        ),
+                    );
+                const { service, githubPlugin } = setUp(ensureRecord);
+
+                await expect(service.deploy('work-1', 'user-1', {})).resolves.toMatchObject({
+                    dispatched: true,
+                });
+
+                expect(ensureRecord).toHaveBeenCalledWith(
+                    expect.objectContaining({ host: 'taken.ever.works', target: 'lb.ever.works' }),
+                );
+                const { secrets } = captureCalls(githubPlugin);
+                const keys = secrets.map((s: any) => s.key);
+                expect(keys).not.toContain('K8S_INGRESS_HOST');
+            });
+
+            it('still routes the host when DNS fails for another reason (logged, as before)', async () => {
+                const ensureRecord = jest.fn().mockRejectedValue(new Error('cf api down'));
+                const { service, githubPlugin } = setUp(ensureRecord);
+
+                await service.deploy('work-1', 'user-1', {});
+
+                const { secrets } = captureCalls(githubPlugin);
+                const byKey = Object.fromEntries(secrets.map((s: any) => [s.key, s.value]));
+                expect(byKey.K8S_INGRESS_HOST).toBe('taken.ever.works');
+            });
         });
 
         it('falls back gracefully when the custom-domain lookup fails', async () => {

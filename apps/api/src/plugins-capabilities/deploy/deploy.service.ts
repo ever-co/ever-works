@@ -35,6 +35,7 @@ import {
     ZeroFrictionFunnelService,
 } from '@ever-works/agent/services';
 import {
+    DnsRecordConflictError,
     EverWorksDnsService,
     SubdomainAllocator,
     EverWorksDbProvisionService,
@@ -788,21 +789,31 @@ export class DeployService {
 
         try {
             const allocation = await this.subdomainAllocator.allocate(work);
-            // Fire-and-forget DNS record creation, matching the legacy
-            // ever-works path's behavior (errors log but never abort).
-            void provider
-                .ensureRecord({
+            // Awaited (it used to be fire-and-forget) so a refusal can keep the
+            // host off the Ingress: the provider never repoints a record that
+            // the zone holds for something else (`DnsRecordConflictError`), and
+            // routing that hostname to this Work would claim it at the ingress
+            // instead. Any other DNS error still only logs, as before: the
+            // deploy proceeds and the record can be fixed afterwards.
+            try {
+                await provider.ensureRecord({
                     host: allocation.fqdn,
                     type: 'CNAME',
                     target: lbTarget,
                     proxied: false,
                     ttl: 1,
-                })
-                .catch((cause) => {
-                    this.logger.error(
-                        `EW-734 k8s managed-subdomain ensureRecord failed for ${allocation.fqdn}: ${(cause as Error).message}`,
-                    );
                 });
+            } catch (cause) {
+                if (cause instanceof DnsRecordConflictError) {
+                    this.logger.error(
+                        `EW-734 k8s managed-subdomain ${allocation.fqdn} for work ${work.id} already exists in the zone for another host; not routing it to this work`,
+                    );
+                    return mergedAfterLegacy;
+                }
+                this.logger.error(
+                    `EW-734 k8s managed-subdomain ensureRecord failed for ${allocation.fqdn}: ${(cause as Error).message}`,
+                );
+            }
             // EW-741 — when the allocator wins, the previously-merged
             // `extraHosts` (custom domains) must still travel alongside the
             // newly-allocated managed subdomain. We re-dedupe against the

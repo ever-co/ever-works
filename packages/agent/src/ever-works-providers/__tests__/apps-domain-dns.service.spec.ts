@@ -51,6 +51,41 @@ describe('AppsDomainDnsServiceImpl', () => {
         });
     });
 
+    it('repoints the App record when its ingress address moves (the apps zone is wholly managed)', async () => {
+        const methods: string[] = [];
+        const fetchImpl = jest.fn(async (url: string, init: RequestInit) => {
+            const method = (init.method ?? 'GET').toUpperCase();
+            methods.push(method);
+            const result =
+                method === 'GET'
+                    ? [
+                          {
+                              id: 'rec-1',
+                              type: 'A',
+                              name: 'acme.apps.example.com',
+                              content: '203.0.113.10',
+                          },
+                      ]
+                    : {
+                          id: 'rec-1',
+                          type: 'A',
+                          name: 'acme.apps.example.com',
+                          content: '203.0.113.20',
+                      };
+            return new Response(JSON.stringify({ success: true, result }), { status: 200 });
+        });
+        const works = {
+            findById: jest.fn(async () => ({ id: 'w-1', slug: 'acme', managedSubdomain: 'acme' })),
+        };
+        const dns = new AppsDomainDnsServiceImpl(works as never, ENV, fetchImpl as never);
+
+        await expect(dns.ensureFor('w-1', { ip: '203.0.113.20' })).resolves.toMatchObject({
+            status: 'ensured',
+            target: '203.0.113.20',
+        });
+        expect(methods).toEqual(['GET', 'PUT']);
+    });
+
     it('uses a CNAME for a hostname and refuses a private address', async () => {
         const { dns, ensureRecord } = service();
         await expect(

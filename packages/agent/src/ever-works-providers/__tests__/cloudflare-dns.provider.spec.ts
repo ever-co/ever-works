@@ -3,6 +3,7 @@ import {
     CloudflareDnsProvider,
     EverWorksDnsService,
 } from '../cloudflare-dns.provider';
+import { DnsRecordConflictError } from '../managed-subdomain-guard';
 
 describe('CloudflareDnsProvider (EW-617 G5)', () => {
     type FetchCall = { url: string; init: RequestInit };
@@ -10,12 +11,15 @@ describe('CloudflareDnsProvider (EW-617 G5)', () => {
     function buildProvider(
         opts: {
             listResult?: any[];
+            /** Per-type lookup results (`?type=`); overrides `listResult` when set. */
+            listByType?: Record<string, any[]>;
             createResult?: any;
             updateResult?: any;
             deleteOk?: boolean;
             deleteStatus?: number;
             deleteBody?: any;
             targetHostname?: string;
+            manageForeignRecords?: boolean;
         } = {},
     ) {
         const calls: FetchCall[] = [];
@@ -23,10 +27,11 @@ describe('CloudflareDnsProvider (EW-617 G5)', () => {
             calls.push({ url, init });
             const method = (init.method ?? 'GET').toUpperCase();
             if (method === 'GET' && url.includes('/dns_records?')) {
-                return new Response(
-                    JSON.stringify({ success: true, result: opts.listResult ?? [] }),
-                    { status: 200 },
-                );
+                const type = new URL(url).searchParams.get('type') ?? '';
+                const result = opts.listByType
+                    ? (opts.listByType[type] ?? [])
+                    : (opts.listResult ?? []);
+                return new Response(JSON.stringify({ success: true, result }), { status: 200 });
             }
             if (method === 'POST' && url.endsWith('/dns_records')) {
                 return new Response(
@@ -79,6 +84,7 @@ describe('CloudflareDnsProvider (EW-617 G5)', () => {
                 zoneId: 'zone1',
                 rootDomain: 'ever.works',
                 targetHostname: opts.targetHostname ?? 'k8s.lb.example',
+                manageForeignRecords: opts.manageForeignRecords,
             },
             fakeFetch,
         );
@@ -123,6 +129,8 @@ describe('CloudflareDnsProvider (EW-617 G5)', () => {
         const tunnel = '5a1c27a6-7d93-4f25-a329-3154995e16db.cfargotunnel.com';
         const { provider, calls } = buildProvider({
             targetHostname: tunnel,
+            // Repointing a record aimed elsewhere needs a wholly managed zone.
+            manageForeignRecords: true,
             listResult: [
                 {
                     id: 'rec-drift',
@@ -162,8 +170,43 @@ describe('CloudflareDnsProvider (EW-617 G5)', () => {
         expect(calls[0].init.method).toBe('GET');
     });
 
-    it('PUTs an updated CNAME when the content drifted from target', async () => {
+    it('treats a CNAME that differs only in case or a trailing dot as in sync', async () => {
         const { provider, calls } = buildProvider({
+            listResult: [
+                {
+                    id: 'rec-existing',
+                    type: 'CNAME',
+                    name: 'ai-coding.ever.works',
+                    content: 'K8S.LB.Example.',
+                },
+            ],
+        });
+        const result = await provider.ensureWorkSubdomain('ai-coding');
+        expect(result.id).toBe('rec-existing');
+        expect(calls.map((c) => c.init.method)).toEqual(['GET']);
+    });
+
+    it("refuses to repoint a CNAME aimed at another target (one of the zone's other hosts)", async () => {
+        const { provider, calls } = buildProvider({
+            listResult: [
+                {
+                    id: 'rec-other-host',
+                    type: 'CNAME',
+                    name: 'ai-coding.ever.works',
+                    content: 'other-host.example.net',
+                },
+            ],
+        });
+        await expect(provider.ensureWorkSubdomain('ai-coding')).rejects.toBeInstanceOf(
+            DnsRecordConflictError,
+        );
+        // Looked it up, wrote nothing.
+        expect(calls.map((c) => c.init.method)).toEqual(['GET']);
+    });
+
+    it('PUTs an updated CNAME when the content drifted and the zone is wholly managed', async () => {
+        const { provider, calls } = buildProvider({
+            manageForeignRecords: true,
             listResult: [
                 {
                     id: 'rec-drifted',
@@ -179,6 +222,16 @@ describe('CloudflareDnsProvider (EW-617 G5)', () => {
         expect(result.content).toBe('k8s.lb.example');
     });
 
+    it.each(['mcp', 'api-dev', 'appstage', 'lb'])(
+        'refuses the reserved platform label %s without calling Cloudflare',
+        async (slug) => {
+            const { provider, calls } = buildProvider();
+            await expect(provider.ensureWorkSubdomain(slug)).rejects.toThrow(/reserved/);
+            await expect(provider.removeWorkSubdomain(slug)).rejects.toThrow(/reserved/);
+            expect(calls).toHaveLength(0);
+        },
+    );
+
     it('rejects slugs that fail the DNS-safe regex', async () => {
         const { provider } = buildProvider();
         await expect(provider.ensureWorkSubdomain('NOT_OK')).rejects.toThrow(/Invalid slug/);
@@ -191,20 +244,173 @@ describe('CloudflareDnsProvider (EW-617 G5)', () => {
         expect(calls[0].init.method).toBe('GET');
     });
 
-    it('deletes the record when one exists', async () => {
+    it('deletes the record when one exists on the managed target', async () => {
         const { provider, calls } = buildProvider({
             listResult: [
                 {
                     id: 'rec-to-go',
                     type: 'CNAME',
                     name: 'foo.ever.works',
-                    content: 'old.lb',
+                    content: 'k8s.lb.example',
                 },
             ],
         });
         await provider.removeWorkSubdomain('foo');
         expect(calls.map((c) => c.init.method)).toEqual(['GET', 'DELETE']);
         expect(calls[1].url).toContain('/dns_records/rec-to-go');
+    });
+
+    it('refuses to delete a record aimed at another target', async () => {
+        const { provider, calls } = buildProvider({
+            listResult: [
+                {
+                    id: 'rec-other-host',
+                    type: 'CNAME',
+                    name: 'foo.ever.works',
+                    content: 'other-host.example.net',
+                },
+            ],
+        });
+        await expect(provider.removeWorkSubdomain('foo')).rejects.toBeInstanceOf(
+            DnsRecordConflictError,
+        );
+        expect(calls.map((c) => c.init.method)).toEqual(['GET']);
+    });
+
+    describe('recordExists', () => {
+        it('sees a host that has only an AAAA record (Workers custom domain / route)', async () => {
+            const { provider, calls } = buildProvider({
+                listByType: {
+                    AAAA: [
+                        {
+                            id: 'rec-worker',
+                            type: 'AAAA',
+                            name: 'crm.ever.works',
+                            content: '100::',
+                        },
+                    ],
+                },
+            });
+
+            await expect(provider.recordExists('crm.ever.works')).resolves.toBe(true);
+            expect(calls.map((c) => new URL(c.url).searchParams.get('type'))).toEqual([
+                'CNAME',
+                'A',
+                'AAAA',
+            ]);
+        });
+
+        it('stops at the first record type found', async () => {
+            const { provider, calls } = buildProvider({
+                listByType: {
+                    CNAME: [
+                        { id: 'r', type: 'CNAME', name: 'x.ever.works', content: 'k8s.lb.example' },
+                    ],
+                },
+            });
+
+            await expect(provider.recordExists('x.ever.works')).resolves.toBe(true);
+            expect(calls).toHaveLength(1);
+        });
+
+        it('is false when no CNAME, A or AAAA record exists', async () => {
+            const { provider, calls } = buildProvider({ listByType: {} });
+
+            await expect(provider.recordExists('free.ever.works')).resolves.toBe(false);
+            expect(calls).toHaveLength(3);
+            expect(calls.every((c) => (c.init.method ?? 'GET') === 'GET')).toBe(true);
+        });
+    });
+
+    describe('IDnsOperations guard (ensureRecord / removeRecord)', () => {
+        const foreign = {
+            id: 'rec-other-host',
+            type: 'CNAME',
+            name: 'taken.ever.works',
+            content: 'other-host.example.net',
+        };
+
+        it('ensureRecord refuses to overwrite a record aimed at a foreign target', async () => {
+            const { provider, calls } = buildProvider({ listResult: [foreign] });
+
+            await expect(
+                provider.ensureRecord({
+                    host: 'taken.ever.works',
+                    type: 'CNAME',
+                    target: 'k8s.lb.example',
+                }),
+            ).rejects.toMatchObject({
+                name: 'DnsRecordConflictError',
+                host: 'taken.ever.works',
+                existingContent: 'other-host.example.net',
+            });
+            // No PUT (repoint) and no POST: the only request was the lookup.
+            expect(calls.map((c) => c.init.method)).toEqual(['GET']);
+        });
+
+        it('ensureRecord leaves a record already on the target alone', async () => {
+            const { provider, calls } = buildProvider({
+                listResult: [{ ...foreign, content: 'k8s.lb.example' }],
+            });
+
+            const result = await provider.ensureRecord({
+                host: 'taken.ever.works',
+                type: 'CNAME',
+                target: 'k8s.lb.example',
+            });
+
+            expect(result.id).toBe('rec-other-host');
+            expect(calls.map((c) => c.init.method)).toEqual(['GET']);
+        });
+
+        it('ensureRecord creates a missing record', async () => {
+            const { provider, calls } = buildProvider({ listResult: [] });
+
+            await provider.ensureRecord({
+                host: 'fresh.ever.works',
+                type: 'CNAME',
+                target: 'k8s.lb.example',
+            });
+
+            expect(calls.map((c) => c.init.method)).toEqual(['GET', 'POST']);
+        });
+
+        it('ensureRecord repoints any record when the zone is wholly managed (apps zone)', async () => {
+            const { provider, calls } = buildProvider({
+                manageForeignRecords: true,
+                listResult: [{ ...foreign, type: 'A', content: '203.0.113.10' }],
+            });
+
+            await provider.ensureRecord({
+                host: 'taken.ever.works',
+                type: 'A',
+                target: '203.0.113.20',
+            });
+
+            expect(calls.map((c) => c.init.method)).toEqual(['GET', 'PUT']);
+            expect(JSON.parse(calls[1].init.body as string)).toMatchObject({
+                content: '203.0.113.20',
+            });
+        });
+
+        it('removeRecord refuses to delete a record aimed at a foreign target', async () => {
+            const { provider, calls } = buildProvider({ listResult: [foreign] });
+
+            await expect(
+                provider.removeRecord({ host: 'taken.ever.works', type: 'CNAME' }),
+            ).rejects.toBeInstanceOf(DnsRecordConflictError);
+            expect(calls.map((c) => c.init.method)).toEqual(['GET']);
+        });
+
+        it('removeRecord deletes a record on the managed target', async () => {
+            const { provider, calls } = buildProvider({
+                listResult: [{ ...foreign, content: 'k8s.lb.example' }],
+            });
+
+            await provider.removeRecord({ host: 'taken.ever.works', type: 'CNAME' });
+
+            expect(calls.map((c) => c.init.method)).toEqual(['GET', 'DELETE']);
+        });
     });
 
     it('throws CloudflareDnsError on a non-success API response', async () => {

@@ -69,7 +69,16 @@ export class AppsDomainDnsServiceImpl {
             this.cached = {
                 key,
                 provider: new CloudflareDnsProvider(
-                    { apiToken, zoneId, rootDomain, targetHostname: rootDomain },
+                    {
+                        apiToken,
+                        zoneId,
+                        rootDomain,
+                        targetHostname: rootDomain,
+                        // Every name written here is an App label `SubdomainAllocator`
+                        // allocated free in this zone, and its record follows the App's
+                        // ingress address, so a changed address must still be repointed.
+                        manageForeignRecords: true,
+                    },
                     this.fetchImpl ?? fetch,
                 ),
             };
