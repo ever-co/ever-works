@@ -81,6 +81,8 @@ interface DeployCall {
     deploymentId: string;
     credential: string;
     phases: string[];
+    /** The components the plugin was handed (their images, once §5.8 resolved them). */
+    components?: unknown;
 }
 
 /** The plugin §5.6 step 4 calls — and the only thing that can end a run. */
@@ -101,7 +103,7 @@ class FakePlugin {
     phases: string[] = [];
 
     async deployApp(
-        input: { deploymentId: string },
+        input: { deploymentId: string; components?: unknown },
         credential: string,
         hooks: {
             onPhase: (phase: string, detail?: Record<string, unknown>) => Promise<void>;
@@ -112,7 +114,12 @@ class FakePlugin {
             }) => Promise<{ checks: unknown[]; passed: boolean }>;
         },
     ): Promise<Record<string, unknown>> {
-        this.calls.push({ deploymentId: input.deploymentId, credential, phases: [...this.phases] });
+        this.calls.push({
+            deploymentId: input.deploymentId,
+            credential,
+            phases: [...this.phases],
+            components: input.components,
+        });
         if (this.throwWith) throw this.throwWith;
 
         for (const phase of this.phases) {
@@ -374,6 +381,8 @@ function harness(
         strategy?: string;
         /** Security (sec/app-works-gates) — the row's requester facts, when the store reads them. */
         findRequester?: AppDeployOrchestratorDeploymentStore['findRequester'];
+        /** §5.8 / FR-34 — the images the row records (a rollback's), when the store reads them. */
+        findRecordedImages?: AppDeployOrchestratorDeploymentStore['findRecordedImages'];
     } = {},
 ): Harness {
     const trace: string[] = [];
@@ -492,6 +501,9 @@ function harness(
             return deployments.update(workId, deploymentId, patch);
         },
         ...(overrides.findRequester ? { findRequester: overrides.findRequester } : {}),
+        ...(overrides.findRecordedImages
+            ? { findRecordedImages: overrides.findRecordedImages }
+            : {}),
     } as AppDeployOrchestratorDeploymentStore;
 
     const orchestrator = new AppDeployOrchestrator(
@@ -990,6 +1002,144 @@ describe('AppDeployOrchestrator.run — the image strategy (APW-06 T25, ACC-06-5
             digest: 'sha256:deadbeef',
             resolvedFromTag: true,
         });
+    });
+
+    it('resolves each distinct component image once too, and renders the digests (schema §10 components[].image)', async () => {
+        const h = harness({ strategy: 'image' });
+        h.builderAnswer.input = {
+            ...h.builderAnswer.input,
+            image: { reference: 'ghcr.io/acme/api:1.2.3' },
+            components: [
+                { name: 'api', role: 'web', port: 3000 },
+                { name: 'web', role: 'web', port: 4200, image: 'ghcr.io/acme/web:1.2.3' },
+                { name: 'worker', role: 'worker', image: 'ghcr.io/acme/web:1.2.3' },
+            ],
+        };
+        const digests: Record<string, string> = {
+            'ghcr.io/acme/api:1.2.3': 'ghcr.io/acme/api@sha256:aaaa',
+            'ghcr.io/acme/web:1.2.3': 'ghcr.io/acme/web@sha256:bbbb',
+        };
+        h.images.resolve = async (input) => {
+            h.images.calls.push(input);
+            return {
+                status: 'resolved',
+                reference: digests[input.reference],
+                digest: digests[input.reference].split('@')[1],
+                resolvedFromTag: true,
+            };
+        };
+
+        const result = await h.orchestrator.run(REQUEST);
+
+        expect(result.state).toBe('READY');
+        expect(h.images.calls.map((call) => call.reference)).toEqual([
+            'ghcr.io/acme/api:1.2.3',
+            'ghcr.io/acme/web:1.2.3',
+        ]);
+        expect(h.plugin.calls[0].components).toEqual([
+            { name: 'api', role: 'web', port: 3000 },
+            { name: 'web', role: 'web', port: 4200, image: 'ghcr.io/acme/web@sha256:bbbb' },
+            { name: 'worker', role: 'worker', image: 'ghcr.io/acme/web@sha256:bbbb' },
+        ]);
+        // One `image_not_pinned` for the App's tag, one for the component tag.
+        expect(result.warnings.map((warning) => warning.code)).toEqual([
+            APP_DEPLOY_WARNING_IMAGE_NOT_PINNED,
+            APP_DEPLOY_WARNING_IMAGE_NOT_PINNED,
+        ]);
+    });
+
+    it('ends ERROR with the refusal of a component image, before the plugin is called', async () => {
+        const h = harness({ strategy: 'image' });
+        h.builderAnswer.input = {
+            ...h.builderAnswer.input,
+            components: [{ name: 'web', role: 'web', port: 4200, image: 'ghcr.io/acme/web:gone' }],
+        };
+        h.images.resolve = async (input) => {
+            h.images.calls.push(input);
+            return input.reference === 'ghcr.io/acme/web:gone'
+                ? { status: 'refused', code: 'image_not_found', message: 'the registry answered 404' }
+                : {
+                      status: 'resolved',
+                      reference: 'ghcr.io/acme/app@sha256:abc',
+                      digest: 'sha256:abc',
+                      resolvedFromTag: true,
+                  };
+        };
+
+        const result = await h.orchestrator.run(REQUEST);
+
+        expect(result.state).toBe('ERROR');
+        expect(result.code).toBe('image_not_found');
+        expect(result.reason).toBe('Component web: the registry answered 404');
+        expect(h.plugin.calls).toEqual([]);
+    });
+
+    it('records the component digests on the row, for a rollback to run again', async () => {
+        const h = harness({ strategy: 'image' });
+        h.builderAnswer.input = {
+            ...h.builderAnswer.input,
+            components: [
+                { name: 'api', role: 'web', port: 3000 },
+                { name: 'web', role: 'web', port: 4200, image: 'ghcr.io/acme/web:1.2.3' },
+            ],
+        };
+        h.images.resolve = async (input) => {
+            h.images.calls.push(input);
+            return input.reference === 'ghcr.io/acme/web:1.2.3'
+                ? {
+                      status: 'resolved',
+                      reference: `ghcr.io/acme/web@sha256:${'b'.repeat(64)}`,
+                      digest: `sha256:${'b'.repeat(64)}`,
+                      resolvedFromTag: true,
+                  }
+                : {
+                      status: 'resolved',
+                      reference: 'ghcr.io/acme/app@sha256:abc',
+                      digest: 'sha256:abc',
+                      resolvedFromTag: false,
+                  };
+        };
+
+        await h.orchestrator.run(REQUEST);
+
+        expect(h.deployments.appRender().componentImages).toEqual({
+            web: `ghcr.io/acme/web@sha256:${'b'.repeat(64)}`,
+        });
+    });
+
+    it('hands the builder the digests the row recorded, and nothing when it records none', async () => {
+        const recorded = harness({
+            strategy: 'image',
+            findRecordedImages: async () => ({
+                workId: 'work-1',
+                imageDigest: `sha256:${'a'.repeat(64)}`,
+                componentImages: {
+                    web: `ghcr.io/acme/web@sha256:${'b'.repeat(64)}`,
+                    // Never a tag: only digest-pinned references are carried.
+                    worker: 'ghcr.io/acme/worker:latest',
+                },
+            }),
+        });
+        await recorded.orchestrator.run(REQUEST);
+        expect(recorded.builderCalls[0].imageDigest).toBe(`sha256:${'a'.repeat(64)}`);
+        expect(recorded.builderCalls[0].componentImages).toEqual({
+            web: `ghcr.io/acme/web@sha256:${'b'.repeat(64)}`,
+        });
+
+        const otherWork = harness({
+            strategy: 'image',
+            findRecordedImages: async () => ({
+                workId: 'work-2',
+                imageDigest: `sha256:${'a'.repeat(64)}`,
+            }),
+        });
+        await otherWork.orchestrator.run(REQUEST);
+        expect(otherWork.builderCalls[0]).not.toHaveProperty('imageDigest');
+
+        const none = harness({ strategy: 'image' });
+        await none.orchestrator.run(REQUEST);
+        expect(none.builderCalls[0]).not.toHaveProperty('imageDigest');
+        expect(none.builderCalls[0]).not.toHaveProperty('componentImages');
     });
 
     it('never resolves an image for a Build-backed strategy', async () => {

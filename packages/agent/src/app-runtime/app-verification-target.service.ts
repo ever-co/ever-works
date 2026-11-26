@@ -118,6 +118,12 @@ import type {
 import { trimEdgeChars } from '../utils/text.utils.js';
 import { APP_DEPENDENCIES_SERVICE } from './app-runtime-deletion.service.js';
 import {
+    APP_IMAGE_REFERENCE_RESOLVER,
+    isDigestPinnedReference,
+    resolveComponentImages,
+    type AppComponentImageAnswer,
+} from './app-component-images.js';
+import {
     APP_RUNTIME_ENV_SOURCE,
     APP_VERIFICATION_SINK,
     AppPortUnavailableError,
@@ -290,7 +296,9 @@ export type AppVerificationRefusalCode =
     | 'env_required_unset'
     | 'dependencies_unavailable'
     | 'deploy_unavailable'
-    | 'cluster_unavailable';
+    | 'cluster_unavailable'
+    /** A component's own image (APW-03 schema §10) could not be pinned to a digest (§5.8). */
+    | 'image_unavailable';
 
 /**
  * Thrown when **no namespace can exist yet** — there is nothing to report *about*, so there is no
@@ -690,6 +698,16 @@ export class AppVerificationTargetService {
         @Optional()
         @Inject(APP_VERIFICATION_SINK)
         private readonly verifications?: AppVerificationSink,
+        // §5.8 for the components that run their own image (APW-03 schema §10 `components[].image`).
+        @Optional()
+        @Inject(APP_IMAGE_REFERENCE_RESOLVER)
+        private readonly images?: {
+            resolve(input: {
+                workId: string;
+                reference: string;
+                specCommitSha: string;
+            }): Promise<AppComponentImageAnswer>;
+        },
     ) {}
 
     /**
@@ -775,6 +793,20 @@ export class AppVerificationTargetService {
             return env.refusal;
         }
 
+        // §5.8 for every component that runs its own image: the attempt runs digests, never a
+        // moving tag — the same rule as a Deployment, asked before the first write.
+        const images = await this.resolveComponentImages(sink, spec.spec, {
+            workId,
+            namespace,
+            provisioningId,
+            attempt,
+            expiresAt,
+            specCommitSha: op?.specCommitSha ?? null,
+        });
+        if ('refusal' in images) {
+            return images.refusal;
+        }
+
         if (!access.prepareAppNamespace || !access.deployApp) {
             return this.refusal(sink, {
                 provisioningId,
@@ -803,7 +835,7 @@ export class AppVerificationTargetService {
             });
         }
 
-        const input = withEphemeralEnv(spec.spec, env.env);
+        const input = withEphemeralEnv(images.spec, env.env);
         const run = this.newRun(access, provisioningId, attempt, namespace, expiresAt);
         // The ref every call of this attempt is made with: the **verification** namespace, never the
         // live one. `access.ref` names the live namespace and is only ever the base of this copy —
@@ -1426,6 +1458,73 @@ export class AppVerificationTargetService {
      * A refusal the namespace name already exists for: reported through the sink, and returned.
      * `state` defaults to `unavailable`; `blocked` is the only other one used here.
      */
+    /**
+     * §5.8 for the components of a verification attempt that run their own image (APW-03 schema
+     * §10 `components[].image`): each distinct reference is resolved once (a tag to its digest, a
+     * digest checked to exist), through the same resolver as a Deployment. The App's own image is
+     * already the digest APW-04 sent in the op. A refusal names the component and carries the
+     * resolver's code; without a resolver an attempt whose component names a tag is refused rather
+     * than run on whatever the tag points at, and digest-pinned components run as named.
+     */
+    private async resolveComponentImages(
+        sink: AppVerificationSink,
+        spec: AppVerificationSpec,
+        ids: {
+            workId: string;
+            namespace: string;
+            provisioningId: string;
+            attempt: number;
+            expiresAt: string;
+            specCommitSha: string | null;
+        },
+    ): Promise<{ spec: AppVerificationSpec } | { refusal: AppVerificationResult }> {
+        const components = spec?.input?.components ?? [];
+        const own = components.filter((component) => String(component?.image ?? '').trim());
+        if (own.length === 0) {
+            return { spec };
+        }
+
+        const refuse = async (failureCode: string, message: string) => ({
+            refusal: await this.refusal(sink, {
+                provisioningId: ids.provisioningId,
+                attempt: ids.attempt,
+                namespace: ids.namespace,
+                expiresAt: ids.expiresAt,
+                code: 'image_unavailable',
+                failureCode,
+                message,
+            }),
+        });
+
+        if (!this.images?.resolve) {
+            const tagged = own.find((component) => !isDigestPinnedReference(component.image));
+            if (tagged) {
+                return refuse(
+                    'image_unresolvable',
+                    `Component ${tagged.name}: no App image reference resolver is bound, so its tag ` +
+                        `${String(tagged.image)} cannot be pinned to a digest.`,
+                );
+            }
+            return { spec };
+        }
+
+        const resolver = this.images;
+        const answer = await resolveComponentImages(components, (reference) =>
+            resolver.resolve({
+                workId: ids.workId,
+                reference,
+                specCommitSha: String(ids.specCommitSha ?? ''),
+            }),
+        );
+        if (answer.status !== 'resolved') {
+            return refuse(answer.code, `Component ${answer.component}: ${answer.message}`);
+        }
+
+        return {
+            spec: { ...spec, input: { ...spec.input, components: [...answer.components] } },
+        };
+    }
+
     private async refusal(
         sink: AppVerificationSink,
         input: {

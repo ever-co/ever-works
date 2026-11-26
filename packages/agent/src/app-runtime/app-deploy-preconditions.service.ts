@@ -1078,15 +1078,25 @@ export class AppDeployPreconditionsService {
         if (strategy === 'image') {
             // §5.8: the image is the spec's own reference at that commit. On the managed
             // tier a tag-only reference is refused **on request**, before any work starts.
-            const reference = String(spec.spec?.build?.image ?? '').trim();
-            if (
-                target === 'ever-works-apps' &&
-                reference.length > 0 &&
-                !isDigestPinned(reference)
-            ) {
+            // A component may run its own image (APW-03 schema §10 `components[].image`): the
+            // same rule applies to it, and one entry names every unpinned reference.
+            const references = [
+                String(spec.spec?.build?.image ?? '').trim(),
+                ...(spec.spec?.components ?? []).map((component) =>
+                    String(component?.image ?? '').trim(),
+                ),
+            ];
+            const unpinned = [
+                ...new Set(
+                    references.filter(
+                        (reference) => reference.length > 0 && !isDigestPinned(reference),
+                    ),
+                ),
+            ];
+            if (target === 'ever-works-apps' && unpinned.length > 0) {
                 unmet.push({
                     code: 'image_not_pinned',
-                    names: [reference],
+                    names: unpinned,
                     message:
                         'Ever Works Apps requires an image pinned by digest. Use ' +
                         '`<repository>@sha256:<64 hex>` in the App spec.',

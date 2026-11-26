@@ -1725,3 +1725,64 @@ describe('memoryLimit default (APW-03 schema §10)', () => {
         expect(memoryLimitFor(memory)).toBe(memoryLimit);
     });
 });
+
+/* -------------------------------------------------------------------------- *
+ * APW-03 schema §10 `components[].image` (2026-11-26) — one image per component
+ * -------------------------------------------------------------------------- */
+
+describe('componentInputs — a component that runs its own image', () => {
+    const API_IMAGE = `ghcr.io/example/api@sha256:${'a'.repeat(64)}`;
+    const WEB_IMAGE = `ghcr.io/example/web@sha256:${'b'.repeat(64)}`;
+    const components: AppSpec['components'] = [
+        { name: 'api', role: 'web', port: 3000 },
+        { name: 'web', role: 'web', port: 4200, image: WEB_IMAGE },
+    ];
+
+    it('carries the image of a published-image App, and nothing for a component that names none', () => {
+        const [api, web] = componentInputs(
+            appSpec({
+                build: { strategy: 'image', image: API_IMAGE },
+                components,
+                domains: { primaryComponent: 'web' },
+            }),
+            LIVE_NAMESPACE,
+        );
+
+        expect(api).not.toHaveProperty('image');
+        expect(web?.image).toBe(WEB_IMAGE);
+    });
+
+    it('keeps the digest a previous Deployment recorded, while the spec names the same repository', () => {
+        const recorded = `ghcr.io/example/web@sha256:${'c'.repeat(64)}`;
+        const tagged: AppSpec['components'] = [
+            { name: 'api', role: 'web', port: 3000 },
+            { name: 'web', role: 'web', port: 4200, image: 'ghcr.io/example/web:1.2.3' },
+            { name: 'admin', role: 'web', port: 4300, image: 'ghcr.io/example/admin:1.2.3' },
+        ];
+        const [, web, admin] = componentInputs(
+            appSpec({
+                build: { strategy: 'image', image: API_IMAGE },
+                components: tagged,
+                domains: { primaryComponent: 'web' },
+            }),
+            LIVE_NAMESPACE,
+            {
+                web: recorded,
+                // Recorded for another repository than the spec names now: the spec wins.
+                admin: `ghcr.io/example/old-admin@sha256:${'d'.repeat(64)}`,
+            },
+        );
+
+        expect(web?.image).toBe(recorded);
+        expect(admin?.image).toBe('ghcr.io/example/admin:1.2.3');
+    });
+
+    it('ignores it when a Build produces the one image every component runs', () => {
+        const inputs = componentInputs(
+            appSpec({ build: { strategy: 'dockerfile' }, components, domains: { primaryComponent: 'web' } }),
+            LIVE_NAMESPACE,
+        );
+
+        for (const input of inputs) expect(input).not.toHaveProperty('image');
+    });
+});

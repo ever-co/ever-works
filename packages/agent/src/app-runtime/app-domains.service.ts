@@ -63,6 +63,8 @@ import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import type { AddDomainResult, DeploymentDomain } from '@ever-works/plugin';
 
 import { WORK_APP_RUNTIME_STATES } from '../app-launcher/app-launcher.service';
+import { config } from '../config';
+import { assertNotPlatformHost } from '../utils/platform-host';
 import {
     APP_CUSTOM_DOMAIN_STORE,
     AppHostsService,
@@ -272,6 +274,12 @@ export class AppDomainsService {
      * §8.4's `addDomain`. A row is stored **unverified** — verification is the member's DNS change,
      * and publishing before it resolves is exactly what FR-39 forbids. Nothing is published here, so
      * no reconcile is dispatched: the guidance this returns is what the member acts on.
+     *
+     * A name equal to or under one of the platform's root domains (`ever.works`, the apps apex,
+     * the managed App apex) is refused with `PlatformDomainNotAllowedError` before any row is read
+     * or written. That holds whoever calls this, not only the facade: an App reaches a platform
+     * root through its managed subdomain, never as a custom domain. A row that already exists is
+     * refused on a re-add as well; the row itself is not touched.
      */
     async addDomain(domain: string, options: AppDomainsOptions): Promise<AddDomainResult> {
         const workId = text(options?.workId);
@@ -280,6 +288,8 @@ export class AppDomainsService {
         if (!workId || !name) {
             throw new Error('An App custom domain needs both a Work and a domain name.');
         }
+
+        assertNotPlatformHost(name, config.everWorks.platformRootDomains());
 
         const existing = await this.findRow(workId, name);
         const record = existing ?? (await this.addRow(workId, name));

@@ -930,6 +930,184 @@ describe('AccountImportService', () => {
         });
     });
 
+    describe('applyImport — a k8s ingressHost under a platform root (PLATFORM_DOMAIN_NOT_ALLOWED)', () => {
+        const original = process.env.EVER_WORKS_DOMAIN;
+
+        beforeEach(() => {
+            process.env.EVER_WORKS_DOMAIN = 'ever.works';
+        });
+
+        afterEach(() => {
+            if (original === undefined) delete process.env.EVER_WORKS_DOMAIN;
+            else process.env.EVER_WORKS_DOMAIN = original;
+        });
+
+        it('drops it from imported user and Work plugin settings with a warning, keeping the rest', async () => {
+            const { service, mocks } = makeService();
+            mocks.userRepository.findById.mockResolvedValue({ id: 'user-1', username: 'octocat' });
+            mocks.workRepository.findByOwnerAndSlug.mockResolvedValue(null);
+            mocks.workRepository.create.mockResolvedValue({ id: 'w-1', slug: 'a' });
+            mocks.pluginRepository.findByPluginId.mockResolvedValue({ id: 'p-k8s' });
+            const work = makeWork({
+                slug: 'a',
+                workPlugins: [
+                    {
+                        pluginId: 'k8s',
+                        enabled: true,
+                        activeCapabilities: [],
+                        settings: { ingressHost: 'Login.Ever.Works', replicas: 2 },
+                        priority: 0,
+                    },
+                ],
+            });
+            const payload = makePayload(
+                [work],
+                [
+                    {
+                        pluginId: 'k8s',
+                        enabled: true,
+                        autoEnableForWorks: false,
+                        settings: {
+                            ingressHost: 'login.ever.works',
+                            clusterSource: 'k8s-works-shared',
+                        },
+                    },
+                    {
+                        pluginId: 'other-plugin',
+                        enabled: true,
+                        autoEnableForWorks: false,
+                        settings: { ingressHost: 'login.ever.works' },
+                    },
+                ],
+            );
+
+            const result = await service.applyImport('user-1', payload, []);
+
+            const userUpserts = mocks.userPluginRepository.upsert.mock.calls.map((call) => call[0]);
+            expect(userUpserts.find((up) => up.pluginId === 'k8s').settings).toEqual({
+                clusterSource: 'k8s-works-shared',
+            });
+            // The rule is the k8s plugin's only.
+            expect(userUpserts.find((up) => up.pluginId === 'other-plugin').settings).toEqual({
+                ingressHost: 'login.ever.works',
+            });
+            expect(mocks.workPluginRepository.upsert.mock.calls[0][0].settings).toEqual({
+                replicas: 2,
+            });
+            expect(
+                result.warnings.filter((w) =>
+                    w.includes("Hosts under ever.works can't be used as the default ingress host"),
+                ),
+            ).toHaveLength(2);
+        });
+
+        it('keeps an ordinary ingressHost', async () => {
+            const { service, mocks } = makeService();
+            mocks.userRepository.findById.mockResolvedValue({ id: 'user-1', username: 'octocat' });
+            mocks.pluginRepository.findByPluginId.mockResolvedValue({ id: 'p-k8s' });
+
+            await service.applyImport(
+                'user-1',
+                makePayload(
+                    [],
+                    [
+                        {
+                            pluginId: 'k8s',
+                            enabled: true,
+                            autoEnableForWorks: false,
+                            settings: { ingressHost: 'shop.example.com' },
+                        },
+                    ],
+                ),
+                [],
+            );
+
+            expect(mocks.userPluginRepository.upsert.mock.calls[0][0].settings).toEqual({
+                ingressHost: 'shop.example.com',
+            });
+        });
+
+        it('drops one smuggled in the user and Work plugin secret bags, keeping the real secrets', async () => {
+            const { service, mocks } = makeService();
+            mocks.userRepository.findById.mockResolvedValue({ id: 'user-1', username: 'octocat' });
+            mocks.workRepository.findByOwnerAndSlug.mockResolvedValue(null);
+            mocks.workRepository.create.mockResolvedValue({ id: 'w-1', slug: 'a' });
+            mocks.pluginRepository.findByPluginId.mockResolvedValue({ id: 'p-k8s' });
+            const work = makeWork({
+                slug: 'a',
+                workPlugins: [
+                    {
+                        pluginId: 'k8s',
+                        enabled: true,
+                        activeCapabilities: [],
+                        settings: { replicas: 2 },
+                        secretSettings: {
+                            ingressHost: 'Login.Ever.Works',
+                            kubeconfig: 'apiVersion: v1',
+                        },
+                        priority: 0,
+                    },
+                ],
+            });
+            const payload = makePayload(
+                [work],
+                [
+                    {
+                        pluginId: 'k8s',
+                        enabled: true,
+                        autoEnableForWorks: false,
+                        settings: { clusterSource: 'k8s-works-shared' },
+                        secretSettings: { ingressHost: 'login.ever.works' },
+                    },
+                ],
+            );
+            payload.includesSecrets = true;
+
+            const result = await service.applyImport('user-1', payload, []);
+
+            const userUpsert = mocks.userPluginRepository.upsert.mock.calls[0][0];
+            expect(userUpsert.settings).toEqual({ clusterSource: 'k8s-works-shared' });
+            expect(userUpsert.secretSettings).toEqual({});
+            const workUpsert = mocks.workPluginRepository.upsert.mock.calls[0][0];
+            expect(workUpsert.settings).toEqual({ replicas: 2 });
+            expect(workUpsert.secretSettings).toEqual({ kubeconfig: 'apiVersion: v1' });
+            const dropped = result.warnings.filter((w) =>
+                w.includes("Hosts under ever.works can't be used as the default ingress host"),
+            );
+            expect(dropped).toHaveLength(2);
+            expect(dropped.every((w) => w.includes('the secret settings of'))).toBe(true);
+        });
+
+        it('keeps the secret bag as it is when it holds no platform host', async () => {
+            const { service, mocks } = makeService();
+            mocks.userRepository.findById.mockResolvedValue({ id: 'user-1', username: 'octocat' });
+            mocks.pluginRepository.findByPluginId.mockResolvedValue({ id: 'p-k8s' });
+            const payload = makePayload(
+                [],
+                [
+                    {
+                        pluginId: 'k8s',
+                        enabled: true,
+                        autoEnableForWorks: false,
+                        settings: {},
+                        secretSettings: {
+                            kubeconfig: 'apiVersion: v1',
+                            ingressHost: 'shop.example.com',
+                        },
+                    },
+                ],
+            );
+            payload.includesSecrets = true;
+
+            await service.applyImport('user-1', payload, []);
+
+            expect(mocks.userPluginRepository.upsert.mock.calls[0][0].secretSettings).toEqual({
+                kubeconfig: 'apiVersion: v1',
+                ingressHost: 'shop.example.com',
+            });
+        });
+    });
+
     describe('applyImport — userPlugin import', () => {
         it('skips userPlugins whose underlying plugin row is missing on this instance', async () => {
             const { service, mocks } = makeService();
@@ -1163,6 +1341,59 @@ describe('AccountImportService', () => {
                 'a.test',
                 'cf',
             );
+        });
+
+        it('skips a customDomain under a platform root with a warning, and still imports the rest', async () => {
+            const original = process.env.EVER_WORKS_DOMAIN;
+            process.env.EVER_WORKS_DOMAIN = 'ever.works';
+            try {
+                const { service, mocks } = makeService();
+                mocks.userRepository.findById.mockResolvedValue({
+                    id: 'user-1',
+                    username: 'octocat',
+                });
+                mocks.workRepository.findByOwnerAndSlug.mockResolvedValue(null);
+                mocks.workRepository.create.mockResolvedValue({ id: 'w-1', slug: 'a' });
+                mocks.workCustomDomainRepository.findOne.mockResolvedValue(null);
+                mocks.pluginRepository.findByPluginId.mockResolvedValue({ id: 'p' });
+                const work = makeWork({
+                    slug: 'a',
+                    customDomains: [
+                        {
+                            domain: 'Login.Ever.Works',
+                            environment: 'prod',
+                            verified: true,
+                            provider: 'k8s',
+                        },
+                        { domain: 'a.test', environment: 'prod', verified: true, provider: 'cf' },
+                    ],
+                });
+
+                const result = await service.applyImport('user-1', makePayload([work]), []);
+
+                expect(mocks.workCustomDomainRepository.addDomain).toHaveBeenCalledTimes(1);
+                expect(mocks.workCustomDomainRepository.addDomain).toHaveBeenCalledWith(
+                    'w-1',
+                    'a.test',
+                    'cf',
+                );
+                expect(mocks.workCustomDomainRepository.findOne).not.toHaveBeenCalledWith(
+                    'w-1',
+                    'Login.Ever.Works',
+                );
+                expect(
+                    result.warnings.some(
+                        (w) =>
+                            w.includes('Skipped custom domain "Login.Ever.Works"') &&
+                            w.includes(
+                                "Domains under ever.works can't be added as a custom domain",
+                            ),
+                    ),
+                ).toBe(true);
+            } finally {
+                if (original === undefined) delete process.env.EVER_WORKS_DOMAIN;
+                else process.env.EVER_WORKS_DOMAIN = original;
+            }
         });
 
         it('passes advancedPrompts through to the repository when at least one field is present', async () => {

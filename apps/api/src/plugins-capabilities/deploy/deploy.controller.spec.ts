@@ -39,6 +39,7 @@ jest.mock('../../auth', () => ({
 }));
 
 import { BadRequestException, ServiceUnavailableException } from '@nestjs/common';
+import { PlatformDomainNotAllowedError } from '@ever-works/agent/utils';
 import { DeployController } from './deploy.controller';
 import type { DeployFacadeService } from '@ever-works/agent/facades';
 import type { WorkOwnershipService } from '@ever-works/agent/services';
@@ -1416,6 +1417,82 @@ describe('DeployController', () => {
 
             await expect(controller.addDomain(auth, 'work-1', dto)).rejects.toMatchObject({
                 response: { message: 'Failed to add domain' },
+            });
+        });
+
+        describe('a domain under a platform root (PLATFORM_DOMAIN_NOT_ALLOWED)', () => {
+            const NAMES = [
+                'EVER_WORKS_DOMAIN',
+                'EVER_WORKS_APPS_DOMAIN',
+                'EVER_WORKS_APPS_MANAGED_DOMAIN',
+            ] as const;
+            const original: Record<string, string | undefined> = {};
+
+            beforeEach(() => {
+                for (const name of NAMES) original[name] = process.env[name];
+                process.env.EVER_WORKS_DOMAIN = 'ever.works';
+                delete process.env.EVER_WORKS_APPS_DOMAIN;
+                process.env.EVER_WORKS_APPS_MANAGED_DOMAIN = 'ever.app';
+            });
+
+            afterEach(() => {
+                for (const name of NAMES) {
+                    if (original[name] === undefined) delete process.env[name];
+                    else process.env[name] = original[name];
+                }
+            });
+
+            it.each([
+                ['login.ever.works', 'ever.works'],
+                ['ever.works', 'ever.works'],
+                ['Login.Ever.Works', 'ever.works'],
+                ['shop.ever.app', 'ever.app'],
+            ])('answers 400 for %s before anything is read', async (domain, root) => {
+                const attempt = controller.addDomain(auth, 'work-1', { domain } as any);
+
+                await expect(attempt).rejects.toBeInstanceOf(BadRequestException);
+                await expect(attempt).rejects.toMatchObject({
+                    status: 400,
+                    response: {
+                        status: 'error',
+                        code: 'PLATFORM_DOMAIN_NOT_ALLOWED',
+                        message: `Domains under ${root} can't be added as a custom domain. Use the managed subdomain setting instead.`,
+                    },
+                });
+                expect(ownershipService.ensureCanEdit).not.toHaveBeenCalled();
+                expect(deployFacade.addDomain).not.toHaveBeenCalled();
+            });
+
+            it('does not refuse a lookalike outside the root', async () => {
+                const work = buildWork({ user: { id: 'caller-1' } });
+                ownershipService.ensureCanEdit.mockResolvedValue({ work, isCreator: true });
+                deployFacade.addDomain.mockResolvedValue({ verified: false });
+
+                await controller.addDomain(auth, 'work-1', { domain: 'evil-ever.works' } as any);
+
+                expect(deployFacade.addDomain).toHaveBeenCalledWith('evil-ever.works', {
+                    userId: 'caller-1',
+                    workId: 'work-1',
+                });
+            });
+
+            it('keeps the code and message when the facade refuses (not the generic fallback)', async () => {
+                const work = buildWork({ user: { id: 'caller-1' } });
+                ownershipService.ensureCanEdit.mockResolvedValue({ work, isCreator: true });
+                deployFacade.addDomain.mockRejectedValue(
+                    new PlatformDomainNotAllowedError('login.preview.example', 'preview.example'),
+                );
+
+                await expect(
+                    controller.addDomain(auth, 'work-1', { domain: 'example.com' } as any),
+                ).rejects.toMatchObject({
+                    status: 400,
+                    response: {
+                        code: 'PLATFORM_DOMAIN_NOT_ALLOWED',
+                        message:
+                            "Domains under preview.example can't be added as a custom domain. Use the managed subdomain setting instead.",
+                    },
+                });
             });
         });
     });

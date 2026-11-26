@@ -1095,6 +1095,29 @@ describe('AppDeployPreconditionsService — the Build (ACC-06-19)', () => {
         expect(entryFor(result, 'image_not_pinned').names).toEqual(['ghcr.io/x/y:latest']);
     });
 
+    it('refuses a tag-only component image on Ever Works Apps too, naming each one once', async () => {
+        const pinned = `ghcr.io/x/api@sha256:${'a'.repeat(64)}`;
+        const harness = managedHarnessForImage(pinned);
+        harness.specs.snapshot = {
+            status: 'valid',
+            spec: appSpec({
+                build: { strategy: 'image', image: pinned },
+                components: [
+                    { name: 'api', role: 'web', port: 3000 },
+                    { name: 'web', role: 'web', port: 4200, image: 'ghcr.io/x/web:latest' },
+                    { name: 'worker', role: 'worker', image: 'ghcr.io/x/web:latest' },
+                ],
+                domains: { primaryComponent: 'web' },
+            }),
+            commitSha: 'sha-head',
+        };
+
+        const result = await harness.service.evaluate(request({ specCommitSha: 'sha-head' }));
+
+        expect(codes(result)).toEqual(['image_not_pinned']);
+        expect(entryFor(result, 'image_not_pinned').names).toEqual(['ghcr.io/x/web:latest']);
+    });
+
     it('accepts the same tag-only image on Your cluster — the refusal is managed-only (ACC-06-52)', async () => {
         const { service, specs } = makeHarness();
         specs.snapshot = {

@@ -205,6 +205,14 @@ export interface AppComponentInput {
 	readonly args?: readonly string[];
 	/** Dockerfile stage override; `build.target` when absent. */
 	readonly target?: string;
+	/**
+	 * The image this component runs instead of the App's `image.reference`
+	 * (`schema.md` §10 `components[].image`, added 2026-11-26): set only for a
+	 * published-image App (`build.strategy: image`) whose spec names one, as the
+	 * spec wrote it. Absent = `image.reference`, so a spec without one renders as
+	 * before. A command Job runs on its component's image.
+	 */
+	readonly image?: string;
 	/** Required for `web`, forbidden for `worker`. */
 	readonly port?: number;
 	readonly replicas: number;

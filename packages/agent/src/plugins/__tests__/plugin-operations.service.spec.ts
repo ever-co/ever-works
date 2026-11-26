@@ -2970,6 +2970,185 @@ describe('PluginOperationsService', () => {
         });
     });
 
+    describe('k8s ingressHost under a platform root (PLATFORM_DOMAIN_NOT_ALLOWED)', () => {
+        const NAMES = [
+            'EVER_WORKS_DOMAIN',
+            'EVER_WORKS_APPS_DOMAIN',
+            'EVER_WORKS_APPS_MANAGED_DOMAIN',
+        ];
+        const original: Record<string, string | undefined> = {};
+
+        const k8sRegistered = (): RegisteredPlugin => {
+            const registered = createRegisteredPlugin({
+                ...createMockPlugin({
+                    type: 'object',
+                    properties: {
+                        ingressHost: { type: 'string' },
+                        clusterSource: { type: 'string' },
+                        replicas: { type: 'number' },
+                    },
+                } as unknown as JsonSchema),
+                id: 'k8s',
+            } as unknown as IPlugin);
+            registered.manifest = {
+                ...registered.manifest,
+                id: 'k8s',
+                autoEnable: true,
+            } as PluginManifest;
+            return registered;
+        };
+
+        const row = (settings: Record<string, unknown>) =>
+            ({
+                id: 'row-1',
+                pluginId: 'k8s',
+                enabled: true,
+                settings,
+                secretSettings: {},
+                metadata: {},
+            }) as any;
+
+        const expectRefused = async (attempt: Promise<unknown>) => {
+            await expect(attempt).rejects.toBeInstanceOf(BadRequestException);
+            await expect(attempt).rejects.toMatchObject({
+                response: {
+                    status: 'error',
+                    code: 'PLATFORM_DOMAIN_NOT_ALLOWED',
+                    message:
+                        "Hosts under ever.works can't be used as the default ingress host. Use the managed subdomain setting instead.",
+                },
+            });
+            expect(userPluginRepository.save).not.toHaveBeenCalled();
+            expect(workPluginRepository.save).not.toHaveBeenCalled();
+            expect(settingsService.updateUserSettings).not.toHaveBeenCalled();
+            expect(settingsService.updateWorkSettings).not.toHaveBeenCalled();
+        };
+
+        beforeEach(() => {
+            for (const name of NAMES) original[name] = process.env[name];
+            process.env.EVER_WORKS_DOMAIN = 'ever.works';
+            delete process.env.EVER_WORKS_APPS_DOMAIN;
+            process.env.EVER_WORKS_APPS_MANAGED_DOMAIN = 'ever.app';
+            jest.spyOn(pluginRegistryService, 'get').mockReturnValue(k8sRegistered());
+            jest.spyOn(pluginRepository, 'findOne').mockResolvedValue({
+                id: 'k8s-entity',
+                pluginId: 'k8s',
+            } as any);
+        });
+
+        afterEach(() => {
+            for (const name of NAMES) {
+                if (original[name] === undefined) delete process.env[name];
+                else process.env[name] = original[name];
+            }
+        });
+
+        it('enablePluginForUser refuses a new one before any write', async () => {
+            jest.spyOn(userPluginRepository, 'findOne').mockResolvedValue(null);
+
+            await expectRefused(
+                service.enablePluginForUser('k8s', 'user-1', { ingressHost: 'login.ever.works' }),
+            );
+        });
+
+        it('updateUserPluginSettings refuses a new one before any write', async () => {
+            jest.spyOn(userPluginRepository, 'findOne').mockResolvedValue(
+                row({ ingressHost: 'old.example.com' }),
+            );
+
+            await expectRefused(
+                service.updateUserPluginSettings('k8s', 'user-1', {
+                    ingressHost: 'Login.Ever.Works',
+                }),
+            );
+        });
+
+        it('enablePluginForWork refuses a new one before any write', async () => {
+            jest.spyOn(userPluginRepository, 'findOne').mockResolvedValue(row({}));
+            jest.spyOn(workPluginRepository, 'findOne').mockResolvedValue(null);
+
+            await expectRefused(
+                service.enablePluginForWork('work-1', 'k8s', 'user-1', {
+                    settings: { ingressHost: 'login.ever.works' },
+                }),
+            );
+        });
+
+        it('updateWorkPluginSettings refuses a new one before any write', async () => {
+            jest.spyOn(userPluginRepository, 'findOne').mockResolvedValue(row({}));
+            jest.spyOn(workPluginRepository, 'findOne').mockResolvedValue(row({}));
+
+            await expectRefused(
+                service.updateWorkPluginSettings('work-1', 'k8s', 'user-1', {
+                    ingressHost: 'login.ever.works',
+                }),
+            );
+        });
+
+        it('refuses one sent in the secret bag before any write, on all three paths that take one', async () => {
+            jest.spyOn(userPluginRepository, 'findOne').mockResolvedValue(row({}));
+            jest.spyOn(workPluginRepository, 'findOne').mockResolvedValue(row({}));
+
+            await expectRefused(
+                service.enablePluginForUser(
+                    'k8s',
+                    'user-1',
+                    { replicas: 2 },
+                    { ingressHost: 'login.ever.works' },
+                ),
+            );
+            await expectRefused(
+                service.updateUserPluginSettings(
+                    'k8s',
+                    'user-1',
+                    { replicas: 2 },
+                    { ingressHost: 'login.ever.works' },
+                ),
+            );
+            await expectRefused(
+                service.updateWorkPluginSettings(
+                    'work-1',
+                    'k8s',
+                    'user-1',
+                    { replicas: 2 },
+                    { ingressHost: 'login.ever.works' },
+                ),
+            );
+        });
+
+        it('lets an unchanged stored value through (same scope, or inherited from the user scope)', async () => {
+            jest.spyOn(userPluginRepository, 'findOne').mockResolvedValue(
+                row({ ingressHost: 'compliance-automation.ever.works' }),
+            );
+            await service.updateUserPluginSettings('k8s', 'user-1', {
+                ingressHost: 'compliance-automation.ever.works',
+                replicas: 2,
+            });
+            expect(userPluginRepository.save).toHaveBeenCalledTimes(1);
+
+            jest.spyOn(workPluginRepository, 'findOne').mockResolvedValue(row({}));
+            await service.updateWorkPluginSettings('work-1', 'k8s', 'user-1', {
+                ingressHost: 'compliance-automation.ever.works',
+                replicas: 3,
+            });
+            expect(workPluginRepository.save).toHaveBeenCalledTimes(1);
+        });
+
+        it('saves a normal host', async () => {
+            jest.spyOn(userPluginRepository, 'findOne').mockResolvedValue(row({}));
+
+            await service.updateUserPluginSettings('k8s', 'user-1', {
+                ingressHost: 'shop.example.com',
+            });
+
+            expect(userPluginRepository.save).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    settings: expect.objectContaining({ ingressHost: 'shop.example.com' }),
+                }),
+            );
+        });
+    });
+
     describe('autoEnable behavior', () => {
         describe('toUserPluginResponse with autoEnable', () => {
             it('should show autoEnabled plugin as installed and enabled without UserPluginEntity', async () => {

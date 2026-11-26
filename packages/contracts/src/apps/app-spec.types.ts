@@ -553,6 +553,12 @@ export interface AppSpecComponent {
 	args?: readonly string[];
 	/** Dockerfile stage override for this component; `build.target` when absent. */
 	target?: string;
+	/**
+	 * The prebuilt image this component runs, with `build.strategy: image` only;
+	 * `build.image` when absent. A tag-only reference is the warning
+	 * `image_not_pinned` (R19).
+	 */
+	image?: string;
 	/** Required for `web` (R1), 1–65535; forbidden for `worker`. */
 	port?: number;
 	/** 0–10; `1` when absent. */

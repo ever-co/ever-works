@@ -889,11 +889,13 @@ written for.
   Trigger name `spec-applied`. Saving a target with **Deploy now** ticked deploys when the effective spec is valid.
 - **Queue.** Latest-wins through `queuedDeploymentId`; the queued row carries the spec commit and
   `queuedBuildId` stays `null`. A queued request from the other strategy is marked `SUPERSEDED`.
-- **Domain change (§8.2).** `restart` redeploys the current Deployment's spec commit and recorded digest.
+- **Domain change (§8.2).** `restart` redeploys the current Deployment's spec commit and recorded digest (and its
+  component digests, `appRender.componentImages`); no tag is re-resolved.
   `rebuild` behaves as `restart` under this strategy, with the warning `rebuild_not_applicable` — there is no
   Build to rebuild.
 - **Rollback (FR-34).** Candidates are the Live rows among the last 20 to the same target. A rollback redeploys
-  the recorded `specCommitSha` and digest and **never** re-resolves the tag; image existence is checked in the
+  the recorded `specCommitSha` and digest (and the component digests of `appRender.componentImages`, APW-03 schema
+  §10 `components[].image`) and **never** re-resolves the tag; image existence is checked in the
   worker, not by `WorkBuild` retention. The Deploy tab's history row shows the short digest instead of a Build link.
 - **`strategy: none`.** `nothing_to_deploy`: Builds still run and the Deploy tab explains why there is nothing
   to run; nothing is queued.
