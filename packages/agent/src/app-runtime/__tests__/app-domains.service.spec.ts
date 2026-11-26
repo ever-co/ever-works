@@ -33,6 +33,10 @@ import {
     type AppIngressAddress,
 } from '../app-domains.service';
 import { AppHostsService, type AppHostsRuntimeStateView } from '../app-hosts.service';
+import {
+    PLATFORM_DOMAIN_NOT_ALLOWED,
+    PlatformDomainNotAllowedError,
+} from '../../utils/platform-host';
 
 /* -------------------------------------------------------------------------- *
  * Fakes
@@ -376,6 +380,70 @@ describe('AppDomainsService.addDomain (APW-06 T26, FR-39)', () => {
         expect(h.domains.added).toEqual([]);
         expect(result.verified).toBe(true);
         expect(result.domain.verification).toBeUndefined();
+    });
+
+    describe('a host under a platform root (PLATFORM_DOMAIN_NOT_ALLOWED)', () => {
+        const NAMES = [
+            'EVER_WORKS_DOMAIN',
+            'EVER_WORKS_APPS_DOMAIN',
+            'EVER_WORKS_APPS_MANAGED_DOMAIN',
+        ] as const;
+        const original: Record<string, string | undefined> = {};
+
+        beforeEach(() => {
+            jest.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
+            for (const name of NAMES) original[name] = process.env[name];
+            process.env.EVER_WORKS_DOMAIN = 'ever.works';
+            delete process.env.EVER_WORKS_APPS_DOMAIN;
+            process.env.EVER_WORKS_APPS_MANAGED_DOMAIN = 'ever.app';
+        });
+
+        afterEach(() => {
+            for (const name of NAMES) {
+                if (original[name] === undefined) delete process.env[name];
+                else process.env[name] = original[name];
+            }
+        });
+
+        it.each([
+            ['login.ever.works', 'ever.works'],
+            ['EVER.WORKS.', 'ever.works'],
+            ['shop.ever.app', 'ever.app'],
+        ])('refuses %s before any row is read or written', async (domain, root) => {
+            const h = harness();
+            const reads = jest.spyOn(h.domains, 'findByWork');
+
+            const attempt = h.service.addDomain(domain, { workId: 'work-1' });
+
+            await expect(attempt).rejects.toBeInstanceOf(PlatformDomainNotAllowedError);
+            await expect(attempt).rejects.toMatchObject({
+                code: PLATFORM_DOMAIN_NOT_ALLOWED,
+                root,
+            });
+            expect(reads).not.toHaveBeenCalled();
+            expect(h.domains.added).toEqual([]);
+            expect(h.hosts.reconciles).toEqual([]);
+        });
+
+        it('refuses a re-add of a stored row too, leaving the row as it is', async () => {
+            const h = harness();
+            h.domains.rows = [{ domain: 'shop.ever.app', verified: false }];
+
+            await expect(
+                h.service.addDomain('shop.ever.app', { workId: 'work-1' }),
+            ).rejects.toBeInstanceOf(PlatformDomainNotAllowedError);
+            expect(h.domains.added).toEqual([]);
+            expect(h.domains.removed).toEqual([]);
+            expect(h.domains.rows).toEqual([{ domain: 'shop.ever.app', verified: false }]);
+        });
+
+        it('still adds a lookalike outside every root', async () => {
+            const h = harness();
+
+            await h.service.addDomain('evil-ever.app', { workId: 'work-1' });
+
+            expect(h.domains.added).toEqual([{ workId: 'work-1', domain: 'evil-ever.app' }]);
+        });
     });
 });
 

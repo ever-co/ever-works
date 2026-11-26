@@ -1,4 +1,8 @@
 import { DeployFacadeService, PLATFORM_MANAGED_KUBECONFIG_SENTINEL } from '../deploy.facade';
+import {
+    PLATFORM_DOMAIN_NOT_ALLOWED,
+    PlatformDomainNotAllowedError,
+} from '../../utils/platform-host';
 
 describe('DeployFacadeService', () => {
     const createService = (args: {
@@ -1202,6 +1206,120 @@ describe('DeployFacadeService', () => {
             });
 
             expect(resolved.token).toBe(PLATFORM_MANAGED_KUBECONFIG_SENTINEL);
+        });
+    });
+
+    describe('addDomain refuses a host under a platform root (PLATFORM_DOMAIN_NOT_ALLOWED)', () => {
+        const NAMES = [
+            'EVER_WORKS_DOMAIN',
+            'EVER_WORKS_APPS_DOMAIN',
+            'EVER_WORKS_APPS_MANAGED_DOMAIN',
+        ];
+        const original: Record<string, string | undefined> = {};
+
+        beforeEach(() => {
+            for (const name of NAMES) original[name] = process.env[name];
+            process.env.EVER_WORKS_DOMAIN = 'ever.works';
+            delete process.env.EVER_WORKS_APPS_DOMAIN;
+            process.env.EVER_WORKS_APPS_MANAGED_DOMAIN = 'ever.app';
+        });
+
+        afterEach(() => {
+            for (const name of NAMES) {
+                if (original[name] === undefined) delete process.env[name];
+                else process.env[name] = original[name];
+            }
+        });
+
+        const fixture = (
+            existing: Record<string, unknown> | null = null,
+            kind: string | undefined = undefined,
+        ) => {
+            const appDomains = { addDomain: jest.fn() };
+            const domainRepository = {
+                findOne: jest.fn().mockResolvedValue(existing),
+                addDomain: jest.fn(),
+                updateVerified: jest.fn(),
+                updateProvider: jest.fn(),
+            };
+            const created = createService({
+                deployProvider: 'k8s',
+                settings: { kubeconfig: { value: 'apiVersion: v1' } },
+                work: { deployProjectId: 'project-1', kind, getRepoOwner: () => 'customer-org' },
+                pluginOverrides: {
+                    addDomain: jest.fn(),
+                    getDomains: jest.fn().mockResolvedValue([]),
+                },
+                domainRepository,
+            });
+            // Bind the App branch only for an App Work: a website Work then takes the provider path
+            // (which would call the plugin and write the row), an App Work the App branch.
+            if (kind === 'app') {
+                (created.service as unknown as { appDomains: unknown }).appDomains = appDomains;
+            }
+
+            return { ...created, domainRepository, appDomains };
+        };
+
+        const expectNothingTouched = (f: ReturnType<typeof fixture>) => {
+            expect((f.plugin as any).addDomain).not.toHaveBeenCalled();
+            expect((f.plugin as any).getDomains).not.toHaveBeenCalled();
+            expect(f.domainRepository.addDomain).not.toHaveBeenCalled();
+            expect(f.domainRepository.updateVerified).not.toHaveBeenCalled();
+            expect(f.domainRepository.updateProvider).not.toHaveBeenCalled();
+            expect(f.domainRepository.findOne).not.toHaveBeenCalled();
+            expect(f.workRepository.findById).not.toHaveBeenCalled();
+            expect(f.workRepository.update).not.toHaveBeenCalled();
+            expect(f.registry.get).not.toHaveBeenCalled();
+            expect(f.appDomains.addDomain).not.toHaveBeenCalled();
+        };
+
+        it.each([
+            ['login.ever.works', 'ever.works', undefined],
+            ['ever.works', 'ever.works', undefined],
+            ['Login.Ever.Works.', 'ever.works', undefined],
+            ['login.ever.app', 'ever.app', undefined],
+            ['login.ever.works', 'ever.works', 'app'],
+        ])(
+            'refuses %s (root %s, kind %s) before any read, plugin call or DB write',
+            async (domain, root, kind) => {
+                const f = fixture(null, kind);
+
+                const attempt = f.service.addDomain(domain, { userId: 'user-1', workId: 'work-1' });
+
+                await expect(attempt).rejects.toBeInstanceOf(PlatformDomainNotAllowedError);
+                await expect(attempt).rejects.toMatchObject({
+                    code: PLATFORM_DOMAIN_NOT_ALLOWED,
+                    root,
+                });
+                expectNothingTouched(f);
+            },
+        );
+
+        it('refuses a re-add of a row that already exists (the existing-row return follows the provider lookup)', async () => {
+            const f = fixture({ domain: 'timetrack.ever.works', verified: false, provider: 'k8s' });
+
+            await expect(
+                f.service.addDomain('timetrack.ever.works', { userId: 'user-1', workId: 'work-1' }),
+            ).rejects.toBeInstanceOf(PlatformDomainNotAllowedError);
+            expectNothingTouched(f);
+        });
+
+        it('still adds a domain outside every root (lookalikes included)', async () => {
+            const f = fixture();
+            (f.plugin as any).addDomain.mockResolvedValue({
+                domain: { name: 'evil-ever.works', verified: false },
+                verified: false,
+            });
+
+            await f.service.addDomain('evil-ever.works', { userId: 'user-1', workId: 'work-1' });
+
+            expect((f.plugin as any).addDomain).toHaveBeenCalledTimes(1);
+            expect(f.domainRepository.addDomain).toHaveBeenCalledWith(
+                'work-1',
+                'evil-ever.works',
+                'k8s',
+            );
         });
     });
 });

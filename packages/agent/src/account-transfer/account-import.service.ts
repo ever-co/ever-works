@@ -27,6 +27,8 @@ import type {
 } from './types';
 import { containsMaskedSecrets, MASKED_SECRET_PREFIX } from './types';
 import { sanitizePrompt } from '../utils/sanitize.util';
+import { matchPlatformRootDomain, platformDomainRefusalMessage } from '../utils/platform-host';
+import { config } from '../config';
 import { normalizeCreateWorkKind, type Work, type WorkKind } from '../entities/work.entity';
 import {
     isAppWorkKind,
@@ -980,7 +982,19 @@ export class AccountImportService {
         }
 
         // Import custom domains
+        const platformRoots = config.everWorks.platformRootDomains();
         for (const cd of dir.customDomains || []) {
+            // Security: the payload is the member's own file, and a stored row reaches the shared
+            // cluster's Ingress on the next deploy. A name under a platform root domain is refused
+            // here exactly as "Add custom domain" refuses it (PLATFORM_DOMAIN_NOT_ALLOWED), so an
+            // import cannot be used to get around that check. An existing row is left as it is.
+            const platformRoot = matchPlatformRootDomain(cd?.domain, platformRoots);
+            if (platformRoot !== null) {
+                result.warnings.push(
+                    `Skipped custom domain "${cd.domain}": ${platformDomainRefusalMessage(platformRoot)}`,
+                );
+                continue;
+            }
             try {
                 const existingDomain = await this.workCustomDomainRepository.findOne(
                     workId,

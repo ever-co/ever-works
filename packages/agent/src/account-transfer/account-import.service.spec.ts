@@ -1165,6 +1165,59 @@ describe('AccountImportService', () => {
             );
         });
 
+        it('skips a customDomain under a platform root with a warning, and still imports the rest', async () => {
+            const original = process.env.EVER_WORKS_DOMAIN;
+            process.env.EVER_WORKS_DOMAIN = 'ever.works';
+            try {
+                const { service, mocks } = makeService();
+                mocks.userRepository.findById.mockResolvedValue({
+                    id: 'user-1',
+                    username: 'octocat',
+                });
+                mocks.workRepository.findByOwnerAndSlug.mockResolvedValue(null);
+                mocks.workRepository.create.mockResolvedValue({ id: 'w-1', slug: 'a' });
+                mocks.workCustomDomainRepository.findOne.mockResolvedValue(null);
+                mocks.pluginRepository.findByPluginId.mockResolvedValue({ id: 'p' });
+                const work = makeWork({
+                    slug: 'a',
+                    customDomains: [
+                        {
+                            domain: 'Login.Ever.Works',
+                            environment: 'prod',
+                            verified: true,
+                            provider: 'k8s',
+                        },
+                        { domain: 'a.test', environment: 'prod', verified: true, provider: 'cf' },
+                    ],
+                });
+
+                const result = await service.applyImport('user-1', makePayload([work]), []);
+
+                expect(mocks.workCustomDomainRepository.addDomain).toHaveBeenCalledTimes(1);
+                expect(mocks.workCustomDomainRepository.addDomain).toHaveBeenCalledWith(
+                    'w-1',
+                    'a.test',
+                    'cf',
+                );
+                expect(mocks.workCustomDomainRepository.findOne).not.toHaveBeenCalledWith(
+                    'w-1',
+                    'Login.Ever.Works',
+                );
+                expect(
+                    result.warnings.some(
+                        (w) =>
+                            w.includes('Skipped custom domain "Login.Ever.Works"') &&
+                            w.includes(
+                                "Domains under ever.works can't be added as a custom domain",
+                            ),
+                    ),
+                ).toBe(true);
+            } finally {
+                if (original === undefined) delete process.env.EVER_WORKS_DOMAIN;
+                else process.env.EVER_WORKS_DOMAIN = original;
+            }
+        });
+
         it('passes advancedPrompts through to the repository when at least one field is present', async () => {
             const { service, mocks } = makeService();
             mocks.userRepository.findById.mockResolvedValue({ id: 'user-1', username: 'octocat' });

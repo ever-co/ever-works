@@ -78,6 +78,9 @@ import {
     clampAgentReviewApproversPerEntry,
     clampAgentReviewRunsPerTask,
 } from '../tasks-domain/task-agent-review';
+// Concrete file, not the utils barrel: `platform-host.ts` imports nothing, so
+// `platformRootDomains()` normalizes exactly as the guard compares.
+import { normalizePlatformHost } from '../utils/platform-host';
 type AppType = 'cli' | 'api';
 
 /**
@@ -1408,6 +1411,40 @@ export const config = {
                 return process.env.EVER_WORKS_PROJECT_WORKS_ENABLED === 'true';
             },
         },
+
+        /**
+         * The root domains the platform serves its own hosts and managed addresses under. A member
+         * may not add a name equal to or under any of them as a custom domain
+         * (`assertNotPlatformHost` in `utils/platform-host.ts`, `PLATFORM_DOMAIN_NOT_ALLOWED`).
+         *
+         * - `EVER_WORKS_DOMAIN`, read the way every other reader in this tree reads it
+         *   (`managed-subdomain.service.ts`, `cloudflare-dns.provider.ts`,
+         *   `subdomain-allocator.service.ts`, `DeployFacadeService.isAutoAssignedDomain`): trimmed,
+         *   with the documented `ever.works` default when unset or blank. The managed subdomains live
+         *   under that default even when the variable is unset, so the guard keeps it too.
+         * - `apps.getDomain()`, the App Works apex, when it differs (with the variable unset it IS the
+         *   platform domain; `null` when misconfigured, and then it is skipped).
+         * - `apps.managedTargetDomain()`, the apex of the managed App target
+         *   (`<label>.<EVER_WORKS_APPS_MANAGED_DOMAIN>`), when set.
+         *
+         * Normalized (lowercased, edge dots removed), deduplicated, blanks dropped. Read per call, so a
+         * test or a late-set variable sees the current value.
+         */
+        platformRootDomains(): string[] {
+            const candidates: Array<string | null | undefined> = [
+                process.env.EVER_WORKS_DOMAIN?.trim() || PLATFORM_MANAGED_DOMAIN_DEFAULT,
+                config.everWorks.apps.getDomain(),
+                config.everWorks.apps.managedTargetDomain(),
+            ];
+            const roots: string[] = [];
+            for (const candidate of candidates) {
+                const root = normalizePlatformHost(candidate);
+                if (root && !roots.includes(root)) roots.push(root);
+            }
+
+            return roots;
+        },
+
         apps: {
             worksEnabled() {
                 return process.env.EVER_WORKS_APP_WORKS_ENABLED === 'true';
