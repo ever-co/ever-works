@@ -4712,6 +4712,13 @@
                 "themeSystem": "시스템",
                 "languageTitle": "언어",
                 "languageDescription": "이 브라우저에서 Ever Works가 사용하는 언어입니다."
+            },
+            "groups": {
+                "account": "계정",
+                "organization": "조직",
+                "product": "Ever Works",
+                "integrations": "통합",
+                "plugins": "플러그인"
             }
         },
         "stats": {
@@ -11370,8 +11377,11 @@
             }
         },
         "switcher": {
-            "heading": "Switch Organization",
+            "heading": "조직 전환",
+            "label": "조직",
+            "noOther": "다른 조직이 없습니다",
             "createNew": "조직 만들기",
+            "addNew": "조직 추가",
             "loading": "Loading…",
             "switchFailed": "조직을 전환할 수 없습니다. 다시 시도하세요.",
             "active": "현재 조직"

@@ -18,7 +18,7 @@ vi.mock('@/lib/utils/plugin-category-icons', () => ({
     getCategoryIcon: () => () => null,
 }));
 
-import { SettingsLayoutClient } from './settings-layout-client';
+import { groupSettingsTabs, SettingsLayoutClient } from './settings-layout-client';
 import { ROUTES } from '@/lib/constants';
 
 /**
@@ -163,5 +163,39 @@ describe('SettingsLayoutClient — the Ever Platform tab', () => {
         // Control: the neighbouring Usage tab still renders.
         expect(hrefs().some((href) => href.endsWith('/settings/usage'))).toBe(true);
         expect(everPlatformLink()).toBeUndefined();
+    });
+});
+
+describe('SettingsLayoutClient — groups (shared Ever shell, A9)', () => {
+    it('opens with Account (Profile, Preferences, Notifications), then Organization, then the product', () => {
+        render(
+            <SettingsLayoutClient settingsMenu={null} appLauncherEnabled>
+                <div />
+            </SettingsLayoutClient>,
+        );
+        const groups = [...document.querySelectorAll('[data-testid^="settings-group-"]')].map(
+            (node) => node.getAttribute('data-testid'),
+        );
+        expect(groups).toEqual([
+            'settings-group-account',
+            'settings-group-organization',
+            'settings-group-product',
+            'settings-group-integrations',
+        ]);
+        const account = screen.getByTestId('settings-group-account');
+        const hrefs = [...account.querySelectorAll('a')].map((a) => a.getAttribute('href'));
+        expect(hrefs.slice(0, 3)).toEqual([
+            '/settings',
+            '/settings/preferences',
+            '/settings/notifications',
+        ]);
+        // Headings are translated keys, in sentence case (no uppercase tracking class).
+        expect(screen.getByText('groups.account').className).not.toContain('uppercase');
+    });
+
+    it('never drops a tab: one no group names joins the product group', () => {
+        const groups = groupSettingsTabs([{ id: 'profile' }, { id: 'something-new' }]);
+        expect(groups.map((group) => group.id)).toEqual(['account', 'product']);
+        expect(groups[1].tabs.map((tab) => tab.id)).toEqual(['something-new']);
     });
 });

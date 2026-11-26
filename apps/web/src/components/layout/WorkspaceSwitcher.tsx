@@ -46,12 +46,26 @@ function pickLabel(org: OrganizationResponse): string {
 }
 
 /**
- * Avatar circle for an Organization. Mimics shadcn `sidebar-07`
- * TeamSwitcher's visual: a colored square with the first initial.
- * `Building2` is used as a fallback when the initial would be empty.
+ * The hue of an Organization's plate (shared Ever shell, A2: "initials on a
+ * colour plate derived from the name"): stable for a name, so the same
+ * Organization always gets the same colour, in every Ever app that uses this rule.
+ */
+export function plateHue(name: string): number {
+    let hash = 0;
+    for (const char of name) {
+        hash = (hash * 31 + (char.codePointAt(0) ?? 0)) % 360;
+    }
+    return hash;
+}
+
+/**
+ * The Organization's tile: its initial on a muted plate whose colour comes
+ * from its name. `Building2` is used as a fallback when the initial would be
+ * empty.
  */
 function OrgAvatar({ org, size = 'sm' }: { org: OrganizationResponse; size?: 'sm' | 'xs' | 'md' }) {
     const initial = pickInitial(org);
+    const hue = plateHue(pickLabel(org));
     const sizeClass =
         size === 'md'
             ? 'w-6 h-6 text-[11px]'
@@ -62,11 +76,11 @@ function OrgAvatar({ org, size = 'sm' }: { org: OrganizationResponse; size?: 'sm
         <div
             className={cn(
                 'shrink-0 inline-flex items-center justify-center rounded-md',
-                'bg-surface-tertiary dark:bg-surface-tertiary-dark',
-                'text-text dark:text-text-dark',
-                'font-semibold',
+                'text-white font-semibold',
                 sizeClass,
             )}
+            style={{ backgroundColor: `hsl(${hue} 32% 42%)` }}
+            data-testid="org-avatar"
             aria-hidden="true"
         >
             {initial || <Building2 className="w-3.5 h-3.5" strokeWidth={1.5} />}
@@ -214,12 +228,23 @@ export function WorkspaceSwitcher({ isCollapsed = false }: WorkspaceSwitcherProp
                     >
                         {leadingIcon}
                         {!isCollapsed && (
-                            <span className="flex-1 min-w-0 text-left text-sm font-medium text-text dark:text-text-dark truncate">
-                                {triggerOrg
-                                    ? pickLabel(triggerOrg)
-                                    : error !== null
-                                      ? t('heading')
-                                      : t('loading')}
+                            <span className="flex flex-1 min-w-0 flex-col text-left">
+                                <span className="truncate text-sm font-semibold text-text dark:text-text-dark">
+                                    {triggerOrg
+                                        ? pickLabel(triggerOrg)
+                                        : error !== null
+                                          ? t('heading')
+                                          : t('loading')}
+                                </span>
+                                {/* A2: one muted line under the name — the Organization's address. */}
+                                {triggerOrg && (
+                                    <span
+                                        className="truncate text-xs text-text-muted dark:text-text-muted-dark"
+                                        data-testid="workspace-switcher-address"
+                                    >
+                                        {triggerOrg.slug}
+                                    </span>
+                                )}
                             </span>
                         )}
                         {!isCollapsed && (
@@ -232,7 +257,7 @@ export function WorkspaceSwitcher({ isCollapsed = false }: WorkspaceSwitcherProp
                     </div>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent side="bottom" align="start" className="w-60">
-                    <DropdownMenuLabel>{t('heading')}</DropdownMenuLabel>
+                    <DropdownMenuLabel>{t('label')}</DropdownMenuLabel>
                     {hasOrgs &&
                         organizations.map((org) => {
                             const isActive = activeOrganization?.id === org.id;
@@ -245,7 +270,7 @@ export function WorkspaceSwitcher({ isCollapsed = false }: WorkspaceSwitcherProp
                                 >
                                     <div className="flex items-center gap-2 w-full">
                                         <OrgAvatar org={org} size="xs" />
-                                        <span className="flex-1 min-w-0 truncate text-text dark:text-text-dark">
+                                        <span className="flex-1 min-w-0 truncate text-left text-text dark:text-text-dark">
                                             {pickLabel(org)}
                                         </span>
                                         {isActive && (
@@ -259,6 +284,15 @@ export function WorkspaceSwitcher({ isCollapsed = false }: WorkspaceSwitcherProp
                                 </DropdownMenuItem>
                             );
                         })}
+                    {/* A2: say so when there is nowhere else to switch to. */}
+                    {organizations.length === 1 && (
+                        <p
+                            className="px-2 py-1.5 text-sm text-text-muted dark:text-text-muted-dark"
+                            data-testid="workspace-switcher-no-other"
+                        >
+                            {t('noOther')}
+                        </p>
+                    )}
                     {hasOrgs && <DropdownMenuSeparator />}
                     {isLoading && !hasOrgs && (
                         <DropdownMenuItem disabled className="text-text-muted">
@@ -273,8 +307,8 @@ export function WorkspaceSwitcher({ isCollapsed = false }: WorkspaceSwitcherProp
                                     strokeWidth={1.5}
                                 />
                             </span>
-                            <span className="flex-1 min-w-0 truncate text-text dark:text-text-dark">
-                                {t('createNew')}
+                            <span className="flex-1 min-w-0 truncate text-left text-text dark:text-text-dark">
+                                {t('addNew')}
                             </span>
                         </div>
                     </DropdownMenuItem>

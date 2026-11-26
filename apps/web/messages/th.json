@@ -4712,6 +4712,13 @@
                 "themeSystem": "ระบบ",
                 "languageTitle": "ภาษา",
                 "languageDescription": "ภาษาที่ Ever Works ใช้ในเบราว์เซอร์นี้"
+            },
+            "groups": {
+                "account": "บัญชี",
+                "organization": "องค์กร",
+                "product": "Ever Works",
+                "integrations": "การเชื่อมต่อ",
+                "plugins": "ปลั๊กอิน"
             }
         },
         "stats": {
@@ -11370,8 +11377,11 @@
             }
         },
         "switcher": {
-            "heading": "Switch Organization",
+            "heading": "สลับองค์กร",
+            "label": "องค์กร",
+            "noOther": "ไม่มีองค์กรอื่น",
             "createNew": "สร้างองค์กร",
+            "addNew": "เพิ่มองค์กร",
             "loading": "Loading…",
             "switchFailed": "สลับองค์กรไม่ได้ ลองอีกครั้ง",
             "active": "องค์กรปัจจุบัน"

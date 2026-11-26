@@ -4712,6 +4712,13 @@
                 "themeSystem": "Системная",
                 "languageTitle": "Язык",
                 "languageDescription": "Язык, на котором Ever Works работает в этом браузере."
+            },
+            "groups": {
+                "account": "Аккаунт",
+                "organization": "Организация",
+                "product": "Ever Works",
+                "integrations": "Интеграции",
+                "plugins": "Плагины"
             }
         },
         "stats": {
@@ -11370,8 +11377,11 @@
             }
         },
         "switcher": {
-            "heading": "Switch Organization",
+            "heading": "Сменить организацию",
+            "label": "Организации",
+            "noOther": "Других организаций нет",
             "createNew": "Создать организацию",
+            "addNew": "Добавить организацию",
             "loading": "Loading…",
             "switchFailed": "Не удалось сменить организацию. Попробуйте ещё раз.",
             "active": "Текущая организация"
