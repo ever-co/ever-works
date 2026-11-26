@@ -43,7 +43,10 @@
     - unknown slugs answered from the item list, and timeouts reported as tool errors;
     - at most 400 registry entries (the subrequest budget).
 
-- [x] T-17 Log the text of zero-result queries only (`zero_result_query`), per the owner's 2026-11-26 decision.
+- [x] T-17 Log the text of zero-result queries only (`zero_result_query`), per the owner's 2026-11-26 decision. Not
+      logged: searches narrowed by `directories`/`category`/`tag`, or that read no directory. Workers Logs invocation
+      logs are off (they stored caller IPs and location), and `/data/search.json` writes no line for a search with
+      results.
 - [ ] T-18 Rebuild the 15 older sites (`timetrack`, `mcpserver`, `vectordb`, `dir`, …; template `classic`). Their
       website repos already hold template `f52bb1d6` (with the agent API, directory-web-template#1181), but the sites
       were not rebuilt after that sync (timetrack: last `k8s-build` 2026-10-23), so `/data/directory.json` is still 404.

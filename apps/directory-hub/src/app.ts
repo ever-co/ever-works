@@ -113,10 +113,13 @@ export async function handleRequest(request: Request, options: HandlerOptions): 
 				const started = Date.now();
 				try {
 					const result = await runSearchAll(loader, input);
-					const entry: Record<string, unknown> = { event: 'rest', path, ms: Date.now() - started, ok: true };
+					// Workers Logs attaches the request URL (with `?q=`) to every log line, so this path writes one only for
+					// a search that matched nothing; that line holds the same text anyway.
 					const missed = zeroResultQuery('search_all', input, { kind: 'structured', value: result });
-					if (missed !== null) entry['zero_result_query'] = missed;
-					options.log?.(entry);
+					if (missed !== null) {
+						const ms = Date.now() - started;
+						options.log?.({ event: 'rest', path, ms, ok: true, zero_result_query: missed });
+					}
 					return jsonResponse(result);
 				} catch (error) {
 					if (error instanceof ToolInputError) return jsonResponse({ error: error.message }, 400);

@@ -154,7 +154,11 @@ agents where the hub is.
 - **Cost**: runs on the Workers Paid plan the directory sites already use; data reads hit the directories' edge cache.
 - **Security & privacy**: public, read-only data; no secrets in the hub; strict size caps per document; untrusted
   third-party text is returned as data; logs carry tool name, counts and timing. The text of a query is logged only
-  when it matched nothing (owner decision 2026-11-26), and never with client IPs or anything else about the caller.
+  when it matched nothing (owner decision 2026-11-26). Workers Logs keeps only the hub's own lines: invocation logs are
+  off (`observability.logs.invocation_logs: false`), because they store each caller's IP (`cf-connecting-ip`,
+  `x-real-ip`), location and request URL. Cloudflare attaches the method, path and URL to every line the hub writes, so
+  `/data/search.json` writes a line only for a zero-result search. Lines age out with the Workers Logs retention and are
+  not exported.
 - **Observability**: one structured log line per tool call (tool, directories searched, unavailable count, result count,
   duration) visible in Workers Logs.
 - **Compatibility**: any directory that implements Contract v1 (minimal and full templates); MCP protocol revisions
@@ -179,7 +183,8 @@ agents where the hub is.
 - A human-facing website: `/` redirects to `/llms.txt`. A browsable "all directories" page would be frontend work under
   the design rule and is a separate decision.
 - Crawling hosts that are not in the registry, and listing Cloudflare zones or DNS to find directories.
-- Logging the text of queries that matched something, and any analysis of callers (owner decision 2026-11-26).
+- No logging of the text of queries that matched something, and no analysis of callers (owner decision 2026-11-26:
+  zero-result queries only).
 
 ## 7. Acceptance Criteria
 

@@ -28,7 +28,7 @@ export function buildLlmsTxt(
 		'',
 		`> ${HUB_DESCRIPTION}`,
 		'',
-		'Read-only, public, no account or API key. CORS is open. A search that matches nothing is logged (its text only, never IPs or anything else about the caller), so we learn which directories are missing.',
+		'Read-only, public, no account or API key. CORS is open. Our logs keep the text of a search that matches nothing, to learn which directories are missing; they hold no IP address or other detail about the caller.',
 		'',
 		'## How to query',
 		'',
