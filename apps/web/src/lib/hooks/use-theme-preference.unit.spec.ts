@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, renderHook } from '@testing-library/react';
-import { readThemePreference, setThemePreference, useThemePreference } from './use-theme';
+import { readThemePreference, setThemePreference, useTheme, useThemePreference } from './use-theme';
 
 /**
  * Shared Ever shell, A4 — Light, Dark or System. System is "no stored theme",
@@ -27,7 +27,11 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+    vi.restoreAllMocks();
     vi.unstubAllGlobals();
+    // The page's own memory of a pick (used when storage refuses it) goes back to System.
+    setThemePreference('system');
+    window.localStorage.clear();
 });
 
 describe('theme preference', () => {
@@ -57,16 +61,48 @@ describe('theme preference', () => {
     });
 
     it('tells readers in this tab, including after the header toggle stored a theme', () => {
-        const { result } = renderHook(() => useThemePreference());
-        expect(result.current).toBe('system');
+        const preference = renderHook(() => useThemePreference());
+        const header = renderHook(() => useTheme());
+        expect(preference.result.current).toBe('system');
         act(() => setThemePreference('dark'));
-        expect(result.current).toBe('dark');
-        act(() => {
-            window.localStorage.setItem('theme', 'light');
-            window.dispatchEvent(new CustomEvent('ever-works:theme-change', { detail: 'light' }));
-        });
-        expect(result.current).toBe('light');
+        expect(preference.result.current).toBe('dark');
+        expect(header.result.current.theme).toBe('dark');
+        // The real top-bar toggle, not a hand-written event.
+        act(() => header.result.current.toggleTheme());
+        expect(window.localStorage.getItem('theme')).toBe('light');
+        expect(preference.result.current).toBe('light');
         act(() => setThemePreference('system'));
-        expect(result.current).toBe('system');
+        expect(preference.result.current).toBe('system');
+    });
+
+    it('follows the device again when another tab picks System', () => {
+        stubDevice(true);
+        window.localStorage.setItem('theme', 'light');
+        const { result } = renderHook(() => useTheme());
+        expect(result.current.theme).toBe('light');
+        act(() => {
+            window.localStorage.removeItem('theme');
+            window.dispatchEvent(new StorageEvent('storage', { key: 'theme', newValue: null }));
+        });
+        expect(result.current.theme).toBe('dark');
+    });
+
+    it('keeps the pick for this page when the browser refuses storage', () => {
+        vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+            throw new Error('SecurityError');
+        });
+        vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+            throw new Error('SecurityError');
+        });
+        setThemePreference('dark');
+        expect(readThemePreference()).toBe('dark');
+        expect(document.documentElement.classList.contains('dark')).toBe(true);
+    });
+
+    it('treats an unknown stored value as System, as the page does', () => {
+        window.localStorage.setItem('theme', 'auto');
+        expect(readThemePreference()).toBe('system');
+        stubDevice(true);
+        expect(renderHook(() => useTheme()).result.current.theme).toBe('dark');
     });
 });

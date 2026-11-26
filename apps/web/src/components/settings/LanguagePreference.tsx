@@ -9,18 +9,36 @@ import { cn } from '@/lib/utils/cn';
 type Locale = (typeof LOCALES)[number];
 
 /**
- * A language's own name for itself ("Deutsch", "日本語"), from the browser's
- * Intl data, so the list needs no translation of its own; the code is the
- * fallback where Intl has no name.
+ * Each language's own name for itself, written out rather than taken from
+ * `Intl.DisplayNames`: the server and the browser may carry different ICU data,
+ * and the select is rendered on both, so the names must not depend on either.
  */
+const ENDONYMS: Record<Locale, string> = {
+    en: 'English',
+    ar: 'العربية',
+    bg: 'Български',
+    de: 'Deutsch',
+    es: 'Español',
+    fr: 'Français',
+    he: 'עברית',
+    hi: 'हिन्दी',
+    id: 'Bahasa Indonesia',
+    it: 'Italiano',
+    ja: '日本語',
+    ko: '한국어',
+    nl: 'Nederlands',
+    pl: 'Polski',
+    pt: 'Português',
+    ru: 'Русский',
+    th: 'ไทย',
+    tr: 'Türkçe',
+    uk: 'Українська',
+    vi: 'Tiếng Việt',
+    zh: '中文',
+};
+
 export function endonym(locale: Locale): string {
-    try {
-        const name = new Intl.DisplayNames([locale], { type: 'language' }).of(locale);
-        if (!name) return locale;
-        return name.charAt(0).toLocaleUpperCase(locale) + name.slice(1);
-    } catch {
-        return locale;
-    }
+    return ENDONYMS[locale] ?? locale;
 }
 
 /**

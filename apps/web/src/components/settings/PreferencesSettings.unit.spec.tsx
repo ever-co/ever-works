@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 
 /**
@@ -35,6 +35,10 @@ beforeEach(() => {
             removeEventListener: vi.fn(),
         })),
     );
+});
+
+afterEach(() => {
+    vi.unstubAllGlobals();
 });
 
 describe('PreferencesSettings', () => {

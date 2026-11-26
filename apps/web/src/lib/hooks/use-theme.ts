@@ -65,9 +65,9 @@ export function useTheme(): UseThemeReturn {
         // fall back to a sensible default.
         let storedTheme: Theme | null = null;
         try {
-            storedTheme = localStorage.getItem(THEME_STORAGE_KEY) as Theme | null;
+            storedTheme = asTheme(localStorage.getItem(THEME_STORAGE_KEY));
         } catch {
-            storedTheme = null;
+            storedTheme = memoryPreference === 'system' ? null : memoryPreference;
         }
         let prefersDark = false;
         try {
@@ -85,13 +85,7 @@ export function useTheme(): UseThemeReturn {
     useEffect(() => {
         const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
         const handleSystemThemeChange = (event: MediaQueryListEvent) => {
-            let storedTheme: Theme | null = null;
-            try {
-                storedTheme = localStorage.getItem(THEME_STORAGE_KEY) as Theme | null;
-            } catch {
-                storedTheme = null;
-            }
-            if (!storedTheme) {
+            if (readThemePreference() === 'system') {
                 setTheme(event.matches ? 'dark' : 'light');
             }
         };
@@ -157,6 +151,17 @@ function systemTheme(): Theme {
     }
 }
 
+/** `light` or `dark`; anything else stored under the key is not a fixed theme. */
+function asTheme(value: string | null): Theme | null {
+    return value === 'light' || value === 'dark' ? value : null;
+}
+
+/**
+ * The last pick of this page, for a browser whose storage refuses to keep it
+ * (private modes, locked-down profiles): the tiles must agree with the page.
+ */
+let memoryPreference: ThemePreference = 'system';
+
 /** Same-tab broadcast of a preference change (a `system` pick stores nothing). */
 const THEME_PREFERENCE_EVENT = 'ever-works:theme-preference-change';
 
@@ -164,10 +169,9 @@ const THEME_PREFERENCE_EVENT = 'ever-works:theme-preference-change';
 export function readThemePreference(): ThemePreference {
     if (typeof window === 'undefined') return 'system';
     try {
-        const stored = window.localStorage.getItem(THEME_STORAGE_KEY);
-        return stored === 'light' || stored === 'dark' ? stored : 'system';
+        return asTheme(window.localStorage.getItem(THEME_STORAGE_KEY)) ?? 'system';
     } catch {
-        return 'system';
+        return memoryPreference;
     }
 }
 
@@ -179,6 +183,7 @@ export function readThemePreference(): ThemePreference {
  */
 export function setThemePreference(preference: ThemePreference): void {
     const resolved: Theme = preference === 'system' ? systemTheme() : preference;
+    memoryPreference = preference;
     try {
         if (preference === 'system') window.localStorage.removeItem(THEME_STORAGE_KEY);
         else window.localStorage.setItem(THEME_STORAGE_KEY, preference);
