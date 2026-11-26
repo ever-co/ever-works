@@ -92,7 +92,10 @@ export function ChatProviderSelector({
                     )}
                 >
                     <div className="p-1.5">
-                        <p className="px-2 pt-1 pb-2 text-[10px] font-medium uppercase tracking-wider text-text-muted dark:text-text-muted-dark">
+                        <p
+                            data-testid="chat-provider-menu-header"
+                            className="px-2 pt-1 pb-2 text-[11px] font-medium text-text-muted dark:text-text-muted-dark"
+                        >
                             {t('title')}
                         </p>
                         {providers.map((provider) => {

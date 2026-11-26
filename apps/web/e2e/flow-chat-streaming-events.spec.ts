@@ -78,7 +78,8 @@ import { isSessionCookieName } from './helpers/auth';
  */
 
 const NEW_CHAT_LABEL = 'New chat';
-const WELCOME_TITLE = 'Welcome to AI Assistant';
+/** The welcome screen's disclosure line (shared Ever shell, A7): present only on a fresh conversation. */
+const WELCOME_TESTID = 'ever-si-disclosure';
 const STOP_LABEL = 'Stop generating';
 
 interface ConversationRow {
@@ -513,10 +514,10 @@ test.describe('AI Chat — SSE streaming events (web tier + API tier)', () => {
             // Start from a clean welcome state so this send creates exactly one fresh
             // conversation we can inspect.
             const newChatBtn = page.getByRole('button', { name: NEW_CHAT_LABEL });
-            if ((await page.getByText(WELCOME_TITLE, { exact: false }).count()) === 0) {
+            if ((await page.getByTestId(WELCOME_TESTID).count()) === 0) {
                 await expect(async () => {
                     await newChatBtn.click({ timeout: 5_000 }).catch(() => {});
-                    await expect(page.getByText(WELCOME_TITLE, { exact: false })).toBeVisible({
+                    await expect(page.getByTestId(WELCOME_TESTID)).toBeVisible({
                         timeout: 5_000,
                     });
                 }).toPass({ timeout: 30_000 });

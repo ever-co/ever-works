@@ -6948,7 +6948,7 @@
                         "empty": "Select a document on the left to view or edit it. Drag a file anywhere to upload."
                     },
                     "ai": {
-                        "title": "AI assistant",
+                        "title": "Ever SI",
                         "empty": "Conversation with the workspace agent will appear here. Use @kb:path to ground replies."
                     }
                 },
@@ -9688,7 +9688,7 @@
         },
         "sidebar": {
             "menu": "תפריט",
-            "aiChat": "צ'אט AI",
+            "aiChat": "Ever SI",
             "newWork": "עבודה חדשה",
             "new": "חדש",
             "activityIndicator": "מייצר עבודה",
@@ -9760,11 +9760,12 @@
             }
         },
         "aiChat": {
-            "title": "עוזר AI",
-            "panelTitle": "צ'אט",
+            "title": "Ever SI",
+            "panelTitle": "Ever SI",
             "subtitle": "צור עבודות בשפה טבעית",
-            "welcomeTitle": "ברוך בואך לעוזר AI 👋",
-            "welcomeSubtitle": "העוזר המופעל על ידי AI שלך. שאל אותי כל דבר על יצירת עבודות, יצירת תוכן או ארגון הנתונים שלך.",
+            "welcomeTitle": "Ever SI",
+            "welcomeSubtitle": "אפשר לשאול על יצירת Works, יצירת תוכן או ארגון הנתונים שלך.",
+            "disclosure": "השיחה שלך היא עם עוזר ה-SI של Ever. הוא עלול לטעות. אנחנו שומרים את השיחה הזו עד שתמחק אותה.",
             "welcomeMessage": "שלום! אני יכול לעזור לך ליצור עבודות בשפה טבעית. שאל משהו כמו \"צור עבודה לכלי AI\" או תאר מה אתה צריך.",
             "capabilities": {
                 "workCreation": "יצירת עבודות",
@@ -9774,20 +9775,21 @@
                 "contentGeneration": "יצירת תוכן",
                 "contentGenerationDesc": "צור תיאורים, קטגוריות ומטא נתונים",
                 "smartSuggestions": "הצעות חכמות",
-                "smartSuggestionsDesc": "קבל המלצות מופעלות AI לפרויקטים שלך"
+                "smartSuggestionsDesc": "המלצות לפרויקטים שלך"
             },
             "newChat": "צ'אט חדש",
             "history": "היסטוריה",
             "loadingConversation": "טוען שיחה…",
-            "inputPlaceholder": "שאל אותי כל דבר...",
+            "inputPlaceholder": "שאל את Ever SI",
             "sendButton": "שלח",
             "stopGenerating": "עצור יצירה",
             "sendHint": "Enter לשליחה · Shift+Enter לשורה חדשה",
-            "closeChat": "סגור צ'אט",
-            "collapseChat": "צמצם צ'אט",
-            "resizeChat": "גרור לשינוי גודל הצ'אט",
-            "expandChat": "הרחב צ'אט",
-            "providersError": "נכשל בטעינת ספקי AI. הצ'אט עלול לא לעבוד כראוי.",
+            "closeChat": "סגירת Ever SI",
+            "collapseChat": "כיווץ Ever SI",
+            "resizeChat": "גרירה לשינוי הגודל של Ever SI",
+            "expandChat": "הרחבת Ever SI",
+            "openPanel": "פתיחת Ever SI",
+            "providersError": "לא ניתן היה לטעון את ספקי ה-AI. ייתכן ש-Ever SI לא יענה כראוי.",
             "providerNotConfigured": "ספק זה לא מוגדר. הגדר אותו בתוספים.",
             "editMessage": "ערוך הודעה",
             "saveEdit": "שמור ושלח",
@@ -9806,7 +9808,7 @@
             "configureDeployProvider": "הגדר ספק פריסה",
             "deployConfigured": "ספק פריסה מוגדר ({provider})",
             "opened": "נפתח",
-            "historyEmpty": "עדיין אין שיחות. התחל צ'אט כדי לראות את ההיסטוריה כאן.",
+            "historyEmpty": "אין עדיין שיחות. שאל את Ever SI משהו כדי להתחיל שיחה.",
             "historyUntitled": "שיחה ללא כותרת",
             "historyToday": "היום",
             "historyYesterday": "אתמול",
@@ -9865,6 +9867,10 @@
                 "stateFailed": "{step}: failed",
                 "statePending": "{step}: not started",
                 "pollingStopped": "Stopped checking for updates. Open the Task to see where it stands."
+            },
+            "panel": {
+                "assistant": "Ever SI",
+                "close": "סגירת Ever SI"
             }
         },
         "plugins": {
@@ -10948,6 +10954,19 @@
             "alsoSignOutEverId": "להתנתק גם מ-Ever ID",
             "cancel": "ביטול",
             "confirm": "התנתקות"
+        },
+        "commandPalette": {
+            "commands": {
+                "openChat": "פתיחת Ever SI",
+                "closeChat": "סגירת Ever SI"
+            },
+            "commandAliases": {
+                "openChat": "ever si, si, צ'אט, עוזר",
+                "closeChat": "ever si, si, הסתרת צ'אט"
+            },
+            "noResults": {
+                "askChat": "לשאול את Ever SI על „{query}”"
+            }
         }
     },
     "layout": {

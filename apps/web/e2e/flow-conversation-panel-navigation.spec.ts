@@ -106,7 +106,7 @@ test.describe('Conversation panel navigation', () => {
 
             // Back to the assistant: its thread renders exactly as before.
             await page.getByTestId('conversation-switch-assistant').click();
-            await expect(page.getByPlaceholder('Ask me anything...')).toBeVisible();
+            await expect(page.getByPlaceholder('Ask Ever SI')).toBeVisible();
         } finally {
             await context.close();
         }

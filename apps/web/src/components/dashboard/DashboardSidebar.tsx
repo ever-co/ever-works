@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useTransition } from 'react';
+import { Fragment, useEffect, useState, useTransition } from 'react';
 import Image from 'next/image';
 import { AuthUser } from '@/lib/auth';
 import { logout } from '@/app/actions/auth';
@@ -26,7 +26,8 @@ import {
     Target,
     Gauge,
     CalendarClock,
-    // Bot / Sparkles / Users / Video no longer label a nav entry of their own —
+    // Sparkles / Users / Video no longer label a nav entry of their own (Bot is
+    // Ever SI's entry again, shared Ever shell A7) —
     // Agents, Skills, Teams and Meetings folded into the two merged entries
     // below (navigation consolidation §3.2). Kept per the repo's no-removal
     // rule: neither eslint nor tsc flags them, they cost nothing after
@@ -425,51 +426,106 @@ export function DashboardSidebar({
                             isCollapsed && 'flex flex-col items-center',
                         )}
                     >
-                        {navigation.map((item) => {
+                        {navigation.map((item, index) => {
                             const prefixes = item.matchPrefixes ?? [item.href];
                             const isActive = prefixes.some(
                                 (prefix) =>
                                     pathname === prefix || pathname?.startsWith(prefix + '/'),
                             );
                             return (
-                                <li
-                                    key={item.name}
-                                    className={isCollapsed ? 'w-full flex justify-center' : ''}
-                                >
-                                    <ConditionalTooltip show={isCollapsed} content={item.name}>
-                                        <Link
-                                            href={item.href}
-                                            onClick={() => onInteraction?.()}
-                                            // Collapsed, the link is icon-only and the tooltip is
-                                            // not an accessible name.
-                                            aria-label={isCollapsed ? item.name : undefined}
-                                            className={cn(
-                                                'flex items-center relative rounded-sm transition-colors border border-transparent',
-                                                isCollapsed
-                                                    ? 'justify-center w-8 h-8 px-0'
-                                                    : 'gap-3 px-4 py-2',
-                                                isActive
-                                                    ? 'border bg-surface-secondary border-surface-tertiary dark:border-transparent dark:bg-card-secondary-dark text-text dark:text-text-dark'
-                                                    : 'text-text dark:text-text-secondary-dark/70 hover:bg-surface-secondary dark:hover:bg-card-primary-dark hover:text-text dark:hover:text-text-dark',
-                                            )}
+                                <Fragment key={item.name}>
+                                    <li className={isCollapsed ? 'w-full flex justify-center' : ''}>
+                                        <ConditionalTooltip show={isCollapsed} content={item.name}>
+                                            <Link
+                                                href={item.href}
+                                                onClick={() => onInteraction?.()}
+                                                // Collapsed, the link is icon-only and the tooltip is
+                                                // not an accessible name.
+                                                aria-label={isCollapsed ? item.name : undefined}
+                                                className={cn(
+                                                    'flex items-center relative rounded-sm transition-colors border border-transparent',
+                                                    isCollapsed
+                                                        ? 'justify-center w-8 h-8 px-0'
+                                                        : 'gap-3 px-4 py-2',
+                                                    isActive
+                                                        ? 'border bg-surface-secondary border-surface-tertiary dark:border-transparent dark:bg-card-secondary-dark text-text dark:text-text-dark'
+                                                        : 'text-text dark:text-text-secondary-dark/70 hover:bg-surface-secondary dark:hover:bg-card-primary-dark hover:text-text dark:hover:text-text-dark',
+                                                )}
+                                            >
+                                                <span className="shrink-0 inline-flex">
+                                                    <item.icon
+                                                        className="w-5 h-5"
+                                                        strokeWidth={1.5}
+                                                    />
+                                                </span>
+                                                {!isCollapsed && (
+                                                    <span className="text-sm">{item.name}</span>
+                                                )}
+                                                <div className="absolute -top-3 -right-0.5">
+                                                    {item.href === ROUTES.DASHBOARD_WORKS && (
+                                                        <SidebarActivityIndicator />
+                                                    )}
+                                                    {item.href === ROUTES.DASHBOARD_INBOX && (
+                                                        <SidebarInboxBadge />
+                                                    )}
+                                                </div>
+                                            </Link>
+                                        </ConditionalTooltip>
+                                    </li>
+                                    {/*
+                                    Shared Ever shell, A7: "Ever SI" right after
+                                    Home. It toggles the panel between the sidebar
+                                    and the page (the panel's own handle does too);
+                                    it is a button, not a page.
+                                */}
+                                    {index === 0 && onOpenChat && (
+                                        <li
+                                            className={
+                                                isCollapsed ? 'w-full flex justify-center' : ''
+                                            }
                                         >
-                                            <span className="shrink-0 inline-flex">
-                                                <item.icon className="w-5 h-5" strokeWidth={1.5} />
-                                            </span>
-                                            {!isCollapsed && (
-                                                <span className="text-sm">{item.name}</span>
-                                            )}
-                                            <div className="absolute -top-3 -right-0.5">
-                                                {item.href === ROUTES.DASHBOARD_WORKS && (
-                                                    <SidebarActivityIndicator />
-                                                )}
-                                                {item.href === ROUTES.DASHBOARD_INBOX && (
-                                                    <SidebarInboxBadge />
-                                                )}
-                                            </div>
-                                        </Link>
-                                    </ConditionalTooltip>
-                                </li>
+                                            <ConditionalTooltip
+                                                show={isCollapsed}
+                                                content={t('aiChat')}
+                                            >
+                                                <button
+                                                    type="button"
+                                                    onClick={() => {
+                                                        onOpenChat();
+                                                        onInteraction?.();
+                                                    }}
+                                                    aria-pressed={chatOpen === true}
+                                                    aria-label={
+                                                        isCollapsed ? t('aiChat') : undefined
+                                                    }
+                                                    data-testid="sidebar-ever-si"
+                                                    className={cn(
+                                                        'w-full flex items-center relative rounded-sm transition-colors border border-transparent cursor-pointer',
+                                                        isCollapsed
+                                                            ? 'justify-center w-8 h-8 px-0'
+                                                            : 'gap-3 px-4 py-2',
+                                                        chatOpen
+                                                            ? 'border bg-surface-secondary border-surface-tertiary dark:border-transparent dark:bg-card-secondary-dark text-text dark:text-text-dark'
+                                                            : 'text-text dark:text-text-secondary-dark/70 hover:bg-surface-secondary dark:hover:bg-card-primary-dark hover:text-text dark:hover:text-text-dark',
+                                                    )}
+                                                >
+                                                    <span className="shrink-0 inline-flex">
+                                                        <Bot
+                                                            className="w-5 h-5"
+                                                            strokeWidth={1.5}
+                                                            aria-hidden="true"
+                                                        />
+                                                    </span>
+                                                    {!isCollapsed && (
+                                                        <span className="text-sm">
+                                                            {t('aiChat')}
+                                                        </span>
+                                                    )}
+                                                </button>
+                                            </ConditionalTooltip>
+                                        </li>
+                                    )}
+                                </Fragment>
                             );
                         })}
                     </ul>

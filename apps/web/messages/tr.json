@@ -6874,7 +6874,7 @@
                         "empty": "Select a document on the left to view or edit it. Drag a file anywhere to upload."
                     },
                     "ai": {
-                        "title": "AI assistant",
+                        "title": "Ever SI",
                         "empty": "Conversation with the workspace agent will appear here. Use @kb:path to ground replies."
                     }
                 },
@@ -9615,7 +9615,7 @@
         },
         "sidebar": {
             "menu": "Menü",
-            "aiChat": "AI Sohbet",
+            "aiChat": "Ever SI",
             "newWork": "Yeni İş",
             "new": "Yeni",
             "activityIndicator": "İş oluşturuluyor",
@@ -9687,11 +9687,12 @@
             }
         },
         "aiChat": {
-            "title": "AI Asistanı",
-            "panelTitle": "Sohbet",
+            "title": "Ever SI",
+            "panelTitle": "Ever SI",
             "subtitle": "Doğal dil ile işler oluşturun",
-            "welcomeTitle": "AI Asistanına Hoş Geldiniz 👋",
-            "welcomeSubtitle": "AI destekli asistanınız. İş oluşturma, içerik üretme veya verilerinizi organize etme hakkında bana her şeyi sorun.",
+            "welcomeTitle": "Ever SI",
+            "welcomeSubtitle": "Works oluşturma, içerik üretme veya verilerinizi düzenleme hakkında sorun.",
+            "disclosure": "Ever'ın SI asistanıyla sohbet ediyorsunuz. Hata yapabilir. Bu sohbeti siz silene kadar saklarız.",
             "welcomeMessage": "Merhaba! Doğal dil kullanarak işler oluşturmanıza yardımcı olabilirim. \"AI araçları için bir iş oluştur\" gibi bir şey sorun veya ihtiyacınızı tarif edin.",
             "capabilities": {
                 "workCreation": "İş Oluşturma",
@@ -9701,20 +9702,21 @@
                 "contentGeneration": "İçerik Üretimi",
                 "contentGenerationDesc": "Açıklamalar, kategoriler ve meta veriler üretin",
                 "smartSuggestions": "Akıllı Öneriler",
-                "smartSuggestionsDesc": "Projeleriniz için AI destekli öneriler alın"
+                "smartSuggestionsDesc": "Projeleriniz için öneriler"
             },
             "newChat": "Yeni sohbet",
             "history": "Geçmiş",
             "loadingConversation": "Sohbet yükleniyor…",
-            "inputPlaceholder": "Bana her şeyi sorun...",
+            "inputPlaceholder": "Ever SI'a sorun",
             "sendButton": "Gönder",
             "stopGenerating": "Üretimi Durdur",
             "sendHint": "Göndermek için Enter · Yeni satır için Shift+Enter",
-            "closeChat": "Sohbeti Kapat",
-            "collapseChat": "Sohbeti Daralt",
-            "resizeChat": "Sohbeti yeniden boyutlandırmak için sürükleyin",
-            "expandChat": "Sohbeti Genişlet",
-            "providersError": "AI sağlayıcıları yüklenemedi. Sohbet düzgün çalışmayabilir.",
+            "closeChat": "Ever SI'ı kapat",
+            "collapseChat": "Ever SI'ı daralt",
+            "resizeChat": "Ever SI'ı yeniden boyutlandırmak için sürükleyin",
+            "expandChat": "Ever SI'ı genişlet",
+            "openPanel": "Ever SI'ı aç",
+            "providersError": "Yapay zekâ sağlayıcıları yüklenemedi. Ever SI doğru yanıt vermeyebilir.",
             "providerNotConfigured": "Bu sağlayıcı yapılandırılmadı. Eklentilerde ayarlayın.",
             "editMessage": "Mesajı düzenle",
             "saveEdit": "Kaydet & Gönder",
@@ -9733,7 +9735,7 @@
             "configureDeployProvider": "Dağıtım Sağlayıcısını Yapılandır",
             "deployConfigured": "Dağıtım sağlayıcısı yapılandırıldı ({provider})",
             "opened": "Açıldı",
-            "historyEmpty": "Henüz sohbet yok. Geçmişinizi burada görmek için bir sohbet başlatın.",
+            "historyEmpty": "Henüz sohbet yok. Başlatmak için Ever SI'a bir şey sorun.",
             "historyUntitled": "Başlıksız sohbet",
             "historyToday": "Bugün",
             "historyYesterday": "Dün",
@@ -9792,6 +9794,10 @@
                 "stateFailed": "{step}: failed",
                 "statePending": "{step}: not started",
                 "pollingStopped": "Stopped checking for updates. Open the Task to see where it stands."
+            },
+            "panel": {
+                "assistant": "Ever SI",
+                "close": "Ever SI'ı kapat"
             }
         },
         "plugins": {
@@ -10949,6 +10955,19 @@
             "alsoSignOutEverId": "Ever ID oturumunu da kapat",
             "cancel": "İptal",
             "confirm": "Oturumu kapat"
+        },
+        "commandPalette": {
+            "commands": {
+                "openChat": "Ever SI'ı aç",
+                "closeChat": "Ever SI'ı kapat"
+            },
+            "commandAliases": {
+                "openChat": "ever si, si, sohbet, asistan",
+                "closeChat": "ever si, si, sohbeti gizle"
+            },
+            "noResults": {
+                "askChat": "Ever SI'a “{query}” hakkında sorun"
+            }
         }
     },
     "layout": {

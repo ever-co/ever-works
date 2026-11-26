@@ -6874,7 +6874,7 @@
                         "empty": "Select a document on the left to view or edit it. Drag a file anywhere to upload."
                     },
                     "ai": {
-                        "title": "AI assistant",
+                        "title": "Ever SI",
                         "empty": "Conversation with the workspace agent will appear here. Use @kb:path to ground replies."
                     }
                 },
@@ -9615,7 +9615,7 @@
         },
         "sidebar": {
             "menu": "Menu",
-            "aiChat": "Czaty AI",
+            "aiChat": "Ever SI",
             "newWork": "Nowy praca",
             "new": "Nowy",
             "activityIndicator": "Generowanie pracy",
@@ -9687,11 +9687,12 @@
             }
         },
         "aiChat": {
-            "title": "Asystent AI",
-            "panelTitle": "Czat",
+            "title": "Ever SI",
+            "panelTitle": "Ever SI",
             "subtitle": "Twórz prace za pomocą języka naturalnego",
-            "welcomeTitle": "Witaj w Asystencie AI 👋",
-            "welcomeSubtitle": "Twój asystent napędzany AI. Pytaj o cokolwiek związanego z tworzeniem prac, generowaniem treści lub organizacją danych.",
+            "welcomeTitle": "Ever SI",
+            "welcomeSubtitle": "Pytaj o tworzenie Works, generowanie treści lub porządkowanie danych.",
+            "disclosure": "Rozmawiasz z asystentem SI firmy Ever. Może popełniać błędy. Przechowujemy tę rozmowę, dopóki jej nie usuniesz.",
             "welcomeMessage": "Cześć! Mogę pomóc ci tworzyć prace za pomocą języka naturalnego. Poproś np. „Stwórz praca narzędzi AI” lub opisz, czego potrzebujesz.",
             "capabilities": {
                 "workCreation": "Tworzenie prac",
@@ -9701,20 +9702,21 @@
                 "contentGeneration": "Generowanie treści",
                 "contentGenerationDesc": "Generuj opisy, kategorie i metadane",
                 "smartSuggestions": "Inteligentne sugestie",
-                "smartSuggestionsDesc": "Otrzymuj rekomendacje AI dla swoich projektów"
+                "smartSuggestionsDesc": "Rekomendacje dla Twoich projektów"
             },
             "newChat": "Nowy czat",
             "history": "Historia",
             "loadingConversation": "Ładowanie rozmowy…",
-            "inputPlaceholder": "Zapytaj o cokolwiek...",
+            "inputPlaceholder": "Zapytaj Ever SI",
             "sendButton": "Wyślij",
             "stopGenerating": "Zatrzymaj generowanie",
             "sendHint": "Enter, aby wysłać · Shift+Enter dla nowej linii",
-            "closeChat": "Zamknij czat",
-            "collapseChat": "Zwiń czat",
-            "resizeChat": "Przeciągnij, aby zmienić rozmiar czatu",
-            "expandChat": "Rozwiń czat",
-            "providersError": "Nie udało się załadować dostawców AI. Czat może nie działać poprawnie.",
+            "closeChat": "Zamknij Ever SI",
+            "collapseChat": "Zwiń Ever SI",
+            "resizeChat": "Przeciągnij, aby zmienić rozmiar Ever SI",
+            "expandChat": "Poszerz Ever SI",
+            "openPanel": "Otwórz Ever SI",
+            "providersError": "Nie udało się wczytać dostawców AI. Ever SI może nie odpowiadać poprawnie.",
             "providerNotConfigured": "Ten dostawca nie jest skonfigurowany. Skonfiguruj go w Wtyczkach.",
             "editMessage": "Edytuj wiadomość",
             "saveEdit": "Zapisz i wyślij",
@@ -9733,7 +9735,7 @@
             "configureDeployProvider": "Skonfiguruj dostawcę wdrożeń",
             "deployConfigured": "Dostawca wdrożeń skonfigurowany ({provider})",
             "opened": "Otwarty",
-            "historyEmpty": "Brak rozmów. Rozpocznij czat, aby zobaczyć historię tutaj.",
+            "historyEmpty": "Brak rozmów. Zapytaj o coś Ever SI, aby zacząć.",
             "historyUntitled": "Rozmowa bez tytułu",
             "historyToday": "Dzisiaj",
             "historyYesterday": "Wczoraj",
@@ -9792,6 +9794,10 @@
                 "stateFailed": "{step}: failed",
                 "statePending": "{step}: not started",
                 "pollingStopped": "Stopped checking for updates. Open the Task to see where it stands."
+            },
+            "panel": {
+                "assistant": "Ever SI",
+                "close": "Zamknij Ever SI"
             }
         },
         "plugins": {
@@ -10949,6 +10955,19 @@
             "alsoSignOutEverId": "Wyloguj się także z Ever ID",
             "cancel": "Anuluj",
             "confirm": "Wyloguj się"
+        },
+        "commandPalette": {
+            "commands": {
+                "openChat": "Otwórz Ever SI",
+                "closeChat": "Zamknij Ever SI"
+            },
+            "commandAliases": {
+                "openChat": "ever si, si, czat, asystent",
+                "closeChat": "ever si, si, ukryj czat"
+            },
+            "noResults": {
+                "askChat": "Zapytaj Ever SI o „{query}”"
+            }
         }
     },
     "layout": {

@@ -280,7 +280,7 @@ test.describe('Chat history UI — open / list / reopen / delete / order (seeded
             ).toBeVisible({ timeout: 15_000 });
 
             // We're back in the transcript (composer present), not the History list.
-            await expect(page.getByPlaceholder('Ask me anything...')).toBeVisible({
+            await expect(page.getByPlaceholder('Ask Ever SI')).toBeVisible({
                 timeout: 15_000,
             });
         } finally {

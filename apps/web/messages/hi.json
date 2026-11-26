@@ -6874,7 +6874,7 @@
                         "empty": "Select a document on the left to view or edit it. Drag a file anywhere to upload."
                     },
                     "ai": {
-                        "title": "AI assistant",
+                        "title": "Ever SI",
                         "empty": "Conversation with the workspace agent will appear here. Use @kb:path to ground replies."
                     }
                 },
@@ -9615,7 +9615,7 @@
         },
         "sidebar": {
             "menu": "मेनू",
-            "aiChat": "एआई चैट",
+            "aiChat": "Ever SI",
             "newWork": "नई कार्य",
             "new": "नया",
             "activityIndicator": "कार्य जेनरेट हो रही है",
@@ -9687,11 +9687,12 @@
             }
         },
         "aiChat": {
-            "title": "एआई सहायक",
-            "panelTitle": "चैट",
+            "title": "Ever SI",
+            "panelTitle": "Ever SI",
             "subtitle": "प्राकृतिक भाषा से कार्य बनाएँ",
-            "welcomeTitle": "एआई सहायक में आपका स्वागत है 👋",
-            "welcomeSubtitle": "आपका एआई-संचालित सहायक। कार्य बनाने, सामग्री उत्पन्न करने या अपने डेटा को व्यवस्थित करने के बारे में कुछ भी पूछें।",
+            "welcomeTitle": "Ever SI",
+            "welcomeSubtitle": "Works बनाने, सामग्री तैयार करने या अपने डेटा को व्यवस्थित करने के बारे में पूछें।",
+            "disclosure": "आप Ever के SI सहायक से बात कर रहे हैं। यह गलतियाँ कर सकता है। हम यह बातचीत तब तक रखते हैं जब तक आप इसे हटा नहीं देते।",
             "welcomeMessage": "नमस्ते! मैं प्राकृतिक भाषा का उपयोग करके कार्य बनाने में आपकी सहायता कर सकता हूँ। कुछ ऐसा पूछें जैसे \"AI टूल्स के लिए एक कार्य बनाएँ\" या बताएँ कि आपको क्या चाहिए।",
             "capabilities": {
                 "workCreation": "कार्य निर्माण",
@@ -9701,20 +9702,21 @@
                 "contentGeneration": "सामग्री उत्पन्न करना",
                 "contentGenerationDesc": "विवरण, श्रेणियाँ और मेटाडेटा उत्पन्न करें",
                 "smartSuggestions": "स्मार्ट सुझाव",
-                "smartSuggestionsDesc": "अपने प्रोजेक्ट्स के लिए एआई-संचालित सिफारिशें प्राप्त करें"
+                "smartSuggestionsDesc": "आपकी परियोजनाओं के लिए सुझाव"
             },
             "newChat": "नया चैट",
             "history": "इतिहास",
             "loadingConversation": "वार्तालाप लोड हो रहा है…",
-            "inputPlaceholder": "मुझसे कुछ भी पूछें...",
+            "inputPlaceholder": "Ever SI से पूछें",
             "sendButton": "भेजें",
             "stopGenerating": "उत्पन्न करना रोकें",
             "sendHint": "भेजने के लिए Enter · नई लाइन के लिए Shift+Enter",
-            "closeChat": "चैट बंद करें",
-            "collapseChat": "चैट संकुचित करें",
-            "resizeChat": "चैट का आकार बदलने के लिए खींचें",
-            "expandChat": "चैट विस्तारित करें",
-            "providersError": "एआई प्रदाताओं को लोड करने में विफल। चैट सही ढंग से काम न करे।",
+            "closeChat": "Ever SI बंद करें",
+            "collapseChat": "Ever SI छोटा करें",
+            "resizeChat": "Ever SI का आकार बदलने के लिए खींचें",
+            "expandChat": "Ever SI चौड़ा करें",
+            "openPanel": "Ever SI खोलें",
+            "providersError": "AI प्रदाता लोड नहीं हो सके। Ever SI सही उत्तर नहीं दे सकता।",
             "providerNotConfigured": "यह प्रदाता कॉन्फ़िगर नहीं है। इसे प्लगइन्स में सेट करें।",
             "editMessage": "संदेश संपादित करें",
             "saveEdit": "सहेजें और सबमिट करें",
@@ -9733,7 +9735,7 @@
             "configureDeployProvider": "डिप्लॉय प्रदाता कॉन्फ़िगर करें",
             "deployConfigured": "डिप्लॉय प्रदाता कॉन्फ़िगर ({provider})",
             "opened": "खोला गया",
-            "historyEmpty": "अभी तक कोई वार्तालाप नहीं। यहाँ अपना इतिहास देखने के लिए एक चैट शुरू करें।",
+            "historyEmpty": "अभी कोई बातचीत नहीं है। शुरू करने के लिए Ever SI से कुछ पूछें।",
             "historyUntitled": "बिना शीर्षक वार्तालाप",
             "historyToday": "आज",
             "historyYesterday": "कल",
@@ -9792,6 +9794,10 @@
                 "stateFailed": "{step}: failed",
                 "statePending": "{step}: not started",
                 "pollingStopped": "Stopped checking for updates. Open the Task to see where it stands."
+            },
+            "panel": {
+                "assistant": "Ever SI",
+                "close": "Ever SI बंद करें"
             }
         },
         "plugins": {
@@ -10949,6 +10955,19 @@
             "alsoSignOutEverId": "Ever ID से भी साइन आउट करें",
             "cancel": "रद्द करें",
             "confirm": "साइन आउट करें"
+        },
+        "commandPalette": {
+            "commands": {
+                "openChat": "Ever SI खोलें",
+                "closeChat": "Ever SI बंद करें"
+            },
+            "commandAliases": {
+                "openChat": "ever si, si, चैट, सहायक",
+                "closeChat": "ever si, si, चैट छिपाएँ"
+            },
+            "noResults": {
+                "askChat": "“{query}” के बारे में Ever SI से पूछें"
+            }
         }
     },
     "layout": {

@@ -6948,7 +6948,7 @@
                         "empty": "Select a document on the left to view or edit it. Drag a file anywhere to upload."
                     },
                     "ai": {
-                        "title": "AI assistant",
+                        "title": "Ever SI",
                         "empty": "Conversation with the workspace agent will appear here. Use @kb:path to ground replies."
                     }
                 },
@@ -9688,7 +9688,7 @@
         },
         "sidebar": {
             "menu": "القائمة",
-            "aiChat": "دردشة الذكاء الاصطناعي",
+            "aiChat": "Ever SI",
             "newWork": "عمل جديد",
             "new": "جديد",
             "activityIndicator": "جاري إنشاء العمل",
@@ -9760,11 +9760,12 @@
             }
         },
         "aiChat": {
-            "title": "مساعد الذكاء الاصطناعي",
-            "panelTitle": "الدردشة",
+            "title": "Ever SI",
+            "panelTitle": "Ever SI",
             "subtitle": "إنشاء الأعمال بلغة طبيعية",
-            "welcomeTitle": "مرحبًا بك في مساعد الذكاء الاصطناعي 👋",
-            "welcomeSubtitle": "مساعدك المدعوم بالذكاء الاصطناعي. اسألني أي شيء حول إنشاء الأعمال، أو توليد المحتوى، أو تنظيم بياناتك.",
+            "welcomeTitle": "Ever SI",
+            "welcomeSubtitle": "اسأل عن إنشاء الأعمال وتوليد المحتوى وتنظيم بياناتك.",
+            "disclosure": "أنت تتحدث مع مساعد SI من Ever. قد يخطئ. نحتفظ بهذه المحادثة إلى أن تحذفها.",
             "welcomeMessage": "مرحبًا! يمكنني مساعدتك في إنشاء الأعمال بلغة طبيعية. اسأل شيئًا مثل \"إنشاء عمل لأدوات الذكاء الاصطناعي\" أو وصف ما تحتاجه.",
             "capabilities": {
                 "workCreation": "إنشاء الأعمال",
@@ -9774,20 +9775,21 @@
                 "contentGeneration": "توليد المحتوى",
                 "contentGenerationDesc": "توليد الوصفات والفئات والبيانات الوصفية",
                 "smartSuggestions": "اقتراحات ذكية",
-                "smartSuggestionsDesc": "الحصول على توصيات مدعومة بالذكاء الاصطناعي لمشاريعك"
+                "smartSuggestionsDesc": "توصيات لمشاريعك"
             },
             "newChat": "دردشة جديدة",
             "history": "السجل",
             "loadingConversation": "جاري تحميل المحادثة…",
-            "inputPlaceholder": "اسألني أي شيء...",
+            "inputPlaceholder": "اسأل Ever SI",
             "sendButton": "إرسال",
             "stopGenerating": "إيقاف التوليد",
             "sendHint": "Enter للإرسال · Shift+Enter لسطر جديد",
-            "closeChat": "إغلاق الدردشة",
-            "collapseChat": "طي الدردشة",
-            "resizeChat": "اسحب لتغيير حجم الدردشة",
-            "expandChat": "توسيع الدردشة",
-            "providersError": "فشل في تحميل مزودي الذكاء الاصطناعي. قد لا تعمل الدردشة بشكل صحيح.",
+            "closeChat": "إغلاق Ever SI",
+            "collapseChat": "طي Ever SI",
+            "resizeChat": "اسحب لتغيير حجم Ever SI",
+            "expandChat": "توسيع Ever SI",
+            "openPanel": "فتح Ever SI",
+            "providersError": "تعذّر تحميل مزوّدي الذكاء الاصطناعي. قد لا يجيب Ever SI بشكل صحيح.",
             "providerNotConfigured": "هذا المزود غير مكوّن. قم بإعداده في الإضافات.",
             "editMessage": "تعديل الرسالة",
             "saveEdit": "حفظ وإرسال",
@@ -9806,7 +9808,7 @@
             "configureDeployProvider": "تكوين مزود النشر",
             "deployConfigured": "مزود النشر مكوّن ({provider})",
             "opened": "مفتوح",
-            "historyEmpty": "لا توجد محادثات بعد. ابدأ دردشة لرؤية سجلك هنا.",
+            "historyEmpty": "لا توجد محادثات بعد. اسأل Ever SI عن أي شيء لتبدأ واحدة.",
             "historyUntitled": "محادثة بدون عنوان",
             "historyToday": "اليوم",
             "historyYesterday": "أمس",
@@ -9865,6 +9867,10 @@
                 "stateFailed": "{step}: failed",
                 "statePending": "{step}: not started",
                 "pollingStopped": "Stopped checking for updates. Open the Task to see where it stands."
+            },
+            "panel": {
+                "assistant": "Ever SI",
+                "close": "إغلاق Ever SI"
             }
         },
         "plugins": {
@@ -10948,6 +10954,19 @@
             "alsoSignOutEverId": "تسجيل الخروج من Ever ID أيضاً",
             "cancel": "إلغاء",
             "confirm": "تسجيل الخروج"
+        },
+        "commandPalette": {
+            "commands": {
+                "openChat": "فتح Ever SI",
+                "closeChat": "إغلاق Ever SI"
+            },
+            "commandAliases": {
+                "openChat": "ever si, si, دردشة, مساعد",
+                "closeChat": "ever si, si, إخفاء الدردشة"
+            },
+            "noResults": {
+                "askChat": "اسأل Ever SI عن «{query}»"
+            }
         }
     },
     "layout": {

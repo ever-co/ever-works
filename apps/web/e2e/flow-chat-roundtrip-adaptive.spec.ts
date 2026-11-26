@@ -25,7 +25,7 @@ import {
  *
  * ── VERIFIED UI (read from source) ───────────────────────────────────────────
  *  ChatInput.tsx
- *    - composer: <textarea placeholder="Ask me anything..."> (i18n inputPlaceholder)
+ *    - composer: <textarea placeholder="Ask Ever SI"> (i18n inputPlaceholder)
  *    - Enter (no shift) submits via form.requestSubmit(); Shift+Enter = newline.
  *    - send button: <button type="submit" aria-label="Send">; while streaming it
  *      swaps to <button aria-label="Stop generating">. textarea is `disabled`
@@ -45,7 +45,7 @@ import {
  *      dropdown anywhere in the panel; the model chip beside the composer is
  *      then the only picker.
  *    - when it DOES render: the trigger shows the active provider name (or
- *      "Provider"); the dropdown header is the i18n `title` ("AI Assistant");
+ *      "Provider"); the dropdown header is the i18n `title` ("Ever SI", test id `chat-provider-menu-header`);
  *      each provider row is a <button>; if `!provider.configured` it is
  *      `disabled` with a "Not configured" badge. Selection persists to
  *      localStorage key `chat-ai-provider`.
@@ -73,7 +73,8 @@ import {
 
 const NEW_CHAT_LABEL = 'New chat';
 const HISTORY_LABEL = 'History';
-const WELCOME_TITLE = 'Welcome to AI Assistant';
+/** The welcome screen's disclosure line (shared Ever shell, A7): present only on a fresh conversation. */
+const WELCOME_TESTID = 'ever-si-disclosure';
 const PROVIDER_NOT_CONFIGURED_BADGE = 'Not configured';
 
 interface ConversationRow {
@@ -227,7 +228,7 @@ test.describe('AI Chat — round-trip adaptive (composer + reset + selector)', (
             await assertReplyOrAlive(page, first, configured);
 
             // The welcome state is gone once a message exists.
-            await expect(page.getByText(WELCOME_TITLE, { exact: false })).toHaveCount(0);
+            await expect(page.getByTestId(WELCOME_TESTID)).toHaveCount(0);
 
             // Click "New chat". Hydration race under next-dev: retry the click until
             // the transcript clears back to the welcome state.
@@ -236,7 +237,7 @@ test.describe('AI Chat — round-trip adaptive (composer + reset + selector)', (
             await expect(async () => {
                 await newChatBtn.click({ timeout: 5_000 }).catch(() => {});
                 // resetChat() → setMessages([]) → welcome re-renders + first bubble gone.
-                await expect(page.getByText(WELCOME_TITLE, { exact: false })).toBeVisible({
+                await expect(page.getByTestId(WELCOME_TESTID)).toBeVisible({
                     timeout: 5_000,
                 });
             }).toPass({ timeout: 30_000 });
@@ -327,7 +328,7 @@ test.describe('AI Chat — round-trip adaptive (composer + reset + selector)', (
                 'a single-provider account gets no selector trigger',
             ).toHaveCount(0);
             await expect(
-                page.getByText('AI Assistant', { exact: true }),
+                page.getByTestId('chat-provider-menu-header'),
                 'and no provider dropdown to open',
             ).toHaveCount(0);
             return;
@@ -341,8 +342,8 @@ test.describe('AI Chat — round-trip adaptive (composer + reset + selector)', (
         });
 
         // Open the dropdown (hydration race: retry until the dropdown header renders).
-        // The dropdown header is the i18n `title` = "AI Assistant".
-        const dropdownHeader = page.getByText('AI Assistant', { exact: true });
+        // The dropdown header is the i18n `title` ("Ever SI"), found by its test id.
+        const dropdownHeader = page.getByTestId('chat-provider-menu-header');
         await expect(async () => {
             await selectorTrigger.click({ timeout: 5_000 }).catch(() => {});
             await expect(dropdownHeader).toBeVisible({ timeout: 4_000 });
@@ -435,7 +436,7 @@ test.describe('AI Chat — round-trip adaptive (composer + reset + selector)', (
         try {
             // Ensure a pristine welcome state (an earlier active conversation may be
             // restored from localStorage). Use "New chat" to clear if needed.
-            const welcome = page.getByText(WELCOME_TITLE, { exact: false });
+            const welcome = page.getByTestId(WELCOME_TESTID);
             if ((await welcome.count()) === 0) {
                 const newChatBtn = page.getByRole('button', { name: NEW_CHAT_LABEL });
                 await expect(async () => {
@@ -510,10 +511,10 @@ test.describe('AI Chat — round-trip adaptive (composer + reset + selector)', (
         try {
             // Start clean so the two turns land in one fresh conversation.
             const newChatBtn = page.getByRole('button', { name: NEW_CHAT_LABEL });
-            if ((await page.getByText(WELCOME_TITLE, { exact: false }).count()) === 0) {
+            if ((await page.getByTestId(WELCOME_TESTID).count()) === 0) {
                 await expect(async () => {
                     await newChatBtn.click({ timeout: 5_000 }).catch(() => {});
-                    await expect(page.getByText(WELCOME_TITLE, { exact: false })).toBeVisible({
+                    await expect(page.getByTestId(WELCOME_TESTID)).toBeVisible({
                         timeout: 5_000,
                     });
                 }).toPass({ timeout: 30_000 });

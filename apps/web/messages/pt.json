@@ -6874,7 +6874,7 @@
                         "empty": "Select a document on the left to view or edit it. Drag a file anywhere to upload."
                     },
                     "ai": {
-                        "title": "AI assistant",
+                        "title": "Ever SI",
                         "empty": "Conversation with the workspace agent will appear here. Use @kb:path to ground replies."
                     }
                 },
@@ -9615,7 +9615,7 @@
         },
         "sidebar": {
             "menu": "Menu",
-            "aiChat": "Chat IA",
+            "aiChat": "Ever SI",
             "newWork": "Novo Trabalho",
             "new": "Novo",
             "activityIndicator": "Trabalho gerando",
@@ -9687,11 +9687,12 @@
             }
         },
         "aiChat": {
-            "title": "Assistente IA",
-            "panelTitle": "Chat",
+            "title": "Ever SI",
+            "panelTitle": "Ever SI",
             "subtitle": "Crie trabalhos com linguagem natural",
-            "welcomeTitle": "Bem-vindo ao Assistente IA 👋",
-            "welcomeSubtitle": "Seu assistente alimentado por IA. Pergunte-me qualquer coisa sobre criar trabalhos, gerar conteúdo ou organizar seus dados.",
+            "welcomeTitle": "Ever SI",
+            "welcomeSubtitle": "Pergunte sobre criar Works, gerar conteúdo ou organizar seus dados.",
+            "disclosure": "Você está conversando com o assistente SI da Ever. Ele pode cometer erros. Guardamos esta conversa até você excluí-la.",
             "welcomeMessage": "Oi! Posso ajudá-lo a criar trabalhos usando linguagem natural. Pergunte algo como \"Crie um trabalho para ferramentas de IA\" ou descreva o que você precisa.",
             "capabilities": {
                 "workCreation": "Criação de Trabalho",
@@ -9701,20 +9702,21 @@
                 "contentGeneration": "Geração de Conteúdo",
                 "contentGenerationDesc": "Gere descrições, categorias e metadados",
                 "smartSuggestions": "Sugestões Inteligentes",
-                "smartSuggestionsDesc": "Obtenha recomendações alimentadas por IA para seus projetos"
+                "smartSuggestionsDesc": "Recomendações para seus projetos"
             },
             "newChat": "Novo chat",
             "history": "Histórico",
             "loadingConversation": "Carregando conversa…",
-            "inputPlaceholder": "Pergunte-me qualquer coisa...",
+            "inputPlaceholder": "Pergunte ao Ever SI",
             "sendButton": "Enviar",
             "stopGenerating": "Parar geração",
             "sendHint": "Enter para enviar · Shift+Enter para nova linha",
-            "closeChat": "Fechar chat",
-            "collapseChat": "Recolher chat",
-            "resizeChat": "Arraste para redimensionar o chat",
-            "expandChat": "Expandir chat",
-            "providersError": "Falha ao carregar provedores de IA. O chat pode não funcionar corretamente.",
+            "closeChat": "Fechar Ever SI",
+            "collapseChat": "Recolher Ever SI",
+            "resizeChat": "Arraste para redimensionar o Ever SI",
+            "expandChat": "Ampliar o Ever SI",
+            "openPanel": "Abrir Ever SI",
+            "providersError": "Não foi possível carregar os provedores de IA. O Ever SI pode não responder corretamente.",
             "providerNotConfigured": "Este provedor não está configurado. Configure-o em Plugins.",
             "editMessage": "Editar mensagem",
             "saveEdit": "Salvar e Enviar",
@@ -9733,7 +9735,7 @@
             "configureDeployProvider": "Configurar Provedor de Implantação",
             "deployConfigured": "Provedor de implantação configurado ({provider})",
             "opened": "Aberto",
-            "historyEmpty": "Nenhuma conversa ainda. Inicie um chat para ver seu histórico aqui.",
+            "historyEmpty": "Ainda não há conversas. Pergunte algo ao Ever SI para começar uma.",
             "historyUntitled": "Conversa sem título",
             "historyToday": "Hoje",
             "historyYesterday": "Ontem",
@@ -9792,6 +9794,10 @@
                 "stateFailed": "{step}: failed",
                 "statePending": "{step}: not started",
                 "pollingStopped": "Stopped checking for updates. Open the Task to see where it stands."
+            },
+            "panel": {
+                "assistant": "Ever SI",
+                "close": "Fechar Ever SI"
             }
         },
         "plugins": {
@@ -10949,6 +10955,19 @@
             "alsoSignOutEverId": "Sair também do Ever ID",
             "cancel": "Cancelar",
             "confirm": "Sair"
+        },
+        "commandPalette": {
+            "commands": {
+                "openChat": "Abrir Ever SI",
+                "closeChat": "Fechar Ever SI"
+            },
+            "commandAliases": {
+                "openChat": "ever si, si, chat, assistente",
+                "closeChat": "ever si, si, ocultar chat"
+            },
+            "noResults": {
+                "askChat": "Perguntar ao Ever SI sobre “{query}”"
+            }
         }
     },
     "layout": {

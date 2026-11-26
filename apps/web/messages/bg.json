@@ -6948,7 +6948,7 @@
                         "empty": "Select a document on the left to view or edit it. Drag a file anywhere to upload."
                     },
                     "ai": {
-                        "title": "AI assistant",
+                        "title": "Ever SI",
                         "empty": "Conversation with the workspace agent will appear here. Use @kb:path to ground replies."
                     }
                 },
@@ -9688,7 +9688,7 @@
         },
         "sidebar": {
             "menu": "Меню",
-            "aiChat": "AI чат",
+            "aiChat": "Ever SI",
             "newWork": "Нова работа",
             "new": "Ново",
             "activityIndicator": "Генериране на работа",
@@ -9760,11 +9760,12 @@
             }
         },
         "aiChat": {
-            "title": "AI асистент",
-            "panelTitle": "Чат",
+            "title": "Ever SI",
+            "panelTitle": "Ever SI",
             "subtitle": "Създавайте работи с естествен език",
-            "welcomeTitle": "Добре дошли в AI асистента 👋",
-            "welcomeSubtitle": "Вашият AI асистент. Попитайте ме за нещо свързано със създаване на работи, генериране на съдържание или организиране на данните ви.",
+            "welcomeTitle": "Ever SI",
+            "welcomeSubtitle": "Питайте за създаване на Works, генериране на съдържание или подреждане на данните ви.",
+            "disclosure": "Разговаряте със SI асистента на Ever. Той може да греши. Пазим този разговор, докато не го изтриете.",
             "welcomeMessage": "Здравей! Мога да ви помогна да създавате работи с естествен език. Попитайте нещо като „Създай работа за AI инструменти“ или опишете какво ви трябва.",
             "capabilities": {
                 "workCreation": "Създаване на работи",
@@ -9774,20 +9775,21 @@
                 "contentGeneration": "Генериране на съдържание",
                 "contentGenerationDesc": "Генерирайте описания, категории и метаданни",
                 "smartSuggestions": "Умни предложения",
-                "smartSuggestionsDesc": "Получавайте AI препоръки за проектите ви"
+                "smartSuggestionsDesc": "Препоръки за вашите проекти"
             },
             "newChat": "Нов чат",
             "history": "История",
             "loadingConversation": "Зареждане на разговор…",
-            "inputPlaceholder": "Попитайте ме за нещо...",
+            "inputPlaceholder": "Попитайте Ever SI",
             "sendButton": "Изпрати",
             "stopGenerating": "Спри генериране",
             "sendHint": "Enter за изпращане · Shift+Enter за нов ред",
-            "closeChat": "Затвори чат",
-            "collapseChat": "Събери чат",
-            "resizeChat": "Плъзнете за промяна на размера на чата",
-            "expandChat": "Разшири чат",
-            "providersError": "Грешка при зареждане на AI доставчици. Чатът може да не работи правилно.",
+            "closeChat": "Затваряне на Ever SI",
+            "collapseChat": "Свиване на Ever SI",
+            "resizeChat": "Плъзнете, за да промените размера на Ever SI",
+            "expandChat": "Разширяване на Ever SI",
+            "openPanel": "Отваряне на Ever SI",
+            "providersError": "Доставчиците на ИИ не можаха да се заредят. Ever SI може да не отговаря правилно.",
             "providerNotConfigured": "Този доставчик не е настроен. Настройте го в Добавки.",
             "editMessage": "Редактирай съобщение",
             "saveEdit": "Запази & Изпрати",
@@ -9806,7 +9808,7 @@
             "configureDeployProvider": "Настрой деплои доставчик",
             "deployConfigured": "Деплой доставчик настроен ({provider})",
             "opened": "Отворен",
-            "historyEmpty": "Все още няма разговори. Започнете чат, за да видите историята си тук.",
+            "historyEmpty": "Все още няма разговори. Попитайте Ever SI нещо, за да започнете.",
             "historyUntitled": "Ненасловен разговор",
             "historyToday": "Днес",
             "historyYesterday": "Вчера",
@@ -9865,6 +9867,10 @@
                 "stateFailed": "{step}: failed",
                 "statePending": "{step}: not started",
                 "pollingStopped": "Stopped checking for updates. Open the Task to see where it stands."
+            },
+            "panel": {
+                "assistant": "Ever SI",
+                "close": "Затваряне на Ever SI"
             }
         },
         "plugins": {
@@ -10948,6 +10954,19 @@
             "alsoSignOutEverId": "Изход и от Ever ID",
             "cancel": "Отказ",
             "confirm": "Изход"
+        },
+        "commandPalette": {
+            "commands": {
+                "openChat": "Отваряне на Ever SI",
+                "closeChat": "Затваряне на Ever SI"
+            },
+            "commandAliases": {
+                "openChat": "ever si, si, чат, асистент",
+                "closeChat": "ever si, si, скриване на чата"
+            },
+            "noResults": {
+                "askChat": "Попитайте Ever SI за „{query}“"
+            }
         }
     },
     "layout": {

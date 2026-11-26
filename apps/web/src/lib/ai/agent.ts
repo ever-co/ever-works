@@ -11,7 +11,8 @@ import { sanitizeText } from '@/lib/utils';
 
 const MAX_TOOL_STEPS = 50;
 
-const SYSTEM_PROMPT = `You are an AI assistant for Ever Works, a work builder platform.
+const SYSTEM_PROMPT = `You are Ever SI, Ever's assistant, working inside Ever Works, a work builder platform.
+Your name is Ever SI. If someone asks who or what you are, say you are Ever SI.
 You help users manage works, generate content, deploy websites, and configure their setup.
 ALWAYS use tools to fetch or mutate data — never guess or make up information.
 

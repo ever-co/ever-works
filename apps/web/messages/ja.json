@@ -6874,7 +6874,7 @@
                         "empty": "Select a document on the left to view or edit it. Drag a file anywhere to upload."
                     },
                     "ai": {
-                        "title": "AI assistant",
+                        "title": "Ever SI",
                         "empty": "Conversation with the workspace agent will appear here. Use @kb:path to ground replies."
                     }
                 },
@@ -9615,7 +9615,7 @@
         },
         "sidebar": {
             "menu": "メニュー",
-            "aiChat": "AI チャット",
+            "aiChat": "Ever SI",
             "newWork": "新規ワーク",
             "new": "新規",
             "activityIndicator": "ワーク生成中",
@@ -9687,11 +9687,12 @@
             }
         },
         "aiChat": {
-            "title": "AI アシスタント",
-            "panelTitle": "チャット",
+            "title": "Ever SI",
+            "panelTitle": "Ever SI",
             "subtitle": "自然言語でワークを作成",
-            "welcomeTitle": "AI アシスタントへようこそ 👋",
-            "welcomeSubtitle": "AI 駆動のアシスタントです。ワークの作成、コンテンツ生成、データの整理について何でもお尋ねください。",
+            "welcomeTitle": "Ever SI",
+            "welcomeSubtitle": "Works の作成、コンテンツの生成、データの整理について質問できます。",
+            "disclosure": "Ever の SI アシスタントとチャットしています。誤りを含むことがあります。この会話は削除するまで保存されます。",
             "welcomeMessage": "こんにちは！自然言語を使ってワークを作成するお手伝いをします。「AI ツールのワークを作成」などのように尋ねたり、必要なものを説明してください。",
             "capabilities": {
                 "workCreation": "ワーク作成",
@@ -9701,20 +9702,21 @@
                 "contentGeneration": "コンテンツ生成",
                 "contentGenerationDesc": "説明、カテゴリ、メタデータを生成",
                 "smartSuggestions": "スマート提案",
-                "smartSuggestionsDesc": "プロジェクト向けの AI 駆動の推奨事項を取得"
+                "smartSuggestionsDesc": "プロジェクトへのおすすめ"
             },
             "newChat": "新規チャット",
             "history": "履歴",
             "loadingConversation": "会話の読み込み中…",
-            "inputPlaceholder": "何でもお尋ねください...",
+            "inputPlaceholder": "Ever SI に質問",
             "sendButton": "送信",
             "stopGenerating": "生成を停止",
             "sendHint": "Enter で送信 · Shift+Enter で改行",
-            "closeChat": "チャットを閉じる",
-            "collapseChat": "チャットを折りたたみ",
-            "resizeChat": "ドラッグしてチャットのサイズを変更",
-            "expandChat": "チャットを展開",
-            "providersError": "AI プロバイダーの読み込みに失敗しました。チャットが正しく動作しない可能性があります。",
+            "closeChat": "Ever SI を閉じる",
+            "collapseChat": "Ever SI を折りたたむ",
+            "resizeChat": "ドラッグして Ever SI のサイズを変更",
+            "expandChat": "Ever SI を広げる",
+            "openPanel": "Ever SI を開く",
+            "providersError": "AI プロバイダーを読み込めませんでした。Ever SI が正しく応答しない可能性があります。",
             "providerNotConfigured": "このプロバイダーは設定されていません。プラグインで設定してください。",
             "editMessage": "メッセージを編集",
             "saveEdit": "保存して送信",
@@ -9733,7 +9735,7 @@
             "configureDeployProvider": "デプロイプロバイダーを設定",
             "deployConfigured": "デプロイプロバイダー設定済み ({provider})",
             "opened": "開いた",
-            "historyEmpty": "まだ会話がありません。チャットを始めて履歴を表示してください。",
+            "historyEmpty": "まだ会話はありません。Ever SI に質問して会話を始めましょう。",
             "historyUntitled": "無題の会話",
             "historyToday": "今日",
             "historyYesterday": "昨日",
@@ -9792,6 +9794,10 @@
                 "stateFailed": "{step}: failed",
                 "statePending": "{step}: not started",
                 "pollingStopped": "Stopped checking for updates. Open the Task to see where it stands."
+            },
+            "panel": {
+                "assistant": "Ever SI",
+                "close": "Ever SI を閉じる"
             }
         },
         "plugins": {
@@ -10949,6 +10955,19 @@
             "alsoSignOutEverId": "Ever ID からもサインアウトする",
             "cancel": "キャンセル",
             "confirm": "サインアウト"
+        },
+        "commandPalette": {
+            "commands": {
+                "openChat": "Ever SI を開く",
+                "closeChat": "Ever SI を閉じる"
+            },
+            "commandAliases": {
+                "openChat": "ever si, si, チャット, アシスタント",
+                "closeChat": "ever si, si, チャットを隠す"
+            },
+            "noResults": {
+                "askChat": "「{query}」について Ever SI に質問"
+            }
         }
     },
     "layout": {
