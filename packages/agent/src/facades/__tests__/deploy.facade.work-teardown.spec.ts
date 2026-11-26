@@ -171,6 +171,25 @@ describe('DeployFacadeService.prepareWorkDeploymentTeardown', () => {
         });
     });
 
+    it('reports the sanitised object name but hands the plugin the raw website repository, as deploy() did', async () => {
+        const { service, removeWorkDeployment } = createService({
+            work: work({ websiteRepo: 'Awesome_Memes-Website' }),
+        });
+
+        const prepared = await service.prepareWorkDeploymentTeardown({
+            userId: 'user-1',
+            workId: 'work-1',
+        });
+
+        expect(prepared).toMatchObject({ status: 'ready', objectName: 'awesome-memes-website' });
+        if (prepared.status !== 'ready') throw new Error('expected ready');
+        await prepared.run();
+        const [projectName, , context] = removeWorkDeployment.mock.calls[0];
+        // The plugin sanitises both itself, exactly as it did when it deployed.
+        expect(projectName).toBe('Awesome_Memes-Website');
+        expect(context).toMatchObject({ projectNameOverride: 'Awesome_Memes-Website' });
+    });
+
     it('honours EVER_WORKS_DEPLOY_NAMESPACE as the tenant namespace base, like the deploy', async () => {
         process.env.EVER_WORKS_DEPLOY_NAMESPACE = 'ew-tenants';
         const { service } = createService({ work: work() });
@@ -345,9 +364,31 @@ describe('DeployFacadeService.prepareWorkDeploymentTeardown', () => {
                 },
             );
 
-            await expect(
-                service.prepareWorkDeploymentTeardown({ userId: 'user-1', workId: 'work-1' }),
-            ).resolves.toMatchObject({ status: 'skipped', reason: 'shared' });
+            const prepared = await service.prepareWorkDeploymentTeardown({
+                userId: 'user-1',
+                workId: 'work-1',
+            });
+
+            expect(prepared).toMatchObject({ status: 'skipped', reason: 'shared' });
+            // Says it is a guess, so an operator knows why this delete left objects behind.
+            expect((prepared as { detail?: string }).detail).toContain('work-2');
+            expect((prepared as { detail?: string }).detail).toContain('could not be read');
+        });
+
+        it('says plainly when a sharer was resolved, not guessed', async () => {
+            const { service } = createService({
+                work: work(),
+                candidates: [work({ id: 'work-2' })],
+            });
+
+            const prepared = await service.prepareWorkDeploymentTeardown({
+                userId: 'user-1',
+                workId: 'work-1',
+            });
+
+            expect((prepared as { detail?: string }).detail).toBe(
+                'Work work-2 deploys to ever-works-tenants-user-1/awesome-memes-website too',
+            );
         });
 
         it('looks candidates up by owner and slug among the Kubernetes-family providers', async () => {

@@ -156,7 +156,9 @@ function isAppKind(work: Work): boolean {
  *
  * A copy, not an import: the agent never depends on a plugin package (plugins
  * load at runtime), and the plugin's entry exports only its class. The plugin's
- * own cases are pinned against this copy in `deploy.facade.work-teardown.spec.ts`.
+ * own cases (`packages/plugins/k8s/src/__tests__/sanitise-slug.spec.ts`) are
+ * pinned against this copy in `deploy.facade.work-teardown.spec.ts`: change both
+ * together.
  * The teardown itself re-derives the name inside the plugin; this copy only
  * decides which other Works could share it.
  */
@@ -1228,11 +1230,15 @@ export class DeployFacadeService implements IDeployFacade {
                 return {
                     status: 'skipped',
                     reason: 'shared',
-                    detail: `Work ${sharer} deploys to ${namespace}/${objectName} too`,
+                    detail: sharer.unresolved
+                        ? `Work ${sharer.id} may deploy to ${namespace}/${objectName} too (its settings could not be read); remove the objects by hand if it does not`
+                        : `Work ${sharer.id} deploys to ${namespace}/${objectName} too`,
                 };
             }
 
             const removeWorkDeployment = plugin.removeWorkDeployment.bind(plugin);
+            // The raw website repository, as `deploy()` received it: the plugin
+            // sanitises it the same way, so its object names are `objectName`.
             const projectName = work.getWebsiteRepo();
             const credential = effective.token;
             const context = effective.lookupContext;
@@ -1259,14 +1265,16 @@ export class DeployFacadeService implements IDeployFacade {
      * `k8s-works` namespace is derived from it), with the same website
      * repository name. Each candidate's namespace is worked out with its own
      * settings. A candidate whose namespace cannot be worked out counts as a
-     * sharer: leaving the objects is the safe side.
+     * sharer (`unresolved: true`): leaving the objects is the safe side, so a
+     * transient settings error leaves them for an operator, and the skip's
+     * detail says which Work could not be read.
      */
     private async findDeploymentSharer(
         work: Work,
         pluginId: string,
         namespace: string,
         objectName: string,
-    ): Promise<string | null> {
+    ): Promise<{ id: string; unresolved: boolean } | null> {
         const candidates = await this.workRepository.findByDeployProvidersForUserOrSlug(
             [EVER_WORKS_DEPLOY_PROVIDER_ID, KUBERNETES_DEPLOY_PROVIDER_ID],
             work.userId,
@@ -1284,12 +1292,15 @@ export class DeployFacadeService implements IDeployFacade {
                 const candidateNamespace = resolveKubernetesDeployNamespace(
                     this.effectiveContextInput(candidate, pluginId, '', settings, settingSources),
                 );
-                if (candidateNamespace === namespace) return candidate.id;
+                if (candidateNamespace === namespace)
+                    return { id: candidate.id, unresolved: false };
             } catch {
                 // Unknown namespace (settings unreadable, or an explicit reserved
                 // one): it may be ours, so it blocks the teardown rather than
                 // letting it through. Leaving the objects is the old behaviour.
-                return candidate.id;
+                // A transient settings error therefore leaves this deleted Work's
+                // objects in place; the skip says so, for an operator to remove.
+                return { id: candidate.id, unresolved: true };
             }
         }
         return null;
