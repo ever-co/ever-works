@@ -930,6 +930,104 @@ describe('AccountImportService', () => {
         });
     });
 
+    describe('applyImport — a k8s ingressHost under a platform root (PLATFORM_DOMAIN_NOT_ALLOWED)', () => {
+        const original = process.env.EVER_WORKS_DOMAIN;
+
+        beforeEach(() => {
+            process.env.EVER_WORKS_DOMAIN = 'ever.works';
+        });
+
+        afterEach(() => {
+            if (original === undefined) delete process.env.EVER_WORKS_DOMAIN;
+            else process.env.EVER_WORKS_DOMAIN = original;
+        });
+
+        it('drops it from imported user and Work plugin settings with a warning, keeping the rest', async () => {
+            const { service, mocks } = makeService();
+            mocks.userRepository.findById.mockResolvedValue({ id: 'user-1', username: 'octocat' });
+            mocks.workRepository.findByOwnerAndSlug.mockResolvedValue(null);
+            mocks.workRepository.create.mockResolvedValue({ id: 'w-1', slug: 'a' });
+            mocks.pluginRepository.findByPluginId.mockResolvedValue({ id: 'p-k8s' });
+            const work = makeWork({
+                slug: 'a',
+                workPlugins: [
+                    {
+                        pluginId: 'k8s',
+                        enabled: true,
+                        activeCapabilities: [],
+                        settings: { ingressHost: 'Login.Ever.Works', replicas: 2 },
+                        priority: 0,
+                    },
+                ],
+            });
+            const payload = makePayload(
+                [work],
+                [
+                    {
+                        pluginId: 'k8s',
+                        enabled: true,
+                        autoEnableForWorks: false,
+                        settings: {
+                            ingressHost: 'login.ever.works',
+                            clusterSource: 'k8s-works-shared',
+                        },
+                    },
+                    {
+                        pluginId: 'other-plugin',
+                        enabled: true,
+                        autoEnableForWorks: false,
+                        settings: { ingressHost: 'login.ever.works' },
+                    },
+                ],
+            );
+
+            const result = await service.applyImport('user-1', payload, []);
+
+            const userUpserts = mocks.userPluginRepository.upsert.mock.calls.map((call) => call[0]);
+            expect(userUpserts.find((up) => up.pluginId === 'k8s').settings).toEqual({
+                clusterSource: 'k8s-works-shared',
+            });
+            // The rule is the k8s plugin's only.
+            expect(userUpserts.find((up) => up.pluginId === 'other-plugin').settings).toEqual({
+                ingressHost: 'login.ever.works',
+            });
+            expect(mocks.workPluginRepository.upsert.mock.calls[0][0].settings).toEqual({
+                replicas: 2,
+            });
+            expect(
+                result.warnings.filter((w) =>
+                    w.includes("Hosts under ever.works can't be used as the default ingress host"),
+                ),
+            ).toHaveLength(2);
+        });
+
+        it('keeps an ordinary ingressHost', async () => {
+            const { service, mocks } = makeService();
+            mocks.userRepository.findById.mockResolvedValue({ id: 'user-1', username: 'octocat' });
+            mocks.pluginRepository.findByPluginId.mockResolvedValue({ id: 'p-k8s' });
+
+            await service.applyImport(
+                'user-1',
+                makePayload(
+                    [],
+                    [
+                        {
+                            pluginId: 'k8s',
+                            enabled: true,
+                            autoEnableForWorks: false,
+                            settings: { ingressHost: 'shop.example.com' },
+                        },
+                    ],
+                ),
+                [],
+            );
+
+            expect(mocks.userPluginRepository.upsert.mock.calls[0][0].settings).toEqual({
+                ingressHost: 'shop.example.com',
+            });
+        });
+    });
+
     describe('applyImport — userPlugin import', () => {
         it('skips userPlugins whose underlying plugin row is missing on this instance', async () => {
             const { service, mocks } = makeService();

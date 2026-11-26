@@ -27,7 +27,15 @@ import type {
 } from './types';
 import { containsMaskedSecrets, MASKED_SECRET_PREFIX } from './types';
 import { sanitizePrompt } from '../utils/sanitize.util';
-import { matchPlatformRootDomain, platformDomainRefusalMessage } from '../utils/platform-host';
+import {
+    matchPlatformRootDomain,
+    platformDomainRefusalMessage,
+    platformIngressHostRefusalMessage,
+} from '../utils/platform-host';
+import {
+    K8S_INGRESS_HOST_SETTING,
+    refusedK8sIngressHostRoot,
+} from '../plugins/services/k8s-ingress-host.rule';
 import { config } from '../config';
 import { normalizeCreateWorkKind, type Work, type WorkKind } from '../entities/work.entity';
 import {
@@ -575,7 +583,12 @@ export class AccountImportService {
                         pluginEntityId: pluginEntity.id,
                         enabled: up.enabled,
                         autoEnableForWorks: up.autoEnableForWorks,
-                        settings: up.settings || {},
+                        settings: this.withoutPlatformIngressHost(
+                            up.pluginId,
+                            up.settings || {},
+                            `plugin "${up.pluginId}"`,
+                            result,
+                        ),
                     };
                     if (payload.includesSecrets && up.secretSettings) {
                         // Skip masked secret values — they are placeholders, not real credentials
@@ -1089,7 +1102,12 @@ export class AccountImportService {
                         dir.slug,
                         result,
                     ),
-                    settings: dp.settings || {},
+                    settings: this.withoutPlatformIngressHost(
+                        dp.pluginId,
+                        dp.settings || {},
+                        `work plugin "${dp.pluginId}" of work "${dir.slug}"`,
+                        result,
+                    ),
                     secretSettings,
                     priority: dp.priority,
                 });
@@ -1099,6 +1117,28 @@ export class AccountImportService {
                 );
             }
         }
+    }
+
+    /**
+     * Security: the imported plugin settings, without a k8s `ingressHost` under a platform root
+     * domain. The payload is the member's own file, and the settings are written as they are, so
+     * the save-time refusal (`k8s-ingress-host.rule.ts`) is applied here too. The host is dropped
+     * with a warning and every other setting is kept.
+     */
+    private withoutPlatformIngressHost(
+        pluginId: string,
+        settings: Record<string, unknown>,
+        label: string,
+        result: ImportResult,
+    ): Record<string, unknown> {
+        const root = refusedK8sIngressHostRoot(pluginId, settings);
+        if (root === null) return settings;
+
+        const { [K8S_INGRESS_HOST_SETTING]: dropped, ...kept } = settings;
+        result.warnings.push(
+            `Dropped the ingressHost ${JSON.stringify(dropped)} from ${label}: ${platformIngressHostRefusalMessage(root)}`,
+        );
+        return kept;
     }
 
     /**
