@@ -568,6 +568,11 @@
 			"source": "router"
 		},
 		{
+			"path": "/:locale/settings/preferences",
+			"file": "apps/web/src/app/[locale]/(dashboard)/settings/preferences/page.tsx",
+			"source": "router"
+		},
+		{
 			"path": "/:locale/settings/repositories",
 			"file": "apps/web/src/app/[locale]/(dashboard)/settings/repositories/page.tsx",
 			"source": "router"
