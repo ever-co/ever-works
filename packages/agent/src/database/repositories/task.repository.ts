@@ -1218,6 +1218,11 @@ export class TaskRepository {
      * (made recurring before `setRecurring` cleared it) would otherwise be
      * dispatched itself, on top of its recurring copies.
      *
+     * `status NOT IN (done, cancelled)`: a Task the owner cancelled (or that
+     * finished) after arming the slot must not start a paid agent run when the
+     * slot comes due. Nothing clears `scheduledAt` on those transitions, so the
+     * scan is where the slot is ignored.
+     *
      * @internal CRON-ONLY — fetches across ALL tenants/users by design.
      * Do NOT call from user-facing request handlers; doing so would expose
      * tasks across tenant boundaries.
@@ -1229,6 +1234,9 @@ export class TaskRepository {
             .andWhere('task.scheduledAt <= :now', { now })
             .andWhere('task.scheduleClaimedAt IS NULL')
             .andWhere('task.isRecurring = :recurring', { recurring: false })
+            .andWhere('task.status NOT IN (:...terminalStatuses)', {
+                terminalStatuses: TERMINAL_TASK_STATUSES,
+            })
             .orderBy('task.scheduledAt', 'ASC')
             .take(limit)
             .getMany();
