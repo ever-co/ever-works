@@ -3098,15 +3098,19 @@ export class WorkLifecycleService {
                 return prepared;
             }
             if (prepared.reason !== 'not_managed') {
-                this.logger.warn(
-                    `Work ${work.id}: its cluster objects will not be removed on delete ` +
-                        `(${prepared.reason}${prepared.detail ? `: ${prepared.detail}` : ''})`,
+                this.logQuietly(() =>
+                    this.logger.warn(
+                        `Work ${work.id}: its cluster objects will not be removed on delete ` +
+                            `(${prepared.reason}${prepared.detail ? `: ${prepared.detail}` : ''})`,
+                    ),
                 );
             }
             return null;
         } catch (error) {
-            this.logger.warn(
-                `Work ${work.id}: could not prepare the removal of its cluster objects: ${describeFailureCode(error)}`,
+            this.logQuietly(() =>
+                this.logger.warn(
+                    `Work ${work.id}: could not prepare the removal of its cluster objects: ${describeFailureCode(error)}`,
+                ),
             );
             return null;
         }
@@ -3133,8 +3137,10 @@ export class WorkLifecycleService {
         try {
             const claimant = await this.workRepository.findByManagedSubdomain(label);
             if (claimant && claimant.id !== work.id) {
-                this.logger.warn(
-                    `Work ${work.id}: kept the DNS record of ${label}; Work ${claimant.id} holds that subdomain`,
+                this.logQuietly(() =>
+                    this.logger.warn(
+                        `Work ${work.id}: kept the DNS record of ${label}; Work ${claimant.id} holds that subdomain`,
+                    ),
                 );
                 return false;
             }
@@ -3148,15 +3154,19 @@ export class WorkLifecycleService {
             );
             const other = sameSlug.find((candidate) => candidate.id !== work.id);
             if (other) {
-                this.logger.warn(
-                    `Work ${work.id}: kept the DNS record of ${label}; Work ${other.id} deploys under the same slug`,
+                this.logQuietly(() =>
+                    this.logger.warn(
+                        `Work ${work.id}: kept the DNS record of ${label}; Work ${other.id} deploys under the same slug`,
+                    ),
                 );
                 return false;
             }
             return true;
         } catch (error) {
-            this.logger.warn(
-                `Work ${work.id}: kept the DNS record of ${label}; its owner could not be checked: ${describeFailureCode(error)}`,
+            this.logQuietly(() =>
+                this.logger.warn(
+                    `Work ${work.id}: kept the DNS record of ${label}; its owner could not be checked: ${describeFailureCode(error)}`,
+                ),
             );
             return false;
         }
@@ -3188,7 +3198,7 @@ export class WorkLifecycleService {
         if (staleTarget) {
             this.logQuietly(() =>
                 this.logger.warn(
-                    `Work ${work.id}: it was last deployed as ${staleTarget}, not ${target}; ` +
+                    `Work ${work.id}: its cached deploy target is ${staleTarget}, not ${target}; ` +
                         `only ${target} is removed, so check ${staleTarget} by hand`,
                 ),
             );

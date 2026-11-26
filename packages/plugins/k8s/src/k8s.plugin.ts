@@ -53,6 +53,7 @@ import type { K8sPluginErrorCode } from './errors.js';
 import { KubernetesApiService } from './k8s-api.service.js';
 import type { LiveDeployment } from './k8s-api.service.js';
 import { defaultIngressStrategyRegistry, IngressStrategyRegistry } from './ingress/strategy.registry.js';
+import type { IngressStrategy } from './ingress/strategy.js';
 import { defaultRegistryProviderRegistry, RegistryProviderRegistry } from './registries/provider.registry.js';
 import { mapDeploymentToStatus } from './status.mapper.js';
 import {
@@ -1561,7 +1562,7 @@ export class KubernetesPlugin implements IPlugin, IDeploymentPlugin {
 		const body = {
 			apiVersion: 'networking.k8s.io/v1',
 			kind: 'Ingress',
-			metadata: { name, namespace },
+			metadata: websiteIngressMetadata(name, namespace, existing, patched.spec, strategy, settings),
 			spec: patched.spec
 		};
 		await this.api.applyIngress(kubeconfig, body, settings.kubeContext);
@@ -1594,7 +1595,7 @@ export class KubernetesPlugin implements IPlugin, IDeploymentPlugin {
 		const body = {
 			apiVersion: 'networking.k8s.io/v1',
 			kind: 'Ingress',
-			metadata: { name, namespace },
+			metadata: websiteIngressMetadata(name, namespace, existing, patched.spec, strategy, settings),
 			spec: patched.spec
 		};
 		await this.api.applyIngress(kubeconfig, body, settings.kubeContext);
@@ -2423,6 +2424,51 @@ const TEARDOWN_REFUSED_NAMESPACES: ReadonlySet<string> = new Set([
 function isTeardownRefusedNamespace(namespace: string): boolean {
 	const normalized = namespace.trim().toLowerCase();
 	return TEARDOWN_REFUSED_NAMESPACES.has(normalized) || normalized.startsWith('kube-');
+}
+
+/** The labels `deploy()` stamps on every website object (`COMMON_LABELS` in the manifest renderer). */
+const DEPLOY_LABEL_KEYS = [
+	'ever-works.io/managed',
+	'ever-works.io/work-id',
+	'app.kubernetes.io/name',
+	'app.kubernetes.io/managed-by'
+] as const;
+
+/**
+ * The metadata for an apply that changes only a website Ingress's hosts (`addDomain`, `removeDomain`).
+ *
+ * Under server-side apply, a field this field manager applied before and now leaves out is removed. The
+ * deploy applies the Ingress with its labels and annotations under the same manager, so an apply of
+ * `spec` alone would strip both: the labels the Work-delete teardown and the orphan report rely on, and
+ * the ingress-controller and TLS-issuer annotations. So the deploy's own labels are carried over from the
+ * live Ingress (their `work-id` value is the raw repository name, which is not known here), and the
+ * annotations are worked out for the new host list, as `deploy()` works them out.
+ */
+function websiteIngressMetadata(
+	name: string,
+	namespace: string,
+	live: unknown,
+	spec: Record<string, unknown>,
+	strategy: IngressStrategy,
+	settings: { tlsIssuer?: string; ingressClass?: string }
+): Record<string, unknown> {
+	const liveLabels = (live as { metadata?: { labels?: Record<string, string> } } | null)?.metadata?.labels ?? {};
+	const labels: Record<string, string> = {};
+	for (const key of DEPLOY_LABEL_KEYS) {
+		if (typeof liveLabels[key] === 'string') labels[key] = liveLabels[key];
+	}
+	const rules = (spec.rules ?? []) as Array<{ host?: string }>;
+	const annotations = strategy.annotations({
+		hosts: rules.map((rule) => rule.host).filter((host): host is string => Boolean(host)),
+		tlsIssuer: settings.tlsIssuer,
+		className: (spec.ingressClassName as string | undefined) ?? settings.ingressClass
+	});
+	return {
+		name,
+		namespace,
+		...(Object.keys(labels).length > 0 ? { labels } : {}),
+		...(Object.keys(annotations).length > 0 ? { annotations } : {})
+	};
 }
 
 /**

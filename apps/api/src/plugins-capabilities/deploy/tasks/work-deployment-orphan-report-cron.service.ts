@@ -20,8 +20,13 @@ const MAX_ORPHAN_LINES = 50;
  * public).
  *
  * It only logs. It never removes anything: removing what it names needs the
- * owner's explicit yes first. One API replica runs it per day (the task lock).
+ * owner's explicit yes first. One API replica runs it per day (the task lock,
+ * capped at 30 minutes; each cluster list is capped at 60 s by the facade).
  * The lines carry namespaces, object names and reason codes only.
+ *
+ * It runs only where `EVER_WORKS_K8S_WORKS_CLUSTER_OWNER=true`: it compares a
+ * whole cluster with this environment's Works alone, and dev, stage and prod
+ * may share one cluster. Elsewhere the tick does nothing (a debug line).
  */
 @Injectable()
 export class WorkDeploymentOrphanReportCronService {
@@ -32,7 +37,7 @@ export class WorkDeploymentOrphanReportCronService {
         private readonly taskLockService: DistributedTaskLockService,
     ) {}
 
-    @Cron(WORK_DEPLOYMENT_ORPHAN_REPORT_CRON)
+    @Cron(WORK_DEPLOYMENT_ORPHAN_REPORT_CRON, { timeZone: 'UTC' })
     async runReport(): Promise<void> {
         try {
             await this.taskLockService.runExclusive(
@@ -40,6 +45,10 @@ export class WorkDeploymentOrphanReportCronService {
                 () => this.report(),
                 {
                     ttlMs: 30 * 60 * 1000,
+                    // A run lists a few clusters and reads the Works: minutes at
+                    // most. Past this the lease is not renewed, so a hung run
+                    // cannot keep the next day's run out.
+                    maxLifetimeMs: 30 * 60 * 1000,
                     onLocked: () =>
                         this.logger.debug(
                             'Skipping the orphaned website deployment report: another instance holds the task lock',
@@ -69,6 +78,14 @@ export class WorkDeploymentOrphanReportCronService {
             );
             return;
         }
+        if (report.skipped === 'unsupported') {
+            // The k8s plugin is not loaded, or is a build without the list: the
+            // report cannot run, which is not the same as finding nothing.
+            this.logger.warn(
+                'Orphaned website deployment report skipped: the Kubernetes plugin cannot list its website deployments',
+            );
+            return;
+        }
         if (report.skipped) {
             this.logger.debug(`Orphaned website deployment report skipped: ${report.skipped}`);
             return;
@@ -94,13 +111,15 @@ export class WorkDeploymentOrphanReportCronService {
         }
 
         const listed = report.clusters.reduce((sum, cluster) => sum + cluster.listed, 0);
+        const failed = report.clusters.filter((cluster) => cluster.failed).length;
         const summary =
             `Orphaned website deployment report: ${listed} website deployment(s) on ` +
             `${report.clusters.length} cluster(s), ${report.orphans.length} orphaned` +
+            (failed > 0 ? `, ${failed} cluster(s) could not be listed` : '') +
             (report.unresolvedWorks > 0
                 ? `, ${report.unresolvedWorks} Work(s) whose target could not be worked out`
                 : '');
-        if (report.orphans.length > 0) {
+        if (report.orphans.length > 0 || failed > 0) {
             this.logger.warn(summary);
         } else {
             this.logger.log(summary);

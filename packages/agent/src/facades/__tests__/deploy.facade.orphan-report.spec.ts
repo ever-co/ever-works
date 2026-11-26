@@ -81,7 +81,7 @@ function createService(args: {
         }),
     };
     const workRepository = {
-        findByDeployProviders: jest.fn().mockResolvedValue(args.works ?? []),
+        findWorkDeploymentReportCandidates: jest.fn().mockResolvedValue(args.works ?? []),
         update: jest.fn(),
         delete: jest.fn(),
     };
@@ -115,12 +115,14 @@ describe('DeployFacadeService.reportOrphanedWorkDeployments', () => {
         internal: process.env.EVER_WORKS_K8S_WORKS_KUBECONFIG,
         shared: process.env.EVER_WORKS_K8S_WORKS_SHARED_KUBECONFIG,
         base: process.env.EVER_WORKS_DEPLOY_NAMESPACE,
+        owner: process.env.EVER_WORKS_K8S_WORKS_CLUSTER_OWNER,
     };
 
     beforeEach(() => {
         delete process.env.EVER_WORKS_K8S_WORKS_KUBECONFIG;
         delete process.env.EVER_WORKS_K8S_WORKS_SHARED_KUBECONFIG;
         delete process.env.EVER_WORKS_DEPLOY_NAMESPACE;
+        process.env.EVER_WORKS_K8S_WORKS_CLUSTER_OWNER = 'true';
     });
 
     afterAll(() => {
@@ -131,7 +133,34 @@ describe('DeployFacadeService.reportOrphanedWorkDeployments', () => {
         restore('EVER_WORKS_K8S_WORKS_KUBECONFIG', saved.internal);
         restore('EVER_WORKS_K8S_WORKS_SHARED_KUBECONFIG', saved.shared);
         restore('EVER_WORKS_DEPLOY_NAMESPACE', saved.base);
+        restore('EVER_WORKS_K8S_WORKS_CLUSTER_OWNER', saved.owner);
     });
+
+    it.each([
+        ['unset', undefined],
+        ['false', 'false'],
+    ])(
+        'lists nothing where this environment does not own the clusters (flag %s)',
+        async (_label, value) => {
+            // dev, stage and prod may list one cluster; each sees only its own Works.
+            if (value === undefined) delete process.env.EVER_WORKS_K8S_WORKS_CLUSTER_OWNER;
+            else process.env.EVER_WORKS_K8S_WORKS_CLUSTER_OWNER = value;
+            const { service, listWorkDeployments, workRepository } = createService({
+                listings: {
+                    [MANAGED_KUBECONFIG]: [{ location: 'ever-works-x-prod', name: 'x-website' }],
+                },
+            });
+
+            await expect(service.reportOrphanedWorkDeployments()).resolves.toEqual({
+                skipped: 'not_cluster_owner',
+                clusters: [],
+                orphans: [],
+                unresolvedWorks: 0,
+            });
+            expect(listWorkDeployments).not.toHaveBeenCalled();
+            expect(workRepository.findWorkDeploymentReportCandidates).not.toHaveBeenCalled();
+        },
+    );
 
     it('names the deployments no Work accounts for, and removes nothing', async () => {
         const { service, listWorkDeployments, removeWorkDeployment } = createService({
@@ -299,6 +328,76 @@ describe('DeployFacadeService.reportOrphanedWorkDeployments', () => {
         expect(report.orphans).toHaveLength(1);
     });
 
+    it('accounts for the cached target of a Work that moved off Kubernetes (review m1)', async () => {
+        const { service, settingsService } = createService({
+            works: [
+                work({
+                    id: 'w-moved',
+                    deployProvider: 'vercel',
+                    websiteRepo: 'memes-website',
+                    deployProjectId: 'ever-works-tenants-user-1/memes-website',
+                }),
+            ],
+            listings: {
+                [MANAGED_KUBECONFIG]: [
+                    { location: 'ever-works-tenants-user-1', name: 'memes-website' },
+                    { location: 'ever-works-tenants-user-1', name: 'other-website' },
+                ],
+            },
+        });
+
+        const report = await service.reportOrphanedWorkDeployments();
+
+        expect(report.orphans).toEqual([
+            {
+                cluster: 'ever-works',
+                namespace: 'ever-works-tenants-user-1',
+                name: 'other-website',
+            },
+        ]);
+        // A Work on another provider counts by its cached target only.
+        expect(settingsService.getSettings).not.toHaveBeenCalled();
+    });
+
+    it('names an orphan two credentials both list once, with both (review n2)', async () => {
+        // Path A and EVER_WORKS_K8S_WORKS_KUBECONFIG: two credentials, one cluster.
+        process.env.EVER_WORKS_K8S_WORKS_KUBECONFIG = INTERNAL_KUBECONFIG;
+        const same = [{ location: 'ever-works-gone-prod', name: 'gone-website' }];
+        const { service } = createService({
+            listings: { [INTERNAL_KUBECONFIG]: same, [MANAGED_KUBECONFIG]: same },
+        });
+
+        const report = await service.reportOrphanedWorkDeployments();
+
+        expect(report.orphans).toEqual([
+            {
+                cluster: 'k8s-works, ever-works',
+                namespace: 'ever-works-gone-prod',
+                name: 'gone-website',
+            },
+        ]);
+    });
+
+    it('gives up on a list that hangs, reports it as TIMEOUT, and goes on (review m2)', async () => {
+        process.env.EVER_WORKS_K8S_WORKS_KUBECONFIG = INTERNAL_KUBECONFIG;
+        const { service, listWorkDeployments } = createService({
+            listings: {
+                [MANAGED_KUBECONFIG]: [{ location: 'ever-works-x-prod', name: 'x-website' }],
+            },
+        });
+        (
+            service as unknown as { workDeploymentListTimeoutMs: number }
+        ).workDeploymentListTimeoutMs = 20;
+        listWorkDeployments.mockImplementationOnce(() => new Promise(() => undefined));
+
+        const report = await service.reportOrphanedWorkDeployments();
+
+        expect(report.clusters).toEqual([
+            { names: ['k8s-works'], listed: 0, failed: 'TIMEOUT' },
+            { names: ['ever-works'], listed: 1 },
+        ]);
+    });
+
     it('skips as unsupported when the k8s plugin cannot list its deployments', async () => {
         const { service } = createService({ pluginOverrides: { listWorkDeployments: undefined } });
 
@@ -342,7 +441,7 @@ describe('DeployFacadeService.reportOrphanedWorkDeployments', () => {
 
     it('lists nothing when the Works cannot be loaded, since everything would look orphaned', async () => {
         const { service, workRepository, listWorkDeployments } = createService({});
-        workRepository.findByDeployProviders.mockRejectedValue(
+        workRepository.findWorkDeploymentReportCandidates.mockRejectedValue(
             Object.assign(new Error('db down at postgres://admin:hunter2@db'), {
                 code: 'ECONNREFUSED',
             }),

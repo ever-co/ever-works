@@ -1,5 +1,5 @@
 import type { Repository, SelectQueryBuilder, Brackets } from 'typeorm';
-import { In, IsNull, LessThanOrEqual } from 'typeorm';
+import { In, IsNull, LessThanOrEqual, Like } from 'typeorm';
 import { WorkRepository } from '../work.repository';
 import { Work } from '../../../entities/work.entity';
 import { Mission } from '../../../entities/mission.entity';
@@ -739,22 +739,33 @@ describe('WorkRepository', () => {
         });
     });
 
-    describe('findByDeployProviders', () => {
-        it('loads every Work on the providers, with its owner', async () => {
+    describe('findWorkDeploymentReportCandidates', () => {
+        it('loads every Work on the providers, and every Work with a Kubernetes-shaped cached target, with its owner', async () => {
             const rows = [{ id: 'w1' } as Work];
             repository.find.mockResolvedValueOnce(rows);
 
-            await expect(service.findByDeployProviders(['ever-works', 'k8s'])).resolves.toBe(rows);
+            await expect(
+                service.findWorkDeploymentReportCandidates(['ever-works', 'k8s']),
+            ).resolves.toBe(rows);
 
             expect(repository.find).toHaveBeenCalledWith({
-                where: { deployProvider: In(['ever-works', 'k8s']) },
+                where: [
+                    { deployProvider: In(['ever-works', 'k8s']) },
+                    { deployProjectId: Like('%/%') },
+                ],
                 relations: ['user'],
             });
         });
 
-        it('answers [] for no provider without a query', async () => {
-            await expect(service.findByDeployProviders([])).resolves.toEqual([]);
-            expect(repository.find).not.toHaveBeenCalled();
+        it('still loads the cached-target Works with no provider given', async () => {
+            repository.find.mockResolvedValueOnce([]);
+
+            await service.findWorkDeploymentReportCandidates([]);
+
+            expect(repository.find).toHaveBeenCalledWith({
+                where: [{ deployProjectId: Like('%/%') }],
+                relations: ['user'],
+            });
         });
     });
 
@@ -786,10 +797,13 @@ describe('WorkRepository', () => {
             });
         });
 
-        it('adds every Work of the tenant whose namespace the objects sit in, whatever its provider', async () => {
+        it('adds every Work of the tenant whose namespace the objects sit in, and every Work with that target cached', async () => {
             repository.find.mockResolvedValueOnce([]);
 
-            await service.findDeploymentSharerCandidates('admin-1', 'memes', 'member-7');
+            await service.findDeploymentSharerCandidates('admin-1', 'memes', {
+                tenantUserId: 'member-7',
+                deployProjectId: 'ever-works-tenants-member-7/memes-website',
+            });
 
             expect(repository.find).toHaveBeenCalledWith({
                 where: [
@@ -797,6 +811,8 @@ describe('WorkRepository', () => {
                     { userId: 'admin-1' },
                     { slug: 'memes', deployProvider: In(['ever-works', 'k8s']) },
                     { userId: 'member-7' },
+                    // Any Work, any provider, that has the target cached (review m7).
+                    { deployProjectId: 'ever-works-tenants-member-7/memes-website' },
                 ],
                 relations: ['user'],
             });
@@ -808,7 +824,7 @@ describe('WorkRepository', () => {
         ])('adds no tenant branch when the tenant is %s', async (_label, tenantUserId) => {
             repository.find.mockResolvedValueOnce([]);
 
-            await service.findDeploymentSharerCandidates('admin-1', '', tenantUserId);
+            await service.findDeploymentSharerCandidates('admin-1', '', { tenantUserId });
 
             expect(repository.find).toHaveBeenCalledWith({
                 where: [{ deployProvider: 'k8s' }, { userId: 'admin-1' }],

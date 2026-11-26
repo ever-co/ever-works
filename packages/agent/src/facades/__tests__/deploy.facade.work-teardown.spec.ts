@@ -128,12 +128,15 @@ describe('DeployFacadeService.prepareWorkDeploymentTeardown', () => {
         internal: process.env.EVER_WORKS_K8S_WORKS_KUBECONFIG,
         shared: process.env.EVER_WORKS_K8S_WORKS_SHARED_KUBECONFIG,
         base: process.env.EVER_WORKS_DEPLOY_NAMESPACE,
+        owner: process.env.EVER_WORKS_K8S_WORKS_CLUSTER_OWNER,
     };
 
     beforeEach(() => {
         delete process.env.EVER_WORKS_K8S_WORKS_KUBECONFIG;
         delete process.env.EVER_WORKS_K8S_WORKS_SHARED_KUBECONFIG;
         delete process.env.EVER_WORKS_DEPLOY_NAMESPACE;
+        // This environment owns the clusters, unless a test says otherwise.
+        process.env.EVER_WORKS_K8S_WORKS_CLUSTER_OWNER = 'true';
     });
 
     afterAll(() => {
@@ -144,6 +147,63 @@ describe('DeployFacadeService.prepareWorkDeploymentTeardown', () => {
         restore('EVER_WORKS_K8S_WORKS_KUBECONFIG', saved.internal);
         restore('EVER_WORKS_K8S_WORKS_SHARED_KUBECONFIG', saved.shared);
         restore('EVER_WORKS_DEPLOY_NAMESPACE', saved.base);
+        restore('EVER_WORKS_K8S_WORKS_CLUSTER_OWNER', saved.owner);
+    });
+
+    describe('only in the environment that owns the platform clusters', () => {
+        it.each([
+            ['unset', undefined],
+            ['false', 'false'],
+        ])(
+            'skips an ever-works Work as not_cluster_owner when the flag is %s, before any credential',
+            async (_label, value) => {
+                if (value === undefined) delete process.env.EVER_WORKS_K8S_WORKS_CLUSTER_OWNER;
+                else process.env.EVER_WORKS_K8S_WORKS_CLUSTER_OWNER = value;
+                const { service, workRepository, removeWorkDeployment, registry } = createService({
+                    work: work(),
+                });
+
+                await expect(
+                    service.prepareWorkDeploymentTeardown({ userId: 'user-1', workId: 'work-1' }),
+                ).resolves.toEqual({
+                    status: 'skipped',
+                    reason: 'not_cluster_owner',
+                    detail: 'EVER_WORKS_K8S_WORKS_CLUSTER_OWNER is not true in this environment',
+                });
+                expect(registry.get).not.toHaveBeenCalled();
+                expect(workRepository.findDeploymentSharerCandidates).not.toHaveBeenCalled();
+                expect(removeWorkDeployment).not.toHaveBeenCalled();
+            },
+        );
+
+        it('skips a k8s Work on k8s-works as not_cluster_owner too', async () => {
+            delete process.env.EVER_WORKS_K8S_WORKS_CLUSTER_OWNER;
+            process.env.EVER_WORKS_K8S_WORKS_KUBECONFIG = INTERNAL_KUBECONFIG;
+            const { service } = createService({
+                work: work({ deployProvider: 'k8s' }),
+                settingsByWork: { 'work-1': { clusterSource: 'k8s-works' } },
+                resolvedSecrets: { clusterSource: { value: 'k8s-works' } },
+            });
+
+            await expect(
+                service.prepareWorkDeploymentTeardown({ userId: 'user-1', workId: 'work-1' }),
+            ).resolves.toMatchObject({ status: 'skipped', reason: 'not_cluster_owner' });
+        });
+
+        it('still answers not_managed, not not_cluster_owner, for a member cluster or another provider', async () => {
+            delete process.env.EVER_WORKS_K8S_WORKS_CLUSTER_OWNER;
+            const custom = createService({
+                work: work({ deployProvider: 'k8s' }),
+                settingsByWork: { 'work-1': { clusterSource: 'custom-kubeconfig' } },
+            });
+            const vercel = createService({ work: work({ deployProvider: 'vercel' }) });
+
+            for (const { service } of [custom, vercel]) {
+                await expect(
+                    service.prepareWorkDeploymentTeardown({ userId: 'user-1', workId: 'work-1' }),
+                ).resolves.toEqual({ status: 'skipped', reason: 'not_managed' });
+            }
+        });
     });
 
     it('prepares the managed ever-works Work in its tenant namespace with the platform kubeconfig', async () => {
@@ -501,11 +561,15 @@ describe('DeployFacadeService.prepareWorkDeploymentTeardown', () => {
 
             await service.prepareWorkDeploymentTeardown({ userId: 'user-1', workId: 'work-1' });
 
-            // The Work's own tenant namespace: no other tenant to add.
+            // The Work's own tenant namespace: no other tenant to add. Any Work that has
+            // the target cached as its deploy target is a candidate too.
             expect(workRepository.findDeploymentSharerCandidates).toHaveBeenCalledWith(
                 'user-1',
                 'awesome-memes',
-                undefined,
+                {
+                    tenantUserId: undefined,
+                    deployProjectId: 'ever-works-tenants-user-1/awesome-memes-website',
+                },
             );
         });
 
@@ -681,7 +745,10 @@ describe('DeployFacadeService.prepareWorkDeploymentTeardown', () => {
                 expect(workRepository.findDeploymentSharerCandidates).toHaveBeenCalledWith(
                     'user-admin',
                     'admin-memes',
-                    'user-m',
+                    {
+                        tenantUserId: 'user-m',
+                        deployProjectId: 'ever-works-tenants-user-m/awesome-memes-website',
+                    },
                 );
             });
 
@@ -752,7 +819,7 @@ describe('DeployFacadeService.prepareWorkDeploymentTeardown', () => {
 
                 expect(prepared).toMatchObject({ status: 'skipped', reason: 'shared' });
                 expect((prepared as { detail?: string }).detail).toContain(
-                    'which tenant cannot be read back from its name',
+                    'cannot be read back from its name',
                 );
                 expect(workRepository.findDeploymentSharerCandidates).not.toHaveBeenCalled();
                 expect(removeWorkDeployment).not.toHaveBeenCalled();
@@ -779,17 +846,18 @@ describe('DeployFacadeService.prepareWorkDeploymentTeardown', () => {
                 expect(workRepository.findDeploymentSharerCandidates).toHaveBeenCalledWith(
                     'user-admin',
                     'admin-memes',
-                    undefined,
+                    expect.objectContaining({ tenantUserId: undefined }),
                 );
             });
         });
 
-        describe('a Work last deployed here whose settings now point elsewhere (N2)', () => {
+        describe('a Work whose cached deploy target is this one (N2, review m7)', () => {
             const TARGET = 'ever-works-tenants-user-1/awesome-memes-website';
+            const CACHED_DETAIL = `has ${TARGET} cached as its deploy target, whatever it deploys to now`;
 
             it('is blocked by a same-owner k8s Work whose cached deployProjectId is this target', async () => {
-                // work-2 was an `ever-works`-style tenant deploy, then switched to `k8s-works`,
-                // whose derived namespace is elsewhere; its last objects are still here.
+                // work-2's cached target is here, though its `k8s-works` settings now derive
+                // another namespace; its objects here may still serve it.
                 const { service, removeWorkDeployment } = createService({
                     work: work(),
                     settingsByWork: { 'work-2': { clusterSource: 'k8s-works' } },
@@ -811,13 +879,13 @@ describe('DeployFacadeService.prepareWorkDeploymentTeardown', () => {
                 expect(prepared).toEqual({
                     status: 'skipped',
                     reason: 'shared',
-                    detail: `Work work-2 was last deployed to ${TARGET} and its settings now point elsewhere; its objects there may still serve it, so remove them by hand if they do not`,
+                    detail: `Work work-2 ${CACHED_DETAIL}; its objects there may still serve it, so remove them by hand if they do not`,
                 });
                 expect(removeWorkDeployment).not.toHaveBeenCalled();
             });
 
-            it('is blocked even when its namespace setting is now a reserved one', async () => {
-                const { service } = createService({
+            it('decides on the cached target without reading its settings, which may be reserved or unreadable', async () => {
+                const { service, settingsService } = createService({
                     work: work(),
                     settingsByWork: {
                         'work-2': { clusterSource: 'k8s-works', namespace: 'kube-system' },
@@ -827,34 +895,66 @@ describe('DeployFacadeService.prepareWorkDeploymentTeardown', () => {
                     ],
                 });
 
-                await expect(
-                    service.prepareWorkDeploymentTeardown({ userId: 'user-1', workId: 'work-1' }),
-                ).resolves.toMatchObject({ status: 'skipped', reason: 'shared' });
+                const prepared = await service.prepareWorkDeploymentTeardown({
+                    userId: 'user-1',
+                    workId: 'work-1',
+                });
+
+                expect(prepared).toMatchObject({ status: 'skipped', reason: 'shared' });
+                expect((prepared as { detail?: string }).detail).toContain(CACHED_DETAIL);
+                expect(
+                    settingsService.getSettings.mock.calls.some(
+                        ([, options]) => (options as { workId?: string }).workId === 'work-2',
+                    ),
+                ).toBe(false);
             });
 
-            it('says "last deployed", not "could not be read", when its settings fail too', async () => {
-                const { service, settingsService } = createService({
+            it('is blocked by a Work of another owner on another provider whose cached target is this one', async () => {
+                // m7: admin B's Work named this namespace, then moved to Vercel. It is neither
+                // the owner's, the tenant's, nor on Kubernetes now; only its cached id says so.
+                const { service } = createService({
                     work: work(),
                     candidates: [
-                        work({ id: 'work-2', deployProvider: 'k8s', deployProjectId: TARGET }),
+                        work({
+                            id: 'work-b',
+                            userId: 'user-b',
+                            slug: 'b-memes',
+                            deployProvider: 'vercel',
+                            deployProjectId: TARGET,
+                        }),
                     ],
                 });
-                settingsService.getSettings.mockImplementation(
-                    async (_id: string, options: { workId?: string }) => {
-                        if (options.workId === 'work-2') throw new Error('settings unavailable');
-                        return {};
-                    },
-                );
 
                 const prepared = await service.prepareWorkDeploymentTeardown({
                     userId: 'user-1',
                     workId: 'work-1',
                 });
 
-                expect((prepared as { detail?: string }).detail).toContain('was last deployed to');
+                expect(prepared).toMatchObject({ status: 'skipped', reason: 'shared' });
+                expect((prepared as { detail?: string }).detail).toContain(
+                    `Work work-b ${CACHED_DETAIL}`,
+                );
             });
 
-            it('is not blocked when that Work was last deployed somewhere else', async () => {
+            it('is blocked by a Work whose website repository was renamed since its target was cached', async () => {
+                const { service } = createService({
+                    work: work(),
+                    candidates: [
+                        work({
+                            id: 'work-2',
+                            deployProvider: 'k8s',
+                            websiteRepo: 'renamed-memes-website',
+                            deployProjectId: TARGET,
+                        }),
+                    ],
+                });
+
+                await expect(
+                    service.prepareWorkDeploymentTeardown({ userId: 'user-1', workId: 'work-1' }),
+                ).resolves.toMatchObject({ status: 'skipped', reason: 'shared' });
+            });
+
+            it('is not blocked when that Work has another target cached', async () => {
                 const { service } = createService({
                     work: work(),
                     settingsByWork: { 'work-2': { clusterSource: 'k8s-works' } },
@@ -872,6 +972,24 @@ describe('DeployFacadeService.prepareWorkDeploymentTeardown', () => {
                     service.prepareWorkDeploymentTeardown({ userId: 'user-1', workId: 'work-1' }),
                 ).resolves.toMatchObject({ status: 'ready' });
             });
+        });
+
+        it('skips as shared when the owner’s own tenant namespace sits at the 63-character cap (review n1)', async () => {
+            // The cut keeps only part of the id there, so other tenants may share the name.
+            process.env.EVER_WORKS_DEPLOY_NAMESPACE = 'ever-works-tenants-of-the-long-base';
+            const owner = 'a'.repeat(40);
+            const { service, removeWorkDeployment } = createService({
+                work: work({ userId: owner }),
+            });
+
+            const prepared = await service.prepareWorkDeploymentTeardown({
+                userId: owner,
+                workId: 'work-1',
+            });
+
+            expect(prepared).toMatchObject({ status: 'skipped', reason: 'shared' });
+            expect((prepared as { detail?: string }).detail).toContain('63-character name cap');
+            expect(removeWorkDeployment).not.toHaveBeenCalled();
         });
     });
 });

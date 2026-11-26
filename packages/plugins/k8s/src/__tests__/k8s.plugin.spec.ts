@@ -1137,7 +1137,7 @@ describe('KubernetesPlugin Work-scoped domain context', () => {
 		expect(api.applyIngress).toHaveBeenCalledWith(
 			VALID,
 			expect.objectContaining({
-				metadata: { name: 'current-website-repo', namespace: 'current-tenant-ns' }
+				metadata: expect.objectContaining({ name: 'current-website-repo', namespace: 'current-tenant-ns' })
 			}),
 			'work-context'
 		);
@@ -1167,10 +1167,80 @@ describe('KubernetesPlugin Work-scoped domain context', () => {
 		expect(api.applyIngress).toHaveBeenCalledWith(
 			VALID,
 			expect.objectContaining({
-				metadata: { name: 'current-website-repo', namespace: 'current-tenant-ns' }
+				metadata: expect.objectContaining({ name: 'current-website-repo', namespace: 'current-tenant-ns' })
 			}),
 			'work-context'
 		);
+	});
+
+	describe('a custom-domain change keeps what the deploy applied to the Ingress', () => {
+		// Under server-side apply, an apply under the deploy's field manager that leaves out the labels
+		// and annotations removes them: the teardown would then keep the Ingress (no labels) and the
+		// orphan report would never list it.
+		const deployLabels = {
+			'ever-works.io/managed': 'true',
+			'ever-works.io/work-id': 'Current_Website_Repo',
+			'app.kubernetes.io/name': 'current-website-repo',
+			'app.kubernetes.io/managed-by': 'ever-works-k8s-plugin'
+		};
+		function labelledIngress(hosts: string[]) {
+			return {
+				metadata: {
+					name: 'current-website-repo',
+					labels: { ...deployLabels, 'team.example.com/owner': 'someone-else' },
+					annotations: { 'kubectl.kubernetes.io/last-applied-configuration': '{}' }
+				},
+				spec: { ingressClassName: 'nginx', rules: hosts.map((host) => ({ host })), tls: [] }
+			};
+		}
+
+		it.each(['addDomain', 'removeDomain'] as const)(
+			'%s re-applies the deploy labels and its annotations',
+			async (method) => {
+				const api = makeMockApi();
+				vi.mocked(api.readIngress).mockResolvedValue(
+					labelledIngress(['site.ever.works', 'tools.example.com']) as never
+				);
+				const plugin = new KubernetesPlugin({ api });
+				await plugin.onLoad(createMockContext({}));
+
+				await (plugin as any)[method](
+					'stale-tenant-ns/stale-site',
+					method === 'addDomain' ? 'new.example.com' : 'tools.example.com',
+					VALID,
+					undefined,
+					scopedContext
+				);
+
+				const body = vi.mocked(api.applyIngress).mock.calls[0]?.[1] as {
+					metadata: { labels?: Record<string, string>; annotations?: Record<string, string> };
+				};
+				// Only the deploy's own labels: another manager's label is not taken over.
+				expect(body.metadata.labels).toEqual(deployLabels);
+				// The nginx strategy's annotations for the new host list, as deploy() works them out.
+				expect(body.metadata.annotations).toEqual({
+					'nginx.ingress.kubernetes.io/proxy-body-size': '10m',
+					'nginx.ingress.kubernetes.io/ssl-redirect': 'false'
+				});
+			}
+		);
+
+		it('adds no labels to an Ingress the deploy did not label', async () => {
+			const api = makeMockApi();
+			const plugin = new KubernetesPlugin({ api });
+			await plugin.onLoad(createMockContext({}));
+
+			await (plugin as any).addDomain(
+				'stale-tenant-ns/stale-site',
+				'new.example.com',
+				VALID,
+				undefined,
+				scopedContext
+			);
+
+			const body = vi.mocked(api.applyIngress).mock.calls[0]?.[1] as { metadata: Record<string, unknown> };
+			expect(body.metadata).not.toHaveProperty('labels');
+		});
 	});
 
 	it('uses the Work kubeContext when verifying a domain', async () => {

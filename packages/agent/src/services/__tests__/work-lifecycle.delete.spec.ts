@@ -400,7 +400,7 @@ describe('WorkLifecycleService.deleteWork — managed hosting removes the cluste
 
         expect(warn.mock.calls.map(([message]) => String(message))).toContainEqual(
             expect.stringContaining(
-                'last deployed as ever-works-tenants-owner-1/old-tools-website',
+                'its cached deploy target is ever-works-tenants-owner-1/old-tools-website',
             ),
         );
         expect(run).toHaveBeenCalledTimes(1);
@@ -504,6 +504,24 @@ describe('WorkLifecycleService.deleteWork — managed hosting removes the cluste
         expect(mocks.everWorksDns.removeWorkSubdomain).toHaveBeenCalledWith('best-tools');
     });
 
+    it('a skipped preparation whose warning cannot be logged does not block the delete (review n5)', async () => {
+        const { service, mocks } = makeService(managedWork());
+        const logger = (service as unknown as { logger: { warn: jest.Mock } }).logger;
+        jest.spyOn(logger, 'warn').mockImplementation(() => {
+            throw new Error('log sink down');
+        });
+        mocks.deployFacade.prepareWorkDeploymentTeardown.mockResolvedValue({
+            status: 'skipped',
+            reason: 'not_cluster_owner',
+            detail: 'EVER_WORKS_K8S_WORKS_CLUSTER_OWNER is not true in this environment',
+        });
+
+        await expect(service.deleteWork('w-managed', {}, user)).resolves.toMatchObject({
+            status: 'success',
+        });
+        expect(mocks.workRepository.delete).toHaveBeenCalledWith('w-managed');
+    });
+
     it('a preparation that throws does not block the delete', async () => {
         const { service, mocks } = makeService(managedWork());
         mocks.deployFacade.prepareWorkDeploymentTeardown.mockRejectedValue(new Error('boom'));
@@ -580,6 +598,22 @@ describe('WorkLifecycleService.deleteWork — the slug DNS record goes only with
         expect(mocks.workRepository.findByManagedSubdomain).toHaveBeenCalledWith('best-tools');
         expect(mocks.workRepository.findByDeployProvidersForUserOrSlug).not.toHaveBeenCalled();
         expect(mocks.everWorksDns.removeWorkSubdomain).toHaveBeenCalledWith('best-tools');
+    });
+
+    it('a logger that throws on a kept-record warning does not fail the delete (review n5)', async () => {
+        const { service, mocks } = makeService(everWorksWork(null));
+        mocks.workRepository.findByManagedSubdomain.mockResolvedValue({ id: 'w-other' });
+        const logger = (service as unknown as { logger: { warn: jest.Mock } }).logger;
+        const warn = jest.spyOn(logger, 'warn').mockImplementation(() => {
+            throw new Error('log sink down');
+        });
+
+        await expect(service.deleteWork('w-managed', {}, user)).resolves.toMatchObject({
+            status: 'success',
+        });
+        expect(warn).toHaveBeenCalled();
+        // The record is still kept: the claim decided it, not the log line.
+        expect(mocks.everWorksDns.removeWorkSubdomain).not.toHaveBeenCalled();
     });
 
     it('keeps it when ANOTHER Work holds the managed subdomain claim on that slug', async () => {

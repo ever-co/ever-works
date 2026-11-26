@@ -8,6 +8,7 @@ import {
     Raw,
     LessThanOrEqual,
     In,
+    Like,
     EntityManager,
     type FindOptionsWhere,
     type SelectQueryBuilder,
@@ -1070,35 +1071,40 @@ export class WorkRepository {
      * derived from the owner, and a Work moved to another provider leaves its
      * objects behind); every `k8s` Work of any owner (a `k8s-works` namespace
      * can be set explicitly, or derived from a truncated slug); every
-     * `ever-works` / `k8s` Work with the same slug; and, when the objects sit
-     * in another tenant's namespace, every Work of `tenantUserId`, whatever its
-     * provider. The caller narrows them by object name and namespace.
+     * `ever-works` / `k8s` Work with the same slug; when the objects sit in
+     * another tenant's namespace, every Work of `tenantUserId`, whatever its
+     * provider; and every Work, of any owner and provider, whose cached
+     * `deployProjectId` is `deployProjectId` (the objects' `namespace/name`).
+     * The caller narrows them by object name and namespace.
      */
     async findDeploymentSharerCandidates(
         userId: string,
         slug: string,
-        tenantUserId?: string,
+        also: { tenantUserId?: string; deployProjectId?: string } = {},
     ): Promise<Work[]> {
         const where: FindOptionsWhere<Work>[] = [{ deployProvider: 'k8s' }];
         if (userId) where.push({ userId });
         if (slug) where.push({ slug, deployProvider: In(['ever-works', 'k8s']) });
-        if (tenantUserId && tenantUserId !== userId) where.push({ userId: tenantUserId });
+        if (also.tenantUserId && also.tenantUserId !== userId) {
+            where.push({ userId: also.tenantUserId });
+        }
+        if (also.deployProjectId) where.push({ deployProjectId: also.deployProjectId });
         return this.repository.find({ where, relations: ['user'] });
     }
 
     /**
-     * Every Work on one of `deployProviders`, with its `user` relation. The
-     * report of website deployments no Work accounts for reads it once a day;
-     * an empty list is `[]` without a query.
+     * The Works the orphaned website deployment report accounts for, with
+     * their `user` relation: every Work on one of `deployProviders`, and every
+     * other Work whose cached `deployProjectId` has a `/` (a Kubernetes
+     * `namespace/name`). A Work that moved off Kubernetes keeps that id, and
+     * its old objects may still serve it. The report reads it once a day.
      */
-    async findByDeployProviders(deployProviders: readonly string[]): Promise<Work[]> {
-        if (deployProviders.length === 0) {
-            return [];
+    async findWorkDeploymentReportCandidates(deployProviders: readonly string[]): Promise<Work[]> {
+        const where: FindOptionsWhere<Work>[] = [{ deployProjectId: Like('%/%') }];
+        if (deployProviders.length > 0) {
+            where.unshift({ deployProvider: In([...deployProviders]) });
         }
-        return this.repository.find({
-            where: { deployProvider: In([...deployProviders]) },
-            relations: ['user'],
-        });
+        return this.repository.find({ where, relations: ['user'] });
     }
 
     /**

@@ -90,6 +90,73 @@ describe('WorkDeploymentOrphanReportCronService', () => {
         );
     });
 
+    it('says in the summary how many clusters could not be listed, as a warning', async () => {
+        const { service, lines } = makeService({
+            clusters: [
+                { names: ['k8s-works'], listed: 0, failed: 'TIMEOUT' },
+                { names: ['ever-works'], listed: 2 },
+            ],
+            orphans: [],
+            unresolvedWorks: 0,
+        });
+
+        await service.runReport();
+
+        expect(lines.log).toEqual([]);
+        expect(lines.warn).toContain(
+            'Orphaned website deployment report: 2 website deployment(s) on 2 cluster(s), 0 orphaned, 1 cluster(s) could not be listed',
+        );
+    });
+
+    it('warns when the Kubernetes plugin cannot list, since that is not "no orphans"', async () => {
+        const { service, lines } = makeService({
+            skipped: 'unsupported',
+            clusters: [],
+            orphans: [],
+            unresolvedWorks: 0,
+        });
+
+        await service.runReport();
+
+        expect(lines.warn).toEqual([
+            'Orphaned website deployment report skipped: the Kubernetes plugin cannot list its website deployments',
+        ]);
+    });
+
+    it('does nothing but a debug line where this environment does not own the clusters', async () => {
+        const { service, lines } = makeService({
+            skipped: 'not_cluster_owner',
+            clusters: [],
+            orphans: [],
+            unresolvedWorks: 0,
+        });
+
+        await service.runReport();
+
+        expect(lines.warn).toEqual([]);
+        expect(lines.log).toEqual([]);
+        expect(lines.debug).toEqual([
+            'Orphaned website deployment report skipped: not_cluster_owner',
+        ]);
+    });
+
+    it('caps the task lock so a hung run cannot keep the next day out', async () => {
+        const { service, taskLockService } = makeService({
+            skipped: 'no_cluster',
+            clusters: [],
+            orphans: [],
+            unresolvedWorks: 0,
+        });
+
+        await service.runReport();
+
+        expect(taskLockService.runExclusive).toHaveBeenCalledWith(
+            expect.any(String),
+            expect.any(Function),
+            expect.objectContaining({ ttlMs: 30 * 60 * 1000, maxLifetimeMs: 30 * 60 * 1000 }),
+        );
+    });
+
     it('names at most 50 orphans and counts the rest', async () => {
         const orphans = Array.from({ length: 53 }, (_, i) => ({
             cluster: 'ever-works',
