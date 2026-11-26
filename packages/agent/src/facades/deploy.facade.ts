@@ -153,8 +153,14 @@ function isAppKind(work: Work): boolean {
  * The object name the Kubernetes plugin gives a website repository
  * (`sanitiseSlug` in `@ever-works/k8s-plugin`): lower case, every run of other
  * characters → `-`, dash runs collapsed, edge dashes dropped, 63 max.
+ *
+ * A copy, not an import: the agent never depends on a plugin package (plugins
+ * load at runtime), and the plugin's entry exports only its class. The plugin's
+ * own cases are pinned against this copy in `deploy.facade.work-teardown.spec.ts`.
+ * The teardown itself re-derives the name inside the plugin; this copy only
+ * decides which other Works could share it.
  */
-function normaliseObjectName(input: string): string {
+export function normaliseObjectName(input: string): string {
     const collapsed = (input ?? '')
         .toLowerCase()
         .replace(/[^a-z0-9-]+/g, '-')
@@ -1280,6 +1286,9 @@ export class DeployFacadeService implements IDeployFacade {
                 );
                 if (candidateNamespace === namespace) return candidate.id;
             } catch {
+                // Unknown namespace (settings unreadable, or an explicit reserved
+                // one): it may be ours, so it blocks the teardown rather than
+                // letting it through. Leaving the objects is the old behaviour.
                 return candidate.id;
             }
         }

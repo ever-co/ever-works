@@ -1,4 +1,4 @@
-import { DeployFacadeService } from '../deploy.facade';
+import { DeployFacadeService, normaliseObjectName } from '../deploy.facade';
 
 /**
  * `DeployFacadeService.prepareWorkDeploymentTeardown` — resolving, while the Work
@@ -361,5 +361,35 @@ describe('DeployFacadeService.prepareWorkDeploymentTeardown', () => {
                 'awesome-memes',
             );
         });
+    });
+});
+
+/**
+ * The facade's copy of the Kubernetes plugin's `sanitiseSlug` decides which other Works
+ * could share a deleted Work's objects. It must answer exactly what the plugin answers, so
+ * these are the plugin's own cases (`packages/plugins/k8s/src/__tests__/sanitise-slug.spec.ts`).
+ */
+describe('normaliseObjectName (parity with the k8s plugin sanitiseSlug)', () => {
+    it.each([
+        ['awesome-time-tracking-website', 'awesome-time-tracking-website'],
+        ['My Project!!', 'my-project'],
+        ['--a--b--', 'a-b'],
+        ['___', ''],
+        ['-', ''],
+        ['', ''],
+        ['a - b', 'a-b'],
+        ['  spaced  ', 'spaced'],
+        ['Ünïcode Name', 'n-code-name'],
+        ['a'.repeat(70), 'a'.repeat(63)],
+        [`${'a'.repeat(62)}-b`, `${'a'.repeat(62)}-`],
+        [`${'a'.repeat(62)}!!b`, `${'a'.repeat(62)}-`],
+    ])('normalises %j to %j', (input, expected) => {
+        expect(normaliseObjectName(input)).toBe(expected);
+    });
+
+    it('stays linear over a long inner run of "-"', () => {
+        const started = performance.now();
+        expect(normaliseObjectName(`a${'-'.repeat(200_000)}a`)).toBe('a-a');
+        expect(performance.now() - started).toBeLessThan(2_000);
     });
 });
