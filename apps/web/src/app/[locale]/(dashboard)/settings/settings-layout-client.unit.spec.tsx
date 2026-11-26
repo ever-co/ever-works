@@ -193,6 +193,25 @@ describe('SettingsLayoutClient — groups (shared Ever shell, A9)', () => {
         expect(screen.getByText('groups.account').className).not.toContain('uppercase');
     });
 
+    it('renders every tab exactly once, with the gates on and off', () => {
+        for (const [flags, expected] of [
+            [{ fleetEnabled: true, appLauncherEnabled: true, everPlatformEnabled: true }, 25],
+            [{ fleetEnabled: false, appLauncherEnabled: false, everPlatformEnabled: false }, 22],
+        ] as const) {
+            const { unmount } = render(
+                <SettingsLayoutClient settingsMenu={null} {...flags}>
+                    <div />
+                </SettingsLayoutClient>,
+            );
+            const hrefs = [...document.querySelectorAll('nav a')].map((a) =>
+                a.getAttribute('href'),
+            );
+            expect(hrefs, JSON.stringify(flags)).toHaveLength(expected);
+            expect(new Set(hrefs).size).toBe(hrefs.length);
+            unmount();
+        }
+    });
+
     it('never drops a tab: one no group names joins the product group', () => {
         const groups = groupSettingsTabs([{ id: 'profile' }, { id: 'something-new' }]);
         expect(groups.map((group) => group.id)).toEqual(['account', 'product']);

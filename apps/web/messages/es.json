@@ -11381,7 +11381,7 @@
             "noOther": "No hay otra organización",
             "createNew": "Crear organización",
             "addNew": "Añadir organización",
-            "loading": "Loading…",
+            "loading": "Cargando…",
             "switchFailed": "No se pudo cambiar de organización. Inténtalo de nuevo.",
             "active": "Organización actual"
         },
