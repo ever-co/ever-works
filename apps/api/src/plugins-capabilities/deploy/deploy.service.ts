@@ -1049,8 +1049,8 @@ export class DeployService {
     /**
      * Wildcard mode, `ever-works` provider: make `work.slug` this Work's managed-subdomain claim. Answers `false`
      * (do not route the host) when another Work holds it, or when the claim cannot be written. The partial unique
-     * index on `works.managedSubdomain` settles two deploys racing for the same name. A Work already holding a claim
-     * keeps it: it is only checked that no other Work holds the slug.
+     * index on `works.managedSubdomain` settles two deploys racing for the same name. A Work already holding exactly the
+     * slug is routed without a write; one holding a different label has its claim moved to the slug.
      */
     private async reserveWildcardHost(work: Work): Promise<boolean> {
         const label = (work.slug ?? '').trim().toLowerCase();
@@ -1058,7 +1058,8 @@ export class DeployService {
         if (current === label) return true;
         const holder = await this.workRepository.findByManagedSubdomain(label);
         if (holder && holder.id !== work.id) return false;
-        if (current) return true;
+        // A held claim that differs from the routed slug (a rename, a backfill) is moved to the slug: the platform
+        // reserves exactly the label it routes, so no other Work can take it.
         try {
             await this.workRepository.update(work.id, { managedSubdomain: label });
             return true;
@@ -1105,7 +1106,7 @@ export class DeployService {
             // the allocator, a rename and other Works' deploys see the name as taken.
             if (isDnsWildcardEnabled() && !(await this.reserveWildcardHost(work))) {
                 this.logger.warn(
-                    `Managed host ${ingressHost} for work ${work.id} is claimed by another work; deploying without it`,
+                    `Managed host ${ingressHost} for work ${work.id} could not be reserved (held by another work, or the claim write failed); deploying without it`,
                 );
                 // Same as a DNS refusal above: an explicit empty host, so a saved k8s `ingressHost` cannot stand in.
                 return { ...(settings ?? {}), ingressHost: '' };

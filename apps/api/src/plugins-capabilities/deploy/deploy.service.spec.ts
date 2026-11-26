@@ -1108,7 +1108,9 @@ describe('DeployService — plugin-driven dispatch + secrets', () => {
                 else process.env.EVER_WORKS_DNS_WILDCARD = previous;
             });
 
-            const build = () => {
+            const build = (
+                savedSettings: Record<string, unknown> = { kubeconfig: 'apiVersion: v1' },
+            ) => {
                 const getDeploymentSecrets = jest.fn().mockResolvedValue({});
                 const built = buildService({
                     deployProvider: 'ever-works',
@@ -1117,7 +1119,7 @@ describe('DeployService — plugin-driven dispatch + secrets', () => {
                         getWorkflowFilenames: () => ['deploy_k8s.yaml'],
                         getDeploymentSecrets,
                     },
-                    settings: { kubeconfig: 'apiVersion: v1' },
+                    settings: savedSettings,
                 });
                 (built.dnsService.getProvider as jest.Mock).mockReturnValue({});
                 (built.dnsService.ensureWorkSubdomain as jest.Mock).mockResolvedValue(true);
@@ -1140,12 +1142,16 @@ describe('DeployService — plugin-driven dispatch + secrets', () => {
             });
 
             it('does not route a slug another Work already holds, and claims nothing', async () => {
-                const { service, repo, getDeploymentSecrets } = build();
+                const { service, repo, getDeploymentSecrets } = build({
+                    kubeconfig: 'apiVersion: v1',
+                    ingressHost: 'member-host.example.com',
+                });
                 repo.findByManagedSubdomain!.mockResolvedValue({ id: 'other-work' });
                 await service.deploy('work-1', 'user-1', {});
                 expect(repo.update).not.toHaveBeenCalledWith('work-1', {
                     managedSubdomain: 'my-site',
                 });
+                // The member's saved host must not stand in for the refused name.
                 expect(getDeploymentSecrets.mock.calls[0][0].ingressHost).toBe('');
             });
 
@@ -1161,6 +1167,27 @@ describe('DeployService — plugin-driven dispatch + secrets', () => {
                     },
                 );
                 await service.deploy('work-1', 'user-1', {});
+                expect(getDeploymentSecrets.mock.calls[0][0].ingressHost).toBe('');
+            });
+
+            it('moves a claim that differs from the slug to the slug, then routes the slug', async () => {
+                const { service, work, repo, getDeploymentSecrets } = build();
+                (work as { managedSubdomain?: string | null }).managedSubdomain = 'other-label';
+                await service.deploy('work-1', 'user-1', {});
+                expect(repo.update).toHaveBeenCalledWith('work-1', { managedSubdomain: 'my-site' });
+                expect(getDeploymentSecrets.mock.calls[0][0].ingressHost).toBe(
+                    'my-site.ever.works',
+                );
+            });
+
+            it('refuses a slug another Work holds even when this Work holds a different claim', async () => {
+                const { service, work, repo, getDeploymentSecrets } = build();
+                (work as { managedSubdomain?: string | null }).managedSubdomain = 'other-label';
+                repo.findByManagedSubdomain!.mockResolvedValue({ id: 'other-work' });
+                await service.deploy('work-1', 'user-1', {});
+                expect(repo.update).not.toHaveBeenCalledWith('work-1', {
+                    managedSubdomain: 'my-site',
+                });
                 expect(getDeploymentSecrets.mock.calls[0][0].ingressHost).toBe('');
             });
 
