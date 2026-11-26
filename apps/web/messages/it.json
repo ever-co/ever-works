@@ -2883,6 +2883,7 @@
             "subtitle": "Gestisci le impostazioni e le preferenze del tuo account",
             "tabs": {
                 "profile": "Profilo",
+                "preferences": "Preferenze",
                 "organization": "Organization",
                 "security": "Sicurezza",
                 "apiKeys": "Chiavi API",
@@ -4702,6 +4703,15 @@
                     "linked": "The organization is linked.",
                     "whatIsSent": "Linking sends the code, this account's ID and the organization's short name (its slug). No other name, e-mail address or content is sent."
                 }
+            },
+            "preferences": {
+                "themeTitle": "Tema",
+                "themeDescription": "Chiaro, scuro o come questo dispositivo. L'icona nella barra superiore passa da chiaro a scuro.",
+                "themeLight": "Chiaro",
+                "themeDark": "Scuro",
+                "themeSystem": "Sistema",
+                "languageTitle": "Lingua",
+                "languageDescription": "La lingua che Ever Works usa in questo browser."
             }
         },
         "stats": {
@@ -9650,6 +9660,7 @@
             },
             "profileMenu": {
                 "accountSettings": "Impostazioni Account",
+                "preferences": "Preferenze",
                 "helpDocs": "Aiuto & Documentazione",
                 "support": "Supporto",
                 "keyboardShortcuts": "Scorciatoie Tastiera",

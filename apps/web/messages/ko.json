@@ -2883,6 +2883,7 @@
             "subtitle": "계정 설정 및 환경설정을 관리하세요",
             "tabs": {
                 "profile": "프로필",
+                "preferences": "환경설정",
                 "organization": "Organization",
                 "security": "보안",
                 "apiKeys": "API 키",
@@ -4702,6 +4703,15 @@
                     "linked": "The organization is linked.",
                     "whatIsSent": "Linking sends the code, this account's ID and the organization's short name (its slug). No other name, e-mail address or content is sent."
                 }
+            },
+            "preferences": {
+                "themeTitle": "테마",
+                "themeDescription": "라이트, 다크 또는 이 기기와 동일. 상단 바의 아이콘으로 라이트와 다크를 전환합니다.",
+                "themeLight": "라이트",
+                "themeDark": "다크",
+                "themeSystem": "시스템",
+                "languageTitle": "언어",
+                "languageDescription": "이 브라우저에서 Ever Works가 사용하는 언어입니다."
             }
         },
         "stats": {
@@ -9650,6 +9660,7 @@
             },
             "profileMenu": {
                 "accountSettings": "계정 설정",
+                "preferences": "환경설정",
                 "helpDocs": "도움말 및 문서",
                 "support": "지원",
                 "keyboardShortcuts": "키보드 단축키",

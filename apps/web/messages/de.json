@@ -2957,6 +2957,7 @@
             "subtitle": "Verwalten Sie Ihre Kontoeinstellungen und Vorlieben",
             "tabs": {
                 "profile": "Profil",
+                "preferences": "Präferenzen",
                 "organization": "Organization",
                 "security": "Sicherheit",
                 "apiKeys": "API-Schlüssel",
@@ -4776,6 +4777,15 @@
                     "linked": "The organization is linked.",
                     "whatIsSent": "Linking sends the code, this account's ID and the organization's short name (its slug). No other name, e-mail address or content is sent."
                 }
+            },
+            "preferences": {
+                "themeTitle": "Design",
+                "themeDescription": "Hell, dunkel oder wie dieses Gerät. Das Symbol in der oberen Leiste wechselt zwischen hell und dunkel.",
+                "themeLight": "Hell",
+                "themeDark": "Dunkel",
+                "themeSystem": "System",
+                "languageTitle": "Sprache",
+                "languageDescription": "Die Sprache, die Ever Works in diesem Browser verwendet."
             }
         },
         "stats": {
@@ -9723,6 +9733,7 @@
             },
             "profileMenu": {
                 "accountSettings": "Kontoeinstellungen",
+                "preferences": "Präferenzen",
                 "helpDocs": "Hilfe & Dokumentation",
                 "support": "Support",
                 "keyboardShortcuts": "Tastaturkürzel",
