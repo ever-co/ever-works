@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { DistributedTaskLockService } from '@ever-works/agent/cache';
+import { config } from '@ever-works/agent/config';
 import { DeployFacadeService } from '@ever-works/agent/facades';
 
 /** Once a day, at a quiet hour (UTC). */
@@ -26,7 +27,8 @@ const MAX_ORPHAN_LINES = 50;
  *
  * It runs only where `EVER_WORKS_K8S_WORKS_CLUSTER_OWNER=true`: it compares a
  * whole cluster with this environment's Works alone, and dev, stage and prod
- * may share one cluster. Elsewhere the tick does nothing (a debug line).
+ * may share one cluster. Elsewhere the tick does nothing but a debug line: it
+ * takes no lock and reads nothing.
  */
 @Injectable()
 export class WorkDeploymentOrphanReportCronService {
@@ -39,6 +41,12 @@ export class WorkDeploymentOrphanReportCronService {
 
     @Cron(WORK_DEPLOYMENT_ORPHAN_REPORT_CRON, { timeZone: 'UTC' })
     async runReport(): Promise<void> {
+        if (!config.everWorks.deploy.isClusterOwner()) {
+            this.logger.debug(
+                'Orphaned website deployment report skipped: not_cluster_owner (EVER_WORKS_K8S_WORKS_CLUSTER_OWNER is not true)',
+            );
+            return;
+        }
         try {
             await this.taskLockService.runExclusive(
                 'deploy:work-deployment-orphan-report',

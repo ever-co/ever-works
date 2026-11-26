@@ -215,7 +215,7 @@ interface PlatformClusterCredential {
 
 /** What the Works account for, for {@link WorkDeploymentOrphanReport}. */
 interface KnownWorkDeploymentTargets {
-    /** Every `namespace/name` a Work deploys to or last deployed to. */
+    /** Every `namespace/name` a Work deploys to, or has cached as its deploy target. */
     readonly targets: Set<string>;
     /** Object names of the Works whose target could not be worked out. */
     readonly unresolvedNames: Set<string>;
@@ -1467,12 +1467,12 @@ export class DeployFacadeService implements IDeployFacade {
             const projectName = work.getWebsiteRepo();
             const credential = effective.token;
             const context = effective.lookupContext;
-            const lastDeployed = kubernetesDeploymentId(work.deployProjectId);
+            const cachedTarget = kubernetesDeploymentId(work.deployProjectId);
             return {
                 status: 'ready',
                 namespace,
                 objectName,
-                ...(lastDeployed && lastDeployed !== target ? { staleTarget: lastDeployed } : {}),
+                ...(cachedTarget && cachedTarget !== target ? { staleTarget: cachedTarget } : {}),
                 run: () => removeWorkDeployment(projectName, credential, context),
             };
         } catch (error) {

@@ -1225,22 +1225,38 @@ describe('KubernetesPlugin Work-scoped domain context', () => {
 			}
 		);
 
-		it('adds no labels to an Ingress the deploy did not label', async () => {
-			const api = makeMockApi();
-			const plugin = new KubernetesPlugin({ api });
-			await plugin.onLoad(createMockContext({}));
+		it.each([
+			['no labels', undefined],
+			['another manager’s labels', { ...deployLabels, 'app.kubernetes.io/managed-by': 'helm' }],
+			['no managed label', { ...deployLabels, 'ever-works.io/managed': 'false' }]
+		])(
+			'writes neither labels nor annotations onto an Ingress the deploy did not make (%s)',
+			async (_label, labels) => {
+				// A member's hand-made Ingress keeps its own ssl-redirect / proxy-body-size values.
+				const api = makeMockApi();
+				vi.mocked(api.readIngress).mockResolvedValue({
+					metadata: {
+						name: 'current-website-repo',
+						...(labels ? { labels } : {}),
+						annotations: { 'nginx.ingress.kubernetes.io/ssl-redirect': 'true' }
+					},
+					spec: { ingressClassName: 'nginx', rules: [{ host: 'tools.example.com' }], tls: [] }
+				} as never);
+				const plugin = new KubernetesPlugin({ api });
+				await plugin.onLoad(createMockContext({}));
 
-			await (plugin as any).addDomain(
-				'stale-tenant-ns/stale-site',
-				'new.example.com',
-				VALID,
-				undefined,
-				scopedContext
-			);
+				await (plugin as any).addDomain(
+					'stale-tenant-ns/stale-site',
+					'new.example.com',
+					VALID,
+					undefined,
+					scopedContext
+				);
 
-			const body = vi.mocked(api.applyIngress).mock.calls[0]?.[1] as { metadata: Record<string, unknown> };
-			expect(body.metadata).not.toHaveProperty('labels');
-		});
+				const body = vi.mocked(api.applyIngress).mock.calls[0]?.[1] as { metadata: Record<string, unknown> };
+				expect(body.metadata).toEqual({ name: 'current-website-repo', namespace: 'current-tenant-ns' });
+			}
+		);
 	});
 
 	it('uses the Work kubeContext when verifying a domain', async () => {

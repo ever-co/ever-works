@@ -2440,9 +2440,14 @@ const DEPLOY_LABEL_KEYS = [
  * Under server-side apply, a field this field manager applied before and now leaves out is removed. The
  * deploy applies the Ingress with its labels and annotations under the same manager, so an apply of
  * `spec` alone would strip both: the labels the Work-delete teardown and the orphan report rely on, and
- * the ingress-controller and TLS-issuer annotations. So the deploy's own labels are carried over from the
- * live Ingress (their `work-id` value is the raw repository name, which is not known here), and the
- * annotations are worked out for the new host list, as `deploy()` works them out.
+ * the ingress-controller and TLS-issuer annotations. So, for an Ingress whose labels show the deploy made it
+ * (`ever-works.io/managed=true` and this plugin as `app.kubernetes.io/managed-by`), the deploy's own labels
+ * are carried over from the live object (their `work-id` value is the raw repository name, which is not
+ * known here), and the annotations are worked out for the new host list, as `deploy()` works them out.
+ *
+ * Any other Ingress at that name (one a member made by hand on their own cluster, say) gets only `name` and
+ * `namespace`, as before: forcing the deploy's annotations onto it would overwrite its own values for
+ * the same keys (`ssl-redirect`, `proxy-body-size`).
  */
 function websiteIngressMetadata(
 	name: string,
@@ -2453,6 +2458,11 @@ function websiteIngressMetadata(
 	settings: { tlsIssuer?: string; ingressClass?: string }
 ): Record<string, unknown> {
 	const liveLabels = (live as { metadata?: { labels?: Record<string, string> } } | null)?.metadata?.labels ?? {};
+	const deployMade =
+		liveLabels['ever-works.io/managed'] === 'true' && liveLabels['app.kubernetes.io/managed-by'] === FIELD_MANAGER;
+	if (!deployMade) {
+		return { name, namespace };
+	}
 	const labels: Record<string, string> = {};
 	for (const key of DEPLOY_LABEL_KEYS) {
 		if (typeof liveLabels[key] === 'string') labels[key] = liveLabels[key];

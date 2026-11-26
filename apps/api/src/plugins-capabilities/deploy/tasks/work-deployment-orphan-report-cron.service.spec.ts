@@ -36,6 +36,36 @@ function makeService(report: WorkDeploymentOrphanReport | Error) {
 }
 
 describe('WorkDeploymentOrphanReportCronService', () => {
+    const savedOwner = process.env.EVER_WORKS_K8S_WORKS_CLUSTER_OWNER;
+
+    beforeEach(() => {
+        // This environment owns the clusters, unless a test says otherwise.
+        process.env.EVER_WORKS_K8S_WORKS_CLUSTER_OWNER = 'true';
+    });
+
+    afterAll(() => {
+        if (savedOwner === undefined) delete process.env.EVER_WORKS_K8S_WORKS_CLUSTER_OWNER;
+        else process.env.EVER_WORKS_K8S_WORKS_CLUSTER_OWNER = savedOwner;
+    });
+
+    it('takes no lock and reads nothing where this environment does not own the clusters', async () => {
+        delete process.env.EVER_WORKS_K8S_WORKS_CLUSTER_OWNER;
+        const { service, deployFacade, taskLockService, lines } = makeService({
+            clusters: [],
+            orphans: [],
+            unresolvedWorks: 0,
+        });
+
+        await service.runReport();
+
+        expect(taskLockService.runExclusive).not.toHaveBeenCalled();
+        expect(deployFacade.reportOrphanedWorkDeployments).not.toHaveBeenCalled();
+        expect(lines.warn).toEqual([]);
+        expect(lines.debug).toEqual([
+            'Orphaned website deployment report skipped: not_cluster_owner (EVER_WORKS_K8S_WORKS_CLUSTER_OWNER is not true)',
+        ]);
+    });
+
     it('names each orphan, says nothing was removed, and never asks for a teardown', async () => {
         const { service, deployFacade, taskLockService, lines } = makeService({
             clusters: [{ names: ['k8s-works'], listed: 3 }],
@@ -123,7 +153,7 @@ describe('WorkDeploymentOrphanReportCronService', () => {
         ]);
     });
 
-    it('does nothing but a debug line where this environment does not own the clusters', async () => {
+    it('logs only a debug line when the facade itself answers not_cluster_owner', async () => {
         const { service, lines } = makeService({
             skipped: 'not_cluster_owner',
             clusters: [],
