@@ -3192,13 +3192,18 @@ export class WorkLifecycleService {
         }
         let outcome: Promise<void>;
         try {
-            outcome = teardown.run().then(
-                (result) => this.logDeploymentTeardown(work, target, result),
-                (error: unknown) =>
-                    this.logger.error(
-                        `Work ${work.id}: removing its cluster objects (${target}) failed: ${describeFailureCode(error)}`,
-                    ),
-            );
+            outcome = teardown
+                .run()
+                .then(
+                    (result) => this.logDeploymentTeardown(work, target, result),
+                    (error: unknown) =>
+                        this.logger.error(
+                            `Work ${work.id}: removing its cluster objects (${target}) failed: ${describeFailureCode(error)}`,
+                        ),
+                )
+                // Never rejects: it is awaited by the delete, or left to run on
+                // in the background where nothing would catch it.
+                .catch(() => undefined);
         } catch (error) {
             this.logger.error(
                 `Work ${work.id}: removing its cluster objects (${target}) failed: ${describeFailureCode(error)}`,

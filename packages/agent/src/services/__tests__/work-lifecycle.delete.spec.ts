@@ -406,6 +406,20 @@ describe('WorkLifecycleService.deleteWork — managed hosting removes the cluste
         expect(run).toHaveBeenCalledTimes(1);
     });
 
+    it('a result that cannot even be logged does not fail the delete', async () => {
+        const { service, mocks } = makeService(managedWork());
+        const logger = (service as unknown as { logger: { log: jest.Mock } }).logger;
+        jest.spyOn(logger, 'log').mockImplementation(() => {
+            throw new Error('log sink down');
+        });
+        const run = jest.fn().mockResolvedValue(removedAll);
+        mocks.deployFacade.prepareWorkDeploymentTeardown.mockResolvedValue(readyTeardown(run));
+
+        await expect(service.deleteWork('w-managed', {}, user)).resolves.toMatchObject({
+            status: 'success',
+        });
+    });
+
     it('a Vercel Work never asks for a cluster teardown', async () => {
         const { service, mocks } = makeService(directoryWork());
 
