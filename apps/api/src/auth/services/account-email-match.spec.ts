@@ -42,7 +42,7 @@ describe('findAccountByEmail', () => {
         expect(users.findByEmailCaseInsensitiveForSocialAuth).not.toHaveBeenCalled();
     });
 
-    it('then the exact match on the address as received, when its case differs', async () => {
+    it('then, for a non-ASCII address only, the exact match on it as received', async () => {
         const users = repo({ 'José@Example.com': { id: 'u-as-typed' } });
 
         await expect(findAccountByEmail(users as never, ' José@Example.com ')).resolves.toEqual({
@@ -50,6 +50,20 @@ describe('findAccountByEmail', () => {
         });
         expect(users.findByEmail.mock.calls).toEqual([['josé@example.com'], ['José@Example.com']]);
         expect(users.findByEmailCaseInsensitiveForSocialAuth).not.toHaveBeenCalled();
+    });
+
+    // The case-insensitive step sees every variant of an ASCII address, so the received casing
+    // must not pick one of several (the OAuth sign-in refuses the same person).
+    it('never looks an ASCII address up in its received casing: two variants are refused', async () => {
+        const users = repo({ 'Jane@Example.com': { id: 'u-exact' } }, [
+            { id: 'u-exact' },
+            { id: 'u-other' },
+        ]);
+
+        await expect(findAccountByEmail(users as never, 'Jane@Example.com')).rejects.toMatchObject({
+            response: { code: SOCIAL_EMAIL_AMBIGUOUS_CODE },
+        });
+        expect(users.findByEmail.mock.calls).toEqual([['jane@example.com']]);
     });
 
     it('skips the as-received lookup when the address is already normalised', async () => {

@@ -1128,15 +1128,9 @@ describe('GitHubAppOnboardingService', () => {
 
                 const result = await ctx.complete();
 
-                // Exact on the normalised address, then exact on the address as GitHub sent it.
-                expect(ctx.userRepository.findByEmail).toHaveBeenNthCalledWith(
-                    1,
-                    'jane@example.com',
-                );
-                expect(ctx.userRepository.findByEmail).toHaveBeenNthCalledWith(
-                    2,
-                    'Jane@Example.com',
-                );
+                // Exact on the normalised address only: for an ASCII address the fallback, not
+                // GitHub's casing, decides.
+                expect(ctx.userRepository.findByEmail.mock.calls).toEqual([['jane@example.com']]);
                 expect(
                     ctx.userRepository.findByEmailCaseInsensitiveForSocialAuth,
                 ).toHaveBeenCalledWith('jane@example.com');
@@ -1174,6 +1168,30 @@ describe('GitHubAppOnboardingService', () => {
                 );
 
                 await expect(ctx.complete()).rejects.toBeInstanceOf(UnauthorizedException);
+                expectNothingWritten(ctx);
+            });
+
+            // The OAuth sign-in refuses this person (SOCIAL_EMAIL_AMBIGUOUS); the App setup must
+            // not instead pick the variant that happens to be in GitHub's exact casing.
+            it('refuses an ASCII address with two case variants even when one matches the casing GitHub sends', async () => {
+                const ctx = arrange({ email: 'Jane@Example.com' });
+                const asGithubSends = {
+                    ...storedUser,
+                    id: 'user-exact',
+                    email: 'Jane@Example.com',
+                };
+                ctx.userRepository.findByEmail.mockImplementation(async (email: string) =>
+                    email === 'Jane@Example.com' ? asGithubSends : null,
+                );
+                ctx.userRepository.findByEmailCaseInsensitiveForSocialAuth.mockResolvedValue([
+                    asGithubSends,
+                    { ...storedUser, id: 'user-other', email: 'JANE@EXAMPLE.COM' },
+                ]);
+
+                await expect(ctx.complete()).rejects.toMatchObject({
+                    status: 409,
+                    response: { code: SOCIAL_EMAIL_AMBIGUOUS_CODE },
+                });
                 expectNothingWritten(ctx);
             });
 

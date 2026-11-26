@@ -22,7 +22,11 @@ import {
 } from '@nestjs/common';
 import { config } from '@src/config/constants';
 import { existingAccountEmailUnverified } from '@src/auth/services/social-link-errors';
-import { findAccountByEmail, normalizeAccountEmail } from '@src/auth/services/account-email-match';
+import {
+    type AccountEmailMatch,
+    findAccountByEmail,
+    normalizeAccountEmail,
+} from '@src/auth/services/account-email-match';
 import * as bcrypt from 'bcrypt';
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { GitHubAppService, type GitHubInstallationResponse } from './github-app.service';
@@ -449,7 +453,11 @@ export class GitHubAppOnboardingService {
         // below is reached only for a GitHub id we have never seen, and it can
         // never link an unverified email to an existing user.
         const existingLink = await repos.links.findByGithubUserId(input.githubUserId);
-        let user = existingLink ? await repos.users.findById(existingLink.userId) : null;
+        // An account found by email may hold only the social-auth columns (AccountEmailMatch);
+        // the create / update below re-reads a full row into `account`.
+        let user: User | AccountEmailMatch | null = existingLink
+            ? await repos.users.findById(existingLink.userId)
+            : null;
 
         if (!user) {
             const existingAuthAccount = await repos.authAccounts.findProviderAccountByAccountId(
@@ -495,10 +503,11 @@ export class GitHubAppOnboardingService {
             }
         }
 
+        let account: User;
         if (!user) {
             const username = await this.resolveUniqueUsername(input.login);
 
-            user = await repos.users.create({
+            account = await repos.users.create({
                 username,
                 email: email || `github-app-${input.githubUserId}@users.noreply.ever.works`,
                 password: await bcrypt.hash(randomUUID(), 10),
@@ -532,7 +541,7 @@ export class GitHubAppOnboardingService {
             // address of the account; that must not verify this one (or the pre-hijack guard
             // above is undone by the next App setup).
             const sameEmail = !!email && (nextEmail ?? '').trim().toLowerCase() === email;
-            user = await repos.users.update(user.id, {
+            account = await repos.users.update(user.id, {
                 username: user.username || input.login,
                 avatar: input.avatarUrl || user.avatar,
                 email: nextEmail,
@@ -543,7 +552,7 @@ export class GitHubAppOnboardingService {
         }
 
         await repos.authAccounts.upsertProviderAccount({
-            userId: user.id,
+            userId: account.id,
             providerId: 'github',
             accountId: input.githubUserId,
             username: input.login,
@@ -562,7 +571,7 @@ export class GitHubAppOnboardingService {
         });
 
         await repos.links.upsertLink({
-            userId: user.id,
+            userId: account.id,
             githubUserId: input.githubUserId,
             githubLogin: input.login,
             githubNodeId: input.nodeId,
@@ -573,7 +582,7 @@ export class GitHubAppOnboardingService {
             scope: input.scope,
         });
 
-        return user;
+        return account;
     }
 
     /**

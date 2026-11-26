@@ -8,7 +8,7 @@ import {
     UserRepository,
 } from '@ever-works/agent/database';
 import type { OnboardingAccountUpsert } from '@ever-works/agent/onboarding';
-import { findAccountByEmail } from '@src/auth/services/account-email-match';
+import { type AccountEmailMatch, findAccountByEmail } from '@src/auth/services/account-email-match';
 import { listVerifiedGitHubEmails } from '@src/auth/utils/github-email.utils';
 import { UsernameAllocatorService } from '@src/users/services/username-allocator.service';
 
@@ -56,7 +56,10 @@ export class OnboardingAccountAdapter implements OnboardingAccountUpsert {
         accessToken: string;
     }): Promise<{ accountId: string }> {
         const existingLink = await this.githubLinks.findByGithubUserId(input.githubUserId);
-        let user = existingLink ? await this.users.findById(existingLink.userId) : null;
+        // Only `id` is read below, which every account found by email carries.
+        let user: AccountEmailMatch | null = existingLink
+            ? await this.users.findById(existingLink.userId)
+            : null;
 
         if (!user) {
             const existingProviderAccount = await this.authAccounts.findProviderAccountByAccountId(
