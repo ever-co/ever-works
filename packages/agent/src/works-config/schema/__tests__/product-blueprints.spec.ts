@@ -85,7 +85,12 @@ describe("the Ever products' App Blueprint drafts", () => {
             expect(env('REC_JWT_SECRET')?.generate).toBeDefined();
             expect(env('TERMS_IP_SALT')?.generate).toBeDefined();
             expect(env('EVER_STATS_ENABLED')?.value).toBe('false');
+            expect(env('EVER_CONNECT_ENABLED')?.value).toBe('false');
             expect(env('GAUZY_API_URL')).toBeUndefined();
+            // A read-only root, with the scratch folders as volumes that are never backed up.
+            const api = (spec?.components ?? []).find((component) => component.name === 'api');
+            expect(api?.writableRootFilesystem).toBe(false);
+            expect(api?.volumes?.every((volume) => volume.backup === false)).toBe(true);
         });
     });
 

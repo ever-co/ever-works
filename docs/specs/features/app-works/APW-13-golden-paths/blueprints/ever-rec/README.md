@@ -37,8 +37,8 @@ application's source is not in this repository.
   `FIREBASE_DATABASE_URL`, `FIREBASE_STORAGE_BUCKET`, `FIREBASE_MESSAGING_SENDER_ID`, `FIREBASE_APP_ID`, and optionally
   `FIREBASE_MEASUREMENT_ID`.
 - **No managed dependency:** Rec stores everything in Firebase; there is no Postgres, S3 or local-disk alternative.
-- **Privacy defaults:** anonymous statistics off (`EVER_STATS_ENABLED=false`); the connection to Ever Platform off (its
-  default); `GAUZY_API_URL` left unset, because the upstream sample points at Ever Gauzy's production and would register
+- **Privacy defaults:** anonymous statistics off (`EVER_STATS_ENABLED=false`); the connection to Ever Platform off
+  (`EVER_CONNECT_ENABLED=false`, also its default); `GAUZY_API_URL` left unset, because the upstream sample points at Ever Gauzy's production and would register
   every sign-up there.
 - **Licence:** AGPL-3.0, a `green` class: managed hosting allowed, with a network source offer.
 

@@ -59,6 +59,7 @@ spec:
       # Read-only root: the two scratch folders the server works in (relative to its working
       # directory) are volumes, never backed up, and /tmp (ffmpeg) is the renderer's own emptyDir.
       # TODO(verify): nothing else writes under /app; 4Gi each, as Ever's own deployment.
+      writableRootFilesystem: false
       volumes:
         - { name: tmp-videos, path: /app/apps/api/tmp_videos, size: 4Gi, backup: false }
         - { name: tmp-videos-fixed, path: /app/apps/api/tmp_videos_fixed, size: 4Gi, backup: false }
@@ -153,9 +154,10 @@ spec:
         description: measurementId from your Firebase web app config, if Analytics is on.
 
     # Privacy defaults: anonymous statistics off (on unless exactly `false`), the connection to
-    # Ever Platform off (its default). GAUZY_API_URL stays unset: the upstream sample points at
+    # Ever Platform off (already its default; stated so it is visible). GAUZY_API_URL stays unset: the upstream sample points at
     # Ever Gauzy's production, which would register every sign-up there.
     - { name: EVER_STATS_ENABLED, value: 'false' }
+    - { name: EVER_CONNECT_ENABLED, value: 'false' }
 
   domains:
     primaryComponent: api
