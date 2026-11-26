@@ -35,17 +35,18 @@ The connection is off by default and nothing is sent until you connect.
 Each of the following needs `EVER_CONNECT_ENABLED=true` as well, is off unless
 it is exactly `true`, and does nothing while the installation is not connected:
 
-| Variable                                 | Default     | Meaning                                                                                                                                                                                                                                                                                                                        |
-| ---------------------------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `EVER_CONNECT_LINK_CODES_ENABLED`        | unset (off) | An Organization's administrator can link it to an organization on Ever Platform with a link code. Off: the link routes answer `404`.                                                                                                                                                                                           |
-| `EVER_CONNECT_HEARTBEAT_ENABLED`         | unset (off) | The installation tells Ever Platform that it is running, with its version, shortly after a start and then once a day.                                                                                                                                                                                                          |
-| `EVER_CONNECT_ENTITLEMENTS_ENABLED`      | unset (off) | The signed entitlement documents are read, verified, kept and shown in Settings.                                                                                                                                                                                                                                               |
-| `EVER_CONNECT_APP_SYNC_ENABLED`          | unset (off) | The apps mirror: for an Organization that enabled it in app.ever.co, the identifiers and status of its Works and deployments are sent.                                                                                                                                                                                         |
-| `EVER_CONNECT_APPS_WRITE_ENABLED`        | unset (off) | Another Ever app may create an App in a linked Organization, and start a deployment of one, for a person who allowed it there. **Requires a non-empty `EVER_ID_TRUSTED_CLIENT_IDS`** (the apps that may write): without it the switch does nothing. Off: the `/api/ever-connect/apps` routes answer `404`.                     |
-| `EVER_CONNECT_PERSON_EXPORT_ENABLED`     | unset (off) | A person's export request is answered with an address where the person, signed in here, downloads what Ever Works holds about their own account (see [Answering with the person's data](#answering-with-the-persons-data)). Off: the answer stays `failed` with `export_not_available`.                                        |
-| `EVER_CONNECT_PERSON_DELETION_ENABLED`   | unset (off) | A person's deletion request deletes the matching accounts, through the account deletion of Settings → Danger Zone, when that is safe for everyone else. **Irreversible.** Off: only the connected identities are removed and the answer stays `failed` with `account_deletion_pending`.                                        |
-| `EVER_CONNECT_MEMBERSHIP_SYNC_ENABLED`   | unset (off) | The membership changes Ever Platform sends for a linked Organization are applied to its members (see [Membership changes from Ever Platform](#membership-changes-from-ever-platform)). Off: they are read past and nothing changes.                                                                                            |
-| `EVER_CONNECT_BLUEPRINT_HANDOFF_ENABLED` | unset (off) | `POST /api/works` keeps the marketplace install a create request names, for an App made from a Blueprint in the Organization linked to the install's Ever organization. Off: an install in a create request is ignored and nothing is kept. The web app has a switch of the same name for reading the address that carries it. |
+| Variable                                 | Default     | Meaning                                                                                                                                                                                                                                                                                                                                                                  |
+| ---------------------------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `EVER_CONNECT_LINK_CODES_ENABLED`        | unset (off) | An Organization's administrator can link it to an organization on Ever Platform with a link code. Off: the link routes answer `404`.                                                                                                                                                                                                                                     |
+| `EVER_CONNECT_HEARTBEAT_ENABLED`         | unset (off) | The installation tells Ever Platform that it is running, with its version, shortly after a start and then once a day.                                                                                                                                                                                                                                                    |
+| `EVER_CONNECT_ENTITLEMENTS_ENABLED`      | unset (off) | The signed entitlement documents are read, verified, kept and shown in Settings.                                                                                                                                                                                                                                                                                         |
+| `EVER_CONNECT_ENTITLEMENT_GATES_ENABLED` | unset (off) | The Ever Platform integrations a plan decides run for a linked Organization only while its entitlement document grants their feature: the apps mirror (`app_sync`) and install requests from apps.ever.co (`listings`). **Requires `EVER_CONNECT_ENTITLEMENTS_ENABLED=true`**: without it the switch does nothing (see [Entitlement documents](#entitlement-documents)). |
+| `EVER_CONNECT_APP_SYNC_ENABLED`          | unset (off) | The apps mirror: for an Organization that enabled it in app.ever.co, the identifiers and status of its Works and deployments are sent.                                                                                                                                                                                                                                   |
+| `EVER_CONNECT_APPS_WRITE_ENABLED`        | unset (off) | Another Ever app may create an App in a linked Organization, and start a deployment of one, for a person who allowed it there. **Requires a non-empty `EVER_ID_TRUSTED_CLIENT_IDS`** (the apps that may write): without it the switch does nothing. Off: the `/api/ever-connect/apps` routes answer `404`.                                                               |
+| `EVER_CONNECT_PERSON_EXPORT_ENABLED`     | unset (off) | A person's export request is answered with an address where the person, signed in here, downloads what Ever Works holds about their own account (see [Answering with the person's data](#answering-with-the-persons-data)). Off: the answer stays `failed` with `export_not_available`.                                                                                  |
+| `EVER_CONNECT_PERSON_DELETION_ENABLED`   | unset (off) | A person's deletion request deletes the matching accounts, through the account deletion of Settings → Danger Zone, when that is safe for everyone else. **Irreversible.** Off: only the connected identities are removed and the answer stays `failed` with `account_deletion_pending`.                                                                                  |
+| `EVER_CONNECT_MEMBERSHIP_SYNC_ENABLED`   | unset (off) | The membership changes Ever Platform sends for a linked Organization are applied to its members (see [Membership changes from Ever Platform](#membership-changes-from-ever-platform)). Off: they are read past and nothing changes.                                                                                                                                      |
+| `EVER_CONNECT_BLUEPRINT_HANDOFF_ENABLED` | unset (off) | `POST /api/works` keeps the marketplace install a create request names, for an App made from a Blueprint in the Organization linked to the install's Ever organization. Off: an install in a create request is ignored and nothing is kept. The web app has a switch of the same name for reading the address that carries it.                                           |
 
 ## Connecting in Settings
 
@@ -171,6 +172,30 @@ the installation and one for each linked Organization.
 
 Nothing in Ever Works depends on a document: only Ever Platform features do.
 After a document expires its features still apply for a grace period.
+
+### Integrations a plan decides
+
+With `EVER_CONNECT_ENTITLEMENT_GATES_ENABLED=true` as well, the Ever Platform
+integrations that a plan includes or not run for a linked Organization only
+while that Organization's document grants their feature, in date or in its
+grace period:
+
+| Integration                                                 | Feature it needs | While the document does not grant it                                                                                |
+| ----------------------------------------------------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------- |
+| Apps and deployments (`app_sync`, the apps mirror)          | `app_sync`       | Nothing of the Organization's Works is queued or sent; a full send follows within a day of the feature coming back. |
+| Install requests from apps.ever.co (`marketplace_installs`) | `listings`       | The integration counts as not enabled for the link: new requests are not kept, and no status is reported for it.    |
+
+The feature names come from Ever Platform's integration catalog, which already
+refuses to enable these integrations for an organization whose plan lacks the
+feature; the switch makes Ever Works stop as well when a later document no
+longer grants it, or when the document is past its grace period or could not be
+read at all. A link whose document has not been read yet counts as not granted,
+so the first read after a start (or after linking) decides.
+
+Nothing else depends on a document: Ever Works' own features (Works, Apps,
+builds, deployments, members) never do, the document's limits are enforced by
+Ever Platform, and Sign in with Ever ID is not gated, so a document that could
+not be refreshed never locks anyone out.
 
 ## Apps on Ever Platform
 

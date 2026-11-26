@@ -79,6 +79,8 @@ describe('AppSyncService', () => {
     let mirror: AppSyncService;
     let extensions: EverConnectExtensions;
     let registry: IntegrationHandlerRegistry;
+    /** The fake connection the mirror is built with. */
+    let connection: EverConnectService;
 
     const tenantA = randomUUID();
     const tenantB = randomUUID();
@@ -199,7 +201,7 @@ describe('AppSyncService', () => {
         refresh = jest.fn(async () => []);
         const client = { instances: { mirrorApps: { push, list } } };
         const repository = dataSource.getRepository(EverConnectConnection);
-        const connection = {
+        connection = {
             connection: async () => repository.findOneOrFail({ where: { id: 'self' } }),
             client: async () =>
                 (await repository.findOneOrFail({ where: { id: 'self' } })).status === 'active'
@@ -275,6 +277,33 @@ describe('AppSyncService', () => {
             await mirror.workChanged(await addWork(orgA, 'Store'));
             expect(await rows()).toEqual([]);
             expect([...(await mirror.enabledLinks()).keys()]).toEqual([orgB.id]);
+        });
+
+        it('nothing for a link whose entitlement document does not grant `app_sync`', async () => {
+            // The entitlement gate (`EVER_CONNECT_ENTITLEMENT_GATES_ENABLED`) lets link B through only.
+            const linksGranting = jest.fn(
+                async (_feature: string, ids: Iterable<string>) =>
+                    new Set([...ids].filter((id) => id === LINK_B)),
+            );
+            const gated = new AppSyncService(
+                dataSource,
+                connection,
+                { refresh } as unknown as EverConnectIntegrationService,
+                registry,
+                extensions,
+                undefined,
+                { linksGranting } as never,
+            );
+            await gated.workChanged(await addWork(orgA, 'Store'));
+            expect(await rows()).toEqual([]);
+            expect([...(await gated.enabledLinks()).keys()]).toEqual([orgB.id]);
+            expect(linksGranting).toHaveBeenCalledWith('app_sync', expect.any(Set));
+            expect([...(linksGranting.mock.calls[0][1] as Set<string>)].sort()).toEqual(
+                [LINK_A, LINK_B].sort(),
+            );
+            const shop = await addWork(orgB, 'Shop');
+            await gated.workChanged(shop);
+            expect((await rows()).map((row) => row.payload)).toEqual([{ workId: shop }]);
         });
 
         it('nothing while the installation is not connected, or its link is archived', async () => {

@@ -1,7 +1,7 @@
 import { Injectable, Logger, OnModuleInit, Optional } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Not, type Repository } from 'typeorm';
+import { In, Not, type Repository } from 'typeorm';
 import {
     claimsOfVerifiedJws,
     entitlementStatus,
@@ -26,8 +26,9 @@ import {
 } from '../ever-connect-extensions';
 import { EVER_CONNECT_LEASE_HELD, type EverConnectRoundLease } from '../ever-connect-lease.service';
 import { EverConnectService } from '../ever-connect.service';
-import { isEntitlementsEnabled } from '../ever-connect.switches';
+import { isEntitlementGatesEnabled, isEntitlementsEnabled } from '../ever-connect.switches';
 import { platformFailure } from '../identity/platform-answer';
+import { grantsFeature } from './entitlement-gates';
 
 /** How long a document is used before it is read again, when it does not say (6 hours). */
 export const ENTITLEMENT_REFRESH_AFTER_S = 21_600;
@@ -98,6 +99,9 @@ interface Claims {
  *   like a plugin secret when the installation has an encryption key.
  * - **Read-only:** {@link view} is what Settings → Ever Platform shows. Nothing
  *   in Ever Works depends on a document: its features are Ever Platform's.
+ *   With `EVER_CONNECT_ENTITLEMENT_GATES_ENABLED`, {@link linksGranting} tells
+ *   the Ever Platform integrations a plan decides (`entitlement-gates.ts`)
+ *   which linked Organizations they still run for.
  *
  * Does nothing unless `EVER_CONNECT_ENTITLEMENTS_ENABLED=true`, and nothing
  * while the installation is not connected.
@@ -211,6 +215,38 @@ export class EverConnectEntitlementService
         if (!this.isEnabled()) return null;
         const row = await this.documents.findOne({ where: { subject } });
         if (!row || subject === EVER_CONNECT_KEY_SET_SUBJECT) return null;
+        return this.viewOf(row, now);
+    }
+
+    /**
+     * Of the given tenant links, the ones whose stored document grants `feature`
+     * (in date or in its grace period). With `EVER_CONNECT_ENTITLEMENT_GATES_ENABLED`
+     * off every given link is answered, unread: nothing is gated. One read for
+     * all of them; a link with no document, or one whose document is paused, is
+     * left out.
+     */
+    async linksGranting(
+        feature: string,
+        platformLinkIds: Iterable<string>,
+        now: Date = new Date(),
+    ): Promise<Set<string>> {
+        const given = new Set(platformLinkIds);
+        if (!isEntitlementGatesEnabled()) return given;
+        const ids = [...given].filter((id) => LINK_ID.test(id));
+        const granted = new Set<string>();
+        if (ids.length === 0) return granted;
+        const rows = await this.documents.find({
+            where: { subject: In(ids.map(linkEntitlementSubject)) },
+        });
+        for (const row of rows) {
+            const id = row.subject.slice('link:'.length);
+            if (grantsFeature(this.viewOf(row, now), feature)) granted.add(id);
+        }
+        return granted;
+    }
+
+    /** What one stored document says, or `null` when it says nothing readable. */
+    private viewOf(row: EverConnectEntitlement, now: Date): EverPlatformEntitlementView | null {
         const claims = this.claimsOf(row);
         if (!claims && !row.lastError) return null;
         const seconds = (value: number | undefined) =>

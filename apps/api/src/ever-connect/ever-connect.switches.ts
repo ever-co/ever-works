@@ -12,7 +12,13 @@
  * - `EVER_CONNECT_ENTITLEMENTS_ENABLED`: the installation reads the signed
  *   entitlement documents (its own and each linked Organization's), verifies
  *   and keeps them, and shows what they say. Nothing in Ever Works depends on
- *   them.
+ *   them unless the next switch is on too.
+ * - `EVER_CONNECT_ENTITLEMENT_GATES_ENABLED`: the Ever Platform integrations
+ *   whose feature a plan decides run for a linked Organization only while its
+ *   document grants that feature (in date or in its grace period): the apps
+ *   mirror (`app_sync`) and install requests from apps.ever.co (`listings`).
+ *   Needs `EVER_CONNECT_ENTITLEMENTS_ENABLED=true`: without the documents it
+ *   does nothing. Ever Works' own features never depend on a document.
  * - `EVER_CONNECT_APP_SYNC_ENABLED`: the apps mirror. For an Organization whose
  *   link has the `app_sync` integration enabled in app.ever.co, the
  *   identifiers and status of its Works and their deployments are sent to Ever
@@ -71,6 +77,16 @@ export function isEntitlementsEnabled(env: Env = process.env): boolean {
     return withConnect(env, 'EVER_CONNECT_ENTITLEMENTS_ENABLED');
 }
 
+/**
+ * Whether the integrations a plan decides wait for the linked Organization's
+ * document (`ENTITLEMENT_GATED_INTEGRATIONS`): the switch, **and** the
+ * documents it reads. Without them every link would look ungranted, so the
+ * switch alone does nothing.
+ */
+export function isEntitlementGatesEnabled(env: Env = process.env): boolean {
+    return withConnect(env, 'EVER_CONNECT_ENTITLEMENT_GATES_ENABLED') && isEntitlementsEnabled(env);
+}
+
 export function isAppSyncEnabled(env: Env = process.env): boolean {
     return withConnect(env, 'EVER_CONNECT_APP_SYNC_ENABLED');
 }
@@ -117,6 +133,8 @@ export interface EverConnectFeatures {
     readonly linkCodes: boolean;
     readonly heartbeat: boolean;
     readonly entitlements: boolean;
+    /** The integrations a plan decides wait for the linked Organization's document. */
+    readonly entitlementGates: boolean;
     readonly appSync: boolean;
     /** The routes exist: the switch is on and the list of trusted apps is not empty. */
     readonly appsWrite: boolean;
@@ -128,6 +146,7 @@ export function everConnectFeatures(env: Env = process.env): EverConnectFeatures
         linkCodes: isLinkCodesEnabled(env),
         heartbeat: isHeartbeatEnabled(env),
         entitlements: isEntitlementsEnabled(env),
+        entitlementGates: isEntitlementGatesEnabled(env),
         appSync: isAppSyncEnabled(env),
         appsWrite: isAppsWriteEnabled(env),
         blueprintHandoff: isBlueprintHandoffEnabled(env),

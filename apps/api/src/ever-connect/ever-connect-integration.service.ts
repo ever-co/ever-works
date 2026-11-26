@@ -10,6 +10,8 @@ import {
     EverConnectIntegrationChangedEvent,
 } from './ever-connect.events';
 import { EverConnectService } from './ever-connect.service';
+import { entitlementFeatureOf } from './entitlements/entitlement-gates';
+import { EverConnectEntitlementService } from './entitlements/ever-connect-entitlement.service';
 import type {
     EverIdLoginClient,
     EverIdLoginIntegration,
@@ -69,6 +71,7 @@ export class EverConnectIntegrationService implements EverIdLoginIntegration {
         private readonly events: EventEmitter2,
         @Optional() secrets?: PluginSecretEncService,
         @Optional() private readonly handlers?: IntegrationHandlerRegistry,
+        @Optional() private readonly entitlements?: EverConnectEntitlementService,
     ) {
         this.secrets = secrets ?? new PluginSecretEncService();
     }
@@ -107,14 +110,29 @@ export class EverConnectIntegrationService implements EverIdLoginIntegration {
 
     /**
      * The tenant links' states of a per-link integration that has a handler
-     * here (`marketplace_installs`); empty for any other key.
+     * here (`marketplace_installs`); empty for any other key. For an
+     * integration a plan decides (`entitlement-gates.ts`), with
+     * `EVER_CONNECT_ENTITLEMENT_GATES_ENABLED` a link whose document does not
+     * grant its feature counts as not enabled; the state stays as reported.
      */
     async linkStates(key: string): Promise<EverConnectLinkIntegrationView[]> {
         const rows = await this.integrations.find({
             where: { linkId: Not(INSTANCE_WIDE), integrationKey: key },
             order: { linkId: 'ASC' },
         });
-        return rows.map((row) => ({ linkId: row.linkId, state: row.state, enabled: row.enabled }));
+        const feature = entitlementFeatureOf(key);
+        const granted =
+            feature && this.entitlements
+                ? await this.entitlements.linksGranting(
+                      feature,
+                      rows.filter((row) => row.enabled).map((row) => row.linkId),
+                  )
+                : null;
+        return rows.map((row) => ({
+            linkId: row.linkId,
+            state: row.state,
+            enabled: row.enabled && (granted === null || granted.has(row.linkId)),
+        }));
     }
 
     /** Whether a per-link integration is enabled for one of the installation's tenant links. */
