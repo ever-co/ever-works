@@ -189,12 +189,12 @@ run, ~100 writes a day). Requests then read one KV value instead of N documents.
 All tools are `readOnlyHint: true`, `idempotentHint: true`, `destructiveHint: false`. Results are returned as
 `structuredContent` and as JSON text, like Contract v1.
 
-| Tool               | Input                                                                                                                                                       | Result                                                                                                                                                |
-| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `list_directories` | `{ query?: string; include_unavailable?: boolean; offset?: number; limit?: number (1-200, default 50) }`                                                    | `{ total, offset, limit, directories: DirectorySummary[], unavailable_count, unavailable? }`, ranked by relevance when `query` is set, else by name   |
-| `search_all`       | `{ query: string; directories?: string[]; category?: string; tag?: string; limit?: number (1-50, default 20); per_directory?: number (1-50, default 10) }`  | `{ query, total, directories_searched, matched_directories: { id, name, url, hits, topic_match }[], items: HubItem[], unavailable: string[], hint? }` |
-| `get_item`         | `{ directory: string; slug: string }`                                                                                                                       | Contract v1 `ItemDetail` plus `directory: { id, name, url }`                                                                                          |
-| `query_directory`  | `{ directory: string; tool: 'get_directory_info' \| 'search_items' \| 'list_items' \| 'get_item' \| 'list_categories' \| 'list_tags'; arguments?: object }` | Exactly the directory's own tool result                                                                                                               |
+| Tool               | Input                                                                                                                                                       | Result                                                                                                                                                               |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `list_directories` | `{ query?: string; include_unavailable?: boolean; offset?: number; limit?: number (1-200, default 50) }`                                                    | `{ total, offset, limit, directories: DirectorySummary[], available_count, unavailable_count, unavailable? }`, ranked by relevance when `query` is set, else by name |
+| `search_all`       | `{ query: string; directories?: string[]; category?: string; tag?: string; limit?: number (1-50, default 20); per_directory?: number (1-50, default 10) }`  | `{ query, total, directories_searched, matched_directories: { id, name, url, hits, topic_match }[], items: HubItem[], unavailable: string[], hint? }`                |
+| `get_item`         | `{ directory: string; slug: string }`                                                                                                                       | Contract v1 `ItemDetail` plus `directory: { id, name, url }`                                                                                                         |
+| `query_directory`  | `{ directory: string; tool: 'get_directory_info' \| 'search_items' \| 'list_items' \| 'get_item' \| 'list_categories' \| 'list_tags'; arguments?: object }` | Exactly the directory's own tool result                                                                                                                              |
 
 ```ts
 interface DirectorySummary {
@@ -229,7 +229,7 @@ interface HubItem extends ItemSummary {
 `directory` arguments accept a registry id (`crm`), a directory hostname (`crm.ever.works`) or its origin
 (`https://crm.ever.works`) — always resolved against the registry; anything that does not resolve fails without a fetch.
 
-`list_directories` returns `unavailable_count` always and the `unavailable` list only with `include_unavailable: true`,
+`list_directories` returns `available_count` and `unavailable_count` always, and the `unavailable` list only with `include_unavailable: true`,
 so the usual answer is not padded with directories that are still being upgraded.
 
 REST twins: `GET /data/directories.json` (= `list_directories` with `include_unavailable: true`, no paging) and

@@ -120,6 +120,18 @@ describe('MCP transport (Contract v1 rules)', () => {
 			expect(failed).not.toHaveProperty('zero_result_query');
 		});
 
+		it('skips list_directories misses while no directory can be read', async () => {
+			const { rpc, network, logs } = hub();
+			for (const url of [...network.routes.keys()].filter((key) => key.endsWith('/data/directory.json'))) {
+				network.routes.set(url, () => new Response('gone', { status: 404 }));
+			}
+			const response = await tool(rpc, 'list_directories', { query: 'zzqq' })();
+			const result = ((await response.json()) as any).result.structuredContent;
+			expect(result).toMatchObject({ total: 0, available_count: 0 });
+			expect(logs.at(-1)).toMatchObject({ event: 'tool', tool: 'list_directories', ok: true });
+			expect(logs.at(-1)).not.toHaveProperty('zero_result_query');
+		});
+
 		it('REST /data/search.json writes a line only for a zero-result search', async () => {
 			const { call, logs } = hub();
 			expect(await entriesOf(() => call('/data/search.json?q=crm'), logs)).toEqual([]);
