@@ -67,6 +67,67 @@ describe('MCP transport (Contract v1 rules)', () => {
 		expect(JSON.stringify(logs)).not.toContain('time tracking'); // no query text in logs
 	});
 
+	describe('zero-result query logging (owner decision 2026-11-26)', () => {
+		/** Run one request and return only the log entries it wrote. */
+		async function entriesOf(run: () => Promise<Response>, logs: Array<Record<string, unknown>>) {
+			const before = logs.length;
+			await run();
+			return logs.slice(before);
+		}
+		const tool = (rpc: ReturnType<typeof hub>['rpc'], name: string, args: Record<string, unknown>) => () =>
+			rpc({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } });
+
+		it('logs the trimmed text of a zero-result search_all and list_directories', async () => {
+			const { rpc, logs } = hub();
+			const [search] = await entriesOf(tool(rpc, 'search_all', { query: '  zzqq nothing matches  ' }), logs);
+			expect(search).toMatchObject({
+				event: 'tool',
+				tool: 'search_all',
+				zero_result_query: 'zzqq nothing matches'
+			});
+			expect(Object.keys(search ?? {}).sort()).toEqual(['event', 'ms', 'ok', 'tool', 'zero_result_query']);
+			const [list] = await entriesOf(tool(rpc, 'list_directories', { query: 'qqzz' }), logs);
+			expect(list?.['zero_result_query']).toBe('qqzz');
+		});
+
+		it('logs no query text when something matched', async () => {
+			const { rpc, logs } = hub();
+			const [search] = await entriesOf(tool(rpc, 'search_all', { query: 'crm' }), logs);
+			expect(search).toMatchObject({ event: 'tool', tool: 'search_all', ok: true });
+			expect(search).not.toHaveProperty('zero_result_query');
+			const [list] = await entriesOf(tool(rpc, 'list_directories', { query: 'time tracking' }), logs);
+			expect(list).not.toHaveProperty('zero_result_query');
+			expect(JSON.stringify(logs)).not.toMatch(/crm|time tracking/);
+		});
+
+		it('caps the logged text at 200 code points and keeps the entry on one line', async () => {
+			const { rpc, logs } = hub();
+			const [long] = await entriesOf(tool(rpc, 'search_all', { query: `${'zq'.repeat(250)}` }), logs);
+			expect(Array.from(String(long?.['zero_result_query']))).toHaveLength(200);
+			const [multiline] = await entriesOf(tool(rpc, 'search_all', { query: 'zzqq\nforged: "line"' }), logs);
+			expect(multiline?.['zero_result_query']).toBe('zzqq\nforged: "line"');
+			expect(JSON.stringify(multiline)).not.toContain('\n');
+		});
+
+		it('skips narrowed searches and failed calls', async () => {
+			const { rpc, logs } = hub();
+			for (const filter of [{ directories: ['crm'] }, { category: 'sales-crm' }, { tag: 'freemium' }]) {
+				const [entry] = await entriesOf(tool(rpc, 'search_all', { query: 'zzqq', ...filter }), logs);
+				expect(entry).not.toHaveProperty('zero_result_query');
+			}
+			const [failed] = await entriesOf(tool(rpc, 'search_all', { query: 'zzqq', limit: 'many' }), logs);
+			expect(failed).toMatchObject({ ok: false });
+			expect(failed).not.toHaveProperty('zero_result_query');
+		});
+
+		it('REST /data/search.json writes a line only for a zero-result search', async () => {
+			const { call, logs } = hub();
+			expect(await entriesOf(() => call('/data/search.json?q=crm'), logs)).toEqual([]);
+			const [miss] = await entriesOf(() => call('/data/search.json?q=xxyy%20none'), logs);
+			expect(miss).toMatchObject({ event: 'rest', path: '/data/search.json', zero_result_query: 'xxyy none' });
+		});
+	});
+
 	it('reports tool input errors as isError results and unknown tools as -32602', async () => {
 		const { rpc } = hub();
 		const bad = (await (

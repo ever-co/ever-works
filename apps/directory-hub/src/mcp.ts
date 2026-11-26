@@ -16,6 +16,7 @@ import {
 	callHubTool,
 	hubInstructions,
 	hubToolDefinitions,
+	zeroResultQuery,
 	type HubToolName
 } from './tools';
 
@@ -176,7 +177,11 @@ export async function handleMcpRequest(request: Request, options: McpOptions): P
 				const started = Date.now();
 				try {
 					const outcome = await callHubTool(name as HubToolName, input['arguments'], options.loader);
-					options.log?.({ event: 'tool', tool: name, ms: Date.now() - started, ok: true });
+					const ms = Date.now() - started;
+					const entry: Record<string, unknown> = { event: 'tool', tool: name, ms, ok: true };
+					const missed = zeroResultQuery(name as HubToolName, input['arguments'], outcome);
+					if (missed !== null) entry['zero_result_query'] = missed;
+					options.log?.(entry);
 					if (outcome.kind === 'passthrough') return rpcResult(id, outcome.result);
 					return rpcResult(id, {
 						content: [{ type: 'text', text: JSON.stringify(outcome.value) }],

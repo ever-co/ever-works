@@ -16,8 +16,9 @@
 
 ## Phase 1 — go live (owner's go + board claim)
 
-- [ ] T-10 Owner answers the open questions in [`spec.md`](./spec.md) §8. Address and registry repo: answered by the
-      phase 1 go (2026-11-21); tenants opt-in, the MCP-servers directory, catalogs and analytics are still open.
+- [x] T-10 Owner answers the open questions in [`spec.md`](./spec.md) §8. Address and registry repo: the phase 1 go
+      (2026-11-21). On 2026-11-26: only our own directories, the MCP-servers directory exists (4,232 items), no catalog
+      listing yet, log zero-result queries only.
 - [x] T-11 Create `ever-works/directory-registry` (README, CONTRIBUTING, MIT, `registry.json`, a validate workflow per
       ADR-014), seeded with the 100 directories and the older ones. Done 2026-11-21: 115 entries (100 + `timetrack` +
       14 older Works with sites).
@@ -25,8 +26,9 @@
       token; confirm sibling-Worker fetches work on the zone (plan §7). Done 2026-11-21: same-zone fetches work.
 - [x] T-13 Live checks: MCP Inspector, the two example questions, `/data/search.json`, every discovery document (plan §0,
       "Phase 1 live"). Not run: connecting Claude itself (`claude mcp add --transport http ever-works https://directories.ever.works/mcp`).
-- [ ] T-14 ever-works-website: `/llms.txt` section and `/.well-known/mcp.json` + `/.well-known/api-catalog` pointing to the hub.
-      PR [ever-co/ever-works-website#322](https://github.com/ever-co/ever-works-website/pull/322), not merged yet.
+- [x] T-14 ever-works-website: `/llms.txt` section and `/.well-known/mcp.json` + `/.well-known/api-catalog` pointing to the hub.
+      PR [ever-co/ever-works-website#322](https://github.com/ever-co/ever-works-website/pull/322), merged 2026-11-21. Live
+      (checked 2026-11-26): all three answer 200, and the catalog is served as `application/linkset+json`.
 - [ ] T-15 Deploy workflow for the Worker (manual dispatch first). The workflow is
       `.github/workflows/deploy-directory-hub.yml` (environment `directory-hub`, `main` only). Since 2026-11-21 19:15Z
       the environment exists with deployment branches limited to `main`, and holds the `DIRECTORY_HUB_CLOUDFLARE_TOKEN`
@@ -41,18 +43,27 @@
     - unknown slugs answered from the item list, and timeouts reported as tool errors;
     - at most 400 registry entries (the subrequest budget).
 
+- [x] T-17 Log the text of zero-result queries only (`zero_result_query`), per the owner's 2026-11-26 decision. Not
+      logged: searches narrowed by `directories`/`category`/`tag`, or that read no directory. Workers Logs invocation
+      logs are off (they stored caller IPs and location), and `/data/search.json` writes no line for a search with
+      results.
+- [ ] T-18 Rebuild the 15 older sites (`timetrack`, `mcpserver`, `vectordb`, `dir`, …; template `classic`). Their
+      website repos already hold template `f52bb1d6` (with the agent API, directory-web-template#1181), but the sites
+      were not rebuilt after that sync (timetrack: last `k8s-build` 2026-10-23), so `/data/directory.json` is still 404.
+
 ## Phase 2
 
 - [ ] T-20 Contract v1.1: optional `network: { name, url, mcp }` in `DirectoryInfo`, an `llms.txt` line and a card field,
       in both templates (minimal and full), so every directory points to the hub.
-- [ ] T-21 Platform: forward-only migration adding a "list in the directory hub" flag to Work, a settings toggle, and
-      `GET /api/public/directories`; the hub merges it with the catalog repo.
+- [ ] ~~T-21 Platform: forward-only migration adding a "list in the directory hub" flag to Work, a settings toggle, and
+      `GET /api/public/directories`.~~ Dropped: the hub lists only our own directories (owner, 2026-11-26).
 - [ ] T-22 Optional `ever.works/mcp*` Workers route to the same Worker.
 - [ ] T-23 Cron Trigger + KV merged index, if cold-isolate latency or memory needs it.
 - [ ] T-24 Publish `@ever-works/agent-api` to npm and drop the helper copy in `src/contract.ts`.
 
 ## Phase 3
 
-- [ ] T-30 Official MCP Registry entry (`server.json`, remote `streamable-http`) and other catalogs (owner's go).
+- [ ] T-30 Official MCP Registry entry (`server.json`, remote `streamable-http`) and other catalogs. Owner 2026-11-26:
+      not yet.
 - [ ] T-31 Optional semantic search (Workers AI embeddings + Vectorize).
 - [ ] T-32 Optional human "all directories" page (design rule, `unslop`).
