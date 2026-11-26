@@ -119,6 +119,23 @@ describe('WorkspaceSwitcher — EW-660 Phase 8', () => {
     });
 
     /**
+     * A failed read is not "no Organization": the person keeps the menu (with
+     * the create row), instead of a lone "Create organization" that would hide
+     * the Organizations they have.
+     */
+    it('keeps the menu when the Organizations read failed', () => {
+        __seedOrganizationsStoreForTests({ data: [], isLoading: false, error: new Error('503') });
+
+        render(<WorkspaceSwitcher />);
+
+        expect(screen.queryByTestId('workspace-switcher-create')).toBeNull();
+        const trigger = screen.getAllByRole('button')[0];
+        expect(trigger).toHaveTextContent('organizations.switcher.heading');
+        fireEvent.click(trigger);
+        expect(screen.getByText('organizations.switcher.createNew')).toBeInTheDocument();
+    });
+
+    /**
      * Empty state popover: opening the trigger surfaces the
      * "Create Organization" row even when no orgs exist.
      */

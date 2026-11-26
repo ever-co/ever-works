@@ -98,7 +98,7 @@ function OrgAvatar({ org, size = 'sm' }: { org: OrganizationResponse; size?: 'sm
  */
 export function WorkspaceSwitcher({ isCollapsed = false }: WorkspaceSwitcherProps) {
     const t = useTranslations('organizations.switcher');
-    const { organizations, isLoading } = useOrganizations();
+    const { organizations, isLoading, error } = useOrganizations();
     const { activeOrganization } = useActiveScope();
     const [isCreateOpen, setIsCreateOpen] = useState(false);
     const [pendingOrganizationSlug, setPendingOrganizationSlug] = useState<string | null>(null);
@@ -146,7 +146,9 @@ export function WorkspaceSwitcher({ isCollapsed = false }: WorkspaceSwitcherProp
     // to make one — it reads "Create organization" and opens the create dialog
     // directly, instead of a menu holding a single entry. (The Ever mark beside
     // the switcher is the sidebar's logo, so the trigger no longer draws one.)
-    if (!hasOrgs && !isLoading) {
+    // Only a read that SUCCEEDED and found none: a failed read keeps the menu,
+    // or a person with Organizations would be shown only "Create organization".
+    if (!hasOrgs && !isLoading && error === null) {
         return (
             <>
                 <button
@@ -213,7 +215,11 @@ export function WorkspaceSwitcher({ isCollapsed = false }: WorkspaceSwitcherProp
                         {leadingIcon}
                         {!isCollapsed && (
                             <span className="flex-1 min-w-0 text-left text-sm font-medium text-text dark:text-text-dark truncate">
-                                {triggerOrg ? pickLabel(triggerOrg) : t('loading')}
+                                {triggerOrg
+                                    ? pickLabel(triggerOrg)
+                                    : error !== null
+                                      ? t('heading')
+                                      : t('loading')}
                             </span>
                         )}
                         {!isCollapsed && (

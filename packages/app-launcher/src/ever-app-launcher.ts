@@ -15,6 +15,7 @@ import type {
 	LauncherManageDetail,
 	LauncherPanelPosition,
 	LauncherRetrySection,
+	LauncherShowOptions,
 	LauncherStrings,
 	LauncherTheme
 } from './types.js';
@@ -201,9 +202,15 @@ export class EverAppLauncher extends LitElement {
 	// Public API (plan §6.2)
 	// -----------------------------------------------------------------------
 
-	/** Open the panel; the command palette calls this (FR-7). */
-	show(): void {
-		void this._openPanel();
+	/**
+	 * Open the panel; the command palette calls this (FR-7).
+	 *
+	 * `focus: false` opens it without moving focus — for a host that opens the
+	 * panel on hover, where taking focus would pull the caret out of whatever
+	 * the person was typing in (and a hover-close would leave it on `<body>`).
+	 */
+	show(options: LauncherShowOptions = {}): void {
+		void this._openPanel(options.focus !== false);
 	}
 
 	/** Close the panel without moving focus (a host-driven close). */
@@ -604,13 +611,13 @@ export class EverAppLauncher extends LitElement {
 	// Opening and closing
 	// -----------------------------------------------------------------------
 
-	private async _openPanel(): Promise<void> {
+	private async _openPanel(moveFocus = true): Promise<void> {
 		if (this._open) return;
 		this._open = true;
 		this._activeIndex = 0;
 		await this.updateComplete;
 		this._observePanel();
-		this._focusInitial();
+		if (moveFocus) this._focusInitial();
 		this.dispatchEvent(new CustomEvent('ever-app-launcher:open', { bubbles: true, composed: true }));
 	}
 

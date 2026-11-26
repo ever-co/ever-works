@@ -188,6 +188,8 @@ export function DashboardLayoutClient({
     // when the person picked it and the viewport is desktop-wide.
     const showsAppLauncherRail = useShowsAppLauncherRail(appLauncherEnabled);
     const railWidth = showsAppLauncherRail ? APP_LAUNCHER_RAIL_WIDTH : 0;
+    // The palette's "Open App Launcher" opens the drawer first when the mark is in it.
+    const revealSidebar = useCallback(() => setSidebarOpen(true), []);
 
     // Server-authoritative onboarding state; mutated optimistically by the
     // wizard's own server-action calls and by close/dismiss handlers below.
@@ -544,7 +546,7 @@ export function DashboardLayoutClient({
                       launcher is switched off — the button renders nothing and the
                       opener stays undefined, so the command is unavailable.
                     */}
-                        <AppLauncherProvider>
+                        <AppLauncherProvider revealSidebar={revealSidebar}>
                             <DashboardKeyboardShortcuts onOpenHelp={openHelpFromShortcut} />
                             <PostHogIdentify
                                 userId={user.id}

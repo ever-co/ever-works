@@ -276,6 +276,28 @@ describe('<ever-app-launcher>', () => {
 			expect(query<HTMLElement>(element, '.panel')?.hasAttribute('hidden')).toBe(false);
 		});
 
+		it('show() moves focus into the panel, show({ focus: false }) leaves it where it was', async () => {
+			const outside = document.createElement('input');
+			document.body.appendChild(outside);
+			const element = await mount({ data: FULL_PANEL });
+
+			outside.focus();
+			const opened = once<CustomEvent>(document, 'ever-app-launcher:open');
+			element.show({ focus: false });
+			await opened;
+			expect(query<HTMLElement>(element, '.panel')?.hasAttribute('hidden')).toBe(false);
+			expect(document.activeElement).toBe(outside);
+
+			element.hide();
+			await element.updateComplete;
+			await new Promise((resolve) => setTimeout(resolve, 0));
+			const reopened = once<CustomEvent>(document, 'ever-app-launcher:open');
+			element.show();
+			await reopened;
+			expect(document.activeElement).toBe(element);
+			outside.remove();
+		});
+
 		it('hide() closes the panel and dispatches :close', async () => {
 			const element = await mount({ data: FULL_PANEL });
 			await open(element);
@@ -957,6 +979,15 @@ describe('<ever-app-launcher>', () => {
 				expect(EVER_APP_LAUNCHER_STYLES).toContain(`:host([panel-position='${position}']) .panel`);
 			}
 			expect(EVER_APP_LAUNCHER_STYLES).toContain('@media (min-width: 640px)');
+			// Logical sides: in a right-to-left page the sidebar and the rail are on the right.
+			expect(EVER_APP_LAUNCHER_STYLES).toContain('inset-inline-start: calc(100% + 8px)');
+			expect(EVER_APP_LAUNCHER_STYLES).not.toMatch(/left: calc\(100% \+ 8px\)/);
+		});
+
+		it('gives each section heading a whole row of the tile grid', () => {
+			// Sections are `display: contents`; without this the heading takes a
+			// tile's cell and pushes the tiles out of line.
+			expect(EVER_APP_LAUNCHER_STYLES).toMatch(/\.section-heading,[^{]*\{\s*grid-column: 1 \/ -1;/);
 		});
 
 		it('lets the host put its own mark in the trigger, keeping the grid as the fallback', async () => {

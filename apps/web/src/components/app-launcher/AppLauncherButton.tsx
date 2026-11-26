@@ -18,6 +18,7 @@ import {
     fetchAppLauncherList,
     isAppLauncherCacheFresh,
     storeAppLauncherList,
+    subscribeAppLauncherCache,
 } from '@/lib/app-launcher/app-launcher-cache';
 import {
     captureAppLauncherEvent,
@@ -251,7 +252,7 @@ export function AppLauncherButton({
     const router = useRouter();
     const scope = useWorkspaceScope();
     const scopeKey = scope === null ? null : serializeWorkspaceScope(scope);
-    const { registerOpenAppLauncher } = useAppLauncher();
+    const { registerOpenAppLauncher, revealSidebar } = useAppLauncher();
 
     const hostRef = useRef<HTMLDivElement | null>(null);
     const elementRef = useRef<EverAppLauncher | null>(null);
@@ -546,8 +547,15 @@ export function AppLauncherButton({
             pendingOpenRef.current = true;
             return;
         }
+        // The sidebar's mark lives in a drawer below the `xl` breakpoint: when the
+        // drawer is closed the mark is off-screen, and a panel opened from it
+        // would be too. Open the drawer first (the panel slides in with it).
+        if (variant === 'sidebar') {
+            const box = element.getBoundingClientRect();
+            if (box.right <= 0 || box.width === 0) revealSidebar?.();
+        }
         element.show();
-    }, []);
+    }, [revealSidebar, variant]);
 
     useEffect(() => {
         registerOpenAppLauncher(openFromPalette);
@@ -567,6 +575,27 @@ export function AppLauncherButton({
         setScoped(null);
         elementRef.current?.hide();
     }, [scopeKey]);
+
+    /**
+     * Follow the shared cache: when the left rail read the list, the panel shows
+     * the same answer; when Manage apps saved and dropped the entry, the panel
+     * drops the arrangement it holds, so its next open reads the new one instead
+     * of showing the old one first.
+     */
+    useEffect(
+        () =>
+            subscribeAppLauncherCache(() => {
+                const entry = cacheEntryFor(scopeKey);
+                if (entry !== null) {
+                    setScoped({ scopeKey, data: entry.data, failed: false });
+                } else {
+                    setScoped((previous) =>
+                        previous !== null && previous.scopeKey === scopeKey ? null : previous,
+                    );
+                }
+            }),
+        [scopeKey],
+    );
 
     // -----------------------------------------------------------------------
     // Hover (the sidebar mark only, A2/A3)
@@ -591,7 +620,9 @@ export function AppLauncherButton({
                 const element = elementRef.current;
                 if (element === null || openRef.current) return;
                 openedByHoverRef.current = true;
-                element.show();
+                // A hover never takes focus: the person may be typing elsewhere,
+                // and a hover-close would otherwise leave focus on <body>.
+                element.show({ focus: false });
             }, HOVER_OPEN_DELAY_MS);
         },
         [clearHoverTimer, variant],

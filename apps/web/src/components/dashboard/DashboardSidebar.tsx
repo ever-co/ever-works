@@ -290,10 +290,16 @@ export function DashboardSidebar({
         >
             <div className="flex flex-col h-full">
                 {/* Logo + controls */}
+                {/*
+                    `relative z-[1000000]`: the App Launcher's panel opens from the
+                    mark in this row, and on phones it is a bottom sheet; the user
+                    block at the foot of the sidebar is `z-999999`, so without this
+                    the sheet's footer slides under the person's name.
+                */}
                 <div
                     className={cn(
-                        'flex items-center shrink-0',
-                        isCollapsed ? 'justify-center px-2 py-2' : 'h-15 px-4',
+                        'relative z-[1000000] flex items-center shrink-0',
+                        isCollapsed ? 'justify-center px-2 py-2' : 'h-15 px-3',
                     )}
                 >
                     <div className="w-full relative">
@@ -316,8 +322,8 @@ export function DashboardSidebar({
                         */}
                         <div
                             className={cn(
-                                'flex items-center gap-1',
-                                isCollapsed ? 'flex-col justify-center' : 'pr-6',
+                                'flex items-center',
+                                isCollapsed ? 'flex-col justify-center gap-1' : 'gap-0.5 pr-5',
                             )}
                         >
                             <SidebarAppLauncher

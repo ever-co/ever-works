@@ -680,6 +680,63 @@ describe('AppLauncherButton positions and theme (shared Ever shell, A3/A4)', () 
         await waitFor(() => expect(element.show).toHaveBeenCalledTimes(1));
     });
 
+    it('opens on hover without moving focus, and closes when the pointer leaves', async () => {
+        const { element, getByTestId } = await mount(undefined, { variant: 'sidebar' });
+        const control = getByTestId('app-launcher-control');
+
+        fireEvent.pointerOver(control, { pointerType: 'mouse' });
+        await waitFor(() => expect(element.show).toHaveBeenCalledWith({ focus: false }));
+        await openPanel(element);
+
+        fireEvent.pointerOut(control, { pointerType: 'mouse' });
+        await waitFor(() => expect(element.hide).toHaveBeenCalledTimes(1));
+    });
+
+    it('keeps a hover-opened panel open when the mark is then clicked, and leaving no longer closes it', async () => {
+        const { element, getByTestId } = await mount(undefined, { variant: 'sidebar' });
+        const control = getByTestId('app-launcher-control');
+        // The element's own trigger toggles the panel; a click it receives would shut it.
+        const trigger = document.createElement('button');
+        trigger.className = 'trigger';
+        const triggerToggle = vi.fn();
+        trigger.addEventListener('click', triggerToggle);
+        element.appendChild(trigger);
+
+        fireEvent.pointerOver(control, { pointerType: 'mouse' });
+        await waitFor(() => expect(element.show).toHaveBeenCalledTimes(1));
+        await openPanel(element);
+
+        fireEvent.click(trigger);
+        expect(triggerToggle).not.toHaveBeenCalled();
+
+        fireEvent.pointerOut(control, { pointerType: 'mouse' });
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        expect(element.hide).not.toHaveBeenCalled();
+    });
+
+    it('opens the sidebar drawer first when the palette opens a mark that is off-screen', async () => {
+        const revealSidebar = vi.fn();
+        const utils = render(
+            <AppLauncherProvider revealSidebar={revealSidebar}>
+                <AppLauncherButton variant="sidebar" />
+                <PaletteProbe />
+            </AppLauncherProvider>,
+        );
+        const element = (await waitFor(() => {
+            const found = utils.container.querySelector('ever-app-launcher');
+            if (found === null) throw new Error('not mounted yet');
+            return found;
+        })) as LauncherStub;
+        element.show = vi.fn();
+        element.getBoundingClientRect = () =>
+            ({ left: -300, right: -260, width: 40, top: 0, bottom: 40, height: 40 }) as DOMRect;
+        await waitFor(() => expect(captured.paletteOpener).toBeTypeOf('function'));
+
+        act(() => captured.paletteOpener?.());
+        expect(revealSidebar).toHaveBeenCalledTimes(1);
+        expect(element.show).toHaveBeenCalledTimes(1);
+    });
+
     it('does not open the header control on hover', async () => {
         const { element, getByTestId } = await mount();
         fireEvent.pointerOver(getByTestId('app-launcher-control'), { pointerType: 'mouse' });

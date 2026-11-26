@@ -150,6 +150,11 @@ export type LauncherTheme = 'light' | 'dark' | 'auto';
  */
 export type LauncherPanelPosition = 'bottom-end' | 'bottom-start' | 'right-start' | 'right-end';
 
+/** `show()`'s options: `focus: false` opens the panel without moving focus (a hover). */
+export interface LauncherShowOptions {
+	focus?: boolean;
+}
+
 /**
  * Which half of the panel failed (`loading`/`error` in plan §6.2): the platform
  * catalog read or the person's apps read. The two render differently — spec

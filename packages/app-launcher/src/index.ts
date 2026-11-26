@@ -63,6 +63,7 @@ export type {
 	LauncherPanelPosition,
 	LauncherRetryDetail,
 	LauncherRetrySection,
+	LauncherShowOptions,
 	LauncherSignInDetail,
 	LauncherStrings,
 	LauncherTheme

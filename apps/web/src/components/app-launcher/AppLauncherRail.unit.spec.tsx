@@ -116,6 +116,8 @@ describe('AppLauncherRail', () => {
         render(<AppLauncherRail />);
         const current = await screen.findByTestId('app-launcher-rail-current');
         expect(current).toHaveAttribute('aria-current', 'page');
+        // The 4 px bar on the current app's left edge (A3).
+        expect(within(current).getByTestId('app-launcher-rail-current-bar')).toBeInTheDocument();
         expect(current.closest('a')).toBeNull();
         expect(current).toHaveTextContent('dashboard.appLauncher.railCurrentApp:Ever Works');
     });

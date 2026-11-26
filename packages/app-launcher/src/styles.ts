@@ -105,7 +105,7 @@ export const EVER_APP_LAUNCHER_STYLES = `
 	position: absolute;
 	z-index: 60;
 	top: calc(100% + 8px);
-	right: 0;
+	inset-inline-end: 0;
 	display: flex;
 	flex-direction: column;
 	gap: 8px;
@@ -126,24 +126,26 @@ export const EVER_APP_LAUNCHER_STYLES = `
 }
 
 /* panel-position: only from 640 px up. Below that the panel is a bottom sheet
-   (the media query at the end of this sheet), whatever the host asked for. */
+   (the media query at the end of this sheet), whatever the host asked for.
+   Logical sides (inline start/end): in a right-to-left page the sidebar and the
+   rail are on the right, and "start" and "end" follow them there. */
 @media (min-width: 640px) {
 	:host([panel-position='bottom-start']) .panel {
-		right: auto;
-		left: 0;
+		inset-inline-end: auto;
+		inset-inline-start: 0;
 	}
 
 	:host([panel-position='right-start']) .panel {
 		top: 0;
-		right: auto;
-		left: calc(100% + 8px);
+		inset-inline-end: auto;
+		inset-inline-start: calc(100% + 8px);
 	}
 
 	:host([panel-position='right-end']) .panel {
 		top: auto;
-		right: auto;
+		inset-inline-end: auto;
 		bottom: 0;
-		left: calc(100% + 8px);
+		inset-inline-start: calc(100% + 8px);
 	}
 }
 
@@ -161,6 +163,24 @@ export const EVER_APP_LAUNCHER_STYLES = `
 
 .section {
 	display: contents;
+}
+
+/* The sections are display: contents, so their headings, messages and actions
+   are items of the tile grid: each takes a whole row, or the heading would sit
+   in a tile's cell and push the tiles out of line. */
+.section-heading,
+.error,
+.empty,
+.retry,
+.empty-action,
+.view-all {
+	grid-column: 1 / -1;
+}
+
+.retry,
+.empty-action,
+.view-all {
+	justify-self: start;
 }
 
 .section-heading {
@@ -341,9 +361,8 @@ export const EVER_APP_LAUNCHER_STYLES = `
 	.panel {
 		position: fixed;
 		top: auto;
-		right: 0;
+		inset-inline: 0;
 		bottom: 0;
-		left: 0;
 		width: auto;
 		max-width: none;
 		max-height: 80vh;

@@ -1,5 +1,6 @@
 'use client';
 
+import { Fragment } from 'react';
 import { useTranslations } from 'next-intl';
 import type { AppLauncherItem } from '@ever-works/contracts';
 import { captureAppLauncherEvent } from '@/lib/app-launcher/app-launcher-telemetry';
@@ -102,7 +103,8 @@ function RailItem({ item, position }: { item: AppLauncherItem; position: number 
                 <span aria-current="page" className={SLOT} data-testid="app-launcher-rail-current">
                     <span
                         aria-hidden="true"
-                        className="absolute -left-1 top-1/2 h-5 w-1 -translate-y-1/2 rounded-r-full bg-text dark:bg-text-dark"
+                        className="absolute -start-1 top-1/2 h-5 w-1 -translate-y-1/2 rounded-e-full bg-text dark:bg-text-dark"
+                        data-testid="app-launcher-rail-current-bar"
                     />
                     <AppIcon item={item} />
                     <span className="sr-only">{t('railCurrentApp', { app: item.name })}</span>
@@ -178,7 +180,7 @@ export function AppLauncherRail() {
         <nav
             aria-label={t('railLabel')}
             data-testid="app-launcher-rail"
-            className="flex h-full w-12 shrink-0 flex-col items-center border-r border-border bg-white py-3 dark:border-border-dark dark:bg-surface-dark"
+            className="flex h-full w-12 shrink-0 flex-col items-center border-e border-border bg-white py-3 dark:border-border-dark dark:bg-surface-dark"
         >
             <div className="flex min-h-0 flex-1 flex-col items-center gap-2 overflow-y-auto">
                 {data === null && loading
@@ -190,23 +192,26 @@ export function AppLauncherRail() {
                           />
                       ))
                     : groups.map((items, groupIndex) => (
-                          <ul
-                              key={items[0].section}
-                              className={cn(
-                                  'flex flex-col items-center gap-1',
-                                  groupIndex > 0 &&
-                                      'border-t border-border pt-2 dark:border-border-dark',
+                          // The list spans the column, so the current app's bar sits at
+                          // the column's edge instead of being clipped by the scroller.
+                          <Fragment key={items[0].section}>
+                              {groupIndex > 0 && (
+                                  <span
+                                      aria-hidden="true"
+                                      className="h-px w-6 shrink-0 bg-border dark:bg-border-dark"
+                                  />
                               )}
-                          >
-                              {items.map((item, index) => (
-                                  <li key={item.key} className="flex w-full justify-center">
-                                      <RailItem
-                                          item={item}
-                                          position={offsets[groupIndex] + index}
-                                      />
-                                  </li>
-                              ))}
-                          </ul>
+                              <ul className="flex w-full flex-col items-center gap-1">
+                                  {items.map((item, index) => (
+                                      <li key={item.key} className="flex w-full justify-center">
+                                          <RailItem
+                                              item={item}
+                                              position={offsets[groupIndex] + index}
+                                          />
+                                      </li>
+                                  ))}
+                              </ul>
+                          </Fragment>
                       ))}
             </div>
             <div className="pt-2">
