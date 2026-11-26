@@ -116,7 +116,9 @@ export class AppDeployDeploymentStoreAdapter implements AppDeployDeploymentStore
      * §5.8 / FR-34 — the image facts this Deployment's row already records: a rollback's request
      * writes the digests of the Deployment it returns to (`appRender.image.digest`,
      * `appRender.componentImages`), which the worker deploys instead of re-resolving a tag. Narrow,
-     * like {@link findRequester}; a row it cannot read answers `null` ("nothing recorded").
+     * like {@link findRequester}; a row it cannot read answers `null` ("nothing recorded"). Values
+     * are read leniently — trimmed, non-strings dropped — because the worker validates them again
+     * (only a `sha256:` digest and digest-pinned references are ever pinned to).
      */
     async findRecordedImages(deploymentId: string): Promise<{
         workId: string | null;

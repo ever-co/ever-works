@@ -982,6 +982,20 @@ describe('AppDeployRequestService (APW-06 T24)', () => {
             });
         });
 
+        it('writes no componentImages for a rollback that records none', async () => {
+            const h = harness();
+
+            await h.service.request(
+                manual({
+                    trigger: 'rollback',
+                    buildId: 'build-old',
+                    rollback: { deploymentId: 'old', componentImages: null },
+                }),
+            );
+
+            expect(h.store.rows[0].appRender).not.toHaveProperty('componentImages');
+        });
+
         it('carries the recorded component digests too, and never a tag', async () => {
             const h = harness();
             h.preconditions.result = ready({

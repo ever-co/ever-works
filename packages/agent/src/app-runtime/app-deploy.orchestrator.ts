@@ -1378,8 +1378,8 @@ export class AppDeployOrchestrator {
             context.warnings.push({
                 code: APP_DEPLOY_WARNING_IMAGE_NOT_PINNED,
                 message:
-                    `Component ${tagged.component} names a tag, so it was resolved once to ` +
-                    `${tagged.reference}; this Deployment runs that digest.`,
+                    `Component ${tagged.component} names the tag ${tagged.tag}, so it was resolved ` +
+                    `once to ${tagged.reference}; this Deployment runs that digest.`,
             });
         }
 

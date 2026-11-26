@@ -38,8 +38,11 @@ export type AppComponentImagesResult =
           components: readonly AppComponentInput[];
           /** Component name → the reference it runs, for `appRender.componentImages`. */
           recorded: Record<string, string>;
-          /** The components whose spec named a tag (§5.8:879's `image_not_pinned`). */
-          resolvedFromTag: ReadonlyArray<{ component: string; reference: string }>;
+          /**
+           * The components whose spec named a tag (§5.8:879's `image_not_pinned`): the tag the
+           * spec named and the digest-pinned reference it was resolved to.
+           */
+          resolvedFromTag: ReadonlyArray<{ component: string; tag: string; reference: string }>;
       }
     | { status: 'refused'; code: string; message: string; component: string };
 
@@ -90,7 +93,7 @@ export async function resolveComponentImages(
 ): Promise<AppComponentImagesResult> {
     const list = [...(components ?? [])];
     const resolved = new Map<string, string>();
-    const resolvedFromTag: Array<{ component: string; reference: string }> = [];
+    const resolvedFromTag: Array<{ component: string; tag: string; reference: string }> = [];
 
     for (const component of list) {
         const reference = String(component?.image ?? '').trim();
@@ -122,7 +125,7 @@ export async function resolveComponentImages(
 
         resolved.set(reference, answer.reference);
         if (answer.resolvedFromTag) {
-            resolvedFromTag.push({ component: name, reference: answer.reference });
+            resolvedFromTag.push({ component: name, tag: reference, reference: answer.reference });
         }
     }
 

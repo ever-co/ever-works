@@ -117,7 +117,11 @@ describe('resolveComponentImages (§5.8 for components[].image)', () => {
             admin: `ghcr.io/acme/admin@${DIGEST_C}`,
         });
         expect(answer.resolvedFromTag).toEqual([
-            { component: 'web', reference: `ghcr.io/acme/web@${DIGEST_B}` },
+            {
+                component: 'web',
+                tag: 'ghcr.io/acme/web:1.2.3',
+                reference: `ghcr.io/acme/web@${DIGEST_B}`,
+            },
         ]);
     });
 
