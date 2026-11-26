@@ -159,12 +159,14 @@ spec:
     # owner's own sign-in is asked; the other two accounts get passwords nobody is shown.
     - name: DEMO_SUPER_ADMIN_EMAIL
       prompt:
+        required: true
         description: The e-mail address you will sign in with as the Super Admin.
         example: admin@example.com
       validate: { pattern: '^[^\s@]+@[^\s@]+\.[^\s@]+$' }
     - name: DEMO_SUPER_ADMIN_PASSWORD
       secret: true
       prompt:
+        required: true
         description: The Super Admin's password (12 to 50 characters; the sign-in form takes at most 50).
       validate: { minLength: 12, maxLength: 50 }
     - name: DEMO_ADMIN_PASSWORD
