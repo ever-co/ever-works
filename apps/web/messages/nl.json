@@ -10949,7 +10949,7 @@
             "chipDeploying": "Wordt uitgerold",
             "chipLastDeployFailed": "Laatste uitrol mislukt",
             "viewAll": "Alle {count} bekijken",
-            "footerHelper": "Opent in een nieuw tabblad. Mogelijk moet je inloggen.",
+            "footerHelper": "Mogelijk moet je inloggen.",
             "manageLink": "Apps beheren",
             "emptyWorks": "Apps die je uitrolt verschijnen hier.",
             "emptyWorksCreateApp": "Een app-werk maken",
@@ -10965,7 +10965,16 @@
             "railLabel": "Apps",
             "railCurrentApp": "{app}, je bent hier",
             "railSoonApp": "{app}, binnenkort",
-            "railOpensInNewTab": "{app} (opent in een nieuw tabblad)"
+            "addApp": "Toevoegen",
+            "addAppLabel": "Voeg je eigen apps toe in Ever Platform",
+            "linePlatform": "Eén account voor elke Ever-app",
+            "lineWorks": "AI-agents die je bedrijf runnen",
+            "lineTeams": "Werk- en projectbeheer",
+            "lineGauzy": "ERP, CRM en HR in één app",
+            "lineRec": "Schermafbeeldingen en schermopnames",
+            "lineTraduora": "Vertaalbeheer voor teams",
+            "lineDemand": "Commerce en on-demand marktplaatsen",
+            "lineTech": "Engineers en beheerde agents om in te huren"
         },
         "signOut": {
             "title": "Afmelden bij Ever Works?",

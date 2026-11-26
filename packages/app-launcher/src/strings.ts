@@ -21,7 +21,7 @@ export const DEFAULT_LAUNCHER_STRINGS: LauncherStrings = {
 	chipDeploying: 'Deploying',
 	chipLastDeployFailed: 'Last deploy failed',
 	viewAll: 'View all {count}',
-	footerHelper: 'Opens in a new tab. You may need to sign in.',
+	footerHelper: 'You may need to sign in.',
 	manageLink: 'Manage apps',
 	emptyWorks: 'Apps you deploy show up here.',
 	emptyWorksCreateApp: 'Create an App Work',
@@ -31,5 +31,7 @@ export const DEFAULT_LAUNCHER_STRINGS: LauncherStrings = {
 	retry: 'Try again',
 	signInPrompt: 'Sign in with Ever ID to see your apps here.',
 	signIn: 'Sign in',
-	manageInEverWorks: 'Manage apps in Ever Works'
+	manageInEverWorks: 'Manage apps in Ever Works',
+	addApp: 'Add',
+	addAppLabel: 'Add your own apps in Ever Platform'
 };

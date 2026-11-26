@@ -10949,7 +10949,7 @@
             "chipDeploying": "Distribuzione in corso",
             "chipLastDeployFailed": "Ultima distribuzione non riuscita",
             "viewAll": "Visualizza tutte ({count})",
-            "footerHelper": "Si apre in una nuova scheda. Potrebbe essere necessario accedere.",
+            "footerHelper": "Potrebbe essere necessario accedere.",
             "manageLink": "Gestisci app",
             "emptyWorks": "Le app che distribuisci compaiono qui.",
             "emptyWorksCreateApp": "Crea un lavoro App",
@@ -10965,7 +10965,16 @@
             "railLabel": "App",
             "railCurrentApp": "{app}, sei qui",
             "railSoonApp": "{app}, prossimamente",
-            "railOpensInNewTab": "{app} (si apre in una nuova scheda)"
+            "addApp": "Aggiungi",
+            "addAppLabel": "Aggiungi le tue app in Ever Platform",
+            "linePlatform": "Un solo account per ogni app Ever",
+            "lineWorks": "Agenti IA che gestiscono la tua attività",
+            "lineTeams": "Gestione del lavoro e dei progetti",
+            "lineGauzy": "ERP, CRM e HR in un’unica app",
+            "lineRec": "Cattura e registrazione dello schermo",
+            "lineTraduora": "Gestione delle traduzioni per i team",
+            "lineDemand": "Commercio e marketplace on demand",
+            "lineTech": "Ingegneri e agenti gestiti su incarico"
         },
         "signOut": {
             "title": "Uscire da Ever Works?",

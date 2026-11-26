@@ -24,6 +24,7 @@ import {
     captureAppLauncherEvent,
     type AppLauncherOpenSource,
 } from '@/lib/app-launcher/app-launcher-telemetry';
+import { addAppUrlFrom, withTranslatedLines } from '@/lib/app-launcher/ever-app-lines';
 import { ROUTES } from '@/lib/constants';
 import { useTheme } from '@/lib/hooks/use-theme';
 import { cn } from '@/lib/utils/cn';
@@ -99,6 +100,8 @@ interface LauncherElementState {
     theme: LauncherTheme;
     panelPosition: LauncherPanelPosition;
     data: AppLauncherListResponse | null;
+    /** **+ Add**'s address in this environment, or `null` (no row). */
+    addAppUrl: string | null;
     strings: Partial<LauncherStrings>;
     appWorksAvailable: boolean | undefined;
     loading: boolean;
@@ -120,6 +123,7 @@ function applyElementState(element: EverAppLauncher, state: LauncherElementState
     element.theme = state.theme;
     element.panelPosition = state.panelPosition;
     element.data = state.data;
+    element.addAppUrl = state.addAppUrl;
     element.strings = state.strings;
     element.appWorksAvailable = state.appWorksAvailable;
     element.loading = state.loading;
@@ -289,7 +293,11 @@ export function AppLauncherButton({
     // The scope key travels with the list and is read back here, so another
     // scope's entry cannot be rendered — not even for the frame a switch lands in.
     const active = scoped !== null && scoped.scopeKey === scopeKey ? scoped : null;
-    const data = active?.data ?? null;
+    const loaded = active?.data ?? null;
+    // Each Ever app's one line in the person's language (the catalog carries
+    // English), and **+ Add**'s address from this environment's Ever Platform.
+    const data = useMemo(() => withTranslatedLines(loaded, (key) => t(key)), [loaded, t]);
+    const addAppUrl = useMemo(() => addAppUrlFrom(loaded), [loaded]);
     const fetchFailed = active?.failed ?? false;
     const error: LauncherErrorSection | null = fetchFailed
         ? 'apps'
@@ -325,6 +333,8 @@ export function AppLauncherButton({
             retry: t('retry'),
             signInPrompt: t('signInPrompt'),
             signIn: t('signIn'),
+            addApp: t('addApp'),
+            addAppLabel: t('addAppLabel'),
         }),
         [t, worksTotal],
     );
@@ -401,8 +411,8 @@ export function AppLauncherButton({
     }, []);
 
     const handleItemActivate = useCallback((event: Event) => {
-        // Not cancelled: the element opens the tile's own stored address itself
-        // (FR-30). This handler only reports what was opened, and the closed
+        // Not cancelled: the tile's own link opens its stored address in this
+        // tab (owner, 2026-11-26). This handler only reports what was opened, and the closed
         // union it reports through has no field for a host, an address or a name
         // (ACC-11-32).
         const detail = (event as CustomEvent<LauncherItemActivateDetail>).detail;
@@ -518,6 +528,7 @@ export function AppLauncherButton({
             theme,
             panelPosition: resolvedPanelPosition,
             data,
+            addAppUrl,
             strings,
             appWorksAvailable,
             loading,

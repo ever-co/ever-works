@@ -39,6 +39,7 @@ export {
 	isGridNavigationKey,
 	isTypeaheadKey,
 	nextGridIndex,
+	nextSectionedIndex,
 	typeaheadIndex
 } from './grid-navigation.js';
 

@@ -10949,7 +10949,7 @@
             "chipDeploying": "Dağıtılıyor",
             "chipLastDeployFailed": "Son dağıtım başarısız",
             "viewAll": "Tümünü görüntüle ({count})",
-            "footerHelper": "Yeni sekmede açılır. Giriş yapmanız gerekebilir.",
+            "footerHelper": "Giriş yapmanız gerekebilir.",
             "manageLink": "Uygulamaları yönet",
             "emptyWorks": "Dağıttığınız uygulamalar burada görünür.",
             "emptyWorksCreateApp": "Uygulama İşi oluştur",
@@ -10965,7 +10965,16 @@
             "railLabel": "Uygulamalar",
             "railCurrentApp": "{app}, buradasınız",
             "railSoonApp": "{app}, yakında",
-            "railOpensInNewTab": "{app} (yeni sekmede açılır)"
+            "addApp": "Ekle",
+            "addAppLabel": "Ever Platform’a kendi uygulamalarınızı ekleyin",
+            "linePlatform": "Tüm Ever uygulamaları için tek hesap",
+            "lineWorks": "İşinizi yürüten yapay zekâ ajanları",
+            "lineTeams": "İş ve proje yönetimi",
+            "lineGauzy": "ERP, CRM ve İK tek uygulamada",
+            "lineRec": "Ekran yakalama ve kaydı",
+            "lineTraduora": "Ekipler için çeviri yönetimi",
+            "lineDemand": "Ticaret ve talep üzerine pazar yerleri",
+            "lineTech": "Kiralık mühendisler ve işletilen ajanlar"
         },
         "signOut": {
             "title": "Ever Works oturumu kapatılsın mı?",

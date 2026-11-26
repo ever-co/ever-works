@@ -59,7 +59,18 @@ const LAUNCHER_KEYS = [
     'railLabel',
     'railCurrentApp',
     'railSoonApp',
-    'railOpensInNewTab',
+    // In-app switcher brief S7 (2026-11-26): the "+ Add" row and its accessible name.
+    'addApp',
+    'addAppLabel',
+    // In-app switcher brief S3: one line per Ever app (`lib/app-launcher/ever-app-lines.ts`).
+    'linePlatform',
+    'lineWorks',
+    'lineTeams',
+    'lineGauzy',
+    'lineRec',
+    'lineTraduora',
+    'lineDemand',
+    'lineTech',
 ] as const;
 
 /** Every locale bundle the app ships (README §7 rule 11: all 21 carry the same keys). */
@@ -97,6 +108,24 @@ describe('the App Launcher message keys (APW-11 T19, ACC-11-31)', () => {
                 );
             }
         }
+    });
+
+    it('says nothing about a new tab: every row opens in the same tab (owner, 2026-11-26)', () => {
+        for (const file of localeFiles()) {
+            const block = (bundle(file).dashboard as Record<string, unknown>).appLauncher as Record<
+                string,
+                unknown
+            >;
+            expect(block.railOpensInNewTab, `${file}: railOpensInNewTab`).toBeUndefined();
+        }
+        expect(
+            (
+                (bundle('en.json').dashboard as Record<string, unknown>).appLauncher as Record<
+                    string,
+                    unknown
+                >
+            ).footerHelper,
+        ).toBe('You may need to sign in.');
     });
 
     it('never names a leaf with a literal dot, which would be unreachable as a message path', () => {

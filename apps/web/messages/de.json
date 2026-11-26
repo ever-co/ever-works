@@ -10948,7 +10948,7 @@
             "chipDeploying": "Wird bereitgestellt",
             "chipLastDeployFailed": "Letzte Bereitstellung fehlgeschlagen",
             "viewAll": "Alle {count} anzeigen",
-            "footerHelper": "Öffnet in einem neuen Tab. Möglicherweise müssen Sie sich anmelden.",
+            "footerHelper": "Möglicherweise müssen Sie sich anmelden.",
             "manageLink": "Apps verwalten",
             "emptyWorks": "Apps, die Sie bereitstellen, erscheinen hier.",
             "emptyWorksCreateApp": "Ein App-Werk erstellen",
@@ -10964,7 +10964,16 @@
             "railLabel": "Apps",
             "railCurrentApp": "{app}, Sie sind hier",
             "railSoonApp": "{app}, demnächst",
-            "railOpensInNewTab": "{app} (öffnet in einem neuen Tab)"
+            "addApp": "Hinzufügen",
+            "addAppLabel": "Eigene Apps in Ever Platform hinzufügen",
+            "linePlatform": "Ein Konto für jede Ever-App",
+            "lineWorks": "KI-Agenten, die Ihr Unternehmen führen",
+            "lineTeams": "Arbeits- und Projektmanagement",
+            "lineGauzy": "ERP, CRM und HR in einer App",
+            "lineRec": "Bildschirmaufnahme und -aufzeichnung",
+            "lineTraduora": "Übersetzungsmanagement für Teams",
+            "lineDemand": "Handel und On-Demand-Marktplätze",
+            "lineTech": "Ingenieure und betreute Agenten zur Miete"
         },
         "signOut": {
             "title": "Von Ever Works abmelden?",

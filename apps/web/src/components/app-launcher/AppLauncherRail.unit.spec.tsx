@@ -106,7 +106,8 @@ describe('AppLauncherRail', () => {
         const names = within(rail)
             .getAllByRole('listitem')
             .map((row) => row.textContent || row.querySelector('a')?.getAttribute('aria-label'));
-        expect(names).toHaveLength(6);
+        // Six apps, and the Ever apps group's "+" (S7).
+        expect(names).toHaveLength(7);
         expect(screen.queryByText('Hidden')).toBeNull();
         // The launcher's own control sits at the foot.
         expect(screen.getByTestId('app-launcher-control')).toHaveAttribute('data-variant', 'rail');
@@ -132,14 +133,16 @@ describe('AppLauncherRail', () => {
         expect(inert[0].closest('a')).toBeNull();
     });
 
-    it('opens the others in a new tab with no opener or referrer, and reports no address', async () => {
+    it('opens the others in the same tab with no referrer, and reports no address', async () => {
         render(<AppLauncherRail />);
-        const link = await screen.findByRole('link', {
-            name: 'dashboard.appLauncher.railOpensInNewTab:Ever Platform',
-        });
-        expect(link).toHaveAttribute('target', '_blank');
-        expect(link).toHaveAttribute('rel', 'noopener noreferrer');
+        const link = await screen.findByRole('link', { name: 'Ever Platform' });
+        // Same tab (owner, 2026-11-26): a plain link, so Ctrl/Cmd/middle-click still opens a new one.
+        expect(link).not.toHaveAttribute('target');
+        expect(link).not.toHaveAttribute('rel');
         expect(link).toHaveAttribute('referrerpolicy', 'no-referrer');
+        for (const anchor of screen.getAllByRole('link')) {
+            expect(anchor).not.toHaveAttribute('target');
+        }
 
         fireEvent.click(link);
         expect(captureMock).toHaveBeenCalledWith({
@@ -152,6 +155,61 @@ describe('AppLauncherRail', () => {
             },
         });
         expect(JSON.stringify(captureMock.mock.calls)).not.toContain('example.com');
+    });
+
+    it('ends the Ever apps group with "+", a same-tab link to Ever Platform’s Apps page (S7)', async () => {
+        render(<AppLauncherRail />);
+        const add = await screen.findByTestId('app-launcher-rail-add');
+        expect(add).toHaveAttribute('href', 'https://platformappeverco.example.com/apps?add=app');
+        expect(add).toHaveAttribute('aria-label', 'dashboard.appLauncher.addAppLabel');
+        expect(add).not.toHaveAttribute('target');
+        // The last slot of the Ever apps list, before Your apps.
+        const lists = screen.getAllByRole('list');
+        expect(lists[1].lastElementChild).toContainElement(add);
+    });
+
+    it('keeps the "+" when the person hid every Ever app', async () => {
+        fetchMock.mockResolvedValue({
+            ok: true,
+            status: 200,
+            json: async () => ({
+                ...LIST,
+                items: LIST.items.map((entry) =>
+                    entry.kind === 'platform' ? { ...entry, visible: false } : entry,
+                ),
+            }),
+        });
+        render(<AppLauncherRail />);
+        const add = await screen.findByTestId('app-launcher-rail-add');
+        expect(add).toHaveAttribute('href', 'https://platformappeverco.example.com/apps?add=app');
+        expect(screen.queryByTestId('app-launcher-rail-current')).toBeNull();
+    });
+
+    it('reports a middle click like a click, and nothing for a right click', async () => {
+        render(<AppLauncherRail />);
+        const link = await screen.findByRole('link', { name: 'Ever Platform' });
+        fireEvent(link, new MouseEvent('auxclick', { bubbles: true, button: 1 }));
+        expect(captureMock).toHaveBeenCalledTimes(1);
+        expect(captureMock.mock.calls[0][0]).toMatchObject({
+            name: 'app_launcher_item_opened',
+            properties: { catalog_id: 'app-ever-co' },
+        });
+        fireEvent(link, new MouseEvent('auxclick', { bubbles: true, button: 2 }));
+        expect(captureMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('draws no "+" when the list has no Ever Platform address', async () => {
+        fetchMock.mockResolvedValue({
+            ok: true,
+            status: 200,
+            json: async () => ({
+                ...LIST,
+                items: LIST.items.filter((entry) => entry.key !== 'platform:app-ever-co'),
+            }),
+        });
+        render(<AppLauncherRail />);
+        await screen.findByTestId('app-launcher-rail-current');
+        expect(screen.queryByTestId('app-launcher-rail-add')).toBeNull();
     });
 
     it('never links an address the panel would refuse', async () => {

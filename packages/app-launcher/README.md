@@ -32,9 +32,15 @@ launcher.addEventListener('ever-app-launcher:empty-action', (event) => {
 
 **The element never navigates on its own in host-fed mode.** `:manage`, `:retry` and
 `:empty-action` are reports for the host to act on (FR-64); `:item-activate` is cancellable, and if
-the host cancels it no tab opens (ACC-11-40). The only thing the element opens is a tile's own
-stored address — exactly as stored, in a new tab, with `noopener noreferrer` and no referrer
-(FR-30, FR-31, ACC-11-23).
+the host cancels it nothing opens (ACC-11-40). The only addresses the element links to are a tile's
+own stored address — exactly as stored (FR-31, ACC-11-23) — and the host's `addAppUrl` (the
+**+ Add** row). Each is a plain link with no `target` and no referrer, so it opens **in the same
+tab** (owner, 2026-11-26), and Ctrl/Cmd/middle-click still opens a new one.
+
+**Ever apps** is a list of rows: the logo on a white tile, the name (with its chip) and one line —
+the catalog's `description`, which a host may translate — and never the host name. **Pinned** and
+**Your apps** stay tile grids. The arrow keys move one row at a time in the list and by the column
+count in the grids (`nextSectionedIndex`).
 
 The registry shapes are **not** redeclared here: `AppLauncherItem`, `AppLauncherListResponse` and the
 section/chip/kind/status unions are re-exported from `@ever-works/contracts`
