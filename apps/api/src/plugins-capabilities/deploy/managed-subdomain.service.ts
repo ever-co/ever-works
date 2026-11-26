@@ -78,8 +78,12 @@ export class ManagedSubdomainService {
         if (subdomain && fqdn && provider) {
             try {
                 // With the zone wildcard (`EVER_WORKS_DNS_WILDCARD`) a Work has no record of its own: the
-                // wildcard answers its name, so there is nothing to probe.
-                recordOk = provider.servedByWildcard(fqdn) || (await provider.recordExists(fqdn));
+                // wildcard answers its name, so there is nothing to probe. Not for a Cloudflare Workers Work:
+                // the wildcard sends its name to the k8s ingress, so it is live only once its Workers domain
+                // (a record of its own) exists.
+                recordOk =
+                    (!this.isCloudflare(work) && provider.servedByWildcard(fqdn)) ||
+                    (await provider.recordExists(fqdn));
             } catch (cause) {
                 // A probe failure is a transient health signal, not a hard
                 // error — log + fall through so the UI still renders.

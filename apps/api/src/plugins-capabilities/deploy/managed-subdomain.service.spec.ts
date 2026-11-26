@@ -144,6 +144,18 @@ describe('ManagedSubdomainService', () => {
             expect(result.recordOk).toBe(true);
         });
 
+        it('a Cloudflare Workers Work is live only with a record of its own, wildcard or not', async () => {
+            workRepository.findById.mockResolvedValue(
+                buildWork({ deployProvider: 'cloudflare', managedSubdomain: 'new-site' }),
+            );
+            provider.servedByWildcard.mockReturnValue(true);
+
+            const result = await service.getState('work-1');
+
+            expect(provider.recordExists).toHaveBeenCalledWith('new-site.ever.works');
+            expect(result.recordOk).toBe(false);
+        });
+
         it('returns recordOk=false (and no throw) when the probe fails', async () => {
             workRepository.findById.mockResolvedValue(buildWork({ managedSubdomain: 'my-site' }));
             provider.recordExists.mockRejectedValue(new Error('Cloudflare down'));
