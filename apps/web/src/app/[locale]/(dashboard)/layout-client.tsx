@@ -46,6 +46,7 @@ import type { PluginDeviceAuthStatus } from '@/lib/api/plugins-capabilities/devi
 import type { ApiVersion } from '@/lib/api/version';
 import { DemoErrorToaster } from '@/components/demo/DemoErrorToaster';
 import { DemoSignUpUrlContext } from '@/lib/demo/demo-sign-up-url';
+import { ChatRetentionContext, type ChatRetention } from '@/lib/ai/chat-disclosure';
 import { DemoStrip, type DemoStripProps } from '@/components/demo/DemoStrip';
 import { SaveAccountStrip } from '@/components/anonymous/SaveAccountStrip';
 import { AnonymousAccountContext } from '@/lib/anonymous/anonymous-account-context';
@@ -161,6 +162,10 @@ export function DashboardLayoutClient({
     const tChat = useTranslations('dashboard.aiChat');
     // Platform demo mode: the sign-up host the chat panel's demo error messages name.
     const demoSignUpUrl = demoStrip?.signUpUrl ?? null;
+    // Ever SI's disclosure line (A7): a temporary account or a demo workspace
+    // loses its conversations with it.
+    const chatRetention: ChatRetention =
+        demoStrip !== null || saveAccountStrip !== null ? 'temporary' : 'kept';
     const [sidebarOpen, setSidebarOpen] = useState(true);
     const [helpOpen, setHelpOpen] = useState(false);
     // Tab the Help drawer opens on when a palette command asks for one.
@@ -594,13 +599,15 @@ export function DashboardLayoutClient({
                                             transition: 'width 200ms ease',
                                         }}
                                     >
-                                        <DemoSignUpUrlContext value={demoSignUpUrl}>
-                                            <ChatPanel
-                                                open={chatOpen}
-                                                onClose={toggleChat}
-                                                style={{ width: '100%' }}
-                                            />
-                                        </DemoSignUpUrlContext>
+                                        <ChatRetentionContext value={chatRetention}>
+                                            <DemoSignUpUrlContext value={demoSignUpUrl}>
+                                                <ChatPanel
+                                                    open={chatOpen}
+                                                    onClose={toggleChat}
+                                                    style={{ width: '100%' }}
+                                                />
+                                            </DemoSignUpUrlContext>
+                                        </ChatRetentionContext>
                                     </div>
                                 ) : (
                                     chatOpen && (
@@ -626,16 +633,20 @@ export function DashboardLayoutClient({
                                                         </div>
                                                     </div>
                                                     <div className="h-[calc(100%-48px)]">
-                                                        <DemoSignUpUrlContext value={demoSignUpUrl}>
-                                                            <ChatPanel
-                                                                open={chatOpen}
-                                                                onClose={toggleChat}
-                                                                style={{
-                                                                    width: '100%',
-                                                                    height: '100%',
-                                                                }}
-                                                            />
-                                                        </DemoSignUpUrlContext>
+                                                        <ChatRetentionContext value={chatRetention}>
+                                                            <DemoSignUpUrlContext
+                                                                value={demoSignUpUrl}
+                                                            >
+                                                                <ChatPanel
+                                                                    open={chatOpen}
+                                                                    onClose={toggleChat}
+                                                                    style={{
+                                                                        width: '100%',
+                                                                        height: '100%',
+                                                                    }}
+                                                                />
+                                                            </DemoSignUpUrlContext>
+                                                        </ChatRetentionContext>
                                                     </div>
                                                 </div>
                                             </div>

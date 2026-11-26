@@ -896,7 +896,7 @@
                 "created": "Misi dibuat",
                 "minLength": "Deskripsi harus minimal 10 karakter.",
                 "error": "Tidak dapat membuat Misi. Silakan coba lagi.",
-                "chatUnavailable": "Chat sedang tidak tersedia — gunakan \"Buat manual\"."
+                "chatUnavailable": "Ever SI sedang tidak tersedia — gunakan \"Buat manual\"."
             },
             "buildOnApp": {
                 "product": "Produk",
@@ -6874,7 +6874,7 @@
                         "empty": "Select a document on the left to view or edit it. Drag a file anywhere to upload."
                     },
                     "ai": {
-                        "title": "AI assistant",
+                        "title": "Agen ruang kerja",
                         "empty": "Conversation with the workspace agent will appear here. Use @kb:path to ground replies."
                     }
                 },
@@ -9615,7 +9615,7 @@
         },
         "sidebar": {
             "menu": "Menu",
-            "aiChat": "Obrolan AI",
+            "aiChat": "Ever SI",
             "newWork": "Karya Baru",
             "new": "Baru",
             "activityIndicator": "Karya sedang dibuat",
@@ -9687,11 +9687,13 @@
             }
         },
         "aiChat": {
-            "title": "Asisten AI",
-            "panelTitle": "Obrolan",
+            "title": "Ever SI",
+            "panelTitle": "Ever SI",
             "subtitle": "Buat karya dengan bahasa alami",
-            "welcomeTitle": "Selamat datang di Asisten AI 👋",
-            "welcomeSubtitle": "Asisten bertenaga AI Anda. Tanyakan apa saja tentang membuat karya, menghasilkan konten, atau mengatur data Anda.",
+            "welcomeTitle": "Ever SI",
+            "welcomeSubtitle": "Tanyakan tentang membuat Works, menghasilkan konten, atau menata data Anda.",
+            "disclosure": "Anda sedang mengobrol dengan asisten SI Ever. Asisten ini bisa keliru. Kami menyimpan percakapan ini sampai Anda menghapusnya.",
+            "disclosureTemporary": "Anda sedang mengobrol dengan asisten SI Ever. Asisten ini bisa keliru. Percakapan ini dihapus bersama akun sementara ini.",
             "welcomeMessage": "Hai! Saya dapat membantu Anda membuat karya menggunakan bahasa alami. Tanyakan seperti \"Buat karya untuk alat AI\" atau jelaskan apa yang Anda butuhkan.",
             "capabilities": {
                 "workCreation": "Pembuatan Karya",
@@ -9701,20 +9703,21 @@
                 "contentGeneration": "Pembangkitan Konten",
                 "contentGenerationDesc": "Hasilkan deskripsi, kategori, dan metadata",
                 "smartSuggestions": "Saran Cerdas",
-                "smartSuggestionsDesc": "Dapatkan rekomendasi bertenaga AI untuk proyek Anda"
+                "smartSuggestionsDesc": "Rekomendasi untuk proyek Anda"
             },
             "newChat": "Obrolan baru",
             "history": "Riwayat",
             "loadingConversation": "Memuat percakapan…",
-            "inputPlaceholder": "Tanyakan apa saja...",
+            "inputPlaceholder": "Tanya Ever SI",
             "sendButton": "Kirim",
             "stopGenerating": "Hentikan pembuatan",
             "sendHint": "Enter untuk kirim · Shift+Enter untuk baris baru",
-            "closeChat": "Tutup obrolan",
-            "collapseChat": "Lipat obrolan",
-            "resizeChat": "Seret untuk mengubah ukuran obrolan",
-            "expandChat": "Lebarkan obrolan",
-            "providersError": "Gagal memuat penyedia AI. Obrolan mungkin tidak berfungsi dengan benar.",
+            "closeChat": "Tutup Ever SI",
+            "collapseChat": "Ciutkan Ever SI",
+            "resizeChat": "Seret untuk mengubah ukuran Ever SI",
+            "expandChat": "Lebarkan Ever SI",
+            "openPanel": "Buka Ever SI",
+            "providersError": "Penyedia AI tidak dapat dimuat. Ever SI mungkin tidak menjawab dengan benar.",
             "providerNotConfigured": "Penyedia ini belum dikonfigurasikan. Atur di Plugin.",
             "editMessage": "Edit pesan",
             "saveEdit": "Simpan & Kirim",
@@ -9733,7 +9736,7 @@
             "configureDeployProvider": "Konfigurasikan Penyedia Penyebaran",
             "deployConfigured": "Penyedia penyebaran dikonfigurasikan ({provider})",
             "opened": "Dibuka",
-            "historyEmpty": "Belum ada percakapan. Mulai obrolan untuk melihat riwayat di sini.",
+            "historyEmpty": "Belum ada percakapan. Tanyakan sesuatu kepada Ever SI untuk memulai.",
             "historyUntitled": "Percakapan tanpa judul",
             "historyToday": "Hari ini",
             "historyYesterday": "Kemarin",
@@ -9792,6 +9795,16 @@
                 "stateFailed": "{step}: failed",
                 "statePending": "{step}: not started",
                 "pollingStopped": "Stopped checking for updates. Open the Task to see where it stands."
+            },
+            "panel": {
+                "assistant": "Ever SI",
+                "close": "Tutup Ever SI"
+            },
+            "secretOnce": {
+                "copy": "Salin",
+                "copied": "Disalin",
+                "copyNow": "Salin sekarang: hanya ditampilkan di sini, sekali. Tidak disimpan dalam percakapan ini, dan Ever SI tidak dapat melihatnya.",
+                "shownOnce": "Sebuah rahasia ditampilkan sekali saat ini dijalankan. Rahasia itu tidak disimpan dalam percakapan; buat yang baru di Pengaturan jika Anda tidak lagi memilikinya."
             }
         },
         "plugins": {
@@ -10949,6 +10962,19 @@
             "alsoSignOutEverId": "Keluar juga dari Ever ID",
             "cancel": "Batal",
             "confirm": "Keluar"
+        },
+        "commandPalette": {
+            "commands": {
+                "openChat": "Buka Ever SI",
+                "closeChat": "Tutup Ever SI"
+            },
+            "commandAliases": {
+                "openChat": "ever si, si, obrolan, asisten, chat, assistant, ask ai",
+                "closeChat": "ever si, si, sembunyikan obrolan, hide chat, chat, assistant"
+            },
+            "noResults": {
+                "askChat": "Tanya Ever SI tentang “{query}”"
+            }
         }
     },
     "layout": {

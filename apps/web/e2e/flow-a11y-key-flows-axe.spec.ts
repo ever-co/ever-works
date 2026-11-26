@@ -31,7 +31,7 @@ import { runAxe, seriousViolations, WCAG_A_AA } from './helpers/axe';
  *   - When the chat panel is EXPANDED the main wrapper gets `aria-hidden=true`;
  *     in the default (open, non-expanded) state main is NOT aria-hidden.
  *   - The chat side-panel opens server-side via the `chat-panel-open=1` cookie;
- *     its composer is a <textarea placeholder="Ask me anything...">. (helpers/chat.ts)
+ *     its composer is a <textarea placeholder="Ask Ever SI">. (helpers/chat.ts)
  *   - The WorkspaceSwitcher trigger is a headlessui MenuButton with
  *     aria-label="Switch Organization" (→ aria-haspopup="menu" + aria-expanded
  *     toggled by headlessui). Its menu items are one-per-org + "Create

@@ -81,7 +81,10 @@ export function ChatHistory({ onClose }: ChatHistoryProps) {
                 ) : conversations.length === 0 ? (
                     <div className="flex flex-col items-center justify-center py-12 px-6 text-center">
                         <MessageSquare className="w-8 h-8 text-text-muted/30 dark:text-text-muted-dark/30 mb-3" />
-                        <p className="text-xs text-text-muted dark:text-text-muted-dark">
+                        <p
+                            data-testid="chat-history-empty"
+                            className="text-xs text-text-muted dark:text-text-muted-dark"
+                        >
                             {t('historyEmpty')}
                         </p>
                     </div>

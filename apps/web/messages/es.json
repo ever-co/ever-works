@@ -942,7 +942,7 @@
                 "created": "Misión creada",
                 "minLength": "La descripción debe tener al menos 10 caracteres.",
                 "error": "No se pudo crear la misión. Inténtalo de nuevo.",
-                "chatUnavailable": "El chat no está disponible ahora mismo: usa «Crear manualmente»."
+                "chatUnavailable": "Ever SI no está disponible ahora mismo: usa «Crear manualmente»."
             },
             "buildOnApp": {
                 "product": "Producto",
@@ -6948,7 +6948,7 @@
                         "empty": "Select a document on the left to view or edit it. Drag a file anywhere to upload."
                     },
                     "ai": {
-                        "title": "AI assistant",
+                        "title": "Agente del espacio de trabajo",
                         "empty": "Conversation with the workspace agent will appear here. Use @kb:path to ground replies."
                     }
                 },
@@ -9688,7 +9688,7 @@
         },
         "sidebar": {
             "menu": "Menú",
-            "aiChat": "Chat IA",
+            "aiChat": "Ever SI",
             "newWork": "Nuevo Trabajo",
             "new": "Nuevo",
             "activityIndicator": "Generando trabajo",
@@ -9760,11 +9760,13 @@
             }
         },
         "aiChat": {
-            "title": "Asistente IA",
-            "panelTitle": "Chat",
+            "title": "Ever SI",
+            "panelTitle": "Ever SI",
             "subtitle": "Crea trabajos con lenguaje natural",
-            "welcomeTitle": "Bienvenido al Asistente IA 👋",
-            "welcomeSubtitle": "Tu asistente impulsado por IA. Pregúntame cualquier cosa sobre crear trabajos, generar contenido o organizar tus datos.",
+            "welcomeTitle": "Ever SI",
+            "welcomeSubtitle": "Pregunta sobre crear Works, generar contenido u organizar tus datos.",
+            "disclosure": "Estás chateando con el asistente SI de Ever. Puede equivocarse. Conservamos esta conversación hasta que la elimines.",
+            "disclosureTemporary": "Estás chateando con el asistente SI de Ever. Puede equivocarse. Esta conversación se elimina junto con esta cuenta temporal.",
             "welcomeMessage": "¡Hola! Puedo ayudarte a crear trabajos usando lenguaje natural. Pregunta algo como \"Crea un trabajo para herramientas de IA\" o describe lo que necesitas.",
             "capabilities": {
                 "workCreation": "Creación de Trabajos",
@@ -9774,20 +9776,21 @@
                 "contentGeneration": "Generación de Contenido",
                 "contentGenerationDesc": "Genera descripciones, categorías y metadatos",
                 "smartSuggestions": "Sugerencias Inteligentes",
-                "smartSuggestionsDesc": "Obtén recomendaciones impulsadas por IA para tus proyectos"
+                "smartSuggestionsDesc": "Recomendaciones para tus proyectos"
             },
             "newChat": "Nuevo chat",
             "history": "Historial",
             "loadingConversation": "Cargando conversación…",
-            "inputPlaceholder": "Pregúntame cualquier cosa...",
+            "inputPlaceholder": "Pregunta a Ever SI",
             "sendButton": "Enviar",
             "stopGenerating": "Detener generación",
             "sendHint": "Enter para enviar · Shift+Enter para nueva línea",
-            "closeChat": "Cerrar chat",
-            "collapseChat": "Contraer chat",
-            "resizeChat": "Arrastra para redimensionar el chat",
-            "expandChat": "Expandir chat",
-            "providersError": "Error al cargar proveedores de IA. El chat podría no funcionar correctamente.",
+            "closeChat": "Cerrar Ever SI",
+            "collapseChat": "Contraer Ever SI",
+            "resizeChat": "Arrastra para cambiar el tamaño de Ever SI",
+            "expandChat": "Ampliar Ever SI",
+            "openPanel": "Abrir Ever SI",
+            "providersError": "No se pudieron cargar los proveedores de IA. Puede que Ever SI no responda correctamente.",
             "providerNotConfigured": "Este proveedor no está configurado. Configúralo en Plugins.",
             "editMessage": "Editar mensaje",
             "saveEdit": "Guardar y Enviar",
@@ -9806,7 +9809,7 @@
             "configureDeployProvider": "Configurar Proveedor de Despliegue",
             "deployConfigured": "Proveedor de despliegue configurado ({provider})",
             "opened": "Abierto",
-            "historyEmpty": "Aún no hay conversaciones. Inicia un chat para ver tu historial aquí.",
+            "historyEmpty": "Aún no hay conversaciones. Pregúntale algo a Ever SI para empezar una.",
             "historyUntitled": "Conversación sin título",
             "historyToday": "Hoy",
             "historyYesterday": "Ayer",
@@ -9865,6 +9868,16 @@
                 "stateFailed": "{step}: failed",
                 "statePending": "{step}: not started",
                 "pollingStopped": "Stopped checking for updates. Open the Task to see where it stands."
+            },
+            "panel": {
+                "assistant": "Ever SI",
+                "close": "Cerrar Ever SI"
+            },
+            "secretOnce": {
+                "copy": "Copiar",
+                "copied": "Copiado",
+                "copyNow": "Cópialo ahora: solo se muestra aquí, una vez. No se guarda en esta conversación y Ever SI no puede verlo.",
+                "shownOnce": "Al ejecutarse se mostró un secreto una vez. No se guarda en la conversación; crea uno nuevo en Configuración si ya no lo tienes."
             }
         },
         "plugins": {
@@ -10948,6 +10961,19 @@
             "alsoSignOutEverId": "Cerrar sesión también en Ever ID",
             "cancel": "Cancelar",
             "confirm": "Cerrar sesión"
+        },
+        "commandPalette": {
+            "commands": {
+                "openChat": "Abrir Ever SI",
+                "closeChat": "Cerrar Ever SI"
+            },
+            "commandAliases": {
+                "openChat": "ever si, si, chat, asistente, preguntar a la ia, chat, assistant, ask ai",
+                "closeChat": "ever si, si, ocultar chat, hide chat, chat, assistant"
+            },
+            "noResults": {
+                "askChat": "Preguntar a Ever SI sobre «{query}»"
+            }
         }
     },
     "layout": {

@@ -942,7 +942,7 @@
                 "created": "Mission erstellt",
                 "minLength": "Die Beschreibung muss mindestens 10 Zeichen lang sein.",
                 "error": "Die Mission konnte nicht erstellt werden. Bitte versuchen Sie es erneut.",
-                "chatUnavailable": "Der Chat ist derzeit nicht verfügbar — nutzen Sie stattdessen „Manuell erstellen“."
+                "chatUnavailable": "Ever SI ist derzeit nicht verfügbar — nutzen Sie stattdessen „Manuell erstellen“."
             },
             "buildOnApp": {
                 "product": "Produkt",
@@ -6948,7 +6948,7 @@
                         "empty": "Select a document on the left to view or edit it. Drag a file anywhere to upload."
                     },
                     "ai": {
-                        "title": "AI assistant",
+                        "title": "Workspace-Agent",
                         "empty": "Conversation with the workspace agent will appear here. Use @kb:path to ground replies."
                     }
                 },
@@ -9688,7 +9688,7 @@
         },
         "sidebar": {
             "menu": "Menü",
-            "aiChat": "AI-Chat",
+            "aiChat": "Ever SI",
             "newWork": "Neues Werk",
             "new": "Neu",
             "activityIndicator": "Werk wird generiert",
@@ -9760,11 +9760,13 @@
             }
         },
         "aiChat": {
-            "title": "AI-Assistent",
-            "panelTitle": "Chat",
+            "title": "Ever SI",
+            "panelTitle": "Ever SI",
             "subtitle": "Werke mit natürlicher Sprache erstellen",
-            "welcomeTitle": "Willkommen beim AI-Assistenten 👋",
-            "welcomeSubtitle": "Ihr KI-gestützter Assistent. Fragen Sie mich alles über das Erstellen von Werken, Generieren von Inhalten oder Organisieren Ihrer Daten.",
+            "welcomeTitle": "Ever SI",
+            "welcomeSubtitle": "Fragen Sie nach dem Erstellen von Works, dem Erzeugen von Inhalten oder dem Ordnen Ihrer Daten.",
+            "disclosure": "Sie chatten mit dem SI-Assistenten von Ever. Er kann Fehler machen. Wir bewahren diese Unterhaltung auf, bis Sie sie löschen.",
+            "disclosureTemporary": "Sie chatten mit dem SI-Assistenten von Ever. Er kann Fehler machen. Diese Unterhaltung wird zusammen mit diesem temporären Konto gelöscht.",
             "welcomeMessage": "Hallo! Ich kann Ihnen helfen, Werke mit natürlicher Sprache zu erstellen. Fragen Sie z. B. „Erstelle ein Werk für AI-Tools“ oder beschreiben Sie, was Sie brauchen.",
             "capabilities": {
                 "workCreation": "Werkerstellung",
@@ -9774,20 +9776,21 @@
                 "contentGeneration": "Inhaltsgenerierung",
                 "contentGenerationDesc": "Beschreibungen, Kategorien und Metadaten generieren",
                 "smartSuggestions": "Intelligente Vorschläge",
-                "smartSuggestionsDesc": "KI-gestützte Empfehlungen für Ihre Projekte erhalten"
+                "smartSuggestionsDesc": "Empfehlungen für Ihre Projekte"
             },
             "newChat": "Neuer Chat",
             "history": "Verlauf",
             "loadingConversation": "Lade Konversation…",
-            "inputPlaceholder": "Fragen Sie mich alles...",
+            "inputPlaceholder": "Ever SI fragen",
             "sendButton": "Senden",
             "stopGenerating": "Generierung stoppen",
             "sendHint": "Enter zum Senden · Shift+Enter für neue Zeile",
-            "closeChat": "Chat schließen",
-            "collapseChat": "Chat ausklappen",
-            "resizeChat": "Ziehen, um Chatgröße zu ändern",
-            "expandChat": "Chat erweitern",
-            "providersError": "AI-Provider konnten nicht geladen werden. Chat funktioniert möglicherweise nicht korrekt.",
+            "closeChat": "Ever SI schließen",
+            "collapseChat": "Ever SI einklappen",
+            "resizeChat": "Ziehen, um die Breite von Ever SI zu ändern",
+            "expandChat": "Ever SI verbreitern",
+            "openPanel": "Ever SI öffnen",
+            "providersError": "Die KI-Anbieter konnten nicht geladen werden. Ever SI antwortet möglicherweise nicht richtig.",
             "providerNotConfigured": "Dieser Provider ist nicht konfiguriert. Richten Sie ihn in Plugins ein.",
             "editMessage": "Nachricht bearbeiten",
             "saveEdit": "Speichern & Absenden",
@@ -9806,7 +9809,7 @@
             "configureDeployProvider": "Deploy-Provider konfigurieren",
             "deployConfigured": "Deploy-Provider konfiguriert ({provider})",
             "opened": "Geöffnet",
-            "historyEmpty": "Noch keine Konversationen. Starten Sie einen Chat, um Ihren Verlauf hier zu sehen.",
+            "historyEmpty": "Noch keine Unterhaltungen. Fragen Sie Ever SI etwas, um eine zu beginnen.",
             "historyUntitled": "Unbenannte Konversation",
             "historyToday": "Heute",
             "historyYesterday": "Gestern",
@@ -9865,6 +9868,16 @@
                 "stateFailed": "{step}: failed",
                 "statePending": "{step}: not started",
                 "pollingStopped": "Stopped checking for updates. Open the Task to see where it stands."
+            },
+            "panel": {
+                "assistant": "Ever SI",
+                "close": "Ever SI schließen"
+            },
+            "secretOnce": {
+                "copy": "Kopieren",
+                "copied": "Kopiert",
+                "copyNow": "Kopieren Sie ihn jetzt: Er wird nur hier und nur einmal angezeigt. Er wird nicht in dieser Unterhaltung gespeichert, und Ever SI kann ihn nicht sehen.",
+                "shownOnce": "Beim Ausführen wurde einmal ein Geheimnis angezeigt. Es wird nicht in der Unterhaltung gespeichert; erstellen Sie in den Einstellungen ein neues, wenn Sie es nicht mehr haben."
             }
         },
         "plugins": {
@@ -10948,6 +10961,19 @@
             "alsoSignOutEverId": "Auch von Ever ID abmelden",
             "cancel": "Abbrechen",
             "confirm": "Abmelden"
+        },
+        "commandPalette": {
+            "commands": {
+                "openChat": "Ever SI öffnen",
+                "closeChat": "Ever SI schließen"
+            },
+            "commandAliases": {
+                "openChat": "ever si, si, chat, assistent, ki fragen, chat, assistant, ask ai",
+                "closeChat": "ever si, si, chat ausblenden, hide chat, chat, assistant"
+            },
+            "noResults": {
+                "askChat": "Ever SI nach „{query}“ fragen"
+            }
         }
     },
     "layout": {

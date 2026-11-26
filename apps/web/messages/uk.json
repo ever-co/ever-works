@@ -896,7 +896,7 @@
                 "created": "Місію створено",
                 "minLength": "Опис має містити щонайменше 10 символів.",
                 "error": "Не вдалося створити місію. Спробуйте ще раз.",
-                "chatUnavailable": "Чат зараз недоступний — скористайтеся «Створити вручну»."
+                "chatUnavailable": "Ever SI зараз недоступний — скористайтеся «Створити вручну»."
             },
             "buildOnApp": {
                 "product": "Продукт",
@@ -6874,7 +6874,7 @@
                         "empty": "Select a document on the left to view or edit it. Drag a file anywhere to upload."
                     },
                     "ai": {
-                        "title": "AI assistant",
+                        "title": "Агент робочого простору",
                         "empty": "Conversation with the workspace agent will appear here. Use @kb:path to ground replies."
                     }
                 },
@@ -9615,7 +9615,7 @@
         },
         "sidebar": {
             "menu": "Меню",
-            "aiChat": "Чат з ІІ",
+            "aiChat": "Ever SI",
             "newWork": "Новий робота",
             "new": "Нове",
             "activityIndicator": "Робота генерується",
@@ -9687,11 +9687,13 @@
             }
         },
         "aiChat": {
-            "title": "Асистент ІІ",
-            "panelTitle": "Чат",
+            "title": "Ever SI",
+            "panelTitle": "Ever SI",
             "subtitle": "Створюйте роботи природною мовою",
-            "welcomeTitle": "Ласкаво просимо до Асистента ІІ 👋",
-            "welcomeSubtitle": "Ваш асистент на основі ІІ. Запитуйте мене про створення робіт, генерацію контенту чи організацію даних.",
+            "welcomeTitle": "Ever SI",
+            "welcomeSubtitle": "Запитуйте про створення Works, генерування вмісту чи впорядкування даних.",
+            "disclosure": "Ви спілкуєтеся з SI-асистентом Ever. Він може помилятися. Ми зберігаємо цю розмову, доки ви її не видалите.",
+            "disclosureTemporary": "Ви спілкуєтеся з SI-асистентом Ever. Він може помилятися. Цю розмову буде видалено разом із цим тимчасовим обліковим записом.",
             "welcomeMessage": "Привіт! Я можу допомогти вам створювати роботи природною мовою. Запитайте щось на кшталт «Створити робота для інструментів ІІ» або опишіть, що вам потрібно.",
             "capabilities": {
                 "workCreation": "Створення робіт",
@@ -9701,20 +9703,21 @@
                 "contentGeneration": "Генерація контенту",
                 "contentGenerationDesc": "Генеруйте описи, категорії та метадані",
                 "smartSuggestions": "Розумні пропозиції",
-                "smartSuggestionsDesc": "Отримуйте рекомендації на основі ІІ для ваших проектів"
+                "smartSuggestionsDesc": "Рекомендації для ваших проєктів"
             },
             "newChat": "Новий чат",
             "history": "Історія",
             "loadingConversation": "Завантаження розмови…",
-            "inputPlaceholder": "Запитайте мене будь-що...",
+            "inputPlaceholder": "Запитайте Ever SI",
             "sendButton": "Надіслати",
             "stopGenerating": "Зупинити генерацію",
             "sendHint": "Enter для надсилання · Shift+Enter для нового рядка",
-            "closeChat": "Закрити чат",
-            "collapseChat": "Згорнути чат",
-            "resizeChat": "Перетягніть, щоб змінити розмір чату",
-            "expandChat": "Розгорнути чат",
-            "providersError": "Не вдалося завантажити постачальників ІІ. Чат може працювати некоректно.",
+            "closeChat": "Закрити Ever SI",
+            "collapseChat": "Згорнути Ever SI",
+            "resizeChat": "Перетягніть, щоб змінити ширину Ever SI",
+            "expandChat": "Розширити Ever SI",
+            "openPanel": "Відкрити Ever SI",
+            "providersError": "Не вдалося завантажити постачальників ШІ. Ever SI може відповідати неправильно.",
             "providerNotConfigured": "Цей постачальник не налаштовано. Налаштуйте в Плагінах.",
             "editMessage": "Редагувати повідомлення",
             "saveEdit": "Зберегти та надіслати",
@@ -9733,7 +9736,7 @@
             "configureDeployProvider": "Налаштувати постачальника розгортання",
             "deployConfigured": "Постачальник розгортання налаштовано ({provider})",
             "opened": "Відкрито",
-            "historyEmpty": "Розмов ще немає. Почніть чат, щоб побачити історію тут.",
+            "historyEmpty": "Розмов ще немає. Запитайте щось в Ever SI, щоб почати.",
             "historyUntitled": "Розмова без назви",
             "historyToday": "Сьогодні",
             "historyYesterday": "Вчора",
@@ -9792,6 +9795,16 @@
                 "stateFailed": "{step}: failed",
                 "statePending": "{step}: not started",
                 "pollingStopped": "Stopped checking for updates. Open the Task to see where it stands."
+            },
+            "panel": {
+                "assistant": "Ever SI",
+                "close": "Закрити Ever SI"
+            },
+            "secretOnce": {
+                "copy": "Копіювати",
+                "copied": "Скопійовано",
+                "copyNow": "Скопіюйте зараз: він показується лише тут і лише один раз. Він не зберігається в цій розмові, і Ever SI його не бачить.",
+                "shownOnce": "Під час виконання секрет було показано один раз. Він не зберігається в розмові; створіть новий у Налаштуваннях, якщо його у вас більше немає."
             }
         },
         "plugins": {
@@ -10949,6 +10962,19 @@
             "alsoSignOutEverId": "Також вийти з Ever ID",
             "cancel": "Скасувати",
             "confirm": "Вийти"
+        },
+        "commandPalette": {
+            "commands": {
+                "openChat": "Відкрити Ever SI",
+                "closeChat": "Закрити Ever SI"
+            },
+            "commandAliases": {
+                "openChat": "ever si, si, чат, асистент, chat, assistant, ask ai",
+                "closeChat": "ever si, si, сховати чат, hide chat, chat, assistant"
+            },
+            "noResults": {
+                "askChat": "Запитати Ever SI про «{query}»"
+            }
         }
     },
     "layout": {

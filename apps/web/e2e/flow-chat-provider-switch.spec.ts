@@ -692,7 +692,7 @@ test.describe('Chat provider switch — configured gate, switch routing, record 
         }
 
         // The composer is the deterministic "panel is alive" anchor.
-        await expect(page.getByPlaceholder('Ask me anything...')).toBeVisible({ timeout: 45_000 });
+        await expect(page.getByPlaceholder('Ask Ever SI')).toBeVisible({ timeout: 45_000 });
 
         // CONTRACT: the provider selector is a CHOICE, so it renders only when
         // there is more than one AI provider activated for the account. With a
@@ -701,9 +701,9 @@ test.describe('Chat provider switch — configured gate, switch routing, record 
         // the confusion this gate removes. Most accounts activate exactly one
         // provider, so "hidden" is the common case and the assertions below
         // branch on the real count rather than assuming the chip is there.
-        // The dropdown header is the i18n `title` = exactly "AI Assistant". Match it
-        // EXACTLY: the panel also renders `welcomeTitle` ("Welcome to AI Assistant 👋"),
-        // so a substring match counts the welcome heading as a dropdown that is not there.
+        // The dropdown header carries `data-testid="chat-provider-menu-header"`: its
+        // text is the i18n `title` ("Ever SI"), which the welcome heading and the
+        // sidebar entry also show, so the text alone cannot tell the menu apart.
         if (seededProviders.length < 2) {
             // The header only exists while the menu is OPEN, so its absence alone
             // would also hold for a wrongly-rendered chip nobody clicked. Assert the
@@ -716,7 +716,7 @@ test.describe('Chat provider switch — configured gate, switch routing, record 
                 'a single-provider account gets no selector trigger',
             ).toHaveCount(0);
             await expect(
-                page.getByText('AI Assistant', { exact: true }),
+                page.getByTestId('chat-provider-menu-header'),
                 'a single-provider account gets no provider dropdown at all',
             ).toHaveCount(0);
             return;
@@ -733,10 +733,10 @@ test.describe('Chat provider switch — configured gate, switch routing, record 
         await expect(triggerOrLabel.first()).toBeVisible({ timeout: 30_000 });
 
         // Open the dropdown (DEV hydration race: the first click can be swallowed
-        // pre-hydration — retry until the menu's section header is visible). Exact
-        // again: the always-visible "Welcome to AI Assistant 👋" heading would
-        // satisfy a substring match before the menu ever opened.
-        const menuHeader = page.getByText('AI Assistant', { exact: true }).first();
+        // pre-hydration — retry until the menu's section header is visible). By test
+        // id again: the always-visible "Ever SI" heading would satisfy a text match
+        // before the menu ever opened.
+        const menuHeader = page.getByTestId('chat-provider-menu-header').first();
         await expect(async () => {
             await triggerOrLabel
                 .first()

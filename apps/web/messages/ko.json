@@ -904,7 +904,7 @@
                 "created": "미션이 생성되었습니다",
                 "minLength": "설명은 최소 10자 이상이어야 합니다.",
                 "error": "미션을 생성하지 못했습니다. 다시 시도해 주세요.",
-                "chatUnavailable": "채팅을 사용할 수 없습니다 — \"직접 만들기\"를 이용하세요."
+                "chatUnavailable": "Ever SI를 사용할 수 없습니다 — \"직접 만들기\"를 이용하세요."
             },
             "buildOnApp": {
                 "product": "제품",
@@ -6874,7 +6874,7 @@
                         "empty": "Select a document on the left to view or edit it. Drag a file anywhere to upload."
                     },
                     "ai": {
-                        "title": "AI assistant",
+                        "title": "워크스페이스 에이전트",
                         "empty": "Conversation with the workspace agent will appear here. Use @kb:path to ground replies."
                     }
                 },
@@ -9615,7 +9615,7 @@
         },
         "sidebar": {
             "menu": "메뉴",
-            "aiChat": "AI 채팅",
+            "aiChat": "Ever SI",
             "newWork": "새 워크",
             "new": "새로",
             "activityIndicator": "워크 생성 중",
@@ -9687,11 +9687,13 @@
             }
         },
         "aiChat": {
-            "title": "AI 어시스턴트",
-            "panelTitle": "채팅",
+            "title": "Ever SI",
+            "panelTitle": "Ever SI",
             "subtitle": "자연어로 워크 생성",
-            "welcomeTitle": "AI 어시스턴트에 오신 것을 환영합니다 👋",
-            "welcomeSubtitle": "AI 기반 어시스턴트입니다. 워크 생성, 콘텐츠 생성 또는 데이터 정리와 관련하여 무엇이든 물어보세요.",
+            "welcomeTitle": "Ever SI",
+            "welcomeSubtitle": "Works 만들기, 콘텐츠 생성, 데이터 정리에 대해 물어보세요.",
+            "disclosure": "Ever의 SI 어시스턴트와 대화하고 있습니다. 실수할 수 있습니다. 이 대화는 삭제할 때까지 보관됩니다.",
+            "disclosureTemporary": "Ever의 SI 어시스턴트와 대화하고 있습니다. 실수할 수 있습니다. 이 대화는 임시 계정과 함께 삭제됩니다.",
             "welcomeMessage": "안녕하세요! 자연어를 사용하여 워크를 생성할 수 있도록 도와드리겠습니다. \"AI 도구 워크 생성\" 같은 것을 요청하거나 필요한 것을 설명하세요.",
             "capabilities": {
                 "workCreation": "워크 생성",
@@ -9701,20 +9703,21 @@
                 "contentGeneration": "콘텐츠 생성",
                 "contentGenerationDesc": "설명, 카테고리 및 메타데이터 생성",
                 "smartSuggestions": "스마트 제안",
-                "smartSuggestionsDesc": "프로젝트를 위한 AI 기반 추천 받기"
+                "smartSuggestionsDesc": "프로젝트 추천"
             },
             "newChat": "새 채팅",
             "history": "기록",
             "loadingConversation": "대화 로딩 중…",
-            "inputPlaceholder": "무엇이든 물어보세요...",
+            "inputPlaceholder": "Ever SI에게 질문",
             "sendButton": "전송",
             "stopGenerating": "생성 중지",
             "sendHint": "Enter로 전송 · Shift+Enter로 새 줄",
-            "closeChat": "채팅 닫기",
-            "collapseChat": "채팅 축소",
-            "resizeChat": "채팅 크기 조정 드래그",
-            "expandChat": "채팅 확장",
-            "providersError": "AI 제공자 로드 실패. 채팅이 제대로 작동하지 않을 수 있습니다.",
+            "closeChat": "Ever SI 닫기",
+            "collapseChat": "Ever SI 접기",
+            "resizeChat": "드래그하여 Ever SI 크기 조정",
+            "expandChat": "Ever SI 넓히기",
+            "openPanel": "Ever SI 열기",
+            "providersError": "AI 제공자를 불러올 수 없습니다. Ever SI가 올바르게 답하지 않을 수 있습니다.",
             "providerNotConfigured": "이 제공자가 구성되지 않았습니다. 플러그인에서 설정하세요.",
             "editMessage": "메시지 편집",
             "saveEdit": "저장 및 제출",
@@ -9733,7 +9736,7 @@
             "configureDeployProvider": "배포 제공자 구성",
             "deployConfigured": "배포 제공자 구성됨 ({provider})",
             "opened": "열림",
-            "historyEmpty": "아직 대화가 없습니다. 여기서 기록을 보려면 채팅을 시작하세요.",
+            "historyEmpty": "아직 대화가 없습니다. Ever SI에게 질문해 대화를 시작하세요.",
             "historyUntitled": "제목 없는 대화",
             "historyToday": "오늘",
             "historyYesterday": "어제",
@@ -9792,6 +9795,16 @@
                 "stateFailed": "{step}: failed",
                 "statePending": "{step}: not started",
                 "pollingStopped": "Stopped checking for updates. Open the Task to see where it stands."
+            },
+            "panel": {
+                "assistant": "Ever SI",
+                "close": "Ever SI 닫기"
+            },
+            "secretOnce": {
+                "copy": "복사",
+                "copied": "복사됨",
+                "copyNow": "지금 복사하세요. 여기에서 한 번만 표시됩니다. 이 대화에 저장되지 않으며 Ever SI도 볼 수 없습니다.",
+                "shownOnce": "실행할 때 비밀 값이 한 번 표시되었습니다. 대화에 보관되지 않으니, 더 이상 없다면 설정에서 새로 만드세요."
             }
         },
         "plugins": {
@@ -10949,6 +10962,19 @@
             "alsoSignOutEverId": "Ever ID에서도 로그아웃",
             "cancel": "취소",
             "confirm": "로그아웃"
+        },
+        "commandPalette": {
+            "commands": {
+                "openChat": "Ever SI 열기",
+                "closeChat": "Ever SI 닫기"
+            },
+            "commandAliases": {
+                "openChat": "ever si, si, 채팅, 어시스턴트, chat, assistant, ask ai",
+                "closeChat": "ever si, si, 채팅 숨기기, hide chat, chat, assistant"
+            },
+            "noResults": {
+                "askChat": "“{query}”에 대해 Ever SI에게 질문"
+            }
         }
     },
     "layout": {
