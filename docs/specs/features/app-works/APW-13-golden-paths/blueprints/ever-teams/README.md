@@ -5,7 +5,7 @@
 the APW-13 spec §4.5: nothing here has run on a cluster yet.
 
 Ever Teams is a web app over an Ever Gauzy API: it keeps no data of its own. This Blueprint runs the web app and asks,
-at setup, which Ever Gauzy API it should use: the person's own Ever Gauzy App, or Ever's hosted
+at setup, which Ever Gauzy API it should use: the person's own Ever Gauzy App (`../ever-gauzy/`), or Ever's hosted
 API. An App spec cannot depend on another App, so the API is named by its address.
 
 ## What this repository is
@@ -57,7 +57,7 @@ application's source is not in this repository.
    writable for it (image optimisation caches there).
 2. Whether the root filesystem can be read-only (`writableRootFilesystem: false`).
 3. Memory request and limit.
-4. Sign-in and sign-up end to end in proxy mode against an Ever Gauzy App, including the
+4. Sign-in and sign-up end to end in proxy mode against an Ever Gauzy App made from `../ever-gauzy/`, including the
    invitation e-mail links.
 5. Live updates (`NEXT_PUBLIC_REALTIME_ENABLED`, off by default): in proxy mode its socket address must be given
    explicitly (`NEXT_PUBLIC_REALTIME_URL`); the Blueprint leaves the feature off.

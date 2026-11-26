@@ -13,8 +13,8 @@ import { validateAppSpecDocument } from '../app-spec.validate';
  * Each must pass what the Blueprint resolver checks before it lists a repository
  * (`app-blueprint-resolver.service.ts`): `.works/works.yml` validates in `blueprint` mode with no
  * error, its root `kind` is `app`, and `spec.blueprint.repo` names the repository. And what this
- * catalog asks of its own drafts: the image is pinned by digest (a tag can move), no secret holds
- * a literal value, and `.works/template.yml` names the same upstream as the spec.
+ * catalog asks of its own drafts: every image is pinned by digest (a tag can move), no secret
+ * holds a literal value, and `.works/template.yml` names the same upstream as the spec.
  */
 const BLUEPRINTS = join(
     __dirname,
@@ -41,8 +41,82 @@ const read = (id: string, file: string): string =>
     readFileSync(join(BLUEPRINTS, id, '.works', file), 'utf8');
 
 describe("the Ever products' App Blueprint drafts", () => {
-    it('includes Ever Traduora and Ever Teams', () => {
-        expect(PRODUCT_BLUEPRINTS).toEqual(expect.arrayContaining(['ever-teams', 'ever-traduora']));
+    it('includes Ever Gauzy, Ever Teams and Ever Traduora', () => {
+        expect(PRODUCT_BLUEPRINTS).toEqual(
+            expect.arrayContaining(['ever-gauzy', 'ever-teams', 'ever-traduora']),
+        );
+    });
+
+    describe('ever-gauzy', () => {
+        const spec = validateAppSpecDocument(read('ever-gauzy', 'works.yml'), {
+            mode: 'blueprint',
+        }).spec;
+        const env = (name: string) => (spec?.env ?? []).find((entry) => entry.name === name);
+        const component = (name: string) =>
+            (spec?.components ?? []).find((entry) => entry.name === name);
+
+        it('runs the API and the web app on their own images, the web app as the public address', () => {
+            expect(spec?.build?.image).toMatch(/^ghcr\.io\/ever-co\/gauzy-api@sha256:/);
+            expect(component('api')?.image).toBeUndefined(); // build.image
+            expect(component('web')?.image).toMatch(/^ghcr\.io\/ever-co\/gauzy-webapp@sha256:/);
+            expect(spec?.domains?.primaryComponent).toBe('web');
+            expect(spec?.dependencies?.postgres).toBeDefined();
+        });
+
+        it("forwards the upstream Caddyfile's API paths to the api component, and nothing else", () => {
+            expect(env('GAUZY_API_INTERNAL_URL')?.from).toBe('components.api.internalUrl');
+            const conf = env('GAUZY_WEB_NGINX_CONF')?.value ?? '';
+            const location = /location ~ (\S+) \{\s*proxy_pass \$\{GAUZY_API_INTERNAL_URL\};/.exec(conf);
+            expect(location).not.toBeNull();
+            const api = new RegExp(location?.[1] ?? '$^');
+            for (const path of [
+                '/api',
+                '/api/health/live',
+                '/graphql',
+                '/public/avatars/a.png',
+                '/swg',
+                '/swg/index.html',
+                '/swg-json',
+                '/swg-yaml',
+            ]) {
+                expect({ path, api: api.test(path) }).toEqual({ path, api: true });
+            }
+            for (const path of ['/', '/index.html', '/main-ABCD1234.js', '/assets/i18n/en.json', '/apiary']) {
+                expect({ path, api: api.test(path) }).toEqual({ path, api: false });
+            }
+            // The web component substitutes only that one variable into the configuration.
+            expect(component('web')?.args?.join(' ')).toContain("envsubst '${GAUZY_API_INTERNAL_URL}'");
+        });
+
+        it('one public address for the API and the web app, which a domain change restarts', () => {
+            for (const name of ['API_BASE_URL', 'CLIENT_BASE_URL', 'ALLOWED_ORIGINS']) {
+                expect(env(name)?.from).toBe('domains.primary.url');
+                expect(spec?.domains?.publicUrlEnv).toContain(name);
+            }
+            expect(spec?.domains?.onChange).toBe('restart');
+        });
+
+        it('generates the four secrets the API refuses to start without', () => {
+            for (const name of [
+                'JWT_SECRET',
+                'JWT_REFRESH_TOKEN_SECRET',
+                'JWT_VERIFICATION_TOKEN_SECRET',
+                'EXPRESS_SESSION_SECRET',
+            ]) {
+                expect(env(name)?.secret).toBe(true);
+                expect(env(name)?.generate?.kind).toBe('hex');
+            }
+        });
+
+        it("asks the Super Admin's sign-in, and never seeds a published default password", () => {
+            expect(env('DEMO_SUPER_ADMIN_EMAIL')?.prompt).toBeDefined();
+            expect(env('DEMO_SUPER_ADMIN_PASSWORD')?.secret).toBe(true);
+            expect(env('DEMO_SUPER_ADMIN_PASSWORD')?.prompt).toBeDefined();
+            expect(env('DEMO_SUPER_ADMIN_PASSWORD')?.validate).toEqual({ minLength: 12, maxLength: 50 });
+            for (const name of ['DEMO_ADMIN_PASSWORD', 'DEMO_EMPLOYEE_PASSWORD']) {
+                expect(env(name)?.generate).toBeDefined();
+            }
+        });
     });
 
     describe('ever-teams', () => {
@@ -87,9 +161,13 @@ describe("the Ever products' App Blueprint drafts", () => {
             expect(spec?.blueprint?.repo).toBe(`ever-works/${id}-template`);
         });
 
-        it('pins its image by digest', () => {
+        it('pins every image by digest', () => {
             expect(spec?.build?.strategy).toBe('image');
             expect(spec?.build?.image).toMatch(/@sha256:[0-9a-f]{64}$/);
+            for (const component of spec?.components ?? []) {
+                if (component.image === undefined) continue;
+                expect(component.image).toMatch(/@sha256:[0-9a-f]{64}$/);
+            }
         });
 
         it('never holds a secret as a literal value', () => {

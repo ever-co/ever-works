@@ -1,0 +1,239 @@
+# yaml-language-server: $schema=https://api.ever.works/api/schema/works.yml.schema.json
+#
+# DRAFT App Blueprint — seed content of the Blueprint repository `ever-works/ever-gauzy-template`.
+# Shape: docs/specs/features/app-works/CONTRACTS.md §1. Validated in blueprint mode by
+# packages/agent/src/works-config/schema/__tests__/product-blueprints.spec.ts (zero errors, as the
+# Blueprint resolver requires before it lists a repository).
+#
+# Ever Gauzy, the business management platform, as an App: the upstream's two published images —
+# the API (`gauzy-api`) and the Angular web app (`gauzy-webapp`) — as two components, each running
+# its own image (`components[].image`), and a managed Postgres. The App has one public address,
+# served by the web app's nginx, which also forwards the API's paths (/api, /graphql, /public, the
+# Swagger pages) to the API inside the App: the routing of the upstream's own single-domain setups
+# (.deploy/caddy/Caddyfile, .do/deploy.template.yaml). Facts were read on 2026-11-26 from
+# ever-co/ever-gauzy (branch `develop`) and from the images' registry metadata; sources are cited in
+# ../README.md. "Verified" means read in source or registry metadata, not yet run.
+
+version: 2
+kind: app
+name: Ever Gauzy
+
+spec:
+  source:
+    relation: fork
+    upstream: { repo: ever-co/ever-gauzy, defaultBranch: develop } # verified: default branch
+    branch: develop
+
+  blueprint:
+    id: ever-gauzy
+    version: 0.1.0
+    repo: ever-works/ever-gauzy-template
+    sha: '0000000000000000000000000000000000000000' # TODO(release): stamped by the release workflow
+
+  license:
+    spdx: AGPL-3.0-only # verified: repository licence metadata (AGPL-3.0)
+    class: green
+    source: blueprint
+
+  display:
+    name: Ever Gauzy
+    protectedPaths: [LICENSE]
+
+  build:
+    strategy: image
+    # The API's image, and the image of every component that names none. verified: the `latest`
+    # tag pointed at this index digest on 2026-11-26 (linux/amd64). Pin by digest; a tag can move.
+    image: ghcr.io/ever-co/gauzy-api@sha256:ffa2be9beae4171fb2f954b053d6b256cd10bd612b446b72032495052e1c3d8e
+
+  components:
+    # The NestJS API: REST under /api, GraphQL under /graphql, uploaded files under /public.
+    # No Ingress of its own (`web` for its Service): the browser reaches it through `web`.
+    - name: api
+      role: web
+      port: 3000 # verified: EXPOSE 3000; API_PORT=3000 below
+      # verified: the image's USER is `node:node`, a name; `node` is uid 1000 in node:alpine.
+      runAsUser: 1000
+      replicas: 1 # the uploads volume has one writer
+      writableRootFilesystem: true # TODO(verify): the API writes ormlogs.log beside main.js
+      # The volume hides what the image ships in apps/api/public (the seed images and the task
+      # icons, copied there from apps/api/src/assets/seed): put them back without overwriting
+      # uploads, then start as the image does (entrypoint.prod.sh, then `node main.js`).
+      command: ['/bin/sh', '-c']
+      args:
+        - >-
+          cp -Rn /srv/gauzy/apps/api/src/assets/seed/. /srv/gauzy/apps/api/public/ &&
+          mkdir -p /srv/gauzy/apps/api/public/uploads /srv/gauzy/apps/api/public/import
+          /srv/gauzy/apps/api/public/export &&
+          exec ./entrypoint.prod.sh node main.js
+      probes:
+        # The first start migrates and seeds the database: "a few minutes" upstream.
+        startup: { http: /api/health/live, periodSeconds: 10, failureThreshold: 120 }
+        readiness: { http: /api/health, periodSeconds: 10, timeoutSeconds: 9 } # checks the database
+        liveness: { http: /api/health/live, periodSeconds: 15, failureThreshold: 6 } # no dependency
+      resources: { cpu: 300m, memory: 1Gi, memoryLimit: 2Gi } # TODO(verify): measure
+      # verified: the API stores uploads under /srv/gauzy/apps/api/public (FILE_PROVIDER=LOCAL)
+      # and serves them at <API_BASE_URL>/public/….
+      volumes: [{ name: public, path: /srv/gauzy/apps/api/public, size: 5Gi, backup: true }]
+
+    # The Angular web app on nginx, the App's public address.
+    - name: web
+      role: web
+      # verified: the `latest` tag pointed at this index digest on 2026-11-26 (linux/amd64).
+      image: ghcr.io/ever-co/gauzy-webapp@sha256:9757fbe2a198e8289ef00a384179bf0239aa5ca002a2db1feda850ae733d02e0
+      port: 4200 # verified: WEB_PORT=4200, `listen 4200` in the image's nginx configuration
+      # verified: the image sets no USER (root) and its nginx switches to `nginx` (uid 101 in
+      # nginx:alpine), which a pod without capabilities cannot do. So it runs as 101 from the
+      # start, with its own nginx configuration (GAUZY_WEB_NGINX_CONF below) whose pid and
+      # temporary files live in /tmp. The script does what the image's entrypoint does: substitute
+      # the environment into the bundles (replacements.sed), then start nginx.
+      runAsUser: 101
+      replicas: 1
+      writableRootFilesystem: true # the bundles are rewritten in place at every start
+      command: ['/bin/sh', '-c']
+      args:
+        - >-
+          set -e;
+          cd /srv/gauzy;
+          export EVER_APP_LINKS_SED=;
+          envsubst < replacements.sed > /tmp/values.sed;
+          for f in *.js; do sed -f /tmp/values.sed "$f" > /tmp/bundle.js; cat /tmp/bundle.js > "$f"; done;
+          printf '%s\n' "$GAUZY_WEB_NGINX_CONF" | envsubst '${GAUZY_API_INTERNAL_URL}' > /tmp/nginx.conf;
+          exec nginx -c /tmp/nginx.conf -g 'daemon off;'
+      probes:
+        readiness: { http: / }
+        liveness: { http: /, periodSeconds: 20 }
+      resources: { cpu: 100m, memory: 128Mi, memoryLimit: 512Mi } # TODO(verify): measure
+
+  dependencies:
+    postgres: { version: '16' }
+    # Optional, off: Redis and the worker (`ghcr.io/ever-co/gauzy-worker`) deliver events —
+    # outbound webhooks, the search index, GraphQL subscriptions. To turn them on, add
+    #   redis: {}
+    # here, a third component
+    #   - { name: worker, role: worker, runAsUser: 1000,
+    #       image: 'ghcr.io/ever-co/gauzy-worker@sha256:e4d2c6a0d383989b5e1e8d8ac74d61c35f29fe7660aa34a991ee7fb9de759697',
+    #       resources: { cpu: 200m, memory: 768Mi } }
+    # and set REDIS_ENABLED to 'true' with REDIS_URL from deps.redis.url (secret: true).
+
+  env:
+    - { name: NODE_ENV, value: production }
+    - { name: DEMO, value: 'false' }
+    # The API listens on every interface; the web app's bundles receive the same values.
+    - { name: API_HOST, value: 0.0.0.0 }
+    - { name: API_PORT, value: '3000' }
+    # One public address for both: the web app's own, which forwards the API's paths.
+    - { name: API_BASE_URL, from: domains.primary.url }
+    - { name: CLIENT_BASE_URL, from: domains.primary.url }
+    - { name: ALLOWED_ORIGINS, from: domains.primary.url }
+    # Two proxies in front of the API: the cluster's ingress, then the web app's nginx.
+    - { name: TRUST_PROXY, value: '2' } # TODO(verify): req.ip is the client's address
+    # The image's heap ceiling is 12 GiB; keep it inside the container's memory limit.
+    - { name: NODE_OPTIONS, value: '--max-old-space-size=1536' }
+
+    # verified: the database settings the image reads (its default engine is SQLite).
+    - { name: DB_TYPE, value: postgres }
+    - { name: DB_HOST, from: deps.postgres.host }
+    - { name: DB_PORT, from: deps.postgres.port }
+    - { name: DB_NAME, from: deps.postgres.database }
+    - { name: DB_USER, from: deps.postgres.user }
+    - { name: DB_PASS, secret: true, from: deps.postgres.password }
+    - { name: DB_SSL_MODE, value: 'false' } # TODO(verify): the operator-backed Postgres speaks TLS
+    - { name: REDIS_ENABLED, value: 'false' }
+
+    # verified: the API refuses to start in production without these four, set to unique values.
+    - name: JWT_SECRET
+      secret: true
+      generate: { kind: hex, bytes: 64, rotate: never }
+    - name: JWT_REFRESH_TOKEN_SECRET
+      secret: true
+      generate: { kind: hex, bytes: 64, rotate: never }
+    - name: JWT_VERIFICATION_TOKEN_SECRET
+      secret: true
+      generate: { kind: hex, bytes: 64, rotate: never }
+    - name: EXPRESS_SESSION_SECRET
+      secret: true
+      generate: { kind: hex, bytes: 64, rotate: never }
+
+    # verified: the first start against an empty database creates a Super Admin, an Admin and an
+    # Employee, and refuses to while their passwords are unset or the published defaults. The
+    # owner's own sign-in is asked; the other two accounts get passwords nobody is shown.
+    - name: DEMO_SUPER_ADMIN_EMAIL
+      prompt:
+        description: The e-mail address you will sign in with as the Super Admin.
+        example: admin@example.com
+      validate: { pattern: '^[^\s@]+@[^\s@]+\.[^\s@]+$' }
+    - name: DEMO_SUPER_ADMIN_PASSWORD
+      secret: true
+      prompt:
+        description: The Super Admin's password (12 to 50 characters; the sign-in form takes at most 50).
+      validate: { minLength: 12, maxLength: 50 }
+    - name: DEMO_ADMIN_PASSWORD
+      secret: true
+      generate: { kind: chars, length: 24, alphabet: alnum, rotate: never }
+    - name: DEMO_EMPLOYEE_PASSWORD
+      secret: true
+      generate: { kind: chars, length: 24, alphabet: alnum, rotate: never }
+
+    # Privacy default: anonymous statistics stay off until the owner turns them on.
+    - { name: EVER_STATS_ENABLED, value: 'false' }
+
+    # The web component's nginx: the API's paths to the API inside the App (the upstream's
+    # Caddyfile routes), the rest to the Angular app. GAUZY_API_INTERNAL_URL is substituted at start.
+    - { name: GAUZY_API_INTERNAL_URL, from: components.api.internalUrl }
+    - name: GAUZY_WEB_NGINX_CONF
+      value: |
+        pid /tmp/nginx.pid;
+        error_log /dev/stderr warn;
+        events { worker_connections 1024; }
+        http {
+          include /etc/nginx/mime.types;
+          default_type application/octet-stream;
+          access_log /dev/stdout;
+          client_body_temp_path /tmp/client_temp;
+          proxy_temp_path /tmp/proxy_temp;
+          fastcgi_temp_path /tmp/fastcgi_temp;
+          uwsgi_temp_path /tmp/uwsgi_temp;
+          scgi_temp_path /tmp/scgi_temp;
+          client_max_body_size 50m;
+          gzip on;
+          gzip_vary on;
+          gzip_proxied any;
+          gzip_min_length 1024;
+          gzip_types text/plain text/css text/javascript application/javascript application/json image/svg+xml;
+          map $http_upgrade $connection_upgrade { default upgrade; '' close; }
+          server {
+            listen 4200;
+            root /srv/gauzy;
+            location ~ ^/(api|api/.*|graphql|public/.*|swg|swg/.*|swg-json|swg-yaml)$ {
+              proxy_pass ${GAUZY_API_INTERNAL_URL};
+              proxy_http_version 1.1;
+              proxy_set_header Upgrade $http_upgrade;
+              proxy_set_header Connection $connection_upgrade;
+              proxy_set_header Host $http_host;
+              proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+              proxy_set_header X-Forwarded-Proto $http_x_forwarded_proto;
+              proxy_set_header CF-Connecting-IP "";
+              proxy_read_timeout 300s;
+            }
+            location = /index.html { add_header Cache-Control "no-cache, must-revalidate" always; }
+            location / { try_files $uri $uri/ /index.html; }
+          }
+        }
+
+  domains:
+    primaryComponent: web
+    publicUrlEnv: [API_BASE_URL, CLIENT_BASE_URL, ALLOWED_ORIGINS]
+    onChange: restart # the web app substitutes the address into its bundles at start
+
+  smoke:
+    - name: web
+      http: { method: GET, path: / }
+      expect: { status: [200] }
+    # Through the web app's nginx to the API: proves the forwarding and the API process.
+    - name: api-live
+      http: { method: GET, path: /api/health/live }
+      expect: { status: [200], bodyContains: ['"status":"ok"'] }
+    # The readiness route also checks the database.
+    - name: api-health
+      http: { method: GET, path: /api/health }
+      expect: { status: [200] }

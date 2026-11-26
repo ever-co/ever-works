@@ -1,0 +1,21 @@
+# The App Blueprint repository's own metadata (never applied to a Work, never copied into a user's
+# repositories — it is read only by the catalog/resolver).
+#
+# This is the METADATA-ONLY App Blueprint for Ever Gauzy: it holds our metadata and no application
+# source. The application lives in `source.repo` below and is forked separately when a member
+# creates an App Work from this Blueprint.
+#
+# The App spec is `.works/works.yml`, the specification's default path and the only file the
+# platform's Blueprint resolver reads, so no `specPath` is set.
+
+schemaVersion: 1
+kind: app
+
+# metadata-only: this repository contains only our metadata. The application source is
+# `source.repo` — a second, separate fork at provisioning.
+shape: metadata-only
+
+source:
+    repo: ever-co/ever-gauzy # owner/name of the upstream project; never this repository
+    defaultBranch: develop
+    refs: { branches: [develop] } # the images' `latest` tag is the upstream's production build
