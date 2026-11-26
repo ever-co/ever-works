@@ -76,6 +76,13 @@ export interface CloudflareDnsConfig {
      * ingress address).
      */
     manageForeignRecords?: boolean;
+    /**
+     * Earlier values of `targetHostname` (the LB moved). A record still aimed at one of them is a
+     * managed record left behind by the move, so it is repointed (or deleted) like one on the
+     * current target. Operator-declared via `EVER_WORKS_DEPLOY_LB_PREVIOUS_HOSTNAMES`; never list
+     * a target that hosts outside the managed Works also point at.
+     */
+    previousTargetHostnames?: readonly string[];
 }
 
 export interface DnsRecordSnapshot {
@@ -160,6 +167,7 @@ export class CloudflareDnsProvider implements IDnsOperations {
             return updated;
         }
 
+        await this.assertNoForeignRecordOfOtherType(fqdn, 'CNAME');
         const created = await this.createRecord({
             type: 'CNAME',
             name: fqdn,
@@ -235,6 +243,7 @@ export class CloudflareDnsProvider implements IDnsOperations {
             );
             return updated;
         }
+        await this.assertNoForeignRecordOfOtherType(host, input.type);
         const created = await this.createAnyRecord({
             type: input.type,
             name: host,
@@ -300,7 +309,11 @@ export class CloudflareDnsProvider implements IDnsOperations {
      */
     private assertManagedRecord(host: string, record: { type: string; content: string }): void {
         if (this.config.manageForeignRecords === true) return;
-        if (sameDnsContent(record.content, this.config.targetHostname)) return;
+        const managedTargets = [
+            this.config.targetHostname,
+            ...(this.config.previousTargetHostnames ?? []),
+        ];
+        if (managedTargets.some((target) => sameDnsContent(record.content, target))) return;
         this.logger.warn(
             `CloudflareDns refused to change ${host}: it points at ${record.content}, not the managed target`,
         );
@@ -333,6 +346,25 @@ export class CloudflareDnsProvider implements IDnsOperations {
             }
         }
         return trimmed;
+    }
+
+    /**
+     * Before creating a `type` record for `host`: a record of ANOTHER type for the same name
+     * (an A, or the `AAAA 100::` of a Workers custom domain, when writing a CNAME) is invisible to
+     * the same-type lookup, and the create would only fail at Cloudflare as a generic error that
+     * callers treat as transient. Surface it as the conflict it is. Skipped for a wholly managed
+     * zone, which keeps its previous behaviour.
+     */
+    private async assertNoForeignRecordOfOtherType(
+        host: string,
+        type: DnsRecordType,
+    ): Promise<void> {
+        if (this.config.manageForeignRecords === true) return;
+        for (const other of ['CNAME', 'A', 'AAAA'] as const) {
+            if (other === type) continue;
+            const found = await this.findRecord(host, other);
+            if (found) this.assertManagedRecord(host, found);
+        }
     }
 
     /** `AAAA` is probed (`recordExists`) but never written by this provider. */
@@ -471,11 +503,19 @@ export class EverWorksDnsService {
             return null;
         }
 
+        // Comma-separated earlier LB hostnames, so records left on them are
+        // repointed after the LB moves (see `previousTargetHostnames`).
+        const previousTargetHostnames = (process.env.EVER_WORKS_DEPLOY_LB_PREVIOUS_HOSTNAMES ?? '')
+            .split(',')
+            .map((host) => host.trim())
+            .filter((host) => host.length > 0);
+
         this.cachedProvider = new CloudflareDnsProvider({
             apiToken,
             zoneId,
             rootDomain,
             targetHostname,
+            previousTargetHostnames,
         });
         return this.cachedProvider;
     }
@@ -491,12 +531,29 @@ export class EverWorksDnsService {
         return `${slug}.${rootDomain}`;
     }
 
-    async ensureWorkSubdomain(slug: string): Promise<void> {
+    /**
+     * Ensure the Work's `<slug>.<root>` CNAME. Never throws. Answers whether
+     * the host may be routed to the Work: `false` when the slug is a reserved
+     * platform label or the name already belongs to another host in the zone
+     * (`DnsRecordConflictError`), so the caller must keep it off the Ingress.
+     * Any other DNS failure answers `true`, as before: the deploy proceeds and
+     * the record can be fixed afterwards.
+     */
+    async ensureWorkSubdomain(slug: string): Promise<boolean> {
         const provider = this.getProvider();
-        if (!provider) return;
+        if (!provider) return true;
+        if (isReservedSubdomainLabel(slug)) {
+            this.logger.warn(`Not managing reserved platform subdomain for slug ${slug}`);
+            return false;
+        }
         try {
             await provider.ensureWorkSubdomain(slug);
+            return true;
         } catch (cause) {
+            if (cause instanceof DnsRecordConflictError) {
+                this.logger.warn(`Not routing ${cause.host}: ${cause.message}`);
+                return false;
+            }
             // DNS failures must not abort a deploy — the user can fix the
             // record manually and the Work is still reachable via the LB
             // hostname. Surface the error so ops can alert on it.
@@ -504,6 +561,7 @@ export class EverWorksDnsService {
                 `Failed to ensure CNAME for ${slug}: ${(cause as Error).message}`,
                 cause instanceof Error ? cause.stack : undefined,
             );
+            return true;
         }
     }
 

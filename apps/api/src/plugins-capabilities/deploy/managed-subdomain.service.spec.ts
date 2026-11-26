@@ -304,12 +304,13 @@ describe('ManagedSubdomainService', () => {
                 proxied: false,
                 ttl: 1,
             });
-            // Order: remove → persist → ensure (rollback safety).
+            // Order: persist → ensure new → remove old, so a failed ensure
+            // rolls back to a label whose record still exists.
             const removeOrder = provider.removeRecord.mock.invocationCallOrder[0];
             const updateOrder = workRepository.update.mock.invocationCallOrder[0];
             const ensureOrder = provider.ensureRecord.mock.invocationCallOrder[0];
-            expect(removeOrder).toBeLessThan(updateOrder);
             expect(updateOrder).toBeLessThan(ensureOrder);
+            expect(ensureOrder).toBeLessThan(removeOrder);
 
             expect(result.subdomain).toBe('new-name');
         });
@@ -364,6 +365,9 @@ describe('ManagedSubdomainService', () => {
             expect(workRepository.update).toHaveBeenNthCalledWith(2, workBefore.id, {
                 managedSubdomain: 'old-name',
             });
+            // The rolled-back label still resolves: its record was never removed.
+            expect(provider.removeRecord).not.toHaveBeenCalled();
+            expect(zone.has('old-name.ever.works')).toBe(true);
         });
 
         it('refuses with 409 a hostname that already exists in the zone, before any write', async () => {

@@ -107,14 +107,15 @@ export class ManagedSubdomainService {
      *      zone (the zone also holds the platform's own hosts). Same probe
      *      `SubdomainAllocator` runs before it allocates. The Work's own
      *      current record never reaches it (step 3).
-     *   5. Remove the old DNS record (best-effort) — keeps the zone tidy and
-     *      releases the old label so a sibling Work can re-claim it.
-     *   6. Persist `work.managedSubdomain = requested`. The partial unique
+     *   5. Persist `work.managedSubdomain = requested`. The partial unique
      *      index is the DB-level backstop against concurrent renames.
-     *   7. Ensure the new DNS record. Failure is hard-error: a successful
+     *   6. Ensure the new DNS record. Failure is hard-error: a successful
      *      persist without a working CNAME would leave the UI showing a
      *      claim that doesn't resolve. We try to roll back the persisted
-     *      claim so the caller can retry.
+     *      claim so the caller can retry — and the old record is still in
+     *      place, because it is only removed after this succeeds.
+     *   7. Remove the old DNS record (best-effort) — keeps the zone tidy and
+     *      releases the old label so a sibling Work can re-claim it.
      *
      * Returns the post-update `SubdomainState` for the caller.
      */
@@ -194,25 +195,10 @@ export class ManagedSubdomainService {
         const newFqdn = `${normalized}.${rootDomain}`;
         const oldFqdn = currentSubdomain ? `${currentSubdomain}.${rootDomain}` : null;
 
-        // Step 4b: before any write (old-record cleanup, DB claim, new record).
+        // Step 4b: before any write (DB claim, new record, old-record cleanup).
         await this.assertHostnameFree(work, normalized, provider);
 
-        // Step 5: best-effort old-record cleanup. A failure here doesn't
-        // block the rename — the new claim is what the user wants live —
-        // but we log so an operator can clean up a dangling CNAME. A reserved
-        // platform label is never deleted, and the provider itself refuses
-        // to delete a record that is not on the managed target.
-        if (oldFqdn && !isReservedSubdomainLabel(currentSubdomain)) {
-            try {
-                await provider.removeRecord({ host: oldFqdn });
-            } catch (cause) {
-                this.logger.warn(
-                    `Failed to remove stale DNS record for ${oldFqdn} during rename of work ${work.id}: ${(cause as Error).message}`,
-                );
-            }
-        }
-
-        // Step 6: persist. A concurrent rename racing to the same label will
+        // Step 5: persist. A concurrent rename racing to the same label will
         // surface as a unique-index violation here; we map it to 409 so the
         // UI shows a friendly retry message instead of a generic 500.
         try {
@@ -227,8 +213,9 @@ export class ManagedSubdomainService {
             throw cause;
         }
 
-        // Step 7: ensure the new record. On failure, try to roll back the
-        // persisted claim so the user isn't stuck with a half-applied rename.
+        // Step 6: ensure the new record. On failure, try to roll back the
+        // persisted claim so the user isn't stuck with a half-applied rename;
+        // the old record has not been touched yet.
         try {
             await provider.ensureRecord({
                 host: newFqdn,
@@ -259,6 +246,21 @@ export class ManagedSubdomainService {
                 status: 'error',
                 message: `Failed to create DNS record for ${newFqdn}. The rename was not applied.`,
             });
+        }
+
+        // Step 7: best-effort old-record cleanup, only once the new record is
+        // in place. A failure here doesn't undo the rename but is logged so an
+        // operator can clean up a dangling CNAME. A reserved platform label is
+        // never deleted, and the provider itself refuses to delete a record
+        // that is not on the managed target.
+        if (oldFqdn && !isReservedSubdomainLabel(currentSubdomain)) {
+            try {
+                await provider.removeRecord({ host: oldFqdn });
+            } catch (cause) {
+                this.logger.warn(
+                    `Failed to remove stale DNS record for ${oldFqdn} during rename of work ${work.id}: ${(cause as Error).message}`,
+                );
+            }
         }
 
         this.logger.log(

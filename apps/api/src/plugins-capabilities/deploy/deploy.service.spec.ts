@@ -1072,6 +1072,30 @@ describe('DeployService — plugin-driven dispatch + secrets', () => {
             void githubPlugin; // silence unused
         });
 
+        it('keeps ${slug}.ever.works off the Ingress when DNS refuses it (reserved or another host)', async () => {
+            const getDeploymentSecrets = jest.fn().mockResolvedValue({});
+            const { service, dnsService } = buildService({
+                deployProvider: 'ever-works',
+                plugin: {
+                    id: 'k8s',
+                    getWorkflowFilenames: () => ['deploy_k8s.yaml'],
+                    getDeploymentSecrets,
+                },
+                settings: { kubeconfig: 'apiVersion: v1' },
+            });
+            (dnsService.getProvider as jest.Mock).mockReturnValue({});
+            (dnsService.ensureWorkSubdomain as jest.Mock).mockResolvedValueOnce(false);
+
+            await expect(service.deploy('work-1', 'user-1', {})).resolves.toMatchObject({
+                dispatched: true,
+            });
+
+            expect(dnsService.ensureWorkSubdomain).toHaveBeenCalledWith('my-site');
+            const settingsArg = getDeploymentSecrets.mock.calls[0][0];
+            expect(settingsArg.ingressHost).toBeUndefined();
+            expect(settingsArg.kubeconfig).toBe('apiVersion: v1');
+        });
+
         it('derives a per-Work k8s Ingress host from work.website (not the shared settings.ingressHost)', async () => {
             const getDeploymentSecrets = jest.fn().mockResolvedValue({});
             const { service, dnsService } = buildService({

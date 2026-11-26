@@ -78,13 +78,14 @@ Editing is allowed for the `ever-works` provider always, and for `k8s` only when
 
 ### Renaming a subdomain
 
-A rename is not a deploy: it validates the new label, removes the old DNS record (best effort — a failure is logged and the rename continues), persists the new claim, then creates the new record. If the record cannot be created, the claim is rolled back so you are never left with a half-applied rename.
+A rename is not a deploy: it validates the new label, checks that the name is free in the DNS zone, persists the new claim, creates the new record, and only then removes the old record (best effort — a failure is logged and the rename still succeeds). If the new record cannot be created, the claim is rolled back and the old record is still in place, so you are never left with a half-applied rename.
 
 Rules enforced on the way in:
 
 - Lowercase letters, digits and hyphens, no leading or trailing hyphen, 1–63 characters. Anything else returns `400` with _"Invalid subdomain format…"_. The form's own hint asks for 3–63 characters.
-- **Reserved platform labels are refused** with `400`. The blocklist is `www`, `api`, `app`, `admin`, `mail`, `auth`, `docs`, `status`, `platform`, `dashboard`, `cdn`, `static`, `root`, `mx`, `ns`, `ns1`, `ns2`.
+- **Reserved platform labels are refused** with `400`. The blocklist is `www`, `api`, `app`, `admin`, `mail`, `auth`, `docs`, `mcp`, `status`, `platform`, `dashboard`, `cdn`, `static`, `root`, `mx`, `ns`, `ns1`, `ns2`, `lb`, plus the per-environment forms of the service names (`api-dev`, `api-stage`, `apidev`, `apistage`, and the same for `www`, `app`, `admin`, `auth`, `docs`, `mcp`, `status`, `platform` and `dashboard`). Automatic allocation uses the same list.
 - A label already claimed by another Work returns `409`, including when two renames race for the same label.
+- **A name that already exists in the DNS zone returns `409`** (_"already in use"_), whatever it points at: the zone also holds hosts that are not Works. Nothing is written. If the zone cannot be checked, the rename returns `503` and nothing changes; try again.
 - Re-saving the label you already have is a no-op — DNS is not touched.
 - A Work whose provider (or environment flag) doesn't allow re-allocation is refused with `400` and the reason spelled out: _"Managed subdomain is not editable for this work (requires ever-works or k8s provider with managed mode active)."_
 - If managed DNS isn't wired on this installation at all, the rename fails with a `500` that names the missing piece — _"Managed DNS is not configured on this environment (CLOUDFLARE_API_TOKEN / CLOUDFLARE_ZONE_ID / EVER_WORKS_DEPLOY_LB_HOSTNAME missing)."_ or the same for `EVER_WORKS_DEPLOY_LB_HOSTNAME` alone — and nothing is persisted.
@@ -305,7 +306,8 @@ Self-hosting Ever Works and want to offer the managed path to your own users? Th
 | `K8S_MANAGED_SUBDOMAIN`                            | Managed-subdomain allocation for `k8s` Works.                                                                                                  | off                  |
 | `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ZONE_ID`      | Managed DNS in the platform zone.                                                                                                              | —                    |
 | `EVER_WORKS_DOMAIN`                                | The managed root domain.                                                                                                                       | `ever.works`         |
-| `EVER_WORKS_DEPLOY_LB_HOSTNAME`                    | CNAME target for managed subdomains.                                                                                                           | —                    |
+| `EVER_WORKS_DEPLOY_LB_HOSTNAME`                    | CNAME target for managed subdomains. The platform only repoints or deletes a record that already points here; any other record is left alone.  | —                    |
+| `EVER_WORKS_DEPLOY_LB_PREVIOUS_HOSTNAMES`          | Comma-separated earlier LB hostnames, after the LB moves: Work records still on one of them are repointed on the next deploy.                  | —                    |
 | `DB_EVER_WORKS_SHARED_ENABLED`                     | The **Ever Works DB** option.                                                                                                                  | off                  |
 | `DB_EVER_WORKS_SHARED_ADMIN_URL`                   | Least-privilege provisioner (`CREATEDB` + `CREATEROLE`) over a **direct** connection — a transaction-pooled endpoint cannot `CREATE DATABASE`. | —                    |
 | `DB_EVER_WORKS_SHARED_HOST` / `_PORT` / `_SSLMODE` | Endpoint composed into each Work's `DATABASE_URL`.                                                                                             | —, `5432`, `require` |

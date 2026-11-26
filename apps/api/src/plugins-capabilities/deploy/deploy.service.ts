@@ -985,10 +985,18 @@ export class DeployService {
 
             const ingressHost = this.dnsService.ingressHostFor(work.slug);
 
-            // Provision asynchronously — DNS propagation runs in parallel with
-            // the workflow dispatch. Errors are logged inside the service so
-            // they never abort the deploy.
-            void this.dnsService.ensureWorkSubdomain(work.slug);
+            // Awaited (it used to be fire-and-forget) so a refusal keeps the
+            // host off the Ingress: a reserved platform label, or a name the
+            // zone holds for another host, must not be claimed at the ingress
+            // either. Other DNS errors are logged inside the service and never
+            // abort the deploy.
+            const routable = await this.dnsService.ensureWorkSubdomain(work.slug);
+            if (routable === false) {
+                this.logger.warn(
+                    `Managed host ${ingressHost} for work ${work.id} is reserved or already in use in the zone; deploying without it`,
+                );
+                return settings;
+            }
 
             return {
                 ...(settings ?? {}),
