@@ -1171,6 +1171,20 @@ describe('GitHubAppOnboardingService', () => {
                 expectNothingWritten(ctx);
             });
 
+            it('still refuses (401, writing nothing) an UNVERIFIED GitHub email whose only match comes from the case-insensitive fallback', async () => {
+                const ctx = arrange({ email: 'Jane@Example.com', emailVerified: false });
+                // A VERIFIED account, so only the GitHub email's own flag can refuse it.
+                ctx.userRepository.findByEmailCaseInsensitiveForSocialAuth.mockResolvedValue([
+                    { ...storedUser, email: 'JANE@example.com', emailVerified: true },
+                ]);
+
+                await expect(ctx.complete()).rejects.toBeInstanceOf(UnauthorizedException);
+                expect(
+                    ctx.userRepository.findByEmailCaseInsensitiveForSocialAuth,
+                ).toHaveBeenCalledWith('jane@example.com');
+                expectNothingWritten(ctx);
+            });
+
             // The OAuth sign-in refuses this person (SOCIAL_EMAIL_AMBIGUOUS); the App setup must
             // not instead pick the variant that happens to be in GitHub's exact casing.
             it('refuses an ASCII address with two case variants even when one matches the casing GitHub sends', async () => {
