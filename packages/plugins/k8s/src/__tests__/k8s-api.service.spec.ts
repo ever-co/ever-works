@@ -764,6 +764,36 @@ describe('KubernetesApiService.deleteObject', () => {
 		);
 	});
 
+	it('sends a uid precondition as the V1DeleteOptions body when one is given', async () => {
+		const { factory, objectApi } = makeFactory();
+		const svc = new KubernetesApiService(factory);
+
+		await svc.deleteObject(
+			VALID,
+			'networking.k8s.io/v1',
+			'Ingress',
+			'ever-works-tenants-u1',
+			'site-a',
+			'Background',
+			undefined,
+			'uid-123'
+		);
+
+		expect(objectApi.delete).toHaveBeenCalledWith(
+			{
+				apiVersion: 'networking.k8s.io/v1',
+				kind: 'Ingress',
+				metadata: { name: 'site-a', namespace: 'ever-works-tenants-u1' }
+			},
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			'Background',
+			{ preconditions: { uid: 'uid-123' } }
+		);
+	});
+
 	it('treats a 404 as success — the object is already gone', async () => {
 		const { factory } = makeFactory({
 			objectApi: () =>

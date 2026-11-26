@@ -161,10 +161,16 @@ export interface WorkDeploymentTeardownResult {
 	readonly removed: readonly WorkDeploymentTeardownObject[];
 	/** Objects that were already gone. */
 	readonly absent: readonly WorkDeploymentTeardownObject[];
-	/** Objects left in place because the provider could not prove they belong to this Work. */
+	/** Objects left in place because the provider could not prove its own deploy created them under this name. */
 	readonly kept: readonly (WorkDeploymentTeardownObject & { readonly reason: string })[];
-	/** Objects whose read or delete failed. The message is scrubbed of credentials. */
-	readonly failed: readonly (WorkDeploymentTeardownObject & { readonly error: string })[];
+	/**
+	 * Objects whose read or delete failed. `error` is scrubbed of credentials; `code`
+	 * is a fixed reason code, which is what a caller should log.
+	 */
+	readonly failed: readonly (WorkDeploymentTeardownObject & {
+		readonly error: string;
+		readonly code?: string;
+	})[];
 }
 
 /**
@@ -275,11 +281,13 @@ export interface IDeploymentPlugin extends IPlugin {
 	/**
 	 * Remove the objects a website Work's deploy created, when the Work is deleted.
 	 *
-	 * Only the Work's own stateless objects go (for Kubernetes: its Ingress,
-	 * Service, Deployment and the Secrets the deploy wrote). It never deletes a
-	 * namespace, a volume or a volume claim, and it leaves any object it cannot
-	 * prove belongs to this Work. Idempotent: an object that is already gone is
-	 * reported in `absent`, not as an error.
+	 * Only the stateless objects the deploy created go (for Kubernetes: the
+	 * Ingress, Service, Deployment and the Secrets the deploy wrote). It never
+	 * deletes a namespace, a volume or a volume claim, and it leaves any object
+	 * it cannot prove the provider's own deploy created under this name. That
+	 * proof is per name, not per Work: the caller must first make sure no other
+	 * Work deploys to the same place. Idempotent: an object that is already gone
+	 * is reported in `absent`, not as an error.
 	 *
 	 * **Optional.** A provider without platform-held runtime objects omits it.
 	 */

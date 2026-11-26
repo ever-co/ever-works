@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { DeployFacadeService, normaliseObjectName } from '../deploy.facade';
 
 /**
@@ -21,6 +23,7 @@ interface WorkFixture {
     kind?: string;
     deployProvider: string | null;
     websiteRepo: string;
+    deployProjectId?: string | null;
     user?: { id: string; isPlatformAdmin?: boolean };
 }
 
@@ -40,6 +43,7 @@ function work(fixture: Partial<WorkFixture> = {}): Record<string, unknown> {
         slug: f.slug,
         kind: f.kind,
         deployProvider: f.deployProvider,
+        deployProjectId: f.deployProjectId ?? null,
         managedSubdomain: null,
         user: f.user ?? { id: f.userId, isPlatformAdmin: true },
         getWebsiteRepo: () => f.websiteRepo,
@@ -97,7 +101,7 @@ function createService(args: {
     };
     const workRepository = {
         findById: jest.fn().mockResolvedValue(args.work),
-        findByDeployProvidersForUserOrSlug: jest.fn().mockResolvedValue(args.candidates ?? []),
+        findDeploymentSharerCandidates: jest.fn().mockResolvedValue(args.candidates ?? []),
         update: jest.fn(),
     };
     const managed =
@@ -304,16 +308,103 @@ describe('DeployFacadeService.prepareWorkDeploymentTeardown', () => {
             workId: 'work-1',
         });
 
-        expect(prepared).toMatchObject({ status: 'skipped', reason: 'unresolved' });
+        expect(prepared).toEqual({
+            status: 'skipped',
+            reason: 'unresolved',
+            detail: 'no platform kubeconfig for the ever-works provider',
+        });
     });
 
-    it('never throws, even when the Work lookup itself fails', async () => {
+    it('never falls back to the member’s own kubeconfig for an ever-works Work', async () => {
+        // The deploy would use the member's `k8s` kubeconfig here; the teardown must not,
+        // or it would delete on the member's cluster.
+        const { service, settingsService, removeWorkDeployment } = createService({
+            work: work(),
+            managedKubeconfig: null,
+            resolvedSecrets: { kubeconfig: { value: 'member-kubeconfig' } },
+        });
+
+        const prepared = await service.prepareWorkDeploymentTeardown({
+            userId: 'user-1',
+            workId: 'work-1',
+        });
+
+        expect(prepared).toMatchObject({ status: 'skipped', reason: 'unresolved' });
+        expect(removeWorkDeployment).not.toHaveBeenCalled();
+        // The member's secret-bearing settings are not even read.
+        expect(
+            settingsService.getResolvedSettings.mock.calls.some(
+                ([, options]) => (options as { includeSecrets?: boolean }).includeSecrets === true,
+            ),
+        ).toBe(false);
+    });
+
+    it('uses the shared-cluster kubeconfig for an ever-works Work when no dedicated one is set, never the member’s', async () => {
+        process.env.EVER_WORKS_K8S_WORKS_SHARED_KUBECONFIG = 'shared-cluster-kubeconfig';
+        const { service, removeWorkDeployment } = createService({
+            work: work(),
+            managedKubeconfig: null,
+            resolvedSecrets: { kubeconfig: { value: 'member-kubeconfig' } },
+        });
+
+        const prepared = await service.prepareWorkDeploymentTeardown({
+            userId: 'user-1',
+            workId: 'work-1',
+        });
+
+        if (prepared.status !== 'ready') throw new Error(`expected ready, got ${prepared.reason}`);
+        await prepared.run();
+        expect(removeWorkDeployment.mock.calls[0][1]).toBe('shared-cluster-kubeconfig');
+    });
+
+    it('never throws, and logs only a reason code, when the Work lookup itself fails', async () => {
+        const { service, workRepository } = createService({ work: work() });
+        workRepository.findById.mockRejectedValue(
+            Object.assign(new Error('db down at postgres://admin:hunter2@db'), {
+                code: 'ECONNREFUSED',
+            }),
+        );
+
+        await expect(
+            service.prepareWorkDeploymentTeardown({ userId: 'user-1', workId: 'work-1' }),
+        ).resolves.toEqual({ status: 'skipped', reason: 'unresolved', detail: 'ECONNREFUSED' });
+    });
+
+    it('answers "unknown" for an error that carries no code', async () => {
         const { service, workRepository } = createService({ work: work() });
         workRepository.findById.mockRejectedValue(new Error('db down'));
 
         await expect(
             service.prepareWorkDeploymentTeardown({ userId: 'user-1', workId: 'work-1' }),
-        ).resolves.toEqual({ status: 'skipped', reason: 'unresolved', detail: 'db down' });
+        ).resolves.toEqual({ status: 'skipped', reason: 'unresolved', detail: 'unknown' });
+    });
+
+    it('names a different place the Work was last deployed to, which this teardown does not remove', async () => {
+        const { service } = createService({
+            work: work({ deployProjectId: 'ever-works-tenants-user-1/old-memes-website' }),
+        });
+
+        await expect(
+            service.prepareWorkDeploymentTeardown({ userId: 'user-1', workId: 'work-1' }),
+        ).resolves.toMatchObject({
+            status: 'ready',
+            staleTarget: 'ever-works-tenants-user-1/old-memes-website',
+        });
+    });
+
+    it.each([
+        ['the same place', 'ever-works-tenants-user-1/awesome-memes-website'],
+        ['another provider’s project id', 'prj_AbC123'],
+    ])('reports no stale target when deployProjectId is %s', async (_label, deployProjectId) => {
+        const { service } = createService({ work: work({ deployProjectId }) });
+
+        const prepared = await service.prepareWorkDeploymentTeardown({
+            userId: 'user-1',
+            workId: 'work-1',
+        });
+
+        expect(prepared.status).toBe('ready');
+        expect(prepared).not.toHaveProperty('staleTarget');
     });
 
     describe('objects another Work also deploys to', () => {
@@ -405,16 +496,135 @@ describe('DeployFacadeService.prepareWorkDeploymentTeardown', () => {
             );
         });
 
-        it('looks candidates up by owner and slug among the Kubernetes-family providers', async () => {
+        it('looks candidates up by the owner and the slug', async () => {
             const { service, workRepository } = createService({ work: work() });
 
             await service.prepareWorkDeploymentTeardown({ userId: 'user-1', workId: 'work-1' });
 
-            expect(workRepository.findByDeployProvidersForUserOrSlug).toHaveBeenCalledWith(
-                ['ever-works', 'k8s'],
+            expect(workRepository.findDeploymentSharerCandidates).toHaveBeenCalledWith(
                 'user-1',
                 'awesome-memes',
             );
+        });
+
+        it('is blocked by another admin’s live Work whose namespace this one took over explicitly', async () => {
+            // Admin B's duplicate `mcp-servers-v2` points its namespace at admin A's
+            // `mcpserver` Work (slug-derived `ever-works-mcpserver-prod`), same repository.
+            // Neither the owner nor the slug matches: only the namespace says they share.
+            process.env.EVER_WORKS_K8S_WORKS_KUBECONFIG = INTERNAL_KUBECONFIG;
+            const repo = 'awesome-mcp-servers-website';
+            const { service, removeWorkDeployment } = createService({
+                work: work({
+                    id: 'work-b',
+                    userId: 'user-b',
+                    slug: 'mcp-servers-v2',
+                    deployProvider: 'k8s',
+                    websiteRepo: repo,
+                }),
+                settingsByWork: {
+                    'work-b': {
+                        clusterSource: 'k8s-works',
+                        namespace: 'ever-works-mcpserver-prod',
+                    },
+                    'work-a': { clusterSource: 'k8s-works' },
+                },
+                resolvedSecrets: { clusterSource: { value: 'k8s-works' } },
+                candidates: [
+                    work({
+                        id: 'work-a',
+                        userId: 'user-a',
+                        slug: 'mcpserver',
+                        deployProvider: 'k8s',
+                        websiteRepo: repo,
+                    }),
+                ],
+            });
+
+            const prepared = await service.prepareWorkDeploymentTeardown({
+                userId: 'user-b',
+                workId: 'work-b',
+            });
+
+            expect(prepared).toEqual({
+                status: 'skipped',
+                reason: 'shared',
+                detail: `Work work-a deploys to ever-works-mcpserver-prod/${repo} too`,
+            });
+            expect(removeWorkDeployment).not.toHaveBeenCalled();
+        });
+
+        it('is blocked by a Work whose slug shares the 40 characters a k8s-works namespace keeps', async () => {
+            process.env.EVER_WORKS_K8S_WORKS_KUBECONFIG = INTERNAL_KUBECONFIG;
+            const stem = 'a-very-long-directory-name-for-the-prefix'.slice(0, 40);
+            const { service } = createService({
+                work: work({ id: 'work-1', slug: `${stem}-one`, deployProvider: 'k8s' }),
+                settingsByWork: {
+                    'work-1': { clusterSource: 'k8s-works' },
+                    'work-2': { clusterSource: 'k8s-works' },
+                },
+                resolvedSecrets: { clusterSource: { value: 'k8s-works' } },
+                candidates: [
+                    work({
+                        id: 'work-2',
+                        userId: 'user-2',
+                        slug: `${stem}-two`,
+                        deployProvider: 'k8s',
+                    }),
+                ],
+            });
+
+            await expect(
+                service.prepareWorkDeploymentTeardown({ userId: 'user-1', workId: 'work-1' }),
+            ).resolves.toMatchObject({ status: 'skipped', reason: 'shared' });
+        });
+
+        it.each([
+            ['moved to Vercel', 'vercel', 'vercel'],
+            ['left with no provider', null, 'no provider'],
+        ])(
+            'is blocked by a same-owner Work with the same name that was %s: its old objects may still serve it',
+            async (_label, provider, said) => {
+                const { service, removeWorkDeployment } = createService({
+                    work: work(),
+                    candidates: [work({ id: 'work-2', deployProvider: provider })],
+                });
+
+                const prepared = await service.prepareWorkDeploymentTeardown({
+                    userId: 'user-1',
+                    workId: 'work-1',
+                });
+
+                expect(prepared).toMatchObject({ status: 'skipped', reason: 'shared' });
+                const detail = (prepared as { detail?: string }).detail ?? '';
+                expect(detail).toContain('work-2');
+                expect(detail).toContain(`moved to ${said}`);
+                expect(removeWorkDeployment).not.toHaveBeenCalled();
+            },
+        );
+
+        it('is not blocked by a candidate whose own namespace setting is reserved: it can never deploy here', async () => {
+            const { service } = createService({
+                work: work(),
+                settingsByWork: {
+                    'work-2': { clusterSource: 'k8s-works', namespace: 'kube-system' },
+                },
+                candidates: [work({ id: 'work-2', deployProvider: 'k8s' })],
+            });
+
+            await expect(
+                service.prepareWorkDeploymentTeardown({ userId: 'user-1', workId: 'work-1' }),
+            ).resolves.toMatchObject({ status: 'ready' });
+        });
+
+        it('ignores App Works among the candidates', async () => {
+            const { service } = createService({
+                work: work(),
+                candidates: [work({ id: 'work-2', kind: 'app' })],
+            });
+
+            await expect(
+                service.prepareWorkDeploymentTeardown({ userId: 'user-1', workId: 'work-1' }),
+            ).resolves.toMatchObject({ status: 'ready' });
         });
     });
 });
@@ -422,23 +632,27 @@ describe('DeployFacadeService.prepareWorkDeploymentTeardown', () => {
 /**
  * The facade's copy of the Kubernetes plugin's `sanitiseSlug` decides which other Works
  * could share a deleted Work's objects. It must answer exactly what the plugin answers, so
- * these are the plugin's own cases (`packages/plugins/k8s/src/__tests__/sanitise-slug.spec.ts`).
+ * it runs the plugin's own case file, which the plugin's `sanitise-slug.spec.ts` also runs:
+ * a change to the plugin's rule fails one of the two specs until both agree.
  */
+const SANITISE_SLUG_CASES = (
+    JSON.parse(
+        readFileSync(
+            resolve(
+                __dirname,
+                '../../../../plugins/k8s/src/__tests__/fixtures/sanitise-slug.cases.json',
+            ),
+            'utf-8',
+        ),
+    ) as { cases: Array<[string, string]> }
+).cases;
+
 describe('normaliseObjectName (parity with the k8s plugin sanitiseSlug)', () => {
-    it.each([
-        ['awesome-time-tracking-website', 'awesome-time-tracking-website'],
-        ['My Project!!', 'my-project'],
-        ['--a--b--', 'a-b'],
-        ['___', ''],
-        ['-', ''],
-        ['', ''],
-        ['a - b', 'a-b'],
-        ['  spaced  ', 'spaced'],
-        ['Ünïcode Name', 'n-code-name'],
-        ['a'.repeat(70), 'a'.repeat(63)],
-        [`${'a'.repeat(62)}-b`, `${'a'.repeat(62)}-`],
-        [`${'a'.repeat(62)}!!b`, `${'a'.repeat(62)}-`],
-    ])('normalises %j to %j', (input, expected) => {
+    it('reads the plugin’s shared case file', () => {
+        expect(SANITISE_SLUG_CASES.length).toBeGreaterThanOrEqual(12);
+    });
+
+    it.each(SANITISE_SLUG_CASES)('normalises %j to %j', (input, expected) => {
         expect(normaliseObjectName(input)).toBe(expected);
     });
 

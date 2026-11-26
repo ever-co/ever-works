@@ -289,7 +289,7 @@ describe('WorkLifecycleService.deleteWork — managed hosting removes the cluste
     };
 
     it.each(['ever-works', 'k8s'] as const)(
-        'a %s Work: resolves the target before the row goes, removes the objects after, then the DNS record',
+        'a %s Work: resolves the target before the row goes, removes the DNS record after it, then the objects',
         async (provider) => {
             const { service, mocks } = makeService(managedWork(provider));
             const order: string[] = [];
@@ -316,13 +316,95 @@ describe('WorkLifecycleService.deleteWork — managed hosting removes the cluste
                 workId: 'w-managed',
             });
             expect(run).toHaveBeenCalledTimes(1);
+            // The DNS step first: it does not wait on the cluster, which may be slow.
             expect(order).toEqual(
                 provider === 'ever-works'
-                    ? ['prepare', 'row-deleted', 'teardown', 'dns']
+                    ? ['prepare', 'row-deleted', 'dns', 'teardown']
                     : ['prepare', 'row-deleted', 'teardown'],
             );
         },
     );
+
+    it('does not hold the delete on a cluster that does not answer: the teardown goes on in the background', async () => {
+        const { service, mocks } = makeService(managedWork());
+        (service as unknown as { deploymentTeardownWaitMs: number }).deploymentTeardownWaitMs = 20;
+        const logger = (service as unknown as { logger: { warn: jest.Mock; log: jest.Mock } })
+            .logger;
+        const warn = jest.spyOn(logger, 'warn').mockImplementation(() => undefined);
+        const log = jest.spyOn(logger, 'log').mockImplementation(() => undefined);
+        let finish: (value: typeof removedAll) => void = () => undefined;
+        const run = jest.fn(
+            () =>
+                new Promise<typeof removedAll>((resolve) => {
+                    finish = resolve;
+                }),
+        );
+        mocks.deployFacade.prepareWorkDeploymentTeardown.mockResolvedValue(readyTeardown(run));
+
+        const result = await service.deleteWork('w-managed', {}, user);
+
+        expect(result.status).toBe('success');
+        expect(mocks.everWorksDns.removeWorkSubdomain).toHaveBeenCalledWith('best-tools');
+        expect(warn.mock.calls.map(([message]) => String(message))).toContainEqual(
+            expect.stringContaining('goes on in the background'),
+        );
+        expect(log.mock.calls.some(([message]) => String(message).includes('removed'))).toBe(false);
+
+        // When it ends, its outcome is still logged.
+        finish(removedAll);
+        await new Promise((resolve) => setImmediate(resolve));
+        expect(log.mock.calls.map(([message]) => String(message))).toContainEqual(
+            expect.stringContaining(
+                'removed Ingress/best-tools-website, Service/best-tools-website, Deployment/best-tools-website',
+            ),
+        );
+    });
+
+    it('logs a failed object by its reason code, never by its message', async () => {
+        const { service, mocks } = makeService(managedWork());
+        const logger = (service as unknown as { logger: { error: jest.Mock } }).logger;
+        const error = jest.spyOn(logger, 'error').mockImplementation(() => undefined);
+        const run = jest.fn().mockResolvedValue({
+            ...removedAll,
+            failed: [
+                {
+                    kind: 'Ingress',
+                    name: 'best-tools-website',
+                    error: 'ingresses is forbidden: User "system:serviceaccount:works:deployer"',
+                    code: 'UNAUTHORIZED',
+                },
+            ],
+        });
+        mocks.deployFacade.prepareWorkDeploymentTeardown.mockResolvedValue(readyTeardown(run));
+
+        await service.deleteWork('w-managed', {}, user);
+
+        const messages = error.mock.calls.map(([message]) => String(message));
+        expect(messages).toContainEqual(
+            expect.stringContaining('could not remove Ingress/best-tools-website (UNAUTHORIZED)'),
+        );
+        expect(messages.join('\n')).not.toContain('forbidden');
+    });
+
+    it('says where the Work was last deployed when that is not where the teardown looks', async () => {
+        const { service, mocks } = makeService(managedWork());
+        const logger = (service as unknown as { logger: { warn: jest.Mock } }).logger;
+        const warn = jest.spyOn(logger, 'warn').mockImplementation(() => undefined);
+        const run = jest.fn().mockResolvedValue(removedAll);
+        mocks.deployFacade.prepareWorkDeploymentTeardown.mockResolvedValue({
+            ...readyTeardown(run),
+            staleTarget: 'ever-works-tenants-owner-1/old-tools-website',
+        });
+
+        await service.deleteWork('w-managed', {}, user);
+
+        expect(warn.mock.calls.map(([message]) => String(message))).toContainEqual(
+            expect.stringContaining(
+                'last deployed as ever-works-tenants-owner-1/old-tools-website',
+            ),
+        );
+        expect(run).toHaveBeenCalledTimes(1);
+    });
 
     it('a Vercel Work never asks for a cluster teardown', async () => {
         const { service, mocks } = makeService(directoryWork());

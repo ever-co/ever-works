@@ -1644,17 +1644,21 @@ export class KubernetesPlugin implements IPlugin, IDeploymentPlugin {
 	 * Remove what {@link deploy} created for a website Work, when the Work is deleted.
 	 *
 	 * The objects are the ones `deploy()` names after `sanitiseSlug(projectName)` in the
-	 * enforced namespace: the Ingress first (it is what makes the site public), then the
+	 * namespace the caller names (`context.namespaceOverride`, required; a platform
+	 * namespace is refused): the Ingress first (it is what makes the site public), then the
 	 * Service, the Deployment (its ReplicaSets and pods follow in the background), the
 	 * `-runtime-env` Secret and the `-pull` Secret. Each one is deleted only when its own
-	 * labels prove this plugin created it for this name (`ever-works.io/managed`,
-	 * `app.kubernetes.io/managed-by`, `app.kubernetes.io/name` and `ever-works.io/work-id`);
-	 * anything else under that name is reported in `kept` and left alone.
+	 * labels prove this plugin's website deploy created it under this name
+	 * (`ever-works.io/managed`, `app.kubernetes.io/managed-by`, `app.kubernetes.io/name`
+	 * and `ever-works.io/work-id`), and only while its uid is still the one that was read;
+	 * anything else under that name is reported in `kept` and left alone. The labels do
+	 * not identify the Work itself, so the caller makes sure no other Work deploys there.
 	 *
 	 * It never deletes the namespace (other Works of the tenant live there), a
 	 * PersistentVolumeClaim or any other object. Idempotent: a missing object is `absent`.
-	 * A failed read or delete is reported in `failed` and the next object is still tried,
-	 * so one error cannot leave the Ingress up when it could have been removed.
+	 * A failed read or delete is reported in `failed` (with a reason code) and the next
+	 * object is still tried, so one error cannot leave the Ingress up when it could have
+	 * been removed.
 	 */
 	async removeWorkDeployment(
 		projectName: string,
@@ -1667,11 +1671,19 @@ export class KubernetesPlugin implements IPlugin, IDeploymentPlugin {
 		if (!slug) {
 			throw new K8sPluginError('NOT_CONFIGURED', 'The effective Kubernetes project name is invalid.');
 		}
-		const requestedNamespace = context?.namespaceOverride?.trim();
-		if (requestedNamespace && !isValidK8sNamespace(requestedNamespace)) {
-			throw new K8sPluginError('NOT_CONFIGURED', 'The effective Kubernetes namespace is invalid.');
+		// The caller names the namespace the deploy used; there is no fallback to
+		// the plugin setting or the legacy default here, and a platform namespace
+		// is refused, so a missing or stale value cannot aim the teardown at one.
+		const namespace = context?.namespaceOverride?.trim() ?? '';
+		if (!namespace || !isValidK8sNamespace(namespace)) {
+			throw new K8sPluginError('NOT_CONFIGURED', 'The effective Kubernetes namespace is missing or invalid.');
 		}
-		const namespace = requestedNamespace || settings.namespace?.trim() || DEFAULT_NAMESPACE;
+		if (isTeardownRefusedNamespace(namespace)) {
+			throw new K8sPluginError(
+				'NOT_CONFIGURED',
+				`The Kubernetes namespace '${namespace}' is a platform namespace; nothing is removed from it.`
+			);
+		}
 
 		const targets: Array<{ apiVersion: string; kind: string; name: string }> = [
 			{ apiVersion: 'networking.k8s.io/v1', kind: 'Ingress', name: slug },
@@ -1684,20 +1696,15 @@ export class KubernetesPlugin implements IPlugin, IDeploymentPlugin {
 		const removed: WorkDeploymentTeardownObject[] = [];
 		const absent: WorkDeploymentTeardownObject[] = [];
 		const kept: Array<WorkDeploymentTeardownObject & { reason: string }> = [];
-		const failed: Array<WorkDeploymentTeardownObject & { error: string }> = [];
+		const failed: Array<WorkDeploymentTeardownObject & { error: string; code: string }> = [];
 		const scrubPatterns = this.runtimeScrubPatterns({ kubeconfig });
 
 		for (const target of targets) {
 			const ref = { kind: target.kind, name: target.name };
 			try {
-				const live = await this.api.readObject<{ metadata?: { labels?: Record<string, string> } }>(
-					kubeconfig,
-					target.apiVersion,
-					target.kind,
-					namespace,
-					target.name,
-					settings.kubeContext
-				);
+				const live = await this.api.readObject<{
+					metadata?: { labels?: Record<string, string>; uid?: string };
+				}>(kubeconfig, target.apiVersion, target.kind, namespace, target.name, settings.kubeContext);
 				if (!live) {
 					absent.push(ref);
 					continue;
@@ -1707,6 +1714,9 @@ export class KubernetesPlugin implements IPlugin, IDeploymentPlugin {
 					kept.push({ ...ref, reason: notOwnedBecause });
 					continue;
 				}
+				// The uid precondition: if the object was replaced after the read
+				// (a redeploy in between), the API server refuses (409) instead of
+				// deleting an object whose labels were never checked.
 				await this.api.deleteObject(
 					kubeconfig,
 					target.apiVersion,
@@ -1714,11 +1724,13 @@ export class KubernetesPlugin implements IPlugin, IDeploymentPlugin {
 					namespace,
 					target.name,
 					'Background',
-					settings.kubeContext
+					settings.kubeContext,
+					live.metadata?.uid || undefined
 				);
 				removed.push(ref);
 			} catch (err) {
-				failed.push({ ...ref, error: scrubError(err, scrubPatterns).message });
+				const scrubbed = scrubError(err, scrubPatterns);
+				failed.push({ ...ref, error: scrubbed.message, code: scrubbed.code });
 			}
 		}
 
@@ -2367,9 +2379,30 @@ function resolveDeploymentTarget(
 }
 
 /**
- * Why a live object is NOT one `deploy()` created for this website Work, or `null` when its labels prove
- * it is. `deploy()` stamps every object with `COMMON_LABELS(projectName, slug)`; the `work-id` label holds
- * the unsanitised project name, so it is compared after the same sanitising.
+ * Namespaces `removeWorkDeployment` never removes anything from: the cluster's own (`kube-*`, `default`)
+ * and the platform's (the legacy `ever-works` default, GitOps, certificates, ingress, monitoring). The
+ * same list the platform refuses as a deploy target; repeated here so the plugin enforces it itself.
+ */
+const TEARDOWN_REFUSED_NAMESPACES: ReadonlySet<string> = new Set([
+	'ever-works',
+	'default',
+	'argocd',
+	'cert-manager',
+	'ingress-nginx',
+	'monitoring'
+]);
+
+function isTeardownRefusedNamespace(namespace: string): boolean {
+	const normalized = namespace.trim().toLowerCase();
+	return TEARDOWN_REFUSED_NAMESPACES.has(normalized) || normalized.startsWith('kube-');
+}
+
+/**
+ * Why a live object is NOT one `deploy()` created under this name, or `null` when its labels prove it
+ * is. `deploy()` stamps every object with `COMMON_LABELS(projectName, slug)`; the `work-id` label holds
+ * the unsanitised project name (the website repository, not the Work's id), so it is compared after the
+ * same sanitising. Two Works whose repositories sanitise to the same name are therefore NOT told apart
+ * here: the caller checks that no other Work deploys to the same namespace and name.
  */
 function workObjectOwnershipGap(labels: Record<string, string> | undefined, slug: string): string | null {
 	if (!labels) return 'no_labels';

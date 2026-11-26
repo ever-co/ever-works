@@ -1064,11 +1064,26 @@ export class WorkRepository {
     }
 
     /**
+     * Works that may deploy to the same Kubernetes objects as a Work of
+     * `userId` with `slug` that is being deleted, with their `user` relation:
+     * every Work of the owner, whatever its provider (a tenant namespace is
+     * derived from the owner, and a Work moved to another provider leaves its
+     * objects behind); every `k8s` Work of any owner (a `k8s-works` namespace
+     * can be set explicitly, or derived from a truncated slug); and every
+     * `ever-works` / `k8s` Work with the same slug. The caller narrows them by
+     * object name and namespace.
+     */
+    async findDeploymentSharerCandidates(userId: string, slug: string): Promise<Work[]> {
+        const where: FindOptionsWhere<Work>[] = [{ deployProvider: 'k8s' }];
+        if (userId) where.push({ userId });
+        if (slug) where.push({ slug, deployProvider: In(['ever-works', 'k8s']) });
+        return this.repository.find({ where, relations: ['user'] });
+    }
+
+    /**
      * Works on one of `deployProviders` that are owned by `userId` OR carry
-     * `slug`, with their `user` relation. The Work-delete teardown uses it to
-     * find another Work that may deploy to the same Kubernetes objects: a
-     * tenant namespace is derived from the owner, and the `k8s-works` one from
-     * the slug.
+     * `slug`, with their `user` relation. A Work delete uses it to check that
+     * no other `ever-works` Work carries the slug whose DNS record it removes.
      */
     async findByDeployProvidersForUserOrSlug(
         deployProviders: readonly string[],

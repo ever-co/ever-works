@@ -122,9 +122,9 @@ export type WorkDeploymentTeardownSkipReason =
     | 'unsupported'
     /** No enforced, non-reserved namespace: the objects' location is not known for sure. */
     | 'no_namespace'
-    /** Another Work deploys to the same namespace and object name. */
+    /** Another Work deploys, or may deploy, to the same namespace and object name. */
     | 'shared'
-    /** The target could not be resolved (no credential, a refused context, a lookup error). */
+    /** The target could not be resolved (no platform credential, a refused context, a lookup error). */
     | 'unresolved';
 
 export type WorkDeploymentTeardownPreparation =
@@ -132,14 +132,46 @@ export type WorkDeploymentTeardownPreparation =
           readonly status: 'ready';
           readonly namespace: string;
           readonly objectName: string;
+          /**
+           * The Work's cached `deployProjectId` (`namespace/name`) when it names
+           * another place than `namespace/objectName` (a rename since the last
+           * deploy): those objects are NOT removed, so the caller can say where
+           * they are.
+           */
+          readonly staleTarget?: string;
           /** Removes the objects. Holds the cluster credential: never log or serialise the closure's inputs. */
           readonly run: () => Promise<WorkDeploymentTeardownResult>;
       }
     | {
           readonly status: 'skipped';
           readonly reason: WorkDeploymentTeardownSkipReason;
+          /** A fixed sentence or a reason code, never an error message: it is logged. */
           readonly detail?: string;
       };
+
+/** A Work of a provider that deploys to Kubernetes objects (`ever-works` is the managed alias of `k8s`). */
+function isKubernetesFamilyProvider(provider: string | null | undefined): boolean {
+    return provider === EVER_WORKS_DEPLOY_PROVIDER_ID || provider === KUBERNETES_DEPLOY_PROVIDER_ID;
+}
+
+/** An error's reason code (`code`, else its class name), never its message: the result is logged. */
+function teardownFailureCode(error: unknown): string {
+    const code = (error as { code?: unknown } | null)?.code;
+    const reason = (error as { reason?: unknown } | null)?.reason;
+    if (typeof code === 'string' && code) {
+        return typeof reason === 'string' && reason ? `${code}/${reason}` : code;
+    }
+    const name = (error as { name?: unknown } | null)?.name;
+    return typeof name === 'string' && name && name !== 'Error' ? name : 'unknown';
+}
+
+/** `namespace/name` when `deployProjectId` looks like a Kubernetes deployment id, else `null`. */
+function kubernetesDeploymentId(deployProjectId: string | null | undefined): string | null {
+    const value = (deployProjectId ?? '').trim();
+    return /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\/[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/.test(value)
+        ? value
+        : null;
+}
 
 /** `work.kind` compared as a string, like `appDomainsFor` (APW-01 adds `'app'` to the union additively). */
 function isAppKind(work: Work): boolean {
@@ -1172,11 +1204,14 @@ export class DeployFacadeService implements IDeployFacade {
      * go with the row. Run the returned step AFTER the row is gone.
      *
      * Only a platform-managed target is prepared: the managed `ever-works`
-     * provider, or `k8s` on `k8s-works` / `k8s-works-shared`. A member's own
-     * cluster (`custom-kubeconfig`) is theirs to clean up, and the platform's
-     * view of it may be stale. It is also skipped when another Work deploys to
-     * the same namespace and object name, since those objects then serve that
-     * Work too.
+     * provider, or `k8s` on `k8s-works` / `k8s-works-shared`, and only with the
+     * platform's own kubeconfig. A member's own cluster (`custom-kubeconfig`, or
+     * the member's kubeconfig the `ever-works` deploy falls back to when the
+     * platform holds none) is theirs to clean up, and the platform's view of it
+     * may be stale. It is also skipped when another Work deploys, or may deploy,
+     * to the same namespace and object name, since those objects then serve that
+     * Work too: the objects' labels name the website repository, not the Work,
+     * so this check is what tells two Works apart.
      *
      * Never throws: anything it cannot resolve is `skipped` with the reason.
      */
@@ -1212,9 +1247,33 @@ export class DeployFacadeService implements IDeployFacade {
                 return { status: 'skipped', reason: 'not_managed' };
             }
 
-            const { plugin, token } = await this.resolvePluginAndTokenForWork(work, options);
-            if (typeof plugin.removeWorkDeployment !== 'function') {
-                return { status: 'skipped', reason: 'unsupported' };
+            let plugin: IDeploymentPlugin;
+            let token: string;
+            if (work.deployProvider === EVER_WORKS_DEPLOY_PROVIDER_ID) {
+                // The platform's kubeconfig only. The deploy falls back to the
+                // member's own `k8s` kubeconfig when the platform holds none; the
+                // teardown never does, as that would aim it at the member's cluster.
+                plugin = this.resolveRegisteredDeployPlugin(work.deployProvider);
+                if (typeof plugin.removeWorkDeployment !== 'function') {
+                    return { status: 'skipped', reason: 'unsupported' };
+                }
+                const managedKubeconfig = await this.resolveEverWorksManagedKubeconfig();
+                if (!managedKubeconfig) {
+                    return {
+                        status: 'skipped',
+                        reason: 'unresolved',
+                        detail: 'no platform kubeconfig for the ever-works provider',
+                    };
+                }
+                token = managedKubeconfig;
+            } else {
+                // `k8s` on `k8s-works` / `k8s-works-shared`: the resolver below
+                // replaces the settings token with the platform's kubeconfig for
+                // that cluster source (and fails when it is not configured).
+                ({ plugin, token } = await this.resolvePluginAndTokenForWork(work, options));
+                if (typeof plugin.removeWorkDeployment !== 'function') {
+                    return { status: 'skipped', reason: 'unsupported' };
+                }
             }
 
             const effective = resolveEffectiveDeploymentContext(
@@ -1229,15 +1288,16 @@ export class DeployFacadeService implements IDeployFacade {
             }
 
             const objectName = normaliseObjectName(work.getWebsiteRepo());
+            const target = `${namespace}/${objectName}`;
             const sharer = await this.findDeploymentSharer(work, plugin.id, namespace, objectName);
             if (sharer) {
-                return {
-                    status: 'skipped',
-                    reason: 'shared',
-                    detail: sharer.unresolved
-                        ? `Work ${sharer.id} may deploy to ${namespace}/${objectName} too (its settings could not be read); remove the objects by hand if it does not`
-                        : `Work ${sharer.id} deploys to ${namespace}/${objectName} too`,
-                };
+                const detail =
+                    sharer.why === 'resolved'
+                        ? `Work ${sharer.id} deploys to ${target} too`
+                        : sharer.why === 'unresolved'
+                          ? `Work ${sharer.id} may deploy to ${target} too (its settings could not be read); remove the objects by hand if it does not`
+                          : `Work ${sharer.id} has the same name and owner and was moved to ${sharer.provider || 'no provider'}; its old objects in ${target} may still serve it, so remove them by hand if they do not`;
+                return { status: 'skipped', reason: 'shared', detail };
             }
 
             const removeWorkDeployment = plugin.removeWorkDeployment.bind(plugin);
@@ -1246,10 +1306,12 @@ export class DeployFacadeService implements IDeployFacade {
             const projectName = work.getWebsiteRepo();
             const credential = effective.token;
             const context = effective.lookupContext;
+            const lastDeployed = kubernetesDeploymentId(work.deployProjectId);
             return {
                 status: 'ready',
                 namespace,
                 objectName,
+                ...(lastDeployed && lastDeployed !== target ? { staleTarget: lastDeployed } : {}),
                 run: () => removeWorkDeployment(projectName, credential, context),
             };
         } catch (error) {
@@ -1261,26 +1323,31 @@ export class DeployFacadeService implements IDeployFacade {
             ) {
                 return { status: 'skipped', reason: 'no_namespace' };
             }
-            // `detail` is for the server log only (`deleteWork` logs it as a
-            // warning); no response carries it. The messages reaching it are the
-            // platform's own resolution errors, never a credential.
-            return {
-                status: 'skipped',
-                reason: 'unresolved',
-                detail: error instanceof Error ? error.message : String(error),
-            };
+            // `detail` goes to the server log (`deleteWork` warns with it), so it
+            // carries the reason code only, never the error's message.
+            return { status: 'skipped', reason: 'unresolved', detail: teardownFailureCode(error) };
         }
     }
 
     /**
-     * The id of another Work that deploys to `namespace/objectName`, or `null`.
+     * Another Work that deploys, or may deploy, to `namespace/objectName`, or
+     * `null`. Only Works whose website repository gives the same object name
+     * count. The candidates are:
      *
-     * Candidates are the Kubernetes-family Works of the same owner (a tenant
-     * namespace is derived from the owner) and those with the same slug (the
-     * `k8s-works` namespace is derived from it), with the same website
-     * repository name. Each candidate's namespace is worked out with its own
-     * settings. A candidate whose namespace cannot be worked out counts as a
-     * sharer (`unresolved: true`): leaving the objects is the safe side, so a
+     * - every Work of the same owner, whatever its provider now: a tenant
+     *   namespace is derived from the owner, and a Work moved to another
+     *   provider leaves its objects running (they may still serve its custom
+     *   domain), with nothing recording where they were. Such a Work counts as
+     *   a sharer (`why: 'moved'`);
+     * - every `k8s` Work of any owner: a `k8s-works` namespace is set
+     *   explicitly or derived from a truncated slug, so it is not tied to an
+     *   owner (the set is small: `k8s` is opt-in and `k8s-works` admin-only);
+     * - every Kubernetes-family Work with the same slug.
+     *
+     * Each Kubernetes-family candidate's namespace is worked out with its own
+     * settings. One that is explicitly reserved can never be ours (ours is not
+     * reserved), so it is skipped. One that cannot be worked out counts as a
+     * sharer (`why: 'unresolved'`): leaving the objects is the safe side, so a
      * transient settings error leaves them for an operator, and the skip's
      * detail says which Work could not be read.
      */
@@ -1289,15 +1356,27 @@ export class DeployFacadeService implements IDeployFacade {
         pluginId: string,
         namespace: string,
         objectName: string,
-    ): Promise<{ id: string; unresolved: boolean } | null> {
-        const candidates = await this.workRepository.findByDeployProvidersForUserOrSlug(
-            [EVER_WORKS_DEPLOY_PROVIDER_ID, KUBERNETES_DEPLOY_PROVIDER_ID],
+    ): Promise<
+        | { id: string; why: 'resolved' }
+        | { id: string; why: 'unresolved' }
+        | { id: string; why: 'moved'; provider: string | null }
+        | null
+    > {
+        const candidates = await this.workRepository.findDeploymentSharerCandidates(
             work.userId,
             work.slug,
         );
         for (const candidate of candidates) {
             if (candidate.id === work.id || isAppKind(candidate)) continue;
             if (normaliseObjectName(candidate.getWebsiteRepo()) !== objectName) continue;
+            if (!isKubernetesFamilyProvider(candidate.deployProvider)) {
+                // Only the same-owner branch returns other providers.
+                return {
+                    id: candidate.id,
+                    why: 'moved',
+                    provider: candidate.deployProvider ?? null,
+                };
+            }
             try {
                 const { settings, settingSources } = await this.getDeploymentSettingsSnapshot(
                     pluginId,
@@ -1307,15 +1386,20 @@ export class DeployFacadeService implements IDeployFacade {
                 const candidateNamespace = resolveKubernetesDeployNamespace(
                     this.effectiveContextInput(candidate, pluginId, '', settings, settingSources),
                 );
-                if (candidateNamespace === namespace)
-                    return { id: candidate.id, unresolved: false };
-            } catch {
-                // Unknown namespace (settings unreadable, or an explicit reserved
-                // one): it may be ours, so it blocks the teardown rather than
-                // letting it through. Leaving the objects is the old behaviour.
-                // A transient settings error therefore leaves this deleted Work's
-                // objects in place; the skip says so, for an operator to remove.
-                return { id: candidate.id, unresolved: true };
+                if (candidateNamespace === namespace) {
+                    return { id: candidate.id, why: 'resolved' };
+                }
+            } catch (error) {
+                if (
+                    error instanceof DeploymentContextResolutionError &&
+                    error.code === 'RESERVED_NAMESPACE'
+                ) {
+                    // Its deploy target is a reserved namespace; ours is not.
+                    continue;
+                }
+                // Unknown namespace (settings unreadable): it may be ours, so it
+                // blocks the teardown rather than letting it through.
+                return { id: candidate.id, why: 'unresolved' };
             }
         }
         return null;
@@ -1381,14 +1465,7 @@ export class DeployFacadeService implements IDeployFacade {
         }
 
         const pluginProviderId = resolvePluginProviderId(providerId);
-        const registered = this.registry.get(pluginProviderId);
-        if (!registered || !registered.manifest.capabilities.includes(this.CAPABILITY)) {
-            throw new DeployProviderNotFoundError(providerId);
-        }
-
-        if (registered.state !== 'loaded') {
-            throw new DeployProviderNotFoundError(providerId);
-        }
+        const registered = this.resolveRegisteredDeployment(providerId);
 
         // Get token from plugin settings (user-required mode)
         let token = await this.getTokenFromSettings(
@@ -1425,6 +1502,23 @@ export class DeployFacadeService implements IDeployFacade {
             token,
             work,
         };
+    }
+
+    /** The loaded deployment plugin registered for `providerId`; throws when there is none. */
+    private resolveRegisteredDeployment(providerId: string) {
+        const registered = this.registry.get(resolvePluginProviderId(providerId));
+        if (!registered || !registered.manifest.capabilities.includes(this.CAPABILITY)) {
+            throw new DeployProviderNotFoundError(providerId);
+        }
+        if (registered.state !== 'loaded') {
+            throw new DeployProviderNotFoundError(providerId);
+        }
+        return registered;
+    }
+
+    /** {@link resolveRegisteredDeployment}'s plugin, without resolving any credential. */
+    private resolveRegisteredDeployPlugin(providerId: string): IDeploymentPlugin {
+        return this.resolveRegisteredDeployment(providerId).plugin as IDeploymentPlugin;
     }
 
     /**

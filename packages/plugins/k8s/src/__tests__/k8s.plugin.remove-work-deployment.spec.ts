@@ -20,7 +20,7 @@ const VALID = readFileSync(resolve(__dirname, 'fixtures/kubeconfig-valid.yml'), 
 const NS = 'ever-works-tenants-user-1';
 const SLUG = 'awesome-memes-website';
 
-type Live = { metadata?: { labels?: Record<string, string> } } | null;
+type Live = { metadata?: { labels?: Record<string, string>; uid?: string } } | null;
 
 function ownedLabels(slug = SLUG, workId = slug): Record<string, string> {
 	return {
@@ -45,7 +45,8 @@ function makeApi(objects: Record<string, Live>, overrides: Partial<Record<string
 			_ns: string,
 			_name: string,
 			_propagationPolicy?: string,
-			_context?: string
+			_context?: string,
+			_preconditionUid?: string
 		): Promise<void> => undefined
 	);
 	const api = { readObject, deleteObject, ...overrides } as unknown as KubernetesApiService;
@@ -195,7 +196,9 @@ describe('KubernetesPlugin.removeWorkDeployment', () => {
 
 		const result = await plugin.removeWorkDeployment(SLUG, VALID, CONTEXT);
 
-		expect(result.failed).toEqual([{ kind: 'Service', name: SLUG, error: 'services is forbidden' }]);
+		expect(result.failed).toEqual([
+			{ kind: 'Service', name: SLUG, error: 'services is forbidden', code: 'APPLY_FAILED' }
+		]);
 		expect(result.removed.map((o) => o.kind)).toEqual(['Ingress', 'Deployment', 'Secret', 'Secret']);
 	});
 
@@ -210,7 +213,7 @@ describe('KubernetesPlugin.removeWorkDeployment', () => {
 		const result = await plugin.removeWorkDeployment(SLUG, VALID, CONTEXT);
 
 		expect(result.failed).toEqual([
-			{ kind: 'Ingress', name: SLUG, error: 'Kubernetes credentials were rejected.' }
+			{ kind: 'Ingress', name: SLUG, error: 'Kubernetes credentials were rejected.', code: 'UNAUTHORIZED' }
 		]);
 		expect(deleteObject.mock.calls.some((call) => call[2] === 'Ingress')).toBe(false);
 	});
@@ -252,6 +255,72 @@ describe('KubernetesPlugin.removeWorkDeployment', () => {
 			plugin.removeWorkDeployment(SLUG, VALID, { namespaceOverride: '../kube-system' })
 		).rejects.toMatchObject({ code: 'NOT_CONFIGURED' });
 		expect(readObject).not.toHaveBeenCalled();
+	});
+
+	it('refuses to run without a namespace override, never falling back to the plugin setting', async () => {
+		const { api, readObject } = makeApi(allOwned());
+		const plugin = new KubernetesPlugin({ api });
+
+		await expect(
+			plugin.removeWorkDeployment(SLUG, VALID, {
+				projectNameOverride: SLUG,
+				settingsOverride: { namespace: NS }
+			})
+		).rejects.toMatchObject({ code: 'NOT_CONFIGURED' });
+		await expect(plugin.removeWorkDeployment(SLUG, VALID)).rejects.toMatchObject({ code: 'NOT_CONFIGURED' });
+		expect(readObject).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		'ever-works',
+		'default',
+		'kube-system',
+		'kube-anything',
+		'argocd',
+		'cert-manager',
+		'ingress-nginx',
+		'monitoring'
+	])('refuses the platform namespace %s', async (namespace) => {
+		const { api, readObject, deleteObject } = makeApi(allOwned());
+		const plugin = new KubernetesPlugin({ api });
+
+		await expect(
+			plugin.removeWorkDeployment(SLUG, VALID, { ...CONTEXT, namespaceOverride: namespace })
+		).rejects.toMatchObject({ code: 'NOT_CONFIGURED' });
+		expect(readObject).not.toHaveBeenCalled();
+		expect(deleteObject).not.toHaveBeenCalled();
+	});
+
+	it('deletes only the object it read: the uid it checked is sent as a precondition', async () => {
+		const objects = allOwned();
+		objects[`Ingress/${SLUG}`] = { metadata: { labels: ownedLabels(), uid: 'uid-ingress' } };
+		const { api, deleteObject } = makeApi(objects);
+		const plugin = new KubernetesPlugin({ api });
+
+		await plugin.removeWorkDeployment(SLUG, VALID, CONTEXT);
+
+		const ingressCall = deleteObject.mock.calls.find((call) => call[2] === 'Ingress');
+		expect(ingressCall?.[7]).toBe('uid-ingress');
+		// An object read without a uid is deleted without a precondition.
+		const serviceCall = deleteObject.mock.calls.find((call) => call[2] === 'Service');
+		expect(serviceCall?.[7]).toBeUndefined();
+	});
+
+	it('reports an object replaced since the read (409 on the precondition) as failed, and goes on', async () => {
+		const objects = allOwned();
+		objects[`Ingress/${SLUG}`] = { metadata: { labels: ownedLabels(), uid: 'uid-old' } };
+		const { api, deleteObject } = makeApi(objects);
+		deleteObject.mockImplementation(async (_kc, _v, kind) => {
+			if (kind === 'Ingress')
+				throw new Error('Operation cannot be fulfilled: Precondition failed: UID in precondition');
+		});
+		const plugin = new KubernetesPlugin({ api });
+
+		const result = await plugin.removeWorkDeployment(SLUG, VALID, CONTEXT);
+
+		expect(result.failed.map((o) => `${o.kind}/${o.name}`)).toEqual([`Ingress/${SLUG}`]);
+		expect(result.failed[0]?.code).toBe('UNKNOWN');
+		expect(result.removed).toHaveLength(4);
 	});
 
 	it('refuses an empty project name', async () => {

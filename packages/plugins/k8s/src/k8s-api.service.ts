@@ -195,7 +195,8 @@ export interface KubernetesObjectApiLike {
 		dryRun?: string,
 		gracePeriodSeconds?: number,
 		orphanDependents?: boolean,
-		propagationPolicy?: string
+		propagationPolicy?: string,
+		body?: { preconditions?: { uid?: string } }
 	): Promise<unknown>;
 }
 
@@ -756,6 +757,9 @@ export class KubernetesApiService {
 	 *
 	 * @param propagationPolicy `Foreground` | `Background` | `Orphan`; passed
 	 * as the 6th positional argument of `KubernetesObjectApi.delete`.
+	 * @param preconditionUid when set, the API server deletes the object only
+	 * while its `metadata.uid` is still this one (409 Conflict otherwise), so an
+	 * object replaced after the caller read it is not deleted in its place.
 	 */
 	async deleteObject(
 		kubeconfigYaml: string,
@@ -764,11 +768,24 @@ export class KubernetesApiService {
 		namespace: string,
 		name: string,
 		propagationPolicy?: string,
-		contextOverride?: string
+		contextOverride?: string,
+		preconditionUid?: string
 	): Promise<void> {
 		const client = this.factory.createKubeConfig(kubeconfigYaml, contextOverride);
 		const objects = this.factory.objectApi(client);
 		try {
+			if (preconditionUid) {
+				await objects.delete(
+					objectRef(apiVersion, kind, namespace, name),
+					undefined, // pretty
+					undefined, // dryRun
+					undefined, // gracePeriodSeconds
+					undefined, // orphanDependents
+					propagationPolicy,
+					{ preconditions: { uid: preconditionUid } } // body: V1DeleteOptions
+				);
+				return;
+			}
 			await objects.delete(
 				objectRef(apiVersion, kind, namespace, name),
 				undefined, // pretty

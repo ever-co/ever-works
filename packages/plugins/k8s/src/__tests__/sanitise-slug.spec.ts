@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 
 import { sanitiseSlug } from '../k8s.plugin';
+
+const SANITISE_SLUG_CASES = (
+	JSON.parse(readFileSync(resolve(__dirname, 'fixtures/sanitise-slug.cases.json'), 'utf-8')) as {
+		cases: Array<[string, string]>;
+	}
+).cases;
 
 /**
  * `sanitiseSlug` turns a project name — the plugin's `projectName` setting, or the Work's
@@ -28,22 +36,14 @@ describe('sanitiseSlug', () => {
 		expect(elapsedMs).toBeLessThan(2_000);
 	});
 
-	// The reordered steps must answer exactly what the original chain answered.
-	it.each([
-		['awesome-time-tracking-website', 'awesome-time-tracking-website'],
-		['My Project!!', 'my-project'],
-		['--a--b--', 'a-b'],
-		['___', ''],
-		['-', ''],
-		['', ''],
-		['a - b', 'a-b'],
-		['  spaced  ', 'spaced'],
-		['Ünïcode Name', 'n-code-name'],
-		['a'.repeat(70), 'a'.repeat(63)],
-		// Truncation after the trim can still end on a dash — kept as it was.
-		[`${'a'.repeat(62)}-b`, `${'a'.repeat(62)}-`],
-		[`${'a'.repeat(62)}!!b`, `${'a'.repeat(62)}-`]
-	])('sanitises %j to %j', (input, expected) => {
+	// The reordered steps must answer exactly what the original chain answered. Truncation
+	// after the trim can still end on a dash (the last two cases): kept as it was.
+	//
+	// The cases live in a fixture because the agent keeps a copy of this function
+	// (`normaliseObjectName`, which decides which Works could share a deleted Work's objects)
+	// and its spec reads the same file: changing the rule here without the fixture fails
+	// this spec, and changing both fails the agent's until its copy follows.
+	it.each(SANITISE_SLUG_CASES)('sanitises %j to %j', (input, expected) => {
 		expect(sanitiseSlug(input)).toBe(expected);
 	});
 });

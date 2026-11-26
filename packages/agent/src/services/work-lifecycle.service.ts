@@ -59,6 +59,7 @@ import {
     DeployFacadeService,
     type WorkDeploymentTeardownPreparation,
 } from '@src/facades/deploy.facade';
+import type { WorkDeploymentTeardownResult } from '@ever-works/plugin';
 import {
     getDefaultWebsiteTemplateId,
     SwitchWebsiteTemplateResponseDto,
@@ -3033,14 +3034,6 @@ export class WorkLifecycleService {
                 ]).catch((error) => this.logger.error('Failed to cleanup repositories:', error));
             }
 
-            // Remove the site's Ingress (and its own Service, Deployment and
-            // Secrets) from the platform-managed cluster. Removing the DNS record
-            // alone no longer takes the site down: the zone's `*.ever.works`
-            // wildcard routes every unrecorded name to the works ingress, so the
-            // Ingress rule is what still serves it. Best effort, like the DNS
-            // removal: a failure is logged and the delete still succeeds.
-            await this.runDeploymentTeardown(work, deploymentTeardown);
-
             // EW-617 G5: tear down the platform-managed CNAME so the slug is
             // immediately reusable. Only applies when the work deployed to
             // `ever-works` — for other providers ensureWorkSubdomain was never
@@ -3048,9 +3041,20 @@ export class WorkLifecycleService {
             // is not configured (dev). Only when this Work holds the name: a
             // slug is not unique across tenants, and a record on the managed
             // target may serve another Work that claimed the same label.
+            // Before the cluster teardown below, which may wait on the cluster.
             if (work.deployProvider === 'ever-works' && (await this.holdsSlugRecord(work))) {
                 await this.everWorksDns.removeWorkSubdomain(work.slug);
             }
+
+            // Remove the site's Ingress (and its own Service, Deployment and
+            // Secrets) from the platform-managed cluster. Removing the DNS record
+            // alone no longer takes the site down: the zone's `*.ever.works`
+            // wildcard routes every unrecorded name to the works ingress, so the
+            // Ingress rule is what still serves it. Best effort, like the DNS
+            // removal: a failure is logged and the delete still succeeds. The
+            // delete waits for it a bounded time only; past that it goes on in
+            // the background and logs its outcome when it ends.
+            await this.runDeploymentTeardown(work, deploymentTeardown);
 
             return {
                 status: 'success',
@@ -3158,7 +3162,20 @@ export class WorkLifecycleService {
         }
     }
 
-    /** Run a prepared teardown. Logs what it did; never throws. */
+    /**
+     * How long a Work delete waits for its cluster teardown. The Kubernetes
+     * calls carry no timeout of their own, so an unreachable cluster would
+     * otherwise hold the request for many minutes, long after the proxy and the
+     * browser have given up on it (and the row is already gone, so a retry
+     * answers 404). Past this the teardown goes on in the background.
+     */
+    private readonly deploymentTeardownWaitMs = 20_000;
+
+    /**
+     * Run a prepared teardown. Logs what it did; never throws. Waits at most
+     * {@link deploymentTeardownWaitMs}: a teardown still running then is left to
+     * finish in the background, and its outcome is logged when it does.
+     */
     private async runDeploymentTeardown(
         work: Work,
         teardown: Extract<WorkDeploymentTeardownPreparation, { status: 'ready' }> | null,
@@ -3167,32 +3184,69 @@ export class WorkLifecycleService {
             return;
         }
         const target = `${teardown.namespace}/${teardown.objectName}`;
+        if (teardown.staleTarget) {
+            this.logger.warn(
+                `Work ${work.id}: it was last deployed as ${teardown.staleTarget}, not ${target}; ` +
+                    `only ${target} is removed, so check ${teardown.staleTarget} by hand`,
+            );
+        }
+        let outcome: Promise<void>;
         try {
-            const result = await teardown.run();
-            const list = (objects: ReadonlyArray<{ kind: string; name: string }>) =>
-                objects.map((o) => `${o.kind}/${o.name}`).join(', ');
-            if (result.removed.length > 0) {
-                this.logger.log(
-                    `Work ${work.id}: removed ${list(result.removed)} from ${result.location ?? teardown.namespace}`,
-                );
-            }
-            if (result.kept.length > 0) {
-                this.logger.warn(
-                    `Work ${work.id}: kept ${result.kept
-                        .map((o) => `${o.kind}/${o.name} (${o.reason})`)
-                        .join(', ')} in ${target}: not created by the platform for this Work`,
-                );
-            }
-            if (result.failed.length > 0) {
-                this.logger.error(
-                    `Work ${work.id}: could not remove ${result.failed
-                        .map((o) => `${o.kind}/${o.name} (${o.error})`)
-                        .join(', ')} from ${target}`,
-                );
-            }
+            outcome = teardown.run().then(
+                (result) => this.logDeploymentTeardown(work, target, result),
+                (error: unknown) =>
+                    this.logger.error(
+                        `Work ${work.id}: removing its cluster objects (${target}) failed: ${describeFailureCode(error)}`,
+                    ),
+            );
         } catch (error) {
             this.logger.error(
                 `Work ${work.id}: removing its cluster objects (${target}) failed: ${describeFailureCode(error)}`,
+            );
+            return;
+        }
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const waited = new Promise<'timeout'>((resolve) => {
+            timer = setTimeout(() => resolve('timeout'), this.deploymentTeardownWaitMs);
+            timer.unref?.();
+        });
+        try {
+            if ((await Promise.race([outcome.then(() => 'done' as const), waited])) === 'timeout') {
+                this.logger.warn(
+                    `Work ${work.id}: removing its cluster objects (${target}) takes longer than ` +
+                        `${Math.round(this.deploymentTeardownWaitMs / 1000)} s; it goes on in the background`,
+                );
+            }
+        } finally {
+            clearTimeout(timer);
+        }
+    }
+
+    /** Log a teardown result: object kinds and names, reason codes, never a message body. */
+    private logDeploymentTeardown(
+        work: Work,
+        target: string,
+        result: WorkDeploymentTeardownResult,
+    ): void {
+        const list = (objects: ReadonlyArray<{ kind: string; name: string }>) =>
+            objects.map((o) => `${o.kind}/${o.name}`).join(', ');
+        if (result.removed.length > 0) {
+            this.logger.log(`Work ${work.id}: removed ${list(result.removed)} from ${target}`);
+        }
+        if (result.kept.length > 0) {
+            this.logger.warn(
+                `Work ${work.id}: kept ${result.kept
+                    .map((o) => `${o.kind}/${o.name} (${o.reason})`)
+                    .join(
+                        ', ',
+                    )} in ${target}: not created by the platform's deploy under this name`,
+            );
+        }
+        if (result.failed.length > 0) {
+            this.logger.error(
+                `Work ${work.id}: could not remove ${result.failed
+                    .map((o) => `${o.kind}/${o.name} (${o.code || 'unknown'})`)
+                    .join(', ')} from ${target}`,
             );
         }
     }

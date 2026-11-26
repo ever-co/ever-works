@@ -739,6 +739,35 @@ describe('WorkRepository', () => {
         });
     });
 
+    describe('findDeploymentSharerCandidates', () => {
+        it('ORs every k8s Work, every Work of the owner (any provider) and the Kubernetes-family Works with the slug', async () => {
+            const rows = [{ id: 'w1' } as Work];
+            repository.find.mockResolvedValueOnce(rows);
+
+            await expect(service.findDeploymentSharerCandidates('u1', 'memes')).resolves.toBe(rows);
+
+            expect(repository.find).toHaveBeenCalledWith({
+                where: [
+                    { deployProvider: 'k8s' },
+                    { userId: 'u1' },
+                    { slug: 'memes', deployProvider: In(['ever-works', 'k8s']) },
+                ],
+                relations: ['user'],
+            });
+        });
+
+        it('drops an empty owner or slug instead of matching on an empty value', async () => {
+            repository.find.mockResolvedValueOnce([]);
+
+            await service.findDeploymentSharerCandidates('', '');
+
+            expect(repository.find).toHaveBeenCalledWith({
+                where: [{ deployProvider: 'k8s' }],
+                relations: ['user'],
+            });
+        });
+    });
+
     describe('updateLastPullRequest', () => {
         it('merges the new lastPullRequest fields onto the existing fields (so a `data` PR update does not erase the `main` PR)', async () => {
             repository.findOne
