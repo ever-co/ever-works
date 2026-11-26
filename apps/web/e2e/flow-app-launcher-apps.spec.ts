@@ -1130,8 +1130,9 @@ test('[ACC-E2E-12 · FR-30–FR-32] every tile href equals the item url exactly,
         await page.goto('/en', { waitUntil: 'domcontentloaded' });
         await expect(
             page.getByTestId('app-launcher-control'),
-            'FR-54: the header control is mounted because the installation switch is on — the ' +
-                'web resolves the same switch from GET /api/config',
+            'FR-54: the launcher control is mounted because the installation switch is on — the ' +
+                'web resolves the same switch from GET /api/config (by default it is the Ever mark ' +
+                'at the top of the sidebar, shared Ever shell A3)',
         ).toBeAttached({ timeout: 30_000 });
         await expect(
             page.getByTestId('app-launcher-unavailable'),

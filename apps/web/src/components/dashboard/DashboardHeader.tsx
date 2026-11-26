@@ -9,6 +9,7 @@ import { WhatsNewButton } from './WhatsNewButton';
 import { WorkSwitcher } from './WorkSwitcher';
 import { CommandPaletteTrigger } from '@/components/command-palette/CommandPaletteTrigger';
 import { AppLauncherButton } from '@/components/app-launcher/AppLauncherButton';
+import { useShowsHeaderAppLauncher } from '@/components/app-launcher/SidebarAppLauncher';
 import { Tooltip } from '@/components/ui/tooltip';
 import { Menu, HelpCircle, Sparkles, X } from 'lucide-react';
 
@@ -61,6 +62,10 @@ export function DashboardHeader({
     const t = useTranslations('dashboard.header');
     const tTheme = useTranslations('common.theme');
     const tHelpCenter = useTranslations('dashboard.helpCenter');
+    // Shared Ever shell, A3: the top bar carries the launcher only when the
+    // person put it there (Settings > App Launcher > position); by default it
+    // is the Ever mark at the top of the sidebar.
+    const showsAppLauncher = useShowsHeaderAppLauncher(appLauncherEnabled);
 
     return (
         <header
@@ -165,13 +170,14 @@ export function DashboardHeader({
 
                         {/*
                           APW-11 T14 — the App Launcher, AFTER the Help button, and
-                          only when the installation resolved the flag. The control
+                          only when the installation resolved the flag AND the
+                          person chose the top bar for it (A3). The control
                           mounts the `<ever-app-launcher>` element itself (it is the
                           element's own trigger) and renders a disabled control if
                           the element's chunk cannot load, so the header never breaks
                           and this slot is never empty-but-clickable (ACC-11-01).
                         */}
-                        {appLauncherEnabled && <AppLauncherButton />}
+                        {showsAppLauncher && <AppLauncherButton variant="header" />}
                     </div>
                 </div>
             </div>

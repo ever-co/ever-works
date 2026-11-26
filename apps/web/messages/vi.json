@@ -2929,7 +2929,13 @@
                 "showingCount": "Đang hiển thị 200 trong {count}",
                 "saving": "Đang lưu…",
                 "saved": "Đã lưu",
-                "saveFailed": "Không thể lưu. Hãy thử lại."
+                "saveFailed": "Không thể lưu. Hãy thử lại.",
+                "placementTitle": "Vị trí",
+                "placementDescription": "Vị trí lối tắt đến các ứng dụng Ever khác. Chỉ áp dụng cho trình duyệt này.",
+                "placementSidebar": "Thanh bên",
+                "placementHeader": "Thanh trên cùng",
+                "placementRail": "Thanh bên trái",
+                "placementSaveFailed": "Trình duyệt này không lưu lựa chọn. Hãy thử lại."
             },
             "githubApp": {
                 "title": "Cài đặt Ứng dụng GitHub",
@@ -10933,7 +10939,7 @@
         "appLauncher": {
             "controlLabel": "Trình khởi chạy ứng dụng",
             "controlTooltip": "Ever apps và ứng dụng của bạn",
-            "panelTitle": "Trình khởi chạy ứng dụng",
+            "panelTitle": "Ứng dụng",
             "sectionPinned": "Đã ghim",
             "sectionPlatforms": "Ever apps",
             "sectionWorks": "Ứng dụng của bạn",
@@ -10955,7 +10961,11 @@
             "controlUnavailable": "App Launcher hiện không khả dụng.",
             "emptyActionFailed": "Không thể mở trang đó. Thử lại.",
             "signInPrompt": "Đăng nhập bằng Ever ID để xem ứng dụng của bạn tại đây.",
-            "signIn": "Đăng nhập"
+            "signIn": "Đăng nhập",
+            "railLabel": "Ứng dụng",
+            "railCurrentApp": "{app}, bạn đang ở đây",
+            "railSoonApp": "{app}, sắp ra mắt",
+            "railOpensInNewTab": "{app} (mở trong thẻ mới)"
         },
         "signOut": {
             "title": "Đăng xuất khỏi Ever Works?",
@@ -11341,8 +11351,10 @@
         },
         "switcher": {
             "heading": "Switch Organization",
-            "createNew": "Create Organization",
-            "loading": "Loading…"
+            "createNew": "Tạo tổ chức",
+            "loading": "Loading…",
+            "switchFailed": "Không thể chuyển tổ chức. Hãy thử lại.",
+            "active": "Tổ chức hiện tại"
         },
         "create": {
             "visionToggle": "Add company vision (optional)",

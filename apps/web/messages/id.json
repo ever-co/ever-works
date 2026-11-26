@@ -2929,7 +2929,13 @@
                 "showingCount": "Menampilkan 200 dari {count}",
                 "saving": "Menyimpan…",
                 "saved": "Tersimpan",
-                "saveFailed": "Gagal menyimpan. Coba lagi."
+                "saveFailed": "Gagal menyimpan. Coba lagi.",
+                "placementTitle": "Posisi",
+                "placementDescription": "Tempat pintasan ke aplikasi Ever lainnya. Hanya berlaku di browser ini.",
+                "placementSidebar": "Bilah sisi",
+                "placementHeader": "Bilah atas",
+                "placementRail": "Rel kiri",
+                "placementSaveFailed": "Browser ini tidak menyimpan pilihan. Coba lagi."
             },
             "githubApp": {
                 "title": "Instalasi GitHub App",
@@ -10933,7 +10939,7 @@
         "appLauncher": {
             "controlLabel": "Peluncur Aplikasi",
             "controlTooltip": "Ever apps dan aplikasi Anda",
-            "panelTitle": "Peluncur Aplikasi",
+            "panelTitle": "Aplikasi",
             "sectionPinned": "Disematkan",
             "sectionPlatforms": "Ever apps",
             "sectionWorks": "Aplikasi Anda",
@@ -10955,7 +10961,11 @@
             "controlUnavailable": "App Launcher tidak tersedia saat ini.",
             "emptyActionFailed": "Tidak dapat membuka halaman itu. Coba lagi.",
             "signInPrompt": "Masuk dengan Ever ID untuk melihat aplikasi Anda di sini.",
-            "signIn": "Masuk"
+            "signIn": "Masuk",
+            "railLabel": "Aplikasi",
+            "railCurrentApp": "{app}, Anda di sini",
+            "railSoonApp": "{app}, segera hadir",
+            "railOpensInNewTab": "{app} (terbuka di tab baru)"
         },
         "signOut": {
             "title": "Keluar dari Ever Works?",
@@ -11341,8 +11351,10 @@
         },
         "switcher": {
             "heading": "Switch Organization",
-            "createNew": "Create Organization",
-            "loading": "Loading…"
+            "createNew": "Buat organisasi",
+            "loading": "Loading…",
+            "switchFailed": "Tidak dapat beralih organisasi. Coba lagi.",
+            "active": "Organisasi saat ini"
         },
         "create": {
             "visionToggle": "Add company vision (optional)",

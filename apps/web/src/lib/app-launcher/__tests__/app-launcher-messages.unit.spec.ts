@@ -55,6 +55,11 @@ const LAUNCHER_KEYS = [
     'emptyActionFailed',
     'signInPrompt',
     'signIn',
+    // Shared Ever shell, A3: the left rail.
+    'railLabel',
+    'railCurrentApp',
+    'railSoonApp',
+    'railOpensInNewTab',
 ] as const;
 
 /** Every locale bundle the app ships (README §7 rule 11: all 21 carry the same keys). */

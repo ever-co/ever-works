@@ -2929,7 +2929,13 @@
                 "showingCount": "แสดง 200 จาก {count}",
                 "saving": "กำลังบันทึก…",
                 "saved": "บันทึกแล้ว",
-                "saveFailed": "บันทึกไม่สำเร็จ ลองอีกครั้ง"
+                "saveFailed": "บันทึกไม่สำเร็จ ลองอีกครั้ง",
+                "placementTitle": "ตำแหน่ง",
+                "placementDescription": "ตำแหน่งของทางลัดไปยังแอป Ever อื่น ๆ ใช้กับเบราว์เซอร์นี้เท่านั้น",
+                "placementSidebar": "แถบด้านข้าง",
+                "placementHeader": "แถบด้านบน",
+                "placementRail": "แถบด้านซ้าย",
+                "placementSaveFailed": "เบราว์เซอร์นี้ไม่ได้บันทึกตัวเลือก ลองอีกครั้ง"
             },
             "githubApp": {
                 "title": "การติดตั้ง GitHub App",
@@ -10933,7 +10939,7 @@
         "appLauncher": {
             "controlLabel": "ตัวเรียกใช้แอป",
             "controlTooltip": "Ever apps และแอปของคุณ",
-            "panelTitle": "ตัวเรียกใช้แอป",
+            "panelTitle": "แอป",
             "sectionPinned": "ปักหมุด",
             "sectionPlatforms": "Ever apps",
             "sectionWorks": "แอปของคุณ",
@@ -10955,7 +10961,11 @@
             "controlUnavailable": "App Launcher ไม่พร้อมใช้งานในขณะนี้",
             "emptyActionFailed": "ไม่สามารถเปิดหน้านั้นได้ ลองอีกครั้ง",
             "signInPrompt": "ลงชื่อเข้าใช้ด้วย Ever ID เพื่อดูแอปของคุณที่นี่",
-            "signIn": "ลงชื่อเข้าใช้"
+            "signIn": "ลงชื่อเข้าใช้",
+            "railLabel": "แอป",
+            "railCurrentApp": "{app} คุณอยู่ที่นี่",
+            "railSoonApp": "{app} เร็ว ๆ นี้",
+            "railOpensInNewTab": "{app} (เปิดในแท็บใหม่)"
         },
         "signOut": {
             "title": "ออกจากระบบ Ever Works หรือไม่",
@@ -11341,8 +11351,10 @@
         },
         "switcher": {
             "heading": "Switch Organization",
-            "createNew": "Create Organization",
-            "loading": "Loading…"
+            "createNew": "สร้างองค์กร",
+            "loading": "Loading…",
+            "switchFailed": "สลับองค์กรไม่ได้ ลองอีกครั้ง",
+            "active": "องค์กรปัจจุบัน"
         },
         "create": {
             "visionToggle": "Add company vision (optional)",

@@ -2929,7 +2929,13 @@
                 "showingCount": "{count} uygulamadan 200 tanesi gösteriliyor",
                 "saving": "Kaydediliyor…",
                 "saved": "Kaydedildi",
-                "saveFailed": "Kaydedilemedi. Yeniden deneyin."
+                "saveFailed": "Kaydedilemedi. Yeniden deneyin.",
+                "placementTitle": "Konum",
+                "placementDescription": "Diğer Ever uygulamalarına giden kısayolun yeri. Yalnızca bu tarayıcıda geçerlidir.",
+                "placementSidebar": "Kenar çubuğu",
+                "placementHeader": "Üst çubuk",
+                "placementRail": "Sol şerit",
+                "placementSaveFailed": "Bu tarayıcı seçimi kaydetmedi. Yeniden deneyin."
             },
             "githubApp": {
                 "title": "GitHub App Kurulumları",
@@ -10933,7 +10939,7 @@
         "appLauncher": {
             "controlLabel": "Uygulama başlatıcı",
             "controlTooltip": "Ever apps ve uygulamalarınız",
-            "panelTitle": "Uygulama başlatıcı",
+            "panelTitle": "Uygulamalar",
             "sectionPinned": "Sabitlenenler",
             "sectionPlatforms": "Ever apps",
             "sectionWorks": "Uygulamalarınız",
@@ -10955,7 +10961,11 @@
             "controlUnavailable": "App Launcher şu anda kullanılamıyor.",
             "emptyActionFailed": "O sayfa açılamadı. Tekrar deneyin.",
             "signInPrompt": "Uygulamalarınızı burada görmek için Ever ID ile giriş yapın.",
-            "signIn": "Giriş yap"
+            "signIn": "Giriş yap",
+            "railLabel": "Uygulamalar",
+            "railCurrentApp": "{app}, buradasınız",
+            "railSoonApp": "{app}, yakında",
+            "railOpensInNewTab": "{app} (yeni sekmede açılır)"
         },
         "signOut": {
             "title": "Ever Works oturumu kapatılsın mı?",
@@ -11341,8 +11351,10 @@
         },
         "switcher": {
             "heading": "Switch Organization",
-            "createNew": "Create Organization",
-            "loading": "Loading…"
+            "createNew": "Kuruluş oluştur",
+            "loading": "Loading…",
+            "switchFailed": "Kuruluş değiştirilemedi. Yeniden deneyin.",
+            "active": "Geçerli kuruluş"
         },
         "create": {
             "visionToggle": "Add company vision (optional)",

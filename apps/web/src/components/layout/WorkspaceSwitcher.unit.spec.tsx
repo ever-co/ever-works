@@ -44,7 +44,8 @@ vi.mock('../logos', () => ({
 // `CreateOrganizationModal` pulls in next/image and the full org create
 // flow — stub it to a noop so the trigger renders without exploding.
 vi.mock('../organizations/CreateOrganizationModal', () => ({
-    CreateOrganizationModal: () => null,
+    CreateOrganizationModal: ({ open }: { open: boolean }) =>
+        open ? <div data-testid="create-organization-modal" /> : null,
 }));
 
 import { WorkspaceSwitcher } from './WorkspaceSwitcher';
@@ -98,20 +99,40 @@ describe('WorkspaceSwitcher — EW-660 Phase 8', () => {
     });
 
     /**
-     * Empty state: even with zero orgs the switcher renders the
-     * spinning favicon + wordmark + chevron trigger so the user can
-     * still reach "Create Organization". The previous behaviour
-     * (bare logo, no trigger) silently broke the create flow.
+     * Empty state (shared Ever shell, A2): with zero orgs the trigger reads
+     * "Create organization" and opens the create dialog directly — no menu
+     * holding a single row. The Ever mark beside the switcher is the sidebar's
+     * logo, so the trigger draws neither the favicon nor the wordmark.
      */
-    it('renders favicon + wordmark + trigger when the user has zero organizations', () => {
+    it('reads "Create organization" and opens the create dialog when the user has zero organizations', () => {
         __seedOrganizationsStoreForTests({ data: [], isLoading: false, error: null });
 
         render(<WorkspaceSwitcher />);
 
-        expect(screen.getByTestId('favicon-everwork-image')).toBeInTheDocument();
-        expect(screen.getByTestId('logo-everwork-image')).toBeInTheDocument();
-        // Trigger button is always present.
-        expect(screen.getAllByRole('button').length).toBeGreaterThanOrEqual(1);
+        expect(screen.queryByTestId('favicon-everwork-image')).toBeNull();
+        expect(screen.queryByTestId('logo-everwork-image')).toBeNull();
+        const trigger = screen.getByTestId('workspace-switcher-create');
+        expect(trigger).toHaveTextContent('organizations.switcher.createNew');
+        expect(screen.queryByTestId('create-organization-modal')).toBeNull();
+        fireEvent.click(trigger);
+        expect(screen.getByTestId('create-organization-modal')).toBeInTheDocument();
+    });
+
+    /**
+     * A failed read is not "no Organization": the person keeps the menu (with
+     * the create row), instead of a lone "Create organization" that would hide
+     * the Organizations they have.
+     */
+    it('keeps the menu when the Organizations read failed', () => {
+        __seedOrganizationsStoreForTests({ data: [], isLoading: false, error: new Error('503') });
+
+        render(<WorkspaceSwitcher />);
+
+        expect(screen.queryByTestId('workspace-switcher-create')).toBeNull();
+        const trigger = screen.getAllByRole('button')[0];
+        expect(trigger).toHaveTextContent('organizations.switcher.heading');
+        fireEvent.click(trigger);
+        expect(screen.getByText('organizations.switcher.createNew')).toBeInTheDocument();
     });
 
     /**
@@ -196,24 +217,19 @@ describe('WorkspaceSwitcher — EW-660 Phase 8', () => {
     });
 
     /**
-     * Collapsed variant — empty state: the trigger renders only the
-     * leading icon (favicon, no wordmark/label/chevron) and clicking
-     * it still opens the popover. Replaces the pre-fix collapsed
-     * sidebar's `<FaviconEverWork>` link to `siteConfig.website`
-     * (localhost:3000 in dev).
+     * Collapsed variant — empty state: an icon-only "+" button whose
+     * accessible name is "Create organization", opening the create dialog.
      */
-    it('renders icon-only trigger and still opens the popover when isCollapsed (empty state)', () => {
+    it('renders an icon-only create button with an accessible name when isCollapsed (empty state)', () => {
         __seedOrganizationsStoreForTests({ data: [], isLoading: false, error: null });
 
         render(<WorkspaceSwitcher isCollapsed />);
 
-        // Empty-state icon = favicon. No label, no chevron, no wordmark.
-        expect(screen.getByTestId('favicon-everwork-image')).toBeInTheDocument();
-        expect(screen.queryByTestId('logo-everwork-image')).toBeNull();
-
-        const trigger = screen.getAllByRole('button')[0];
+        expect(screen.queryByTestId('favicon-everwork-image')).toBeNull();
+        const trigger = screen.getByRole('button', { name: 'organizations.switcher.createNew' });
+        expect(trigger).not.toHaveTextContent('organizations.switcher.createNew');
         fireEvent.click(trigger);
-        expect(screen.getByText('organizations.switcher.createNew')).toBeInTheDocument();
+        expect(screen.getByTestId('create-organization-modal')).toBeInTheDocument();
     });
 
     /**

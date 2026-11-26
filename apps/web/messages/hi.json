@@ -2929,7 +2929,13 @@
                 "showingCount": "{count} में से 200 दिखाए जा रहे हैं",
                 "saving": "सहेजा जा रहा है…",
                 "saved": "सहेजा गया",
-                "saveFailed": "सहेजा नहीं जा सका। फिर से प्रयास करें।"
+                "saveFailed": "सहेजा नहीं जा सका। फिर से प्रयास करें।",
+                "placementTitle": "स्थान",
+                "placementDescription": "अन्य Ever ऐप्स का शॉर्टकट कहाँ रहता है। केवल इस ब्राउज़र पर लागू होता है।",
+                "placementSidebar": "साइडबार",
+                "placementHeader": "शीर्ष बार",
+                "placementRail": "बाईं पट्टी",
+                "placementSaveFailed": "इस ब्राउज़र ने चुनाव सहेजा नहीं। फिर से कोशिश करें।"
             },
             "githubApp": {
                 "title": "GitHub ऐप इंस्टॉलेशन",
@@ -10933,7 +10939,7 @@
         "appLauncher": {
             "controlLabel": "ऐप लॉन्चर",
             "controlTooltip": "Ever apps और आपके ऐप्स",
-            "panelTitle": "ऐप लॉन्चर",
+            "panelTitle": "ऐप्स",
             "sectionPinned": "पिन किए गए",
             "sectionPlatforms": "Ever apps",
             "sectionWorks": "आपके ऐप्स",
@@ -10955,7 +10961,11 @@
             "controlUnavailable": "App Launcher अभी उपलब्ध नहीं है।",
             "emptyActionFailed": "वह पृष्ठ खोल नहीं सके। पुनः प्रयास करें।",
             "signInPrompt": "अपने ऐप्स यहाँ देखने के लिए Ever ID से साइन इन करें।",
-            "signIn": "साइन इन"
+            "signIn": "साइन इन",
+            "railLabel": "ऐप्स",
+            "railCurrentApp": "{app}, आप यहाँ हैं",
+            "railSoonApp": "{app}, जल्द ही",
+            "railOpensInNewTab": "{app} (नए टैब में खुलता है)"
         },
         "signOut": {
             "title": "Ever Works से साइन आउट करें?",
@@ -11341,8 +11351,10 @@
         },
         "switcher": {
             "heading": "Switch Organization",
-            "createNew": "Create Organization",
-            "loading": "Loading…"
+            "createNew": "संगठन बनाएँ",
+            "loading": "Loading…",
+            "switchFailed": "संगठन नहीं बदला जा सका। फिर से कोशिश करें।",
+            "active": "वर्तमान संगठन"
         },
         "create": {
             "visionToggle": "Add company vision (optional)",

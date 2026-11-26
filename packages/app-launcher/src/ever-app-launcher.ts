@@ -13,7 +13,9 @@ import type {
 	LauncherErrorSection,
 	LauncherItemActivateDetail,
 	LauncherManageDetail,
+	LauncherPanelPosition,
 	LauncherRetrySection,
+	LauncherShowOptions,
 	LauncherStrings,
 	LauncherTheme
 } from './types.js';
@@ -36,7 +38,9 @@ import type {
  * | Kind      | Name                                      | Notes                                             |
  * | --------- | ----------------------------------------- | ------------------------------------------------- |
  * | attribute | `current`                                 | catalog id of the platform to mark **You're here** |
- * | attribute | `theme`                                   | `light` \\| `dark` \\| `auto` (default `auto`)      |
+ * | attribute | `theme`                                   | `light` \\| `dark` \\| `auto` (default `auto`), reflected |
+ * | attribute | `panel-position`                          | `bottom-end` (default) \\| `bottom-start` \\| `right-start` \\| `right-end`, reflected |
+ * | slot      | `trigger-icon`                            | replaces the trigger's 2×2 grid (a host's own mark) |
  * | attribute | `environment`, `catalog-url`, `apps-url`  | P2 self-fetch only; carried, not yet read          |
  * | attribute | `sign-in-available`, `allow-localhost`    | S6 button; FR-32's local-development allowance     |
  * | property  | `data`                                    | `{ items, meta } \\| null` — host-fed mode          |
@@ -92,7 +96,11 @@ export class EverAppLauncher extends LitElement {
 
 	static properties = {
 		current: { type: String },
-		theme: { type: String },
+		// Reflected: the `:host([theme=…])` rules in `styles.ts` read the
+		// attribute, so a host that sets the property (as every host does,
+		// plan §6.2 "properties, never attributes") must still see it applied.
+		theme: { type: String, reflect: true },
+		panelPosition: { type: String, attribute: 'panel-position', reflect: true },
 		environment: { type: String },
 		catalogUrl: { type: String, attribute: 'catalog-url' },
 		appsUrl: { type: String, attribute: 'apps-url' },
@@ -113,6 +121,15 @@ export class EverAppLauncher extends LitElement {
 
 	/** `light`, `dark`, or `auto` (plan §6.2). */
 	theme: LauncherTheme = 'auto';
+
+	/**
+	 * Where the panel opens relative to the trigger. `bottom-end` (the default)
+	 * suits a control at the right end of a top bar; `bottom-start` a control at
+	 * the top-left of a sidebar; `right-start` / `right-end` a control in a narrow
+	 * column (a collapsed sidebar, an app rail). Under a 640 px viewport the panel
+	 * is a bottom sheet whatever this says.
+	 */
+	panelPosition: LauncherPanelPosition = 'bottom-end';
 
 	/** P2 self-fetch only (FR-10); carried here so a host can set it today. */
 	environment: AppLauncherEnvironment = 'production';
@@ -185,9 +202,15 @@ export class EverAppLauncher extends LitElement {
 	// Public API (plan §6.2)
 	// -----------------------------------------------------------------------
 
-	/** Open the panel; the command palette calls this (FR-7). */
-	show(): void {
-		void this._openPanel();
+	/**
+	 * Open the panel; the command palette calls this (FR-7).
+	 *
+	 * `focus: false` opens it without moving focus — for a host that opens the
+	 * panel on hover, where taking focus would pull the caret out of whatever
+	 * the person was typing in (and a hover-close would leave it on `<body>`).
+	 */
+	show(options: LauncherShowOptions = {}): void {
+		void this._openPanel(options.focus !== false);
 	}
 
 	/** Close the panel without moving focus (a host-driven close). */
@@ -214,7 +237,7 @@ export class EverAppLauncher extends LitElement {
 				@click=${this._onTriggerClick}
 				@keydown=${this._onTriggerKeydown}
 			>
-				<span class="trigger-icon">${TRIGGER_ICON}</span>
+				<span class="trigger-icon"><slot name="trigger-icon">${TRIGGER_ICON}</slot></span>
 			</button>
 			<div
 				class="panel"
@@ -588,13 +611,13 @@ export class EverAppLauncher extends LitElement {
 	// Opening and closing
 	// -----------------------------------------------------------------------
 
-	private async _openPanel(): Promise<void> {
+	private async _openPanel(moveFocus = true): Promise<void> {
 		if (this._open) return;
 		this._open = true;
 		this._activeIndex = 0;
 		await this.updateComplete;
 		this._observePanel();
-		this._focusInitial();
+		if (moveFocus) this._focusInitial();
 		this.dispatchEvent(new CustomEvent('ever-app-launcher:open', { bubbles: true, composed: true }));
 	}
 

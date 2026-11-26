@@ -2929,7 +2929,13 @@
                 "showingCount": "{count} 件中 200 件を表示",
                 "saving": "保存中…",
                 "saved": "保存しました",
-                "saveFailed": "保存できませんでした。もう一度お試しください。"
+                "saveFailed": "保存できませんでした。もう一度お試しください。",
+                "placementTitle": "表示位置",
+                "placementDescription": "ほかの Ever アプリへのショートカットの位置。このブラウザーにのみ適用されます。",
+                "placementSidebar": "サイドバー",
+                "placementHeader": "トップバー",
+                "placementRail": "左レール",
+                "placementSaveFailed": "このブラウザーに選択を保存できませんでした。もう一度お試しください。"
             },
             "githubApp": {
                 "title": "GitHub App インストール",
@@ -10933,7 +10939,7 @@
         "appLauncher": {
             "controlLabel": "アプリランチャー",
             "controlTooltip": "Ever apps とあなたのアプリ",
-            "panelTitle": "アプリランチャー",
+            "panelTitle": "アプリ",
             "sectionPinned": "ピン留め",
             "sectionPlatforms": "Ever apps",
             "sectionWorks": "あなたのアプリ",
@@ -10955,7 +10961,11 @@
             "controlUnavailable": "App Launcher は現在利用できません。",
             "emptyActionFailed": "そのページを開けませんでした。もう一度お試しください。",
             "signInPrompt": "Ever ID でサインインすると、ここにアプリが表示されます。",
-            "signIn": "サインイン"
+            "signIn": "サインイン",
+            "railLabel": "アプリ",
+            "railCurrentApp": "{app}（現在表示中）",
+            "railSoonApp": "{app}（近日公開）",
+            "railOpensInNewTab": "{app}（新しいタブで開きます）"
         },
         "signOut": {
             "title": "Ever Works からサインアウトしますか？",
@@ -11341,8 +11351,10 @@
         },
         "switcher": {
             "heading": "Switch Organization",
-            "createNew": "Create Organization",
-            "loading": "Loading…"
+            "createNew": "組織を作成",
+            "loading": "Loading…",
+            "switchFailed": "組織を切り替えられませんでした。もう一度お試しください。",
+            "active": "現在の組織"
         },
         "create": {
             "visionToggle": "Add company vision (optional)",

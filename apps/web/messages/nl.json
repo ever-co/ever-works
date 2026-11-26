@@ -2929,7 +2929,13 @@
                 "showingCount": "200 van {count} weergegeven",
                 "saving": "Opslaan…",
                 "saved": "Opgeslagen",
-                "saveFailed": "Opslaan mislukt. Probeer het opnieuw."
+                "saveFailed": "Opslaan mislukt. Probeer het opnieuw.",
+                "placementTitle": "Positie",
+                "placementDescription": "Waar de toegang tot de andere Ever-apps staat. Geldt alleen voor deze browser.",
+                "placementSidebar": "Zijbalk",
+                "placementHeader": "Bovenbalk",
+                "placementRail": "Linkerbalk",
+                "placementSaveFailed": "Deze browser heeft de keuze niet bewaard. Probeer het opnieuw."
             },
             "githubApp": {
                 "title": "GitHub App-installaties",
@@ -10933,7 +10939,7 @@
         "appLauncher": {
             "controlLabel": "App-launcher",
             "controlTooltip": "Ever apps en je apps",
-            "panelTitle": "App-launcher",
+            "panelTitle": "Apps",
             "sectionPinned": "Vastgezet",
             "sectionPlatforms": "Ever apps",
             "sectionWorks": "Jouw apps",
@@ -10955,7 +10961,11 @@
             "controlUnavailable": "App Launcher is momenteel niet beschikbaar.",
             "emptyActionFailed": "Die pagina kon niet worden geopend. Probeer het opnieuw.",
             "signInPrompt": "Log in met Ever ID om je apps hier te zien.",
-            "signIn": "Inloggen"
+            "signIn": "Inloggen",
+            "railLabel": "Apps",
+            "railCurrentApp": "{app}, je bent hier",
+            "railSoonApp": "{app}, binnenkort",
+            "railOpensInNewTab": "{app} (opent in een nieuw tabblad)"
         },
         "signOut": {
             "title": "Afmelden bij Ever Works?",
@@ -11341,8 +11351,10 @@
         },
         "switcher": {
             "heading": "Switch Organization",
-            "createNew": "Create Organization",
-            "loading": "Loading…"
+            "createNew": "Organisatie maken",
+            "loading": "Loading…",
+            "switchFailed": "Kon niet van organisatie wisselen. Probeer het opnieuw.",
+            "active": "Huidige organisatie"
         },
         "create": {
             "visionToggle": "Add company vision (optional)",

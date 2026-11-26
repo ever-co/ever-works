@@ -2929,7 +2929,13 @@
                 "showingCount": "显示 200 项，共 {count} 项",
                 "saving": "保存中…",
                 "saved": "已保存",
-                "saveFailed": "无法保存。请重试。"
+                "saveFailed": "无法保存。请重试。",
+                "placementTitle": "位置",
+                "placementDescription": "前往其他 Ever 应用的入口所在位置。仅对此浏览器生效。",
+                "placementSidebar": "侧边栏",
+                "placementHeader": "顶部栏",
+                "placementRail": "左侧栏",
+                "placementSaveFailed": "此浏览器未能保存该选择。请重试。"
             },
             "githubApp": {
                 "title": "GitHub App 安装",
@@ -10933,7 +10939,7 @@
         "appLauncher": {
             "controlLabel": "应用启动器",
             "controlTooltip": "Ever apps 和你的应用",
-            "panelTitle": "应用启动器",
+            "panelTitle": "应用",
             "sectionPinned": "已固定",
             "sectionPlatforms": "Ever apps",
             "sectionWorks": "你的应用",
@@ -10955,7 +10961,11 @@
             "controlUnavailable": "App Launcher 目前不可用。",
             "emptyActionFailed": "无法打开该页面。请重试。",
             "signInPrompt": "使用 Ever ID 登录以在此查看你的应用。",
-            "signIn": "登录"
+            "signIn": "登录",
+            "railLabel": "应用",
+            "railCurrentApp": "{app}，你在这里",
+            "railSoonApp": "{app}，即将推出",
+            "railOpensInNewTab": "{app}（在新标签页中打开）"
         },
         "signOut": {
             "title": "退出 Ever Works？",
@@ -11341,8 +11351,10 @@
         },
         "switcher": {
             "heading": "Switch Organization",
-            "createNew": "Create Organization",
-            "loading": "Loading…"
+            "createNew": "创建组织",
+            "loading": "Loading…",
+            "switchFailed": "无法切换组织。请重试。",
+            "active": "当前组织"
         },
         "create": {
             "visionToggle": "Add company vision (optional)",

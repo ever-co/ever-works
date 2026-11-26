@@ -2929,7 +2929,13 @@
                 "showingCount": "Wyświetlono 200 z {count}",
                 "saving": "Zapisywanie…",
                 "saved": "Zapisano",
-                "saveFailed": "Nie udało się zapisać. Spróbuj ponownie."
+                "saveFailed": "Nie udało się zapisać. Spróbuj ponownie.",
+                "placementTitle": "Położenie",
+                "placementDescription": "Gdzie jest dostęp do innych aplikacji Ever. Dotyczy tylko tej przeglądarki.",
+                "placementSidebar": "Pasek boczny",
+                "placementHeader": "Górny pasek",
+                "placementRail": "Lewy pasek",
+                "placementSaveFailed": "Ta przeglądarka nie zapisała wyboru. Spróbuj ponownie."
             },
             "githubApp": {
                 "title": "Instalacje aplikacji GitHub",
@@ -10933,7 +10939,7 @@
         "appLauncher": {
             "controlLabel": "Program uruchamiający aplikacje",
             "controlTooltip": "Ever apps i Twoje aplikacje",
-            "panelTitle": "Program uruchamiający aplikacje",
+            "panelTitle": "Aplikacje",
             "sectionPinned": "Przypięte",
             "sectionPlatforms": "Ever apps",
             "sectionWorks": "Twoje aplikacje",
@@ -10955,7 +10961,11 @@
             "controlUnavailable": "App Launcher jest obecnie niedostępny.",
             "emptyActionFailed": "Nie udało się otworzyć tej strony. Spróbuj ponownie.",
             "signInPrompt": "Zaloguj się przez Ever ID, aby zobaczyć tu swoje aplikacje.",
-            "signIn": "Zaloguj się"
+            "signIn": "Zaloguj się",
+            "railLabel": "Aplikacje",
+            "railCurrentApp": "{app}, jesteś tutaj",
+            "railSoonApp": "{app}, wkrótce",
+            "railOpensInNewTab": "{app} (otwiera się w nowej karcie)"
         },
         "signOut": {
             "title": "Wylogować się z Ever Works?",
@@ -11341,8 +11351,10 @@
         },
         "switcher": {
             "heading": "Switch Organization",
-            "createNew": "Create Organization",
-            "loading": "Loading…"
+            "createNew": "Utwórz organizację",
+            "loading": "Loading…",
+            "switchFailed": "Nie udało się przełączyć organizacji. Spróbuj ponownie.",
+            "active": "Bieżąca organizacja"
         },
         "create": {
             "visionToggle": "Add company vision (optional)",

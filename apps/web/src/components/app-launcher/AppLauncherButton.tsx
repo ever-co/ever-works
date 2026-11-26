@@ -1,25 +1,39 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useTranslations } from 'next-intl';
-import { APP_LAUNCHER_CLIENT_CACHE_MS, type AppLauncherListResponse } from '@ever-works/contracts';
+import type { AppLauncherListResponse } from '@ever-works/contracts';
 import type {
     EverAppLauncher,
     LauncherEmptyActionDetail,
     LauncherErrorSection,
     LauncherItemActivateDetail,
+    LauncherPanelPosition,
     LauncherStrings,
+    LauncherTheme,
 } from '@ever-works/app-launcher';
+import {
+    appLauncherCacheEntryFor,
+    fetchAppLauncherList,
+    isAppLauncherCacheFresh,
+    storeAppLauncherList,
+    subscribeAppLauncherCache,
+} from '@/lib/app-launcher/app-launcher-cache';
 import {
     captureAppLauncherEvent,
     type AppLauncherOpenSource,
 } from '@/lib/app-launcher/app-launcher-telemetry';
-import { browserApiFetch } from '@/lib/api/browser-api';
 import { ROUTES } from '@/lib/constants';
+import { useTheme } from '@/lib/hooks/use-theme';
+import { cn } from '@/lib/utils/cn';
 import { useWorkspaceScope } from '@/lib/hooks/use-workspace-scope';
 import { serializeWorkspaceScope } from '@/lib/workspace-scope';
 import { useRouter } from '@/i18n/navigation';
 import { useAppLauncher } from './AppLauncherProvider';
+import { EverMark } from './EverMark';
+
+export { resetAppLauncherCache } from '@/lib/app-launcher/app-launcher-cache';
 
 /**
  * APW-11 T14 — the App Launcher control (plan §6.4).
@@ -59,9 +73,6 @@ import { useAppLauncher } from './AppLauncherProvider';
  */
 const EVER_APP_LAUNCHER_TAG = 'ever-app-launcher';
 
-/** The registry read of plan §4.1, through the scope-stamping BFF transport. */
-const APPS_ENDPOINT = '/api/me/apps';
-
 /**
  * **Create an App Work** (FR-64). `/works/new` reads a pre-chosen kind from
  * `?kind=` — the convention `WorksCreateComposer` and `NewPageClient` already
@@ -85,6 +96,8 @@ interface LauncherHandlers {
 
 /** Everything the element reads from outside, in one object. */
 interface LauncherElementState {
+    theme: LauncherTheme;
+    panelPosition: LauncherPanelPosition;
     data: AppLauncherListResponse | null;
     strings: Partial<LauncherStrings>;
     appWorksAvailable: boolean | undefined;
@@ -104,6 +117,8 @@ const ELEMENT_EVENTS: ReadonlyArray<readonly [string, keyof LauncherHandlers]> =
 
 /** Plan §6.2's host surface: properties, never attributes. */
 function applyElementState(element: EverAppLauncher, state: LauncherElementState): void {
+    element.theme = state.theme;
+    element.panelPosition = state.panelPosition;
     element.data = state.data;
     element.strings = state.strings;
     element.appWorksAvailable = state.appWorksAvailable;
@@ -113,8 +128,6 @@ function applyElementState(element: EverAppLauncher, state: LauncherElementState
     // `platform:<current>` match); this surface knows no catalog id of its own,
     // so it says so with the empty string rather than guessing one.
     element.current = '';
-    // `auto` follows `prefers-color-scheme`, which is this app's own default.
-    element.theme = 'auto';
 }
 
 /** What one scope's read left behind. `scopeKey` pins it to that scope. */
@@ -124,31 +137,42 @@ interface ScopedApps {
     failed: boolean;
 }
 
-/** The module-level cache (plan §6.4): it outlives the control's unmount. */
-interface AppLauncherCacheEntry {
-    data: AppLauncherListResponse;
-    fetchedAt: number;
-    scopeKey: string;
-}
-
-let appLauncherCache: AppLauncherCacheEntry | null = null;
-
 /**
- * Clear the module cache.
+ * Where the control sits (shared Ever shell, A3) — which decides its trigger,
+ * the side the panel opens on, and the `source` an open is reported with.
  *
- * Exported for the spec only: the cache is deliberately module-level — that is
- * the point of it, and it is why a second open is free — so a spec cannot reset
- * it by unmounting anything.
+ * - `header`: the 2×2 grid at the right end of the top bar; the panel opens
+ *   below it, lined up with its right edge.
+ * - `sidebar`: the Ever mark at the top of the sidebar, turning slowly; hover
+ *   (120 ms) or click opens the panel below it, lined up with its left edge.
+ * - `rail`: the 2×2 grid at the foot of the left rail; the panel opens to its
+ *   right, lined up with its bottom edge.
+ *
+ * The module cache this control reads lives in `lib/app-launcher/app-launcher-cache`,
+ * shared with the left rail.
  */
-export function resetAppLauncherCache(): void {
-    appLauncherCache = null;
-}
+export type AppLauncherVariant = 'header' | 'sidebar' | 'rail';
 
-/** The cache entry for this scope, or `null` — never another scope's entry. */
-function cacheEntryFor(scopeKey: string | null): AppLauncherCacheEntry | null {
-    if (scopeKey === null || appLauncherCache === null) return null;
-    return appLauncherCache.scopeKey === scopeKey ? appLauncherCache : null;
-}
+const DEFAULT_PANEL_POSITION: Record<AppLauncherVariant, LauncherPanelPosition> = {
+    header: 'bottom-end',
+    sidebar: 'bottom-start',
+    rail: 'right-end',
+};
+
+/** The mark's trigger is the size of the sidebar's other header controls. */
+const TRIGGER_SIZE: Record<AppLauncherVariant, string> = {
+    header: '36px',
+    sidebar: '32px',
+    rail: '32px',
+};
+
+/** A3: hover opens the mark's panel after 120 ms… */
+export const HOVER_OPEN_DELAY_MS = 120;
+
+/** …and leaving it closes a panel the hover opened, after 200 ms. */
+export const HOVER_CLOSE_DELAY_MS = 200;
+
+const cacheEntryFor = appLauncherCacheEntryFor;
 
 /**
  * How many visible tiles a section holds, counted the way the panel counts them
@@ -206,12 +230,29 @@ function LauncherControlIcon() {
     );
 }
 
-export function AppLauncherButton() {
+export interface AppLauncherButtonProps {
+    /** Where the control sits; `header` by default. */
+    variant?: AppLauncherVariant;
+    /** Overrides the side the panel opens on (a collapsed sidebar opens it to the right). */
+    panelPosition?: LauncherPanelPosition;
+    className?: string;
+}
+
+export function AppLauncherButton({
+    variant = 'header',
+    panelPosition,
+    className,
+}: AppLauncherButtonProps = {}) {
     const t = useTranslations('dashboard.appLauncher');
+    // The panel follows the app's own theme toggle, not the operating system's
+    // (shared Ever shell, A4): `useTheme` is what the header's toggle drives.
+    const { isDark } = useTheme();
+    const theme: LauncherTheme = isDark ? 'dark' : 'light';
+    const resolvedPanelPosition = panelPosition ?? DEFAULT_PANEL_POSITION[variant];
     const router = useRouter();
     const scope = useWorkspaceScope();
     const scopeKey = scope === null ? null : serializeWorkspaceScope(scope);
-    const { registerOpenAppLauncher } = useAppLauncher();
+    const { registerOpenAppLauncher, revealSidebar } = useAppLauncher();
 
     const hostRef = useRef<HTMLDivElement | null>(null);
     const elementRef = useRef<EverAppLauncher | null>(null);
@@ -232,6 +273,13 @@ export function AppLauncherButton() {
     /** The palette asked before the chunk landed — open as soon as it does. */
     const pendingOpenRef = useRef(false);
     const previousScopeKeyRef = useRef(scopeKey);
+    /** Whether the element's panel is open, from its own `:open` / `:close` reports. */
+    const openRef = useRef(false);
+    /** The panel was opened by a hover (sidebar mark only), so leaving closes it. */
+    const openedByHoverRef = useRef(false);
+    const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    /** The light-DOM slot the sidebar mark is portalled into. */
+    const [triggerIconSlot, setTriggerIconSlot] = useState<HTMLElement | null>(null);
 
     const [unavailable, setUnavailable] = useState(false);
     const [emptyActionFailed, setEmptyActionFailed] = useState(false);
@@ -295,7 +343,7 @@ export function AppLauncherButton() {
             const cached = cacheEntryFor(scopeKey);
             if (cached !== null) {
                 setScoped({ scopeKey, data: cached.data, failed: false });
-                if (!force && Date.now() - cached.fetchedAt < APP_LAUNCHER_CLIENT_CACHE_MS) {
+                if (!force && isAppLauncherCacheFresh(cached)) {
                     return;
                 }
             }
@@ -304,14 +352,10 @@ export function AppLauncherButton() {
             requestIdRef.current = requestId;
             setLoading(true);
             try {
-                const response = await browserApiFetch(APPS_ENDPOINT);
-                if (!response.ok) {
-                    throw new Error(`App launcher read failed with ${response.status}`);
-                }
-                const payload = (await response.json()) as AppLauncherListResponse;
+                const payload = await fetchAppLauncherList();
                 if (requestIdRef.current !== requestId) return;
                 if (scopeKey !== null) {
-                    appLauncherCache = { data: payload, fetchedAt: Date.now(), scopeKey };
+                    storeAppLauncherList(scopeKey, payload);
                 }
                 setScoped({ scopeKey, data: payload, failed: false });
             } catch {
@@ -332,8 +376,9 @@ export function AppLauncherButton() {
     const handleOpen = useCallback(() => {
         // Read then clear: the palette's mark is consumed by the open it caused,
         // so a later open from the trigger is never blamed on the palette.
-        const source = sourceRef.current ?? 'header';
+        const source = sourceRef.current ?? variant;
         sourceRef.current = null;
+        openRef.current = true;
         const rendered = cacheEntryFor(scopeKey)?.data ?? data;
         captureAppLauncherEvent({
             name: 'app_launcher_opened',
@@ -345,12 +390,14 @@ export function AppLauncherButton() {
             },
         });
         void load();
-    }, [data, load, scopeKey]);
+    }, [data, load, scopeKey, variant]);
 
     const handleClose = useCallback(() => {
         // A stale mark would mislabel the next open; the element closed, so the
         // open it belonged to is over either way.
         sourceRef.current = null;
+        openRef.current = false;
+        openedByHoverRef.current = false;
     }, []);
 
     const handleItemActivate = useCallback((event: Event) => {
@@ -423,6 +470,15 @@ export function AppLauncherButton() {
 
             const element = document.createElement(EVER_APP_LAUNCHER_TAG) as EverAppLauncher;
             elementRef.current = element;
+            element.style.setProperty('--ever-app-launcher-trigger-size', TRIGGER_SIZE[variant]);
+            if (variant === 'sidebar') {
+                // The Ever mark replaces the grid: a light-DOM child in the
+                // element's `trigger-icon` slot, drawn by React through a portal.
+                const slot = document.createElement('span');
+                slot.slot = 'trigger-icon';
+                element.appendChild(slot);
+                setTriggerIconSlot(slot);
+            }
             const state = stateRef.current;
             if (state !== null) applyElementState(element, state);
             attached = ELEMENT_EVENTS.map(([name, key]) => {
@@ -449,12 +505,18 @@ export function AppLauncherButton() {
             }
             elementRef.current = null;
             attached = [];
+            setTriggerIconSlot(null);
         };
+        // The variant is fixed for the life of a control: a placement change
+        // mounts another control (`SidebarAppLauncher`, `DashboardHeader`, the rail).
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
     /** Republish the element's outside world, and hand it to the element if it exists. */
     useEffect(() => {
         const state: LauncherElementState = {
+            theme,
+            panelPosition: resolvedPanelPosition,
             data,
             strings,
             appWorksAvailable,
@@ -485,8 +547,15 @@ export function AppLauncherButton() {
             pendingOpenRef.current = true;
             return;
         }
+        // The sidebar's mark lives in a drawer below the `xl` breakpoint: when the
+        // drawer is closed the mark is off-screen, and a panel opened from it
+        // would be too. Open the drawer first (the panel slides in with it).
+        if (variant === 'sidebar') {
+            const box = element.getBoundingClientRect();
+            if (box.right <= 0 || box.width === 0) revealSidebar?.();
+        }
         element.show();
-    }, []);
+    }, [revealSidebar, variant]);
 
     useEffect(() => {
         registerOpenAppLauncher(openFromPalette);
@@ -507,31 +576,147 @@ export function AppLauncherButton() {
         elementRef.current?.hide();
     }, [scopeKey]);
 
+    /**
+     * Follow the shared cache: when the left rail read the list, the panel shows
+     * the same answer; when Manage apps saved and dropped the entry, the panel
+     * drops the arrangement it holds, so its next open reads the new one instead
+     * of showing the old one first.
+     */
+    useEffect(
+        () =>
+            subscribeAppLauncherCache(() => {
+                const entry = cacheEntryFor(scopeKey);
+                if (entry !== null) {
+                    setScoped({ scopeKey, data: entry.data, failed: false });
+                } else {
+                    setScoped((previous) =>
+                        previous !== null && previous.scopeKey === scopeKey ? null : previous,
+                    );
+                }
+            }),
+        [scopeKey],
+    );
+
+    // -----------------------------------------------------------------------
+    // Hover (the sidebar mark only, A2/A3)
+    // -----------------------------------------------------------------------
+
+    const clearHoverTimer = useCallback(() => {
+        if (hoverTimerRef.current !== null) {
+            clearTimeout(hoverTimerRef.current);
+            hoverTimerRef.current = null;
+        }
+    }, []);
+
+    useEffect(() => clearHoverTimer, [clearHoverTimer]);
+
+    const handlePointerEnter = useCallback(
+        (event: React.PointerEvent<HTMLDivElement>) => {
+            if (variant !== 'sidebar' || event.pointerType !== 'mouse') return;
+            clearHoverTimer();
+            if (openRef.current) return;
+            hoverTimerRef.current = setTimeout(() => {
+                hoverTimerRef.current = null;
+                const element = elementRef.current;
+                if (element === null || openRef.current) return;
+                openedByHoverRef.current = true;
+                // A hover never takes focus: the person may be typing elsewhere,
+                // and a hover-close would otherwise leave focus on <body>.
+                element.show({ focus: false });
+            }, HOVER_OPEN_DELAY_MS);
+        },
+        [clearHoverTimer, variant],
+    );
+
+    const handlePointerLeave = useCallback(
+        (event: React.PointerEvent<HTMLDivElement>) => {
+            if (variant !== 'sidebar' || event.pointerType !== 'mouse') return;
+            clearHoverTimer();
+            if (!openedByHoverRef.current) return;
+            hoverTimerRef.current = setTimeout(() => {
+                hoverTimerRef.current = null;
+                if (openedByHoverRef.current) elementRef.current?.hide();
+            }, HOVER_CLOSE_DELAY_MS);
+        },
+        [clearHoverTimer, variant],
+    );
+
+    /**
+     * A click on a mark the hover already opened keeps the panel open (it would
+     * otherwise toggle it shut a moment after it appeared) and makes it a
+     * clicked panel, which leaving no longer closes. Capture phase: this runs
+     * before the trigger's own toggle inside the element's shadow root.
+     */
+    const handleClickCapture = useCallback(
+        (event: React.MouseEvent<HTMLDivElement>) => {
+            if (variant !== 'sidebar' || !openedByHoverRef.current || !openRef.current) return;
+            const path = event.nativeEvent.composedPath();
+            const onTrigger = path.some(
+                (node) => node instanceof HTMLElement && node.classList.contains('trigger'),
+            );
+            if (!onTrigger) return;
+            event.stopPropagation();
+            clearHoverTimer();
+            openedByHoverRef.current = false;
+        },
+        [clearHoverTimer, variant],
+    );
+
+    const wrapperClassName = cn(
+        'relative',
+        variant === 'header' ? 'mt-2' : 'flex shrink-0 items-center',
+        className,
+    );
+
     if (unavailable) {
         return (
-            <div className="relative mt-2" data-testid="app-launcher-control">
+            <div
+                className={wrapperClassName}
+                data-testid="app-launcher-control"
+                data-variant={variant}
+            >
                 <button
                     type="button"
                     disabled
                     aria-label={t('controlUnavailable')}
                     title={t('controlUnavailable')}
                     data-testid="app-launcher-unavailable"
-                    className="cursor-not-allowed rounded-md text-text-secondary opacity-50 dark:text-text-secondary-dark"
+                    className={cn(
+                        'cursor-not-allowed rounded-md text-text-secondary opacity-50 dark:text-text-secondary-dark',
+                        variant !== 'header' && 'inline-flex size-8 items-center justify-center',
+                    )}
                 >
-                    <LauncherControlIcon />
+                    {variant === 'sidebar' ? (
+                        <EverMark spinning={false} className="size-5" />
+                    ) : (
+                        <LauncherControlIcon />
+                    )}
                 </button>
             </div>
         );
     }
 
     return (
-        <div className="relative mt-2" data-testid="app-launcher-control">
-            <div ref={hostRef} />
+        <div
+            className={wrapperClassName}
+            data-testid="app-launcher-control"
+            data-variant={variant}
+            onPointerEnter={handlePointerEnter}
+            onPointerLeave={handlePointerLeave}
+            onClickCapture={handleClickCapture}
+        >
+            <div ref={hostRef} className={variant === 'header' ? undefined : 'flex'} />
+            {triggerIconSlot !== null
+                ? createPortal(<EverMark className="size-5" />, triggerIconSlot)
+                : null}
             {emptyActionFailed ? (
                 <p
                     role="alert"
                     data-testid="app-launcher-empty-action-error"
-                    className="absolute right-0 top-full z-50 mt-1 w-max max-w-64 rounded-md border border-border bg-surface px-2 py-1 text-xs text-text-secondary shadow-sm dark:border-border-dark dark:bg-surface-dark dark:text-text-secondary-dark"
+                    className={cn(
+                        'absolute top-full z-50 mt-1 w-max max-w-64 rounded-md border border-border bg-surface px-2 py-1 text-xs text-text-secondary shadow-sm dark:border-border-dark dark:bg-surface-dark dark:text-text-secondary-dark',
+                        variant === 'header' ? 'right-0' : 'left-0',
+                    )}
                 >
                     {t('emptyActionFailed')}
                 </p>
