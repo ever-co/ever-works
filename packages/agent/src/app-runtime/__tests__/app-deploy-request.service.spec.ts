@@ -981,6 +981,60 @@ describe('AppDeployRequestService (APW-06 T24)', () => {
                 rollback: { rolledBackToDeploymentId: '00000000-0000-4000-8000-0000000000bb' },
             });
         });
+
+        it('writes no componentImages for a rollback that records none', async () => {
+            const h = harness();
+
+            await h.service.request(
+                manual({
+                    trigger: 'rollback',
+                    buildId: 'build-old',
+                    rollback: { deploymentId: 'old', componentImages: null },
+                }),
+            );
+
+            expect(h.store.rows[0].appRender).not.toHaveProperty('componentImages');
+        });
+
+        it('carries the recorded component digests too, and never a tag', async () => {
+            const h = harness();
+            h.preconditions.result = ready({
+                context: {
+                    target: 'your-cluster',
+                    specCommitSha: 'sha-image-old',
+                    strategy: 'image',
+                    buildId: null,
+                    latestGreenBuildId: null,
+                    primaryHost: 'app.example.com',
+                },
+            });
+
+            await h.service.request(
+                manual({
+                    trigger: 'rollback',
+                    buildId: null,
+                    rollback: {
+                        deploymentId: '00000000-0000-4000-8000-0000000000bb',
+                        buildId: null,
+                        specCommitSha: 'sha-image-old',
+                        imageReference: 'ghcr.io/example/app',
+                        imageDigest: `sha256:${'a'.repeat(64)}`,
+                        componentImages: {
+                            web: `ghcr.io/example/web@sha256:${'b'.repeat(64)}`,
+                            worker: 'ghcr.io/example/worker:latest',
+                        },
+                    },
+                }),
+            );
+
+            expect(h.store.rows[0].appRender).toMatchObject({
+                componentImages: { web: `ghcr.io/example/web@sha256:${'b'.repeat(64)}` },
+            });
+            expect(
+                (h.store.rows[0].appRender as { componentImages?: Record<string, string> })
+                    .componentImages,
+            ).not.toHaveProperty('worker');
+        });
     });
 
     /* ---------------------------------------------------------------------- *
