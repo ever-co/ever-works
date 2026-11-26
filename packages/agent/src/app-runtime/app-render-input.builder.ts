@@ -1353,6 +1353,9 @@ export function componentInputs(
 ): AppComponentInput[] {
     const primary = primaryComponentName(spec);
     const buildTarget = text(spec?.build?.target);
+    // APW-03 schema §10 `components[].image` (2026-11-26): honoured with `strategy: image` only —
+    // a Build produces one image, which every component of a `dockerfile`/`auto` App runs.
+    const ownImages = text(spec?.build?.strategy) === 'image';
 
     return (spec?.components ?? []).map((component): AppComponentInput => {
         const name = text(component?.name);
@@ -1360,6 +1363,7 @@ export function componentInputs(
         const resources = component?.resources ?? {};
         const memory = text(resources.memory) || COMPONENT_DEFAULTS.memory;
         const target = text(component?.target) || buildTarget;
+        const image = ownImages ? text(component?.image) : '';
 
         return {
             name,
@@ -1368,6 +1372,8 @@ export function componentInputs(
             ...(component?.args ? { args: [...component.args] } : {}),
             // §3.1:328 — `components[].target` is `build.target` when the component is silent.
             ...(target ? { target } : {}),
+            // Absent = the App's image (`image.reference`), so an App spec without one renders as before.
+            ...(image ? { image } : {}),
             ...(isPositiveNumber(component?.port) ? { port: Math.floor(component.port) } : {}),
             replicas: isPositiveNumber(component?.replicas)
                 ? Math.floor(component.replicas)

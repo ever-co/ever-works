@@ -812,7 +812,11 @@ export class AppDeployOrchestrator {
                 null;
 
             if (context.strategy === 'image') {
-                const identity = await this.resolveImage(context, input);
+                const identity = await this.resolveImage(
+                    context,
+                    text(input.image?.reference),
+                    input,
+                );
 
                 if (identity.status !== 'resolved') {
                     await this.failRun(context, result, identity.code, identity.message);
@@ -837,6 +841,23 @@ export class AppDeployOrchestrator {
                             'above; this Deployment runs that digest.',
                     });
                 }
+
+                // APW-03 schema §10 `components[].image`: a component's own image gets the same
+                // identity rule, once per distinct reference, so no component runs a moving tag.
+                const resolvedComponents = await this.resolveComponentImages(context, input);
+
+                if (resolvedComponents.status !== 'resolved') {
+                    await this.failRun(
+                        context,
+                        result,
+                        resolvedComponents.code,
+                        resolvedComponents.message,
+                    );
+
+                    return result;
+                }
+
+                input = { ...input, components: resolvedComponents.components };
             }
 
             // ---- 3c · the image's USER, judged before the cluster is touched (2026-10-21) ---
@@ -1199,13 +1220,15 @@ export class AppDeployOrchestrator {
         }
     }
 
-    /** §5.8:876-882 — T72's resolver, called exactly once and only for `build.strategy: image`. */
+    /**
+     * §5.8:876-882 — T72's resolver, only for `build.strategy: image`: once for the App's image,
+     * and once more per distinct component image (`resolveComponentImages`) when a spec names any.
+     */
     private async resolveImage(
         context: RunContext,
+        reference: string,
         input: AppRenderInput,
     ): Promise<AppImageResolutionResult> {
-        const reference = text(input.image?.reference);
-
         if (!this.images?.resolve) {
             // No T72 in this worker. §5.8 makes the identity resolution mandatory before `prepare`;
             // running the spec's reference unpinned would deploy whatever the tag points at by the
@@ -1240,17 +1263,77 @@ export class AppDeployOrchestrator {
         }
     }
 
+    /**
+     * §5.8's identity rule for the components that run their **own** image (APW-03 schema §10
+     * `components[].image`, carried by the render input for `build.strategy: image` only): each
+     * distinct reference is resolved once through the same resolver, a tag records the warning
+     * `image_not_pinned` naming the component, and the first refusal ends the run with its own
+     * code. A render input whose components name no image calls nothing and is returned unchanged.
+     */
+    private async resolveComponentImages(
+        context: RunContext,
+        input: AppRenderInput,
+    ): Promise<
+        | { status: 'resolved'; components: AppRenderInput['components'] }
+        | { status: 'refused'; code: string; message: string }
+    > {
+        const components = input.components ?? [];
+        const resolved = new Map<string, string>();
+
+        for (const component of components) {
+            const reference = text(component?.image);
+
+            if (!reference || resolved.has(reference)) continue;
+
+            const identity = await this.resolveImage(context, reference, input);
+
+            if (identity.status !== 'resolved') {
+                return {
+                    status: 'refused',
+                    code: identity.code,
+                    message: `Component ${text(component?.name)}: ${identity.message}`,
+                };
+            }
+
+            resolved.set(reference, identity.reference);
+
+            if (identity.resolvedFromTag) {
+                context.warnings.push({
+                    code: APP_DEPLOY_WARNING_IMAGE_NOT_PINNED,
+                    message:
+                        `Component ${text(component?.name)} names a tag, so it was resolved once to ` +
+                        `${identity.reference}; this Deployment runs that digest.`,
+                });
+            }
+        }
+
+        if (resolved.size === 0) return { status: 'resolved', components };
+
+        return {
+            status: 'resolved',
+            components: components.map((component) => {
+                const reference = text(component?.image);
+
+                return reference && resolved.has(reference)
+                    ? { ...component, image: resolved.get(reference) as string }
+                    : component;
+            }),
+        };
+    }
+
     /* ---------------------------------------------------------------------- *
      * §5.6 step 4 — the call, and its hooks
      * ---------------------------------------------------------------------- */
 
     /**
      * The registry `USER` pre-check (`APP_WORKS_IMAGE_USER_PRECHECK_ENABLED`, default off): read
-     * the image config's `User` once and apply the kubelet's `runAsNonRoot` rule to every component
-     * (a command Job runs on its component's image and security context, so the components cover
-     * the jobs). The first component the kubelet would refuse ends the run with that refusal's own
-     * code; a read that could not complete is the warning `image_user_unchecked` and never a
-     * refusal. `null` = nothing to refuse (or the check is off / unbound).
+     * each image config's `User` once and apply the kubelet's `runAsNonRoot` rule to every component
+     * that runs it (a command Job runs on its component's image and security context, so the
+     * components cover the jobs). A component runs its own `image` when the render input carries one
+     * (APW-03 schema §10 `components[].image`), else the App's. The first component the kubelet would
+     * refuse ends the run with that refusal's own code; a read that could not complete is the
+     * warning `image_user_unchecked` and never a refusal. `null` = nothing to refuse (or the check
+     * is off / unbound).
      */
     private async checkImageUser(
         context: RunContext,
@@ -1259,10 +1342,7 @@ export class AppDeployOrchestrator {
         if (!this.imageUsers || !config.everWorks.apps.imageUserPrecheckEnabled()) {
             return null;
         }
-        const reference = text(input?.image?.reference);
-        if (!reference) {
-            return null;
-        }
+        const appReference = text(input?.image?.reference);
         // The pod-level `runAsNonRoot` the renderer will emit (`app-security.ts`): always on the
         // managed target, and on Your cluster unless the target's policy allows root.
         const runAsNonRoot =
@@ -1271,9 +1351,41 @@ export class AppDeployOrchestrator {
             return null;
         }
 
+        const users = new Map<string, string | null>();
+        for (const component of input?.components ?? []) {
+            const reference = text(component?.image) || appReference;
+            if (!reference) {
+                continue;
+            }
+            if (!users.has(reference)) {
+                users.set(reference, await this.readImageUser(context, input, reference));
+            }
+            const user = users.get(reference);
+            if (user === null || user === undefined) {
+                continue; // unread: the warning is recorded, the cluster judges it
+            }
+            const verdict = judgeImageUser(user, {
+                runAsNonRoot,
+                runAsUser: component?.runAsUser ?? null,
+                component: text(component?.name) ?? '',
+                image: reference,
+            });
+            if (verdict) {
+                return verdict;
+            }
+        }
+        return null;
+    }
+
+    /** One registry read of an image's `User`; `null` (and the warning) when it could not be read. */
+    private async readImageUser(
+        context: RunContext,
+        input: AppRenderInput,
+        reference: string,
+    ): Promise<string | null> {
         let read: Awaited<ReturnType<AppImageUserInspector['readUser']>>;
         try {
-            read = await this.imageUsers.readUser({
+            read = await (this.imageUsers as AppImageUserInspector).readUser({
                 reference,
                 pull: input?.image?.pull ?? null,
             });
@@ -1289,19 +1401,7 @@ export class AppDeployOrchestrator {
             });
             return null;
         }
-
-        for (const component of input?.components ?? []) {
-            const verdict = judgeImageUser(read.user, {
-                runAsNonRoot,
-                runAsUser: component?.runAsUser ?? null,
-                component: text(component?.name) ?? '',
-                image: reference,
-            });
-            if (verdict) {
-                return verdict;
-            }
-        }
-        return null;
+        return read.user;
     }
 
     private async deploy(
