@@ -2883,6 +2883,7 @@
             "subtitle": "管理您的帐户设置和偏好",
             "tabs": {
                 "profile": "个人资料",
+                "preferences": "偏好设置",
                 "organization": "Organization",
                 "security": "安全",
                 "apiKeys": "API 密钥",
@@ -4702,6 +4703,15 @@
                     "linked": "The organization is linked.",
                     "whatIsSent": "Linking sends the code, this account's ID and the organization's short name (its slug). No other name, e-mail address or content is sent."
                 }
+            },
+            "preferences": {
+                "themeTitle": "主题",
+                "themeDescription": "浅色、深色或与此设备相同。顶部栏的图标可在浅色和深色之间切换。",
+                "themeLight": "浅色",
+                "themeDark": "深色",
+                "themeSystem": "跟随系统",
+                "languageTitle": "语言",
+                "languageDescription": "Ever Works 在此浏览器中使用的语言。"
             }
         },
         "stats": {
@@ -9650,6 +9660,7 @@
             },
             "profileMenu": {
                 "accountSettings": "帐户设置",
+                "preferences": "偏好设置",
                 "helpDocs": "帮助与文档",
                 "support": "支持",
                 "keyboardShortcuts": "键盘快捷键",

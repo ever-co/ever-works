@@ -11,6 +11,8 @@ import {
     Home,
     FolderClosed,
     Settings,
+    SlidersHorizontal,
+    ChevronsUpDown,
     LogOut,
     Plus,
     X,
@@ -573,6 +575,14 @@ export function DashboardSidebar({
                                                 </p>
                                             </div>
                                         )}
+                                        {/* Shared Ever shell, A6: the user block reads as a menu. */}
+                                        {!isCollapsed && (
+                                            <ChevronsUpDown
+                                                className="w-4 h-4 shrink-0 text-text-muted dark:text-text-muted-dark"
+                                                strokeWidth={1.5}
+                                                aria-hidden="true"
+                                            />
+                                        )}
                                     </div>
                                 </DropdownMenuTrigger>
                                 <DropdownMenuContent
@@ -599,6 +609,21 @@ export function DashboardSidebar({
                                             strokeWidth={1.5}
                                         />
                                         {t('profileMenu.accountSettings')}
+                                    </DropdownMenuItem>
+                                    {/* A6: Account, then Preferences (theme, App Launcher position, language). */}
+                                    <DropdownMenuItem
+                                        data-testid="profile-menu-preferences"
+                                        onClick={() => {
+                                            onInteraction?.();
+                                            router.push(ROUTES.DASHBOARD_SETTINGS_PREFERENCES);
+                                        }}
+                                        className="cursor-pointer px-3 rounded-md hover:bg-surface-tertiary/50 dark:hover:bg-card-primary-dark"
+                                    >
+                                        <SlidersHorizontal
+                                            className="w-4 h-4 mr-2 shrink-0"
+                                            strokeWidth={1.5}
+                                        />
+                                        {t('profileMenu.preferences')}
                                     </DropdownMenuItem>
                                     <DropdownMenuItem
                                         data-testid="profile-menu-help-docs"

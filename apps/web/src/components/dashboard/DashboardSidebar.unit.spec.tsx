@@ -12,6 +12,7 @@ import { DashboardSidebar } from './DashboardSidebar';
  */
 
 const nav = vi.hoisted(() => ({ pathname: '/' }));
+const routerPush = vi.hoisted(() => vi.fn());
 
 vi.mock('next-intl', () => ({
     useTranslations: () => (key: string) => key,
@@ -24,7 +25,7 @@ vi.mock('@/i18n/navigation', () => ({
         </a>
     ),
     usePathname: () => nav.pathname,
-    useRouter: () => ({ push: vi.fn(), replace: vi.fn() }),
+    useRouter: () => ({ push: routerPush, replace: vi.fn() }),
 }));
 
 vi.mock('@/app/actions/auth', () => ({ logout: vi.fn() }));
@@ -211,6 +212,16 @@ describe('DashboardSidebar — Help entries in the profile menu (AW-25)', () => 
             .find((element): element is HTMLButtonElement => element !== null);
         fireEvent.click(trigger!);
     }
+
+    it('lists Preferences right after Account settings, and opens it (shared Ever shell, A6)', () => {
+        render(<DashboardSidebar user={user} isOpen onToggle={() => {}} />);
+        openProfileMenu();
+        const items = screen.getAllByRole('menuitem').map((item) => item.textContent?.trim());
+        const account = items.indexOf('profileMenu.accountSettings');
+        expect(items[account + 1]).toBe('profileMenu.preferences');
+        fireEvent.click(screen.getByRole('menuitem', { name: 'profileMenu.preferences' }));
+        expect(routerPush).toHaveBeenCalledWith('/settings/preferences');
+    });
 
     it('opens the manual from "Help & Docs" and keeps the documentation site as its own row', () => {
         const onOpenHelp = vi.fn();
