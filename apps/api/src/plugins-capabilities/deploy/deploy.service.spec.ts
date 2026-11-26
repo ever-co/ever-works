@@ -1098,6 +1098,123 @@ describe('DeployService — plugin-driven dispatch + secrets', () => {
             expect(settingsArg.kubeconfig).toBe('apiVersion: v1');
         });
 
+        describe('with the zone wildcard (EVER_WORKS_DNS_WILDCARD=true): the name is reserved in the DB', () => {
+            const previous = process.env.EVER_WORKS_DNS_WILDCARD;
+            beforeEach(() => {
+                process.env.EVER_WORKS_DNS_WILDCARD = 'true';
+            });
+            afterEach(() => {
+                if (previous === undefined) delete process.env.EVER_WORKS_DNS_WILDCARD;
+                else process.env.EVER_WORKS_DNS_WILDCARD = previous;
+            });
+
+            const build = (
+                savedSettings: Record<string, unknown> = { kubeconfig: 'apiVersion: v1' },
+            ) => {
+                const getDeploymentSecrets = jest.fn().mockResolvedValue({});
+                const built = buildService({
+                    deployProvider: 'ever-works',
+                    plugin: {
+                        id: 'k8s',
+                        getWorkflowFilenames: () => ['deploy_k8s.yaml'],
+                        getDeploymentSecrets,
+                    },
+                    settings: savedSettings,
+                });
+                (built.dnsService.getProvider as jest.Mock).mockReturnValue({});
+                (built.dnsService.ensureWorkSubdomain as jest.Mock).mockResolvedValue(true);
+                const repo = built.workRepository as unknown as {
+                    update: jest.Mock;
+                    findByManagedSubdomain?: jest.Mock;
+                };
+                repo.findByManagedSubdomain = jest.fn().mockResolvedValue(null);
+                return { ...built, repo, getDeploymentSecrets };
+            };
+
+            it('claims the slug for this Work, then routes the host', async () => {
+                const { service, repo, getDeploymentSecrets } = build();
+                await service.deploy('work-1', 'user-1', {});
+                expect(repo.findByManagedSubdomain).toHaveBeenCalledWith('my-site');
+                expect(repo.update).toHaveBeenCalledWith('work-1', { managedSubdomain: 'my-site' });
+                expect(getDeploymentSecrets.mock.calls[0][0].ingressHost).toBe(
+                    'my-site.ever.works',
+                );
+            });
+
+            it('does not route a slug another Work already holds, and claims nothing', async () => {
+                const { service, repo, getDeploymentSecrets } = build({
+                    kubeconfig: 'apiVersion: v1',
+                    ingressHost: 'member-host.example.com',
+                });
+                repo.findByManagedSubdomain!.mockResolvedValue({ id: 'other-work' });
+                await service.deploy('work-1', 'user-1', {});
+                expect(repo.update).not.toHaveBeenCalledWith('work-1', {
+                    managedSubdomain: 'my-site',
+                });
+                // The member's saved host must not stand in for the refused name.
+                expect(getDeploymentSecrets.mock.calls[0][0].ingressHost).toBe('');
+            });
+
+            it('does not route the host when the claim cannot be written (a racing deploy won)', async () => {
+                const { service, repo, getDeploymentSecrets } = build();
+                repo.update.mockImplementation(
+                    async (_id: string, patch: Record<string, unknown>) => {
+                        if ('managedSubdomain' in patch) {
+                            throw Object.assign(new Error('duplicate key value'), {
+                                code: '23505',
+                            });
+                        }
+                    },
+                );
+                await service.deploy('work-1', 'user-1', {});
+                expect(getDeploymentSecrets.mock.calls[0][0].ingressHost).toBe('');
+            });
+
+            it('moves a claim that differs from the slug to the slug, then routes the slug', async () => {
+                const { service, work, repo, getDeploymentSecrets } = build();
+                (work as { managedSubdomain?: string | null }).managedSubdomain = 'other-label';
+                await service.deploy('work-1', 'user-1', {});
+                expect(repo.update).toHaveBeenCalledWith('work-1', { managedSubdomain: 'my-site' });
+                expect(getDeploymentSecrets.mock.calls[0][0].ingressHost).toBe(
+                    'my-site.ever.works',
+                );
+            });
+
+            it('refuses a slug another Work holds even when this Work holds a different claim', async () => {
+                const { service, work, repo, getDeploymentSecrets } = build();
+                (work as { managedSubdomain?: string | null }).managedSubdomain = 'other-label';
+                repo.findByManagedSubdomain!.mockResolvedValue({ id: 'other-work' });
+                await service.deploy('work-1', 'user-1', {});
+                expect(repo.update).not.toHaveBeenCalledWith('work-1', {
+                    managedSubdomain: 'my-site',
+                });
+                expect(getDeploymentSecrets.mock.calls[0][0].ingressHost).toBe('');
+            });
+
+            it('a Work that already holds the claim is routed without another lookup', async () => {
+                const { service, work, repo, getDeploymentSecrets } = build();
+                (work as { managedSubdomain?: string | null }).managedSubdomain = 'my-site';
+                await service.deploy('work-1', 'user-1', {});
+                expect(repo.findByManagedSubdomain).not.toHaveBeenCalled();
+                expect(getDeploymentSecrets.mock.calls[0][0].ingressHost).toBe(
+                    'my-site.ever.works',
+                );
+            });
+
+            it('flag off: no claim is written (unchanged behaviour)', async () => {
+                delete process.env.EVER_WORKS_DNS_WILDCARD;
+                const { service, repo, getDeploymentSecrets } = build();
+                await service.deploy('work-1', 'user-1', {});
+                expect(repo.findByManagedSubdomain).not.toHaveBeenCalled();
+                expect(repo.update).not.toHaveBeenCalledWith('work-1', {
+                    managedSubdomain: 'my-site',
+                });
+                expect(getDeploymentSecrets.mock.calls[0][0].ingressHost).toBe(
+                    'my-site.ever.works',
+                );
+            });
+        });
+
         it.each(['https://mcp.ever.works', 'https://ever.works', 'https://api-dev.ever.works/'])(
             'keeps the platform apex or a reserved label from work.website (%s) off the k8s Ingress',
             async (website) => {

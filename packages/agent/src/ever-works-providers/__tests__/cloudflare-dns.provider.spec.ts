@@ -22,6 +22,7 @@ describe('CloudflareDnsProvider (EW-617 G5)', () => {
             targetHostname?: string;
             manageForeignRecords?: boolean;
             previousTargetHostnames?: string[];
+            wildcard?: boolean;
         } = {},
     ) {
         const calls: FetchCall[] = [];
@@ -91,12 +92,128 @@ describe('CloudflareDnsProvider (EW-617 G5)', () => {
                 targetHostname: opts.targetHostname ?? 'k8s.lb.example',
                 manageForeignRecords: opts.manageForeignRecords,
                 previousTargetHostnames: opts.previousTargetHostnames,
+                wildcard: opts.wildcard,
             },
             fakeFetch,
         );
 
         return { provider, calls, fakeFetch };
     }
+
+    describe('wildcard mode (EVER_WORKS_DNS_WILDCARD)', () => {
+        const methods = (calls: FetchCall[]) =>
+            calls.map((c) => (c.init.method ?? 'GET').toUpperCase());
+
+        it('creates no record for a free name: the zone wildcard already answers it', async () => {
+            const { provider, calls } = buildProvider({ listResult: [], wildcard: true });
+            const result = await provider.ensureWorkSubdomain('ai-coding');
+            expect(result).toMatchObject({
+                type: 'CNAME',
+                name: 'ai-coding.ever.works',
+                content: 'k8s.lb.example',
+            });
+            // Every probe still runs (a foreign record of any type must still be refused); no write follows.
+            expect(methods(calls).length).toBeGreaterThan(0);
+            expect(methods(calls).every((m) => m === 'GET')).toBe(true);
+        });
+
+        it('still refuses a name another host holds as AAAA (a directory on Workers)', async () => {
+            const { provider, calls } = buildProvider({
+                listByType: {
+                    AAAA: [{ id: 'w1', type: 'AAAA', name: 'crm.ever.works', content: '100::' }],
+                },
+                wildcard: true,
+            });
+            await expect(provider.ensureWorkSubdomain('crm')).rejects.toBeInstanceOf(
+                DnsRecordConflictError,
+            );
+            expect(methods(calls).every((m) => m === 'GET')).toBe(true);
+        });
+
+        it('still refuses a CNAME aimed at another host', async () => {
+            const { provider, calls } = buildProvider({
+                listByType: {
+                    CNAME: [
+                        {
+                            id: 'm1',
+                            type: 'CNAME',
+                            name: 'stats-github.ever.works',
+                            content: 'tunnel.example',
+                        },
+                    ],
+                },
+                wildcard: true,
+            });
+            await expect(provider.ensureWorkSubdomain('stats-github')).rejects.toBeInstanceOf(
+                DnsRecordConflictError,
+            );
+            expect(methods(calls).every((m) => m === 'GET')).toBe(true);
+        });
+
+        it('keeps a managed record left on a previous LB target in sync', async () => {
+            const { provider, calls } = buildProvider({
+                listByType: {
+                    CNAME: [
+                        {
+                            id: 'rec-existing',
+                            type: 'CNAME',
+                            name: 'ai-coding.ever.works',
+                            content: 'old.lb.example',
+                        },
+                    ],
+                },
+                previousTargetHostnames: ['old.lb.example'],
+                wildcard: true,
+            });
+            await provider.ensureWorkSubdomain('ai-coding');
+            expect(methods(calls)).toContain('PUT');
+        });
+
+        it('ensureRecord writes no CNAME to the managed target for a one-label host', async () => {
+            const { provider, calls } = buildProvider({ listResult: [], wildcard: true });
+            const result = await provider.ensureRecord({
+                host: 'ai-coding.ever.works',
+                type: 'CNAME',
+                target: 'k8s.lb.example',
+            });
+            expect(result).toMatchObject({
+                id: '',
+                type: 'CNAME',
+                name: 'ai-coding.ever.works',
+                content: 'k8s.lb.example',
+            });
+            expect(methods(calls).every((m) => m === 'GET')).toBe(true);
+        });
+
+        it('ensureRecord still creates a record of another type or target', async () => {
+            const { provider, calls } = buildProvider({ listResult: [], wildcard: true });
+            await provider.ensureRecord({
+                host: 'ai-coding.ever.works',
+                type: 'A',
+                target: '203.0.113.7',
+            });
+            expect(methods(calls)).toContain('POST');
+        });
+
+        it('servedByWildcard: exactly one label under the root domain, and only when enabled', () => {
+            const on = buildProvider({ wildcard: true }).provider;
+            const off = buildProvider({}).provider;
+            expect(on.servedByWildcard('ai-coding.ever.works')).toBe(true);
+            expect(on.servedByWildcard(' AI-Coding.Ever.Works ')).toBe(true);
+            expect(on.servedByWildcard('a.b.ever.works')).toBe(false);
+            expect(on.servedByWildcard('ever.works')).toBe(false);
+            expect(on.servedByWildcard('ai-coding.ever.app')).toBe(false);
+            expect(on.servedByWildcard('ai-codingever.works')).toBe(false);
+            expect(off.servedByWildcard('ai-coding.ever.works')).toBe(false);
+        });
+
+        it('wildcard off: a free name still gets its own CNAME (unchanged behaviour)', async () => {
+            const { provider, calls } = buildProvider({ listResult: [] });
+            await provider.ensureWorkSubdomain('ai-coding');
+            expect(methods(calls).filter((m) => m === 'POST')).toHaveLength(1);
+            expect(methods(calls).at(-1)).toBe('POST');
+        });
+    });
 
     it('creates a fresh CNAME when no record exists', async () => {
         const { provider, calls } = buildProvider({ listResult: [] });
@@ -591,6 +708,7 @@ describe('EverWorksDnsService (EW-617 G5)', () => {
         'EVER_WORKS_DOMAIN',
         'EVER_WORKS_DEPLOY_LB_HOSTNAME',
         'EVER_WORKS_DEPLOY_LB_PREVIOUS_HOSTNAMES',
+        'EVER_WORKS_DNS_WILDCARD',
     ] as const;
 
     const previous: Record<string, string | undefined> = {};
@@ -633,6 +751,19 @@ describe('EverWorksDnsService (EW-617 G5)', () => {
         const svc = new EverWorksDnsService();
         const provider = svc.getProvider();
         expect(provider).toBeInstanceOf(CloudflareDnsProvider);
+    });
+
+    it('turns wildcard mode on only for EVER_WORKS_DNS_WILDCARD=true', () => {
+        process.env.CLOUDFLARE_API_TOKEN = 'tk';
+        process.env.CLOUDFLARE_ZONE_ID = 'zone1';
+        process.env.EVER_WORKS_DEPLOY_LB_HOSTNAME = 'k8s.lb.example';
+        expect(
+            new EverWorksDnsService().getProvider()!.servedByWildcard('ai-coding.ever.works'),
+        ).toBe(false);
+        process.env.EVER_WORKS_DNS_WILDCARD = 'true';
+        expect(
+            new EverWorksDnsService().getProvider()!.servedByWildcard('ai-coding.ever.works'),
+        ).toBe(true);
     });
 
     it('defaults rootDomain to "ever.works" when env is not overridden', () => {

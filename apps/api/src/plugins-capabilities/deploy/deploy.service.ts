@@ -36,6 +36,7 @@ import {
 } from '@ever-works/agent/services';
 import {
     DnsRecordConflictError,
+    isDnsWildcardEnabled,
     isReservedSubdomainLabel,
     EverWorksDnsService,
     SubdomainAllocator,
@@ -1045,6 +1046,31 @@ export class DeployService {
      *  - env vars are missing (dev / preview),
      * letting the existing k8s plugin LB hostname remain the fallback.
      */
+    /**
+     * Wildcard mode, `ever-works` provider: make `work.slug` this Work's managed-subdomain claim. Answers `false`
+     * (do not route the host) when another Work holds it, or when the claim cannot be written. The partial unique
+     * index on `works.managedSubdomain` settles two deploys racing for the same name. A Work already holding exactly the
+     * slug is routed without a write; one holding a different label has its claim moved to the slug.
+     */
+    private async reserveWildcardHost(work: Work): Promise<boolean> {
+        const label = (work.slug ?? '').trim().toLowerCase();
+        const current = (work.managedSubdomain ?? '').trim().toLowerCase();
+        if (current === label) return true;
+        const holder = await this.workRepository.findByManagedSubdomain(label);
+        if (holder && holder.id !== work.id) return false;
+        // A held claim that differs from the routed slug (a rename, a backfill) is moved to the slug: the platform
+        // reserves exactly the label it routes, so no other Work can take it.
+        try {
+            await this.workRepository.update(work.id, { managedSubdomain: label });
+            return true;
+        } catch (cause) {
+            this.logger.warn(
+                `Could not reserve managed subdomain ${label} for work ${work.id}: ${(cause as Error).message}`,
+            );
+            return false;
+        }
+    }
+
     private async applyEverWorksSubdomain(
         work: Work,
         settings: Record<string, unknown> | undefined,
@@ -1072,6 +1098,17 @@ export class DeployService {
                 // An explicit empty host, so the member's own saved k8s
                 // `ingressHost` (a user-scoped plugin setting) does not reach
                 // the shared cluster's Ingress in its place.
+                return { ...(settings ?? {}), ingressHost: '' };
+            }
+
+            // With the zone wildcard (`EVER_WORKS_DNS_WILDCARD`) no record is written for this host, and on this path
+            // the record was the only thing that reserved `<slug>.<root>` for this Work. Persist the claim instead, so
+            // the allocator, a rename and other Works' deploys see the name as taken.
+            if (isDnsWildcardEnabled() && !(await this.reserveWildcardHost(work))) {
+                this.logger.warn(
+                    `Managed host ${ingressHost} for work ${work.id} could not be reserved (held by another work, or the claim write failed); deploying without it`,
+                );
+                // Same as a DNS refusal above: an explicit empty host, so a saved k8s `ingressHost` cannot stand in.
                 return { ...(settings ?? {}), ingressHost: '' };
             }
 

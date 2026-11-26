@@ -38,6 +38,7 @@ describe('ManagedSubdomainService', () => {
         recordExists: jest.Mock;
         ensureRecord: jest.Mock;
         removeRecord: jest.Mock;
+        servedByWildcard: jest.Mock;
     };
     let dnsService: { getProvider: jest.Mock; getZoneProbe: jest.Mock };
     let service: ManagedSubdomainService;
@@ -78,6 +79,7 @@ describe('ManagedSubdomainService', () => {
             removeRecord: jest.fn(async ({ host }: { host: string }) => {
                 zone.delete(host);
             }),
+            servedByWildcard: jest.fn().mockReturnValue(false),
         };
         dnsService = {
             getProvider: jest.fn().mockReturnValue(provider),
@@ -129,6 +131,29 @@ describe('ManagedSubdomainService', () => {
                 recordOk: true,
                 editable: true,
             });
+        });
+
+        it('returns recordOk=true without a probe when the zone wildcard serves the host', async () => {
+            workRepository.findById.mockResolvedValue(buildWork({ managedSubdomain: 'new-site' }));
+            provider.servedByWildcard.mockReturnValue(true);
+
+            const result = await service.getState('work-1');
+
+            expect(provider.servedByWildcard).toHaveBeenCalledWith('new-site.ever.works');
+            expect(provider.recordExists).not.toHaveBeenCalled();
+            expect(result.recordOk).toBe(true);
+        });
+
+        it('a Cloudflare Workers Work is live only with a record of its own, wildcard or not', async () => {
+            workRepository.findById.mockResolvedValue(
+                buildWork({ deployProvider: 'cloudflare', managedSubdomain: 'new-site' }),
+            );
+            provider.servedByWildcard.mockReturnValue(true);
+
+            const result = await service.getState('work-1');
+
+            expect(provider.recordExists).toHaveBeenCalledWith('new-site.ever.works');
+            expect(result.recordOk).toBe(false);
         });
 
         it('returns recordOk=false (and no throw) when the probe fails', async () => {
