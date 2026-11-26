@@ -1145,7 +1145,7 @@ describe('DeployService — plugin-driven dispatch + secrets', () => {
                 expect(repo.update).not.toHaveBeenCalledWith('work-1', {
                     managedSubdomain: 'my-site',
                 });
-                expect(getDeploymentSecrets.mock.calls[0][0].ingressHost).toBeUndefined();
+                expect(getDeploymentSecrets.mock.calls[0][0].ingressHost).toBe('');
             });
 
             it('does not route the host when the claim cannot be written (a racing deploy won)', async () => {
@@ -1160,7 +1160,7 @@ describe('DeployService — plugin-driven dispatch + secrets', () => {
                     },
                 );
                 await service.deploy('work-1', 'user-1', {});
-                expect(getDeploymentSecrets.mock.calls[0][0].ingressHost).toBeUndefined();
+                expect(getDeploymentSecrets.mock.calls[0][0].ingressHost).toBe('');
             });
 
             it('a Work that already holds the claim is routed without another lookup', async () => {

@@ -1059,7 +1059,8 @@ export class DeployService {
                 this.logger.warn(
                     `Managed host ${ingressHost} for work ${work.id} is claimed by another work; deploying without it`,
                 );
-                return settings;
+                // Same as a DNS refusal above: an explicit empty host, so a saved k8s `ingressHost` cannot stand in.
+                return { ...(settings ?? {}), ingressHost: '' };
             }
 
             return {
