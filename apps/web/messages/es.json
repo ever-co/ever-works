@@ -10948,7 +10948,7 @@
             "chipDeploying": "Desplegando",
             "chipLastDeployFailed": "Último despliegue fallido",
             "viewAll": "Ver todos ({count})",
-            "footerHelper": "Se abre en una pestaña nueva. Es posible que tengas que iniciar sesión.",
+            "footerHelper": "Es posible que tengas que iniciar sesión.",
             "manageLink": "Gestionar apps",
             "emptyWorks": "Las apps que despliegues aparecerán aquí.",
             "emptyWorksCreateApp": "Crear un trabajo de app",
@@ -10964,7 +10964,16 @@
             "railLabel": "Aplicaciones",
             "railCurrentApp": "{app}, estás aquí",
             "railSoonApp": "{app}, próximamente",
-            "railOpensInNewTab": "{app} (se abre en una pestaña nueva)"
+            "addApp": "Añadir",
+            "addAppLabel": "Añade tus propias apps en Ever Platform",
+            "linePlatform": "Una cuenta para todas las apps de Ever",
+            "lineWorks": "Agentes de IA que gestionan tu negocio",
+            "lineTeams": "Gestión de trabajo y proyectos",
+            "lineGauzy": "ERP, CRM y RR. HH. en una sola app",
+            "lineRec": "Captura y grabación de pantalla",
+            "lineTraduora": "Gestión de traducciones para equipos",
+            "lineDemand": "Comercio y marketplaces bajo demanda",
+            "lineTech": "Ingenieros y agentes operados para contratar"
         },
         "signOut": {
             "title": "¿Cerrar sesión en Ever Works?",

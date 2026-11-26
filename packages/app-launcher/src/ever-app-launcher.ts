@@ -1,6 +1,6 @@
 import { LitElement, html, nothing, type TemplateResult } from 'lit';
 
-import { isControlOpenKey, isTypeaheadKey, nextGridIndex, typeaheadIndex } from './grid-navigation.js';
+import { isTypeaheadKey, nextSectionedIndex, typeaheadIndex } from './grid-navigation.js';
 import { safeLauncherUrl } from './safe-url.js';
 import { DEFAULT_LAUNCHER_STRINGS } from './strings.js';
 import { styles } from './styles.js';
@@ -28,10 +28,16 @@ import type {
  *
  * **The element never navigates on its own.** There is no route and no session
  * in here: `:manage`, `:retry` and `:empty-action` are reports for the host to
- * act on (FR-64, ACC-11-48), and the only thing the element ever opens is a
- * tile's own stored address, in a new tab, with no opener and no referrer
- * (FR-30) — and only after the cancellable `:item-activate` was not cancelled
- * (ACC-11-40).
+ * act on (FR-64, ACC-11-48). The only addresses it links to are a tile's own
+ * stored address and the host's `addAppUrl`, each a plain link that opens **in
+ * the same tab** (owner, 2026-11-26; a modifier or middle click still opens a
+ * new tab, the browser's own behaviour) with no referrer — and a tile only
+ * after the cancellable `:item-activate` was not cancelled (ACC-11-40).
+ *
+ * **Ever apps** is a list of rows (logo on a white tile, name, one line, never
+ * the host); **Pinned** and **Your apps** stay tile grids. The last row of
+ * **Ever apps** is **+ Add** when the host gives an `addAppUrl` (in-app switcher
+ * brief S7).
  *
  * Host-facing surface (plan §6.2):
  *
@@ -44,6 +50,7 @@ import type {
  * | attribute | `environment`, `catalog-url`, `apps-url`  | P2 self-fetch only; carried, not yet read          |
  * | attribute | `sign-in-available`, `allow-localhost`    | S6 button; FR-32's local-development allowance     |
  * | property  | `data`                                    | `{ items, meta } \\| null` — host-fed mode          |
+ * | property  | `addAppUrl`                               | **+ Add**'s address, or `null` (no row)            |
  * | property  | `strings`                                 | `Partial<LauncherStrings>`                        |
  * | property  | `appWorksAvailable`                       | overrides `meta.appWorksAvailable` (FR-64)         |
  * | property  | `loading`, `error`                        | `'catalog'` \\| `'apps'` \\| `null`                   |
@@ -81,6 +88,13 @@ const TRIGGER_ICON = html`
 	</svg>
 `;
 
+/** The "+" of the **+ Add** row, drawn on the same white tile as the app logos. Decorative only. */
+const ADD_ICON = html`
+	<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true" focusable="false">
+		<path d="M12 5v14M5 12h14" stroke-linecap="round"></path>
+	</svg>
+`;
+
 /** The initials tile FR-14 falls back to when a platform has no icon. */
 function initialsOf(name: string): string {
 	return name
@@ -107,6 +121,7 @@ export class EverAppLauncher extends LitElement {
 		signInAvailable: { type: Boolean, attribute: 'sign-in-available' },
 		allowLocalhost: { type: Boolean, attribute: 'allow-localhost' },
 		data: { attribute: false },
+		addAppUrl: { attribute: false },
 		strings: { attribute: false },
 		appWorksAvailable: { attribute: false },
 		loading: { type: Boolean },
@@ -152,6 +167,14 @@ export class EverAppLauncher extends LitElement {
 
 	/** `GET /api/me/apps` — the host-fed payload (FR-33). */
 	data: AppLauncherListResponse | null = null;
+
+	/**
+	 * Where **+ Add** leads — the page where a person adds their own apps, in
+	 * this environment's Ever Platform (`…/apps?add=app`). `null`, or an address
+	 * FR-32 refuses, renders no row: an installation with no Ever Platform link
+	 * shows nothing Ever-specific (S7/S8).
+	 */
+	addAppUrl: string | null = null;
 
 	/** Translated strings; anything the host omits stays English (FR-42). */
 	strings: Partial<LauncherStrings> = {};
@@ -314,7 +337,9 @@ export class EverAppLauncher extends LitElement {
 			this._strings.sectionPlatforms,
 			platforms,
 			flat,
-			this.error === 'catalog' ? this._renderError('catalog', 'platforms', this._strings.catalogError) : nothing
+			html`${this._renderAddApp()}${this.error === 'catalog'
+				? this._renderError('catalog', 'platforms', this._strings.catalogError)
+				: nothing}`
 		)}${this._renderSection(
 			'works',
 			this._strings.sectionWorks,
@@ -348,10 +373,11 @@ export class EverAppLauncher extends LitElement {
 	}
 
 	private _renderTile(item: AppLauncherItem, position: number, section: string): TemplateResult {
-		const strings = this._strings;
 		const chip = this._chipFor(item);
 		const isCurrent = this._isCurrent(item);
 		const inert = this._isInert(item);
+		// **Ever apps** is a list of rows; the other sections are tile grids.
+		const tileClass = section === 'platforms' ? 'tile row' : 'tile';
 		// Roving tabindex (FR-40): exactly one tile is in the tab order, and never an inert one.
 		const tabindex = inert ? -1 : position === this._tabStop ? 0 : -1;
 		const icon = item.iconDataUri
@@ -359,32 +385,43 @@ export class EverAppLauncher extends LitElement {
 					><img src=${item.iconDataUri} alt=""
 				/></span>`
 			: html`<span class="tile-icon" part="tile-icon" aria-hidden="true">${initialsOf(item.name)}</span>`;
-		const body = html`
-			<span class="tile-body">
-				<span class="tile-name">${item.name}</span>
-				${chip
-					? html`<span
-							class="chip"
-							part="chip"
-							data-chip=${item.chip ?? (isCurrent ? 'current' : (item.status ?? 'beta'))}
-							>${chip}</span
-						>`
-					: item.host
-						? html`<span class="tile-host">${item.host}</span>`
-						: nothing}
-			</span>
-		`;
+		const chipElement = chip
+			? html`<span
+					class="chip"
+					part="chip"
+					data-chip=${item.chip ?? (isCurrent ? 'current' : (item.status ?? 'beta'))}
+					>${chip}</span
+				>`
+			: nothing;
+		// An Ever app is told apart by its one line, never by its host (owner,
+		// 2026-11-26: no URL in the switcher); a Work keeps its host.
+		const line = item.kind === 'platform' ? item.description : item.host;
+		const lineElement = line ? html`<span class="tile-line" part="tile-line">${line}</span>` : nothing;
+		const body =
+			section === 'platforms'
+				? html`
+						<span class="tile-body">
+							<span class="tile-title"><span class="tile-name">${item.name}</span>${chipElement}</span>
+							${lineElement}
+						</span>
+					`
+				: html`
+						<span class="tile-body">
+							<span class="tile-name">${item.name}</span>
+							${chip ? chipElement : lineElement}
+						</span>
+					`;
 
 		// **You're here** is not a link (FR-13); activating it closes the panel.
 		if (isCurrent) {
 			return html`<button
-				class="tile"
+				class=${tileClass}
 				part="tile"
 				type="button"
 				role="menuitem"
 				data-key=${item.key}
 				data-section=${section}
-				aria-current="true"
+				aria-current="page"
 				tabindex=${String(tabindex)}
 				@click=${this._onCurrentTileClick}
 			>
@@ -396,7 +433,7 @@ export class EverAppLauncher extends LitElement {
 		// inert — no link, no tab, no `:item-activate`.
 		if (inert) {
 			return html`<div
-				class="tile"
+				class=${tileClass}
 				part="tile"
 				role="menuitem"
 				data-key=${item.key}
@@ -408,20 +445,44 @@ export class EverAppLauncher extends LitElement {
 			</div>`;
 		}
 
+		// A plain link with no `target`: the app opens in this tab (owner,
+		// 2026-11-26), and Ctrl/Cmd/middle-click still opens a new one.
 		return html`<a
-			class="tile"
+			class=${tileClass}
 			part="tile"
 			role="menuitem"
 			data-key=${item.key}
 			data-section=${section}
-			href=${item.url as string}
-			target="_blank"
-			rel="noopener noreferrer"
+			href=${this._safeUrl(item.url) as string}
 			referrerpolicy="no-referrer"
 			tabindex=${String(tabindex)}
 			@click=${(event: MouseEvent) => this._onTileClick(item, event)}
 		>
 			${icon}${body}
+		</a>`;
+	}
+
+	/**
+	 * **+ Add** (in-app switcher brief S7): the last row of **Ever apps**, under a
+	 * hairline — a "+" on the same white tile as the logos, the label **Add**,
+	 * and a same-tab link to the host's `addAppUrl`. Like **Manage apps** it is a
+	 * `Tab` stop after the grid, not a tile the arrow keys move through.
+	 */
+	private _renderAddApp(): TemplateResult | typeof nothing {
+		const href = this._safeUrl(this.addAppUrl);
+		if (href === null) return nothing;
+		const strings = this._strings;
+		return html`<a
+			class="add-app"
+			part="add-app"
+			role="menuitem"
+			href=${href}
+			referrerpolicy="no-referrer"
+			title=${strings.addAppLabel}
+			aria-label=${strings.addAppLabel}
+		>
+			<span class="tile-icon" aria-hidden="true">${ADD_ICON}</span>
+			<span class="tile-name">${strings.addApp}</span>
 		</a>`;
 	}
 
@@ -530,6 +591,11 @@ export class EverAppLauncher extends LitElement {
 
 	private _isColdLoading(): boolean {
 		return this.loading && !this.data;
+	}
+
+	/** FR-32's guard with this element's local-development allowance. */
+	private _safeUrl(value: unknown): string | null {
+		return safeLauncherUrl(value, { allowLocalhost: this.allowLocalhost });
 	}
 
 	private _itemsIn(section: 'pinned' | 'platforms' | 'works'): AppLauncherItem[] {
@@ -730,7 +796,17 @@ export class EverAppLauncher extends LitElement {
 			return;
 		}
 
-		const next = nextGridIndex({ key: event.key, index: active, columns: this._columns, count: tiles.length });
+		// **Ever apps** is one row per line; the grids above and below it are
+		// `_columns` wide. Each section starts on its own line.
+		const next = nextSectionedIndex({
+			key: event.key,
+			index: active,
+			sections: [
+				{ count: this._itemsIn('pinned').length, columns: this._columns },
+				{ count: this._itemsIn('platforms').length, columns: 1 },
+				{ count: this._itemsIn('works').length, columns: this._columns }
+			]
+		});
 		if (next !== null) {
 			event.preventDefault();
 			this._focusTile(next, tiles);
@@ -769,10 +845,12 @@ export class EverAppLauncher extends LitElement {
 	};
 
 	/**
-	 * FR-30/ACC-11-40. The tile is an anchor so middle-click and
-	 * "open in a new tab" keep working; the primary click is handled here so
-	 * the cancellable `:item-activate` — and nothing else — decides whether a
-	 * tab opens, and so the address never gains a parameter (FR-31).
+	 * ACC-11-40, same tab (owner, 2026-11-26). The tile is a plain anchor with no
+	 * `target`, so the browser itself opens it in this tab, and a modifier or
+	 * middle click still opens a new one. The cancellable `:item-activate` is
+	 * dispatched synchronously first, so the host's answer is known before the
+	 * anchor's own navigation runs: a cancelled event, or an address FR-32
+	 * refuses, stops it. The address is the stored one, unchanged (FR-31).
 	 */
 	private _onTileClick(item: AppLauncherItem, event: MouseEvent): void {
 		const detail: LauncherItemActivateDetail = {
@@ -790,13 +868,9 @@ export class EverAppLauncher extends LitElement {
 				cancelable: true
 			})
 		);
-		// Always: the anchor's own navigation must not race the host's answer.
-		event.preventDefault();
-		if (!proceed) return;
-
-		const url = safeLauncherUrl(item.url, { allowLocalhost: this.allowLocalhost });
-		if (url === null) return;
-		window.open(url, '_blank', 'noopener,noreferrer');
+		if (!proceed || this._safeUrl(item.url) === null) {
+			event.preventDefault();
+		}
 	}
 
 	private _onManage = (): void => {

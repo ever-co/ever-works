@@ -10949,7 +10949,7 @@
             "chipDeploying": "Menyebarkan",
             "chipLastDeployFailed": "Penyebaran terakhir gagal",
             "viewAll": "Lihat semua ({count})",
-            "footerHelper": "Terbuka di tab baru. Anda mungkin perlu masuk.",
+            "footerHelper": "Anda mungkin perlu masuk.",
             "manageLink": "Kelola aplikasi",
             "emptyWorks": "Aplikasi yang Anda sebarkan akan muncul di sini.",
             "emptyWorksCreateApp": "Buat Karya Aplikasi",
@@ -10965,7 +10965,16 @@
             "railLabel": "Aplikasi",
             "railCurrentApp": "{app}, Anda di sini",
             "railSoonApp": "{app}, segera hadir",
-            "railOpensInNewTab": "{app} (terbuka di tab baru)"
+            "addApp": "Tambah",
+            "addAppLabel": "Tambahkan aplikasi Anda sendiri di Ever Platform",
+            "linePlatform": "Satu akun untuk setiap aplikasi Ever",
+            "lineWorks": "Agen AI yang menjalankan bisnis Anda",
+            "lineTeams": "Manajemen pekerjaan dan proyek",
+            "lineGauzy": "ERP, CRM, dan HR dalam satu aplikasi",
+            "lineRec": "Tangkapan dan rekaman layar",
+            "lineTraduora": "Manajemen terjemahan untuk tim",
+            "lineDemand": "Perdagangan dan marketplace sesuai permintaan",
+            "lineTech": "Insinyur dan agen terkelola untuk disewa"
         },
         "signOut": {
             "title": "Keluar dari Ever Works?",

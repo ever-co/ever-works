@@ -10949,7 +10949,7 @@
             "chipDeploying": "デプロイ中",
             "chipLastDeployFailed": "前回のデプロイに失敗しました",
             "viewAll": "すべて表示 ({count})",
-            "footerHelper": "新しいタブで開きます。サインインが必要な場合があります。",
+            "footerHelper": "サインインが必要な場合があります。",
             "manageLink": "アプリを管理",
             "emptyWorks": "デプロイしたアプリがここに表示されます。",
             "emptyWorksCreateApp": "アプリワークを作成",
@@ -10965,7 +10965,16 @@
             "railLabel": "アプリ",
             "railCurrentApp": "{app}（現在表示中）",
             "railSoonApp": "{app}（近日公開）",
-            "railOpensInNewTab": "{app}（新しいタブで開きます）"
+            "addApp": "追加",
+            "addAppLabel": "Ever Platform に独自のアプリを追加",
+            "linePlatform": "すべての Ever アプリに使える 1 つのアカウント",
+            "lineWorks": "ビジネスを動かす AI エージェント",
+            "lineTeams": "業務とプロジェクトの管理",
+            "lineGauzy": "ERP・CRM・HR をひとつのアプリで",
+            "lineRec": "画面キャプチャと録画",
+            "lineTraduora": "チーム向けの翻訳管理",
+            "lineDemand": "コマースとオンデマンド マーケットプレイス",
+            "lineTech": "エンジニアと運用付き AI エージェントに依頼"
         },
         "signOut": {
             "title": "Ever Works からサインアウトしますか？",

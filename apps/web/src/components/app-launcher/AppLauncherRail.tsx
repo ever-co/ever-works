@@ -2,8 +2,10 @@
 
 import { Fragment } from 'react';
 import { useTranslations } from 'next-intl';
+import { Plus } from 'lucide-react';
 import type { AppLauncherItem } from '@ever-works/contracts';
 import { captureAppLauncherEvent } from '@/lib/app-launcher/app-launcher-telemetry';
+import { addAppUrlFrom } from '@/lib/app-launcher/ever-app-lines';
 import { useAppLauncherList } from '@/lib/app-launcher/use-app-launcher-list';
 import { useWorkspaceScope } from '@/lib/hooks/use-workspace-scope';
 import { serializeWorkspaceScope } from '@/lib/workspace-scope';
@@ -15,8 +17,11 @@ import { AppLauncherButton } from './AppLauncherButton';
  * The App Launcher as a **left rail** (shared Ever shell, A3): a 3rem column
  * left of the sidebar, desktop only, one 32 px icon per app with a tooltip. The
  * current app carries a 4 px bar on its left edge and is not a link; every other
- * app opens in a new tab; an app that is announced but has no address yet
- * ("Soon") is shown, dimmed, and opens nothing.
+ * app opens in the same tab (owner, 2026-11-26), as a plain link, so
+ * Ctrl/Cmd/middle-click still opens a new one; an app that is announced but has
+ * no address yet ("Soon") is shown, dimmed, and opens nothing. Ever apps sit on
+ * a white tile, as in the panel, and the group ends with a "+" that leads to
+ * Ever Platform's page for adding your own apps (S7), when there is one.
  *
  * It shows the same list as the panel, in the same order — Pinned, Ever apps,
  * Your apps, each as the person arranged it in Manage apps (Show / Pin /
@@ -66,10 +71,16 @@ function catalogIdFromKey(key: string): string | undefined {
     return key.startsWith('platform:') ? key.slice('platform:'.length) : undefined;
 }
 
+/**
+ * The white tile an Ever app's logo sits on, in both themes (S3): the Ever
+ * Platform and Ever Demand marks are dark and would vanish on a dark rail.
+ */
+const LOGO_TILE = 'size-8 shrink-0 rounded-lg bg-white p-1 ring-1 ring-inset ring-black/10';
+
 function AppIcon({ item }: { item: AppLauncherItem }) {
     if (item.iconDataUri) {
         return (
-            // A data: URI drawn at 32 px; next/image adds nothing here.
+            // A data: URI drawn at 24 px on a 32 px tile; next/image adds nothing here.
             // eslint-disable-next-line @next/next/no-img-element
             <img
                 src={item.iconDataUri}
@@ -77,7 +88,10 @@ function AppIcon({ item }: { item: AppLauncherItem }) {
                 width={32}
                 height={32}
                 draggable={false}
-                className="size-8 shrink-0 rounded-lg object-contain"
+                className={cn(
+                    'size-8 shrink-0 rounded-lg object-contain',
+                    item.kind === 'platform' && LOGO_TILE,
+                )}
             />
         );
     }
@@ -135,10 +149,8 @@ function RailItem({ item, position }: { item: AppLauncherItem; position: number 
         <Tooltip content={item.name} position="right">
             <a
                 href={url}
-                target="_blank"
-                rel="noopener noreferrer"
                 referrerPolicy="no-referrer"
-                aria-label={t('railOpensInNewTab', { app: item.name })}
+                aria-label={item.name}
                 className={cn(
                     SLOT,
                     'outline-none transition-colors hover:bg-surface-secondary focus-visible:ring-2 focus-visible:ring-text/30',
@@ -162,11 +174,43 @@ function RailItem({ item, position }: { item: AppLauncherItem; position: number 
     );
 }
 
+/** S7's "+": the last slot of the Ever apps group, a same-tab link to Ever Platform's Apps page. */
+function AddAppItem({ href }: { href: string }) {
+    const t = useTranslations('dashboard.appLauncher');
+    const label = t('addAppLabel');
+    return (
+        <Tooltip content={label} position="right">
+            <a
+                href={href}
+                referrerPolicy="no-referrer"
+                aria-label={label}
+                data-testid="app-launcher-rail-add"
+                className={cn(
+                    SLOT,
+                    'outline-none transition-colors hover:bg-surface-secondary focus-visible:ring-2 focus-visible:ring-text/30',
+                    'dark:hover:bg-surface-secondary-dark dark:focus-visible:ring-text-dark/30',
+                )}
+            >
+                <span
+                    aria-hidden="true"
+                    className={cn(
+                        LOGO_TILE,
+                        'inline-flex items-center justify-center text-zinc-600',
+                    )}
+                >
+                    <Plus className="size-4" strokeWidth={1.5} />
+                </span>
+            </a>
+        </Tooltip>
+    );
+}
+
 export function AppLauncherRail() {
     const t = useTranslations('dashboard.appLauncher');
     const scope = useWorkspaceScope();
     const scopeKey = scope === null ? null : serializeWorkspaceScope(scope);
     const { data, loading } = useAppLauncherList(scopeKey);
+    const addAppUrl = addAppUrlFrom(data);
 
     const groups = SECTIONS.map((section) =>
         (data?.items ?? []).filter((item) => item.visible !== false && item.section === section),
@@ -210,6 +254,11 @@ export function AppLauncherRail() {
                                           />
                                       </li>
                                   ))}
+                                  {items[0].section === 'platforms' && addAppUrl !== null && (
+                                      <li className="flex w-full justify-center">
+                                          <AddAppItem href={addAppUrl} />
+                                      </li>
+                                  )}
                               </ul>
                           </Fragment>
                       ))}

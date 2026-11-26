@@ -10949,7 +10949,7 @@
             "chipDeploying": "배포 중",
             "chipLastDeployFailed": "마지막 배포 실패",
             "viewAll": "모두 보기 ({count})",
-            "footerHelper": "새 탭에서 열립니다. 로그인이 필요할 수 있습니다.",
+            "footerHelper": "로그인이 필요할 수 있습니다.",
             "manageLink": "앱 관리",
             "emptyWorks": "배포한 앱이 여기에 표시됩니다.",
             "emptyWorksCreateApp": "앱 워크 생성",
@@ -10965,7 +10965,16 @@
             "railLabel": "앱",
             "railCurrentApp": "{app}, 현재 위치",
             "railSoonApp": "{app}, 출시 예정",
-            "railOpensInNewTab": "{app} (새 탭에서 열림)"
+            "addApp": "추가",
+            "addAppLabel": "Ever Platform에 내 앱 추가",
+            "linePlatform": "모든 Ever 앱을 위한 하나의 계정",
+            "lineWorks": "비즈니스를 운영하는 AI 에이전트",
+            "lineTeams": "업무 및 프로젝트 관리",
+            "lineGauzy": "ERP, CRM, HR을 하나의 앱에서",
+            "lineRec": "화면 캡처 및 녹화",
+            "lineTraduora": "팀을 위한 번역 관리",
+            "lineDemand": "커머스 및 온디맨드 마켓플레이스",
+            "lineTech": "고용 가능한 엔지니어와 운영형 에이전트"
         },
         "signOut": {
             "title": "Ever Works에서 로그아웃할까요?",

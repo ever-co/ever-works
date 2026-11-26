@@ -91,6 +91,7 @@ import { AppLauncherProvider, useAppLauncher } from './AppLauncherProvider';
 /** What the control sets on the element it creates (plan §6.2 host surface). */
 interface LauncherStub extends HTMLElement {
     data: AppLauncherListResponse | null;
+    addAppUrl: string | null;
     strings: Record<string, string>;
     appWorksAvailable?: boolean;
     loading: boolean;
@@ -304,6 +305,50 @@ describe('AppLauncherButton (plan §6.4)', () => {
         expect(element.strings.viewAll).toBe('dashboard.appLauncher.viewAll:0');
         // Nothing is fetched until the panel is opened (FR-5 / FR-6).
         expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it('translates each Ever app line and leads + Add to this environment’s Ever Platform (S3, S7)', async () => {
+        fetchMock.mockImplementation(async () => {
+            const payload = appsPayload('personal');
+            return {
+                ok: true,
+                status: 200,
+                json: async () => ({
+                    ...payload,
+                    items: [
+                        {
+                            ...payload.items[1],
+                            key: 'platform:app-ever-co',
+                            name: 'Ever Platform',
+                            description: 'One account for every Ever app',
+                            url: 'https://app-dev.ever.co',
+                            host: 'app-dev.ever.co',
+                        },
+                        ...payload.items,
+                    ],
+                }),
+            };
+        });
+        const { element } = await mount();
+        expect(element.addAppUrl).toBeNull();
+        expect(element.strings.addApp).toBe('dashboard.appLauncher.addApp');
+        expect(element.strings.addAppLabel).toBe('dashboard.appLauncher.addAppLabel');
+
+        await openPanel(element);
+        await waitFor(() => expect(element.data).not.toBeNull());
+        expect(element.addAppUrl).toBe('https://app-dev.ever.co/apps?add=app');
+        const platform = element.data?.items.find((entry) => entry.key === 'platform:app-ever-co');
+        expect(platform?.description).toBe('dashboard.appLauncher.linePlatform');
+        // An entry with no translated line keeps the catalog's own.
+        const docs = element.data?.items.find((entry) => entry.key === 'platform:docs-personal');
+        expect(docs?.description).toBeUndefined();
+    });
+
+    it('draws no + Add when the list has no Ever Platform address (S7, S8)', async () => {
+        const { element } = await mount();
+        await openPanel(element);
+        await waitFor(() => expect(element.data).not.toBeNull());
+        expect(element.addAppUrl).toBeNull();
     });
 
     it('renders a second open within 5 minutes from the cache with no fetch, and refetches past the TTL (ACC-11-03)', async () => {

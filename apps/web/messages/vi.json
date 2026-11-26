@@ -10949,7 +10949,7 @@
             "chipDeploying": "Đang triển khai",
             "chipLastDeployFailed": "Triển khai lần cuối thất bại",
             "viewAll": "Xem tất cả ({count})",
-            "footerHelper": "Mở trong tab mới. Bạn có thể cần đăng nhập.",
+            "footerHelper": "Bạn có thể cần đăng nhập.",
             "manageLink": "Quản lý ứng dụng",
             "emptyWorks": "Ứng dụng bạn triển khai sẽ xuất hiện ở đây.",
             "emptyWorksCreateApp": "Tạo Công việc Ứng dụng",
@@ -10965,7 +10965,16 @@
             "railLabel": "Ứng dụng",
             "railCurrentApp": "{app}, bạn đang ở đây",
             "railSoonApp": "{app}, sắp ra mắt",
-            "railOpensInNewTab": "{app} (mở trong thẻ mới)"
+            "addApp": "Thêm",
+            "addAppLabel": "Thêm ứng dụng của riêng bạn trong Ever Platform",
+            "linePlatform": "Một tài khoản cho mọi ứng dụng Ever",
+            "lineWorks": "Tác tử AI vận hành doanh nghiệp của bạn",
+            "lineTeams": "Quản lý công việc và dự án",
+            "lineGauzy": "ERP, CRM và nhân sự trong một ứng dụng",
+            "lineRec": "Chụp và ghi màn hình",
+            "lineTraduora": "Quản lý bản dịch cho nhóm",
+            "lineDemand": "Thương mại và chợ trực tuyến theo nhu cầu",
+            "lineTech": "Kỹ sư và tác tử được vận hành sẵn để thuê"
         },
         "signOut": {
             "title": "Đăng xuất khỏi Ever Works?",

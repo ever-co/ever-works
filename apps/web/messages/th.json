@@ -10949,7 +10949,7 @@
             "chipDeploying": "กำลังปรับใช้",
             "chipLastDeployFailed": "การปรับใช้ครั้งล่าสุดล้มเหลว",
             "viewAll": "ดูทั้งหมด ({count})",
-            "footerHelper": "เปิดในแท็บใหม่ คุณอาจต้องลงชื่อเข้าใช้",
+            "footerHelper": "คุณอาจต้องลงชื่อเข้าใช้",
             "manageLink": "จัดการแอป",
             "emptyWorks": "แอปที่คุณปรับใช้จะแสดงที่นี่",
             "emptyWorksCreateApp": "สร้างงานแอป",
@@ -10965,7 +10965,16 @@
             "railLabel": "แอป",
             "railCurrentApp": "{app} คุณอยู่ที่นี่",
             "railSoonApp": "{app} เร็ว ๆ นี้",
-            "railOpensInNewTab": "{app} (เปิดในแท็บใหม่)"
+            "addApp": "เพิ่ม",
+            "addAppLabel": "เพิ่มแอปของคุณเองใน Ever Platform",
+            "linePlatform": "บัญชีเดียวสำหรับทุกแอป Ever",
+            "lineWorks": "เอเจนต์ AI ที่ดูแลธุรกิจของคุณ",
+            "lineTeams": "การจัดการงานและโปรเจกต์",
+            "lineGauzy": "ERP, CRM และ HR ในแอปเดียว",
+            "lineRec": "จับภาพและบันทึกหน้าจอ",
+            "lineTraduora": "การจัดการงานแปลสำหรับทีม",
+            "lineDemand": "การค้าและมาร์เก็ตเพลสแบบออนดีมานด์",
+            "lineTech": "วิศวกรและเอเจนต์ที่ดูแลให้ พร้อมจ้างงาน"
         },
         "signOut": {
             "title": "ออกจากระบบ Ever Works หรือไม่",

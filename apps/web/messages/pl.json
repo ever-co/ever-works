@@ -10949,7 +10949,7 @@
             "chipDeploying": "Trwa wdrażanie",
             "chipLastDeployFailed": "Ostatnie wdrożenie nie powiodło się",
             "viewAll": "Zobacz wszystkie ({count})",
-            "footerHelper": "Otwiera się w nowej karcie. Może być wymagane zalogowanie.",
+            "footerHelper": "Może być wymagane zalogowanie.",
             "manageLink": "Zarządzaj aplikacjami",
             "emptyWorks": "Aplikacje, które wdrożysz, pojawią się tutaj.",
             "emptyWorksCreateApp": "Utwórz pracę typu aplikacja",
@@ -10965,7 +10965,16 @@
             "railLabel": "Aplikacje",
             "railCurrentApp": "{app}, jesteś tutaj",
             "railSoonApp": "{app}, wkrótce",
-            "railOpensInNewTab": "{app} (otwiera się w nowej karcie)"
+            "addApp": "Dodaj",
+            "addAppLabel": "Dodaj własne aplikacje w Ever Platform",
+            "linePlatform": "Jedno konto do każdej aplikacji Ever",
+            "lineWorks": "Agenci AI, którzy prowadzą Twoją firmę",
+            "lineTeams": "Zarządzanie pracą i projektami",
+            "lineGauzy": "ERP, CRM i HR w jednej aplikacji",
+            "lineRec": "Przechwytywanie i nagrywanie ekranu",
+            "lineTraduora": "Zarządzanie tłumaczeniami dla zespołów",
+            "lineDemand": "Handel i platformy sprzedażowe na żądanie",
+            "lineTech": "Inżynierowie i obsługiwani agenci do wynajęcia"
         },
         "signOut": {
             "title": "Wylogować się z Ever Works?",

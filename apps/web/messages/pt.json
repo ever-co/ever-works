@@ -10949,7 +10949,7 @@
             "chipDeploying": "Implantando",
             "chipLastDeployFailed": "A última implantação falhou",
             "viewAll": "Ver todos ({count})",
-            "footerHelper": "Abre em uma nova aba. Talvez você precise entrar.",
+            "footerHelper": "Talvez você precise entrar.",
             "manageLink": "Gerenciar apps",
             "emptyWorks": "Os apps que você implantar aparecem aqui.",
             "emptyWorksCreateApp": "Criar um trabalho de app",
@@ -10965,7 +10965,16 @@
             "railLabel": "Aplicativos",
             "railCurrentApp": "{app}, você está aqui",
             "railSoonApp": "{app}, em breve",
-            "railOpensInNewTab": "{app} (abre em uma nova aba)"
+            "addApp": "Adicionar",
+            "addAppLabel": "Adicione seus próprios apps no Ever Platform",
+            "linePlatform": "Uma conta para todos os apps Ever",
+            "lineWorks": "Agentes de IA que gerenciam o seu negócio",
+            "lineTeams": "Gestão de trabalho e projetos",
+            "lineGauzy": "ERP, CRM e RH em um só app",
+            "lineRec": "Captura e gravação de tela",
+            "lineTraduora": "Gestão de traduções para equipes",
+            "lineDemand": "Comércio e marketplaces sob demanda",
+            "lineTech": "Engenheiros e agentes operados para contratar"
         },
         "signOut": {
             "title": "Sair do Ever Works?",

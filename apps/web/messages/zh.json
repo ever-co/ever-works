@@ -10949,7 +10949,7 @@
             "chipDeploying": "部署中",
             "chipLastDeployFailed": "上次部署失败",
             "viewAll": "查看全部 ({count})",
-            "footerHelper": "在新标签页中打开。你可能需要登录。",
+            "footerHelper": "你可能需要登录。",
             "manageLink": "管理应用",
             "emptyWorks": "你部署的应用会显示在这里。",
             "emptyWorksCreateApp": "创建应用作品",
@@ -10965,7 +10965,16 @@
             "railLabel": "应用",
             "railCurrentApp": "{app}，你在这里",
             "railSoonApp": "{app}，即将推出",
-            "railOpensInNewTab": "{app}（在新标签页中打开）"
+            "addApp": "添加",
+            "addAppLabel": "在 Ever Platform 中添加你自己的应用",
+            "linePlatform": "一个账户，畅用所有 Ever 应用",
+            "lineWorks": "替你经营业务的 AI 智能体",
+            "lineTeams": "工作与项目管理",
+            "lineGauzy": "ERP、CRM 和人力资源，一个应用搞定",
+            "lineRec": "屏幕截图与录制",
+            "lineTraduora": "面向团队的翻译管理",
+            "lineDemand": "电商与按需服务市场",
+            "lineTech": "可雇用的工程师与托管智能体"
         },
         "signOut": {
             "title": "退出 Ever Works？",

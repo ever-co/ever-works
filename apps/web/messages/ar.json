@@ -10948,7 +10948,7 @@
             "chipDeploying": "جارٍ النشر",
             "chipLastDeployFailed": "فشل آخر نشر",
             "viewAll": "عرض الكل ({count})",
-            "footerHelper": "يفتح في علامة تبويب جديدة. قد تحتاج إلى تسجيل الدخول.",
+            "footerHelper": "قد تحتاج إلى تسجيل الدخول.",
             "manageLink": "إدارة التطبيقات",
             "emptyWorks": "التطبيقات التي تنشرها ستظهر هنا.",
             "emptyWorksCreateApp": "إنشاء عمل تطبيق",
@@ -10964,7 +10964,16 @@
             "railLabel": "التطبيقات",
             "railCurrentApp": "{app}، أنت هنا",
             "railSoonApp": "{app}، قريبًا",
-            "railOpensInNewTab": "{app} (يُفتح في علامة تبويب جديدة)"
+            "addApp": "إضافة",
+            "addAppLabel": "أضف تطبيقاتك الخاصة في Ever Platform",
+            "linePlatform": "حساب واحد لكل تطبيقات Ever",
+            "lineWorks": "وكلاء ذكاء اصطناعي يديرون أعمالك",
+            "lineTeams": "إدارة العمل والمشاريع",
+            "lineGauzy": "ERP وCRM والموارد البشرية في تطبيق واحد",
+            "lineRec": "التقاط الشاشة وتسجيلها",
+            "lineTraduora": "إدارة الترجمة للفرق",
+            "lineDemand": "التجارة والأسواق عند الطلب",
+            "lineTech": "مهندسون ووكلاء مُشغَّلون للتعاقد"
         },
         "signOut": {
             "title": "هل تريد تسجيل الخروج من Ever Works؟",

@@ -13439,7 +13439,7 @@
             "chipDeploying": "Deploying",
             "chipLastDeployFailed": "Last deploy failed",
             "viewAll": "View all {count}",
-            "footerHelper": "Opens in a new tab. You may need to sign in.",
+            "footerHelper": "You may need to sign in.",
             "manageLink": "Manage apps",
             "emptyWorks": "Apps you deploy show up here.",
             "emptyWorksCreateApp": "Create an App Work",
@@ -13455,7 +13455,16 @@
             "railLabel": "Apps",
             "railCurrentApp": "{app}, you're here",
             "railSoonApp": "{app}, soon",
-            "railOpensInNewTab": "{app} (opens in a new tab)"
+            "addApp": "Add",
+            "addAppLabel": "Add your own apps in Ever Platform",
+            "linePlatform": "One account for every Ever app",
+            "lineWorks": "AI agents that run your business",
+            "lineTeams": "Work and project management",
+            "lineGauzy": "ERP, CRM and HR in one app",
+            "lineRec": "Screen capture and recording",
+            "lineTraduora": "Translation management for teams",
+            "lineDemand": "Commerce and on-demand marketplaces",
+            "lineTech": "Engineers and operated agents for hire"
         },
         "signOut": {
             "title": "Sign out of Ever Works?",

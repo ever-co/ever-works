@@ -24,6 +24,11 @@ import { css, unsafeCSS } from 'lit';
  * | `--ever-app-launcher-radius`         | `10px`         | panel and tile corners             |
  * | `--ever-app-launcher-font`           | system UI      | typeface                           |
  * | `--ever-app-launcher-tile-height`    | `88px`         | tile height (FR-5: never shifts)   |
+ * | `--ever-app-launcher-row-height`     | `48px`         | an **Ever apps** row and **+ Add** |
+ *
+ * The logo tile behind an Ever app's mark is white in both themes, with a
+ * hairline ring (in-app switcher brief S3): the Ever Platform and Ever Demand
+ * marks are dark and would vanish on a dark tile.
  *
  * Expressed as one plain string so the size/coverage checks and this module's
  * spec can read the stylesheet a host actually loads, and converted to a
@@ -43,6 +48,7 @@ export const EVER_APP_LAUNCHER_STYLES = `
 	--ever-app-launcher-trigger-size: 36px;
 	--ever-app-launcher-font: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
 	--ever-app-launcher-tile-height: 88px;
+	--ever-app-launcher-row-height: 48px;
 	display: inline-block;
 	position: relative;
 	font-family: var(--ever-app-launcher-font);
@@ -262,7 +268,7 @@ export const EVER_APP_LAUNCHER_STYLES = `
 	white-space: nowrap;
 }
 
-.tile-host {
+.tile-line {
 	overflow: hidden;
 	font-size: 11px;
 	color: var(--ever-app-launcher-muted);
@@ -279,6 +285,83 @@ export const EVER_APP_LAUNCHER_STYLES = `
 	font-size: 11px;
 	font-weight: 500;
 	white-space: nowrap;
+}
+
+/* **Ever apps**: one row per app across the whole panel — the logo on a white
+   tile, then the name (with its chip) over one muted line. Rows are a list, so
+   they carry no border of their own; the transparent one keeps the box the
+   same size as a tile's. */
+.tile.row {
+	grid-column: 1 / -1;
+	gap: 12px;
+	height: var(--ever-app-launcher-row-height);
+	min-height: var(--ever-app-launcher-row-height);
+	padding: 8px;
+	border-color: transparent;
+}
+
+.row .tile-icon,
+.add-app .tile-icon {
+	box-sizing: border-box;
+	padding: 4px;
+	background: #ffffff;
+	box-shadow: inset 0 0 0 1px rgba(24, 24, 27, 0.1);
+	color: #52525b;
+}
+
+.add-app .tile-icon svg {
+	width: 16px;
+	height: 16px;
+}
+
+.tile-title {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	min-width: 0;
+}
+
+.tile-title .chip {
+	align-self: center;
+}
+
+.row .tile-line {
+	font-size: 12px;
+}
+
+/* **+ Add** (S7): the last row of **Ever apps**, under a hairline. */
+.add-app {
+	box-sizing: border-box;
+	position: relative;
+	display: flex;
+	grid-column: 1 / -1;
+	align-items: center;
+	gap: 12px;
+	height: var(--ever-app-launcher-row-height);
+	margin-top: 4px;
+	padding: 8px;
+	border-radius: var(--ever-app-launcher-radius);
+	color: inherit;
+	text-decoration: none;
+}
+
+.add-app::before {
+	content: '';
+	position: absolute;
+	top: -6px;
+	right: 8px;
+	left: 8px;
+	height: 1px;
+	background: var(--ever-app-launcher-border);
+}
+
+.add-app:hover {
+	background: var(--ever-app-launcher-hover);
+}
+
+.add-app:focus-visible {
+	outline: 2px solid var(--ever-app-launcher-accent);
+	outline-offset: 2px;
 }
 
 .skeleton {

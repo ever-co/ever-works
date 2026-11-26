@@ -10949,7 +10949,7 @@
             "chipDeploying": "तैनात किया जा रहा है",
             "chipLastDeployFailed": "पिछली तैनाती विफल रही",
             "viewAll": "सभी {count} देखें",
-            "footerHelper": "नए टैब में खुलता है। आपको साइन इन करना पड़ सकता है।",
+            "footerHelper": "आपको साइन इन करना पड़ सकता है।",
             "manageLink": "ऐप्स प्रबंधित करें",
             "emptyWorks": "आपके द्वारा तैनात किए गए ऐप्स यहाँ दिखाई देंगे।",
             "emptyWorksCreateApp": "ऐप कार्य बनाएं",
@@ -10965,7 +10965,16 @@
             "railLabel": "ऐप्स",
             "railCurrentApp": "{app}, आप यहाँ हैं",
             "railSoonApp": "{app}, जल्द ही",
-            "railOpensInNewTab": "{app} (नए टैब में खुलता है)"
+            "addApp": "जोड़ें",
+            "addAppLabel": "Ever Platform में अपने ऐप जोड़ें",
+            "linePlatform": "हर Ever ऐप के लिए एक खाता",
+            "lineWorks": "AI एजेंट जो आपका व्यवसाय चलाते हैं",
+            "lineTeams": "काम और प्रोजेक्ट प्रबंधन",
+            "lineGauzy": "ERP, CRM और HR एक ही ऐप में",
+            "lineRec": "स्क्रीन कैप्चर और रिकॉर्डिंग",
+            "lineTraduora": "टीमों के लिए अनुवाद प्रबंधन",
+            "lineDemand": "कॉमर्स और ऑन-डिमांड मार्केटप्लेस",
+            "lineTech": "किराए पर इंजीनियर और संचालित एजेंट"
         },
         "signOut": {
             "title": "Ever Works से साइन आउट करें?",

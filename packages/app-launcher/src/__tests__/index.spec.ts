@@ -46,6 +46,7 @@ describe('@ever-works/app-launcher entry point', () => {
 		expect(typeof entry.safeLauncherUrl).toBe('function');
 		expect(typeof entry.isSafeLauncherUrl).toBe('function');
 		expect(typeof entry.nextGridIndex).toBe('function');
+		expect(typeof entry.nextSectionedIndex).toBe('function');
 		expect(typeof entry.typeaheadIndex).toBe('function');
 		expect(Array.isArray(entry.GRID_NAVIGATION_KEYS)).toBe(true);
 	});

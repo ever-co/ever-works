@@ -10948,7 +10948,7 @@
             "chipDeploying": "Разполага се",
             "chipLastDeployFailed": "Последното разполагане е неуспешно",
             "viewAll": "Виж всички ({count})",
-            "footerHelper": "Отваря се в нов раздел. Може да се наложи да влезете.",
+            "footerHelper": "Може да се наложи да влезете.",
             "manageLink": "Управление на приложения",
             "emptyWorks": "Приложенията, които разположите, ще се появят тук.",
             "emptyWorksCreateApp": "Създай работа за приложение",
@@ -10964,7 +10964,16 @@
             "railLabel": "Приложения",
             "railCurrentApp": "{app}, вие сте тук",
             "railSoonApp": "{app}, скоро",
-            "railOpensInNewTab": "{app} (отваря се в нов раздел)"
+            "addApp": "Добавяне",
+            "addAppLabel": "Добавете свои приложения в Ever Platform",
+            "linePlatform": "Един акаунт за всички приложения на Ever",
+            "lineWorks": "AI агенти, които управляват бизнеса ви",
+            "lineTeams": "Управление на работа и проекти",
+            "lineGauzy": "ERP, CRM и HR в едно приложение",
+            "lineRec": "Заснемане и запис на екрана",
+            "lineTraduora": "Управление на преводи за екипи",
+            "lineDemand": "Търговия и пазари при поискване",
+            "lineTech": "Инженери и управлявани агенти под наем"
         },
         "signOut": {
             "title": "Изход от Ever Works?",

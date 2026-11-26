@@ -10948,7 +10948,7 @@
             "chipDeploying": "מפריס",
             "chipLastDeployFailed": "הפריסה האחרונה נכשלה",
             "viewAll": "הצג הכל ({count})",
-            "footerHelper": "נפתח בכרטיסייה חדשה. ייתכן שתצטרך להתחבר.",
+            "footerHelper": "ייתכן שתצטרך להתחבר.",
             "manageLink": "ניהול אפליקציות",
             "emptyWorks": "אפליקציות שתפרוס יופיעו כאן.",
             "emptyWorksCreateApp": "צור עבודת אפליקציה",
@@ -10964,7 +10964,16 @@
             "railLabel": "אפליקציות",
             "railCurrentApp": "{app}, אתה כאן",
             "railSoonApp": "{app}, בקרוב",
-            "railOpensInNewTab": "{app} (נפתח בכרטיסייה חדשה)"
+            "addApp": "הוספה",
+            "addAppLabel": "הוסף אפליקציות משלך ב-Ever Platform",
+            "linePlatform": "חשבון אחד לכל אפליקציות Ever",
+            "lineWorks": "סוכני AI שמנהלים את העסק שלך",
+            "lineTeams": "ניהול עבודה ופרויקטים",
+            "lineGauzy": "ERP, CRM ומשאבי אנוש באפליקציה אחת",
+            "lineRec": "צילום והקלטת מסך",
+            "lineTraduora": "ניהול תרגומים לצוותים",
+            "lineDemand": "מסחר ושווקים לפי דרישה",
+            "lineTech": "מהנדסים וסוכנים מופעלים להעסקה"
         },
         "signOut": {
             "title": "להתנתק מ-Ever Works?",
