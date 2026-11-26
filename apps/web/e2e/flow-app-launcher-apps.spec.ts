@@ -27,9 +27,9 @@
  * >   `PUT /api/works/:id`) records `app.launcher.hidden` then `app.launcher.exposed`, with
  * >   actor and direction and no address (APW-11 FR-21).
  * > - Every tile `href` equals the item's `url` from `GET /api/me/apps` exactly (no query,
- * >   fragment or userinfo); the opened tab has `window.opener === null` and sends no
- * >   referrer; no launcher request carries a credential in its URL (network log)
- * >   (APW-11 FR-30–FR-32).
+ * >   fragment or userinfo); activating it navigates the same tab (no new page or popup) and
+ * >   sends no referrer; no launcher request carries a credential in its URL (network log)
+ * >   (APW-11 FR-30–FR-32; same tab since 2026-11-26, owner decision).
  *
  * **ACC-11-47** (`ACCEPTANCE.md:1409`) is what the FR-63 case here drives at the API layer:
  * "**Manage apps** past 200 items renders **Showing 200 of {count}** and still reaches every

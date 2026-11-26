@@ -70,7 +70,7 @@ anyone and the person's own apps once Ever ID lets that platform ask on their be
 ```
    BEFORE  header: [Work ▾] … [⌘K] … [✦][🔔][◐][?]      AFTER  header: [Work ▾] … [⌘K] … [✦][🔔][◐][?][⠿]
    app  → Work ▸ Deploy ▸ copy address                          ⠿ → Pinned · Ever apps · Your apps · Manage apps
-   Gauzy → type the address                                     each tile → new tab, nothing attached
+   Gauzy → type the address                                     each tile → same tab, nothing attached
    P2: the same panel, as one web component, inside Gauzy, Teams, Rec …
 ```
 
@@ -82,13 +82,13 @@ anyone and the person's own apps once Ever ID lets that platform ask on their be
   **Given** a person with an App Work whose latest production deployment succeeded at
   `cal.example.com`,
   **when** they open the App Launcher and activate the **Cal** tile,
-  **then** `https://cal.example.com` opens in a new tab, the dashboard tab stays where it was, the panel
-  closes, and the opened address carries no query string, fragment or token added by Ever Works.
+  **then** `https://cal.example.com` opens in the same tab (Ctrl/Cmd/middle-click still opens a new one),
+  and the opened address carries no query string, fragment or token added by Ever Works. (same tab since 2026-11-26, owner decision; ever-co/ever-works#3359)
 - **S2 — Jump to another Ever platform.**
   **Given** the platform catalog lists Ever Gauzy for the environment Ever Works is running in,
   **when** the person activates **Ever Gauzy**,
-  **then** Gauzy's address for that environment opens in a new tab; before activation the panel footer
-  reads **"Opens in a new tab. You may need to sign in."**
+  **then** Gauzy's address for that environment opens in the same tab; before activation the panel footer
+  reads **"You may need to sign in."** (same tab since 2026-11-26, owner decision; ever-co/ever-works#3359)
 - **S3 — Expose a website Work.**
   **Given** a directory Work with a live managed subdomain that is not in the launcher,
   **when** an editor of that Work turns on **Show in App Launcher** in the Work's settings,
@@ -306,7 +306,9 @@ Every threshold below is a number on purpose.
 
 ### 4.6 Opening an item safely
 
-- **FR-30.** Every tile opens its address in a new tab with no opener reference and no referrer.
+- **FR-30.** Every tile opens its address **in the same tab**, as a plain link with no `target`, and sends no
+  referrer. A modifier or middle click still opens a new tab, because the browser does that for any link, and it
+  goes through the same cancellable activation. (same tab since 2026-11-26, owner decision; ever-co/ever-works#3359) Before that: a new tab with no opener reference.
 - **FR-31.** No session token, API key, identifier or tracking parameter is ever added to an opened
   address, and no launcher request places a credential in a URL.
 - **FR-32.** Only `https` addresses are opened. On a local development installation, `http://localhost`
@@ -433,24 +435,24 @@ All copy below is final English copy, ready to be keyed for translation.
 ║             [📘 Docs  Last deploy failed]                       ║
 ║             View all 140                                       ║
 ╟────────────────────────────────────────────────────────────────╢
-║  Opens in a new tab. You may need to sign in.   Manage apps →  ║
+║  You may need to sign in.                       Manage apps →  ║
 ╚════════════════════════════════════════════════════════════════╝
    tiles: icon + name (+ host or chip), 3 per row, fixed height
 ```
 
-| Element                 | Copy                                           |
-| ----------------------- | ---------------------------------------------- |
-| Control accessible name | `App Launcher`                                 |
-| Control tooltip         | `Ever apps and your apps`                      |
-| Panel title             | `App Launcher`                                 |
-| Section headings        | `Pinned` · `Ever apps` · `Your apps`           |
-| Current platform chip   | `You're here`                                  |
-| Beta chip               | `Beta`                                         |
-| Work chips              | `Deploying` · `Last deploy failed`             |
-| Overflow                | `View all {count}`                             |
-| Footer helper           | `Opens in a new tab. You may need to sign in.` |
-| Footer link             | `Manage apps`                                  |
-| Command palette entry   | `Open App Launcher`                            |
+| Element                 | Copy                                 |
+| ----------------------- | ------------------------------------ |
+| Control accessible name | `App Launcher`                       |
+| Control tooltip         | `Ever apps and your apps`            |
+| Panel title             | `App Launcher`                       |
+| Section headings        | `Pinned` · `Ever apps` · `Your apps` |
+| Current platform chip   | `You're here`                        |
+| Beta chip               | `Beta`                               |
+| Work chips              | `Deploying` · `Last deploy failed`   |
+| Overflow                | `View all {count}`                   |
+| Footer helper           | `You may need to sign in.`           |
+| Footer link             | `Manage apps`                        |
+| Command palette entry   | `Open App Launcher`                  |
 
 ### 6.2 Loading, empty and error states
 
@@ -526,7 +528,7 @@ Works, read-only, with the footer link `Manage apps in Ever Works`.
 | Panel grid      | `↑` `↓`                 | Tile above / below.                                             |
 | Panel grid      | `Home` / `End`          | First / last tile.                                              |
 | Panel grid      | a letter                | Next tile whose name starts with it.                            |
-| Panel grid      | `Enter`                 | Open the tile in a new tab (or close, on **You're here**).      |
+| Panel grid      | `Enter`                 | Open the tile in this tab (or close, on **You're here**).       |
 | Panel           | `Tab` / `Shift+Tab`     | Cycle between the grid and **Manage apps**; focus stays inside. |
 | Panel           | `Esc`                   | Close; focus returns to the control.                            |
 | Manage apps row | `Alt+↑` / `Alt+↓`       | Move the focused row up / down.                                 |
@@ -600,8 +602,8 @@ A reviewer can run this list top to bottom against a running build with the flag
 
 **Safety**
 
-- [ ] **ACC-11-23** Every opened tab has no `window.opener`, sends no referrer, and its address equals the
-      stored address exactly — no added query, fragment or token.
+- [ ] **ACC-11-23** Activating a tile navigates this tab (no new page or popup), sends no referrer, and the
+      address equals the stored address exactly — no added query, fragment or token. (same tab since 2026-11-26, owner decision; ever-co/ever-works#3359)
 - [ ] **ACC-11-24** No launcher request places a credential in a URL (verified from the network log).
 
 **Registry**

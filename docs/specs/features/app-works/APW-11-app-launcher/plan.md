@@ -728,10 +728,12 @@ licence inventory, and the lockfile is regenerated in the same PR — neither ap
 
 ### 6.3 Behaviour details
 
-- **Opening a tile**: `window.open(url, '_blank', 'noopener,noreferrer')` after `safe-url` re-check;
-  the tile is an `<a href target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer">` so
-  middle-click also works, with `click` intercepted only to dispatch the cancellable event first
-  (spec FR-30, ACC-11-40).
+- **Opening a tile** (amended 2026-11-26, owner: same tab): the tile is a plain
+  `<a href referrerpolicy="no-referrer">` with no `target` and no `rel`, whose `href` passed the `safe-url`
+  check. `click` (and a middle `auxclick`) dispatch the cancellable event first and only call
+  `preventDefault()` when it was cancelled or the address is refused; otherwise the browser follows the
+  link in this tab (spec FR-30, ACC-11-40). Until 2026-11-26 this was `window.open(url, '_blank',
+'noopener,noreferrer')`.
 - **ARIA**: trigger `<button aria-haspopup="menu" aria-expanded aria-controls>`; panel
   `role="menu"`; sections `role="group" aria-labelledby`; tiles `role="menuitem"` with roving
   `tabindex`. Focus trap between the grid and the footer link; `Esc` restores focus to the trigger.
@@ -833,7 +835,7 @@ dashboard.appLauncher.chipBeta              "Beta"
 dashboard.appLauncher.chipDeploying         "Deploying"
 dashboard.appLauncher.chipLastDeployFailed  "Last deploy failed"
 dashboard.appLauncher.viewAll               "View all {count}"
-dashboard.appLauncher.footerHelper          "Opens in a new tab. You may need to sign in."
+dashboard.appLauncher.footerHelper          "You may need to sign in."   (2026-11-26: "Opens in a new tab." dropped)
 dashboard.appLauncher.manageLink            "Manage apps"
 dashboard.appLauncher.emptyWorks            "Apps you deploy show up here."
 dashboard.appLauncher.emptyWorksCreateApp   "Create an App Work"
