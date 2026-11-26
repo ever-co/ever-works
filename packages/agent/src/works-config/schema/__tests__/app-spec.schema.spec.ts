@@ -766,6 +766,12 @@ const BOUND_CASES: readonly BoundCase[] = [
         refused: 'a'.repeat(513),
     },
     {
+        name: 'components[].image ≤ 512 characters',
+        path: ['components', 0, 'image'],
+        accepted: 'a'.repeat(512),
+        refused: 'a'.repeat(513),
+    },
+    {
         name: 'build.args ≤ 50 entries',
         path: ['build', 'args'],
         accepted: Array.from({ length: 50 }, () => ({ name: 'A', value: 'x' })),
@@ -1782,6 +1788,16 @@ describe('notation patterns (schema.md §0)', () => {
 
     it.each(imageRefCases)('%s', (_name, value, accepted) => {
         const doc = withLeaf(validSpec, ['build', 'image'], value);
+        if (accepted) {
+            expectAccepted(doc);
+        } else {
+            expectRefused(doc);
+        }
+    });
+
+    // `components[].image` (2026-11-26) takes the same ImageRef as `build.image`.
+    it.each(imageRefCases)('components[].image: %s', (_name, value, accepted) => {
+        const doc = withLeaf(validSpec, ['components', 0, 'image'], value);
         if (accepted) {
             expectAccepted(doc);
         } else {

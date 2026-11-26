@@ -937,6 +937,62 @@ describe('R19 — severity depends on where it runs', () => {
     });
 });
 
+describe('R19 — a component that runs its own image (§10 `components[].image`)', () => {
+    const PINNED_API =
+        "    build: { strategy: image, image: 'ghcr.io/example/api@sha256:9f2c1e0b7a4d3c2b1a09f8e7d6c5b4a39281706f5e4d3c2b1a0f9e8d7c6b5a49' }";
+    const API_COMPONENT = '        - { name: api, role: web, port: 3000 }';
+
+    it('judges a component image by the same rule as build.image, at its own pointer', () => {
+        const findings = withCode(
+            evaluate(
+                fixture(
+                    PINNED_API,
+                    '    components:',
+                    API_COMPONENT,
+                    "        - { name: web, role: web, port: 4200, image: 'ghcr.io/example/web:1.2.3' }",
+                    '    domains: { primaryComponent: web }',
+                ),
+                { context: { mode: 'blueprint', entryVerified: true } },
+            ),
+            'image_not_pinned',
+        );
+        expect(findings.length).toBe(1);
+        expect(findings[0].severity).toBe('error');
+        expect(findings[0].pointer).toBe('/spec/components/1/image');
+        expect(findings[0].params).toEqual({ image: 'ghcr.io/example/web:1.2.3', component: 'web' });
+    });
+
+    it('reports nothing when every image is pinned by digest', () => {
+        const findings = withCode(
+            evaluate(
+                fixture(
+                    PINNED_API,
+                    '    components:',
+                    API_COMPONENT,
+                    "        - { name: web, role: web, port: 4200, image: 'ghcr.io/example/web@sha256:0a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f9' }",
+                    '    domains: { primaryComponent: web }',
+                ),
+            ),
+            'image_not_pinned',
+        );
+        expect(findings).toEqual([]);
+    });
+
+    it('does not judge a component image under a strategy that ignores it', () => {
+        const findings = withCode(
+            evaluate(
+                fixture(
+                    '    build: { strategy: dockerfile }',
+                    '    components:',
+                    "        - { name: web, role: web, port: 4200, image: 'ghcr.io/example/web:1.2.3' }",
+                ),
+            ),
+            'image_not_pinned',
+        );
+        expect(findings).toEqual([]);
+    });
+});
+
 describe('schema.md §12 — the key-pair examples (ACC-03-49)', () => {
     /**
      * The `env` block of §12:285-306, verbatim in shape: four valid entries and

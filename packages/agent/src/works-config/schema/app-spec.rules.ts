@@ -1323,20 +1323,40 @@ export function rule18VolumeReplicas(
     return findings;
 }
 
-/** R19 — `build.strategy: image` with a tag-only reference (§9:174). */
+/**
+ * R19 — `build.strategy: image` with a tag-only reference (§9:174), in
+ * `build.image` or in a component's own `image` (§10, 2026-11-26). A component
+ * image is only honoured with that strategy, so with any other strategy it is
+ * not judged here.
+ */
 export function rule19ImageNotPinned(
     spec: AppSpec,
     ctx: AppSpecRuleContext = {},
 ): readonly AppSpecRuleFinding[] {
     if (spec.build?.strategy !== 'image') return [];
-    const image = spec.build?.image;
-    if (typeof image !== 'string' || image.length === 0) return [];
-    if (/@sha256:[0-9a-f]{64}$/.test(image)) return [];
     // §22:473 — a warning, and an **error** in `blueprint` mode for `verified`
     // entries: a verified Blueprint pins what it ships.
     const severity: AppSpecSeverity =
         ctx.mode === 'blueprint' && ctx.entryVerified === true ? 'error' : 'warning';
-    return [issue(spec, ctx, 'image_not_pinned', severity, ptr('build', 'image'), { image })];
+    const unpinned = (image: unknown): image is string =>
+        typeof image === 'string' && image.length > 0 && !/@sha256:[0-9a-f]{64}$/.test(image);
+
+    const findings: AppSpecRuleFinding[] = [];
+    const image = spec.build?.image;
+    if (unpinned(image)) {
+        findings.push(issue(spec, ctx, 'image_not_pinned', severity, ptr('build', 'image'), { image }));
+    }
+    componentsOf(spec).forEach((component, index) => {
+        const own = component.image;
+        if (!unpinned(own)) return;
+        findings.push(
+            issue(spec, ctx, 'image_not_pinned', severity, ptr('components', index, 'image'), {
+                image: own,
+                component: component.name,
+            }),
+        );
+    });
+    return findings;
 }
 
 /** R20 — `checks[].required: false` verifies nothing (§17:379). */
