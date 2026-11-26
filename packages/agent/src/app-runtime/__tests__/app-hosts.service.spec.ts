@@ -629,6 +629,32 @@ describe('AppHostsService.onPrimaryChanged (APW-06 T26, plan §8.2:1106-1118)', 
         });
     });
 
+    it('a `restart` keeps a recorded digest whose reference names a tag, without the tag', async () => {
+        const h = harness();
+        h.states.row = {
+            target: 'your-cluster',
+            currentDeploymentId: 'deployment-11',
+            targetSettings: { tls: 'cert-manager', primaryDomain: 'old.example.com' },
+        };
+        h.deployments.rows.set('deployment-11', {
+            id: 'deployment-11',
+            buildId: null,
+            appRender: {
+                specCommitSha: 'sha-live',
+                image: { reference: 'ghcr.io/example/app:1.2', digest: `sha256:${'e'.repeat(64)}` },
+            },
+        });
+
+        await h.service.onPrimaryChanged('work-1');
+
+        // The digest is what is pinned; a reference that is not pinned too is not carried as history.
+        expect(h.deploys.calls[0]?.recordedImages).toEqual({
+            imageReference: null,
+            imageDigest: `sha256:${'e'.repeat(64)}`,
+            componentImages: null,
+        });
+    });
+
     it('a `restart` of a Build carries no spec commit and no images beside it', async () => {
         const h = harness();
         h.states.row = {

@@ -403,8 +403,25 @@ export interface AppDeployRuntimeStateStore {
  * Request and result
  * -------------------------------------------------------------------------- */
 
-/** A manual rollback's facts (FR-34, §5.8's rollback paragraph). */
-export interface AppDeployRollbackFacts {
+/**
+ * §5.8 / FR-38 — the images a `domain-change` restart redeploys: the ones the current Deployment
+ * recorded (`appRender.image`, `appRender.componentImages`). They are written on the new row exactly
+ * as a rollback's are, so the worker pins the spec's references to them and never re-resolves a
+ * tag, but nothing marks the new Deployment as a rollback.
+ */
+export interface AppDeployRecordedImageFacts {
+    /** The App image's recorded reference and `sha256:` digest. */
+    imageReference?: string | null;
+    imageDigest?: string | null;
+    /** Component name → digest-pinned reference (APW-03 schema §10 `components[].image`). */
+    componentImages?: Record<string, string> | null;
+}
+
+/**
+ * A manual rollback's facts (FR-34, §5.8's rollback paragraph): the recorded images of the
+ * Deployment it returns to, plus which one that is.
+ */
+export interface AppDeployRollbackFacts extends AppDeployRecordedImageFacts {
     /** The Live Deployment being rolled back to. */
     deploymentId: string;
     /** Its Build — `null` under `build.strategy: image` (FR-64). */
@@ -418,20 +435,6 @@ export interface AppDeployRollbackFacts {
      * Its recorded component images (`appRender.componentImages`: component name → digest-pinned
      * reference, APW-03 schema §10 `components[].image`) — re-resolved no more than the App's image.
      */
-    componentImages?: Record<string, string> | null;
-}
-
-/**
- * §5.8 / FR-38 — the images a `domain-change` restart redeploys: the ones the current Deployment
- * recorded (`appRender.image`, `appRender.componentImages`). They are written on the new row exactly
- * as a rollback's are, so the worker pins the spec's references to them and never re-resolves a
- * tag, but nothing marks the new Deployment as a rollback.
- */
-export interface AppDeployRecordedImageFacts {
-    /** The App image's recorded reference and `sha256:` digest. */
-    imageReference?: string | null;
-    imageDigest?: string | null;
-    /** Component name → digest-pinned reference (APW-03 schema §10 `components[].image`). */
     componentImages?: Record<string, string> | null;
 }
 
@@ -1433,7 +1436,8 @@ export function rowDraft(
     appTrigger: AppDeployTrigger,
 ): AppDeployRowDraft {
     const rollback = request?.rollback;
-    // The images this Deployment pins to: a rollback's, else a restart's (a domain change).
+    // The images this Deployment pins to: a rollback's (its facts extend the recorded-image ones),
+    // else a restart's (a domain change).
     const pinned: AppDeployRecordedImageFacts | null = rollback ?? request?.recordedImages ?? null;
     const render: Record<string, unknown> = {
         specCommitSha: stored.specCommitSha,

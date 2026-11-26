@@ -1209,8 +1209,10 @@ export function recordedImagesOf(
 
     if (!imageDigest && Object.keys(componentImages).length === 0) return null;
 
+    // The reference is history only (the digest is what is pinned): kept when it is pinned too.
+    const reference = text(render?.image?.reference);
     return {
-        imageReference: imageDigest ? text(render?.image?.reference) : null,
+        imageReference: imageDigest && isDigestPinnedReference(reference) ? reference : null,
         imageDigest,
         componentImages: Object.keys(componentImages).length > 0 ? componentImages : null,
     };
