@@ -41,10 +41,57 @@ const read = (id: string, file: string): string =>
     readFileSync(join(BLUEPRINTS, id, '.works', file), 'utf8');
 
 describe("the Ever products' App Blueprint drafts", () => {
-    it('includes Ever Gauzy, Ever Teams and Ever Traduora', () => {
+    it('includes Ever Gauzy, Ever Rec, Ever Teams and Ever Traduora', () => {
         expect(PRODUCT_BLUEPRINTS).toEqual(
-            expect.arrayContaining(['ever-gauzy', 'ever-teams', 'ever-traduora']),
+            expect.arrayContaining(['ever-gauzy', 'ever-rec', 'ever-teams', 'ever-traduora']),
         );
+    });
+
+    describe('ever-rec', () => {
+        const spec = validateAppSpecDocument(read('ever-rec', 'works.yml'), {
+            mode: 'blueprint',
+        }).spec;
+        const env = (name: string) => (spec?.env ?? []).find((entry) => entry.name === name);
+
+        it("runs the API image and never the portal image that has Ever's own addresses compiled in", () => {
+            expect(spec?.build?.image).toMatch(/^ghcr\.io\/ever-co\/ever-rec-api@sha256:/);
+            for (const component of spec?.components ?? []) {
+                expect(component.image ?? '').not.toContain('ever-rec-portal');
+            }
+        });
+
+        it("asks for the person's own Firebase project, keeping the private key and API key secret", () => {
+            for (const name of [
+                'FIREBASE_PROJECT_ID',
+                'FIREBASE_ADMIN_CLIENT_EMAIL',
+                'FIREBASE_ADMIN_PRIVATE_KEY',
+                'FIREBASE_API_KEY',
+                'FIREBASE_AUTH_DOMAIN',
+                'FIREBASE_DATABASE_URL',
+                'FIREBASE_STORAGE_BUCKET',
+                'FIREBASE_MESSAGING_SENDER_ID',
+                'FIREBASE_APP_ID',
+            ]) {
+                expect({ name, required: env(name)?.prompt?.required }).toEqual({
+                    name,
+                    required: true,
+                });
+            }
+            expect(env('FIREBASE_ADMIN_PRIVATE_KEY')?.secret).toBe(true);
+            expect(env('FIREBASE_API_KEY')?.secret).toBe(true);
+        });
+
+        it('generates its secrets, keeps statistics off and never points sign-ups at another product', () => {
+            expect(env('REC_JWT_SECRET')?.generate).toBeDefined();
+            expect(env('TERMS_IP_SALT')?.generate).toBeDefined();
+            expect(env('EVER_STATS_ENABLED')?.value).toBe('false');
+            expect(env('EVER_CONNECT_ENABLED')?.value).toBe('false');
+            expect(env('GAUZY_API_URL')).toBeUndefined();
+            // A read-only root, with the scratch folders as volumes that are never backed up.
+            const api = (spec?.components ?? []).find((component) => component.name === 'api');
+            expect(api?.writableRootFilesystem).toBe(false);
+            expect(api?.volumes?.every((volume) => volume.backup === false)).toBe(true);
+        });
     });
 
     describe('ever-gauzy', () => {
