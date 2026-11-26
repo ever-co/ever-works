@@ -383,6 +383,45 @@ describe('WorkQueryService', () => {
         });
     });
 
+    describe('workGenerationHistory page bounds', () => {
+        const historyPageFor = async (limit?: number, offset?: number) => {
+            ownershipService.ensureCanView = jest.fn().mockResolvedValue({ work: { id: 'w-1' } });
+            generationHistoryRepository.findByWorkFiltered = jest.fn().mockResolvedValue([]);
+            generationHistoryRepository.countByWork = jest.fn().mockResolvedValue(0);
+
+            const result = await service.workGenerationHistory('w-1', user, { limit, offset });
+            const [, queryLimit, queryOffset] =
+                generationHistoryRepository.findByWorkFiltered.mock.calls[0];
+            // The echoed page and the query page must always agree.
+            expect(result.limit).toBe(queryLimit);
+            expect(result.offset).toBe(queryOffset);
+            return { limit: queryLimit, offset: queryOffset };
+        };
+
+        it.each([
+            [undefined, undefined, 10, 0],
+            [-5, -10, 1, 0],
+            [0, 0, 1, 0],
+            [Number.NaN, Number.NaN, 10, 0],
+            [Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY, 100, Number.MAX_SAFE_INTEGER],
+            [2.7, 3.9, 2, 3],
+            [500, 40, 100, 40],
+            [20, 1e21, 20, Number.MAX_SAFE_INTEGER],
+            [20, 1e19, 20, Number.MAX_SAFE_INTEGER],
+        ])('limit %p / offset %p -> %p / %p', async (limit, offset, wantLimit, wantOffset) => {
+            expect(await historyPageFor(limit, offset)).toEqual({
+                limit: wantLimit,
+                offset: wantOffset,
+            });
+        });
+
+        it('keeps in-range values unchanged', async () => {
+            expect(await historyPageFor(1, 0)).toEqual({ limit: 1, offset: 0 });
+            expect(await historyPageFor(25, 50)).toEqual({ limit: 25, offset: 50 });
+            expect(await historyPageFor(100, 200)).toEqual({ limit: 100, offset: 200 });
+        });
+    });
+
     it('returns Work rows owned by the user with the OWNER role', async () => {
         const ownedWork = {
             id: 'owned-work-1',

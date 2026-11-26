@@ -24,6 +24,7 @@ describe('OnboardingAccountAdapter', () => {
         users: {
             findById: jest.Mock;
             findByEmail: jest.Mock;
+            findByEmailCaseInsensitiveForSocialAuth: jest.Mock;
             findByUsername: jest.Mock;
             create: jest.Mock;
         };
@@ -63,6 +64,10 @@ describe('OnboardingAccountAdapter', () => {
             userById?: { id: string } | null;
             providerAccount?: { userId: string } | null;
             userByEmail?: { id: string; emailVerified?: boolean } | null;
+            /** Users keyed by their EXACT stored email; when set, `findByEmail` is case-sensitive. */
+            usersByExactEmail?: Record<string, { id: string; emailVerified?: boolean }>;
+            /** What the case-insensitive fallback answers (up to two rows). */
+            caseVariants?: Array<{ id: string; email: string; emailVerified?: boolean }>;
             existingUsernames?: string[];
             /** What GitHub's `GET /user/emails` answers for the caller's token. */
             githubEmails?: Array<{ email: string; verified?: boolean }> | Error;
@@ -82,7 +87,16 @@ describe('OnboardingAccountAdapter', () => {
                             ? overrides.userById
                             : null,
                     ),
-                findByEmail: jest.fn().mockResolvedValue(overrides.userByEmail ?? null),
+                findByEmail: overrides.usersByExactEmail
+                    ? jest
+                          .fn()
+                          .mockImplementation(
+                              async (email: string) => overrides.usersByExactEmail![email] ?? null,
+                          )
+                    : jest.fn().mockResolvedValue(overrides.userByEmail ?? null),
+                findByEmailCaseInsensitiveForSocialAuth: jest
+                    .fn()
+                    .mockResolvedValue(overrides.caseVariants ?? []),
                 findByUsername: jest
                     .fn()
                     .mockImplementation(async (name: string) =>
@@ -204,6 +218,91 @@ describe('OnboardingAccountAdapter', () => {
         expect(mocks.githubLinks.upsertLink).toHaveBeenCalledWith(
             expect.objectContaining({ userId: 'user-from-email', githubUserId: '12345' }),
         );
+    });
+
+    // The unique index on `users.email` is case-sensitive and the lookup was exact on the claim
+    // as typed, so a claimed `Octo@Example.com` missed the stored `octo@example.com`: the caller
+    // got a separate account and the GitHub identity was bound to it instead of to theirs.
+    describe('a verified claimed email in another case than the stored one', () => {
+        const mixedCase = { ...baseInput, email: 'Octo@Example.com' };
+        const verifiedByGithub = [{ email: 'octo@example.com', verified: true }];
+
+        it('joins the stored lower-case verified user found by the normalised exact lookup', async () => {
+            const { adapter, mocks } = create({
+                githubEmails: verifiedByGithub,
+                usersByExactEmail: {
+                    'octo@example.com': { id: 'user-octo', emailVerified: true },
+                },
+            });
+
+            const result = await adapter.upsertFromGithub(mixedCase);
+
+            expect(result.accountId).toBe('user-octo');
+            expect(mocks.users.findByEmail).toHaveBeenCalledWith('octo@example.com');
+            expect(mocks.users.create).not.toHaveBeenCalled();
+            expect(mocks.authAccounts.upsertProviderAccount).toHaveBeenCalledWith(
+                expect.objectContaining({ userId: 'user-octo', accountId: '12345' }),
+            );
+            expect(mocks.githubLinks.upsertLink).toHaveBeenCalledWith(
+                expect.objectContaining({ userId: 'user-octo', githubUserId: '12345' }),
+            );
+        });
+
+        it('joins the one verified user stored in a third case, through the case-insensitive fallback', async () => {
+            const { adapter, mocks } = create({
+                githubEmails: verifiedByGithub,
+                usersByExactEmail: {},
+                caseVariants: [
+                    { id: 'user-legacy', email: 'OCTO@example.com', emailVerified: true },
+                ],
+            });
+
+            const result = await adapter.upsertFromGithub(mixedCase);
+
+            expect(result.accountId).toBe('user-legacy');
+            expect(mocks.users.findByEmailCaseInsensitiveForSocialAuth).toHaveBeenCalledWith(
+                'octo@example.com',
+            );
+            expect(mocks.users.create).not.toHaveBeenCalled();
+        });
+
+        it('still never joins a case-variant user whose OWN email is unverified', async () => {
+            const { adapter, mocks } = create({
+                githubEmails: verifiedByGithub,
+                usersByExactEmail: {},
+                caseVariants: [{ id: 'squatter', email: 'OCTO@example.com', emailVerified: false }],
+            });
+
+            const result = await adapter.upsertFromGithub(mixedCase);
+
+            expect(result.accountId).toBe('new-user-id');
+            expect(mocks.users.create.mock.calls[0][0]).toMatchObject({
+                email: 'agent-12345@users.noreply.ever.works',
+                emailVerified: false,
+            });
+            expect(mocks.authAccounts.upsertProviderAccount.mock.calls[0][0].userId).toBe(
+                'new-user-id',
+            );
+        });
+
+        it('refuses two or more case variants with SOCIAL_EMAIL_AMBIGUOUS before any write', async () => {
+            const { adapter, mocks } = create({
+                githubEmails: verifiedByGithub,
+                usersByExactEmail: {},
+                caseVariants: [
+                    { id: 'user-a', email: 'OCTO@example.com', emailVerified: true },
+                    { id: 'user-b', email: 'octo@EXAMPLE.com', emailVerified: true },
+                ],
+            });
+
+            await expect(adapter.upsertFromGithub(mixedCase)).rejects.toMatchObject({
+                status: 409,
+                response: { code: 'SOCIAL_EMAIL_AMBIGUOUS' },
+            });
+            expect(mocks.users.create).not.toHaveBeenCalled();
+            expect(mocks.authAccounts.upsertProviderAccount).not.toHaveBeenCalled();
+            expect(mocks.githubLinks.upsertLink).not.toHaveBeenCalled();
+        });
     });
 
     // `POST /api/onboarding` is public: `body.email` is only the caller's claim. Matched by it

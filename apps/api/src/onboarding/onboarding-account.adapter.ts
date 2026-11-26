@@ -8,6 +8,7 @@ import {
     UserRepository,
 } from '@ever-works/agent/database';
 import type { OnboardingAccountUpsert } from '@ever-works/agent/onboarding';
+import { type AccountEmailMatch, findAccountByEmail } from '@src/auth/services/account-email-match';
 import { listVerifiedGitHubEmails } from '@src/auth/utils/github-email.utils';
 import { UsernameAllocatorService } from '@src/users/services/username-allocator.service';
 
@@ -55,7 +56,10 @@ export class OnboardingAccountAdapter implements OnboardingAccountUpsert {
         accessToken: string;
     }): Promise<{ accountId: string }> {
         const existingLink = await this.githubLinks.findByGithubUserId(input.githubUserId);
-        let user = existingLink ? await this.users.findById(existingLink.userId) : null;
+        // Only `id` is read below, which every account found by email carries.
+        let user: AccountEmailMatch | null = existingLink
+            ? await this.users.findById(existingLink.userId)
+            : null;
 
         if (!user) {
             const existingProviderAccount = await this.authAccounts.findProviderAccountByAccountId(
@@ -72,7 +76,11 @@ export class OnboardingAccountAdapter implements OnboardingAccountUpsert {
         if (!user && input.email?.trim()) {
             verifiedEmail = await this.verifiedEmailOfCaller(input.email, input.accessToken);
             if (verifiedEmail) {
-                const byEmail = await this.users.findByEmail(input.email.trim());
+                // Exact first, then a unique case-insensitive match, as in the OAuth sign-in: a
+                // claimed `Jane@Example.com` finds the stored `jane@example.com` instead of
+                // creating a separate account and binding the GitHub identity to it. Accounts
+                // that differ only in case are refused (SOCIAL_EMAIL_AMBIGUOUS) before any write.
+                const byEmail = await findAccountByEmail(this.users, input.email);
                 if (byEmail?.emailVerified) {
                     user = byEmail;
                 } else if (byEmail) {
