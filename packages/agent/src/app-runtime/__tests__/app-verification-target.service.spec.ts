@@ -1156,7 +1156,7 @@ describe('handleVerificationDeploy — a component that runs its own image', () 
         );
     });
 
-    it('refuses the attempt with the resolver's own code, naming the component, and writes nothing', async () => {
+    it("refuses the attempt with the resolver's own code, naming the component, and writes nothing", async () => {
         const h = harness({ componentImage: TAG, images: {} });
 
         await h.service.handleVerificationDeploy(deployOp());
