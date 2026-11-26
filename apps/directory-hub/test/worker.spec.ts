@@ -67,6 +67,23 @@ describe('MCP transport (Contract v1 rules)', () => {
 		expect(JSON.stringify(logs)).not.toContain('time tracking'); // no query text in logs
 	});
 
+	it('logs the text of zero-result queries only, over MCP and REST', async () => {
+		const { rpc, call, logs } = hub();
+		const call1 = (args: Record<string, unknown>, name = 'search_all') =>
+			rpc({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } });
+		await call1({ query: '  zzqq nothing matches  ' });
+		await call1({ query: 'qqzz' }, 'list_directories');
+		await call1({ query: 'crm' });
+		await call('/data/search.json?q=xxyy%20none');
+		expect(logs.map((entry) => entry['zero_result_query'])).toEqual([
+			'zzqq nothing matches',
+			'qqzz',
+			undefined,
+			'xxyy none'
+		]);
+		expect(Object.keys(logs[0] ?? {}).sort()).toEqual(['event', 'ms', 'ok', 'tool', 'zero_result_query']);
+	});
+
 	it('reports tool input errors as isError results and unknown tools as -32602', async () => {
 		const { rpc } = hub();
 		const bad = (await (

@@ -434,3 +434,23 @@ export async function callHubTool(name: HubToolName, rawArgs: unknown, loader: D
 			return queryDirectory(loader, input);
 	}
 }
+
+/** Longest query text kept in a zero-result log entry (characters). */
+export const MAX_LOGGED_QUERY_LENGTH = 200;
+
+/**
+ * The query of a search that matched nothing, for the logs; `null` for any other call. Owner decision 2026-11-26: the
+ * hub logs only these queries, to show which directories are missing, and never IPs or anything else about the caller.
+ *
+ * @param name - Tool that ran (only `search_all` and `list_directories` are logged)
+ * @param rawArgs - Its arguments as sent by the client
+ * @param outcome - Its result
+ */
+export function zeroResultQuery(name: HubToolName, rawArgs: unknown, outcome: ToolOutcome): string | null {
+	if (outcome.kind !== 'structured' || (name !== 'search_all' && name !== 'list_directories')) return null;
+	const total = (outcome.value as { total?: unknown } | null)?.total;
+	if (total !== 0) return null;
+	const query = args(rawArgs)['query'];
+	if (typeof query !== 'string' || !query.trim()) return null;
+	return query.trim().slice(0, MAX_LOGGED_QUERY_LENGTH);
+}
