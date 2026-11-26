@@ -39,6 +39,25 @@ import {
     SendMessageInput,
 } from './email.service';
 
+/** Upper bound for the `offset` query so it always fits a Postgres integer. */
+const MAX_MESSAGE_OFFSET = 1_000_000;
+
+/**
+ * Parse an integer query value, falling back to `fallback` when it is not a
+ * number (`abc`, empty) and clamping to `[min, max]`. A raw `parseInt` yields
+ * `NaN` or a negative number, which the query builder rejects with a 500.
+ */
+export function clampQueryInt(
+    raw: string | undefined,
+    fallback: number,
+    min: number,
+    max: number,
+): number {
+    const parsed = Number.parseInt(String(raw ?? ''), 10);
+    if (!Number.isFinite(parsed)) return fallback;
+    return Math.min(max, Math.max(min, parsed));
+}
+
 /**
  * Minimal Response/Request surfaces for the SSE inbox stream + inbound
  * webhook. Mirrors the convention in usage.controller.ts /
@@ -186,8 +205,8 @@ export class EmailController {
         const messages = await this.emailService.listMessagesForAgent(
             auth.userId,
             agentId,
-            Number.parseInt(limit, 10),
-            Number.parseInt(offset, 10),
+            clampQueryInt(limit, 50, 1, 100),
+            clampQueryInt(offset, 0, 0, MAX_MESSAGE_OFFSET),
         );
         return { messages };
     }
