@@ -60,7 +60,15 @@ For Works on the `k8s` provider the platform can allocate the same kind of addre
 
 The allocator persists the claim only; the deploy path creates the DNS record — and it refuses to allocate at all when the DNS provider or the load-balancer target is missing, so you never end up with a claimed name that resolves to nothing.
 
-Deleting a Work on the `ever-works` provider tears its CNAME down, which frees the name for reuse. The record is removed only when it still points at the load-balancer target and the slug is not a reserved platform label; a record pointing anywhere else is left in place for an operator.
+Deleting a Work on the `ever-works` provider tears its CNAME down, which frees the name for reuse. The record is removed only when it still points at the load-balancer target, the slug is not a reserved platform label, and the deleted Work held the name: if another Work claims the slug as its managed subdomain, or (for a Work without a claim) another `ever-works` Work has the same slug, the record stays. A record pointing anywhere else is left in place for an operator.
+
+Deleting a Work also removes what its deploy created on a platform-managed cluster (the `ever-works` provider, or `k8s` on `k8s-works` / `k8s-works-shared`). The Ingress goes first, then the Service, the Deployment and the two Secrets the deploy wrote (`<name>-runtime-env`, `<name>-pull`), in the namespace the deploy used. This matters because the zone may carry a `*.ever.works` wildcard that routes every unrecorded name to the works ingress, so a deleted Work's Ingress would otherwise keep its site public after the record is gone.
+
+- An object is removed only when its labels show the platform created it for that Work.
+- The namespace and any volume are never deleted.
+- A member's own cluster (`custom-kubeconfig`) is never touched.
+- Nothing is removed when another Work deploys to the same namespace and name.
+- The removal is best effort, like the DNS one: a failure is logged and the delete still succeeds.
 
 **Wildcard zones.** A DNS zone holds a limited number of records (200 on Cloudflare's Free plan), so one record per Work does not scale. When the zone has a proxied `*.<EVER_WORKS_DOMAIN>` record, and the tunnel or load balancer routes that wildcard to the managed ingress, set `EVER_WORKS_DNS_WILDCARD=true`. The platform then creates no record for a new Work: the wildcard already answers its name, and the Site URL card shows it as live. Everything else stays the same. A name that another host already holds in the zone, whether a platform host or a Workers site, is still refused, and records that existing Works already have are still kept in sync. On the `ever-works` provider, a deploy saves the Work's name as its managed subdomain, so the name stays reserved without a record. **Before you turn it on:** deleting a Work removes its DNS record, but not its Ingress. With the wildcard, the deleted Work's name still reaches the managed ingress, so remove the Work's Ingress when you delete it.
 

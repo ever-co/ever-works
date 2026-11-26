@@ -39,7 +39,9 @@ import type {
 	PluginHealthCheck,
 	PluginManifest,
 	ValidationError,
-	ValidationResult
+	ValidationResult,
+	WorkDeploymentTeardownObject,
+	WorkDeploymentTeardownResult
 } from '@ever-works/plugin';
 
 import { createHash } from 'node:crypto';
@@ -58,6 +60,7 @@ import {
 	buildImagePullSecret,
 	buildIngress,
 	buildService,
+	FIELD_MANAGER,
 	pullSecretNameFor
 } from './manifest.renderer.js';
 import { parseKubeconfig } from './kubeconfig.parser.js';
@@ -1637,6 +1640,91 @@ export class KubernetesPlugin implements IPlugin, IDeploymentPlugin {
 		return result;
 	}
 
+	/**
+	 * Remove what {@link deploy} created for a website Work, when the Work is deleted.
+	 *
+	 * The objects are the ones `deploy()` names after `sanitiseSlug(projectName)` in the
+	 * enforced namespace: the Ingress first (it is what makes the site public), then the
+	 * Service, the Deployment (its ReplicaSets and pods follow in the background), the
+	 * `-runtime-env` Secret and the `-pull` Secret. Each one is deleted only when its own
+	 * labels prove this plugin created it for this name (`ever-works.io/managed`,
+	 * `app.kubernetes.io/managed-by`, `app.kubernetes.io/name` and `ever-works.io/work-id`);
+	 * anything else under that name is reported in `kept` and left alone.
+	 *
+	 * It never deletes the namespace (other Works of the tenant live there), a
+	 * PersistentVolumeClaim or any other object. Idempotent: a missing object is `absent`.
+	 * A failed read or delete is reported in `failed` and the next object is still tried,
+	 * so one error cannot leave the Ingress up when it could have been removed.
+	 */
+	async removeWorkDeployment(
+		projectName: string,
+		kubeconfig: string,
+		context?: DeploymentLookupContext
+	): Promise<WorkDeploymentTeardownResult> {
+		const settings = await this.loadEffectiveDeploymentSettings(context);
+		this.assertMemberKubeconfigAccepted(kubeconfig, settings.clusterSource);
+		const slug = sanitiseSlug(context?.projectNameOverride?.trim() || projectName || '');
+		if (!slug) {
+			throw new K8sPluginError('NOT_CONFIGURED', 'The effective Kubernetes project name is invalid.');
+		}
+		const requestedNamespace = context?.namespaceOverride?.trim();
+		if (requestedNamespace && !isValidK8sNamespace(requestedNamespace)) {
+			throw new K8sPluginError('NOT_CONFIGURED', 'The effective Kubernetes namespace is invalid.');
+		}
+		const namespace = requestedNamespace || settings.namespace?.trim() || DEFAULT_NAMESPACE;
+
+		const targets: Array<{ apiVersion: string; kind: string; name: string }> = [
+			{ apiVersion: 'networking.k8s.io/v1', kind: 'Ingress', name: slug },
+			{ apiVersion: 'v1', kind: 'Service', name: slug },
+			{ apiVersion: 'apps/v1', kind: 'Deployment', name: slug },
+			{ apiVersion: 'v1', kind: 'Secret', name: `${slug}-runtime-env` },
+			{ apiVersion: 'v1', kind: 'Secret', name: pullSecretNameFor(slug) }
+		];
+
+		const removed: WorkDeploymentTeardownObject[] = [];
+		const absent: WorkDeploymentTeardownObject[] = [];
+		const kept: Array<WorkDeploymentTeardownObject & { reason: string }> = [];
+		const failed: Array<WorkDeploymentTeardownObject & { error: string }> = [];
+		const scrubPatterns = this.runtimeScrubPatterns({ kubeconfig });
+
+		for (const target of targets) {
+			const ref = { kind: target.kind, name: target.name };
+			try {
+				const live = await this.api.readObject<{ metadata?: { labels?: Record<string, string> } }>(
+					kubeconfig,
+					target.apiVersion,
+					target.kind,
+					namespace,
+					target.name,
+					settings.kubeContext
+				);
+				if (!live) {
+					absent.push(ref);
+					continue;
+				}
+				const notOwnedBecause = workObjectOwnershipGap(live.metadata?.labels, slug);
+				if (notOwnedBecause) {
+					kept.push({ ...ref, reason: notOwnedBecause });
+					continue;
+				}
+				await this.api.deleteObject(
+					kubeconfig,
+					target.apiVersion,
+					target.kind,
+					namespace,
+					target.name,
+					'Background',
+					settings.kubeContext
+				);
+				removed.push(ref);
+			} catch (err) {
+				failed.push({ ...ref, error: scrubError(err, scrubPatterns).message });
+			}
+		}
+
+		return { location: namespace, removed, absent, kept, failed };
+	}
+
 	// Optional contract methods for the deploy service ----------------------
 
 	getWorkflowFilenames(): string[] {
@@ -2276,6 +2364,21 @@ function resolveDeploymentTarget(
 		namespace: namespaceOverride || parsed.namespace,
 		name
 	};
+}
+
+/**
+ * Why a live object is NOT one `deploy()` created for this website Work, or `null` when its labels prove
+ * it is. `deploy()` stamps every object with `COMMON_LABELS(projectName, slug)`; the `work-id` label holds
+ * the unsanitised project name, so it is compared after the same sanitising.
+ */
+function workObjectOwnershipGap(labels: Record<string, string> | undefined, slug: string): string | null {
+	if (!labels) return 'no_labels';
+	if (labels['ever-works.io/managed'] !== 'true') return 'not_managed';
+	if (labels['app.kubernetes.io/managed-by'] !== FIELD_MANAGER) return 'other_manager';
+	if (labels['app.kubernetes.io/name'] !== slug) return 'other_name';
+	const workId = labels['ever-works.io/work-id'];
+	if (typeof workId !== 'string' || sanitiseSlug(workId) !== slug) return 'other_work';
+	return null;
 }
 
 function applyKubeContextOverride(settings: KubernetesSettings, override?: string | null): void {

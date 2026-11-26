@@ -9,6 +9,7 @@ import {
     LessThanOrEqual,
     In,
     EntityManager,
+    type FindOptionsWhere,
     type SelectQueryBuilder,
 } from 'typeorm';
 import { Work } from '../../entities/work.entity';
@@ -1060,6 +1061,31 @@ export class WorkRepository {
 
     async findByUser(userId: string): Promise<Work[]> {
         return await this.repository.find({ where: { userId } });
+    }
+
+    /**
+     * Works on one of `deployProviders` that are owned by `userId` OR carry
+     * `slug`, with their `user` relation. The Work-delete teardown uses it to
+     * find another Work that may deploy to the same Kubernetes objects: a
+     * tenant namespace is derived from the owner, and the `k8s-works` one from
+     * the slug.
+     */
+    async findByDeployProvidersForUserOrSlug(
+        deployProviders: readonly string[],
+        userId: string,
+        slug: string,
+    ): Promise<Work[]> {
+        if (deployProviders.length === 0) {
+            return [];
+        }
+        const providers = In([...deployProviders]);
+        const where: FindOptionsWhere<Work>[] = [];
+        if (userId) where.push({ userId, deployProvider: providers });
+        if (slug) where.push({ slug, deployProvider: providers });
+        if (where.length === 0) {
+            return [];
+        }
+        return this.repository.find({ where, relations: ['user'] });
     }
 
     /**

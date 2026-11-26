@@ -248,6 +248,61 @@ function resolveCloudflareDeploymentContext(
     };
 }
 
+/**
+ * The namespace a Kubernetes-family deploy (`k8s` or the managed `ever-works`)
+ * of this Work targets, or `undefined` when the plugin's own setting applies.
+ *
+ * The namespace rule of {@link resolveEffectiveDeploymentContext}, on its own:
+ * it reads no kubeconfig, so a caller can also answer it for a Work whose
+ * credentials it does not hold (the teardown's check that no other Work deploys
+ * to the same objects). Throws `RESERVED_NAMESPACE` for an explicit reserved one.
+ */
+export function resolveKubernetesDeployNamespace(
+    input: EffectiveDeploymentContextInput,
+): string | undefined {
+    const managedAlias = input.deployProvider === EVER_WORKS_DEPLOY_PROVIDER_ID;
+    const clusterSource = coerceDeploymentClusterSource(input.settings.clusterSource);
+    const requestedNamespace =
+        typeof input.settings.namespace === 'string' ? input.settings.namespace.trim() : '';
+    const namespaceSource = input.settingSources?.namespace;
+    const namespaceIsExplicit =
+        namespaceSource === undefined ? Boolean(requestedNamespace) : namespaceSource !== 'default';
+
+    if (managedAlias || isSharedClusterSource(clusterSource)) {
+        const tenantId = input.ownerUserId?.trim() || input.workId;
+        const base =
+            (input.env ?? process.env).EVER_WORKS_DEPLOY_NAMESPACE?.trim() || 'ever-works-tenants';
+        return buildEverWorksTenantNamespace(tenantId, base);
+    }
+    if (requestedNamespace && namespaceIsExplicit) {
+        if (isReservedDeployNamespace(requestedNamespace)) {
+            throw new DeploymentContextResolutionError(
+                `Namespace '${requestedNamespace}' is reserved and cannot be used as a deploy target. ` +
+                    `Choose a different namespace (reserved: ever-works, default, kube-*, argocd, ` +
+                    `cert-manager, ingress-nginx, monitoring).`,
+                'RESERVED_NAMESPACE',
+            );
+        }
+        return requestedNamespace;
+    }
+    if (clusterSource === 'k8s-works') {
+        const slug = (input.workSlug || input.workId)
+            .toLowerCase()
+            .replace(/[^a-z0-9-]+/g, '-')
+            .replace(/^-+|(?<!-)-+$/g, '')
+            .slice(0, 40);
+        const derived = slug ? `ever-works-${slug}-prod` : '';
+        return derived && !isReservedDeployNamespace(derived) ? derived : undefined;
+    }
+    if (requestedNamespace) {
+        // The Kubernetes plugin's documented custom-cluster default is the
+        // legacy `ever-works` namespace. A schema default is not a user request
+        // for a reserved platform namespace, so preserve it for BYOC Works.
+        return requestedNamespace;
+    }
+    return undefined;
+}
+
 export function resolveEffectiveDeploymentContext(
     input: EffectiveDeploymentContextInput,
 ): EffectiveDeploymentContext {
@@ -311,44 +366,7 @@ export function resolveEffectiveDeploymentContext(
         // current context instead of inheriting a stale/foreign tenant value.
         delete settings.kubeContext;
     }
-    const requestedNamespace =
-        typeof input.settings.namespace === 'string' ? input.settings.namespace.trim() : '';
-    const namespaceSource = input.settingSources?.namespace;
-    const namespaceIsExplicit =
-        namespaceSource === undefined ? Boolean(requestedNamespace) : namespaceSource !== 'default';
-    let namespace: string | undefined;
-
-    if (managedAlias || isSharedClusterSource(clusterSource)) {
-        const tenantId = input.ownerUserId?.trim() || input.workId;
-        const base =
-            (input.env ?? process.env).EVER_WORKS_DEPLOY_NAMESPACE?.trim() || 'ever-works-tenants';
-        namespace = buildEverWorksTenantNamespace(tenantId, base);
-    } else if (requestedNamespace && namespaceIsExplicit) {
-        if (isReservedDeployNamespace(requestedNamespace)) {
-            throw new DeploymentContextResolutionError(
-                `Namespace '${requestedNamespace}' is reserved and cannot be used as a deploy target. ` +
-                    `Choose a different namespace (reserved: ever-works, default, kube-*, argocd, ` +
-                    `cert-manager, ingress-nginx, monitoring).`,
-                'RESERVED_NAMESPACE',
-            );
-        }
-        namespace = requestedNamespace;
-    } else if (clusterSource === 'k8s-works') {
-        const slug = (input.workSlug || input.workId)
-            .toLowerCase()
-            .replace(/[^a-z0-9-]+/g, '-')
-            .replace(/^-+|(?<!-)-+$/g, '')
-            .slice(0, 40);
-        const derived = slug ? `ever-works-${slug}-prod` : '';
-        if (derived && !isReservedDeployNamespace(derived)) {
-            namespace = derived;
-        }
-    } else if (requestedNamespace) {
-        // The Kubernetes plugin's documented custom-cluster default is the
-        // legacy `ever-works` namespace. A schema default is not a user request
-        // for a reserved platform namespace, so preserve it for BYOC Works.
-        namespace = requestedNamespace;
-    }
+    const namespace = resolveKubernetesDeployNamespace(input);
 
     if (namespace !== undefined) {
         settings.namespace = namespace;

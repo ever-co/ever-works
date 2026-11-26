@@ -11,6 +11,7 @@ import type {
     DeploymentDomain,
     AddDomainResult,
     SettingSource,
+    WorkDeploymentTeardownResult,
 } from '@ever-works/plugin';
 import { PLUGIN_CAPABILITIES, isDnsProvider } from '@ever-works/plugin';
 import type { IDnsProvider } from '@ever-works/plugin';
@@ -30,7 +31,11 @@ import type { Work } from '../entities/work.entity';
 import type { User } from '../entities/user.entity';
 import {
     PLATFORM_MANAGED_KUBECONFIG_SENTINEL,
+    coerceDeploymentClusterSource,
+    isReservedDeployNamespace,
     resolveEffectiveDeploymentContext,
+    resolveKubernetesDeployNamespace,
+    type EffectiveDeploymentContextInput,
 } from './deployment-context.resolver';
 
 const KUBERNETES_DEPLOY_PROVIDER_ID = 'k8s';
@@ -104,6 +109,61 @@ interface EffectiveDeploymentOperationContext {
     readonly token: string;
     readonly teamScope: string | undefined;
     readonly context: DeploymentLookupContext;
+}
+
+/** Why {@link DeployFacadeService.prepareWorkDeploymentTeardown} prepared nothing. */
+export type WorkDeploymentTeardownSkipReason =
+    /** The Work row was not found. */
+    | 'not_found'
+    /** Not a platform-managed Kubernetes target (another provider, a member's own cluster, an App Work). */
+    | 'not_managed'
+    /** The deploy plugin has no `removeWorkDeployment`. */
+    | 'unsupported'
+    /** No enforced, non-reserved namespace: the objects' location is not known for sure. */
+    | 'no_namespace'
+    /** Another Work deploys to the same namespace and object name. */
+    | 'shared'
+    /** The target could not be resolved (no credential, a refused context, a lookup error). */
+    | 'unresolved';
+
+export type WorkDeploymentTeardownPreparation =
+    | {
+          readonly status: 'ready';
+          readonly namespace: string;
+          readonly objectName: string;
+          /** Removes the objects. Holds the cluster credential: never log or serialise the closure's inputs. */
+          readonly run: () => Promise<WorkDeploymentTeardownResult>;
+      }
+    | {
+          readonly status: 'skipped';
+          readonly reason: WorkDeploymentTeardownSkipReason;
+          readonly detail?: string;
+      };
+
+/** `work.kind` compared as a string, like `appDomainsFor` (APW-01 adds `'app'` to the union additively). */
+function isAppKind(work: Work): boolean {
+    return (
+        String(work.kind ?? '')
+            .trim()
+            .toLowerCase() === APP_WORK_KIND
+    );
+}
+
+/**
+ * The object name the Kubernetes plugin gives a website repository
+ * (`sanitiseSlug` in `@ever-works/k8s-plugin`): lower case, every run of other
+ * characters → `-`, dash runs collapsed, edge dashes dropped, 63 max.
+ */
+function normaliseObjectName(input: string): string {
+    const collapsed = (input ?? '')
+        .toLowerCase()
+        .replace(/[^a-z0-9-]+/g, '-')
+        .replace(/-+/g, '-');
+    let start = 0;
+    let end = collapsed.length;
+    while (start < end && collapsed[start] === '-') start += 1;
+    while (end > start && collapsed[end - 1] === '-') end -= 1;
+    return collapsed.slice(start, end).slice(0, 63);
 }
 
 /**
@@ -1089,6 +1149,167 @@ export class DeployFacadeService implements IDeployFacade {
         return result;
     }
 
+    /**
+     * Prepare the removal of a website Work's platform-held runtime objects
+     * (Ingress, Service, Deployment, the Secrets the deploy wrote) for when the
+     * Work is deleted.
+     *
+     * Call it BEFORE the Work row is deleted: the cluster, namespace and
+     * kubeconfig are resolved exactly as the deploy resolved them, and that
+     * reads the Work's own plugin settings (`clusterSource`, `namespace`), which
+     * go with the row. Run the returned step AFTER the row is gone.
+     *
+     * Only a platform-managed target is prepared: the managed `ever-works`
+     * provider, or `k8s` on `k8s-works` / `k8s-works-shared`. A member's own
+     * cluster (`custom-kubeconfig`) is theirs to clean up, and the platform's
+     * view of it may be stale. It is also skipped when another Work deploys to
+     * the same namespace and object name, since those objects then serve that
+     * Work too.
+     *
+     * Never throws: anything it cannot resolve is `skipped` with the reason.
+     */
+    async prepareWorkDeploymentTeardown(
+        options: DeployFacadeOptions,
+    ): Promise<WorkDeploymentTeardownPreparation> {
+        try {
+            const work = await this.workRepository.findById(options.workId);
+            if (!work) {
+                return { status: 'skipped', reason: 'not_found' };
+            }
+            if (
+                isAppKind(work) ||
+                (work.deployProvider !== EVER_WORKS_DEPLOY_PROVIDER_ID &&
+                    work.deployProvider !== KUBERNETES_DEPLOY_PROVIDER_ID)
+            ) {
+                return { status: 'skipped', reason: 'not_managed' };
+            }
+
+            // Same settings the deploy layered (non-secret ones are enough: the
+            // cluster source and namespace). A `k8s` Work on the member's own
+            // cluster stops here, before any credential is resolved.
+            const pluginId = resolvePluginProviderId(work.deployProvider);
+            const { settings, settingSources } = await this.getDeploymentSettingsSnapshot(
+                pluginId,
+                options,
+                false,
+            );
+            if (
+                work.deployProvider === KUBERNETES_DEPLOY_PROVIDER_ID &&
+                coerceDeploymentClusterSource(settings.clusterSource) === 'custom-kubeconfig'
+            ) {
+                return { status: 'skipped', reason: 'not_managed' };
+            }
+
+            const { plugin, token } = await this.resolvePluginAndTokenForWork(work, options);
+            if (typeof plugin.removeWorkDeployment !== 'function') {
+                return { status: 'skipped', reason: 'unsupported' };
+            }
+
+            const effective = resolveEffectiveDeploymentContext(
+                this.effectiveContextInput(work, plugin.id, token, settings, settingSources),
+            );
+            const namespace = effective.namespace;
+            if (!namespace || isReservedDeployNamespace(namespace)) {
+                return { status: 'skipped', reason: 'no_namespace' };
+            }
+            if (!effective.token.trim()) {
+                return { status: 'skipped', reason: 'unresolved', detail: 'no cluster credential' };
+            }
+
+            const objectName = normaliseObjectName(work.getWebsiteRepo());
+            const sharer = await this.findDeploymentSharer(work, plugin.id, namespace, objectName);
+            if (sharer) {
+                return {
+                    status: 'skipped',
+                    reason: 'shared',
+                    detail: `Work ${sharer} deploys to ${namespace}/${objectName} too`,
+                };
+            }
+
+            const removeWorkDeployment = plugin.removeWorkDeployment.bind(plugin);
+            const projectName = work.getWebsiteRepo();
+            const credential = effective.token;
+            const context = effective.lookupContext;
+            return {
+                status: 'ready',
+                namespace,
+                objectName,
+                run: () => removeWorkDeployment(projectName, credential, context),
+            };
+        } catch (error) {
+            return {
+                status: 'skipped',
+                reason: 'unresolved',
+                detail: error instanceof Error ? error.message : String(error),
+            };
+        }
+    }
+
+    /**
+     * The id of another Work that deploys to `namespace/objectName`, or `null`.
+     *
+     * Candidates are the Kubernetes-family Works of the same owner (a tenant
+     * namespace is derived from the owner) and those with the same slug (the
+     * `k8s-works` namespace is derived from it), with the same website
+     * repository name. Each candidate's namespace is worked out with its own
+     * settings. A candidate whose namespace cannot be worked out counts as a
+     * sharer: leaving the objects is the safe side.
+     */
+    private async findDeploymentSharer(
+        work: Work,
+        pluginId: string,
+        namespace: string,
+        objectName: string,
+    ): Promise<string | null> {
+        const candidates = await this.workRepository.findByDeployProvidersForUserOrSlug(
+            [EVER_WORKS_DEPLOY_PROVIDER_ID, KUBERNETES_DEPLOY_PROVIDER_ID],
+            work.userId,
+            work.slug,
+        );
+        for (const candidate of candidates) {
+            if (candidate.id === work.id || isAppKind(candidate)) continue;
+            if (normaliseObjectName(candidate.getWebsiteRepo()) !== objectName) continue;
+            try {
+                const { settings, settingSources } = await this.getDeploymentSettingsSnapshot(
+                    pluginId,
+                    { userId: candidate.userId, workId: candidate.id },
+                    false,
+                );
+                const candidateNamespace = resolveKubernetesDeployNamespace(
+                    this.effectiveContextInput(candidate, pluginId, '', settings, settingSources),
+                );
+                if (candidateNamespace === namespace) return candidate.id;
+            } catch {
+                return candidate.id;
+            }
+        }
+        return null;
+    }
+
+    private effectiveContextInput(
+        work: Work,
+        pluginId: string,
+        resolvedToken: string,
+        settings: Record<string, unknown>,
+        settingSources: Record<string, SettingSource | undefined>,
+    ): EffectiveDeploymentContextInput {
+        const owner = work.user as User | undefined;
+        return {
+            deployProvider: work.deployProvider,
+            pluginId,
+            resolvedToken,
+            settings,
+            settingSources,
+            websiteOwner: work.getRepoOwner('website'),
+            websiteProjectName: work.getWebsiteRepo(),
+            workId: work.id,
+            workSlug: work.slug,
+            managedSubdomain: work.managedSubdomain,
+            ownerUserId: owner?.id ?? work.userId,
+            isPlatformAdmin: Boolean(owner?.isPlatformAdmin),
+        };
+    }
+
     // Private methods
 
     private async resolvePluginAndToken(options: DeployFacadeOptions): Promise<{
@@ -1108,7 +1329,17 @@ export class DeployFacadeService implements IDeployFacade {
         if (!work) {
             throw new DeployFacadeError(`Work not found: ${options.workId}`, 'resolvePlugin');
         }
+        return this.resolvePluginAndTokenForWork(work, options);
+    }
 
+    private async resolvePluginAndTokenForWork(
+        work: Work,
+        options: DeployFacadeOptions,
+    ): Promise<{
+        plugin: IDeploymentPlugin;
+        token: string;
+        work: Work;
+    }> {
         const providerId = work.deployProvider;
         if (!providerId) {
             throw new NoDeployProviderError();
