@@ -69,6 +69,7 @@ spec:
     - name: GAUZY_API_SERVER_URL
       description: The Ever Gauzy API that holds this Ever Teams' data.
       prompt:
+        required: true
         description: >-
           The address of the Ever Gauzy API to use, without /api: your Ever Gauzy App's address,
           or https://api.ever.team for Ever's hosted API.

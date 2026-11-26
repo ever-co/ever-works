@@ -54,7 +54,7 @@ describe("the Ever products' App Blueprint drafts", () => {
         it('asks for the Gauzy API and keeps the browser on its own /api routes (proxy mode)', () => {
             const api = env('GAUZY_API_SERVER_URL');
             expect(api?.prompt?.description).toBeTruthy();
-            expect(api?.prompt?.required).not.toBe(false);
+            expect(api?.prompt?.required).toBe(true);
             // Set, it would send the browser straight to the Gauzy API instead of this App's routes.
             expect(env('NEXT_PUBLIC_GAUZY_API_SERVER_URL')).toBeUndefined();
         });
