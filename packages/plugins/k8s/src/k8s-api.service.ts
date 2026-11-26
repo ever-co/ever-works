@@ -39,6 +39,11 @@ interface NetworkingV1ApiLike {
 	listNamespacedIngress(args: { namespace: string }): Promise<{
 		items: Array<{ metadata?: { name?: string }; spec?: unknown }>;
 	}>;
+	listIngressForAllNamespaces(args?: { labelSelector?: string }): Promise<{
+		items: Array<{
+			metadata?: { name?: string; namespace?: string; labels?: Record<string, string> };
+		}>;
+	}>;
 	readNamespacedIngress(args: { name: string; namespace: string }): Promise<{
 		metadata?: { name?: string };
 		spec?: unknown;
@@ -634,6 +639,34 @@ export class KubernetesApiService {
 			return await net.readNamespacedIngress({ name, namespace });
 		} catch (err) {
 			if (isNotFound(err)) return null;
+			const scrubbed = scrubError(err);
+			throw new K8sPluginError(scrubbed.code, scrubbed.message, err);
+		}
+	}
+
+	/**
+	 * Every namespace's Ingresses that carry the website deploy's labels
+	 * (`ever-works.io/managed=true`, and this plugin as `app.kubernetes.io/managed-by`),
+	 * with their labels. Read-only. An App Work's objects never carry
+	 * `ever-works.io/managed`, so they are not in it. A failed list is scrubbed and
+	 * wrapped in `K8sPluginError`.
+	 */
+	async listManagedIngresses(
+		kubeconfigYaml: string,
+		contextOverride?: string
+	): Promise<Array<{ name: string; namespace: string; labels: Record<string, string> }>> {
+		const client = this.factory.createKubeConfig(kubeconfigYaml, contextOverride);
+		const net = this.factory.networkingV1Api(client);
+		try {
+			const resp = await net.listIngressForAllNamespaces({
+				labelSelector: `ever-works.io/managed=true,app.kubernetes.io/managed-by=${FIELD_MANAGER}`
+			});
+			return (resp.items ?? []).map((item) => ({
+				name: item.metadata?.name ?? '',
+				namespace: item.metadata?.namespace ?? '',
+				labels: item.metadata?.labels ?? {}
+			}));
+		} catch (err) {
 			const scrubbed = scrubError(err);
 			throw new K8sPluginError(scrubbed.code, scrubbed.message, err);
 		}

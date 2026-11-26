@@ -1,5 +1,5 @@
 import type { Repository, SelectQueryBuilder, Brackets } from 'typeorm';
-import { In, IsNull, LessThanOrEqual } from 'typeorm';
+import { In, IsNull, LessThanOrEqual, Like } from 'typeorm';
 import { WorkRepository } from '../work.repository';
 import { Work } from '../../../entities/work.entity';
 import { Mission } from '../../../entities/mission.entity';
@@ -739,6 +739,36 @@ describe('WorkRepository', () => {
         });
     });
 
+    describe('findWorkDeploymentReportCandidates', () => {
+        it('loads every Work on the providers, and every Work with a Kubernetes-shaped cached target, with its owner', async () => {
+            const rows = [{ id: 'w1' } as Work];
+            repository.find.mockResolvedValueOnce(rows);
+
+            await expect(
+                service.findWorkDeploymentReportCandidates(['ever-works', 'k8s']),
+            ).resolves.toBe(rows);
+
+            expect(repository.find).toHaveBeenCalledWith({
+                where: [
+                    { deployProvider: In(['ever-works', 'k8s']) },
+                    { deployProjectId: Like('%/%') },
+                ],
+                relations: ['user'],
+            });
+        });
+
+        it('still loads the cached-target Works with no provider given', async () => {
+            repository.find.mockResolvedValueOnce([]);
+
+            await service.findWorkDeploymentReportCandidates([]);
+
+            expect(repository.find).toHaveBeenCalledWith({
+                where: [{ deployProjectId: Like('%/%') }],
+                relations: ['user'],
+            });
+        });
+    });
+
     describe('findDeploymentSharerCandidates', () => {
         it('ORs every k8s Work, every Work of the owner (any provider) and the Kubernetes-family Works with the slug', async () => {
             const rows = [{ id: 'w1' } as Work];
@@ -763,6 +793,41 @@ describe('WorkRepository', () => {
 
             expect(repository.find).toHaveBeenCalledWith({
                 where: [{ deployProvider: 'k8s' }],
+                relations: ['user'],
+            });
+        });
+
+        it('adds every Work of the tenant whose namespace the objects sit in, and every Work with that target cached', async () => {
+            repository.find.mockResolvedValueOnce([]);
+
+            await service.findDeploymentSharerCandidates('admin-1', 'memes', {
+                tenantUserId: 'member-7',
+                deployProjectId: 'ever-works-tenants-member-7/memes-website',
+            });
+
+            expect(repository.find).toHaveBeenCalledWith({
+                where: [
+                    { deployProvider: 'k8s' },
+                    { userId: 'admin-1' },
+                    { slug: 'memes', deployProvider: In(['ever-works', 'k8s']) },
+                    { userId: 'member-7' },
+                    // Any Work, any provider, that has the target cached (review m7).
+                    { deployProjectId: 'ever-works-tenants-member-7/memes-website' },
+                ],
+                relations: ['user'],
+            });
+        });
+
+        it.each([
+            ['empty', ''],
+            ['the owner again', 'admin-1'],
+        ])('adds no tenant branch when the tenant is %s', async (_label, tenantUserId) => {
+            repository.find.mockResolvedValueOnce([]);
+
+            await service.findDeploymentSharerCandidates('admin-1', '', { tenantUserId });
+
+            expect(repository.find).toHaveBeenCalledWith({
+                where: [{ deployProvider: 'k8s' }, { userId: 'admin-1' }],
                 relations: ['user'],
             });
         });

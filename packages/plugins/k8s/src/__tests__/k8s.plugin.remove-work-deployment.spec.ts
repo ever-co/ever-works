@@ -333,3 +333,59 @@ describe('KubernetesPlugin.removeWorkDeployment', () => {
 		expect(readObject).not.toHaveBeenCalled();
 	});
 });
+
+/**
+ * `KubernetesPlugin.listWorkDeployments` — the read-only list a report of orphaned
+ * website deployments (no Work deploys there any more) is built from.
+ */
+describe('KubernetesPlugin.listWorkDeployments', () => {
+	function listing(items: Array<{ name: string; namespace: string; labels: Record<string, string> }>) {
+		const listManagedIngresses = vi.fn(async () => items);
+		const { api, readObject, deleteObject } = makeApi({}, { listManagedIngresses });
+		return { plugin: new KubernetesPlugin({ api }), listManagedIngresses, readObject, deleteObject };
+	}
+
+	it('answers each Ingress its website deploy created, sorted, and changes nothing', async () => {
+		const { plugin, listManagedIngresses, readObject, deleteObject } = listing([
+			{ name: 'zebra-website', namespace: 'ever-works-zebra-prod', labels: ownedLabels('zebra-website') },
+			{ name: SLUG, namespace: NS, labels: ownedLabels() }
+		]);
+
+		const refs = await plugin.listWorkDeployments(VALID, { kubeContextOverride: null });
+
+		expect(refs).toEqual([
+			{ location: 'ever-works-tenants-user-1', name: SLUG },
+			{ location: 'ever-works-zebra-prod', name: 'zebra-website' }
+		]);
+		expect(listManagedIngresses).toHaveBeenCalledWith(VALID, undefined);
+		expect(readObject).not.toHaveBeenCalled();
+		expect(deleteObject).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		['another manager', { ...ownedLabels(), 'app.kubernetes.io/managed-by': 'helm' }],
+		['another name', ownedLabels('other-website')],
+		['a work-id that is not its name', ownedLabels(SLUG, 'someone-else')],
+		['no managed label', { ...ownedLabels(), 'ever-works.io/managed': 'false' }]
+	])('leaves out an Ingress with %s', async (_label, labels) => {
+		const { plugin } = listing([{ name: SLUG, namespace: NS, labels }]);
+
+		await expect(plugin.listWorkDeployments(VALID)).resolves.toEqual([]);
+	});
+
+	it('leaves out an entry with no namespace or name', async () => {
+		const { plugin } = listing([{ name: '', namespace: NS, labels: ownedLabels('') }]);
+
+		await expect(plugin.listWorkDeployments(VALID)).resolves.toEqual([]);
+	});
+
+	it('throws a scrubbed K8sPluginError when the list fails', async () => {
+		const listManagedIngresses = vi.fn(async () => {
+			throw new K8sPluginError('UNAUTHORIZED', 'ingresses is forbidden');
+		});
+		const { api } = makeApi({}, { listManagedIngresses });
+		const plugin = new KubernetesPlugin({ api });
+
+		await expect(plugin.listWorkDeployments(VALID)).rejects.toMatchObject({ code: 'UNAUTHORIZED' });
+	});
+});

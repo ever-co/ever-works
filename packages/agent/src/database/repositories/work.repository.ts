@@ -8,6 +8,7 @@ import {
     Raw,
     LessThanOrEqual,
     In,
+    Like,
     EntityManager,
     type FindOptionsWhere,
     type SelectQueryBuilder,
@@ -1069,14 +1070,40 @@ export class WorkRepository {
      * every Work of the owner, whatever its provider (a tenant namespace is
      * derived from the owner, and a Work moved to another provider leaves its
      * objects behind); every `k8s` Work of any owner (a `k8s-works` namespace
-     * can be set explicitly, or derived from a truncated slug); and every
-     * `ever-works` / `k8s` Work with the same slug. The caller narrows them by
-     * object name and namespace.
+     * can be set explicitly, or derived from a truncated slug); every
+     * `ever-works` / `k8s` Work with the same slug; when the objects sit in
+     * another tenant's namespace, every Work of `tenantUserId`, whatever its
+     * provider; and every Work, of any owner and provider, whose cached
+     * `deployProjectId` is `deployProjectId` (the objects' `namespace/name`).
+     * The caller narrows them by object name and namespace.
      */
-    async findDeploymentSharerCandidates(userId: string, slug: string): Promise<Work[]> {
+    async findDeploymentSharerCandidates(
+        userId: string,
+        slug: string,
+        also: { tenantUserId?: string; deployProjectId?: string } = {},
+    ): Promise<Work[]> {
         const where: FindOptionsWhere<Work>[] = [{ deployProvider: 'k8s' }];
         if (userId) where.push({ userId });
         if (slug) where.push({ slug, deployProvider: In(['ever-works', 'k8s']) });
+        if (also.tenantUserId && also.tenantUserId !== userId) {
+            where.push({ userId: also.tenantUserId });
+        }
+        if (also.deployProjectId) where.push({ deployProjectId: also.deployProjectId });
+        return this.repository.find({ where, relations: ['user'] });
+    }
+
+    /**
+     * The Works the orphaned website deployment report accounts for, with
+     * their `user` relation: every Work on one of `deployProviders`, and every
+     * other Work whose cached `deployProjectId` has a `/` (a Kubernetes
+     * `namespace/name`). A Work that moved off Kubernetes keeps that id, and
+     * its old objects may still serve it. The report reads it once a day.
+     */
+    async findWorkDeploymentReportCandidates(deployProviders: readonly string[]): Promise<Work[]> {
+        const where: FindOptionsWhere<Work>[] = [{ deployProjectId: Like('%/%') }];
+        if (deployProviders.length > 0) {
+            where.unshift({ deployProvider: In([...deployProviders]) });
+        }
         return this.repository.find({ where, relations: ['user'] });
     }
 

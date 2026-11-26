@@ -249,6 +249,15 @@ function resolveCloudflareDeploymentContext(
 }
 
 /**
+ * The base of the per-tenant namespaces `{base}-{tenantId}` that the managed
+ * `ever-works` provider and the `k8s-works-shared` cluster deploy to:
+ * `EVER_WORKS_DEPLOY_NAMESPACE`, else `ever-works-tenants`.
+ */
+export function everWorksTenantNamespaceBase(env: NodeJS.ProcessEnv = process.env): string {
+    return env.EVER_WORKS_DEPLOY_NAMESPACE?.trim() || 'ever-works-tenants';
+}
+
+/**
  * The namespace a Kubernetes-family deploy (`k8s` or the managed `ever-works`)
  * of this Work targets, or `undefined` when the plugin's own setting applies.
  *
@@ -270,9 +279,10 @@ export function resolveKubernetesDeployNamespace(
 
     if (managedAlias || isSharedClusterSource(clusterSource)) {
         const tenantId = input.ownerUserId?.trim() || input.workId;
-        const base =
-            (input.env ?? process.env).EVER_WORKS_DEPLOY_NAMESPACE?.trim() || 'ever-works-tenants';
-        return buildEverWorksTenantNamespace(tenantId, base);
+        return buildEverWorksTenantNamespace(
+            tenantId,
+            everWorksTenantNamespaceBase(input.env ?? process.env),
+        );
     }
     if (requestedNamespace && namespaceIsExplicit) {
         if (isReservedDeployNamespace(requestedNamespace)) {

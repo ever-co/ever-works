@@ -11,6 +11,7 @@ import type {
     DeploymentDomain,
     AddDomainResult,
     SettingSource,
+    WorkDeploymentRef,
     WorkDeploymentTeardownResult,
 } from '@ever-works/plugin';
 import { PLUGIN_CAPABILITIES, isDnsProvider } from '@ever-works/plugin';
@@ -23,7 +24,7 @@ import { WorkRepository } from '../database/repositories/work.repository';
 import { GitFacadeService } from './git.facade';
 import { WorkCustomDomainRepository } from '../database/repositories/work-custom-domain.repository';
 import { AppDomainsService } from '../app-runtime/app-domains.service';
-import { EverWorksK8sDeployProvider } from '../ever-works-providers';
+import { EverWorksK8sDeployProvider, buildEverWorksTenantNamespace } from '../ever-works-providers';
 import { FacadeError, NoProviderError, ProviderNotFoundError } from './base.facade';
 import { config } from '../config';
 import { assertNotPlatformHost } from '../utils/platform-host';
@@ -33,6 +34,7 @@ import {
     DeploymentContextResolutionError,
     PLATFORM_MANAGED_KUBECONFIG_SENTINEL,
     coerceDeploymentClusterSource,
+    everWorksTenantNamespaceBase,
     isReservedDeployNamespace,
     resolveEffectiveDeploymentContext,
     resolveKubernetesDeployNamespace,
@@ -118,6 +120,13 @@ export type WorkDeploymentTeardownSkipReason =
     | 'not_found'
     /** Not a platform-managed Kubernetes target (another provider, a member's own cluster, an App Work). */
     | 'not_managed'
+    /**
+     * This environment is not marked as the owner of the platform's Works
+     * clusters (`EVER_WORKS_K8S_WORKS_CLUSTER_OWNER`), so its sharer check,
+     * which sees only its own database, cannot tell whether another
+     * environment's Work deploys to the same objects.
+     */
+    | 'not_cluster_owner'
     /** The deploy plugin has no `removeWorkDeployment`. */
     | 'unsupported'
     /** No enforced, non-reserved namespace: the objects' location is not known for sure. */
@@ -134,9 +143,10 @@ export type WorkDeploymentTeardownPreparation =
           readonly objectName: string;
           /**
            * The Work's cached `deployProjectId` (`namespace/name`) when it names
-           * another place than `namespace/objectName` (a rename since the last
-           * deploy): those objects are NOT removed, so the caller can say where
-           * they are.
+           * another place than `namespace/objectName`. It is set when the
+           * platform first looks the deployment up and is not rewritten, so a
+           * rename or a move since then shows here. Objects there are NOT
+           * removed, so the caller can say where to look.
            */
           readonly staleTarget?: string;
           /** Removes the objects. Holds the cluster credential: never log or serialise the closure's inputs. */
@@ -148,6 +158,69 @@ export type WorkDeploymentTeardownPreparation =
           /** A fixed sentence or a reason code, never an error message: it is logged. */
           readonly detail?: string;
       };
+
+/** A platform-held cluster credential an orphan report lists with. */
+export type PlatformDeployCluster = 'ever-works' | 'k8s-works' | 'k8s-works-shared';
+
+/**
+ * {@link DeployFacadeService.reportOrphanedWorkDeployments}: the website
+ * deployments on the platform's clusters that no Work accounts for. A report
+ * only: nothing in it is removed, and removing anything it names needs the
+ * owner's explicit yes first. Secret-free: names, namespaces and reason codes.
+ */
+export interface WorkDeploymentOrphanReport {
+    /**
+     * Why nothing was listed, when nothing was. `not_cluster_owner`: this
+     * environment is not marked as the clusters' owner
+     * (`EVER_WORKS_K8S_WORKS_CLUSTER_OWNER`), so it cannot tell another
+     * environment's deployments from orphans.
+     */
+    readonly skipped?: 'not_cluster_owner' | 'unsupported' | 'no_cluster' | 'works_unreadable';
+    /** With `works_unreadable`, or a `no_cluster` whose lookup failed: the reason code. */
+    readonly detail?: string;
+    /** One entry per distinct credential (names that share one are listed together). */
+    readonly clusters: ReadonlyArray<{
+        readonly names: readonly PlatformDeployCluster[];
+        /** Website deployments the deploy created there. */
+        readonly listed: number;
+        /** The list's reason code, when it failed. */
+        readonly failed?: string;
+    }>;
+    /**
+     * Deployments whose `namespace/name` is no Work's deploy target and no
+     * Work's cached deploy target (`deployProjectId`): a deleted Work's
+     * teardown was skipped or failed, or a Work moved off Kubernetes before
+     * its deploy target was ever cached.
+     */
+    readonly orphans: ReadonlyArray<{
+        /** The credential(s) that listed it: `+` joins names that share one, `, ` separate ones. */
+        readonly cluster: string;
+        readonly namespace: string;
+        readonly name: string;
+    }>;
+    /**
+     * Kubernetes Works whose target could not be worked out. A deployment with
+     * one of their object names is not called an orphan, wherever it is.
+     */
+    readonly unresolvedWorks: number;
+}
+
+/** One distinct platform cluster credential, and the names that share it. Holds a secret: never log it. */
+interface PlatformClusterCredential {
+    readonly names: PlatformDeployCluster[];
+    readonly kubeconfig: string;
+    /** The cluster source a `k8s` deploy names it by (none for the managed `ever-works` one). */
+    readonly clusterSource?: 'k8s-works' | 'k8s-works-shared';
+}
+
+/** What the Works account for, for {@link WorkDeploymentOrphanReport}. */
+interface KnownWorkDeploymentTargets {
+    /** Every `namespace/name` a Work deploys to, or has cached as its deploy target. */
+    readonly targets: Set<string>;
+    /** Object names of the Works whose target could not be worked out. */
+    readonly unresolvedNames: Set<string>;
+    readonly unresolvedWorks: number;
+}
 
 /** A Work of a provider that deploys to Kubernetes objects (`ever-works` is the managed alias of `k8s`). */
 function isKubernetesFamilyProvider(provider: string | null | undefined): boolean {
@@ -171,6 +244,79 @@ function kubernetesDeploymentId(deployProjectId: string | null | undefined): str
     return /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\/[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/.test(value)
         ? value
         : null;
+}
+
+/**
+ * Whose per-tenant namespace (`{base}-{tenantId}`, see
+ * {@link buildEverWorksTenantNamespace}) `namespace` is:
+ *
+ * - `'unreadable'` when it is a tenant namespace at the 63-character cap, the
+ *   owner's own included: the id may have been cut there, so several tenants
+ *   may share it (with the default base and a UUID the name is 55 characters);
+ * - `null` when it is not a tenant namespace, or it is the owner's own;
+ * - `{ tenantId }` otherwise, read back from the name. A tenant id is a user id
+ *   (a UUID), which the name keeps as it is.
+ *
+ * A `k8s` Work on `k8s-works` can name any namespace explicitly, a member's
+ * tenant namespace included; that member's Works then deploy to the same place.
+ */
+function foreignTenantOf(
+    namespace: string,
+    ownerId: string,
+): { tenantId: string } | 'unreadable' | null {
+    const base = everWorksTenantNamespaceBase();
+    const prefix = `${base}-`;
+    const tenantId = namespace.startsWith(prefix) ? namespace.slice(prefix.length) : '';
+    // A cut can also drop the dash it left at the end, hence one below the cap.
+    if (tenantId && namespace.length >= 62) {
+        return 'unreadable';
+    }
+    if (!tenantId || namespace === buildEverWorksTenantNamespace(ownerId, base)) {
+        return null;
+    }
+    return { tenantId };
+}
+
+/** Why another Work, or another tenant, may own a deleted Work's objects. */
+type DeploymentSharer =
+    /** Its own settings resolve to the same namespace. */
+    | { readonly id: string; readonly why: 'resolved' }
+    /** Its settings could not be read, so it may. */
+    | { readonly id: string; readonly why: 'unresolved' }
+    /** Its cached deploy target (`deployProjectId`) is this one, whatever it deploys to now. */
+    | { readonly id: string; readonly why: 'cached_target' }
+    /** It is the owner's or the namespace tenant's, on another provider now: its old objects may still serve it. */
+    | {
+          readonly id: string;
+          readonly why: 'moved';
+          readonly provider: string | null;
+          readonly sameOwner: boolean;
+      }
+    /** The namespace is a tenant namespace whose tenants cannot be read back from its name. */
+    | { readonly why: 'unreadable_tenant' };
+
+/** The `shared` skip's detail: fixed wording, Work ids and object names only. */
+function describeDeploymentSharer(
+    sharer: DeploymentSharer,
+    namespace: string,
+    target: string,
+): string {
+    switch (sharer.why) {
+        case 'resolved':
+            return `Work ${sharer.id} deploys to ${target} too`;
+        case 'unresolved':
+            return `Work ${sharer.id} may deploy to ${target} too (its settings could not be read); remove the objects by hand if it does not`;
+        case 'cached_target':
+            return `Work ${sharer.id} has ${target} cached as its deploy target, whatever it deploys to now; its objects there may still serve it, so remove them by hand if they do not`;
+        case 'moved': {
+            const whose = sharer.sameOwner
+                ? 'has the same name and owner'
+                : `belongs to the tenant whose namespace ${namespace} is, has the same name`;
+            return `Work ${sharer.id} ${whose} and was moved to ${sharer.provider || 'no provider'}; its old objects in ${target} may still serve it, so remove them by hand if they do not`;
+        }
+        case 'unreadable_tenant':
+            return `${namespace} is a tenant namespace at the 63-character name cap, so which tenants share it cannot be read back from its name; remove the objects in ${target} by hand if no Work of theirs uses them`;
+    }
 }
 
 /** `work.kind` compared as a string, like `appDomainsFor` (APW-01 adds `'app'` to the union additively). */
@@ -1213,6 +1359,11 @@ export class DeployFacadeService implements IDeployFacade {
      * Work too: the objects' labels name the website repository, not the Work,
      * so this check is what tells two Works apart.
      *
+     * That check reads only this environment's database, so the whole
+     * teardown runs only where `EVER_WORKS_K8S_WORKS_CLUSTER_OWNER=true`
+     * (`not_cluster_owner` elsewhere): dev, stage and prod may list the same
+     * cluster.
+     *
      * Never throws: anything it cannot resolve is `skipped` with the reason.
      */
     async prepareWorkDeploymentTeardown(
@@ -1245,6 +1396,18 @@ export class DeployFacadeService implements IDeployFacade {
                 coerceDeploymentClusterSource(settings.clusterSource) === 'custom-kubeconfig'
             ) {
                 return { status: 'skipped', reason: 'not_managed' };
+            }
+            // The platform's clusters may be shared by several environments
+            // (dev, stage and prod list the same `k8s-works` credential, and a
+            // slug-derived namespace ends in `-prod` in all of them). The sharer
+            // check below sees only this database, so it decides only in the
+            // environment that owns the clusters.
+            if (!config.everWorks.deploy.isClusterOwner()) {
+                return {
+                    status: 'skipped',
+                    reason: 'not_cluster_owner',
+                    detail: 'EVER_WORKS_K8S_WORKS_CLUSTER_OWNER is not true in this environment',
+                };
             }
 
             let plugin: IDeploymentPlugin;
@@ -1291,13 +1454,11 @@ export class DeployFacadeService implements IDeployFacade {
             const target = `${namespace}/${objectName}`;
             const sharer = await this.findDeploymentSharer(work, plugin.id, namespace, objectName);
             if (sharer) {
-                const detail =
-                    sharer.why === 'resolved'
-                        ? `Work ${sharer.id} deploys to ${target} too`
-                        : sharer.why === 'unresolved'
-                          ? `Work ${sharer.id} may deploy to ${target} too (its settings could not be read); remove the objects by hand if it does not`
-                          : `Work ${sharer.id} has the same name and owner and was moved to ${sharer.provider || 'no provider'}; its old objects in ${target} may still serve it, so remove them by hand if they do not`;
-                return { status: 'skipped', reason: 'shared', detail };
+                return {
+                    status: 'skipped',
+                    reason: 'shared',
+                    detail: describeDeploymentSharer(sharer, namespace, target),
+                };
             }
 
             const removeWorkDeployment = plugin.removeWorkDeployment.bind(plugin);
@@ -1306,12 +1467,12 @@ export class DeployFacadeService implements IDeployFacade {
             const projectName = work.getWebsiteRepo();
             const credential = effective.token;
             const context = effective.lookupContext;
-            const lastDeployed = kubernetesDeploymentId(work.deployProjectId);
+            const cachedTarget = kubernetesDeploymentId(work.deployProjectId);
             return {
                 status: 'ready',
                 namespace,
                 objectName,
-                ...(lastDeployed && lastDeployed !== target ? { staleTarget: lastDeployed } : {}),
+                ...(cachedTarget && cachedTarget !== target ? { staleTarget: cachedTarget } : {}),
                 run: () => removeWorkDeployment(projectName, credential, context),
             };
         } catch (error) {
@@ -1331,8 +1492,7 @@ export class DeployFacadeService implements IDeployFacade {
 
     /**
      * Another Work that deploys, or may deploy, to `namespace/objectName`, or
-     * `null`. Only Works whose website repository gives the same object name
-     * count. The candidates are:
+     * `null`. The candidates are:
      *
      * - every Work of the same owner, whatever its provider now: a tenant
      *   namespace is derived from the owner, and a Work moved to another
@@ -1342,11 +1502,24 @@ export class DeployFacadeService implements IDeployFacade {
      * - every `k8s` Work of any owner: a `k8s-works` namespace is set
      *   explicitly or derived from a truncated slug, so it is not tied to an
      *   owner (the set is small: `k8s` is opt-in and `k8s-works` admin-only);
-     * - every Kubernetes-family Work with the same slug.
+     * - every Kubernetes-family Work with the same slug;
+     * - when `namespace` is another tenant's namespace (a `k8s-works` Work can
+     *   name one explicitly), every Work of that tenant, whatever its provider,
+     *   for the same reason as the owner's. When which tenant cannot be read
+     *   back from the name, the teardown is skipped (`why: 'unreadable_tenant'`);
+     * - every Work, of any owner and any provider, whose cached
+     *   `deployProjectId` is `namespace/objectName`.
      *
-     * Each Kubernetes-family candidate's namespace is worked out with its own
-     * settings. One that is explicitly reserved can never be ours (ours is not
-     * reserved), so it is skipped. One that cannot be worked out counts as a
+     * A Work whose cached `deployProjectId` is `namespace/objectName` is a
+     * sharer outright (`why: 'cached_target'`), whatever its website
+     * repository, provider or settings say now. That field is set when the
+     * platform first looks the deployment up and is not rewritten, so it names
+     * where that Work's objects were, not necessarily where they are.
+     *
+     * Otherwise only Works whose website repository gives the same object name
+     * count. Each Kubernetes-family candidate's namespace is worked out with its
+     * own settings. One that is explicitly reserved can never be ours (ours is
+     * not reserved), so it is skipped. One that cannot be worked out counts as a
      * sharer (`why: 'unresolved'`): leaving the objects is the safe side, so a
      * transient settings error leaves them for an operator, and the skip's
      * detail says which Work could not be read.
@@ -1356,25 +1529,36 @@ export class DeployFacadeService implements IDeployFacade {
         pluginId: string,
         namespace: string,
         objectName: string,
-    ): Promise<
-        | { id: string; why: 'resolved' }
-        | { id: string; why: 'unresolved' }
-        | { id: string; why: 'moved'; provider: string | null }
-        | null
-    > {
+    ): Promise<DeploymentSharer | null> {
+        const target = `${namespace}/${objectName}`;
+        const ownerId = (work.user as User | undefined)?.id ?? work.userId;
+        const foreignTenant = foreignTenantOf(namespace, ownerId);
+        if (foreignTenant === 'unreadable') {
+            return { why: 'unreadable_tenant' };
+        }
+        const tenantUserId = foreignTenant?.tenantId;
         const candidates = await this.workRepository.findDeploymentSharerCandidates(
             work.userId,
             work.slug,
+            { tenantUserId, deployProjectId: target },
         );
         for (const candidate of candidates) {
             if (candidate.id === work.id || isAppKind(candidate)) continue;
+            // Before the name check: its repository may have been renamed since.
+            if (kubernetesDeploymentId(candidate.deployProjectId) === target) {
+                return { id: candidate.id, why: 'cached_target' };
+            }
             if (normaliseObjectName(candidate.getWebsiteRepo()) !== objectName) continue;
             if (!isKubernetesFamilyProvider(candidate.deployProvider)) {
-                // Only the same-owner branch returns other providers.
+                // Only the owner's and the namespace tenant's Works can have
+                // left objects here from a Kubernetes deploy before a move.
+                const sameOwner = candidate.userId === work.userId;
+                if (!sameOwner && (!tenantUserId || candidate.userId !== tenantUserId)) continue;
                 return {
                     id: candidate.id,
                     why: 'moved',
                     provider: candidate.deployProvider ?? null,
+                    sameOwner,
                 };
             }
             try {
@@ -1403,6 +1587,250 @@ export class DeployFacadeService implements IDeployFacade {
             }
         }
         return null;
+    }
+
+    /**
+     * Report the website deployments on the platform's own clusters that no
+     * Work accounts for: what a skipped or failed Work-delete teardown left
+     * running. REPORT ONLY: it lists and compares, and never removes anything;
+     * removing what it names needs the owner's explicit yes first.
+     *
+     * It runs only where `EVER_WORKS_K8S_WORKS_CLUSTER_OWNER=true`
+     * (`skipped: 'not_cluster_owner'` elsewhere). It compares a whole
+     * cluster's deployments with this environment's Works alone, so in an
+     * environment that shares the cluster with another, every Work of the
+     * other would look orphaned.
+     *
+     * The clusters are the platform's kubeconfigs (the managed `ever-works`
+     * one, `EVER_WORKS_K8S_WORKS_KUBECONFIG`, `EVER_WORKS_K8S_WORKS_SHARED_KUBECONFIG`),
+     * each listed once, and each list gets at most
+     * {@link workDeploymentListTimeoutMs} (a hung one is `failed: 'TIMEOUT'`).
+     * A deployment is accounted for when its `namespace/name` is the deploy
+     * target of an `ever-works` or `k8s` Work (worked out as the deploy works
+     * it out), or the deploy target any Work has cached (`deployProjectId`: a
+     * Work that moved off Kubernetes keeps it). The targets are compared across
+     * clusters, not per cluster, so an orphan can hide behind a live Work's
+     * target on another cluster; never the reverse. A deployment that two
+     * credentials both list is named once, with both.
+     *
+     * Reading a `k8s` Work's settings may let the settings service tidy that
+     * Work's stored plugin settings once (`normalizeWorkDefaultShadows`), as a
+     * deploy or a teardown does; nothing else is written.
+     *
+     * Never throws: a failed list is reported per cluster with a reason code.
+     */
+    async reportOrphanedWorkDeployments(): Promise<WorkDeploymentOrphanReport> {
+        const nothing = (
+            skipped: NonNullable<WorkDeploymentOrphanReport['skipped']>,
+            detail?: string,
+        ): WorkDeploymentOrphanReport => ({
+            skipped,
+            ...(detail ? { detail } : {}),
+            clusters: [],
+            orphans: [],
+            unresolvedWorks: 0,
+        });
+
+        if (!config.everWorks.deploy.isClusterOwner()) {
+            return nothing('not_cluster_owner');
+        }
+
+        let plugin: IDeploymentPlugin;
+        try {
+            plugin = this.resolveRegisteredDeployPlugin(KUBERNETES_DEPLOY_PROVIDER_ID);
+        } catch {
+            return nothing('unsupported');
+        }
+        if (typeof plugin.listWorkDeployments !== 'function') {
+            return nothing('unsupported');
+        }
+        const listWorkDeployments = plugin.listWorkDeployments.bind(plugin);
+
+        let clusters: PlatformClusterCredential[];
+        try {
+            clusters = await this.platformDeployClusters();
+        } catch (error) {
+            // The managed kubeconfig lookup is meant not to throw; if it does,
+            // there is no credential to list with.
+            return nothing('no_cluster', teardownFailureCode(error));
+        }
+        if (clusters.length === 0) {
+            return nothing('no_cluster');
+        }
+
+        let known: KnownWorkDeploymentTargets;
+        try {
+            known = await this.knownWorkDeploymentTargets(plugin.id);
+        } catch (error) {
+            // Without the Works, every deployment would look orphaned.
+            return nothing('works_unreadable', teardownFailureCode(error));
+        }
+
+        const listed: Array<WorkDeploymentOrphanReport['clusters'][number]> = [];
+        const orphans = new Map<string, { namespace: string; name: string; clusters: string[] }>();
+        for (const cluster of clusters) {
+            try {
+                const refs = await this.withListTimeout<readonly WorkDeploymentRef[]>(
+                    listWorkDeployments(cluster.kubeconfig, {
+                        settingsOverride: cluster.clusterSource
+                            ? { clusterSource: cluster.clusterSource }
+                            : {},
+                        kubeContextOverride: null,
+                    }),
+                );
+                listed.push({ names: cluster.names, listed: refs.length });
+                for (const ref of refs) {
+                    const key = `${ref.location}/${ref.name}`;
+                    if (known.targets.has(key)) continue;
+                    if (known.unresolvedNames.has(ref.name)) continue;
+                    const label = cluster.names.join('+');
+                    const seen = orphans.get(key);
+                    if (seen) {
+                        // Another credential reaches the same cluster.
+                        if (!seen.clusters.includes(label)) seen.clusters.push(label);
+                        continue;
+                    }
+                    orphans.set(key, {
+                        namespace: ref.location,
+                        name: ref.name,
+                        clusters: [label],
+                    });
+                }
+            } catch (error) {
+                listed.push({
+                    names: cluster.names,
+                    listed: 0,
+                    failed: teardownFailureCode(error),
+                });
+            }
+        }
+        return {
+            clusters: listed,
+            orphans: [...orphans.values()].map((orphan) => ({
+                cluster: orphan.clusters.join(', '),
+                namespace: orphan.namespace,
+                name: orphan.name,
+            })),
+            unresolvedWorks: known.unresolvedWorks,
+        };
+    }
+
+    /**
+     * How long one cluster's list may take in the orphan report. The
+     * Kubernetes client sets no request timeout, so a half-open connection
+     * would otherwise hold the report, and its daily lock, for hours.
+     */
+    private readonly workDeploymentListTimeoutMs = 60_000;
+
+    /** `listing`, or a `TIMEOUT` rejection after {@link workDeploymentListTimeoutMs}. */
+    private withListTimeout<T>(listing: Promise<T>): Promise<T> {
+        // The list is read-only: if it is abandoned, a late failure is dropped.
+        listing.catch(() => undefined);
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const timeout = new Promise<never>((_, reject) => {
+            timer = setTimeout(
+                () => reject(Object.assign(new Error('list timed out'), { code: 'TIMEOUT' })),
+                this.workDeploymentListTimeoutMs,
+            );
+            timer.unref?.();
+        });
+        return Promise.race([listing, timeout]).finally(() => clearTimeout(timer));
+    }
+
+    /**
+     * The platform's cluster credentials, each distinct one once (the managed
+     * `ever-works` one may BE the shared cluster's: Path B), with the cluster
+     * source a `k8s` deploy names it by.
+     */
+    private async platformDeployClusters(): Promise<PlatformClusterCredential[]> {
+        const sources: Array<{
+            name: PlatformDeployCluster;
+            kubeconfig: string | null | undefined;
+            clusterSource?: 'k8s-works' | 'k8s-works-shared';
+        }> = [
+            {
+                name: 'k8s-works',
+                kubeconfig: process.env.EVER_WORKS_K8S_WORKS_KUBECONFIG,
+                clusterSource: 'k8s-works',
+            },
+            {
+                name: 'k8s-works-shared',
+                kubeconfig: process.env.EVER_WORKS_K8S_WORKS_SHARED_KUBECONFIG,
+                clusterSource: 'k8s-works-shared',
+            },
+            { name: 'ever-works', kubeconfig: await this.resolveEverWorksManagedKubeconfig() },
+        ];
+        const clusters: PlatformClusterCredential[] = [];
+        for (const source of sources) {
+            const kubeconfig = source.kubeconfig?.trim();
+            if (!kubeconfig) continue;
+            const same = clusters.find((cluster) => cluster.kubeconfig === kubeconfig);
+            if (same) {
+                same.names.push(source.name);
+                continue;
+            }
+            clusters.push({
+                names: [source.name],
+                kubeconfig,
+                ...(source.clusterSource ? { clusterSource: source.clusterSource } : {}),
+            });
+        }
+        return clusters;
+    }
+
+    /**
+     * Every `namespace/name` an `ever-works` or `k8s` Work deploys to, every
+     * deploy target a Work of any provider has cached (`deployProjectId`), and
+     * the object names of the Works whose target could not be worked out. An
+     * `ever-works` Work's namespace is its owner's tenant namespace whatever
+     * its settings say, so only a `k8s` Work's settings are read. Throws when
+     * the Works cannot be loaded.
+     */
+    private async knownWorkDeploymentTargets(
+        pluginId: string,
+    ): Promise<KnownWorkDeploymentTargets> {
+        const works = await this.workRepository.findWorkDeploymentReportCandidates([
+            EVER_WORKS_DEPLOY_PROVIDER_ID,
+            KUBERNETES_DEPLOY_PROVIDER_ID,
+        ]);
+        const targets = new Set<string>();
+        const unresolvedNames = new Set<string>();
+        let unresolvedWorks = 0;
+        for (const work of works) {
+            if (isAppKind(work)) continue;
+            const cachedTarget = kubernetesDeploymentId(work.deployProjectId);
+            if (cachedTarget) targets.add(cachedTarget);
+            // A Work on another provider now counts by its cached target only.
+            if (!isKubernetesFamilyProvider(work.deployProvider)) continue;
+            const objectName = normaliseObjectName(work.getWebsiteRepo());
+            if (!objectName) continue;
+            try {
+                let settings: Record<string, unknown> = {};
+                let settingSources: Record<string, SettingSource | undefined> = {};
+                if (work.deployProvider === KUBERNETES_DEPLOY_PROVIDER_ID) {
+                    ({ settings, settingSources } = await this.getDeploymentSettingsSnapshot(
+                        pluginId,
+                        { userId: work.userId, workId: work.id },
+                        false,
+                    ));
+                }
+                const namespace = resolveKubernetesDeployNamespace(
+                    this.effectiveContextInput(work, pluginId, '', settings, settingSources),
+                );
+                if (namespace) targets.add(`${namespace}/${objectName}`);
+            } catch (error) {
+                if (
+                    error instanceof DeploymentContextResolutionError &&
+                    error.code === 'RESERVED_NAMESPACE'
+                ) {
+                    // A reserved namespace is never a deploy target.
+                    continue;
+                }
+                unresolvedNames.add(objectName);
+                unresolvedWorks += 1;
+            }
+        }
+        return { targets, unresolvedNames, unresolvedWorks };
     }
 
     private effectiveContextInput(

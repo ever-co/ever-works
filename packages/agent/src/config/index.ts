@@ -1857,6 +1857,25 @@ export const config = {
             isEnabled() {
                 return process.env.DEPLOY_EVER_WORKS_ENABLED === 'true';
             },
+            /**
+             * `EVER_WORKS_K8S_WORKS_CLUSTER_OWNER=true`: this environment's
+             * database is the only one that deploys to the platform's Works
+             * clusters (`EVER_WORKS_DEPLOY_KUBECONFIG`, `EVER_WORKS_K8S_WORKS_KUBECONFIG`,
+             * `EVER_WORKS_K8S_WORKS_SHARED_KUBECONFIG`). Off by default.
+             *
+             * Two things read only this environment's Works and act on a whole
+             * cluster, so they hold only then: removing a deleted Work's objects
+             * from those clusters (its "does another Work share them?" check sees
+             * only this database), and the daily orphaned website deployment
+             * report. dev, stage and prod can share one cluster, and the
+             * slug-derived `k8s-works` namespace ends in `-prod` everywhere, so
+             * turn it on only in the environment that owns the clusters.
+             */
+            isClusterOwner() {
+                return (
+                    process.env.EVER_WORKS_K8S_WORKS_CLUSTER_OWNER?.trim().toLowerCase() === 'true'
+                );
+            },
             getKubeconfig() {
                 return process.env.EVER_WORKS_DEPLOY_KUBECONFIG || '';
             },

@@ -174,6 +174,17 @@ export interface WorkDeploymentTeardownResult {
 }
 
 /**
+ * A website deployment {@link IDeploymentPlugin.listWorkDeployments} found: where it is
+ * and its name, as its deploy named it. Secret-free.
+ */
+export interface WorkDeploymentRef {
+	/** Where it is (a Kubernetes namespace, for example). */
+	readonly location: string;
+	/** Its name (for Kubernetes, the Ingress name, which is also its Service's and Deployment's). */
+	readonly name: string;
+}
+
+/**
  * Deployment plugin interface
  * Capability: 'deployment'
  */
@@ -296,6 +307,18 @@ export interface IDeploymentPlugin extends IPlugin {
 		token: string,
 		context?: DeploymentLookupContext
 	): Promise<WorkDeploymentTeardownResult>;
+
+	/**
+	 * List the website deployments this provider's own deploy created on the target the
+	 * token reaches (for Kubernetes: every namespace's Ingresses that carry the deploy's
+	 * labels), so a report can name the ones no Work accounts for.
+	 *
+	 * Read-only: it changes nothing, and nothing it lists is removed because of it.
+	 * Throws on a failed list (the error is scrubbed of credentials and carries a code).
+	 *
+	 * **Optional.** A provider without platform-held runtime objects omits it.
+	 */
+	listWorkDeployments?(token: string, context?: DeploymentLookupContext): Promise<readonly WorkDeploymentRef[]>;
 
 	/**
 	 * Workflow filenames to dispatch when deploying, in priority order.

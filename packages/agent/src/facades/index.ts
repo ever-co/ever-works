@@ -115,6 +115,8 @@ export {
     NoDeployCredentialsError,
     PLATFORM_MANAGED_KUBECONFIG_SENTINEL,
     type DeployFacadeFullOptions,
+    type PlatformDeployCluster,
+    type WorkDeploymentOrphanReport,
 } from './deploy.facade';
 
 // Code Edit Facade
