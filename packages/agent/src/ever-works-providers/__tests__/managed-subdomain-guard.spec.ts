@@ -59,6 +59,53 @@ describe('managed-subdomain-guard', () => {
                 expect(RESERVED_SUBDOMAIN_LABELS.has(label)).toBe(false);
             }
         });
+
+        it.each([
+            'login',
+            'signin',
+            'sign-in',
+            'signup',
+            'sign-up',
+            'register',
+            'account',
+            'accounts',
+            'billing',
+            'pay',
+            'payment',
+            'payments',
+            'checkout',
+            'sso',
+            'oauth',
+            'id',
+            'identity',
+            'password',
+            'reset',
+            'verify',
+            'security',
+            'secure',
+            'support',
+            'help',
+            'portal',
+            'console',
+            'my',
+        ])('reserves the account / sign-in / payment label %s', (label) => {
+            expect(RESERVED_SUBDOMAIN_LABELS.has(label)).toBe(true);
+            expect(isReservedSubdomainLabel(` ${label.toUpperCase()} `)).toBe(true);
+        });
+
+        it('reserves the account labels themselves only, not per-environment variants or longer names', () => {
+            for (const label of [
+                'login-dev',
+                'loginstage',
+                'billing-stage',
+                'my-shop',
+                'helpdesk',
+                'identity-lab',
+                'paypal-clone',
+            ]) {
+                expect(RESERVED_SUBDOMAIN_LABELS.has(label)).toBe(false);
+            }
+        });
     });
 
     it('isReservedSubdomainLabel ignores case and surrounding spaces', () => {

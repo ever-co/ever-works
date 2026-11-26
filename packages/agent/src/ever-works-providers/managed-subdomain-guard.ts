@@ -40,6 +40,43 @@ const INFRASTRUCTURE_LABELS = [
 ] as const;
 
 /**
+ * Account, sign-in and payment names. A tenant site at `login.ever.works` or `billing.ever.works`
+ * would look like the platform's own page, so none of these can be a managed subdomain.
+ *
+ * They are not platform services and have no per-environment copies, so, like
+ * {@link INFRASTRUCTURE_LABELS}, only the names themselves are reserved (no `login-dev`).
+ */
+const ACCOUNT_LABELS = [
+    'login',
+    'signin',
+    'sign-in',
+    'signup',
+    'sign-up',
+    'register',
+    'account',
+    'accounts',
+    'billing',
+    'pay',
+    'payment',
+    'payments',
+    'checkout',
+    'sso',
+    'oauth',
+    'id',
+    'identity',
+    'password',
+    'reset',
+    'verify',
+    'security',
+    'secure',
+    'support',
+    'help',
+    'portal',
+    'console',
+    'my',
+] as const;
+
+/**
  * Labels a tenant can never claim, whether through `SubdomainAllocator` or an explicit
  * `PUT /api/deploy/works/:id/subdomain`. The zone probe (`recordExists`) already refuses any
  * hostname that exists; this list also keeps the platform's names while no record exists for
@@ -51,6 +88,7 @@ export const RESERVED_SUBDOMAIN_LABELS: ReadonlySet<string> = new Set<string>([
         ENVIRONMENT_SUFFIXES.map((suffix) => `${name}${suffix}`),
     ),
     ...INFRASTRUCTURE_LABELS,
+    ...ACCOUNT_LABELS,
 ]);
 
 /** `true` iff `label` (any case, surrounding spaces ignored) is reserved for the platform. */
