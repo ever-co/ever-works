@@ -72,7 +72,8 @@ import { loginViaUI } from './helpers/auth';
  * context, so its history is provably empty without touching the seeded user.
  */
 
-const HISTORY_EMPTY = 'No conversations yet. Start a chat to see your history here.';
+/** The History panel's empty state, by test id: its copy names Ever SI and may change again. */
+const HISTORY_EMPTY_TESTID = 'chat-history-empty';
 const HISTORY_UNTITLED = 'Untitled conversation';
 const HISTORY_LABEL = 'History';
 const LABEL_TODAY = 'Today';
@@ -211,7 +212,7 @@ test.describe('Chat history UI — open / list / reopen / delete / order (seeded
 
             // We just created two conversations for THIS user → list is NOT empty and
             // contains BOTH rows (refreshConversations() on mount re-fetches them).
-            await expect(page.getByText(HISTORY_EMPTY, { exact: false })).toHaveCount(0);
+            await expect(page.getByTestId(HISTORY_EMPTY_TESTID)).toHaveCount(0);
             await expect(rowA, 'conversation A appears in History').toBeVisible({
                 timeout: 15_000,
             });
@@ -395,7 +396,7 @@ test.describe('Chat history UI — open / list / reopen / delete / order (seeded
                 untitledRow.first(),
                 'untitled conversation shows the fallback label',
             ).toBeVisible({ timeout: 15_000 });
-            await expect(page.getByText(HISTORY_EMPTY, { exact: false })).toHaveCount(0);
+            await expect(page.getByTestId(HISTORY_EMPTY_TESTID)).toHaveCount(0);
         } finally {
             await deleteConversation(request, token, convId);
         }
@@ -539,7 +540,7 @@ test.describe('Chat history UI — genuine empty state (fresh isolated user)', (
 
             await openChatPanelFor(page, baseOrigin(baseURL));
 
-            const emptyState = page.getByText(HISTORY_EMPTY, { exact: false });
+            const emptyState = page.getByTestId(HISTORY_EMPTY_TESTID);
             await openHistoryView(page, emptyState);
 
             await expect(emptyState, 'empty-state message shown for fresh user').toBeVisible({

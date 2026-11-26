@@ -896,7 +896,7 @@
                 "created": "Misi dibuat",
                 "minLength": "Deskripsi harus minimal 10 karakter.",
                 "error": "Tidak dapat membuat Misi. Silakan coba lagi.",
-                "chatUnavailable": "Chat sedang tidak tersedia — gunakan \"Buat manual\"."
+                "chatUnavailable": "Ever SI sedang tidak tersedia — gunakan \"Buat manual\"."
             },
             "buildOnApp": {
                 "product": "Produk",
@@ -6874,7 +6874,7 @@
                         "empty": "Select a document on the left to view or edit it. Drag a file anywhere to upload."
                     },
                     "ai": {
-                        "title": "Ever SI",
+                        "title": "Agen ruang kerja",
                         "empty": "Conversation with the workspace agent will appear here. Use @kb:path to ground replies."
                     }
                 },
@@ -9693,6 +9693,7 @@
             "welcomeTitle": "Ever SI",
             "welcomeSubtitle": "Tanyakan tentang membuat Works, menghasilkan konten, atau menata data Anda.",
             "disclosure": "Anda sedang mengobrol dengan asisten SI Ever. Asisten ini bisa keliru. Kami menyimpan percakapan ini sampai Anda menghapusnya.",
+            "disclosureTemporary": "Anda sedang mengobrol dengan asisten SI Ever. Asisten ini bisa keliru. Percakapan ini dihapus bersama akun sementara ini.",
             "welcomeMessage": "Hai! Saya dapat membantu Anda membuat karya menggunakan bahasa alami. Tanyakan seperti \"Buat karya untuk alat AI\" atau jelaskan apa yang Anda butuhkan.",
             "capabilities": {
                 "workCreation": "Pembuatan Karya",
@@ -9798,6 +9799,12 @@
             "panel": {
                 "assistant": "Ever SI",
                 "close": "Tutup Ever SI"
+            },
+            "secretOnce": {
+                "copy": "Salin",
+                "copied": "Disalin",
+                "copyNow": "Salin sekarang: hanya ditampilkan di sini, sekali. Tidak disimpan dalam percakapan ini, dan Ever SI tidak dapat melihatnya.",
+                "shownOnce": "Sebuah rahasia ditampilkan sekali saat ini dijalankan. Rahasia itu tidak disimpan dalam percakapan; buat yang baru di Pengaturan jika Anda tidak lagi memilikinya."
             }
         },
         "plugins": {
@@ -10962,8 +10969,8 @@
                 "closeChat": "Tutup Ever SI"
             },
             "commandAliases": {
-                "openChat": "ever si, si, obrolan, asisten",
-                "closeChat": "ever si, si, sembunyikan obrolan"
+                "openChat": "ever si, si, obrolan, asisten, chat, assistant, ask ai",
+                "closeChat": "ever si, si, sembunyikan obrolan, hide chat, chat, assistant"
             },
             "noResults": {
                 "askChat": "Tanya Ever SI tentang “{query}”"

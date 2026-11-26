@@ -3,6 +3,7 @@
 import { useTranslations } from 'next-intl';
 import { PenLine, FolderSearch, Globe, Lightbulb } from 'lucide-react';
 import { cn } from '@/lib/utils/cn';
+import { useChatRetention } from '@/lib/ai/chat-disclosure';
 
 interface ChatWelcomeProps {
     onSuggestion: (text: string) => void;
@@ -32,6 +33,9 @@ export function ChatWelcome({ onSuggestion }: ChatWelcomeProps) {
     const t = useTranslations('dashboard.aiChat');
     const tc = useTranslations('dashboard.aiChat.capabilities');
     const ts = useTranslations('dashboard.aiChat.suggestions');
+    // The disclosure says what is true for this account: kept until deleted, or
+    // deleted with a temporary account / demo workspace.
+    const retention = useChatRetention();
 
     return (
         <div className="flex flex-col h-full px-5 py-6 overflow-y-auto max-w-150 mx-auto">
@@ -47,7 +51,7 @@ export function ChatWelcome({ onSuggestion }: ChatWelcomeProps) {
                     data-testid="ever-si-disclosure"
                     className="mt-3 text-[11px] text-text-muted dark:text-text-muted-dark leading-relaxed"
                 >
-                    {t('disclosure')}
+                    {retention === 'temporary' ? t('disclosureTemporary') : t('disclosure')}
                 </p>
             </div>
 

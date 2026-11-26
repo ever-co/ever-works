@@ -896,7 +896,7 @@
                 "created": "Đã tạo nhiệm vụ",
                 "minLength": "Mô tả phải có ít nhất 10 ký tự.",
                 "error": "Không thể tạo nhiệm vụ. Vui lòng thử lại.",
-                "chatUnavailable": "Trò chuyện hiện không khả dụng — hãy dùng \"Tạo thủ công\"."
+                "chatUnavailable": "Ever SI hiện không khả dụng — hãy dùng \"Tạo thủ công\"."
             },
             "buildOnApp": {
                 "product": "Sản phẩm",
@@ -6874,7 +6874,7 @@
                         "empty": "Select a document on the left to view or edit it. Drag a file anywhere to upload."
                     },
                     "ai": {
-                        "title": "Ever SI",
+                        "title": "Tác tử không gian làm việc",
                         "empty": "Conversation with the workspace agent will appear here. Use @kb:path to ground replies."
                     }
                 },
@@ -9693,6 +9693,7 @@
             "welcomeTitle": "Ever SI",
             "welcomeSubtitle": "Hỏi về việc tạo Works, tạo nội dung hoặc sắp xếp dữ liệu của bạn.",
             "disclosure": "Bạn đang trò chuyện với trợ lý SI của Ever. Trợ lý có thể mắc lỗi. Chúng tôi lưu cuộc trò chuyện này cho đến khi bạn xóa.",
+            "disclosureTemporary": "Bạn đang trò chuyện với trợ lý SI của Ever. Trợ lý có thể mắc lỗi. Cuộc trò chuyện này bị xóa cùng tài khoản tạm thời này.",
             "welcomeMessage": "Chào! Tôi có thể giúp bạn tạo công việc bằng ngôn ngữ tự nhiên. Hỏi điều gì đó như \"Tạo công việc cho công cụ AI\" hoặc mô tả những gì bạn cần.",
             "capabilities": {
                 "workCreation": "Tạo Công việc",
@@ -9798,6 +9799,12 @@
             "panel": {
                 "assistant": "Ever SI",
                 "close": "Đóng Ever SI"
+            },
+            "secretOnce": {
+                "copy": "Sao chép",
+                "copied": "Đã sao chép",
+                "copyNow": "Hãy sao chép ngay: chỉ hiển thị ở đây, một lần. Không được lưu trong cuộc trò chuyện này và Ever SI không thể thấy.",
+                "shownOnce": "Một bí mật đã được hiển thị một lần khi chạy. Nó không được giữ trong cuộc trò chuyện; hãy tạo cái mới trong Cài đặt nếu bạn không còn nó."
             }
         },
         "plugins": {
@@ -10962,8 +10969,8 @@
                 "closeChat": "Đóng Ever SI"
             },
             "commandAliases": {
-                "openChat": "ever si, si, trò chuyện, trợ lý",
-                "closeChat": "ever si, si, ẩn trò chuyện"
+                "openChat": "ever si, si, trò chuyện, trợ lý, chat, assistant, ask ai",
+                "closeChat": "ever si, si, ẩn trò chuyện, hide chat, chat, assistant"
             },
             "noResults": {
                 "askChat": "Hỏi Ever SI về “{query}”"

@@ -896,7 +896,7 @@
                 "created": "Миссия создана",
                 "minLength": "Описание должно содержать не менее 10 символов.",
                 "error": "Не удалось создать миссию. Попробуйте ещё раз.",
-                "chatUnavailable": "Чат сейчас недоступен — воспользуйтесь «Создать вручную»."
+                "chatUnavailable": "Ever SI сейчас недоступен — воспользуйтесь «Создать вручную»."
             },
             "buildOnApp": {
                 "product": "Продукт",
@@ -6874,7 +6874,7 @@
                         "empty": "Select a document on the left to view or edit it. Drag a file anywhere to upload."
                     },
                     "ai": {
-                        "title": "Ever SI",
+                        "title": "Агент рабочего пространства",
                         "empty": "Conversation with the workspace agent will appear here. Use @kb:path to ground replies."
                     }
                 },
@@ -9693,6 +9693,7 @@
             "welcomeTitle": "Ever SI",
             "welcomeSubtitle": "Спрашивайте о создании Works, генерации контента или упорядочивании данных.",
             "disclosure": "Вы общаетесь с SI-ассистентом Ever. Он может ошибаться. Мы храним этот разговор, пока вы его не удалите.",
+            "disclosureTemporary": "Вы общаетесь с SI-ассистентом Ever. Он может ошибаться. Этот разговор удаляется вместе с этим временным аккаунтом.",
             "welcomeMessage": "Привет! Я могу помочь вам создать работы с помощью естественного языка. Спросите что-то вроде «Создай директорию для инструментов ИИ» или опишите, что вам нужно.",
             "capabilities": {
                 "workCreation": "Создание работ",
@@ -9798,6 +9799,12 @@
             "panel": {
                 "assistant": "Ever SI",
                 "close": "Закрыть Ever SI"
+            },
+            "secretOnce": {
+                "copy": "Копировать",
+                "copied": "Скопировано",
+                "copyNow": "Скопируйте сейчас: он показывается только здесь и только один раз. Он не сохраняется в этом разговоре, и Ever SI его не видит.",
+                "shownOnce": "При выполнении секрет был показан один раз. Он не хранится в разговоре; создайте новый в настройках, если его у вас больше нет."
             }
         },
         "plugins": {
@@ -10962,8 +10969,8 @@
                 "closeChat": "Закрыть Ever SI"
             },
             "commandAliases": {
-                "openChat": "ever si, si, чат, ассистент",
-                "closeChat": "ever si, si, скрыть чат"
+                "openChat": "ever si, si, чат, ассистент, chat, assistant, ask ai",
+                "closeChat": "ever si, si, скрыть чат, hide chat, chat, assistant"
             },
             "noResults": {
                 "askChat": "Спросить Ever SI о «{query}»"

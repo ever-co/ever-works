@@ -21,7 +21,6 @@ const NAMING_KEYS = [
     'dashboard.aiChat.welcomeTitle',
     'dashboard.aiChat.panel.assistant',
     'dashboard.sidebar.aiChat',
-    'dashboard.workDetail.kb.panes.ai.title',
 ] as const;
 
 const MENTIONING_KEYS = [
@@ -32,6 +31,8 @@ const MENTIONING_KEYS = [
     'dashboard.commandPalette.commands.openChat',
     'dashboard.commandPalette.commands.closeChat',
     'dashboard.commandPalette.noResults.askChat',
+    'dashboard.missionsPage.newPage.chatUnavailable',
+    'dashboard.aiChat.secretOnce.copyNow',
 ] as const;
 
 function read(bundle: Record<string, unknown>, path: string): unknown {
@@ -62,9 +63,18 @@ describe('Ever SI naming (A7)', () => {
             for (const key of NAMING_KEYS) expect(read(messages, key), key).toBe('Ever SI');
             for (const key of MENTIONING_KEYS)
                 expect(read(messages, key), key).toContain('Ever SI');
-            const disclosure = read(messages, 'dashboard.aiChat.disclosure');
-            expect(typeof disclosure, 'disclosure').toBe('string');
-            expect(disclosure as string).toContain('SI');
+            for (const key of [
+                'dashboard.aiChat.disclosure',
+                'dashboard.aiChat.disclosureTemporary',
+            ]) {
+                const line = read(messages, key);
+                expect(typeof line, key).toBe('string');
+                expect(line as string, key).toContain('SI');
+            }
+            // The knowledge-base pane hosts the workspace agent, not Ever SI.
+            expect(read(messages, 'dashboard.workDetail.kb.panes.ai.title')).not.toMatch(
+                /assistant/i,
+            );
         },
     );
 

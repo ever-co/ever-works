@@ -11,6 +11,7 @@ vi.mock('next-intl', () => ({
 }));
 
 import { ChatWelcome } from './ChatWelcome';
+import { ChatRetentionContext } from '@/lib/ai/chat-disclosure';
 
 describe('ChatWelcome', () => {
     it('titles the panel and shows the disclosure line', () => {
@@ -20,6 +21,17 @@ describe('ChatWelcome', () => {
         );
         expect(screen.getByTestId('ever-si-disclosure')).toHaveTextContent(
             'dashboard.aiChat.disclosure',
+        );
+    });
+
+    it('says a temporary account loses the conversation with it', () => {
+        render(
+            <ChatRetentionContext value="temporary">
+                <ChatWelcome onSuggestion={vi.fn()} />
+            </ChatRetentionContext>,
+        );
+        expect(screen.getByTestId('ever-si-disclosure')).toHaveTextContent(
+            'dashboard.aiChat.disclosureTemporary',
         );
     });
 });

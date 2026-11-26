@@ -534,6 +534,7 @@ function secretOnceEntries(output: unknown): SecretOnceEntryView[] | null {
 }
 
 function SecretOnceBox({ label, entries }: { label: string; entries: SecretOnceEntryView[] }) {
+    const tSecret = useTranslations('dashboard.aiChat.secretOnce');
     const [copied, setCopied] = useState<string | null>(null);
     return (
         <div className="mt-2 p-3 rounded-lg border border-warning/30 bg-warning/5">
@@ -559,16 +560,14 @@ function SecretOnceBox({ label, entries }: { label: string; entries: SecretOnceE
                                 className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium bg-surface-secondary text-text dark:bg-surface-secondary-dark dark:text-text-dark hover:opacity-80 transition-opacity cursor-pointer"
                             >
                                 <Check className="w-3 h-3" />
-                                {copied === entry.field ? 'Copied' : 'Copy'}
+                                {copied === entry.field ? tSecret('copied') : tSecret('copy')}
                             </button>
                         </div>
                     </div>
                 ) : null,
             )}
             <p className="text-[11px] text-text-muted dark:text-text-muted-dark">
-                {entries.some((entry) => entry.value)
-                    ? 'Copy it now: it is shown only here, once. It is not saved in this conversation and the assistant cannot see it.'
-                    : 'A secret was shown once when this ran. It is not kept in the conversation; create a new one in Settings if you no longer have it.'}
+                {entries.some((entry) => entry.value) ? tSecret('copyNow') : tSecret('shownOnce')}
             </p>
         </div>
     );

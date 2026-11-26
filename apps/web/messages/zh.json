@@ -896,7 +896,7 @@
                 "created": "Mission 已创建",
                 "minLength": "描述至少需要 10 个字符。",
                 "error": "无法创建 Mission，请重试。",
-                "chatUnavailable": "聊天当前不可用——请改用“手动创建”。"
+                "chatUnavailable": "Ever SI 当前不可用——请改用“手动创建”。"
             },
             "buildOnApp": {
                 "product": "产品",
@@ -6874,7 +6874,7 @@
                         "empty": "Select a document on the left to view or edit it. Drag a file anywhere to upload."
                     },
                     "ai": {
-                        "title": "Ever SI",
+                        "title": "工作区智能体",
                         "empty": "Conversation with the workspace agent will appear here. Use @kb:path to ground replies."
                     }
                 },
@@ -9693,6 +9693,7 @@
             "welcomeTitle": "Ever SI",
             "welcomeSubtitle": "可以询问如何创建 Works、生成内容或整理你的数据。",
             "disclosure": "你正在与 Ever 的 SI 助手聊天。它可能会出错。我们会保留此对话，直到你将其删除。",
+            "disclosureTemporary": "你正在与 Ever 的 SI 助手聊天。它可能会出错。此对话会随此临时账户一起删除。",
             "welcomeMessage": "嗨！我可以使用自然语言帮助您创建作品。例如询问“为 AI 工具创建一个作品”或描述您的需求。",
             "capabilities": {
                 "workCreation": "作品创建",
@@ -9798,6 +9799,12 @@
             "panel": {
                 "assistant": "Ever SI",
                 "close": "关闭 Ever SI"
+            },
+            "secretOnce": {
+                "copy": "复制",
+                "copied": "已复制",
+                "copyNow": "请立即复制：它只在这里显示一次。它不会保存在此对话中，Ever SI 也看不到它。",
+                "shownOnce": "运行时显示过一次密钥。它不会保存在对话中；如果你已不再持有，请在设置中新建一个。"
             }
         },
         "plugins": {
@@ -10962,8 +10969,8 @@
                 "closeChat": "关闭 Ever SI"
             },
             "commandAliases": {
-                "openChat": "ever si, si, 聊天, 助手",
-                "closeChat": "ever si, si, 隐藏聊天"
+                "openChat": "ever si, si, 聊天, 助手, chat, assistant, ask ai",
+                "closeChat": "ever si, si, 隐藏聊天, hide chat, chat, assistant"
             },
             "noResults": {
                 "askChat": "向 Ever SI 询问“{query}”"

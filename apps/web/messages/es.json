@@ -942,7 +942,7 @@
                 "created": "Misión creada",
                 "minLength": "La descripción debe tener al menos 10 caracteres.",
                 "error": "No se pudo crear la misión. Inténtalo de nuevo.",
-                "chatUnavailable": "El chat no está disponible ahora mismo: usa «Crear manualmente»."
+                "chatUnavailable": "Ever SI no está disponible ahora mismo: usa «Crear manualmente»."
             },
             "buildOnApp": {
                 "product": "Producto",
@@ -6948,7 +6948,7 @@
                         "empty": "Select a document on the left to view or edit it. Drag a file anywhere to upload."
                     },
                     "ai": {
-                        "title": "Ever SI",
+                        "title": "Agente del espacio de trabajo",
                         "empty": "Conversation with the workspace agent will appear here. Use @kb:path to ground replies."
                     }
                 },
@@ -9766,6 +9766,7 @@
             "welcomeTitle": "Ever SI",
             "welcomeSubtitle": "Pregunta sobre crear Works, generar contenido u organizar tus datos.",
             "disclosure": "Estás chateando con el asistente SI de Ever. Puede equivocarse. Conservamos esta conversación hasta que la elimines.",
+            "disclosureTemporary": "Estás chateando con el asistente SI de Ever. Puede equivocarse. Esta conversación se elimina junto con esta cuenta temporal.",
             "welcomeMessage": "¡Hola! Puedo ayudarte a crear trabajos usando lenguaje natural. Pregunta algo como \"Crea un trabajo para herramientas de IA\" o describe lo que necesitas.",
             "capabilities": {
                 "workCreation": "Creación de Trabajos",
@@ -9871,6 +9872,12 @@
             "panel": {
                 "assistant": "Ever SI",
                 "close": "Cerrar Ever SI"
+            },
+            "secretOnce": {
+                "copy": "Copiar",
+                "copied": "Copiado",
+                "copyNow": "Cópialo ahora: solo se muestra aquí, una vez. No se guarda en esta conversación y Ever SI no puede verlo.",
+                "shownOnce": "Al ejecutarse se mostró un secreto una vez. No se guarda en la conversación; crea uno nuevo en Configuración si ya no lo tienes."
             }
         },
         "plugins": {
@@ -10961,8 +10968,8 @@
                 "closeChat": "Cerrar Ever SI"
             },
             "commandAliases": {
-                "openChat": "ever si, si, chat, asistente, preguntar a la ia",
-                "closeChat": "ever si, si, ocultar chat"
+                "openChat": "ever si, si, chat, asistente, preguntar a la ia, chat, assistant, ask ai",
+                "closeChat": "ever si, si, ocultar chat, hide chat, chat, assistant"
             },
             "noResults": {
                 "askChat": "Preguntar a Ever SI sobre «{query}»"

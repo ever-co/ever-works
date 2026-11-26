@@ -904,7 +904,7 @@
                 "created": "Missie aangemaakt",
                 "minLength": "De beschrijving moet minstens 10 tekens bevatten.",
                 "error": "Kon de missie niet aanmaken. Probeer het opnieuw.",
-                "chatUnavailable": "Chat is momenteel niet beschikbaar — gebruik \"Handmatig aanmaken\"."
+                "chatUnavailable": "Ever SI is momenteel niet beschikbaar — gebruik \"Handmatig aanmaken\"."
             },
             "buildOnApp": {
                 "product": "Product",
@@ -6874,7 +6874,7 @@
                         "empty": "Select a document on the left to view or edit it. Drag a file anywhere to upload."
                     },
                     "ai": {
-                        "title": "Ever SI",
+                        "title": "Werkruimte-agent",
                         "empty": "Conversation with the workspace agent will appear here. Use @kb:path to ground replies."
                     }
                 },
@@ -9693,6 +9693,7 @@
             "welcomeTitle": "Ever SI",
             "welcomeSubtitle": "Vraag naar het maken van Works, het genereren van inhoud of het ordenen van je gegevens.",
             "disclosure": "Je chat met de SI-assistent van Ever. Die kan fouten maken. We bewaren dit gesprek tot je het verwijdert.",
+            "disclosureTemporary": "Je chat met de SI-assistent van Ever. Die kan fouten maken. Dit gesprek wordt samen met dit tijdelijke account verwijderd.",
             "welcomeMessage": "Hoi! Ik kan je helpen werken te maken met natuurlijke taal. Vraag iets als \"Maak een werk voor AI-tools\" of beschrijf wat je nodig hebt.",
             "capabilities": {
                 "workCreation": "Werk-aanmaak",
@@ -9798,6 +9799,12 @@
             "panel": {
                 "assistant": "Ever SI",
                 "close": "Ever SI sluiten"
+            },
+            "secretOnce": {
+                "copy": "Kopiëren",
+                "copied": "Gekopieerd",
+                "copyNow": "Kopieer hem nu: hij wordt alleen hier en maar één keer getoond. Hij wordt niet in dit gesprek bewaard en Ever SI kan hem niet zien.",
+                "shownOnce": "Bij het uitvoeren werd eenmaal een geheim getoond. Het wordt niet in het gesprek bewaard; maak een nieuw aan in Instellingen als je het niet meer hebt."
             }
         },
         "plugins": {
@@ -10962,8 +10969,8 @@
                 "closeChat": "Ever SI sluiten"
             },
             "commandAliases": {
-                "openChat": "ever si, si, chat, assistent",
-                "closeChat": "ever si, si, chat verbergen"
+                "openChat": "ever si, si, chat, assistent, chat, assistant, ask ai",
+                "closeChat": "ever si, si, chat verbergen, hide chat, chat, assistant"
             },
             "noResults": {
                 "askChat": "Vraag Ever SI naar ‘{query}’"

@@ -904,7 +904,7 @@
                 "created": "미션이 생성되었습니다",
                 "minLength": "설명은 최소 10자 이상이어야 합니다.",
                 "error": "미션을 생성하지 못했습니다. 다시 시도해 주세요.",
-                "chatUnavailable": "채팅을 사용할 수 없습니다 — \"직접 만들기\"를 이용하세요."
+                "chatUnavailable": "Ever SI를 사용할 수 없습니다 — \"직접 만들기\"를 이용하세요."
             },
             "buildOnApp": {
                 "product": "제품",
@@ -6874,7 +6874,7 @@
                         "empty": "Select a document on the left to view or edit it. Drag a file anywhere to upload."
                     },
                     "ai": {
-                        "title": "Ever SI",
+                        "title": "워크스페이스 에이전트",
                         "empty": "Conversation with the workspace agent will appear here. Use @kb:path to ground replies."
                     }
                 },
@@ -9693,6 +9693,7 @@
             "welcomeTitle": "Ever SI",
             "welcomeSubtitle": "Works 만들기, 콘텐츠 생성, 데이터 정리에 대해 물어보세요.",
             "disclosure": "Ever의 SI 어시스턴트와 대화하고 있습니다. 실수할 수 있습니다. 이 대화는 삭제할 때까지 보관됩니다.",
+            "disclosureTemporary": "Ever의 SI 어시스턴트와 대화하고 있습니다. 실수할 수 있습니다. 이 대화는 임시 계정과 함께 삭제됩니다.",
             "welcomeMessage": "안녕하세요! 자연어를 사용하여 워크를 생성할 수 있도록 도와드리겠습니다. \"AI 도구 워크 생성\" 같은 것을 요청하거나 필요한 것을 설명하세요.",
             "capabilities": {
                 "workCreation": "워크 생성",
@@ -9798,6 +9799,12 @@
             "panel": {
                 "assistant": "Ever SI",
                 "close": "Ever SI 닫기"
+            },
+            "secretOnce": {
+                "copy": "복사",
+                "copied": "복사됨",
+                "copyNow": "지금 복사하세요. 여기에서 한 번만 표시됩니다. 이 대화에 저장되지 않으며 Ever SI도 볼 수 없습니다.",
+                "shownOnce": "실행할 때 비밀 값이 한 번 표시되었습니다. 대화에 보관되지 않으니, 더 이상 없다면 설정에서 새로 만드세요."
             }
         },
         "plugins": {
@@ -10962,8 +10969,8 @@
                 "closeChat": "Ever SI 닫기"
             },
             "commandAliases": {
-                "openChat": "ever si, si, 채팅, 어시스턴트",
-                "closeChat": "ever si, si, 채팅 숨기기"
+                "openChat": "ever si, si, 채팅, 어시스턴트, chat, assistant, ask ai",
+                "closeChat": "ever si, si, 채팅 숨기기, hide chat, chat, assistant"
             },
             "noResults": {
                 "askChat": "“{query}”에 대해 Ever SI에게 질문"

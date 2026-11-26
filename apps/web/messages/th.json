@@ -896,7 +896,7 @@
                 "created": "สร้างภารกิจแล้ว",
                 "minLength": "คำอธิบายต้องมีอย่างน้อย 10 ตัวอักษร",
                 "error": "ไม่สามารถสร้างภารกิจได้ กรุณาลองใหม่อีกครั้ง",
-                "chatUnavailable": "แชทไม่พร้อมใช้งานขณะนี้ — ใช้ \"สร้างด้วยตนเอง\" แทน"
+                "chatUnavailable": "Ever SI ไม่พร้อมใช้งานขณะนี้ — ใช้ \"สร้างด้วยตนเอง\" แทน"
             },
             "buildOnApp": {
                 "product": "ผลิตภัณฑ์",
@@ -6874,7 +6874,7 @@
                         "empty": "Select a document on the left to view or edit it. Drag a file anywhere to upload."
                     },
                     "ai": {
-                        "title": "Ever SI",
+                        "title": "เอเจนต์ของพื้นที่ทำงาน",
                         "empty": "Conversation with the workspace agent will appear here. Use @kb:path to ground replies."
                     }
                 },
@@ -9693,6 +9693,7 @@
             "welcomeTitle": "Ever SI",
             "welcomeSubtitle": "ถามเกี่ยวกับการสร้าง Works การสร้างเนื้อหา หรือการจัดระเบียบข้อมูลของคุณ",
             "disclosure": "คุณกำลังแชตกับผู้ช่วย SI ของ Ever ผู้ช่วยอาจผิดพลาดได้ เราเก็บบทสนทนานี้ไว้จนกว่าคุณจะลบ",
+            "disclosureTemporary": "คุณกำลังแชตกับผู้ช่วย SI ของ Ever ผู้ช่วยอาจผิดพลาดได้ บทสนทนานี้จะถูกลบพร้อมกับบัญชีชั่วคราวนี้",
             "welcomeMessage": "สวัสดี! ฉันสามารถช่วยคุณสร้างงานโดยใช้ภาษาธรรมชาติ ถามบางอย่างเช่น \"สร้างงานสำหรับเครื่องมือ AI\" หรืออธิบายสิ่งที่คุณต้องการ",
             "capabilities": {
                 "workCreation": "การสร้างงาน",
@@ -9798,6 +9799,12 @@
             "panel": {
                 "assistant": "Ever SI",
                 "close": "ปิด Ever SI"
+            },
+            "secretOnce": {
+                "copy": "คัดลอก",
+                "copied": "คัดลอกแล้ว",
+                "copyNow": "คัดลอกตอนนี้: จะแสดงที่นี่เพียงครั้งเดียว ไม่ได้บันทึกในบทสนทนานี้ และ Ever SI มองไม่เห็น",
+                "shownOnce": "มีการแสดงข้อมูลลับหนึ่งครั้งเมื่อทำงานนี้ ข้อมูลนี้ไม่ได้เก็บไว้ในบทสนทนา สร้างใหม่ได้ในการตั้งค่าหากไม่มีแล้ว"
             }
         },
         "plugins": {
@@ -10962,8 +10969,8 @@
                 "closeChat": "ปิด Ever SI"
             },
             "commandAliases": {
-                "openChat": "ever si, si, แชต, ผู้ช่วย",
-                "closeChat": "ever si, si, ซ่อนแชต"
+                "openChat": "ever si, si, แชต, ผู้ช่วย, chat, assistant, ask ai",
+                "closeChat": "ever si, si, ซ่อนแชต, hide chat, chat, assistant"
             },
             "noResults": {
                 "askChat": "ถาม Ever SI เกี่ยวกับ “{query}”"

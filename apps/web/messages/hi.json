@@ -896,7 +896,7 @@
                 "created": "मिशन बनाया गया",
                 "minLength": "विवरण कम से कम 10 अक्षरों का होना चाहिए।",
                 "error": "मिशन नहीं बनाया जा सका। कृपया पुनः प्रयास करें।",
-                "chatUnavailable": "चैट अभी उपलब्ध नहीं है — इसके बजाय \"मैन्युअल रूप से बनाएँ\" का उपयोग करें।"
+                "chatUnavailable": "Ever SI अभी उपलब्ध नहीं है — इसके बजाय \"मैन्युअल रूप से बनाएँ\" का उपयोग करें।"
             },
             "buildOnApp": {
                 "product": "उत्पाद",
@@ -6874,7 +6874,7 @@
                         "empty": "Select a document on the left to view or edit it. Drag a file anywhere to upload."
                     },
                     "ai": {
-                        "title": "Ever SI",
+                        "title": "वर्कस्पेस एजेंट",
                         "empty": "Conversation with the workspace agent will appear here. Use @kb:path to ground replies."
                     }
                 },
@@ -9693,6 +9693,7 @@
             "welcomeTitle": "Ever SI",
             "welcomeSubtitle": "Works बनाने, सामग्री तैयार करने या अपने डेटा को व्यवस्थित करने के बारे में पूछें।",
             "disclosure": "आप Ever के SI सहायक से बात कर रहे हैं। यह गलतियाँ कर सकता है। हम यह बातचीत तब तक रखते हैं जब तक आप इसे हटा नहीं देते।",
+            "disclosureTemporary": "आप Ever के SI सहायक से बात कर रहे हैं। यह गलतियाँ कर सकता है। यह बातचीत इस अस्थायी खाते के साथ हटा दी जाती है।",
             "welcomeMessage": "नमस्ते! मैं प्राकृतिक भाषा का उपयोग करके कार्य बनाने में आपकी सहायता कर सकता हूँ। कुछ ऐसा पूछें जैसे \"AI टूल्स के लिए एक कार्य बनाएँ\" या बताएँ कि आपको क्या चाहिए।",
             "capabilities": {
                 "workCreation": "कार्य निर्माण",
@@ -9716,7 +9717,7 @@
             "resizeChat": "Ever SI का आकार बदलने के लिए खींचें",
             "expandChat": "Ever SI चौड़ा करें",
             "openPanel": "Ever SI खोलें",
-            "providersError": "AI प्रदाता लोड नहीं हो सके। Ever SI सही उत्तर नहीं दे सकता।",
+            "providersError": "AI प्रदाता लोड नहीं हो सके। हो सकता है Ever SI सही उत्तर न दे।",
             "providerNotConfigured": "यह प्रदाता कॉन्फ़िगर नहीं है। इसे प्लगइन्स में सेट करें।",
             "editMessage": "संदेश संपादित करें",
             "saveEdit": "सहेजें और सबमिट करें",
@@ -9798,6 +9799,12 @@
             "panel": {
                 "assistant": "Ever SI",
                 "close": "Ever SI बंद करें"
+            },
+            "secretOnce": {
+                "copy": "कॉपी करें",
+                "copied": "कॉपी हो गया",
+                "copyNow": "इसे अभी कॉपी करें: यह केवल यहीं, एक बार दिखाया जाता है। यह इस बातचीत में सहेजा नहीं जाता और Ever SI इसे नहीं देख सकता।",
+                "shownOnce": "इसके चलने पर एक गुप्त मान एक बार दिखाया गया था। यह बातचीत में नहीं रखा जाता; अगर यह अब आपके पास नहीं है तो सेटिंग्स में नया बनाएँ।"
             }
         },
         "plugins": {
@@ -10962,8 +10969,8 @@
                 "closeChat": "Ever SI बंद करें"
             },
             "commandAliases": {
-                "openChat": "ever si, si, चैट, सहायक",
-                "closeChat": "ever si, si, चैट छिपाएँ"
+                "openChat": "ever si, si, चैट, सहायक, chat, assistant, ask ai",
+                "closeChat": "ever si, si, चैट छिपाएँ, hide chat, chat, assistant"
             },
             "noResults": {
                 "askChat": "“{query}” के बारे में Ever SI से पूछें"

@@ -1434,7 +1434,7 @@
                 "created": "Mission created",
                 "minLength": "Description must be at least 10 characters.",
                 "error": "Couldn't create the Mission. Please try again.",
-                "chatUnavailable": "Chat is unavailable right now — use \"Create manually\" instead."
+                "chatUnavailable": "Ever SI is unavailable right now — use “Create manually” instead."
             },
             "buildOnApp": {
                 "product": "Product",
@@ -9163,7 +9163,7 @@
                         "empty": "Select a document on the left to view or edit it. Drag a file anywhere to upload."
                     },
                     "ai": {
-                        "title": "Ever SI",
+                        "title": "Workspace agent",
                         "empty": "Conversation with the workspace agent will appear here. Use @kb:path to ground replies."
                     }
                 },
@@ -12233,6 +12233,7 @@
             "welcomeTitle": "Ever SI",
             "welcomeSubtitle": "Ask about creating Works, generating content or organizing your data.",
             "disclosure": "You're chatting with Ever's SI assistant. It can make mistakes. We keep this conversation until you delete it.",
+            "disclosureTemporary": "You're chatting with Ever's SI assistant. It can make mistakes. This conversation is deleted together with this temporary account.",
             "welcomeMessage": "Hi! I can help you create works using natural language. Ask something like \"Create a Work for AI tools\" or describe what you need.",
             "capabilities": {
                 "workCreation": "Work Creation",
@@ -12405,6 +12406,12 @@
                 "stateFailed": "{step}: failed",
                 "statePending": "{step}: not started",
                 "pollingStopped": "Stopped checking for updates. Open the Task to see where it stands."
+            },
+            "secretOnce": {
+                "copy": "Copy",
+                "copied": "Copied",
+                "copyNow": "Copy it now: it is shown only here, once. It is not saved in this conversation, and Ever SI cannot see it.",
+                "shownOnce": "A secret was shown once when this ran. It is not kept in the conversation; create a new one in Settings if you no longer have it."
             }
         },
         "plugins": {

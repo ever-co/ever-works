@@ -942,7 +942,7 @@
                 "created": "Mission créée",
                 "minLength": "La description doit comporter au moins 10 caractères.",
                 "error": "Impossible de créer la mission. Veuillez réessayer.",
-                "chatUnavailable": "Le chat est indisponible — utilisez « Créer manuellement »."
+                "chatUnavailable": "Ever SI est indisponible — utilisez « Créer manuellement »."
             },
             "buildOnApp": {
                 "product": "Produit",
@@ -6948,7 +6948,7 @@
                         "empty": "Select a document on the left to view or edit it. Drag a file anywhere to upload."
                     },
                     "ai": {
-                        "title": "Ever SI",
+                        "title": "Agent de l'espace de travail",
                         "empty": "Conversation with the workspace agent will appear here. Use @kb:path to ground replies."
                     }
                 },
@@ -9766,6 +9766,7 @@
             "welcomeTitle": "Ever SI",
             "welcomeSubtitle": "Posez vos questions sur la création de Works, la génération de contenu ou l'organisation de vos données.",
             "disclosure": "Vous discutez avec l'assistant SI d'Ever. Il peut se tromper. Nous conservons cette conversation jusqu'à ce que vous la supprimiez.",
+            "disclosureTemporary": "Vous discutez avec l'assistant SI d'Ever. Il peut se tromper. Cette conversation est supprimée avec ce compte temporaire.",
             "welcomeMessage": "Salut ! Je peux vous aider à créer des travaux en utilisant un langage naturel. Demandez quelque chose comme « Créez un travail pour les outils IA » ou décrivez ce dont vous avez besoin.",
             "capabilities": {
                 "workCreation": "Création d'travail",
@@ -9871,6 +9872,12 @@
             "panel": {
                 "assistant": "Ever SI",
                 "close": "Fermer Ever SI"
+            },
+            "secretOnce": {
+                "copy": "Copier",
+                "copied": "Copié",
+                "copyNow": "Copiez-le maintenant : il n'est affiché qu'ici, une seule fois. Il n'est pas enregistré dans cette conversation et Ever SI ne peut pas le voir.",
+                "shownOnce": "Un secret a été affiché une fois lors de l'exécution. Il n'est pas conservé dans la conversation ; créez-en un nouveau dans les paramètres si vous ne l'avez plus."
             }
         },
         "plugins": {
@@ -10961,8 +10968,8 @@
                 "closeChat": "Fermer Ever SI"
             },
             "commandAliases": {
-                "openChat": "ever si, si, chat, assistant, demander à l'ia",
-                "closeChat": "ever si, si, masquer le chat"
+                "openChat": "ever si, si, chat, assistant, demander à l'ia, chat, assistant, ask ai",
+                "closeChat": "ever si, si, masquer le chat, hide chat, chat, assistant"
             },
             "noResults": {
                 "askChat": "Demander à Ever SI : « {query} »"

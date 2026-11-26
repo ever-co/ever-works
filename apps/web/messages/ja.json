@@ -904,7 +904,7 @@
                 "created": "ミッションを作成しました",
                 "minLength": "説明は 10 文字以上で入力してください。",
                 "error": "ミッションを作成できませんでした。もう一度お試しください。",
-                "chatUnavailable": "チャットは現在利用できません。「手動で作成」をご利用ください。"
+                "chatUnavailable": "Ever SI は現在利用できません。「手動で作成」をご利用ください。"
             },
             "buildOnApp": {
                 "product": "プロダクト",
@@ -6874,7 +6874,7 @@
                         "empty": "Select a document on the left to view or edit it. Drag a file anywhere to upload."
                     },
                     "ai": {
-                        "title": "Ever SI",
+                        "title": "ワークスペースエージェント",
                         "empty": "Conversation with the workspace agent will appear here. Use @kb:path to ground replies."
                     }
                 },
@@ -9693,6 +9693,7 @@
             "welcomeTitle": "Ever SI",
             "welcomeSubtitle": "Works の作成、コンテンツの生成、データの整理について質問できます。",
             "disclosure": "Ever の SI アシスタントとチャットしています。誤りを含むことがあります。この会話は削除するまで保存されます。",
+            "disclosureTemporary": "Ever の SI アシスタントとチャットしています。誤りを含むことがあります。この会話は一時アカウントと一緒に削除されます。",
             "welcomeMessage": "こんにちは！自然言語を使ってワークを作成するお手伝いをします。「AI ツールのワークを作成」などのように尋ねたり、必要なものを説明してください。",
             "capabilities": {
                 "workCreation": "ワーク作成",
@@ -9798,6 +9799,12 @@
             "panel": {
                 "assistant": "Ever SI",
                 "close": "Ever SI を閉じる"
+            },
+            "secretOnce": {
+                "copy": "コピー",
+                "copied": "コピーしました",
+                "copyNow": "今すぐコピーしてください。ここに一度だけ表示されます。この会話には保存されず、Ever SI も見ることはできません。",
+                "shownOnce": "実行時にシークレットが一度だけ表示されました。会話には保存されません。手元にない場合は設定で新しく作成してください。"
             }
         },
         "plugins": {
@@ -10962,8 +10969,8 @@
                 "closeChat": "Ever SI を閉じる"
             },
             "commandAliases": {
-                "openChat": "ever si, si, チャット, アシスタント",
-                "closeChat": "ever si, si, チャットを隠す"
+                "openChat": "ever si, si, チャット, アシスタント, chat, assistant, ask ai",
+                "closeChat": "ever si, si, チャットを隠す, hide chat, chat, assistant"
             },
             "noResults": {
                 "askChat": "「{query}」について Ever SI に質問"

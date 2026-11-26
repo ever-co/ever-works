@@ -896,7 +896,7 @@
                 "created": "Görev oluşturuldu",
                 "minLength": "Açıklama en az 10 karakter olmalıdır.",
                 "error": "Görev oluşturulamadı. Lütfen tekrar deneyin.",
-                "chatUnavailable": "Sohbet şu anda kullanılamıyor — \"Elle oluştur\" seçeneğini kullanın."
+                "chatUnavailable": "Ever SI şu anda kullanılamıyor — \"Elle oluştur\" seçeneğini kullanın."
             },
             "buildOnApp": {
                 "product": "Ürün",
@@ -6874,7 +6874,7 @@
                         "empty": "Select a document on the left to view or edit it. Drag a file anywhere to upload."
                     },
                     "ai": {
-                        "title": "Ever SI",
+                        "title": "Çalışma alanı aracısı",
                         "empty": "Conversation with the workspace agent will appear here. Use @kb:path to ground replies."
                     }
                 },
@@ -9693,6 +9693,7 @@
             "welcomeTitle": "Ever SI",
             "welcomeSubtitle": "Works oluşturma, içerik üretme veya verilerinizi düzenleme hakkında sorun.",
             "disclosure": "Ever'ın SI asistanıyla sohbet ediyorsunuz. Hata yapabilir. Bu sohbeti siz silene kadar saklarız.",
+            "disclosureTemporary": "Ever'ın SI asistanıyla sohbet ediyorsunuz. Hata yapabilir. Bu sohbet, bu geçici hesapla birlikte silinir.",
             "welcomeMessage": "Merhaba! Doğal dil kullanarak işler oluşturmanıza yardımcı olabilirim. \"AI araçları için bir iş oluştur\" gibi bir şey sorun veya ihtiyacınızı tarif edin.",
             "capabilities": {
                 "workCreation": "İş Oluşturma",
@@ -9798,6 +9799,12 @@
             "panel": {
                 "assistant": "Ever SI",
                 "close": "Ever SI'ı kapat"
+            },
+            "secretOnce": {
+                "copy": "Kopyala",
+                "copied": "Kopyalandı",
+                "copyNow": "Şimdi kopyalayın: yalnızca burada, bir kez gösterilir. Bu sohbette saklanmaz ve Ever SI onu göremez.",
+                "shownOnce": "Bu çalıştığında bir gizli değer bir kez gösterildi. Sohbette saklanmaz; artık sizde yoksa Ayarlar’da yenisini oluşturun."
             }
         },
         "plugins": {
@@ -10962,8 +10969,8 @@
                 "closeChat": "Ever SI'ı kapat"
             },
             "commandAliases": {
-                "openChat": "ever si, si, sohbet, asistan",
-                "closeChat": "ever si, si, sohbeti gizle"
+                "openChat": "ever si, si, sohbet, asistan, chat, assistant, ask ai",
+                "closeChat": "ever si, si, sohbeti gizle, hide chat, chat, assistant"
             },
             "noResults": {
                 "askChat": "Ever SI'a “{query}” hakkında sorun"

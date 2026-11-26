@@ -896,7 +896,7 @@
                 "created": "Missão criada",
                 "minLength": "A descrição deve ter pelo menos 10 caracteres.",
                 "error": "Não foi possível criar a missão. Tente novamente.",
-                "chatUnavailable": "O chat está indisponível — use «Criar manualmente»."
+                "chatUnavailable": "O Ever SI está indisponível — use «Criar manualmente»."
             },
             "buildOnApp": {
                 "product": "Produto",
@@ -6874,7 +6874,7 @@
                         "empty": "Select a document on the left to view or edit it. Drag a file anywhere to upload."
                     },
                     "ai": {
-                        "title": "Ever SI",
+                        "title": "Agente do espaço de trabalho",
                         "empty": "Conversation with the workspace agent will appear here. Use @kb:path to ground replies."
                     }
                 },
@@ -9693,6 +9693,7 @@
             "welcomeTitle": "Ever SI",
             "welcomeSubtitle": "Pergunte sobre criar Works, gerar conteúdo ou organizar seus dados.",
             "disclosure": "Você está conversando com o assistente SI da Ever. Ele pode cometer erros. Guardamos esta conversa até você excluí-la.",
+            "disclosureTemporary": "Você está conversando com o assistente SI da Ever. Ele pode cometer erros. Esta conversa é excluída junto com esta conta temporária.",
             "welcomeMessage": "Oi! Posso ajudá-lo a criar trabalhos usando linguagem natural. Pergunte algo como \"Crie um trabalho para ferramentas de IA\" ou descreva o que você precisa.",
             "capabilities": {
                 "workCreation": "Criação de Trabalho",
@@ -9798,6 +9799,12 @@
             "panel": {
                 "assistant": "Ever SI",
                 "close": "Fechar Ever SI"
+            },
+            "secretOnce": {
+                "copy": "Copiar",
+                "copied": "Copiado",
+                "copyNow": "Copie agora: é mostrado só aqui, uma vez. Não é salvo nesta conversa, e o Ever SI não consegue vê-lo.",
+                "shownOnce": "Um segredo foi mostrado uma vez quando isso foi executado. Ele não fica na conversa; crie um novo em Configurações se não o tiver mais."
             }
         },
         "plugins": {
@@ -10962,8 +10969,8 @@
                 "closeChat": "Fechar Ever SI"
             },
             "commandAliases": {
-                "openChat": "ever si, si, chat, assistente",
-                "closeChat": "ever si, si, ocultar chat"
+                "openChat": "ever si, si, chat, assistente, chat, assistant, ask ai",
+                "closeChat": "ever si, si, ocultar chat, hide chat, chat, assistant"
             },
             "noResults": {
                 "askChat": "Perguntar ao Ever SI sobre “{query}”"
