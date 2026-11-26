@@ -22,6 +22,11 @@ import {
 } from '@nestjs/common';
 import { config } from '@src/config/constants';
 import { existingAccountEmailUnverified } from '@src/auth/services/social-link-errors';
+import {
+    type AccountEmailMatch,
+    findAccountByEmail,
+    normalizeAccountEmail,
+} from '@src/auth/services/account-email-match';
 import * as bcrypt from 'bcrypt';
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { GitHubAppService, type GitHubInstallationResponse } from './github-app.service';
@@ -448,7 +453,11 @@ export class GitHubAppOnboardingService {
         // below is reached only for a GitHub id we have never seen, and it can
         // never link an unverified email to an existing user.
         const existingLink = await repos.links.findByGithubUserId(input.githubUserId);
-        let user = existingLink ? await repos.users.findById(existingLink.userId) : null;
+        // An account found by email may hold only the social-auth columns (AccountEmailMatch);
+        // the create / update below re-reads a full row into `account`.
+        let user: User | AccountEmailMatch | null = existingLink
+            ? await repos.users.findById(existingLink.userId)
+            : null;
 
         if (!user) {
             const existingAuthAccount = await repos.authAccounts.findProviderAccountByAccountId(
@@ -470,8 +479,16 @@ export class GitHubAppOnboardingService {
             }
         }
 
-        if (!user && input.email) {
-            user = await repos.users.findByEmail(input.email);
+        // Normalised once and used for every lookup and write of the user's email below: stored
+        // addresses are lower case, so GitHub's casing can neither miss an existing account nor
+        // create a case variant of it. Blank or missing: the noreply placeholder, unverified.
+        const email = normalizeAccountEmail(input.email);
+
+        if (!user && email) {
+            // Exact first, then a unique case-insensitive match, as in the OAuth sign-in. Several
+            // accounts that differ only in case are refused (SOCIAL_EMAIL_AMBIGUOUS, 409) here,
+            // before anything is written; the one account found faces the same checks as before.
+            user = await findAccountByEmail(repos.users, input.email);
             if (user && !input.emailVerified) {
                 throw new UnauthorizedException(
                     'Unable to link this GitHub App user because the provider email is not verified',
@@ -486,18 +503,17 @@ export class GitHubAppOnboardingService {
             }
         }
 
+        let account: User;
         if (!user) {
             const username = await this.resolveUniqueUsername(input.login);
-            const email =
-                input.email || `github-app-${input.githubUserId}@users.noreply.ever.works`;
 
-            user = await repos.users.create({
+            account = await repos.users.create({
                 username,
-                email,
+                email: email || `github-app-${input.githubUserId}@users.noreply.ever.works`,
                 password: await bcrypt.hash(randomUUID(), 10),
                 registrationProvider: 'github',
                 avatar: input.avatarUrl || undefined,
-                emailVerified: input.email ? input.emailVerified : false,
+                emailVerified: email ? input.emailVerified : false,
                 isActive: true,
                 lastLoginAt: new Date(),
             });
@@ -507,15 +523,25 @@ export class GitHubAppOnboardingService {
             // null the same as the placeholder noreply address — overwrite.
             const isPlaceholderEmail =
                 !user.email || user.email.endsWith('@users.noreply.ever.works');
-            const nextEmail = input.email && isPlaceholderEmail ? input.email : user.email;
+            // The placeholder is replaced only by an address no other account uses in any case:
+            // writing it next to another account's `Jane@Example.com` would create a case
+            // variant of it (and verify it, below). That user keeps the placeholder instead.
+            const replacePlaceholder =
+                !!email &&
+                isPlaceholderEmail &&
+                !(await repos.users.existsByEmailCaseInsensitive(email));
+            if (email && isPlaceholderEmail && !replacePlaceholder) {
+                this.logger.warn(
+                    `GitHub App user ${user.id} keeps its placeholder email: another account already uses the GitHub address`,
+                );
+            }
+            const nextEmail = replacePlaceholder ? email : user.email;
             // Only a verified address that IS the user's address can verify it, as in
             // `AuthService.validateSocialUser`. Reached by identity, GitHub may verify another
             // address of the account; that must not verify this one (or the pre-hijack guard
             // above is undone by the next App setup).
-            const sameEmail =
-                !!input.email &&
-                (nextEmail ?? '').trim().toLowerCase() === input.email.trim().toLowerCase();
-            user = await repos.users.update(user.id, {
+            const sameEmail = !!email && (nextEmail ?? '').trim().toLowerCase() === email;
+            account = await repos.users.update(user.id, {
                 username: user.username || input.login,
                 avatar: input.avatarUrl || user.avatar,
                 email: nextEmail,
@@ -526,7 +552,7 @@ export class GitHubAppOnboardingService {
         }
 
         await repos.authAccounts.upsertProviderAccount({
-            userId: user.id,
+            userId: account.id,
             providerId: 'github',
             accountId: input.githubUserId,
             username: input.login,
@@ -545,7 +571,7 @@ export class GitHubAppOnboardingService {
         });
 
         await repos.links.upsertLink({
-            userId: user.id,
+            userId: account.id,
             githubUserId: input.githubUserId,
             githubLogin: input.login,
             githubNodeId: input.nodeId,
@@ -556,7 +582,7 @@ export class GitHubAppOnboardingService {
             scope: input.scope,
         });
 
-        return user;
+        return account;
     }
 
     /**

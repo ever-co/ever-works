@@ -181,6 +181,39 @@ describe('EverIdLinkingService', () => {
         expect(deleteUser).toHaveBeenCalledWith({ id: 'new-user' });
     });
 
+    // The unique index on `users.email` is case-sensitive, so the claim's casing would make
+    // case-variant rows possible. Only the account's email changes: the address checks, the
+    // connection's `emailAtLink` and the sealed value keep the claim as it came.
+    it('stores a mixed-case claim email trimmed and in lower case on the new account', async () => {
+        const { service, users, identities } = build();
+        identities.insertLink.mockResolvedValue({ id: 'identity-1' });
+        const pending = new EverIdSealService().seal('signUp', {
+            id: 'pending-mixed-case',
+            kind: 'signUp',
+            issuer: claims.issuer,
+            subject: claims.subject,
+            email: ' Person@Example.COM ',
+            name: claims.name,
+            sid: null,
+            returnTo: null,
+        });
+
+        await service.confirmSignUp(
+            pending,
+            [{ documentId: 'tos:ever-works', version: '1', sha256: 'a'.repeat(64), locale: 'en' }],
+            ctx,
+        );
+
+        expect(users.create).toHaveBeenCalledTimes(1);
+        expect(users.create).toHaveBeenCalledWith(
+            expect.objectContaining({ email: 'person@example.com', emailVerified: true }),
+        );
+        expect(users.existsByEmailCaseInsensitive).toHaveBeenCalledWith(' Person@Example.COM ');
+        expect(identities.insertLink).toHaveBeenCalledWith(
+            expect.objectContaining({ userId: 'new-user', emailAtLink: ' Person@Example.COM ' }),
+        );
+    });
+
     it('refuses an account-exists hand-off value at the sign-up confirmation', async () => {
         const { service } = build();
         const pending = new EverIdSealService().seal('signUp', {

@@ -297,7 +297,9 @@ export class EverIdLinkingService {
         );
         const user = await this.users.create({
             username,
-            email: pending.email,
+            // Stored as every account email is: trimmed and lower case. The checks above
+            // already compared it case-insensitively; this only drops the claim's casing.
+            email: pending.email.trim().toLowerCase(),
             password: await bcrypt.hash(randomBytes(32).toString('hex'), getBcryptCost()),
             registrationProvider: EVER_ID_REGISTRATION_PROVIDER,
             // The provider verified the address (`email_verified`), which is the
