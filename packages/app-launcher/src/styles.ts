@@ -214,7 +214,9 @@ export const EVER_APP_LAUNCHER_STYLES = `
 	background: var(--ever-app-launcher-bg);
 	color: inherit;
 	font: inherit;
-	text-align: left;
+	/* start, not left: a full-width row in a right-to-left locale keeps its text
+	   beside its icon. */
+	text-align: start;
 	text-decoration: none;
 	cursor: pointer;
 }

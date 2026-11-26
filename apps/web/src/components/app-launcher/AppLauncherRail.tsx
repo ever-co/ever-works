@@ -145,6 +145,16 @@ function RailItem({ item, position }: { item: AppLauncherItem; position: number 
     }
 
     const catalogId = item.kind === 'platform' ? catalogIdFromKey(item.key) : undefined;
+    const reportOpened = () =>
+        captureAppLauncherEvent({
+            name: 'app_launcher_item_opened',
+            properties: {
+                item_kind: item.kind,
+                ...(catalogId === undefined ? {} : { catalog_id: catalogId }),
+                position,
+                pinned,
+            },
+        });
     return (
         <Tooltip content={item.name} position="right">
             <a
@@ -156,17 +166,11 @@ function RailItem({ item, position }: { item: AppLauncherItem; position: number 
                     'outline-none transition-colors hover:bg-surface-secondary focus-visible:ring-2 focus-visible:ring-text/30',
                     'dark:hover:bg-surface-secondary-dark dark:focus-visible:ring-text-dark/30',
                 )}
-                onClick={() =>
-                    captureAppLauncherEvent({
-                        name: 'app_launcher_item_opened',
-                        properties: {
-                            item_kind: item.kind,
-                            ...(catalogId === undefined ? {} : { catalog_id: catalogId }),
-                            position,
-                            pinned,
-                        },
-                    })
-                }
+                onClick={reportOpened}
+                onAuxClick={(event) => {
+                    // A middle click opens it in a new tab without a click event.
+                    if (event.button === 1) reportOpened();
+                }}
             >
                 <AppIcon item={item} />
             </a>
@@ -210,14 +214,21 @@ export function AppLauncherRail() {
     const scope = useWorkspaceScope();
     const scopeKey = scope === null ? null : serializeWorkspaceScope(scope);
     const { data, loading } = useAppLauncherList(scopeKey);
-    const addAppUrl = addAppUrlFrom(data);
+    // The same address rule as every rail link (FR-32), on top of the derivation's own.
+    const addAppUrl = safeRailUrl(addAppUrlFrom(data));
 
-    const groups = SECTIONS.map((section) =>
-        (data?.items ?? []).filter((item) => item.visible !== false && item.section === section),
-    ).filter((items) => items.length > 0);
+    // The Ever apps group is drawn for its "+" even when the person hid every Ever app.
+    const groups = SECTIONS.map((section) => ({
+        section,
+        items: (data?.items ?? []).filter(
+            (item) => item.visible !== false && item.section === section,
+        ),
+    })).filter(
+        ({ section, items }) => items.length > 0 || (section === 'platforms' && addAppUrl !== null),
+    );
     // Positions count across the groups, the way the panel's grid counts its tiles.
     const offsets = groups.map((_, index) =>
-        groups.slice(0, index).reduce((sum, items) => sum + items.length, 0),
+        groups.slice(0, index).reduce((sum, group) => sum + group.items.length, 0),
     );
 
     return (
@@ -235,10 +246,10 @@ export function AppLauncherRail() {
                               className="m-1 size-8 rounded-lg bg-surface-secondary dark:bg-surface-secondary-dark"
                           />
                       ))
-                    : groups.map((items, groupIndex) => (
+                    : groups.map(({ section, items }, groupIndex) => (
                           // The list spans the column, so the current app's bar sits at
                           // the column's edge instead of being clipped by the scroller.
-                          <Fragment key={items[0].section}>
+                          <Fragment key={section}>
                               {groupIndex > 0 && (
                                   <span
                                       aria-hidden="true"
@@ -254,7 +265,7 @@ export function AppLauncherRail() {
                                           />
                                       </li>
                                   ))}
-                                  {items[0].section === 'platforms' && addAppUrl !== null && (
+                                  {section === 'platforms' && addAppUrl !== null && (
                                       <li className="flex w-full justify-center">
                                           <AddAppItem href={addAppUrl} />
                                       </li>

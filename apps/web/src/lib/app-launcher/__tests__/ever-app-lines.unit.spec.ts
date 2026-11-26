@@ -123,5 +123,11 @@ describe('addAppUrlFrom', () => {
         expect(
             addAppUrlFrom(list([item({ key: 'platform:app-ever-co', url: 'not a url' })])),
         ).toBeNull();
+        expect(
+            addAppUrlFrom(
+                list([item({ key: 'platform:app-ever-co', url: 'https://u:p@app.ever.co' })]),
+            ),
+            'FR-32: never an address with credentials',
+        ).toBeNull();
     });
 });

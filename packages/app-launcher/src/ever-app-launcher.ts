@@ -212,10 +212,12 @@ export class EverAppLauncher extends LitElement {
 	connectedCallback(): void {
 		super.connectedCallback();
 		document.addEventListener('pointerdown', this._onDocumentPointerDown, true);
+		window.addEventListener('pageshow', this._onPageShow);
 	}
 
 	disconnectedCallback(): void {
 		document.removeEventListener('pointerdown', this._onDocumentPointerDown, true);
+		window.removeEventListener('pageshow', this._onPageShow);
 		this._observer?.disconnect();
 		this._observer = null;
 		super.disconnectedCallback();
@@ -457,6 +459,11 @@ export class EverAppLauncher extends LitElement {
 			referrerpolicy="no-referrer"
 			tabindex=${String(tabindex)}
 			@click=${(event: MouseEvent) => this._onTileClick(item, event)}
+			@auxclick=${(event: MouseEvent) => {
+				// A middle click opens a new tab without a `click` event: it goes
+				// through the same cancellable `:item-activate` (ACC-11-40).
+				if (event.button === 1) this._onTileClick(item, event);
+			}}
 		>
 			${icon}${body}
 		</a>`;
@@ -466,7 +473,9 @@ export class EverAppLauncher extends LitElement {
 	 * **+ Add** (in-app switcher brief S7): the last row of **Ever apps**, under a
 	 * hairline — a "+" on the same white tile as the logos, the label **Add**,
 	 * and a same-tab link to the host's `addAppUrl`. Like **Manage apps** it is a
-	 * `Tab` stop after the grid, not a tile the arrow keys move through.
+	 * `Tab` stop after the grid; `ArrowUp`/`ArrowDown` from it step back into the
+	 * rows and on into **Your apps**. Its accessible name is the visible **Add**
+	 * (WCAG 2.5.3, label in name); `addAppLabel` is its tooltip and description.
 	 */
 	private _renderAddApp(): TemplateResult | typeof nothing {
 		const href = this._safeUrl(this.addAppUrl);
@@ -479,7 +488,6 @@ export class EverAppLauncher extends LitElement {
 			href=${href}
 			referrerpolicy="no-referrer"
 			title=${strings.addAppLabel}
-			aria-label=${strings.addAppLabel}
 		>
 			<span class="tile-icon" aria-hidden="true">${ADD_ICON}</span>
 			<span class="tile-name">${strings.addApp}</span>
@@ -781,6 +789,7 @@ export class EverAppLauncher extends LitElement {
 
 		const tiles = this._tileElements();
 		if (tiles.length === 0) return;
+		if (this._onAddAppKeydown(event, tiles)) return;
 		const active = tiles.indexOf(this._activeInPanel() as HTMLElement);
 
 		if (isTypeaheadKey(event.key)) {
@@ -812,6 +821,23 @@ export class EverAppLauncher extends LitElement {
 			this._focusTile(next, tiles);
 		}
 	};
+
+	/**
+	 * **+ Add** sits between the last **Ever apps** row and **Your apps**, but it is
+	 * not a tile, so the grid model cannot place it. `ArrowUp` from it goes to the
+	 * last Ever apps row and `ArrowDown` to the first tile below it; any other key
+	 * falls through to the grid model. Returns whether the key was handled.
+	 */
+	private _onAddAppKeydown(event: KeyboardEvent, tiles: HTMLElement[]): boolean {
+		const active = this._activeInPanel();
+		if (!(active instanceof HTMLElement) || !active.classList.contains('add-app')) return false;
+		if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return false;
+		const below = this._itemsIn('pinned').length + this._itemsIn('platforms').length;
+		const target = event.key === 'ArrowUp' ? below - 1 : below;
+		event.preventDefault();
+		if (target >= 0 && target < tiles.length) this._focusTile(target, tiles);
+		return true;
+	}
 
 	/** FR-40: `Tab` cycles between the grid and **Manage apps**; focus stays in. */
 	private _trapTab(event: KeyboardEvent): void {
@@ -901,6 +927,14 @@ export class EverAppLauncher extends LitElement {
 			new CustomEvent('ever-app-launcher:retry', { detail: { section }, bubbles: true, composed: true })
 		);
 	}
+
+	/**
+	 * A tile now leaves this page in the same tab, so **Back** may restore it from
+	 * the back-forward cache with the panel still open. Close it on that restore.
+	 */
+	private _onPageShow = (event: Event): void => {
+		if ((event as PageTransitionEvent).persisted && this._open) this.hide();
+	};
 
 	private _onDocumentPointerDown = (event: Event): void => {
 		if (!this._open) return;

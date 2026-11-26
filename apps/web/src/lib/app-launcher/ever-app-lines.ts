@@ -71,7 +71,8 @@ export function withTranslatedLines(
  * hidden or not, since hiding Ever Platform from the list does not remove the
  * place where apps are added. `null` (no row) when the list has no Ever
  * Platform address: an installation without an Ever Platform shows nothing
- * Ever-specific.
+ * Ever-specific. The base must pass the launcher's address rule (FR-32:
+ * `https`, no credentials); the element and the rail check the result again.
  */
 export function addAppUrlFrom(data: AppLauncherListResponse | null): string | null {
     const platform = data?.items.find(
@@ -80,7 +81,9 @@ export function addAppUrlFrom(data: AppLauncherListResponse | null): string | nu
     if (!platform || typeof platform.url !== 'string') return null;
     try {
         const base = new URL(platform.url);
-        if (base.protocol !== 'https:') return null;
+        if (base.protocol !== 'https:' || base.username !== '' || base.password !== '') {
+            return null;
+        }
         return new URL('/apps?add=app', base).toString();
     } catch {
         return null;

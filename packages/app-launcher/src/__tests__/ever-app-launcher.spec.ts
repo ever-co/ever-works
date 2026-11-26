@@ -753,7 +753,8 @@ describe('<ever-app-launcher>', () => {
 			expect(add?.hasAttribute('rel')).toBe(false);
 			expect(add?.getAttribute('role')).toBe('menuitem');
 			expect(add?.textContent?.trim()).toBe('Add');
-			expect(add?.getAttribute('aria-label')).toBe('Add your own apps in Ever Platform');
+			// WCAG 2.5.3: the accessible name is the visible word; the long label is the tooltip.
+			expect(add?.hasAttribute('aria-label')).toBe(false);
 			expect(add?.getAttribute('title')).toBe('Add your own apps in Ever Platform');
 
 			// Inside Ever apps, after its last row and before Your apps.
@@ -778,7 +779,7 @@ describe('<ever-app-launcher>', () => {
 			await open(element);
 			const add = query<HTMLElement>(element, '.add-app');
 			expect(add?.textContent?.trim()).toBe('Ajouter');
-			expect(add?.getAttribute('aria-label')).toBe('Ajoutez vos propres apps dans Ever Platform');
+			expect(add?.getAttribute('title')).toBe('Ajoutez vos propres apps dans Ever Platform');
 		});
 
 		it('is a Tab stop between the grid and Manage apps, and the arrows skip it', async () => {
@@ -793,6 +794,65 @@ describe('<ever-app-launcher>', () => {
 			keydown(panel, 'Home');
 			keydown(panel, 'End');
 			expect(focused(element)).toBe(tiles(element).at(-1));
+		});
+
+		it('steps back to the last Ever apps row with ArrowUp and on to Your apps with ArrowDown', async () => {
+			// [Cal (pinned), Ever Works, Ever Gauzy, Ever Teams (rows), + Add, Umami, Docs]
+			const element = await mount({ data: FULL_PANEL, addAppUrl: ADD_URL });
+			await open(element);
+			const add = query<HTMLElement>(element, '.add-app') as HTMLElement;
+
+			add.focus();
+			keydown(add, 'ArrowUp');
+			expect(focused(element), 'the last Ever apps row').toBe(tiles(element)[3]);
+
+			add.focus();
+			keydown(add, 'ArrowDown');
+			expect(focused(element), 'the first Your apps tile').toBe(tiles(element)[4]);
+		});
+	});
+
+	describe('same tab, every way a link opens (owner, 2026-11-26)', () => {
+		it('sends a middle click through the cancellable item-activate too (ACC-11-40)', async () => {
+			const element = await mount({ data: FULL_PANEL });
+			await open(element);
+			const activations: string[] = [];
+			element.addEventListener('ever-app-launcher:item-activate', (event) => {
+				activations.push((event as CustomEvent).detail.key);
+				event.preventDefault();
+			});
+			const cal = tiles(element).find((tile) => tile.dataset.key === 'work:cal') as HTMLElement;
+
+			const middle = new MouseEvent('auxclick', { button: 1, bubbles: true, composed: true, cancelable: true });
+			cal.dispatchEvent(middle);
+			expect(activations).toEqual(['work:cal']);
+			expect(middle.defaultPrevented, 'a cancelled activation stops the new tab as well').toBe(true);
+
+			// A right click (button 2) opens a context menu, not the app: no report.
+			cal.dispatchEvent(new MouseEvent('auxclick', { button: 2, bubbles: true, composed: true }));
+			expect(activations).toHaveLength(1);
+		});
+
+		it('closes the panel when Back restores the page from the back-forward cache', async () => {
+			const element = await mount({ data: FULL_PANEL });
+			await open(element);
+			const closed = once(element, 'ever-app-launcher:close');
+			window.dispatchEvent(Object.assign(new Event('pageshow'), { persisted: true }));
+			await closed;
+			expect(query<HTMLElement>(element, '.panel')?.hasAttribute('hidden')).toBe(true);
+		});
+
+		it('keeps a fresh load (not from the cache) as it is', async () => {
+			const element = await mount({ data: FULL_PANEL });
+			await open(element);
+			window.dispatchEvent(Object.assign(new Event('pageshow'), { persisted: false }));
+			await element.updateComplete;
+			expect(query<HTMLElement>(element, '.panel')?.hasAttribute('hidden')).toBe(false);
+		});
+
+		it('aligns row text to the start edge, so right-to-left rows keep text beside the icon', () => {
+			expect(EVER_APP_LAUNCHER_STYLES).toContain('text-align: start;');
+			expect(EVER_APP_LAUNCHER_STYLES).not.toContain('text-align: left;');
 		});
 	});
 

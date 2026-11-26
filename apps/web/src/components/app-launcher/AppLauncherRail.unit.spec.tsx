@@ -168,6 +168,36 @@ describe('AppLauncherRail', () => {
         expect(lists[1].lastElementChild).toContainElement(add);
     });
 
+    it('keeps the "+" when the person hid every Ever app', async () => {
+        fetchMock.mockResolvedValue({
+            ok: true,
+            status: 200,
+            json: async () => ({
+                ...LIST,
+                items: LIST.items.map((entry) =>
+                    entry.kind === 'platform' ? { ...entry, visible: false } : entry,
+                ),
+            }),
+        });
+        render(<AppLauncherRail />);
+        const add = await screen.findByTestId('app-launcher-rail-add');
+        expect(add).toHaveAttribute('href', 'https://platformappeverco.example.com/apps?add=app');
+        expect(screen.queryByTestId('app-launcher-rail-current')).toBeNull();
+    });
+
+    it('reports a middle click like a click, and nothing for a right click', async () => {
+        render(<AppLauncherRail />);
+        const link = await screen.findByRole('link', { name: 'Ever Platform' });
+        fireEvent(link, new MouseEvent('auxclick', { bubbles: true, button: 1 }));
+        expect(captureMock).toHaveBeenCalledTimes(1);
+        expect(captureMock.mock.calls[0][0]).toMatchObject({
+            name: 'app_launcher_item_opened',
+            properties: { catalog_id: 'app-ever-co' },
+        });
+        fireEvent(link, new MouseEvent('auxclick', { bubbles: true, button: 2 }));
+        expect(captureMock).toHaveBeenCalledTimes(1);
+    });
+
     it('draws no "+" when the list has no Ever Platform address', async () => {
         fetchMock.mockResolvedValue({
             ok: true,
