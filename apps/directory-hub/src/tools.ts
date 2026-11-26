@@ -266,6 +266,7 @@ async function listDirectories(loader: DirectoryLoader, input: Record<string, un
 		offset,
 		limit,
 		directories: ordered.slice(offset, offset + limit).map(summarizeDirectory),
+		available_count: set.available.length,
 		unavailable_count: set.unavailable.length,
 		...(includeUnavailable ? { unavailable } : {})
 	};
@@ -442,8 +443,8 @@ export const MAX_LOGGED_QUERY_LENGTH = 200;
  * The query of a search that matched nothing, for the logs; `null` for any other call. Owner decision 2026-11-26: the
  * hub logs only these queries, to show which directories are missing, and nothing else about the caller.
  *
- * Only misses that point at a missing directory count: a `search_all` narrowed by `directories`, `category` or `tag`, or
- * one that could read no directory at all, is not logged.
+ * Only misses that point at a missing directory count: a `search_all` narrowed by `directories`, `category` or `tag`, a
+ * `search_all` that could read no directory, and a `list_directories` while no directory is available are not logged.
  *
  * @param name - Tool that ran (only `search_all` and `list_directories` are logged)
  * @param rawArgs - Its arguments as sent by the client
@@ -451,7 +452,11 @@ export const MAX_LOGGED_QUERY_LENGTH = 200;
  */
 export function zeroResultQuery(name: HubToolName, rawArgs: unknown, outcome: ToolOutcome): string | null {
 	if (outcome.kind !== 'structured' || (name !== 'search_all' && name !== 'list_directories')) return null;
-	const value = (outcome.value ?? {}) as { total?: unknown; directories_searched?: unknown };
+	const value = (outcome.value ?? {}) as {
+		total?: unknown;
+		directories_searched?: unknown;
+		available_count?: unknown;
+	};
 	if (value.total !== 0) return null;
 	const input = args(rawArgs);
 	if (name === 'search_all') {
@@ -459,6 +464,8 @@ export function zeroResultQuery(name: HubToolName, rawArgs: unknown, outcome: To
 		if (['directories', 'category', 'tag'].some((key) => input[key] !== undefined && input[key] !== ''))
 			return null;
 	}
+	// No directory could be read, so the miss says nothing about missing directories.
+	if (name === 'list_directories' && value.available_count === 0) return null;
 	const query = input['query'];
 	if (typeof query !== 'string' || !query.trim()) return null;
 	return Array.from(query.trim()).slice(0, MAX_LOGGED_QUERY_LENGTH).join('');

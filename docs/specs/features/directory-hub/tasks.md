@@ -44,7 +44,8 @@
     - at most 400 registry entries (the subrequest budget).
 
 - [x] T-17 Log the text of zero-result queries only (`zero_result_query`), per the owner's 2026-11-26 decision. Not
-      logged: searches narrowed by `directories`/`category`/`tag`, or that read no directory. Workers Logs invocation
+      logged: searches narrowed by `directories`/`category`/`tag`, searches that read no directory, and `list_directories`
+      while no directory is available (`available_count: 0`). Workers Logs invocation
       logs are off (they stored caller IPs and location), and `/data/search.json` writes no line for a search with
       results.
 - [ ] T-18 Rebuild the 15 older sites (`timetrack`, `mcpserver`, `vectordb`, `dir`, …; template `classic`). Their
