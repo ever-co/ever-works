@@ -113,6 +113,44 @@ export class AppDeployDeploymentStoreAdapter implements AppDeployDeploymentStore
     }
 
     /**
+     * §5.8 / FR-34 — the image facts this Deployment's row already records: a rollback's request
+     * writes the digests of the Deployment it returns to (`appRender.image.digest`,
+     * `appRender.componentImages`), which the worker deploys instead of re-resolving a tag. Narrow,
+     * like {@link findRequester}; a row it cannot read answers `null` ("nothing recorded").
+     */
+    async findRecordedImages(deploymentId: string): Promise<{
+        workId: string | null;
+        imageDigest: string | null;
+        componentImages: Record<string, string> | null;
+    } | null> {
+        if (!this.deployments) return null;
+
+        const row = await this.deployments.findById(deploymentId);
+        if (!row) return null;
+
+        const render = (row.appRender ?? null) as {
+            image?: { digest?: unknown } | null;
+            componentImages?: unknown;
+        } | null;
+        const digest = render?.image?.digest;
+        const recorded = render?.componentImages;
+        const componentImages: Record<string, string> = {};
+        if (recorded && typeof recorded === 'object' && !Array.isArray(recorded)) {
+            for (const [name, reference] of Object.entries(recorded as Record<string, unknown>)) {
+                if (typeof reference === 'string' && reference.trim()) {
+                    componentImages[name] = reference.trim();
+                }
+            }
+        }
+
+        return {
+            workId: row.workId ?? null,
+            imageDigest: typeof digest === 'string' && digest.trim() ? digest.trim() : null,
+            componentImages: Object.keys(componentImages).length > 0 ? componentImages : null,
+        };
+    }
+
+    /**
      * Security (sec/app-works-gates) — who requested this Deployment: the `triggeredByUserId`
      * column and `appRender.requestedByHumanSession` (written by `rowDraft` from the API's
      * `AppDeployRequest.requestedByHumanSession`). Narrow on purpose, like {@link findById}: the

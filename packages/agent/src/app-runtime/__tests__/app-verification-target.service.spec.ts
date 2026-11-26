@@ -172,6 +172,10 @@ interface Harness {
     prepareCalls: Array<{ namespace: string; target: string; isolation: boolean | undefined }>;
     /** Anything at all that would have written a row. Empty for every verification op. */
     rowWrites: string[];
+    /** The render inputs `deployApp` received. */
+    deployInputs: AppRenderInput[];
+    /** The references the image resolver was asked for. */
+    imageCalls: string[];
 }
 
 /**
@@ -291,6 +295,14 @@ function harness(
         destroyThrows?: Error | null;
         statusSnapshot?: AppStatusSnapshot;
         phases?: string[];
+        /** APW-03 schema §10 `components[].image` on the `web` component. */
+        componentImage?: string;
+        /** The image resolver's answer by reference; `undefined` leaves it unbound. */
+        images?: Record<
+            string,
+            | { status: 'resolved'; reference: string; digest: string; resolvedFromTag: boolean }
+            | { status: 'refused'; code: string; message: string }
+        >;
     } = {},
 ): Harness {
     const order: string[] = [];
@@ -299,6 +311,7 @@ function harness(
     const envCalls: Harness['envCalls'] = [];
     const destroyCalls: Harness['destroyCalls'] = [];
     const clusterChecks: Harness['clusterChecks'] = [];
+    const deployInputs: AppRenderInput[] = [];
     const kinds = options.kinds ?? ['postgres', 'redis'];
     let specCalls = 0;
 
@@ -360,6 +373,7 @@ function harness(
             hooks: AppDeployHooks,
         ): Promise<AppDeployResult> {
             order.push(`deployApp:${input?.ref?.namespace}`);
+            deployInputs.push(input);
             if (options.deployThrows) {
                 throw options.deployThrows;
             }
@@ -436,9 +450,36 @@ function harness(
         async readVerificationSpec(req): Promise<AppVerificationSpec | undefined> {
             specCalls += 1;
             order.push(`spec:readVerificationSpec:${req.namespace}`);
-            return { input: renderInput(req.namespace), dependencyKinds: kinds };
+            const base = renderInput(req.namespace);
+            const input = options.componentImage
+                ? {
+                      ...base,
+                      components: base.components.map((component) => ({
+                          ...component,
+                          image: options.componentImage,
+                      })),
+                  }
+                : base;
+            return { input, dependencyKinds: kinds };
         },
     };
+
+    const imageCalls: string[] = [];
+    const images = options.images
+        ? {
+              async resolve(req: { workId: string; reference: string; specCommitSha: string }) {
+                  imageCalls.push(req.reference);
+                  order.push(`resolveImage:${req.reference}`);
+                  return (
+                      options.images?.[req.reference] ?? {
+                          status: 'refused' as const,
+                          code: 'image_not_found',
+                          message: `${req.reference} does not exist`,
+                      }
+                  );
+              },
+          }
+        : undefined;
 
     const service = new PinnedService(
         options.withFacade === false ? undefined : facade,
@@ -446,6 +487,7 @@ function harness(
         options.withEnv === false ? undefined : env,
         options.withDependencies === false ? undefined : dependencies,
         options.withSink === false ? undefined : sink,
+        images,
     );
 
     return {
@@ -461,6 +503,8 @@ function harness(
         clusterChecks,
         prepareCalls,
         rowWrites,
+        deployInputs,
+        imageCalls,
     };
 }
 
@@ -1078,5 +1122,69 @@ describe('no work_deployments insert and no runtime-state write (ACC-06-48)', ()
 
         expect(h.rowWrites).toEqual([]);
         expect(h.reports.length).toBeGreaterThan(1);
+    });
+});
+
+/* -------------------------------------------------------------------------- *
+ * §5.8 for APW-03 schema §10 `components[].image` — an attempt runs digests, never a tag
+ * -------------------------------------------------------------------------- */
+
+describe('handleVerificationDeploy — a component that runs its own image', () => {
+    const TAG = 'ghcr.io/ever-works/helpdesk-web:1.2.3';
+    const PINNED = `ghcr.io/ever-works/helpdesk-web@sha256:${'b'.repeat(64)}`;
+
+    it('resolves the tag once, before the first write, and deploys the digest', async () => {
+        const h = harness({
+            componentImage: TAG,
+            images: {
+                [TAG]: {
+                    status: 'resolved',
+                    reference: PINNED,
+                    digest: `sha256:${'b'.repeat(64)}`,
+                    resolvedFromTag: true,
+                },
+            },
+        });
+
+        await h.service.handleVerificationDeploy(deployOp());
+
+        expect(h.imageCalls).toEqual([TAG]);
+        expect(h.deployInputs[0]?.components[0]?.image).toBe(PINNED);
+        // Asked before anything is written: the resolution precedes the namespace preparation.
+        expect(h.order.findIndex((step) => step.startsWith('resolveImage:'))).toBeLessThan(
+            h.order.findIndex((step) => step.startsWith('prepare:')),
+        );
+    });
+
+    it('refuses the attempt with the resolver's own code, naming the component, and writes nothing', async () => {
+        const h = harness({ componentImage: TAG, images: {} });
+
+        await h.service.handleVerificationDeploy(deployOp());
+
+        const failure = h.reports[h.reports.length - 1]?.failure;
+        expect(failure?.code).toBe('image_not_found');
+        expect(failure?.message).toContain('Component web:');
+        expect(h.prepareCalls).toEqual([]);
+        expect(h.deployInputs).toEqual([]);
+    });
+
+    it('without a resolver, refuses a tag but runs a digest-pinned component image as named', async () => {
+        const tagged = harness({ componentImage: TAG });
+        await tagged.service.handleVerificationDeploy(deployOp());
+        expect(tagged.reports[tagged.reports.length - 1]?.failure?.code).toBe('image_unresolvable');
+        expect(tagged.deployInputs).toEqual([]);
+
+        const pinned = harness({ componentImage: PINNED });
+        await pinned.service.handleVerificationDeploy(deployOp());
+        expect(pinned.deployInputs[0]?.components[0]?.image).toBe(PINNED);
+    });
+
+    it('calls no resolver when no component names its own image', async () => {
+        const h = harness({ images: {} });
+
+        await h.service.handleVerificationDeploy(deployOp());
+
+        expect(h.imageCalls).toEqual([]);
+        expect(h.deployInputs).toHaveLength(1);
     });
 });

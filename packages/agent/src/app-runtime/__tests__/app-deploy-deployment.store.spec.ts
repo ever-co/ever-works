@@ -295,3 +295,38 @@ describe('AppDeployDeploymentStoreAdapter.markDispatchFailed', () => {
         await expect(store(mock).markDispatchFailed('d-1', 'x', 'y')).resolves.toBeUndefined();
     });
 });
+
+describe('AppDeployDeploymentStoreAdapter.findRecordedImages (§5.8, FR-34)', () => {
+    it("reads the row's recorded digest and component images, and nothing else", async () => {
+        const mock = repo({
+            findById: jest.fn(async () => ({
+                id: 'dep-1',
+                workId: 'work-1',
+                appRender: {
+                    image: { reference: 'ghcr.io/a/app', digest: ` sha256:${'a'.repeat(64)} ` },
+                    componentImages: { web: `ghcr.io/a/web@sha256:${'b'.repeat(64)}`, bad: 42 },
+                    requestedByHumanSession: true,
+                },
+            })),
+        });
+
+        await expect(store(mock).findRecordedImages('dep-1')).resolves.toEqual({
+            workId: 'work-1',
+            imageDigest: `sha256:${'a'.repeat(64)}`,
+            componentImages: { web: `ghcr.io/a/web@sha256:${'b'.repeat(64)}` },
+        });
+    });
+
+    it('answers nulls for a row that records nothing, and null for no row', async () => {
+        const empty = repo({
+            findById: jest.fn(async () => ({ id: 'dep-1', workId: 'work-1', appRender: {} })),
+        });
+        await expect(store(empty).findRecordedImages('dep-1')).resolves.toEqual({
+            workId: 'work-1',
+            imageDigest: null,
+            componentImages: null,
+        });
+
+        await expect(store(repo()).findRecordedImages('dep-1')).resolves.toBeNull();
+    });
+});

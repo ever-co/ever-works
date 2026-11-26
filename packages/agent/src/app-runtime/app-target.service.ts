@@ -643,8 +643,15 @@ export class AppTargetService {
         const render = (row.appRender ?? {}) as {
             specCommitSha?: unknown;
             image?: { reference?: unknown; digest?: unknown };
+            componentImages?: unknown;
         };
         const specCommitSha = text(render.specCommitSha) || text(row.commitSha) || null;
+        const componentImages =
+            render.componentImages &&
+            typeof render.componentImages === 'object' &&
+            !Array.isArray(render.componentImages)
+                ? (render.componentImages as Record<string, string>)
+                : null;
         const result = await this.requests.request({
             workId,
             userId,
@@ -662,6 +669,8 @@ export class AppTargetService {
                 specCommitSha,
                 imageReference: text(render.image?.reference) || null,
                 imageDigest: text(render.image?.digest) || null,
+                // APW-03 schema §10 `components[].image`: their digests are rolled back too.
+                ...(componentImages ? { componentImages } : {}),
             },
         });
         return { ok: true, result };

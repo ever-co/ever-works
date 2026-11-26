@@ -1752,6 +1752,31 @@ describe('componentInputs — a component that runs its own image', () => {
         expect(web?.image).toBe(WEB_IMAGE);
     });
 
+    it('keeps the digest a previous Deployment recorded, while the spec names the same repository', () => {
+        const recorded = `ghcr.io/example/web@sha256:${'c'.repeat(64)}`;
+        const tagged: AppSpec['components'] = [
+            { name: 'api', role: 'web', port: 3000 },
+            { name: 'web', role: 'web', port: 4200, image: 'ghcr.io/example/web:1.2.3' },
+            { name: 'admin', role: 'web', port: 4300, image: 'ghcr.io/example/admin:1.2.3' },
+        ];
+        const [, web, admin] = componentInputs(
+            appSpec({
+                build: { strategy: 'image', image: API_IMAGE },
+                components: tagged,
+                domains: { primaryComponent: 'web' },
+            }),
+            LIVE_NAMESPACE,
+            {
+                web: recorded,
+                // Recorded for another repository than the spec names now: the spec wins.
+                admin: `ghcr.io/example/old-admin@sha256:${'d'.repeat(64)}`,
+            },
+        );
+
+        expect(web?.image).toBe(recorded);
+        expect(admin?.image).toBe('ghcr.io/example/admin:1.2.3');
+    });
+
     it('ignores it when a Build produces the one image every component runs', () => {
         const inputs = componentInputs(
             appSpec({ build: { strategy: 'dockerfile' }, components, domains: { primaryComponent: 'web' } }),

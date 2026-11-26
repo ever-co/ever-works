@@ -361,6 +361,7 @@ describe('AppTargetService — rollback, lifecycle, ops and source offer (lane a
         appRender: {
             specCommitSha: 'c1',
             image: { reference: 'ghcr.io/a/b@sha256:x', digest: 'sha256:x' },
+            componentImages: { web: 'ghcr.io/a/web@sha256:y' },
         },
     };
     const CURRENT = {
@@ -393,6 +394,8 @@ describe('AppTargetService — rollback, lifecycle, ops and source offer (lane a
                 rollback: expect.objectContaining({
                     deploymentId: 'd-old',
                     imageDigest: 'sha256:x',
+                    // APW-03 schema §10 `components[].image`: rolled back with the App's digest.
+                    componentImages: { web: 'ghcr.io/a/web@sha256:y' },
                 }),
             }),
         );
