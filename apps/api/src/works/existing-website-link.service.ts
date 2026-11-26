@@ -13,6 +13,8 @@ import {
 } from '@ever-works/agent/database';
 import { DomainEnvironment, Work, WorkCustomDomain } from '@ever-works/agent/entities';
 import { WorkOwnershipService } from '@ever-works/agent/services';
+import { config } from '@ever-works/agent/config';
+import { matchPlatformRootDomain, platformDomainNotAllowedBody } from '@ever-works/agent/utils';
 import { DataSource, FindOneOptions, IsNull, Repository } from 'typeorm';
 import { ScopeContextService } from '../scope';
 import {
@@ -37,6 +39,19 @@ export class ExistingWebsiteLinkService {
         requestedUrl: string,
     ): Promise<ExistingWebsiteLinkResponseDto> {
         const { url, domain } = parseExistingWebsiteUrl(requestedUrl);
+
+        // Security: linking writes a custom-domain row and `work.website`, and the next deploy puts
+        // that host on the shared cluster's Ingress. A name equal to or under one of the platform's
+        // root domains (`login.ever.works`) is refused here, as "Add custom domain" refuses it, with
+        // the same coded 400 and before anything is read or written. `domain` is the parser's
+        // canonical ASCII host.
+        const platformRoot = matchPlatformRootDomain(
+            domain,
+            config.everWorks.platformRootDomains(),
+        );
+        if (platformRoot !== null) {
+            throw new BadRequestException(platformDomainNotAllowedBody(platformRoot));
+        }
         const tenantId = this.scopeContext.getTenantId();
         const organizationId = this.scopeContext.getOrganizationId();
 

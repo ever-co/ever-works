@@ -32,6 +32,7 @@ jest.mock('@ever-works/agent/events', () => ({
     },
 }));
 
+import { Logger } from '@nestjs/common';
 import { DeployService } from './deploy.service';
 import { DnsRecordConflictError } from '@ever-works/agent/ever-works-providers';
 
@@ -1893,6 +1894,156 @@ describe('DeployService — plugin-driven dispatch + secrets', () => {
             const keys = secrets.map((s: any) => s.key);
             expect(keys).toContain('K8S_INGRESS_HOST');
             expect(keys).not.toContain('K8S_EXTRA_HOSTS');
+        });
+
+        describe('stored rows and saved hosts under a platform root (warn, never filter)', () => {
+            const NAMES = [
+                'EVER_WORKS_DOMAIN',
+                'EVER_WORKS_APPS_DOMAIN',
+                'EVER_WORKS_APPS_MANAGED_DOMAIN',
+            ] as const;
+            const original: Record<string, string | undefined> = {};
+            let warn: jest.SpyInstance;
+            let log: jest.SpyInstance;
+
+            beforeEach(() => {
+                for (const name of NAMES) original[name] = process.env[name];
+                process.env.EVER_WORKS_DOMAIN = 'ever.works';
+                delete process.env.EVER_WORKS_APPS_DOMAIN;
+                process.env.EVER_WORKS_APPS_MANAGED_DOMAIN = 'ever.app';
+                warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+                log = jest.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
+            });
+
+            afterEach(() => {
+                // Only this block's spies: the suite-level getDeploymentSecrets keeps its implementation.
+                warn.mockRestore();
+                log.mockRestore();
+                for (const name of NAMES) {
+                    if (original[name] === undefined) delete process.env[name];
+                    else process.env[name] = original[name];
+                }
+            });
+
+            const platformWarnings = () =>
+                warn.mock.calls
+                    .map((call) => String(call[0]))
+                    .filter((line) => line.includes('under a platform root domain'));
+
+            it('keeps a stored row under the root on the Ingress and warns once (Work id + domain)', async () => {
+                const { service, githubPlugin, customDomainRepository } = buildService({
+                    plugin: {
+                        id: 'k8s',
+                        getWorkflowFilenames: () => ['deploy_k8s.yaml'],
+                        getDeploymentSecrets,
+                    },
+                    deployProvider: 'k8s',
+                    website: 'https://managed.example.com',
+                });
+                customDomainRepository.findByWork.mockResolvedValueOnce([
+                    { domain: 'timetrack.ever.works' },
+                    { domain: 'shop.ever.app' },
+                    { domain: 'tools.example.com' },
+                    { domain: 'evil-ever.works' },
+                ]);
+
+                await service.deploy('work-1', 'user-1', {});
+
+                // Nothing is filtered: every stored row still travels to the Ingress.
+                const { secrets } = captureCalls(githubPlugin);
+                const byKey = Object.fromEntries(secrets.map((s: any) => [s.key, s.value]));
+                expect(byKey.K8S_EXTRA_HOSTS).toBe(
+                    'timetrack.ever.works,shop.ever.app,tools.example.com,evil-ever.works',
+                );
+                expect(getDeploymentSecrets.mock.calls[0][0].extraHosts).toEqual([
+                    'timetrack.ever.works',
+                    'shop.ever.app',
+                    'tools.example.com',
+                    'evil-ever.works',
+                ]);
+
+                // One WARN per deploy, naming the Work and only the rows under a root.
+                const lines = platformWarnings();
+                expect(lines).toHaveLength(1);
+                expect(lines[0]).toContain('Work work-1');
+                expect(lines[0]).toContain('"timetrack.ever.works", "shop.ever.app"');
+                expect(lines[0]).not.toContain('tools.example.com');
+                expect(lines[0]).not.toContain('evil-ever.works');
+            });
+
+            it('quotes a stored value, so a newline in it cannot start a forged log line', async () => {
+                const { service, work } = buildService({
+                    plugin: { id: 'k8s', getWorkflowFilenames: () => ['deploy_k8s.yaml'] },
+                    deployProvider: 'k8s',
+                });
+
+                (service as any).warnPlatformRootCustomDomains(work, ['x\nFORGED.ever.works']);
+
+                const lines = platformWarnings();
+                expect(lines).toHaveLength(1);
+                expect(lines[0]).not.toContain('\n');
+                expect(lines[0]).toContain('"x\\nforged.ever.works"');
+            });
+
+            it('does not warn when no stored row is under a root', async () => {
+                const { service, customDomainRepository } = buildService({
+                    plugin: {
+                        id: 'k8s',
+                        getWorkflowFilenames: () => ['deploy_k8s.yaml'],
+                        getDeploymentSecrets,
+                    },
+                    deployProvider: 'k8s',
+                    website: 'https://managed.example.com',
+                });
+                customDomainRepository.findByWork.mockResolvedValueOnce([
+                    { domain: 'tools.example.com' },
+                ]);
+
+                await service.deploy('work-1', 'user-1', {});
+
+                expect(platformWarnings()).toEqual([]);
+            });
+
+            it('keeps a saved shared-cluster k8s ingressHost under the root and warns', async () => {
+                const { service, work } = buildService({
+                    plugin: { id: 'k8s', getWorkflowFilenames: () => ['deploy_k8s.yaml'] },
+                    deployProvider: 'k8s',
+                });
+                const settings = {
+                    clusterSource: 'k8s-works-shared',
+                    ingressHost: 'Login.Ever.Works',
+                };
+
+                const merged = await (service as any).applyManagedSubdomain(work, settings);
+
+                expect(merged.ingressHost).toBe('Login.Ever.Works');
+                const lines = platformWarnings();
+                expect(lines).toHaveLength(1);
+                expect(lines[0]).toContain('Work work-1');
+                expect(lines[0]).toContain('shared cluster');
+                expect(lines[0]).toContain('"login.ever.works"');
+            });
+
+            it.each([
+                [
+                    'another cluster source',
+                    { clusterSource: 'k8s-works', ingressHost: 'login.ever.works' },
+                ],
+                [
+                    'a host outside the root',
+                    { clusterSource: 'k8s-works-shared', ingressHost: 'shop.example.com' },
+                ],
+            ])('does not warn about a saved ingressHost on %s', async (_label, settings) => {
+                const { service, work } = buildService({
+                    plugin: { id: 'k8s', getWorkflowFilenames: () => ['deploy_k8s.yaml'] },
+                    deployProvider: 'k8s',
+                });
+
+                const merged = await (service as any).applyManagedSubdomain(work, settings);
+
+                expect(merged.ingressHost).toBe(settings.ingressHost);
+                expect(platformWarnings()).toEqual([]);
+            });
         });
     });
 

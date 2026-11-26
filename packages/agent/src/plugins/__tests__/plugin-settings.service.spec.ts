@@ -712,6 +712,126 @@ describe('PluginSettingsService', () => {
         });
     });
 
+    describe('k8s ingressHost under a platform root (PLATFORM_DOMAIN_NOT_ALLOWED)', () => {
+        const NAMES = [
+            'EVER_WORKS_DOMAIN',
+            'EVER_WORKS_APPS_DOMAIN',
+            'EVER_WORKS_APPS_MANAGED_DOMAIN',
+        ];
+        const original: Record<string, string | undefined> = {};
+
+        const k8sPlugin = (): IPlugin =>
+            ({
+                ...createMockPlugin({
+                    type: 'object',
+                    properties: {
+                        ingressHost: { type: 'string' },
+                        clusterSource: { type: 'string' },
+                        replicas: { type: 'number' },
+                    },
+                } as unknown as JsonSchema),
+                id: 'k8s',
+            }) as unknown as IPlugin;
+
+        beforeEach(() => {
+            for (const name of NAMES) original[name] = process.env[name];
+            process.env.EVER_WORKS_DOMAIN = 'ever.works';
+            delete process.env.EVER_WORKS_APPS_DOMAIN;
+            process.env.EVER_WORKS_APPS_MANAGED_DOMAIN = 'ever.app';
+            jest.spyOn(registry, 'get').mockReturnValue(createRegisteredPlugin(k8sPlugin()));
+            jest.spyOn(pluginRepository, 'findByPluginId').mockResolvedValue({
+                id: 'k8s-entity',
+                pluginId: 'k8s',
+                settings: {},
+                secretSettings: {},
+            } as any);
+        });
+
+        afterEach(() => {
+            for (const name of NAMES) {
+                if (original[name] === undefined) delete process.env[name];
+                else process.env[name] = original[name];
+            }
+        });
+
+        const stored = (settings: Record<string, unknown>) =>
+            ({
+                id: 'row-1',
+                pluginId: 'k8s',
+                settings,
+                secretSettings: {},
+            }) as any;
+
+        it('refuses a NEW user-scope ingressHost under the root before any write', async () => {
+            jest.spyOn(userPluginRepository, 'findByUserAndPlugin').mockResolvedValue(
+                stored({ clusterSource: 'k8s-works-shared' }),
+            );
+
+            const attempt = service.updateUserSettings('k8s', 'user-1', {
+                ingressHost: 'login.ever.works',
+            });
+
+            await expect(attempt).rejects.toBeInstanceOf(BadRequestException);
+            await expect(attempt).rejects.toMatchObject({
+                response: { status: 'error', code: 'PLATFORM_DOMAIN_NOT_ALLOWED' },
+            });
+            expect(userPluginRepository.updateSettings).not.toHaveBeenCalled();
+            expect(userPluginRepository.create).not.toHaveBeenCalled();
+            expect(eventEmitter.emit).not.toHaveBeenCalled();
+        });
+
+        it('refuses a NEW Work-scope ingressHost under the managed App apex', async () => {
+            jest.spyOn(workPluginRepository, 'findByWorkAndPlugin').mockResolvedValue(null);
+
+            await expect(
+                service.updateWorkSettings('k8s', 'work-1', { ingressHost: 'shop.ever.app' }),
+            ).rejects.toMatchObject({ response: { code: 'PLATFORM_DOMAIN_NOT_ALLOWED' } });
+            expect(workPluginRepository.create).not.toHaveBeenCalled();
+            expect(workPluginRepository.updateSettings).not.toHaveBeenCalled();
+        });
+
+        it('lets an unchanged stored ingressHost through, so the other k8s settings still save', async () => {
+            jest.spyOn(userPluginRepository, 'findByUserAndPlugin').mockResolvedValue(
+                stored({ ingressHost: 'compliance-automation.ever.works', replicas: 1 }),
+            );
+
+            await service.updateUserSettings('k8s', 'user-1', {
+                ingressHost: 'Compliance-Automation.Ever.Works',
+                replicas: 2,
+            });
+            await service.updateUserSettings('k8s', 'user-1', { replicas: 3 });
+
+            expect(userPluginRepository.updateSettings).toHaveBeenCalledTimes(2);
+            expect(userPluginRepository.updateSettings).toHaveBeenLastCalledWith(
+                'user-1',
+                'k8s',
+                { ingressHost: 'compliance-automation.ever.works', replicas: 3 },
+                {},
+            );
+        });
+
+        it('saves a normal host and a lookalike', async () => {
+            jest.spyOn(workPluginRepository, 'findByWorkAndPlugin').mockResolvedValue(
+                stored({ ingressHost: 'old.example.com' }),
+            );
+
+            await service.updateWorkSettings('k8s', 'work-1', { ingressHost: 'shop.example.com' });
+            await service.updateWorkSettings('k8s', 'work-1', { ingressHost: 'evil-ever.works' });
+
+            expect(workPluginRepository.updateSettings).toHaveBeenCalledTimes(2);
+        });
+
+        it('does not judge the admin (global) scope', async () => {
+            await service.updateAdminSettings('k8s', { ingressHost: 'login.ever.works' });
+
+            expect(pluginRepository.updateSettings).toHaveBeenCalledWith(
+                'k8s',
+                { ingressHost: 'login.ever.works' },
+                {},
+            );
+        });
+    });
+
     // D3 / C-08 (EW-716, D3-SIBLINGS residue) — at-rest encryption proof for the
     // settings-PATCH persistence layer. The PluginOperationsService PATCH paths
     // (updateUserPluginSettings / updateWorkPluginSettings) route every secret

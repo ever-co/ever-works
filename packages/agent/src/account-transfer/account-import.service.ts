@@ -27,6 +27,16 @@ import type {
 } from './types';
 import { containsMaskedSecrets, MASKED_SECRET_PREFIX } from './types';
 import { sanitizePrompt } from '../utils/sanitize.util';
+import {
+    matchPlatformRootDomain,
+    platformDomainRefusalMessage,
+    platformIngressHostRefusalMessage,
+} from '../utils/platform-host';
+import {
+    K8S_INGRESS_HOST_SETTING,
+    refusedK8sIngressHostRoot,
+} from '../plugins/services/k8s-ingress-host.rule';
+import { config } from '../config';
 import { normalizeCreateWorkKind, type Work, type WorkKind } from '../entities/work.entity';
 import {
     isAppWorkKind,
@@ -573,7 +583,12 @@ export class AccountImportService {
                         pluginEntityId: pluginEntity.id,
                         enabled: up.enabled,
                         autoEnableForWorks: up.autoEnableForWorks,
-                        settings: up.settings || {},
+                        settings: this.withoutPlatformIngressHost(
+                            up.pluginId,
+                            up.settings || {},
+                            `plugin "${up.pluginId}"`,
+                            result,
+                        ),
                     };
                     if (payload.includesSecrets && up.secretSettings) {
                         // Skip masked secret values — they are placeholders, not real credentials
@@ -582,7 +597,15 @@ export class AccountImportService {
                                 `Plugin "${up.pluginId}" has masked secret values. Replace "${MASKED_SECRET_PREFIX}..." values with real credentials in the JSON file and re-import.`,
                             );
                         } else {
-                            data.secretSettings = up.secretSettings;
+                            // The secret bag is judged too: a secret overrides the same key in
+                            // settings when the deploy resolves them, so a host smuggled in here
+                            // would reach the Ingress just the same.
+                            data.secretSettings = this.withoutPlatformIngressHost(
+                                up.pluginId,
+                                up.secretSettings,
+                                `the secret settings of plugin "${up.pluginId}"`,
+                                result,
+                            );
                         }
                     }
 
@@ -980,7 +1003,19 @@ export class AccountImportService {
         }
 
         // Import custom domains
+        const platformRoots = config.everWorks.platformRootDomains();
         for (const cd of dir.customDomains || []) {
+            // Security: the payload is the member's own file, and a stored row reaches the shared
+            // cluster's Ingress on the next deploy. A name under a platform root domain is refused
+            // here exactly as "Add custom domain" refuses it (PLATFORM_DOMAIN_NOT_ALLOWED), so an
+            // import cannot be used to get around that check. An existing row is left as it is.
+            const platformRoot = matchPlatformRootDomain(cd?.domain, platformRoots);
+            if (platformRoot !== null) {
+                result.warnings.push(
+                    `Skipped custom domain "${cd.domain}": ${platformDomainRefusalMessage(platformRoot)}`,
+                );
+                continue;
+            }
             try {
                 const existingDomain = await this.workCustomDomainRepository.findOne(
                     workId,
@@ -1061,7 +1096,13 @@ export class AccountImportService {
                             `Work plugin "${dp.pluginId}" has masked secret values. Replace "${MASKED_SECRET_PREFIX}..." values with real credentials in the JSON file and re-import.`,
                         );
                     } else {
-                        secretSettings = dp.secretSettings;
+                        // Judged like `settings` below: a secret overrides the same key there.
+                        secretSettings = this.withoutPlatformIngressHost(
+                            dp.pluginId,
+                            dp.secretSettings,
+                            `the secret settings of work plugin "${dp.pluginId}" of work "${dir.slug}"`,
+                            result,
+                        );
                     }
                 }
 
@@ -1075,7 +1116,12 @@ export class AccountImportService {
                         dir.slug,
                         result,
                     ),
-                    settings: dp.settings || {},
+                    settings: this.withoutPlatformIngressHost(
+                        dp.pluginId,
+                        dp.settings || {},
+                        `work plugin "${dp.pluginId}" of work "${dir.slug}"`,
+                        result,
+                    ),
                     secretSettings,
                     priority: dp.priority,
                 });
@@ -1085,6 +1131,36 @@ export class AccountImportService {
                 );
             }
         }
+    }
+
+    /**
+     * Security: the imported plugin settings, without a k8s `ingressHost` under a platform root
+     * domain. The payload is the member's own file, and the settings are written as they are, so
+     * the save-time refusal (`k8s-ingress-host.rule.ts`) is applied here too. The host is dropped
+     * with a warning and every other setting is kept.
+     *
+     * Applied to BOTH bags, `settings` and `secretSettings`: when the deploy resolves a plugin's
+     * settings with secrets, a secret overrides the same key in `settings`
+     * (`PluginSettingsService.getResolvedSettings`), so an `ingressHost` in the secret bag would
+     * reach the Ingress as well. The secret bag is not otherwise filtered by the schema, because
+     * the platform itself stores secrets under keys the schema need not mark `x-secret` (the
+     * `secretKeys` option, a plugin's `context.updateSettings({ secretSettings })`), and such a
+     * filter could drop a real credential.
+     */
+    private withoutPlatformIngressHost(
+        pluginId: string,
+        settings: Record<string, unknown>,
+        label: string,
+        result: ImportResult,
+    ): Record<string, unknown> {
+        const root = refusedK8sIngressHostRoot(pluginId, settings);
+        if (root === null) return settings;
+
+        const { [K8S_INGRESS_HOST_SETTING]: dropped, ...kept } = settings;
+        result.warnings.push(
+            `Dropped the ingressHost ${JSON.stringify(dropped)} from ${label}: ${platformIngressHostRefusalMessage(root)}`,
+        );
+        return kept;
     }
 
     /**

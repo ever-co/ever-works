@@ -125,7 +125,7 @@ const IsPublicRootHttpsUrl = () =>
 
 export class ExistingWebsiteLinkDto {
     @ApiProperty({
-        example: 'https://ever.works',
+        example: 'https://example.com',
         format: 'uri',
         description: 'Existing public root HTTPS website URL to link without deployment.',
     })
@@ -139,10 +139,10 @@ export class ExistingWebsiteLinkResponseDto {
     @ApiProperty({ format: 'uuid' })
     workId: string;
 
-    @ApiProperty({ example: 'https://ever.works' })
+    @ApiProperty({ example: 'https://example.com' })
     url: string;
 
-    @ApiProperty({ example: 'ever.works' })
+    @ApiProperty({ example: 'example.com' })
     domain: string;
 
     @ApiProperty({ description: 'Whether this request created the domain relation.' })

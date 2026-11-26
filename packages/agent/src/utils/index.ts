@@ -21,3 +21,6 @@ export * from './optional-provider.util';
 // and the canonical chat-template marker pattern. Prefer these over a new
 // local neutralizer.
 export * from './untrusted-content';
+// The ONE check that refuses a custom domain under the platform's own root
+// domains (`config.everWorks.platformRootDomains()` supplies the roots).
+export * from './platform-host';

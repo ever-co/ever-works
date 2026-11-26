@@ -215,11 +215,11 @@ describe('ExistingWebsiteLinkService', () => {
         const h = createHarness();
 
         await expect(
-            h.service.linkExistingWebsite(workId, userId, 'https://EVER.WORKS/'),
+            h.service.linkExistingWebsite(workId, userId, 'https://EXAMPLE.COM/'),
         ).resolves.toEqual({
             workId,
-            url: 'https://ever.works',
-            domain: 'ever.works',
+            url: 'https://example.com',
+            domain: 'example.com',
             created: true,
             verified: false,
         });
@@ -238,7 +238,7 @@ describe('ExistingWebsiteLinkService', () => {
         );
         expect(h.domainRepository.create).toHaveBeenCalledWith({
             workId,
-            domain: 'ever.works',
+            domain: 'example.com',
             environment: 'production',
             verified: false,
             provider: undefined,
@@ -253,7 +253,7 @@ describe('ExistingWebsiteLinkService', () => {
                 organizationId,
                 website: expect.anything(),
             }),
-            { website: 'https://ever.works' },
+            { website: 'https://example.com' },
         );
     });
 
@@ -261,7 +261,7 @@ describe('ExistingWebsiteLinkService', () => {
         const existingDomain = {
             id: 'domain-1',
             workId,
-            domain: 'ever.works',
+            domain: 'example.com',
             verified: true,
             provider: 'manual',
         };
@@ -271,17 +271,17 @@ describe('ExistingWebsiteLinkService', () => {
                 userId,
                 tenantId,
                 organizationId,
-                website: 'https://ever.works',
+                website: 'https://example.com',
             },
             existingDomain,
         });
 
         await expect(
-            h.service.linkExistingWebsite(workId, userId, 'https://ever.works'),
+            h.service.linkExistingWebsite(workId, userId, 'https://example.com'),
         ).resolves.toEqual({
             workId,
-            url: 'https://ever.works',
-            domain: 'ever.works',
+            url: 'https://example.com',
+            domain: 'example.com',
             created: false,
             verified: true,
         });
@@ -295,18 +295,18 @@ describe('ExistingWebsiteLinkService', () => {
             existingDomain: {
                 id: 'domain-1',
                 workId,
-                domain: 'ever.works',
+                domain: 'example.com',
                 verified: false,
             },
         });
 
-        await h.service.linkExistingWebsite(workId, userId, 'https://ever.works');
+        await h.service.linkExistingWebsite(workId, userId, 'https://example.com');
 
         expect(h.domainRepository.create).not.toHaveBeenCalled();
         expect(h.domainRepository.save).not.toHaveBeenCalled();
         expect(h.workRepository.update).toHaveBeenCalledWith(
             expect.objectContaining({ id: workId, userId, tenantId, organizationId }),
-            { website: 'https://ever.works' },
+            { website: 'https://example.com' },
         );
     });
 
@@ -315,7 +315,7 @@ describe('ExistingWebsiteLinkService', () => {
         const racedDomain = {
             id: 'domain-race-winner',
             workId,
-            domain: 'ever.works',
+            domain: 'example.com',
             verified: true,
             provider: 'manual',
         };
@@ -327,17 +327,17 @@ describe('ExistingWebsiteLinkService', () => {
         });
 
         await expect(
-            h.service.linkExistingWebsite(workId, userId, 'https://ever.works'),
+            h.service.linkExistingWebsite(workId, userId, 'https://example.com'),
         ).resolves.toEqual({
             workId,
-            url: 'https://ever.works',
-            domain: 'ever.works',
+            url: 'https://example.com',
+            domain: 'example.com',
             created: false,
             verified: true,
         });
         expect(h.workRepository.update).toHaveBeenCalledWith(
             expect.objectContaining({ id: workId, userId, tenantId, organizationId }),
-            { website: 'https://ever.works' },
+            { website: 'https://example.com' },
         );
         expect(h.domainRepository.save).not.toHaveBeenCalled();
     });
@@ -354,7 +354,7 @@ describe('ExistingWebsiteLinkService', () => {
         });
 
         await expect(
-            h.service.linkExistingWebsite(workId, userId, 'https://ever.works'),
+            h.service.linkExistingWebsite(workId, userId, 'https://example.com'),
         ).rejects.toBeInstanceOf(ConflictException);
         expect(h.domainRepository.find).not.toHaveBeenCalled();
         expect(h.domainRepository.save).not.toHaveBeenCalled();
@@ -368,7 +368,7 @@ describe('ExistingWebsiteLinkService', () => {
         const h = createHarness(options);
 
         await expect(
-            h.service.linkExistingWebsite(workId, userId, 'https://ever.works'),
+            h.service.linkExistingWebsite(workId, userId, 'https://example.com'),
         ).rejects.toBeInstanceOf(BadRequestException);
         expect(h.ownership.ensureIsOwner).not.toHaveBeenCalled();
         expect(h.dataSource.transaction).not.toHaveBeenCalled();
@@ -381,7 +381,7 @@ describe('ExistingWebsiteLinkService', () => {
             h.ownership.ensureIsOwner.mockRejectedValueOnce(ownershipError);
 
             await expect(
-                h.service.linkExistingWebsite(workId, userId, 'https://ever.works'),
+                h.service.linkExistingWebsite(workId, userId, 'https://example.com'),
             ).rejects.toMatchObject({
                 status: 404,
                 response: expect.objectContaining({ message: 'Work not found' }),
@@ -399,7 +399,7 @@ describe('ExistingWebsiteLinkService', () => {
         });
 
         await expect(
-            h.service.linkExistingWebsite(workId, userId, 'https://ever.works'),
+            h.service.linkExistingWebsite(workId, userId, 'https://example.com'),
         ).rejects.toMatchObject({
             status: 404,
             response: expect.objectContaining({ message: 'Work not found' }),
@@ -411,7 +411,7 @@ describe('ExistingWebsiteLinkService', () => {
         const h = createHarness({ transactionWork: null });
 
         await expect(
-            h.service.linkExistingWebsite(workId, userId, 'https://ever.works'),
+            h.service.linkExistingWebsite(workId, userId, 'https://example.com'),
         ).rejects.toMatchObject({
             status: 404,
             response: expect.objectContaining({ message: 'Work not found' }),
@@ -431,7 +431,7 @@ describe('ExistingWebsiteLinkService', () => {
         });
 
         await expect(
-            h.service.linkExistingWebsite(workId, userId, 'https://ever.works'),
+            h.service.linkExistingWebsite(workId, userId, 'https://example.com'),
         ).rejects.toMatchObject({
             status: 404,
             response: expect.objectContaining({ message: 'Work not found' }),
@@ -448,7 +448,7 @@ describe('ExistingWebsiteLinkService', () => {
             userId,
             tenantId,
             organizationId,
-            website: 'https://ever.works',
+            website: 'https://example.com',
         };
         const h = createHarness({ transactionWork: unclaimed });
         h.workRepository.findOne.mockResolvedValueOnce(unclaimed).mockResolvedValueOnce(winner);
@@ -459,8 +459,8 @@ describe('ExistingWebsiteLinkService', () => {
         });
 
         await expect(
-            h.service.linkExistingWebsite(workId, userId, 'https://ever.works'),
-        ).resolves.toMatchObject({ url: 'https://ever.works' });
+            h.service.linkExistingWebsite(workId, userId, 'https://example.com'),
+        ).resolves.toMatchObject({ url: 'https://example.com' });
         expect(h.workRepository.findOne).toHaveBeenCalledTimes(2);
     });
 
@@ -478,7 +478,7 @@ describe('ExistingWebsiteLinkService', () => {
         });
 
         await expect(
-            h.service.linkExistingWebsite(workId, userId, 'https://ever.works'),
+            h.service.linkExistingWebsite(workId, userId, 'https://example.com'),
         ).rejects.toMatchObject({
             status: 404,
             response: expect.objectContaining({ message: 'Work not found' }),
@@ -499,7 +499,7 @@ describe('ExistingWebsiteLinkService', () => {
         });
 
         await expect(
-            h.service.linkExistingWebsite(workId, userId, 'https://ever.works'),
+            h.service.linkExistingWebsite(workId, userId, 'https://example.com'),
         ).rejects.toBeInstanceOf(ConflictException);
         expect(h.domainRepository.find).not.toHaveBeenCalled();
     });
@@ -512,8 +512,8 @@ describe('ExistingWebsiteLinkService', () => {
         );
 
         await expect(
-            h.service.linkExistingWebsite(workId, userId, 'https://ever.works'),
-        ).resolves.toMatchObject({ url: 'https://ever.works' });
+            h.service.linkExistingWebsite(workId, userId, 'https://example.com'),
+        ).resolves.toMatchObject({ url: 'https://example.com' });
         expect(h.dataSource.transaction).toHaveBeenCalledTimes(2);
     });
 
@@ -530,8 +530,8 @@ describe('ExistingWebsiteLinkService', () => {
         );
 
         await expect(
-            h.service.linkExistingWebsite(workId, userId, 'https://ever.works'),
-        ).resolves.toMatchObject({ url: 'https://ever.works' });
+            h.service.linkExistingWebsite(workId, userId, 'https://example.com'),
+        ).resolves.toMatchObject({ url: 'https://example.com' });
         expect(h.dataSource.transaction).toHaveBeenCalledTimes(2);
     });
 
@@ -544,7 +544,7 @@ describe('ExistingWebsiteLinkService', () => {
         h.dataSource.transaction.mockRejectedValue(error);
 
         await expect(
-            h.service.linkExistingWebsite(workId, userId, 'https://ever.works'),
+            h.service.linkExistingWebsite(workId, userId, 'https://example.com'),
         ).rejects.toBe(error);
         expect(h.dataSource.transaction).toHaveBeenCalledTimes(1);
     });
@@ -556,7 +556,7 @@ describe('ExistingWebsiteLinkService', () => {
         h.dataSource.transaction.mockRejectedValue(error);
 
         await expect(
-            h.service.linkExistingWebsite(workId, userId, 'https://ever.works'),
+            h.service.linkExistingWebsite(workId, userId, 'https://example.com'),
         ).rejects.toBe(error);
         expect(h.dataSource.transaction).toHaveBeenCalledTimes(6);
         expect(h.workRepository.update).not.toHaveBeenCalled();
@@ -565,26 +565,26 @@ describe('ExistingWebsiteLinkService', () => {
     it('converges identical concurrent links on a lockless driver', async () => {
         const h = createLocklessRaceHarness();
         const combined = Promise.all([
-            h.service.linkExistingWebsite(workId, userId, 'https://ever.works'),
-            h.service.linkExistingWebsite(workId, userId, 'https://ever.works'),
+            h.service.linkExistingWebsite(workId, userId, 'https://example.com'),
+            h.service.linkExistingWebsite(workId, userId, 'https://example.com'),
         ]);
 
         await new Promise<void>((resolve) => setImmediate(resolve));
         h.releaseDomainReads();
 
         await expect(combined).resolves.toEqual([
-            expect.objectContaining({ url: 'https://ever.works', created: true }),
-            expect.objectContaining({ url: 'https://ever.works', created: false }),
+            expect.objectContaining({ url: 'https://example.com', created: true }),
+            expect.objectContaining({ url: 'https://example.com', created: false }),
         ]);
         expect(h.domains.size).toBe(1);
         expect(h.domainRepository.save).toHaveBeenCalledTimes(1);
-        expect(h.getWebsite()).toBe('https://ever.works');
+        expect(h.getWebsite()).toBe('https://example.com');
     });
 
     it('never overwrites a different concurrent link on a lockless driver', async () => {
         const h = createLocklessRaceHarness();
         const combined = Promise.allSettled([
-            h.service.linkExistingWebsite(workId, userId, 'https://ever.works'),
+            h.service.linkExistingWebsite(workId, userId, 'https://example.com'),
             h.service.linkExistingWebsite(workId, userId, 'https://other.works'),
         ]);
 
@@ -594,14 +594,14 @@ describe('ExistingWebsiteLinkService', () => {
         const [first, second] = await combined;
         expect(first).toMatchObject({
             status: 'fulfilled',
-            value: expect.objectContaining({ url: 'https://ever.works', created: true }),
+            value: expect.objectContaining({ url: 'https://example.com', created: true }),
         });
         expect(second).toMatchObject({
             status: 'rejected',
             reason: expect.any(ConflictException),
         });
-        expect([...h.domains.keys()]).toEqual(['ever.works']);
-        expect(h.getWebsite()).toBe('https://ever.works');
+        expect([...h.domains.keys()]).toEqual(['example.com']);
+        expect(h.getWebsite()).toBe('https://example.com');
     });
 
     it('validates the URL before performing ownership or database lookups', async () => {
@@ -612,5 +612,64 @@ describe('ExistingWebsiteLinkService', () => {
         ).rejects.toBeInstanceOf(BadRequestException);
         expect(h.ownership.ensureIsOwner).not.toHaveBeenCalled();
         expect(h.dataSource.transaction).not.toHaveBeenCalled();
+    });
+
+    describe('a host under a platform root (PLATFORM_DOMAIN_NOT_ALLOWED)', () => {
+        const NAMES = [
+            'EVER_WORKS_DOMAIN',
+            'EVER_WORKS_APPS_DOMAIN',
+            'EVER_WORKS_APPS_MANAGED_DOMAIN',
+        ] as const;
+        const original: Record<string, string | undefined> = {};
+
+        beforeEach(() => {
+            for (const name of NAMES) original[name] = process.env[name];
+            process.env.EVER_WORKS_DOMAIN = 'ever.works';
+            delete process.env.EVER_WORKS_APPS_DOMAIN;
+            process.env.EVER_WORKS_APPS_MANAGED_DOMAIN = 'ever.app';
+        });
+
+        afterEach(() => {
+            for (const name of NAMES) {
+                if (original[name] === undefined) delete process.env[name];
+                else process.env[name] = original[name];
+            }
+        });
+
+        it.each([
+            ['https://login.ever.works', 'ever.works'],
+            ['https://ever.works', 'ever.works'],
+            ['https://LOGIN.Ever.Works/', 'ever.works'],
+            // `new URL` maps fullwidth dots to ASCII before the check runs.
+            ['https://login．ever．works', 'ever.works'],
+            ['https://shop.ever.app', 'ever.app'],
+        ])('refuses %s with the coded 400 before any read or write', async (requestedUrl, root) => {
+            const h = createHarness();
+
+            const attempt = h.service.linkExistingWebsite(workId, userId, requestedUrl);
+
+            await expect(attempt).rejects.toBeInstanceOf(BadRequestException);
+            await expect(attempt).rejects.toMatchObject({
+                status: 400,
+                response: {
+                    status: 'error',
+                    code: 'PLATFORM_DOMAIN_NOT_ALLOWED',
+                    message: `Domains under ${root} can't be added as a custom domain. Use the managed subdomain setting instead.`,
+                },
+            });
+            expect(h.ownership.ensureIsOwner).not.toHaveBeenCalled();
+            expect(h.dataSource.transaction).not.toHaveBeenCalled();
+            expect(h.workRepository.update).not.toHaveBeenCalled();
+            expect(h.insertBuilder.execute).not.toHaveBeenCalled();
+        });
+
+        it('still links a lookalike outside every root', async () => {
+            const h = createHarness();
+
+            await expect(
+                h.service.linkExistingWebsite(workId, userId, 'https://evil-ever.works'),
+            ).resolves.toMatchObject({ url: 'https://evil-ever.works', domain: 'evil-ever.works' });
+            expect(h.dataSource.transaction).toHaveBeenCalledTimes(1);
+        });
     });
 });

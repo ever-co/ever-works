@@ -135,19 +135,19 @@ describe('ExistingWebsiteLinkService file-backed SQLite concurrency', () => {
         const second = await createService(secondaryDataSource);
 
         const results = await Promise.all([
-            link(first, 'https://ever.works'),
-            link(second, 'https://EVER.WORKS/'),
+            link(first, 'https://example.com'),
+            link(second, 'https://EXAMPLE.COM/'),
         ]);
 
         expect(results.map((result) => result.created).sort()).toEqual([false, true]);
         expect(results).toEqual([
-            expect.objectContaining({ url: 'https://ever.works', verified: false }),
-            expect.objectContaining({ url: 'https://ever.works', verified: false }),
+            expect.objectContaining({ url: 'https://example.com', verified: false }),
+            expect.objectContaining({ url: 'https://example.com', verified: false }),
         ]);
         await expect(primaryDataSource.getRepository(WorkCustomDomain).count()).resolves.toBe(1);
         await expect(
             primaryDataSource.getRepository(Work).findOneByOrFail({ id: workId }),
-        ).resolves.toMatchObject({ website: 'https://ever.works' });
+        ).resolves.toMatchObject({ website: 'https://example.com' });
     });
 
     it('keeps the first database claim and returns 409 for a different concurrent URL', async () => {
@@ -155,7 +155,7 @@ describe('ExistingWebsiteLinkService file-backed SQLite concurrency', () => {
         const second = await createService(secondaryDataSource);
 
         const results = await Promise.allSettled([
-            link(first, 'https://ever.works'),
+            link(first, 'https://example.com'),
             link(second, 'https://other.works'),
         ]);
         const fulfilled = results.filter(
@@ -181,7 +181,7 @@ describe('ExistingWebsiteLinkService file-backed SQLite concurrency', () => {
             {
                 id: '00000000-0000-0000-0000-000000000001',
                 workId,
-                domain: 'EVER.WORKS',
+                domain: 'EXAMPLE.COM',
                 environment: DomainEnvironment.PRODUCTION,
                 verified: false,
                 provider: 'legacy',
@@ -191,7 +191,7 @@ describe('ExistingWebsiteLinkService file-backed SQLite concurrency', () => {
             {
                 id: '00000000-0000-0000-0000-000000000002',
                 workId,
-                domain: 'Ever.Works',
+                domain: 'Example.Com',
                 environment: DomainEnvironment.PRODUCTION,
                 verified: true,
                 provider: 'manual',
@@ -201,8 +201,8 @@ describe('ExistingWebsiteLinkService file-backed SQLite concurrency', () => {
         ]);
         const instance = await createService(primaryDataSource);
 
-        await expect(link(instance, 'https://ever.works')).resolves.toMatchObject({
-            domain: 'ever.works',
+        await expect(link(instance, 'https://example.com')).resolves.toMatchObject({
+            domain: 'example.com',
             created: false,
             verified: true,
         });
@@ -211,8 +211,8 @@ describe('ExistingWebsiteLinkService file-backed SQLite concurrency', () => {
                 order: { id: 'ASC' },
             }),
         ).resolves.toEqual([
-            expect.objectContaining({ domain: 'EVER.WORKS', verified: false, provider: 'legacy' }),
-            expect.objectContaining({ domain: 'Ever.Works', verified: true, provider: 'manual' }),
+            expect.objectContaining({ domain: 'EXAMPLE.COM', verified: false, provider: 'legacy' }),
+            expect.objectContaining({ domain: 'Example.Com', verified: true, provider: 'manual' }),
         ]);
     });
 
@@ -222,19 +222,19 @@ describe('ExistingWebsiteLinkService file-backed SQLite concurrency', () => {
         );
         await primaryDataSource.getRepository(WorkCustomDomain).save({
             workId,
-            domain: 'Ever.Works',
+            domain: 'Example.Com',
             environment: DomainEnvironment.PRODUCTION,
             verified: true,
             provider: 'manual',
         });
         const instance = await createService(primaryDataSource);
 
-        await expect(link(instance, 'https://ever.works')).resolves.toMatchObject({
+        await expect(link(instance, 'https://example.com')).resolves.toMatchObject({
             created: false,
             verified: true,
         });
         await expect(primaryDataSource.getRepository(WorkCustomDomain).find()).resolves.toEqual([
-            expect.objectContaining({ domain: 'Ever.Works', verified: true, provider: 'manual' }),
+            expect.objectContaining({ domain: 'Example.Com', verified: true, provider: 'manual' }),
         ]);
     });
 
@@ -245,14 +245,14 @@ describe('ExistingWebsiteLinkService file-backed SQLite concurrency', () => {
         );
 
         const [linkResult, domainResult] = await Promise.all([
-            link(instance, 'https://ever.works'),
-            domainRepository.addDomain(workId, 'Ever.Works', 'manual'),
+            link(instance, 'https://example.com'),
+            domainRepository.addDomain(workId, 'Example.Com', 'manual'),
         ]);
 
-        expect(linkResult).toMatchObject({ domain: 'ever.works' });
-        expect(domainResult.domain).toBe('ever.works');
+        expect(linkResult).toMatchObject({ domain: 'example.com' });
+        expect(domainResult.domain).toBe('example.com');
         await expect(primaryDataSource.getRepository(WorkCustomDomain).find()).resolves.toEqual([
-            expect.objectContaining({ domain: 'ever.works' }),
+            expect.objectContaining({ domain: 'example.com' }),
         ]);
     });
 });

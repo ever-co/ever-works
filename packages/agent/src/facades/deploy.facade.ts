@@ -24,6 +24,8 @@ import { WorkCustomDomainRepository } from '../database/repositories/work-custom
 import { AppDomainsService } from '../app-runtime/app-domains.service';
 import { EverWorksK8sDeployProvider } from '../ever-works-providers';
 import { FacadeError, NoProviderError, ProviderNotFoundError } from './base.facade';
+import { config } from '../config';
+import { assertNotPlatformHost } from '../utils/platform-host';
 import type { Work } from '../entities/work.entity';
 import type { User } from '../entities/user.entity';
 import {
@@ -699,6 +701,15 @@ export class DeployFacadeService implements IDeployFacade {
      * Provider state is checked first so domains already attached outside Ever Works are imported.
      */
     async addDomain(domain: string, options: DeployFacadeOptions): Promise<AddDomainResult> {
+        // Security: a name equal to or under one of the platform's root domains is never a
+        // member's custom domain. The shared cluster would otherwise serve their site on a
+        // platform-looking host (`login.ever.works`). Refused here, first, before any read, any
+        // plugin call or any DB write, so no caller can skip it, the HTTP route included. That also
+        // covers a re-add of a row that already exists: the existing-row return below comes after
+        // the provider lookup (`plugin.getDomains`), so it is refused too. The stored row itself
+        // is untouched and stays on the Ingress.
+        assertNotPlatformHost(domain, config.everWorks.platformRootDomains());
+
         const appDomains = await this.appDomainsFor(options);
 
         if (appDomains) return appDomains.addDomain(domain, options);
