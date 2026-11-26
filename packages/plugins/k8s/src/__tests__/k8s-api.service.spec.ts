@@ -253,6 +253,55 @@ describe('KubernetesApiService.listManagedDeployments', () => {
 	});
 });
 
+describe('KubernetesApiService.listManagedIngresses', () => {
+	it('lists every namespace with the website deploy labels and keeps each Ingress’s labels', async () => {
+		const listIngressForAllNamespaces = vi.fn(async () => ({
+			items: [
+				{
+					metadata: {
+						name: 'memes-website',
+						namespace: 'ever-works-tenants-u1',
+						labels: { 'ever-works.io/managed': 'true' }
+					}
+				},
+				{ metadata: {} }
+			]
+		}));
+		const { factory } = makeFactory({
+			networkingV1Api: () => ({ listIngressForAllNamespaces }) as never
+		});
+		const svc = new KubernetesApiService(factory);
+
+		const result = await svc.listManagedIngresses(VALID);
+
+		expect(listIngressForAllNamespaces).toHaveBeenCalledWith({
+			labelSelector: `ever-works.io/managed=true,app.kubernetes.io/managed-by=${FIELD_MANAGER}`
+		});
+		expect(result).toEqual([
+			{
+				name: 'memes-website',
+				namespace: 'ever-works-tenants-u1',
+				labels: { 'ever-works.io/managed': 'true' }
+			},
+			{ name: '', namespace: '', labels: {} }
+		]);
+	});
+
+	it('wraps a failed list in a K8sPluginError', async () => {
+		const { factory } = makeFactory({
+			networkingV1Api: () =>
+				({
+					listIngressForAllNamespaces: vi.fn(async () => {
+						throw Object.assign(new Error('ingresses is forbidden'), { statusCode: 403 });
+					})
+				}) as never
+		});
+		const svc = new KubernetesApiService(factory);
+
+		await expect(svc.listManagedIngresses(VALID)).rejects.toBeInstanceOf(K8sPluginError);
+	});
+});
+
 describe('KubernetesApiService SSA apply helpers', () => {
 	const SERVER_SIDE_APPLY = 'application/apply-patch+yaml';
 

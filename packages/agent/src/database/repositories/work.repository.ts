@@ -1069,15 +1069,36 @@ export class WorkRepository {
      * every Work of the owner, whatever its provider (a tenant namespace is
      * derived from the owner, and a Work moved to another provider leaves its
      * objects behind); every `k8s` Work of any owner (a `k8s-works` namespace
-     * can be set explicitly, or derived from a truncated slug); and every
-     * `ever-works` / `k8s` Work with the same slug. The caller narrows them by
-     * object name and namespace.
+     * can be set explicitly, or derived from a truncated slug); every
+     * `ever-works` / `k8s` Work with the same slug; and, when the objects sit
+     * in another tenant's namespace, every Work of `tenantUserId`, whatever its
+     * provider. The caller narrows them by object name and namespace.
      */
-    async findDeploymentSharerCandidates(userId: string, slug: string): Promise<Work[]> {
+    async findDeploymentSharerCandidates(
+        userId: string,
+        slug: string,
+        tenantUserId?: string,
+    ): Promise<Work[]> {
         const where: FindOptionsWhere<Work>[] = [{ deployProvider: 'k8s' }];
         if (userId) where.push({ userId });
         if (slug) where.push({ slug, deployProvider: In(['ever-works', 'k8s']) });
+        if (tenantUserId && tenantUserId !== userId) where.push({ userId: tenantUserId });
         return this.repository.find({ where, relations: ['user'] });
+    }
+
+    /**
+     * Every Work on one of `deployProviders`, with its `user` relation. The
+     * report of website deployments no Work accounts for reads it once a day;
+     * an empty list is `[]` without a query.
+     */
+    async findByDeployProviders(deployProviders: readonly string[]): Promise<Work[]> {
+        if (deployProviders.length === 0) {
+            return [];
+        }
+        return this.repository.find({
+            where: { deployProvider: In([...deployProviders]) },
+            relations: ['user'],
+        });
     }
 
     /**

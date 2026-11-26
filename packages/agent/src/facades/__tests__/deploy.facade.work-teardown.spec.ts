@@ -501,9 +501,11 @@ describe('DeployFacadeService.prepareWorkDeploymentTeardown', () => {
 
             await service.prepareWorkDeploymentTeardown({ userId: 'user-1', workId: 'work-1' });
 
+            // The Work's own tenant namespace: no other tenant to add.
             expect(workRepository.findDeploymentSharerCandidates).toHaveBeenCalledWith(
                 'user-1',
                 'awesome-memes',
+                undefined,
             );
         });
 
@@ -625,6 +627,251 @@ describe('DeployFacadeService.prepareWorkDeploymentTeardown', () => {
             await expect(
                 service.prepareWorkDeploymentTeardown({ userId: 'user-1', workId: 'work-1' }),
             ).resolves.toMatchObject({ status: 'ready' });
+        });
+
+        it('is not blocked by another owner’s Work on another provider (only the owner’s or the tenant’s can have moved away)', async () => {
+            const { service } = createService({
+                work: work(),
+                candidates: [work({ id: 'work-9', userId: 'user-9', deployProvider: 'vercel' })],
+            });
+
+            await expect(
+                service.prepareWorkDeploymentTeardown({ userId: 'user-1', workId: 'work-1' }),
+            ).resolves.toMatchObject({ status: 'ready' });
+        });
+
+        describe('a namespace that is another tenant’s (N1)', () => {
+            // An admin's `k8s` Work on `k8s-works` that names a member's tenant namespace
+            // explicitly deploys to the same place as that member's `ever-works` Works.
+            const adminWork = (fixture: Partial<WorkFixture> = {}) =>
+                work({
+                    id: 'work-admin',
+                    userId: 'user-admin',
+                    slug: 'admin-memes',
+                    deployProvider: 'k8s',
+                    ...fixture,
+                });
+            const adminSettings = {
+                'work-admin': {
+                    clusterSource: 'k8s-works',
+                    namespace: 'ever-works-tenants-user-m',
+                },
+            };
+
+            beforeEach(() => {
+                process.env.EVER_WORKS_K8S_WORKS_KUBECONFIG = INTERNAL_KUBECONFIG;
+            });
+
+            it('adds that tenant’s Works to the candidates', async () => {
+                const { service, workRepository } = createService({
+                    work: adminWork(),
+                    settingsByWork: adminSettings,
+                    resolvedSecrets: { clusterSource: { value: 'k8s-works' } },
+                });
+
+                const prepared = await service.prepareWorkDeploymentTeardown({
+                    userId: 'user-admin',
+                    workId: 'work-admin',
+                });
+
+                expect(prepared).toMatchObject({
+                    status: 'ready',
+                    namespace: 'ever-works-tenants-user-m',
+                });
+                expect(workRepository.findDeploymentSharerCandidates).toHaveBeenCalledWith(
+                    'user-admin',
+                    'admin-memes',
+                    'user-m',
+                );
+            });
+
+            it('is blocked by the tenant’s ever-works Work with another slug and the same repository', async () => {
+                const { service, removeWorkDeployment } = createService({
+                    work: adminWork(),
+                    settingsByWork: adminSettings,
+                    resolvedSecrets: { clusterSource: { value: 'k8s-works' } },
+                    candidates: [work({ id: 'work-m', userId: 'user-m', slug: 'member-memes' })],
+                });
+
+                const prepared = await service.prepareWorkDeploymentTeardown({
+                    userId: 'user-admin',
+                    workId: 'work-admin',
+                });
+
+                expect(prepared).toEqual({
+                    status: 'skipped',
+                    reason: 'shared',
+                    detail: 'Work work-m deploys to ever-works-tenants-user-m/awesome-memes-website too',
+                });
+                expect(removeWorkDeployment).not.toHaveBeenCalled();
+            });
+
+            it('is blocked by the tenant’s Work that moved to another provider', async () => {
+                const { service } = createService({
+                    work: adminWork(),
+                    settingsByWork: adminSettings,
+                    resolvedSecrets: { clusterSource: { value: 'k8s-works' } },
+                    candidates: [
+                        work({
+                            id: 'work-m',
+                            userId: 'user-m',
+                            slug: 'member-memes',
+                            deployProvider: 'vercel',
+                        }),
+                    ],
+                });
+
+                const prepared = await service.prepareWorkDeploymentTeardown({
+                    userId: 'user-admin',
+                    workId: 'work-admin',
+                });
+
+                expect(prepared).toMatchObject({ status: 'skipped', reason: 'shared' });
+                const detail = (prepared as { detail?: string }).detail ?? '';
+                expect(detail).toContain('work-m');
+                expect(detail).toContain(
+                    'belongs to the tenant whose namespace ever-works-tenants-user-m is',
+                );
+                expect(detail).toContain('moved to vercel');
+            });
+
+            it('skips as shared when the tenant cannot be read back from a name at the 63-character cap', async () => {
+                process.env.EVER_WORKS_DEPLOY_NAMESPACE = 'ever-works-tenants-of-the-long-base';
+                const namespace = `ever-works-tenants-of-the-long-base-${'a'.repeat(27)}`;
+                expect(namespace).toHaveLength(63);
+                const { service, workRepository, removeWorkDeployment } = createService({
+                    work: adminWork(),
+                    settingsByWork: { 'work-admin': { clusterSource: 'k8s-works', namespace } },
+                    resolvedSecrets: { clusterSource: { value: 'k8s-works' } },
+                });
+
+                const prepared = await service.prepareWorkDeploymentTeardown({
+                    userId: 'user-admin',
+                    workId: 'work-admin',
+                });
+
+                expect(prepared).toMatchObject({ status: 'skipped', reason: 'shared' });
+                expect((prepared as { detail?: string }).detail).toContain(
+                    'which tenant cannot be read back from its name',
+                );
+                expect(workRepository.findDeploymentSharerCandidates).not.toHaveBeenCalled();
+                expect(removeWorkDeployment).not.toHaveBeenCalled();
+            });
+
+            it('adds no other tenant for a namespace that is not a tenant namespace', async () => {
+                const { service, workRepository } = createService({
+                    work: adminWork(),
+                    settingsByWork: {
+                        'work-admin': {
+                            clusterSource: 'k8s-works',
+                            namespace: 'ever-works-memes-prod',
+                        },
+                    },
+                    resolvedSecrets: { clusterSource: { value: 'k8s-works' } },
+                });
+
+                await expect(
+                    service.prepareWorkDeploymentTeardown({
+                        userId: 'user-admin',
+                        workId: 'work-admin',
+                    }),
+                ).resolves.toMatchObject({ status: 'ready', namespace: 'ever-works-memes-prod' });
+                expect(workRepository.findDeploymentSharerCandidates).toHaveBeenCalledWith(
+                    'user-admin',
+                    'admin-memes',
+                    undefined,
+                );
+            });
+        });
+
+        describe('a Work last deployed here whose settings now point elsewhere (N2)', () => {
+            const TARGET = 'ever-works-tenants-user-1/awesome-memes-website';
+
+            it('is blocked by a same-owner k8s Work whose cached deployProjectId is this target', async () => {
+                // work-2 was an `ever-works`-style tenant deploy, then switched to `k8s-works`,
+                // whose derived namespace is elsewhere; its last objects are still here.
+                const { service, removeWorkDeployment } = createService({
+                    work: work(),
+                    settingsByWork: { 'work-2': { clusterSource: 'k8s-works' } },
+                    candidates: [
+                        work({
+                            id: 'work-2',
+                            slug: 'memes-two',
+                            deployProvider: 'k8s',
+                            deployProjectId: TARGET,
+                        }),
+                    ],
+                });
+
+                const prepared = await service.prepareWorkDeploymentTeardown({
+                    userId: 'user-1',
+                    workId: 'work-1',
+                });
+
+                expect(prepared).toEqual({
+                    status: 'skipped',
+                    reason: 'shared',
+                    detail: `Work work-2 was last deployed to ${TARGET} and its settings now point elsewhere; its objects there may still serve it, so remove them by hand if they do not`,
+                });
+                expect(removeWorkDeployment).not.toHaveBeenCalled();
+            });
+
+            it('is blocked even when its namespace setting is now a reserved one', async () => {
+                const { service } = createService({
+                    work: work(),
+                    settingsByWork: {
+                        'work-2': { clusterSource: 'k8s-works', namespace: 'kube-system' },
+                    },
+                    candidates: [
+                        work({ id: 'work-2', deployProvider: 'k8s', deployProjectId: TARGET }),
+                    ],
+                });
+
+                await expect(
+                    service.prepareWorkDeploymentTeardown({ userId: 'user-1', workId: 'work-1' }),
+                ).resolves.toMatchObject({ status: 'skipped', reason: 'shared' });
+            });
+
+            it('says "last deployed", not "could not be read", when its settings fail too', async () => {
+                const { service, settingsService } = createService({
+                    work: work(),
+                    candidates: [
+                        work({ id: 'work-2', deployProvider: 'k8s', deployProjectId: TARGET }),
+                    ],
+                });
+                settingsService.getSettings.mockImplementation(
+                    async (_id: string, options: { workId?: string }) => {
+                        if (options.workId === 'work-2') throw new Error('settings unavailable');
+                        return {};
+                    },
+                );
+
+                const prepared = await service.prepareWorkDeploymentTeardown({
+                    userId: 'user-1',
+                    workId: 'work-1',
+                });
+
+                expect((prepared as { detail?: string }).detail).toContain('was last deployed to');
+            });
+
+            it('is not blocked when that Work was last deployed somewhere else', async () => {
+                const { service } = createService({
+                    work: work(),
+                    settingsByWork: { 'work-2': { clusterSource: 'k8s-works' } },
+                    candidates: [
+                        work({
+                            id: 'work-2',
+                            slug: 'memes-two',
+                            deployProvider: 'k8s',
+                            deployProjectId: 'ever-works-memes-two-prod/awesome-memes-website',
+                        }),
+                    ],
+                });
+
+                await expect(
+                    service.prepareWorkDeploymentTeardown({ userId: 'user-1', workId: 'work-1' }),
+                ).resolves.toMatchObject({ status: 'ready' });
+            });
         });
     });
 });

@@ -40,6 +40,7 @@ import type {
 	PluginManifest,
 	ValidationError,
 	ValidationResult,
+	WorkDeploymentRef,
 	WorkDeploymentTeardownObject,
 	WorkDeploymentTeardownResult
 } from '@ever-works/plugin';
@@ -1735,6 +1736,33 @@ export class KubernetesPlugin implements IPlugin, IDeploymentPlugin {
 		}
 
 		return { location: namespace, removed, absent, kept, failed };
+	}
+
+	/**
+	 * The website deployments {@link deploy} created on the cluster the kubeconfig reaches:
+	 * every namespace's Ingresses whose labels prove this plugin's website deploy created them
+	 * under their name (the same proof {@link removeWorkDeployment} asks for), as
+	 * `{ location: namespace, name }`, sorted. App Work objects never carry those labels.
+	 *
+	 * Read-only: a report of what no Work accounts for is built from it, and nothing is removed
+	 * because of it. A failed list throws a `K8sPluginError` whose message is scrubbed of the
+	 * kubeconfig's credentials.
+	 */
+	async listWorkDeployments(kubeconfig: string, context?: DeploymentLookupContext): Promise<WorkDeploymentRef[]> {
+		const settings = await this.loadEffectiveDeploymentSettings(context);
+		this.assertMemberKubeconfigAccepted(kubeconfig, settings.clusterSource);
+		let ingresses: Awaited<ReturnType<KubernetesApiService['listManagedIngresses']>>;
+		try {
+			ingresses = await this.api.listManagedIngresses(kubeconfig, settings.kubeContext);
+		} catch (err) {
+			const scrubbed = scrubError(err, this.runtimeScrubPatterns({ kubeconfig }));
+			throw new K8sPluginError(scrubbed.code, scrubbed.message, err);
+		}
+		return ingresses
+			.filter((ingress) => ingress.namespace && ingress.name)
+			.filter((ingress) => workObjectOwnershipGap(ingress.labels, ingress.name) === null)
+			.map((ingress) => ({ location: ingress.namespace, name: ingress.name }))
+			.sort((a, b) => `${a.location}/${a.name}`.localeCompare(`${b.location}/${b.name}`));
 	}
 
 	// Optional contract methods for the deploy service ----------------------

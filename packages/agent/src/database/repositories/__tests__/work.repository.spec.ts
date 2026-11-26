@@ -739,6 +739,25 @@ describe('WorkRepository', () => {
         });
     });
 
+    describe('findByDeployProviders', () => {
+        it('loads every Work on the providers, with its owner', async () => {
+            const rows = [{ id: 'w1' } as Work];
+            repository.find.mockResolvedValueOnce(rows);
+
+            await expect(service.findByDeployProviders(['ever-works', 'k8s'])).resolves.toBe(rows);
+
+            expect(repository.find).toHaveBeenCalledWith({
+                where: { deployProvider: In(['ever-works', 'k8s']) },
+                relations: ['user'],
+            });
+        });
+
+        it('answers [] for no provider without a query', async () => {
+            await expect(service.findByDeployProviders([])).resolves.toEqual([]);
+            expect(repository.find).not.toHaveBeenCalled();
+        });
+    });
+
     describe('findDeploymentSharerCandidates', () => {
         it('ORs every k8s Work, every Work of the owner (any provider) and the Kubernetes-family Works with the slug', async () => {
             const rows = [{ id: 'w1' } as Work];
@@ -763,6 +782,36 @@ describe('WorkRepository', () => {
 
             expect(repository.find).toHaveBeenCalledWith({
                 where: [{ deployProvider: 'k8s' }],
+                relations: ['user'],
+            });
+        });
+
+        it('adds every Work of the tenant whose namespace the objects sit in, whatever its provider', async () => {
+            repository.find.mockResolvedValueOnce([]);
+
+            await service.findDeploymentSharerCandidates('admin-1', 'memes', 'member-7');
+
+            expect(repository.find).toHaveBeenCalledWith({
+                where: [
+                    { deployProvider: 'k8s' },
+                    { userId: 'admin-1' },
+                    { slug: 'memes', deployProvider: In(['ever-works', 'k8s']) },
+                    { userId: 'member-7' },
+                ],
+                relations: ['user'],
+            });
+        });
+
+        it.each([
+            ['empty', ''],
+            ['the owner again', 'admin-1'],
+        ])('adds no tenant branch when the tenant is %s', async (_label, tenantUserId) => {
+            repository.find.mockResolvedValueOnce([]);
+
+            await service.findDeploymentSharerCandidates('admin-1', '', tenantUserId);
+
+            expect(repository.find).toHaveBeenCalledWith({
+                where: [{ deployProvider: 'k8s' }, { userId: 'admin-1' }],
                 relations: ['user'],
             });
         });
