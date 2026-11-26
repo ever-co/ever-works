@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Work } from '../entities/work.entity';
 import { WorkRepository } from '../database/repositories/work.repository';
 import { EverWorksDnsService } from './cloudflare-dns.provider';
+import { isReservedSubdomainLabel } from './managed-subdomain-guard';
 import type { IDnsOperations } from '@ever-works/plugin';
 
 /**
@@ -57,29 +58,6 @@ export class SubdomainAllocator {
     private readonly logger = new Logger(SubdomainAllocator.name);
     private static readonly MAX_TRIES = 5;
     private static readonly LABEL_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
-    /**
-     * Reserved platform labels — never let a tenant claim these. Mirrors the
-     * blocklist intent in spec §7.
-     */
-    private static readonly BLOCKLIST: ReadonlySet<string> = new Set([
-        'www',
-        'api',
-        'app',
-        'admin',
-        'mail',
-        'auth',
-        'docs',
-        'status',
-        'platform',
-        'dashboard',
-        'cdn',
-        'static',
-        'root',
-        'mx',
-        'ns',
-        'ns1',
-        'ns2',
-    ]);
 
     constructor(
         private readonly workRepository: WorkRepository,
@@ -217,7 +195,9 @@ export class SubdomainAllocator {
         probe: IDnsOperations | null,
     ): Promise<boolean> {
         this.assertLabel(candidate);
-        if (SubdomainAllocator.BLOCKLIST.has(candidate)) {
+        // Reserved platform labels (spec §7) — the same list the explicit
+        // rename (`ManagedSubdomainService.update`) enforces.
+        if (isReservedSubdomainLabel(candidate)) {
             return false;
         }
         // DB-level claim by another Work?
@@ -235,11 +215,15 @@ export class SubdomainAllocator {
                     return false;
                 }
             } catch (cause) {
-                // A probe failure must not block allocation — the DB unique
-                // index + caller-side ensureRecord drift-correction will catch
-                // any real collision when we actually try to write the record.
-                this.logger.warn(
-                    `SubdomainAllocator probe failed for ${candidate}.${rootDomain}: ${(cause as Error).message}`,
+                // Fail closed: when the zone cannot be read, the candidate may
+                // belong to another host, and not every caller writes a record
+                // that would refuse it (a Cloudflare Workers deploy takes the
+                // hostname over without one). Stop here instead of moving on to
+                // `-<shortId>` candidates: one transient error must not leave the
+                // Work with a suffixed label for good. The caller retries later
+                // (a k8s deploy falls back, a Workers deploy is refused).
+                throw new Error(
+                    `SubdomainAllocator could not read the zone for ${candidate}.${rootDomain}; try again: ${(cause as Error).message}`,
                 );
             }
         }

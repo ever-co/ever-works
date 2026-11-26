@@ -380,6 +380,12 @@
                         "type": "string",
                         "pattern": "^[A-Za-z0-9._-]{1,64}$"
                     },
+                    "image": {
+                        "description": "The prebuilt image this component runs, only with `strategy: image` (§10:198a); default: `build.image`. A tag-only reference warns (R19).",
+                        "type": "string",
+                        "maxLength": 512,
+                        "pattern": "^(?:[A-Za-z0-9][A-Za-z0-9._-]*(?::\\d+)?\\/)?[a-z0-9]+(?:[._/-][a-z0-9]+)*(?::[A-Za-z0-9._-]+)?(?:@sha256:[0-9a-f]{64})?$"
+                    },
                     "port": {
                         "description": "The container port, 1–65535 (§10:199). Required for `web` (R1), forbidden for `worker`.",
                         "type": "integer",

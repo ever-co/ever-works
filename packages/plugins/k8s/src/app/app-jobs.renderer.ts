@@ -58,6 +58,7 @@ import type { AppCronInput, AppComponentInput, AppJobInput, AppRenderInput, AppS
 import {
 	APP_SERVICE_PORT,
 	cpuLimitForTarget,
+	componentImage,
 	componentRunAsUser,
 	effectiveEnvChecksum,
 	type AppRenderOptions,
@@ -485,7 +486,8 @@ function commandContainer(
 ): Record<string, unknown> {
 	const containerSpec: Record<string, unknown> = {
 		name: componentObjectName(component.name),
-		image: String(input?.image?.reference ?? ''),
+		// The component's own image when it names one (APW-03 schema §10 `components[].image`).
+		image: componentImage(input, component),
 		imagePullPolicy: 'IfNotPresent',
 		envFrom: envReferences(input, options)
 	};

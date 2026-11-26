@@ -57,7 +57,8 @@ the application's source is not in this repository.
 
 ## The other Ever products
 
-Ever Rec, Ever Gauzy and Ever Teams are not Blueprints yet: each ships its API and its web interface as two images
-(`ever-rec` from `.deploy/api` and `.deploy/portal`; `gauzy-api` and `gauzy-webapp`, Ever Teams on Gauzy's API), and
-an App spec builds one image per App (`build.image`), with components choosing only a command or a build target.
-They need either an image that serves both from one container, or per-component images in the App spec.
+Ever Gauzy (`../ever-gauzy/`) and Ever Teams (`../ever-teams/`) have Blueprints too. Ever Gauzy ships its API and its
+web interface as two images, which an App spec runs since components may name their own image
+(`components[].image`, with `build.strategy: image`). Ever Teams is one web image over a Gauzy API that the person
+names at setup. Ever Rec (`../ever-rec/`) is a draft blocked on an upstream change: its portal image has its
+addresses compiled in and calls the API cross-origin.

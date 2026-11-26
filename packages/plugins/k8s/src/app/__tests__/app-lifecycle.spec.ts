@@ -981,6 +981,21 @@ describe('runAppJob (FR-51, ACC-06-37)', () => {
 		expect(h.cluster.appliedOf('Job')).toHaveLength(1);
 	});
 
+	it('runs on the component that runs the requested image when components run different images', async () => {
+		const h = harness();
+		liveApp(h);
+		// A published-image App whose worker runs its own image (APW-03 schema §10 components[].image).
+		const worker = workerDeployment();
+		worker.spec.template.spec.containers[0].image = OTHER_IMAGE;
+		h.cluster.seedDeployment(worker);
+
+		await h.lifecycle.runAppJob(REF, KUBECONFIG, { name: 'migrate', image: OTHER_IMAGE });
+		const job = h.cluster.appliedOf('Job')[0];
+
+		expect(job.spec.template.spec.containers[0].image).toBe(OTHER_IMAGE);
+		expect(job.spec.template.spec.containers[0].name).toBe('worker');
+	});
+
 	it('refuses a run whose image is not the live one', async () => {
 		const h = harness();
 		liveApp(h);

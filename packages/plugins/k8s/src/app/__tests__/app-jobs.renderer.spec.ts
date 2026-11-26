@@ -259,6 +259,16 @@ describe('renderCommandJob (plan §4.8: "a Job with the component\'s image, env,
 		expect(podSpecOf(job).securityContext.seccompProfile).toEqual({ type: 'RuntimeDefault' });
 	});
 
+	it('runs on the image of its component when that component names its own (schema §10 components[].image)', () => {
+		const own = `registry.example.com/example-org/helpdesk-tools@sha256:${'d'.repeat(64)}`;
+		const job = jobObject((draft) => {
+			const component = draft.components.find((entry: { name: string }) => entry.name === draft.jobs[0].component);
+			component.image = own;
+		}, MIGRATE);
+
+		expect(podSpecOf(job).containers[0].image).toBe(own);
+	});
+
 	it('references the App env through `envFrom` and writes no env value (§4.3, ACC-06-16)', () => {
 		const { input } = inputWith(() => undefined);
 		const render = planAppRender(input);

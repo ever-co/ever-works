@@ -44,6 +44,21 @@ import {
     EverWorksDbProvisionService,
     summarizeDbProvisionError,
 } from '@ever-works/agent/ever-works-providers';
+import { config } from '@ever-works/agent/config';
+import {
+    isPlatformDomainNotAllowedError,
+    matchPlatformRootDomain,
+    platformDomainNotAllowedBody,
+} from '@ever-works/agent/utils';
+
+/**
+ * The 400 for a custom domain equal to or under one of the platform's root domains. The body
+ * (`{ status, code: 'PLATFORM_DOMAIN_NOT_ALLOWED', message }`) is the shared one every route that
+ * refuses a platform host answers, so a client can tell this refusal apart from a format error.
+ */
+function platformDomainNotAllowed(root: string): BadRequestException {
+    return new BadRequestException(platformDomainNotAllowedBody(root));
+}
 
 /**
  * Mask a Postgres connection string for display — keep scheme/host/db, hide the
@@ -881,11 +896,28 @@ export class DeployController {
     })
     @ApiParam({ name: 'id', description: 'Work ID' })
     @ApiResponse({ status: 200, description: 'Domain added' })
+    @ApiResponse({
+        status: 400,
+        description:
+            'No deployment yet, or the domain is refused. A domain equal to or under one of the platform\'s root domains (e.g. ever.works) answers { status: "error", code: "PLATFORM_DOMAIN_NOT_ALLOWED", message }.',
+    })
     async addDomain(
         @CurrentUser() auth: AuthenticatedUser,
         @Param('id', new ParseUUIDPipe()) id: string,
         @Body() dto: AddDomainDto,
     ) {
+        // Security: a name under the platform's own root domains is never a member's custom
+        // domain; the shared cluster would serve their site on a platform-looking host. Input
+        // validation, so it runs first, before anything is read. The facade refuses it again for
+        // every other caller.
+        const platformRoot = matchPlatformRootDomain(
+            dto.domain,
+            config.everWorks.platformRootDomains(),
+        );
+        if (platformRoot !== null) {
+            throw platformDomainNotAllowed(platformRoot);
+        }
+
         const { work, isCreator } = await this.ownershipService.ensureCanEdit(id, auth.userId);
 
         if (!work.website) {
@@ -901,7 +933,11 @@ export class DeployController {
                 workId: id,
             });
             return { status: 'success', ...result };
-        } catch {
+        } catch (error) {
+            // The facade's own refusal keeps its message and code instead of the generic one.
+            if (isPlatformDomainNotAllowedError(error)) {
+                throw platformDomainNotAllowed(error.root);
+            }
             throw new BadRequestException({
                 status: 'error',
                 message: 'Failed to add domain',

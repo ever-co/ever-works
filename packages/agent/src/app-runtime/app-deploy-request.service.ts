@@ -403,8 +403,25 @@ export interface AppDeployRuntimeStateStore {
  * Request and result
  * -------------------------------------------------------------------------- */
 
-/** A manual rollback's facts (FR-34, §5.8's rollback paragraph). */
-export interface AppDeployRollbackFacts {
+/**
+ * §5.8 / FR-38 — the images a `domain-change` restart redeploys: the ones the current Deployment
+ * recorded (`appRender.image`, `appRender.componentImages`). They are written on the new row exactly
+ * as a rollback's are, so the worker pins the spec's references to them and never re-resolves a
+ * tag, but nothing marks the new Deployment as a rollback.
+ */
+export interface AppDeployRecordedImageFacts {
+    /** The App image's recorded reference and `sha256:` digest. */
+    imageReference?: string | null;
+    imageDigest?: string | null;
+    /** Component name → digest-pinned reference (APW-03 schema §10 `components[].image`). */
+    componentImages?: Record<string, string> | null;
+}
+
+/**
+ * A manual rollback's facts (FR-34, §5.8's rollback paragraph): the recorded images of the
+ * Deployment it returns to, plus which one that is.
+ */
+export interface AppDeployRollbackFacts extends AppDeployRecordedImageFacts {
     /** The Live Deployment being rolled back to. */
     deploymentId: string;
     /** Its Build — `null` under `build.strategy: image` (FR-64). */
@@ -414,6 +431,11 @@ export interface AppDeployRollbackFacts {
     /** Its recorded image reference and digest — the pair a rollback "never re-resolves" (§5.8). */
     imageReference?: string | null;
     imageDigest?: string | null;
+    /**
+     * Its recorded component images (`appRender.componentImages`: component name → digest-pinned
+     * reference, APW-03 schema §10 `components[].image`) — re-resolved no more than the App's image.
+     */
+    componentImages?: Record<string, string> | null;
 }
 
 /** What the caller knows when it asks for a Deployment. */
@@ -431,6 +453,11 @@ export interface AppDeployRequest {
     confirmClusterChange?: boolean;
     /** FR-34: the Deployment a manual **Roll back** returns to. */
     rollback?: AppDeployRollbackFacts | null;
+    /**
+     * §5.8 / FR-38: the images a redeploy of what is live pins to (a `domain-change` restart). A
+     * `rollback`'s own facts win when both are given.
+     */
+    recordedImages?: AppDeployRecordedImageFacts | null;
     /** FR-34's `runPreDeployJobs`: `false` skips them, which is the rollback default. */
     runPreDeployJobs?: boolean;
     /** The deploy branch, when the caller knows it (recorded for the history row). */
@@ -1385,6 +1412,21 @@ export function storedFacts(
     };
 }
 
+/**
+ * A rollback's recorded component images, kept only when digest-pinned (`<repository>@sha256:…`);
+ * `null` when none is left.
+ */
+export function recordedComponentImages(
+    value: Record<string, string> | null | undefined,
+): Record<string, string> | null {
+    const out: Record<string, string> = {};
+    for (const [name, reference] of Object.entries(value ?? {})) {
+        const pinned = typeof reference === 'string' ? reference.trim() : '';
+        if (String(name).trim() && /@sha256:[0-9a-f]{64}$/.test(pinned)) out[name] = pinned;
+    }
+    return Object.keys(out).length > 0 ? out : null;
+}
+
 /** §2.2 step 4's row, from the facts above and the request's own actor. */
 export function rowDraft(
     deploymentId: string,
@@ -1394,6 +1436,9 @@ export function rowDraft(
     appTrigger: AppDeployTrigger,
 ): AppDeployRowDraft {
     const rollback = request?.rollback;
+    // The images this Deployment pins to: a rollback's (its facts extend the recorded-image ones),
+    // else a restart's (a domain change).
+    const pinned: AppDeployRecordedImageFacts | null = rollback ?? request?.recordedImages ?? null;
     const render: Record<string, unknown> = {
         specCommitSha: stored.specCommitSha,
         skipPreDeployJobs: stored.skipPreDeployJobs,
@@ -1414,14 +1459,24 @@ export function rowDraft(
         };
     }
 
-    if (rollback?.imageDigest) {
+    const digest = pinned?.imageDigest ? String(pinned.imageDigest).trim() : '';
+    if (/^sha256:[0-9a-f]{64}$/.test(digest)) {
         // §5.8: "A rollback redeploys the recorded `specCommitSha` and digest and **never**
         // re-resolves the tag" — the recorded pair is what the worker reads instead of the registry.
+        // A domain change's restart redeploys what is live by the same rule. Only a `sha256:`
+        // digest is written (the worker checks it again); anything else leaves the tag to resolve.
         render.image = {
-            reference: rollback.imageReference ? String(rollback.imageReference) : '',
-            digest: String(rollback.imageDigest),
+            reference: pinned?.imageReference ? String(pinned.imageReference) : '',
+            digest,
             resolvedFromTag: false,
         };
+    }
+
+    const componentImages = recordedComponentImages(pinned?.componentImages);
+    if (componentImages) {
+        // The same rule for the components that run their own image: only digest-pinned
+        // references are carried, so the worker pins to exactly what the old Deployment ran.
+        render.componentImages = componentImages;
     }
 
     return {

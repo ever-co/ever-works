@@ -27,6 +27,7 @@ import type { IDnsOperations } from '@ever-works/plugin';
 import { config } from '../config';
 import { WorkRepository } from '../database/repositories/work.repository';
 import { CloudflareDnsProvider } from './cloudflare-dns.provider';
+import { DnsRecordConflictError } from './managed-subdomain-guard';
 import { SubdomainAllocator } from './subdomain-allocator.service';
 
 /** §8.3 — the shortest label a managed App subdomain may have. */
@@ -69,12 +70,35 @@ export class AppsDomainDnsServiceImpl {
             this.cached = {
                 key,
                 provider: new CloudflareDnsProvider(
-                    { apiToken, zoneId, rootDomain, targetHostname: rootDomain },
+                    {
+                        apiToken,
+                        zoneId,
+                        rootDomain,
+                        targetHostname: rootDomain,
+                        // In a zone of its own, every name written here is an App label
+                        // `SubdomainAllocator` allocated free, and its record follows the
+                        // App's ingress address, so a changed address is repointed. On the
+                        // shared default the apps zone IS the platform zone, which also
+                        // holds the platform's own hosts: keep the guard on there.
+                        manageForeignRecords: this.isDedicatedZone(rootDomain, zoneId),
+                    },
                     this.fetchImpl ?? fetch,
                 ),
             };
         }
         return this.cached.provider as IDnsOperations & CloudflareDnsProvider;
+    }
+
+    /**
+     * `true` when the apps DNS zone is not the platform zone: a different apex
+     * than `EVER_WORKS_DOMAIN` AND a different zone id than `CLOUDFLARE_ZONE_ID`.
+     * The shared default (no `EVER_WORKS_APPS_DOMAIN`) is never dedicated.
+     */
+    private isDedicatedZone(rootDomain: string, zoneId: string): boolean {
+        const platformDomain =
+            (this.env.EVER_WORKS_DOMAIN ?? '').trim().toLowerCase() || 'ever.works';
+        const platformZoneId = (this.env.CLOUDFLARE_ZONE_ID ?? '').trim();
+        return rootDomain.trim().toLowerCase() !== platformDomain && zoneId !== platformZoneId;
     }
 
     /**
@@ -141,7 +165,22 @@ export class AppsDomainDnsServiceImpl {
             record = { type: 'CNAME', target: hostname };
         if (!record) return { status: 'skipped', reason: 'ingress_address_not_public' };
 
-        await dns.ensureRecord({ host, type: record.type, target: record.target, proxied: false });
+        try {
+            await dns.ensureRecord({
+                host,
+                type: record.type,
+                target: record.target,
+                proxied: false,
+            });
+        } catch (error) {
+            // A shared zone keeps the guard on: a record this provider may not
+            // repoint is a skip the caller can see, like every other missing piece.
+            if (error instanceof DnsRecordConflictError) {
+                this.logger.warn(`Managed App host ${host} not repointed: ${error.message}`);
+                return { status: 'skipped', reason: 'record_not_managed' };
+            }
+            throw error;
+        }
         this.logger.log(
             `Managed App host ${host} → ${record.type} ${record.target} (work ${workId}).`,
         );

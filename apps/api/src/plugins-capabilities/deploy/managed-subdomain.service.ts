@@ -5,9 +5,15 @@ import {
     InternalServerErrorException,
     Logger,
     NotFoundException,
+    ServiceUnavailableException,
 } from '@nestjs/common';
 import { WorkRepository } from '@ever-works/agent/database';
-import { EverWorksDnsService } from '@ever-works/agent/ever-works-providers';
+import {
+    DnsRecordConflictError,
+    EverWorksDnsService,
+    isReservedSubdomainLabel,
+    type CloudflareDnsProvider,
+} from '@ever-works/agent/ever-works-providers';
 import type { Work } from '@ever-works/agent/entities';
 
 /**
@@ -43,34 +49,6 @@ export interface SubdomainState {
     readonly editable: boolean;
 }
 
-/**
- * Reserved platform labels — never let a tenant claim these. Mirrors the
- * spec §7 blocklist + the `SubdomainAllocator` BLOCKLIST so DB-level state
- * stays consistent whether the label was assigned via the allocator or via
- * an explicit `PUT`. Kept module-local (not exported from `@ever-works/agent`)
- * because the allocator's set is `private static readonly` and exporting
- * it would couple the API to a private detail.
- */
-const RESERVED_LABELS: ReadonlySet<string> = new Set([
-    'www',
-    'api',
-    'app',
-    'admin',
-    'mail',
-    'auth',
-    'docs',
-    'status',
-    'platform',
-    'dashboard',
-    'cdn',
-    'static',
-    'root',
-    'mx',
-    'ns',
-    'ns1',
-    'ns2',
-]);
-
 const LABEL_RE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/;
 
 @Injectable()
@@ -99,7 +77,13 @@ export class ManagedSubdomainService {
         let recordOk = false;
         if (subdomain && fqdn && provider) {
             try {
-                recordOk = await provider.recordExists(fqdn);
+                // With the zone wildcard (`EVER_WORKS_DNS_WILDCARD`) a Work has no record of its own: the
+                // wildcard answers its name, so there is nothing to probe. Not for a Cloudflare Workers Work:
+                // the wildcard sends its name to the k8s ingress, so it is live only once its Workers domain
+                // (a record of its own) exists.
+                recordOk =
+                    (!this.isCloudflare(work) && provider.servedByWildcard(fqdn)) ||
+                    (await provider.recordExists(fqdn));
             } catch (cause) {
                 // A probe failure is a transient health signal, not a hard
                 // error — log + fall through so the UI still renders.
@@ -121,17 +105,23 @@ export class ManagedSubdomainService {
     /**
      * Re-allocate the managed subdomain to `requested` for `workId`. Steps:
      *   1. Format guard (defence-in-depth — controller DTO already validated).
-     *   2. Blocklist guard (spec §7).
+     *   2. Blocklist guard (spec §7, `RESERVED_SUBDOMAIN_LABELS`, shared with
+     *      `SubdomainAllocator`).
      *   3. No-op when `requested` already matches `work.managedSubdomain`.
      *   4. Global uniqueness via `WorkRepository.findByManagedSubdomain`.
-     *   5. Remove the old DNS record (best-effort) — keeps the zone tidy and
-     *      releases the old label so a sibling Work can re-claim it.
-     *   6. Persist `work.managedSubdomain = requested`. The partial unique
+     *   4b. Zone uniqueness: the hostname must not already exist in the DNS
+     *      zone (the zone also holds the platform's own hosts). Same probe
+     *      `SubdomainAllocator` runs before it allocates. The Work's own
+     *      current record never reaches it (step 3).
+     *   5. Persist `work.managedSubdomain = requested`. The partial unique
      *      index is the DB-level backstop against concurrent renames.
-     *   7. Ensure the new DNS record. Failure is hard-error: a successful
+     *   6. Ensure the new DNS record. Failure is hard-error: a successful
      *      persist without a working CNAME would leave the UI showing a
      *      claim that doesn't resolve. We try to roll back the persisted
-     *      claim so the caller can retry.
+     *      claim so the caller can retry — and the old record is still in
+     *      place, because it is only removed after this succeeds.
+     *   7. Remove the old DNS record (best-effort) — keeps the zone tidy and
+     *      releases the old label so a sibling Work can re-claim it.
      *
      * Returns the post-update `SubdomainState` for the caller.
      */
@@ -144,7 +134,7 @@ export class ManagedSubdomainService {
                     'Invalid subdomain format. Must be lowercase letters, digits, and dashes (no leading/trailing dash), 1-63 characters.',
             });
         }
-        if (RESERVED_LABELS.has(normalized)) {
+        if (isReservedSubdomainLabel(normalized)) {
             throw new BadRequestException({
                 status: 'error',
                 message: `Subdomain "${normalized}" is reserved by the platform and cannot be claimed.`,
@@ -174,17 +164,28 @@ export class ManagedSubdomainService {
             });
         }
 
+        const provider = this.dnsService.getProvider();
+        const lbTarget = process.env.EVER_WORKS_DEPLOY_LB_HOSTNAME?.trim() ?? '';
+
         // Cloudflare Workers: the label is the Worker's hostname label, and
         // the Workers Custom Domain that `wrangler deploy` attaches brings its
         // own DNS record (a CNAME to the k8s LB here would even block it).
         // So a rename only re-claims the label; the next deploy publishes the
-        // site at the new hostname, on a new `ew-<label>` Worker.
+        // site at the new hostname, on a new `ew-<label>` Worker. That deploy
+        // takes over whatever record holds the name, so the zone check matters
+        // just as much here. The probe only reads the platform zone, so it does
+        // not need the LB target; with no zone configured at all there is
+        // nothing to probe, as for `SubdomainAllocator`. (A Work publishing to
+        // a member's own Cloudflare zone is still probed in the platform zone:
+        // a name taken there is refused, which fails safe.)
         if (this.isCloudflare(work)) {
+            const probe = this.dnsService.getZoneProbe();
+            if (probe) {
+                await this.assertHostnameFree(work, normalized, probe);
+            }
             return this.renameWithoutDns(work, currentSubdomain, normalized);
         }
 
-        const provider = this.dnsService.getProvider();
-        const lbTarget = process.env.EVER_WORKS_DEPLOY_LB_HOSTNAME?.trim() ?? '';
         if (!provider) {
             throw new InternalServerErrorException({
                 status: 'error',
@@ -204,20 +205,10 @@ export class ManagedSubdomainService {
         const newFqdn = `${normalized}.${rootDomain}`;
         const oldFqdn = currentSubdomain ? `${currentSubdomain}.${rootDomain}` : null;
 
-        // Step 5: best-effort old-record cleanup. A failure here doesn't
-        // block the rename — the new claim is what the user wants live —
-        // but we log so an operator can clean up a dangling CNAME.
-        if (oldFqdn) {
-            try {
-                await provider.removeRecord({ host: oldFqdn });
-            } catch (cause) {
-                this.logger.warn(
-                    `Failed to remove stale DNS record for ${oldFqdn} during rename of work ${work.id}: ${(cause as Error).message}`,
-                );
-            }
-        }
+        // Step 4b: before any write (DB claim, new record, old-record cleanup).
+        await this.assertHostnameFree(work, normalized, provider);
 
-        // Step 6: persist. A concurrent rename racing to the same label will
+        // Step 5: persist. A concurrent rename racing to the same label will
         // surface as a unique-index violation here; we map it to 409 so the
         // UI shows a friendly retry message instead of a generic 500.
         try {
@@ -232,8 +223,9 @@ export class ManagedSubdomainService {
             throw cause;
         }
 
-        // Step 7: ensure the new record. On failure, try to roll back the
-        // persisted claim so the user isn't stuck with a half-applied rename.
+        // Step 6: ensure the new record. On failure, try to roll back the
+        // persisted claim so the user isn't stuck with a half-applied rename;
+        // the old record has not been touched yet.
         try {
             await provider.ensureRecord({
                 host: newFqdn,
@@ -246,6 +238,20 @@ export class ManagedSubdomainService {
             this.logger.error(
                 `ensureRecord failed for ${newFqdn} on work ${work.id}: ${(cause as Error).message}; rolling back persisted claim`,
             );
+            // A timeout or other transient error can come back after Cloudflare
+            // already created the record; left in place, it would make every
+            // retry of this name a 409. Best-effort removal (the provider only
+            // deletes a record on the managed target). Not after a refusal:
+            // that record belongs to something else.
+            if (!(cause instanceof DnsRecordConflictError)) {
+                try {
+                    await provider.removeRecord({ host: newFqdn });
+                } catch (cleanupErr) {
+                    this.logger.warn(
+                        `Failed to clean up ${newFqdn} after a failed rename of work ${work.id}: ${(cleanupErr as Error).message}`,
+                    );
+                }
+            }
             try {
                 await this.workRepository.update(work.id, {
                     managedSubdomain: currentSubdomain || null,
@@ -255,10 +261,30 @@ export class ManagedSubdomainService {
                     `Failed to roll back managedSubdomain for work ${work.id}: ${(rollbackErr as Error).message}`,
                 );
             }
+            // The provider refused to repoint a record created for something
+            // else between the probe above and this write.
+            if (cause instanceof DnsRecordConflictError) {
+                throw this.hostnameInUse(normalized, rootDomain);
+            }
             throw new InternalServerErrorException({
                 status: 'error',
                 message: `Failed to create DNS record for ${newFqdn}. The rename was not applied.`,
             });
+        }
+
+        // Step 7: best-effort old-record cleanup, only once the new record is
+        // in place. A failure here doesn't undo the rename but is logged so an
+        // operator can clean up a dangling CNAME. A reserved platform label is
+        // never deleted, and the provider itself refuses to delete a record
+        // that is not on the managed target.
+        if (oldFqdn && !isReservedSubdomainLabel(currentSubdomain)) {
+            try {
+                await provider.removeRecord({ host: oldFqdn });
+            } catch (cause) {
+                this.logger.warn(
+                    `Failed to remove stale DNS record for ${oldFqdn} during rename of work ${work.id}: ${(cause as Error).message}`,
+                );
+            }
         }
 
         this.logger.log(
@@ -268,6 +294,48 @@ export class ManagedSubdomainService {
         // Re-read so the response reflects the persisted state (including
         // `recordOk` after the freshly ensured record).
         return this.getState(work.id);
+    }
+
+    /**
+     * 409 unless `<label>.<rootDomain>` is free in the DNS zone. Any existing
+     * record of any type counts, even one aimed at the managed LB: the zone also
+     * holds the platform's own hosts, which may share that target, so its
+     * content cannot prove which Work (if any) the record belongs to. Fails
+     * closed: when the zone cannot be read the rename is refused (503) rather
+     * than risk taking over a host that exists.
+     */
+    private async assertHostnameFree(
+        work: Work,
+        label: string,
+        provider: Pick<CloudflareDnsProvider, 'recordExists' | 'rootDomain'>,
+    ): Promise<void> {
+        const rootDomain = provider.rootDomain();
+        const fqdn = `${label}.${rootDomain}`;
+        let exists: boolean;
+        try {
+            exists = await provider.recordExists(fqdn);
+        } catch (cause) {
+            this.logger.warn(
+                `Zone probe failed for ${fqdn} during rename of work ${work.id}: ${(cause as Error).message}`,
+            );
+            throw new ServiceUnavailableException({
+                status: 'error',
+                message: `Could not check whether ${fqdn} is free. Please try again.`,
+            });
+        }
+        if (exists) {
+            this.logger.warn(
+                `Refused managed subdomain ${fqdn} for work ${work.id}: the hostname already exists in the zone`,
+            );
+            throw this.hostnameInUse(label, rootDomain);
+        }
+    }
+
+    private hostnameInUse(label: string, rootDomain: string): ConflictException {
+        return new ConflictException({
+            status: 'error',
+            message: `Subdomain "${label}" is already in use on ${rootDomain}. Please pick a different one.`,
+        });
     }
 
     /**

@@ -44,7 +44,11 @@ export class ExistingWebsiteLinkController {
     })
     @ApiParam({ name: 'id', format: 'uuid', description: 'Work ID' })
     @ApiOkResponse({ type: ExistingWebsiteLinkResponseDto })
-    @ApiBadRequestResponse({ description: 'Missing active Organization or invalid website URL.' })
+    @ApiBadRequestResponse({
+        description:
+            'Missing active Organization, invalid website URL, or a host equal to or under one of the platform root domains ' +
+            '(e.g. ever.works), which answers { status: "error", code: "PLATFORM_DOMAIN_NOT_ALLOWED", message }.',
+    })
     @ApiNotFoundResponse({ description: 'Work not found in the active Organization.' })
     @ApiConflictResponse({ description: 'Work is already linked to a different website URL.' })
     async link(

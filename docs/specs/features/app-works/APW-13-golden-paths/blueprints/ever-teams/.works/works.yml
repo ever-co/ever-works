@@ -1,0 +1,97 @@
+# yaml-language-server: $schema=https://api.ever.works/api/schema/works.yml.schema.json
+#
+# DRAFT App Blueprint — seed content of the Blueprint repository `ever-works/ever-teams-template`.
+# Shape: docs/specs/features/app-works/CONTRACTS.md §1. Validated in blueprint mode by
+# packages/agent/src/works-config/schema/__tests__/product-blueprints.spec.ts (zero errors, as the
+# Blueprint resolver requires before it lists a repository).
+#
+# Ever Teams, the work and project management web app, as an App: the upstream's own published web
+# image, one web component, no database of its own. Ever Teams keeps its data in an Ever Gauzy API,
+# which this App does not run: the person names one at setup (their own Ever Gauzy App, or Ever's
+# hosted API). The browser talks to this App only: its /api routes forward to that API from the
+# server ("proxy mode"), so the Gauzy API needs no address the browser can reach.
+# Facts were read on 2026-11-26 from ever-co/ever-teams (branch `develop`) and from the image's
+# registry metadata; sources are cited in ../README.md. "Verified" means read in source or registry
+# metadata, not yet run.
+
+version: 2
+kind: app
+name: Ever Teams
+
+spec:
+  source:
+    relation: fork
+    upstream: { repo: ever-co/ever-teams, defaultBranch: develop } # verified: default branch
+    branch: develop
+
+  blueprint:
+    id: ever-teams
+    version: 0.1.0
+    repo: ever-works/ever-teams-template
+    sha: '0000000000000000000000000000000000000000' # TODO(release): stamped by the release workflow
+
+  license:
+    spdx: AGPL-3.0-only # verified: repository licence metadata (AGPL-3.0)
+    class: green
+    source: blueprint
+
+  display:
+    name: Ever Teams
+    protectedPaths: [LICENSE]
+
+  build:
+    strategy: image
+    # verified: the `latest` tag of the upstream's web image pointed at this index digest on
+    # 2026-11-26 (linux/amd64). Pin by digest; a tag can move.
+    image: ghcr.io/ever-co/ever-teams-webapp@sha256:65d340a9d92ebc188bf3b69c7f3caa2a07ac972efcb18230ff828e9dfd267774
+
+  components:
+    - name: web
+      role: web
+      # No command: the image runs `node ./apps/web/server.js` (the Next.js standalone server).
+      port: 3030 # verified: EXPOSE 3030 and PORT=3030 in the image
+      # verified: the image sets no USER (it would run as root); `node` is uid 1000 in the
+      # node:slim base, and runAsNonRoot needs a numeric uid.
+      runAsUser: 1000
+      replicas: 1
+      writableRootFilesystem: true # TODO(verify): the server writes .next/cache; try false
+      probes:
+        startup: { http: /api/health, periodSeconds: 5, failureThreshold: 30 }
+        readiness: { http: /api/health } # verified: GET /api/health answers {"data":{"status":200,…}}
+        liveness: { http: /api/health, periodSeconds: 30 }
+      # The image sets a 1536 MiB heap ceiling (NODE_OPTIONS); the limit leaves room above it.
+      resources: { cpu: 200m, memory: 768Mi, memoryLimit: 2Gi } # TODO(verify): measure
+
+  env:
+    # The Ever Gauzy API this Ever Teams keeps its data in: an ORIGIN, without /api (the app
+    # appends /api itself). Read by the server only. NEXT_PUBLIC_GAUZY_API_SERVER_URL stays unset
+    # on purpose: unset, the browser calls this App's own /api routes, which forward to this address.
+    - name: GAUZY_API_SERVER_URL
+      description: The Ever Gauzy API that holds this Ever Teams' data.
+      prompt:
+        required: true
+        description: >-
+          The address of the Ever Gauzy API to use, without /api: your Ever Gauzy App's address,
+          or https://api.ever.team for Ever's hosted API.
+        example: https://gauzy.example.com
+      validate: { pattern: '^https?://[^\s/?#]+$' } # an origin only: no path, so no /api
+    # verified: Auth.js signs the session with AUTH_SECRET; the published sample value is public.
+    - name: AUTH_SECRET
+      secret: true
+      generate: { kind: base64, bytes: 32, rotate: never }
+    # The app's own public address (links, the health answer, Ever ID callbacks).
+    - { name: NEXT_PUBLIC_WEB_APP_URL, from: domains.primary.url }
+    # The standalone server binds HOSTNAME; all interfaces, so the probes reach it.
+    - { name: HOSTNAME, value: 0.0.0.0 }
+    # Privacy default: anonymous statistics stay off until the owner turns them on.
+    - { name: EVER_STATS_ENABLED, value: 'false' }
+
+  domains:
+    primaryComponent: web
+    publicUrlEnv: [NEXT_PUBLIC_WEB_APP_URL]
+    onChange: restart
+
+  smoke:
+    - name: health
+      http: { method: GET, path: /api/health }
+      expect: { status: [200], bodyContains: ['"status":200'] }

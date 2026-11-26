@@ -18,6 +18,7 @@ import { PluginRegistryService, loadPluginSchema } from './plugin-registry.servi
 import { PluginEvents } from '../plugins.constants';
 import { PluginSecretEncService } from './plugin-secret-enc.service';
 import { PluginPlatformSettingsService } from './plugin-platform-settings.service';
+import { assertK8sIngressHostAllowed } from './k8s-ingress-host.rule';
 import {
     SettingsSchemaValidatorService,
     type SettingsScope as ValidatorSettingsScope,
@@ -338,6 +339,7 @@ export class PluginSettingsService {
                 'user',
                 options,
                 validationSettings,
+                existing?.settings,
             );
 
         const pluginEntity = await this.pluginRepository.findByPluginId(pluginId);
@@ -397,6 +399,7 @@ export class PluginSettingsService {
                 'work',
                 options,
                 validationSettings,
+                existing?.settings,
             );
 
         const pluginEntity = await this.pluginRepository.findByPluginId(pluginId);
@@ -525,6 +528,8 @@ export class PluginSettingsService {
         scope: SettingScope,
         options?: { secretKeys?: string[] },
         settingsForValidation: Record<string, unknown> = settings,
+        /** The settings already saved at this scope: an unchanged k8s `ingressHost` is not new. */
+        storedSettings?: Record<string, unknown>,
     ): Promise<{
         regularSettings: Record<string, unknown>;
         secretSettings: Record<string, unknown>;
@@ -566,6 +571,13 @@ export class PluginSettingsService {
         );
         if (!scopeValidation.valid) {
             throw new Error(`Scope violation: ${scopeValidation.violations.join(', ')}`);
+        }
+
+        // Security: a NEW k8s `ingressHost` under a platform root domain is refused at the member
+        // scopes (coded 400, PLATFORM_DOMAIN_NOT_ALLOWED). Only the incoming values are judged, and
+        // a value equal to the stored one passes, so a stored host never blocks the other settings.
+        if (scope !== 'global') {
+            assertK8sIngressHostAllowed(pluginId, filteredSettings, storedSettings);
         }
 
         if (this.settingsValidator) {

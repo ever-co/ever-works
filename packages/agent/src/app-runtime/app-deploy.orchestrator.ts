@@ -157,6 +157,11 @@ import {
     publicSmokeWindowSeconds,
     type AppPublicSmokeRun,
 } from './app-public-smoke.service';
+import {
+    APP_IMAGE_REFERENCE_RESOLVER,
+    isDigestPinnedReference,
+    resolveComponentImages,
+} from './app-component-images';
 import { AppRenderInputBuilder, workSlugFromNamespace } from './app-render-input.builder';
 
 /* -------------------------------------------------------------------------- *
@@ -169,8 +174,12 @@ import { AppRenderInputBuilder, workSlugFromNamespace } from './app-render-input
 /** DI token for {@link AppDeployTargetResolver} — bound to T20's `AppRuntimeFacadeService`. */
 export const APP_DEPLOY_TARGET_RESOLVER = Symbol('APP_DEPLOY_TARGET_RESOLVER');
 
-/** DI token for {@link AppImageReferenceResolver} — owned by APW-06 T72. */
-export const APP_IMAGE_REFERENCE_RESOLVER = Symbol('APP_IMAGE_REFERENCE_RESOLVER');
+/**
+ * DI token for {@link AppImageReferenceResolver} — owned by APW-06 T72. Declared in
+ * `app-component-images.ts` (re-exported here, its public path) so the verification target can
+ * inject it without importing this file, which would close an import cycle through the builder.
+ */
+export { APP_IMAGE_REFERENCE_RESOLVER };
 
 /** DI token for {@link AppUpstreamStateReader} — owned by APW-02. */
 export const APP_UPSTREAM_STATE_READER = Symbol('APP_UPSTREAM_STATE_READER');
@@ -481,6 +490,24 @@ export interface AppDeployOrchestratorDeploymentStore extends AppDeployDeploymen
      * row it cannot read, means "nobody" — fail closed.
      */
     findRequester?(deploymentId: string): Promise<AppDeployRequesterFacts | null>;
+    /**
+     * §5.8 / FR-34 — the images this Deployment's own row already records: a rollback's request
+     * writes the digests of the Deployment it returns to (`appRender.image.digest`,
+     * `appRender.componentImages`), a domain change's restart those of the live one (§8.2), and
+     * the run must deploy those rather than re-resolve a tag.
+     * Unbound, or a row it cannot read, means "nothing recorded" — the spec's references are
+     * resolved as for any Deployment.
+     */
+    findRecordedImages?(deploymentId: string): Promise<AppDeployRecordedImages | null>;
+}
+
+/** §5.8 / FR-34 — the image facts a Deployment row records, as `findRecordedImages` reads them. */
+export interface AppDeployRecordedImages {
+    workId?: string | null;
+    /** `sha256:<64 hex>` of the App's image (`appRender.image.digest`). */
+    imageDigest?: string | null;
+    /** Component name → digest-pinned reference (`appRender.componentImages`). */
+    componentImages?: Record<string, string> | null;
 }
 
 /** Security (sec/app-works-gates) — the requester facts of one Deployment row. */
@@ -810,9 +837,15 @@ export class AppDeployOrchestrator {
             // ---- 3b · §5.8's image identity, once, before `prepare` -------------------------
             let image: { reference: string; digest: string; resolvedFromTag: boolean } | null =
                 null;
+            // Component name → the digest-pinned reference it runs (`appRender.componentImages`).
+            let componentImages: Record<string, string> | null = null;
 
             if (context.strategy === 'image') {
-                const identity = await this.resolveImage(context, input);
+                const identity = await this.resolveImage(
+                    context,
+                    text(input.image?.reference),
+                    input,
+                );
 
                 if (identity.status !== 'resolved') {
                     await this.failRun(context, result, identity.code, identity.message);
@@ -837,6 +870,27 @@ export class AppDeployOrchestrator {
                             'above; this Deployment runs that digest.',
                     });
                 }
+
+                // APW-03 schema §10 `components[].image`: a component's own image gets the same
+                // identity rule, once per distinct reference, so no component runs a moving tag.
+                const resolvedComponents = await this.resolveComponentImages(context, input);
+
+                if (resolvedComponents.status !== 'resolved') {
+                    await this.failRun(
+                        context,
+                        result,
+                        resolvedComponents.code,
+                        resolvedComponents.message,
+                    );
+
+                    return result;
+                }
+
+                input = { ...input, components: resolvedComponents.components };
+                componentImages =
+                    Object.keys(resolvedComponents.recorded).length > 0
+                        ? resolvedComponents.recorded
+                        : null;
             }
 
             // ---- 3c · the image's USER, judged before the cluster is touched (2026-10-21) ---
@@ -871,6 +925,8 @@ export class AppDeployOrchestrator {
                     ],
                     jobs: [...(deployResult.jobs ?? [])],
                     ...(image ? { image } : {}),
+                    // A rollback of this Deployment runs these digests again (§5.8, FR-34).
+                    ...(componentImages ? { componentImages } : {}),
                     ...(deployResult.failure ? { failure: deployResult.failure } : {}),
                     ...(cancelReasonOf(deployResult)
                         ? { [APP_DEPLOY_CANCELLED_BY_KEY]: cancelReasonOf(deployResult) }
@@ -1133,6 +1189,9 @@ export class AppDeployOrchestrator {
             !text(state?.clusterFingerprint) || state?.clusterFingerprint !== fingerprint;
         // Security (sec/app-works-gates) — from the Deployment's own row, never the job payload.
         const requester = await this.readRequester(context);
+        // §5.8 / FR-34 — a rollback (and a domain change's restart) redeploys the recorded digests
+        // and never re-resolves a tag.
+        const recorded = await this.readRecordedImages(context);
 
         try {
             const answer = await this.renderer.build({
@@ -1147,6 +1206,8 @@ export class AppDeployOrchestrator {
                 preview: request?.preview ?? null,
                 requestedByUserId: requester.userId,
                 requestedByHumanSession: requester.humanSession,
+                ...(recorded.imageDigest ? { imageDigest: recorded.imageDigest } : {}),
+                ...(recorded.componentImages ? { componentImages: recorded.componentImages } : {}),
             });
 
             context.warnings.push(...(answer.warnings ?? []));
@@ -1199,13 +1260,56 @@ export class AppDeployOrchestrator {
         }
     }
 
-    /** §5.8:876-882 — T72's resolver, called exactly once and only for `build.strategy: image`. */
+    /**
+     * §5.8 / FR-34 — the digests this Deployment's own row recorded when it was requested (a
+     * rollback's), for the render-input builder to pin the spec's references to. Every failure, a
+     * row of another Work, and an unbound store answer "nothing recorded"; only a `sha256:` digest
+     * and digest-pinned component references are kept.
+     */
+    private async readRecordedImages(
+        context: RunContext,
+    ): Promise<{ imageDigest: string | null; componentImages: Record<string, string> | null }> {
+        const nothing = { imageDigest: null, componentImages: null };
+        if (!this.deployments || typeof this.deployments.findRecordedImages !== 'function') {
+            return nothing;
+        }
+
+        try {
+            const facts = await this.deployments.findRecordedImages(context.deploymentId);
+            if (!facts) return nothing;
+            if (text(facts.workId) && text(facts.workId) !== context.workId) return nothing;
+
+            const digest = text(facts.imageDigest);
+            const componentImages: Record<string, string> = {};
+            for (const [name, reference] of Object.entries(facts.componentImages ?? {})) {
+                if (text(name) && isDigestPinnedReference(text(reference))) {
+                    componentImages[text(name) as string] = text(reference) as string;
+                }
+            }
+
+            return {
+                imageDigest: digest && /^sha256:[0-9a-f]{64}$/.test(digest) ? digest : null,
+                componentImages: Object.keys(componentImages).length > 0 ? componentImages : null,
+            };
+        } catch (error) {
+            this.logger.warn(
+                `Reading the recorded images of App Deployment ${context.deploymentId} failed (` +
+                    `${messageOf(error)}); the spec's references are resolved instead.`,
+            );
+
+            return nothing;
+        }
+    }
+
+    /**
+     * §5.8:876-882 — T72's resolver, only for `build.strategy: image`: once for the App's image,
+     * and once more per distinct component image (`resolveComponentImages`) when a spec names any.
+     */
     private async resolveImage(
         context: RunContext,
+        reference: string,
         input: AppRenderInput,
     ): Promise<AppImageResolutionResult> {
-        const reference = text(input.image?.reference);
-
         if (!this.images?.resolve) {
             // No T72 in this worker. §5.8 makes the identity resolution mandatory before `prepare`;
             // running the spec's reference unpinned would deploy whatever the tag points at by the
@@ -1240,17 +1344,63 @@ export class AppDeployOrchestrator {
         }
     }
 
+    /**
+     * §5.8's identity rule for the components that run their **own** image (APW-03 schema §10
+     * `components[].image`, carried by the render input for `build.strategy: image` only), through
+     * the shared `resolveComponentImages`: each distinct reference is resolved once through the same
+     * resolver, a tag records the warning `image_not_pinned` naming the component, and the first
+     * refusal ends the run with its own code. A render input whose components name no image calls
+     * nothing and is returned unchanged. `recorded` is what `appRender.componentImages` stores, so a
+     * rollback of this Deployment runs the same digests.
+     */
+    private async resolveComponentImages(
+        context: RunContext,
+        input: AppRenderInput,
+    ): Promise<
+        | {
+              status: 'resolved';
+              components: AppRenderInput['components'];
+              recorded: Record<string, string>;
+          }
+        | { status: 'refused'; code: string; message: string }
+    > {
+        const answer = await resolveComponentImages(input.components, (reference) =>
+            this.resolveImage(context, reference, input),
+        );
+
+        if (answer.status !== 'resolved') {
+            return {
+                status: 'refused',
+                code: answer.code,
+                message: `Component ${answer.component}: ${answer.message}`,
+            };
+        }
+
+        for (const tagged of answer.resolvedFromTag) {
+            context.warnings.push({
+                code: APP_DEPLOY_WARNING_IMAGE_NOT_PINNED,
+                message:
+                    `Component ${tagged.component} names the tag ${tagged.tag}, so it was resolved ` +
+                    `once to ${tagged.reference}; this Deployment runs that digest.`,
+            });
+        }
+
+        return { status: 'resolved', components: answer.components, recorded: answer.recorded };
+    }
+
     /* ---------------------------------------------------------------------- *
      * §5.6 step 4 — the call, and its hooks
      * ---------------------------------------------------------------------- */
 
     /**
      * The registry `USER` pre-check (`APP_WORKS_IMAGE_USER_PRECHECK_ENABLED`, default off): read
-     * the image config's `User` once and apply the kubelet's `runAsNonRoot` rule to every component
-     * (a command Job runs on its component's image and security context, so the components cover
-     * the jobs). The first component the kubelet would refuse ends the run with that refusal's own
-     * code; a read that could not complete is the warning `image_user_unchecked` and never a
-     * refusal. `null` = nothing to refuse (or the check is off / unbound).
+     * each image config's `User` once and apply the kubelet's `runAsNonRoot` rule to every component
+     * that runs it (a command Job runs on its component's image and security context, so the
+     * components cover the jobs). A component runs its own `image` when the render input carries one
+     * (APW-03 schema §10 `components[].image`), else the App's. The first component the kubelet would
+     * refuse ends the run with that refusal's own code; a read that could not complete is the
+     * warning `image_user_unchecked` and never a refusal. `null` = nothing to refuse (or the check
+     * is off / unbound).
      */
     private async checkImageUser(
         context: RunContext,
@@ -1259,10 +1409,7 @@ export class AppDeployOrchestrator {
         if (!this.imageUsers || !config.everWorks.apps.imageUserPrecheckEnabled()) {
             return null;
         }
-        const reference = text(input?.image?.reference);
-        if (!reference) {
-            return null;
-        }
+        const appReference = text(input?.image?.reference);
         // The pod-level `runAsNonRoot` the renderer will emit (`app-security.ts`): always on the
         // managed target, and on Your cluster unless the target's policy allows root.
         const runAsNonRoot =
@@ -1271,9 +1418,41 @@ export class AppDeployOrchestrator {
             return null;
         }
 
+        const users = new Map<string, string | null>();
+        for (const component of input?.components ?? []) {
+            const reference = text(component?.image) || appReference;
+            if (!reference) {
+                continue;
+            }
+            if (!users.has(reference)) {
+                users.set(reference, await this.readImageUser(context, input, reference));
+            }
+            const user = users.get(reference);
+            if (user === null || user === undefined) {
+                continue; // unread: the warning is recorded, the cluster judges it
+            }
+            const verdict = judgeImageUser(user, {
+                runAsNonRoot,
+                runAsUser: component?.runAsUser ?? null,
+                component: text(component?.name) ?? '',
+                image: reference,
+            });
+            if (verdict) {
+                return verdict;
+            }
+        }
+        return null;
+    }
+
+    /** One registry read of an image's `User`; `null` (and the warning) when it could not be read. */
+    private async readImageUser(
+        context: RunContext,
+        input: AppRenderInput,
+        reference: string,
+    ): Promise<string | null> {
         let read: Awaited<ReturnType<AppImageUserInspector['readUser']>>;
         try {
-            read = await this.imageUsers.readUser({
+            read = await (this.imageUsers as AppImageUserInspector).readUser({
                 reference,
                 pull: input?.image?.pull ?? null,
             });
@@ -1289,19 +1468,7 @@ export class AppDeployOrchestrator {
             });
             return null;
         }
-
-        for (const component of input?.components ?? []) {
-            const verdict = judgeImageUser(read.user, {
-                runAsNonRoot,
-                runAsUser: component?.runAsUser ?? null,
-                component: text(component?.name) ?? '',
-                image: reference,
-            });
-            if (verdict) {
-                return verdict;
-            }
-        }
-        return null;
+        return read.user;
     }
 
     private async deploy(

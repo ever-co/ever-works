@@ -154,6 +154,7 @@ import type {
     AppVerificationSpecRequest,
     AppVerificationSpecSource,
 } from './app-verification-target.service.js';
+import { pinRecordedComponentImage } from './app-component-images.js';
 
 /* -------------------------------------------------------------------------- *
  * Vocabulary this file adds
@@ -312,6 +313,12 @@ export interface AppRenderInputRequest {
     specCommitSha?: string | null;
     /** §5.8: the digest T72's resolver recorded, when it ran. Never resolved here. */
     imageDigest?: string | null;
+    /**
+     * §5.8 / FR-34 for APW-03 schema §10 `components[].image`: component name → the digest-pinned
+     * reference a previous Deployment recorded (`appRender.componentImages`). A component whose spec
+     * still names that repository runs it instead of re-resolving a tag. Never resolved here.
+     */
+    componentImages?: Record<string, string> | null;
     /** §5.6 step 6's bookkeeping: the first Deployment of this cluster fingerprint. */
     isFirstDeploymentOnCluster?: boolean | null;
     /** §5.5 / FR-34: pre-deploy jobs are skipped on a rollback by default. */
@@ -809,7 +816,7 @@ export class AppRenderInputBuilder implements AppVerificationSpecSource {
                       }
                     : {}),
             },
-            components: componentInputs(specBody, ref.namespace),
+            components: componentInputs(specBody, ref.namespace, request?.componentImages),
             jobs: jobInputs(specBody),
             cron: cronInputs(specBody),
             smoke: smokeInputs(specBody),
@@ -1350,9 +1357,13 @@ export function primaryComponentName(spec: AppSpec | null | undefined): string |
 export function componentInputs(
     spec: AppSpec | null | undefined,
     namespace: string,
+    recordedImages?: Record<string, string> | null,
 ): AppComponentInput[] {
     const primary = primaryComponentName(spec);
     const buildTarget = text(spec?.build?.target);
+    // APW-03 schema §10 `components[].image` (2026-11-26): honoured with `strategy: image` only —
+    // a Build produces one image, which every component of a `dockerfile`/`auto` App runs.
+    const ownImages = text(spec?.build?.strategy) === 'image';
 
     return (spec?.components ?? []).map((component): AppComponentInput => {
         const name = text(component?.name);
@@ -1360,6 +1371,10 @@ export function componentInputs(
         const resources = component?.resources ?? {};
         const memory = text(resources.memory) || COMPONENT_DEFAULTS.memory;
         const target = text(component?.target) || buildTarget;
+        // A redeploy keeps what an earlier Deployment resolved for this component (§5.8, FR-34).
+        const image = ownImages
+            ? pinRecordedComponentImage(text(component?.image), recordedImages?.[name])
+            : '';
 
         return {
             name,
@@ -1368,6 +1383,8 @@ export function componentInputs(
             ...(component?.args ? { args: [...component.args] } : {}),
             // §3.1:328 — `components[].target` is `build.target` when the component is silent.
             ...(target ? { target } : {}),
+            // Absent = the App's image (`image.reference`), so an App spec without one renders as before.
+            ...(image ? { image } : {}),
             ...(isPositiveNumber(component?.port) ? { port: Math.floor(component.port) } : {}),
             replicas: isPositiveNumber(component?.replicas)
                 ? Math.floor(component.replicas)

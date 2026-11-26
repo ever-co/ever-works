@@ -1,0 +1,170 @@
+# yaml-language-server: $schema=https://api.ever.works/api/schema/works.yml.schema.json
+#
+# DRAFT App Blueprint — seed content of the Blueprint repository `ever-works/ever-rec-template`.
+# Shape: docs/specs/features/app-works/CONTRACTS.md §1. Validated in blueprint mode by
+# packages/agent/src/works-config/schema/__tests__/product-blueprints.spec.ts (zero errors, as the
+# Blueprint resolver requires before it lists a repository).
+#
+# STATUS: BLOCKED for people to use — read ../README.md first. Ever Rec, the screen recording and
+# capture app, is an API (`ever-rec-api`) and a Next.js portal (`ever-rec-portal`). The API fits an
+# App as it is and is what this file runs. The portal does not yet: its published images have the
+# API's and their own addresses compiled in (the `prod` image talks to Ever's own rec.so), and its
+# browser code calls the API cross-origin, while an App has one public address. Both are upstream
+# changes, listed in the README with the portal component that joins this file once they land.
+#
+# Ever Rec keeps its data in Firebase (Realtime Database, Firestore, Storage, Auth): a Firebase
+# project the person creates is a prerequisite, asked at setup. Facts were read on 2026-11-26 from
+# ever-co/ever-rec (branch `develop`) and from the images' registry metadata; sources are cited in
+# ../README.md. "Verified" means read in source or registry metadata, not yet run.
+
+version: 2
+kind: app
+name: Ever Rec
+
+spec:
+  source:
+    relation: fork
+    upstream: { repo: ever-co/ever-rec, defaultBranch: develop } # verified: default branch
+    branch: develop
+
+  blueprint:
+    id: ever-rec
+    version: 0.1.0
+    repo: ever-works/ever-rec-template
+    sha: '0000000000000000000000000000000000000000' # TODO(release): stamped by the release workflow
+
+  license:
+    spdx: AGPL-3.0-only # verified: repository licence metadata (AGPL-3.0)
+    class: green
+    source: blueprint
+
+  display:
+    name: Ever Rec
+    protectedPaths: [LICENSE]
+
+  build:
+    strategy: image
+    # verified: the `prod` tag (built from `main` by the upstream's k8s-build workflow) pointed at
+    # this index digest on 2026-11-26 (linux/amd64 only). Pin by digest; a tag can move.
+    image: ghcr.io/ever-co/ever-rec-api@sha256:7ffe2aa0b175bd2f873a426cb5b6e7c1f987b7537221606bbaed85d34f374438
+
+  components:
+    # The NestJS API: REST under /api/v1, static files from its own `public/` at the root.
+    - name: api
+      role: web
+      port: 3000 # verified: EXPOSE 3000; API_PORT below
+      # verified: the image's USER is `node`, a name; `node` is uid 1000 in node:alpine.
+      runAsUser: 1000
+      replicas: 1
+      # Read-only root: the two scratch folders the server works in (relative to its working
+      # directory) are volumes, never backed up, and /tmp (ffmpeg) is the renderer's own emptyDir.
+      # TODO(verify): nothing else writes under /app; 4Gi each, as Ever's own deployment.
+      writableRootFilesystem: false
+      volumes:
+        - { name: tmp-videos, path: /app/apps/api/tmp_videos, size: 4Gi, backup: false }
+        - { name: tmp-videos-fixed, path: /app/apps/api/tmp_videos_fixed, size: 4Gi, backup: false }
+      probes:
+        startup: { http: /api/v1/hello, periodSeconds: 5, failureThreshold: 60 }
+        readiness: { http: /api/v1/hello } # verified: GET /api/v1/hello answers "Hello world"
+        liveness: { http: /api/v1/hello, periodSeconds: 30 }
+      resources: { cpu: 100m, memory: 384Mi, memoryLimit: 2Gi } # TODO(verify): video work peaks
+
+  env:
+    - { name: API_PORT, value: '3000' }
+    # The public addresses. Once the portal joins this App (README), it serves this same address
+    # and forwards /api/v1 to the API, so both stay the App's one address.
+    - { name: API_BASE_URL, from: domains.primary.url } # links and OAuth callbacks
+    - { name: WEBSITE_URL, from: domains.primary.url } # the CORS origin and redirects
+    - { name: FIREBASE_REQ_URI, from: domains.primary.url }
+
+    # verified: the API refuses to start without these two.
+    - name: REC_JWT_SECRET
+      secret: true
+      generate: { kind: base64, bytes: 48, rotate: never }
+    - name: TERMS_IP_SALT
+      secret: true
+      generate: { kind: hex, bytes: 32, rotate: never }
+
+    # Firebase, the data store (verified: firebase.config.ts, firebase.bootstrap.ts). The three
+    # admin values come from a service account key of the person's project; the API refuses to
+    # start without them.
+    - name: FIREBASE_PROJECT_ID
+      prompt:
+        required: true
+        group: Firebase
+        description: Your Firebase project's ID (Project settings, General).
+        example: my-rec-project
+    - name: FIREBASE_ADMIN_CLIENT_EMAIL
+      prompt:
+        required: true
+        group: Firebase
+        description: The client e-mail of a service account key of that project (Project settings, Service accounts).
+        example: firebase-adminsdk-abc12@my-rec-project.iam.gserviceaccount.com
+    - name: FIREBASE_ADMIN_PRIVATE_KEY
+      secret: true
+      prompt:
+        required: true
+        group: Firebase
+        description: >-
+          The private key of that service account key, the whole PEM block (line breaks may be
+          written as \n).
+      validate: { pattern: 'BEGIN (RSA )?PRIVATE KEY' } # PKCS#8 (Firebase's) or PKCS#1
+    # The web app config of the same project (Project settings, Your apps, Web app).
+    - name: FIREBASE_API_KEY
+      secret: true
+      prompt:
+        required: true
+        group: Firebase
+        description: The Web API key of your Firebase web app config (apiKey).
+    - name: FIREBASE_AUTH_DOMAIN
+      prompt:
+        required: true
+        group: Firebase
+        description: authDomain from your Firebase web app config.
+        example: my-rec-project.firebaseapp.com
+    - name: FIREBASE_DATABASE_URL
+      prompt:
+        required: true
+        group: Firebase
+        description: databaseURL from your Firebase web app config (the Realtime Database).
+        example: https://my-rec-project-default-rtdb.firebaseio.com
+      validate: { pattern: '^https://\S+$' }
+    - name: FIREBASE_STORAGE_BUCKET
+      prompt:
+        required: true
+        group: Firebase
+        description: storageBucket from your Firebase web app config.
+        example: my-rec-project.appspot.com
+    - name: FIREBASE_MESSAGING_SENDER_ID
+      prompt:
+        required: true
+        group: Firebase
+        description: messagingSenderId from your Firebase web app config.
+        example: '123456789012'
+    - name: FIREBASE_APP_ID
+      prompt:
+        required: true
+        group: Firebase
+        description: appId from your Firebase web app config.
+        example: '1:123456789012:web:0a1b2c3d4e5f60718293a4'
+    - name: FIREBASE_MEASUREMENT_ID
+      prompt:
+        required: false
+        group: Firebase
+        description: measurementId from your Firebase web app config, if Analytics is on.
+
+    # Privacy defaults: anonymous statistics off (on unless exactly `false`), the connection to
+    # Ever Platform off (already its default; stated so it is visible). GAUZY_API_URL stays unset: the upstream sample points at
+    # Ever Gauzy's production, which would register every sign-up there.
+    - { name: EVER_STATS_ENABLED, value: 'false' }
+    - { name: EVER_CONNECT_ENABLED, value: 'false' }
+
+  domains:
+    primaryComponent: api
+    publicUrlEnv: [API_BASE_URL, WEBSITE_URL, FIREBASE_REQ_URI]
+    onChange: restart
+
+  smoke:
+    - name: hello
+      http: { method: GET, path: /api/v1/hello }
+      expect: { status: [200], bodyContains: ['Hello world'] }

@@ -34,8 +34,8 @@ describe('ExistingWebsiteLinkController', () => {
     it('binds the acting user and validated request to the service', async () => {
         const response = {
             workId,
-            url: 'https://ever.works',
-            domain: 'ever.works',
+            url: 'https://example.com',
+            domain: 'example.com',
             created: true,
             verified: false,
         };
@@ -45,12 +45,12 @@ describe('ExistingWebsiteLinkController', () => {
         const controller = new ExistingWebsiteLinkController(service as any);
 
         await expect(
-            controller.link({ userId: 'user-1' } as any, workId, { url: 'https://ever.works' }),
+            controller.link({ userId: 'user-1' } as any, workId, { url: 'https://example.com' }),
         ).resolves.toEqual(response);
         expect(service.linkExistingWebsite).toHaveBeenCalledWith(
             workId,
             'user-1',
-            'https://ever.works',
+            'https://example.com',
         );
     });
 });

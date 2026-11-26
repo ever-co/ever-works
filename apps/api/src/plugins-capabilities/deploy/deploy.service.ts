@@ -35,12 +35,17 @@ import {
     ZeroFrictionFunnelService,
 } from '@ever-works/agent/services';
 import {
+    DnsRecordConflictError,
+    isDnsWildcardEnabled,
+    isReservedSubdomainLabel,
     EverWorksDnsService,
     SubdomainAllocator,
     EverWorksDbProvisionService,
 } from '@ever-works/agent/ever-works-providers';
 import { isAppWorkKind, isRepositoryWorkKind } from '@ever-works/contracts';
 import { ZERO_FRICTION_FUNNEL_EVENTS } from '@ever-works/contracts/telemetry';
+import { config } from '@ever-works/agent/config';
+import { matchPlatformRootDomain } from '@ever-works/agent/utils';
 import {
     WebsiteUpdateService,
     getWebsiteTemplateBranch,
@@ -788,21 +793,48 @@ export class DeployService {
 
         try {
             const allocation = await this.subdomainAllocator.allocate(work);
-            // Fire-and-forget DNS record creation, matching the legacy
-            // ever-works path's behavior (errors log but never abort).
-            void provider
-                .ensureRecord({
+            // A claim persisted before reserved labels were enforced on every
+            // path is never routed (the allocator itself never picks one).
+            if (isReservedSubdomainLabel(allocation.subdomain)) {
+                this.logger.warn(
+                    `EW-734 k8s managed-subdomain ${allocation.fqdn} for work ${work.id} is a reserved platform label; not routing it`,
+                );
+                return mergedAfterLegacy;
+            }
+            // Awaited (it used to be fire-and-forget) so a refusal can keep the
+            // host off the Ingress: the provider never repoints a record that
+            // the zone holds for something else (`DnsRecordConflictError`), and
+            // routing that hostname to this Work would claim it at the ingress
+            // instead. Any other DNS error still only logs, as before: the
+            // deploy proceeds and the record can be fixed afterwards.
+            try {
+                await provider.ensureRecord({
                     host: allocation.fqdn,
                     type: 'CNAME',
                     target: lbTarget,
                     proxied: false,
                     ttl: 1,
-                })
-                .catch((cause) => {
-                    this.logger.error(
-                        `EW-734 k8s managed-subdomain ensureRecord failed for ${allocation.fqdn}: ${(cause as Error).message}`,
-                    );
                 });
+            } catch (cause) {
+                if (cause instanceof DnsRecordConflictError) {
+                    // An expected refusal, not a fault: warn, like the rename path.
+                    this.logger.warn(
+                        `EW-734 k8s managed-subdomain ${allocation.fqdn} for work ${work.id} already exists in the zone for another host; not routing it to this work`,
+                    );
+                    // A label allocated by THIS deploy is released, so the Work
+                    // is not left holding (and the UI showing) another host's
+                    // name; the next deploy allocates again. A label it already
+                    // held is kept: after an LB move its own record can look
+                    // foreign, and dropping the claim would lose its name.
+                    if (allocation.allocated) {
+                        await this.releaseManagedSubdomain(work.id, allocation.subdomain);
+                    }
+                    return mergedAfterLegacy;
+                }
+                this.logger.error(
+                    `EW-734 k8s managed-subdomain ensureRecord failed for ${allocation.fqdn}: ${(cause as Error).message}`,
+                );
+            }
             // EW-741 — when the allocator wins, the previously-merged
             // `extraHosts` (custom domains) must still travel alongside the
             // newly-allocated managed subdomain. We re-dedupe against the
@@ -874,6 +906,14 @@ export class DeployService {
                 );
             }
         }
+        // The deploy publishes the Worker at `<label>.<zone>` and takes over any
+        // record there, so a reserved label (a claim persisted before they were
+        // enforced on every path) must not reach it.
+        if (isReservedSubdomainLabel(label)) {
+            throw new BadRequestException(
+                `The managed subdomain "${label}" is reserved by the platform. Pick another one (Deploy, Change subdomain) and deploy again.`,
+            );
+        }
         const next: Record<string, unknown> = { ...(settings ?? {}), workSlug: work.slug };
         if (label) {
             next.managedSubdomain = label;
@@ -915,6 +955,10 @@ export class DeployService {
                 ? ((settings as Record<string, unknown>).ingressHost as string)
                 : undefined;
         const rawHosts = domains.map((row) => row.domain);
+        // Rows under a platform root are kept, not filtered: a live site can depend on one, and
+        // dropping it here would take that host off the Ingress on the next deploy. New ones are
+        // refused (`PLATFORM_DOMAIN_NOT_ALLOWED`); stored ones are only reported for review.
+        this.warnPlatformRootCustomDomains(work, rawHosts);
         const extras = this.dedupeExtraHosts(rawHosts, primary);
         if (extras.length === 0) {
             return settings;
@@ -923,6 +967,48 @@ export class DeployService {
             ...(settings ?? {}),
             extraHosts: extras,
         };
+    }
+
+    /**
+     * One WARN per deploy naming the Work's stored custom domains that are equal
+     * to or under a platform root domain. Those rows predate the refusal in
+     * "Add custom domain"; they keep deploying exactly as before, and this line
+     * is how an operator finds them to review.
+     */
+    private warnPlatformRootCustomDomains(work: Work, hosts: readonly string[]): void {
+        const roots = config.everWorks.platformRootDomains();
+        const flagged = hosts.filter(
+            (host) => typeof host === 'string' && matchPlatformRootDomain(host, roots) !== null,
+        );
+        if (flagged.length === 0) return;
+
+        // Quoted: a stored value is data, and a newline in it must not start a new log line.
+        const listed = flagged.map((host) => JSON.stringify(host.trim().toLowerCase())).join(', ');
+        this.logger.warn(
+            `Work ${work.id} has stored custom domain(s) under a platform root domain: ${listed}. ` +
+                'They stay on the Ingress; an operator should review them (new ones are refused: PLATFORM_DOMAIN_NOT_ALLOWED).',
+        );
+    }
+
+    /**
+     * WARN when a shared-cluster k8s deploy falls back to the member's saved
+     * k8s `ingressHost` (a user-scoped plugin setting) and that host is equal to
+     * or under a platform root domain. The value is still used as before; the
+     * line is for an operator to review.
+     */
+    private warnPlatformRootSavedIngressHost(
+        work: Work,
+        settings: Record<string, unknown> | undefined,
+    ): void {
+        const saved = settings?.ingressHost;
+        if (typeof saved !== 'string' || !saved.trim()) return;
+        if (coerceDeploymentClusterSource(settings?.clusterSource) !== 'k8s-works-shared') return;
+        if (matchPlatformRootDomain(saved, config.everWorks.platformRootDomains()) === null) return;
+
+        this.logger.warn(
+            `Work ${work.id} deploys to the shared cluster with a saved k8s ingressHost under a platform root domain: ` +
+                `${JSON.stringify(saved.trim().toLowerCase())}. It is still used; an operator should review it.`,
+        );
     }
 
     /**
@@ -960,6 +1046,31 @@ export class DeployService {
      *  - env vars are missing (dev / preview),
      * letting the existing k8s plugin LB hostname remain the fallback.
      */
+    /**
+     * Wildcard mode, `ever-works` provider: make `work.slug` this Work's managed-subdomain claim. Answers `false`
+     * (do not route the host) when another Work holds it, or when the claim cannot be written. The partial unique
+     * index on `works.managedSubdomain` settles two deploys racing for the same name. A Work already holding exactly the
+     * slug is routed without a write; one holding a different label has its claim moved to the slug.
+     */
+    private async reserveWildcardHost(work: Work): Promise<boolean> {
+        const label = (work.slug ?? '').trim().toLowerCase();
+        const current = (work.managedSubdomain ?? '').trim().toLowerCase();
+        if (current === label) return true;
+        const holder = await this.workRepository.findByManagedSubdomain(label);
+        if (holder && holder.id !== work.id) return false;
+        // A held claim that differs from the routed slug (a rename, a backfill) is moved to the slug: the platform
+        // reserves exactly the label it routes, so no other Work can take it.
+        try {
+            await this.workRepository.update(work.id, { managedSubdomain: label });
+            return true;
+        } catch (cause) {
+            this.logger.warn(
+                `Could not reserve managed subdomain ${label} for work ${work.id}: ${(cause as Error).message}`,
+            );
+            return false;
+        }
+    }
+
     private async applyEverWorksSubdomain(
         work: Work,
         settings: Record<string, unknown> | undefined,
@@ -974,10 +1085,32 @@ export class DeployService {
 
             const ingressHost = this.dnsService.ingressHostFor(work.slug);
 
-            // Provision asynchronously — DNS propagation runs in parallel with
-            // the workflow dispatch. Errors are logged inside the service so
-            // they never abort the deploy.
-            void this.dnsService.ensureWorkSubdomain(work.slug);
+            // Awaited (it used to be fire-and-forget) so a refusal keeps the
+            // host off the Ingress: a reserved platform label, or a name the
+            // zone holds for another host, must not be claimed at the ingress
+            // either. Other DNS errors are logged inside the service and never
+            // abort the deploy.
+            const routable = await this.dnsService.ensureWorkSubdomain(work.slug);
+            if (routable === false) {
+                this.logger.warn(
+                    `Managed host ${ingressHost} for work ${work.id} is reserved or already in use in the zone; deploying without it`,
+                );
+                // An explicit empty host, so the member's own saved k8s
+                // `ingressHost` (a user-scoped plugin setting) does not reach
+                // the shared cluster's Ingress in its place.
+                return { ...(settings ?? {}), ingressHost: '' };
+            }
+
+            // With the zone wildcard (`EVER_WORKS_DNS_WILDCARD`) no record is written for this host, and on this path
+            // the record was the only thing that reserved `<slug>.<root>` for this Work. Persist the claim instead, so
+            // the allocator, a rename and other Works' deploys see the name as taken.
+            if (isDnsWildcardEnabled() && !(await this.reserveWildcardHost(work))) {
+                this.logger.warn(
+                    `Managed host ${ingressHost} for work ${work.id} could not be reserved (held by another work, or the claim write failed); deploying without it`,
+                );
+                // Same as a DNS refusal above: an explicit empty host, so a saved k8s `ingressHost` cannot stand in.
+                return { ...(settings ?? {}), ingressHost: '' };
+            }
 
             return {
                 ...(settings ?? {}),
@@ -992,15 +1125,56 @@ export class DeployService {
         // admission webhook rejects the collision. Derive it from `work.website`.
         if (work.deployProvider === 'k8s') {
             const websiteHost = this.deriveIngressHostFromWebsite(work);
+            if (websiteHost && this.isPlatformReservedHost(websiteHost)) {
+                // `work.website` is user-editable and is not a managed-subdomain
+                // claim, so it must not put the platform apex or a reserved
+                // label on this Work's Ingress.
+                this.logger.warn(
+                    `Work ${work.id} website host ${websiteHost} is reserved by the platform; deploying without it`,
+                );
+                // Empty, not absent: the saved plugin `ingressHost` must not
+                // stand in for the refused host.
+                return { ...(settings ?? {}), ingressHost: '' };
+            }
             if (websiteHost) {
                 return {
                     ...(settings ?? {}),
                     ingressHost: websiteHost,
                 };
             }
+            // No website host: the saved plugin `ingressHost` reaches the Ingress unchanged.
+            this.warnPlatformRootSavedIngressHost(work, settings);
         }
 
         return settings;
+    }
+
+    /**
+     * `true` for the managed root domain itself or a reserved label directly
+     * under it (`mcp.ever.works`). Other names under the root stay allowed: the
+     * platform's own k8s Works take their host from `work.website`.
+     */
+    private isPlatformReservedHost(host: string): boolean {
+        const root = (process.env.EVER_WORKS_DOMAIN?.trim() || 'ever.works').toLowerCase();
+        const normalized = host.toLowerCase().replace(/\.$/, '');
+        if (normalized === root) return true;
+        if (!normalized.endsWith(`.${root}`)) return false;
+        const label = normalized.slice(0, -(root.length + 1));
+        return !label.includes('.') && isReservedSubdomainLabel(label);
+    }
+
+    /**
+     * Release a managed-subdomain claim this deploy just allocated. Best
+     * effort: a failure is logged and the deploy goes on without the host.
+     */
+    private async releaseManagedSubdomain(workId: string, label: string): Promise<void> {
+        try {
+            await this.workRepository.update(workId, { managedSubdomain: null });
+        } catch (cause) {
+            this.logger.error(
+                `Failed to release managed subdomain ${label} of work ${workId}: ${(cause as Error).message}`,
+            );
+        }
     }
 
     /**
