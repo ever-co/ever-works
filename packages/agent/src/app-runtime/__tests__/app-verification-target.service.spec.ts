@@ -1078,14 +1078,16 @@ describe('no work_deployments insert and no runtime-state write (ACC-06-48)', ()
         expect(source).toContain('work_deployments');
     });
 
-    it('declares exactly five collaborators, and none of them is a store', () => {
+    it('declares exactly six collaborators, and none of them is a store', () => {
         // An arity pin in the house style (`job-runtime.providers.spec.ts`): the facade, the spec
-        // source, the env source, APW-07's ephemeral provisioner and the sink. A sixth — a
+        // source, the env source, APW-07's ephemeral provisioner, the sink and (2026-11-26, APW-03
+        // schema §10 `components[].image`) the read-only App image resolver of §5.8. A seventh — a
         // `WorkDeployment` repository, a runtime-state store — turns this red.
-        expect(AppVerificationTargetService.length).toBe(5);
+        expect(AppVerificationTargetService.length).toBe(6);
         expect(code).toContain('APP_DEPENDENCIES_SERVICE');
         expect(code).toContain('APP_RUNTIME_ENV_SOURCE');
         expect(code).toContain('APP_VERIFICATION_SINK');
+        expect(code).toContain('APP_IMAGE_REFERENCE_RESOLVER');
     });
 
     it('reuses the three port tokens instead of declaring parallel ones (R-26)', () => {
