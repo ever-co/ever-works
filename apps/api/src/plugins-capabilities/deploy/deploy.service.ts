@@ -43,6 +43,8 @@ import {
 } from '@ever-works/agent/ever-works-providers';
 import { isAppWorkKind, isRepositoryWorkKind } from '@ever-works/contracts';
 import { ZERO_FRICTION_FUNNEL_EVENTS } from '@ever-works/contracts/telemetry';
+import { config } from '@ever-works/agent/config';
+import { matchPlatformRootDomain } from '@ever-works/agent/utils';
 import {
     WebsiteUpdateService,
     getWebsiteTemplateBranch,
@@ -952,6 +954,10 @@ export class DeployService {
                 ? ((settings as Record<string, unknown>).ingressHost as string)
                 : undefined;
         const rawHosts = domains.map((row) => row.domain);
+        // Rows under a platform root are kept, not filtered: a live site can depend on one, and
+        // dropping it here would take that host off the Ingress on the next deploy. New ones are
+        // refused (`PLATFORM_DOMAIN_NOT_ALLOWED`); stored ones are only reported for review.
+        this.warnPlatformRootCustomDomains(work, rawHosts);
         const extras = this.dedupeExtraHosts(rawHosts, primary);
         if (extras.length === 0) {
             return settings;
@@ -960,6 +966,48 @@ export class DeployService {
             ...(settings ?? {}),
             extraHosts: extras,
         };
+    }
+
+    /**
+     * One WARN per deploy naming the Work's stored custom domains that are equal
+     * to or under a platform root domain. Those rows predate the refusal in
+     * "Add custom domain"; they keep deploying exactly as before, and this line
+     * is how an operator finds them to review.
+     */
+    private warnPlatformRootCustomDomains(work: Work, hosts: readonly string[]): void {
+        const roots = config.everWorks.platformRootDomains();
+        const flagged = hosts.filter(
+            (host) => typeof host === 'string' && matchPlatformRootDomain(host, roots) !== null,
+        );
+        if (flagged.length === 0) return;
+
+        // Quoted: a stored value is data, and a newline in it must not start a new log line.
+        const listed = flagged.map((host) => JSON.stringify(host.trim().toLowerCase())).join(', ');
+        this.logger.warn(
+            `Work ${work.id} has stored custom domain(s) under a platform root domain: ${listed}. ` +
+                'They stay on the Ingress; an operator should review them (new ones are refused: PLATFORM_DOMAIN_NOT_ALLOWED).',
+        );
+    }
+
+    /**
+     * WARN when a shared-cluster k8s deploy falls back to the member's saved
+     * k8s `ingressHost` (a user-scoped plugin setting) and that host is equal to
+     * or under a platform root domain. The value is still used as before; the
+     * line is for an operator to review.
+     */
+    private warnPlatformRootSavedIngressHost(
+        work: Work,
+        settings: Record<string, unknown> | undefined,
+    ): void {
+        const saved = settings?.ingressHost;
+        if (typeof saved !== 'string' || !saved.trim()) return;
+        if (coerceDeploymentClusterSource(settings?.clusterSource) !== 'k8s-works-shared') return;
+        if (matchPlatformRootDomain(saved, config.everWorks.platformRootDomains()) === null) return;
+
+        this.logger.warn(
+            `Work ${work.id} deploys to the shared cluster with a saved k8s ingressHost under a platform root domain: ` +
+                `${JSON.stringify(saved.trim().toLowerCase())}. It is still used; an operator should review it.`,
+        );
     }
 
     /**
@@ -1057,6 +1105,8 @@ export class DeployService {
                     ingressHost: websiteHost,
                 };
             }
+            // No website host: the saved plugin `ingressHost` reaches the Ingress unchanged.
+            this.warnPlatformRootSavedIngressHost(work, settings);
         }
 
         return settings;
