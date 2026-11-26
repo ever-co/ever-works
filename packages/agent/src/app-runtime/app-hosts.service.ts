@@ -70,9 +70,10 @@
  *   token. `setPendingDomainRebuildBuildId` is the §8.2/§7.2:1057 write, named after its column.
  * - **The App spec read** — T21's `APP_DEPLOY_SPEC_SOURCE` (`app-deploy-preconditions.service.ts:196-197`),
  *   reused rather than re-declared, for `domains.onChange` and `build.strategy`.
- * - **The Deployment row** — T16 (`tasks.md:285-291`). Two facts only: the current Deployment's id
- *   (from the runtime state) and its `appRender.hosts`. The swap is
- *   `{ provide: APP_HOSTS_DEPLOYMENT_STORE, useExisting: WorkDeploymentRepository }`.
+ * - **The Deployment row** — T16 (`tasks.md:285-291`). The current Deployment's id (from the
+ *   runtime state), its `appRender.hosts`, and what a `restart` redeploys: its Build, its spec
+ *   commit and its recorded image digests (`appRender.image`, `appRender.componentImages`). The
+ *   swap is `{ provide: APP_HOSTS_DEPLOYMENT_STORE, useExisting: WorkDeploymentRepository }`.
  * - **The custom-domain rows** — `WorkCustomDomainRepository` **has** landed
  *   (`database/repositories/work-custom-domain.repository.ts:210-215`) and `findByWork` is exactly
  *   the read §8.1 needs; the binding is
@@ -103,6 +104,7 @@ import {
     type AppDeploySpecSource,
 } from './app-deploy-preconditions.service';
 import { APP_CLUSTER_OP_DISPATCHER } from './app-runtime-deletion.service';
+import { isDigestPinnedReference } from './app-component-images';
 import type { AppRenderHosts, AppRenderHostSource } from './app-render-input.builder';
 import type { AppDeployTrigger } from './app-deploy-request.service';
 
@@ -284,6 +286,26 @@ export interface AppHostsDeploymentView {
     commitSha?: string | null;
     appRender?: {
         hosts?: { primary?: string | null; extra?: readonly string[] | null } | null;
+        /** §5.8 — the spec commit the Deployment ran (`build.strategy: image` has no Build). */
+        specCommitSha?: string | null;
+        /** §5.8 — the App image it ran: the reference and the `sha256:` digest it was pinned to. */
+        image?: { reference?: string | null; digest?: string | null } | null;
+        /** Component name → the digest-pinned reference it ran (APW-03 schema §10). */
+        componentImages?: Record<string, string> | null;
+    } | null;
+}
+
+/**
+ * What a `restart` redeploys (§8.2:1109, §5.8): the current Deployment's Build or, without one, its
+ * spec commit, and the image digests it recorded — so a domain change never re-resolves a tag.
+ */
+export interface AppHostsCurrentDeploymentFacts {
+    buildId: string | null;
+    specCommitSha: string | null;
+    images: {
+        imageReference: string | null;
+        imageDigest: string | null;
+        componentImages: Record<string, string> | null;
     } | null;
 }
 
@@ -338,6 +360,12 @@ export interface AppHostsDeployRequester {
         trigger?: AppDeployTrigger;
         buildId?: string | null;
         specCommitSha?: string | null;
+        /** `AppDeployRequest.recordedImages` — the digests a restart pins to. */
+        recordedImages?: {
+            imageReference?: string | null;
+            imageDigest?: string | null;
+            componentImages?: Record<string, string> | null;
+        } | null;
     }): Promise<{
         status?: string | null;
         httpStatus?: number | null;
@@ -696,7 +724,9 @@ export class AppHostsService implements AppRenderHostSource {
      *    {@link APP_HOSTS_WARNING_REBUILD_NOT_APPLICABLE} (§5.8:892-894) — there is no Build to
      *    rebuild;
      * 3. `restart` → one `domain-change` Deployment request naming the **current** Build
-     *    (§8.2:1109, "a Deployment of `currentDeployment.buildId`");
+     *    (§8.2:1109, "a Deployment of `currentDeployment.buildId`") or, without one, its spec commit,
+     *    and carrying the image digests it recorded — so the restart runs what is live and never
+     *    re-resolves a tag (§5.8);
      * 4. `rebuild` → `requestRebuild` for the deploy-branch head, and its `build.id` is stored in
      *    `pendingDomainRebuildBuildId` **also when `deduped: true`**;
      * 5. a refused (`rebuildRateLimited`) or `blocked` request stores **no** marker and requests
@@ -803,7 +833,8 @@ export class AppHostsService implements AppRenderHostSource {
             );
         }
 
-        const currentBuildId = await this.currentBuildId(id, state);
+        const current = await this.currentDeployment(id, state);
+        const currentBuildId = current.buildId;
 
         let answer: Awaited<ReturnType<AppHostsDeployRequester['request']>>;
         try {
@@ -812,7 +843,11 @@ export class AppHostsService implements AppRenderHostSource {
                 userId: opts?.userId ?? null,
                 trigger: 'domain-change',
                 buildId: currentBuildId,
-                specCommitSha: null,
+                // §5.8 — without a Build, the spec commit and the digests are the Deployment's
+                // handles: a restart redeploys the ones that are live and never re-resolves a tag.
+                // A Build names its own commit and image, so neither is repeated beside one.
+                specCommitSha: currentBuildId ? null : current.specCommitSha,
+                ...(!currentBuildId && current.images ? { recordedImages: current.images } : {}),
             });
         } catch (error) {
             this.logger.warn(
@@ -1006,26 +1041,39 @@ export class AppHostsService implements AppRenderHostSource {
         }
     }
 
-    /** §8.2:1109's "`currentDeployment.buildId`", read through the same T16 seam as `previous`. */
-    private async currentBuildId(
+    /**
+     * §8.2:1109's "`currentDeployment.buildId`", read through the same T16 seam as `previous`, with
+     * the §5.8 facts a restart without a Build needs: the spec commit and the recorded digests.
+     */
+    private async currentDeployment(
         workId: string,
         state: AppHostsRuntimeStateView | null,
-    ): Promise<string | null> {
+    ): Promise<AppHostsCurrentDeploymentFacts> {
+        const nothing: AppHostsCurrentDeploymentFacts = {
+            buildId: null,
+            specCommitSha: null,
+            images: null,
+        };
         const deploymentId = text(state?.currentDeploymentId);
-        if (!deploymentId || !this.deployments?.findById) return null;
+        if (!deploymentId || !this.deployments?.findById) return nothing;
 
         try {
             const row = (await this.deployments.findById(deploymentId)) ?? null;
+            if (!row) return nothing;
 
-            return text(row?.buildId);
+            return {
+                buildId: text(row.buildId),
+                specCommitSha: text(row.appRender?.specCommitSha) || text(row.commitSha),
+                images: recordedImagesOf(row),
+            };
         } catch (error) {
             this.logger.warn(
                 `Reading the current App Deployment of Work ${workId} failed (${messageOf(
                     error,
-                )}); the Deployment is requested without a Build.`,
+                )}); the Deployment is requested without its Build, spec commit or digests.`,
             );
 
-            return null;
+            return nothing;
         }
     }
 
@@ -1130,6 +1178,44 @@ function text(value: unknown): string | null {
 
 function messageOf(error: unknown): string {
     return error instanceof Error ? error.message : String(error);
+}
+
+/** `sha256:<64 hex>` — the only App image digest a restart pins to. */
+const IMAGE_DIGEST = /^sha256:[0-9a-f]{64}$/;
+
+/**
+ * The image digests a Deployment row recorded (`appRender.image`, `appRender.componentImages`),
+ * kept only when they are digests — a tag is never carried, so it can never be pinned to — and
+ * `null` when nothing is left. The request service and the worker check them again.
+ */
+export function recordedImagesOf(
+    row: AppHostsDeploymentView | null | undefined,
+): AppHostsCurrentDeploymentFacts['images'] {
+    const render = row?.appRender ?? null;
+    const digest = text(render?.image?.digest);
+    const imageDigest = digest && IMAGE_DIGEST.test(digest) ? digest : null;
+
+    const componentImages: Record<string, string> = {};
+    const recorded = render?.componentImages;
+    if (recorded && typeof recorded === 'object' && !Array.isArray(recorded)) {
+        for (const [name, reference] of Object.entries(recorded)) {
+            const component = text(name);
+            const pinned = text(reference);
+            if (component && pinned && isDigestPinnedReference(pinned)) {
+                componentImages[component] = pinned;
+            }
+        }
+    }
+
+    if (!imageDigest && Object.keys(componentImages).length === 0) return null;
+
+    // The reference is history only (the digest is what is pinned): kept when it is pinned too.
+    const reference = text(render?.image?.reference);
+    return {
+        imageReference: imageDigest && isDigestPinnedReference(reference) ? reference : null,
+        imageDigest,
+        componentImages: Object.keys(componentImages).length > 0 ? componentImages : null,
+    };
 }
 
 /** Host comparison: DNS names are case-insensitive and a trailing dot is the same name. */

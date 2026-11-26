@@ -889,7 +889,8 @@ written for.
   Trigger name `spec-applied`. Saving a target with **Deploy now** ticked deploys when the effective spec is valid.
 - **Queue.** Latest-wins through `queuedDeploymentId`; the queued row carries the spec commit and
   `queuedBuildId` stays `null`. A queued request from the other strategy is marked `SUPERSEDED`.
-- **Domain change (§8.2).** `restart` redeploys the current Deployment's spec commit and recorded digest.
+- **Domain change (§8.2).** `restart` redeploys the current Deployment's spec commit and recorded digest (and its
+  component digests, `appRender.componentImages`); no tag is re-resolved.
   `rebuild` behaves as `restart` under this strategy, with the warning `rebuild_not_applicable` — there is no
   Build to rebuild.
 - **Rollback (FR-34).** Candidates are the Live rows among the last 20 to the same target. A rollback redeploys

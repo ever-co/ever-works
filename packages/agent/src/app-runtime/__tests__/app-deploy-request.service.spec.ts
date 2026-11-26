@@ -1035,6 +1035,84 @@ describe('AppDeployRequestService (APW-06 T24)', () => {
                     .componentImages,
             ).not.toHaveProperty('worker');
         });
+
+        it('a domain-change restart pins the recorded digests without being a rollback', async () => {
+            const h = harness();
+            h.preconditions.result = ready({
+                context: {
+                    target: 'your-cluster',
+                    specCommitSha: 'sha-live',
+                    strategy: 'image',
+                    buildId: null,
+                    latestGreenBuildId: null,
+                    primaryHost: 'app.example.com',
+                },
+            });
+
+            const result = await h.service.request(
+                manual({
+                    trigger: 'domain-change',
+                    buildId: null,
+                    specCommitSha: 'sha-live',
+                    recordedImages: {
+                        imageReference: `ghcr.io/example/app@sha256:${'a'.repeat(64)}`,
+                        imageDigest: `sha256:${'a'.repeat(64)}`,
+                        componentImages: {
+                            web: `ghcr.io/example/web@sha256:${'b'.repeat(64)}`,
+                            worker: 'ghcr.io/example/worker:latest',
+                        },
+                    },
+                }),
+            );
+
+            expect(result.status).toBe('accepted');
+            expect(result.stored.rollback).toBeNull();
+            expect(h.store.rows[0].appTrigger).toBe('domain-change');
+            expect(h.store.rows[0].appRender).toMatchObject({
+                specCommitSha: 'sha-live',
+                image: {
+                    reference: `ghcr.io/example/app@sha256:${'a'.repeat(64)}`,
+                    digest: `sha256:${'a'.repeat(64)}`,
+                    resolvedFromTag: false,
+                },
+                componentImages: { web: `ghcr.io/example/web@sha256:${'b'.repeat(64)}` },
+            });
+            expect(h.store.rows[0].appRender).not.toHaveProperty('rollback');
+        });
+
+        it('writes no image pin for a recorded digest that is not a sha256 digest', async () => {
+            const h = harness();
+
+            await h.service.request(
+                manual({
+                    trigger: 'domain-change',
+                    buildId: 'build-live',
+                    recordedImages: {
+                        imageReference: 'ghcr.io/example/app:1',
+                        imageDigest: 'latest',
+                    },
+                }),
+            );
+
+            expect(h.store.rows[0].appRender).not.toHaveProperty('image');
+        });
+
+        it("a rollback's own recorded images win over a restart's", async () => {
+            const h = harness();
+
+            await h.service.request(
+                manual({
+                    trigger: 'rollback',
+                    buildId: 'build-old',
+                    rollback: { deploymentId: 'old', imageDigest: `sha256:${'c'.repeat(64)}` },
+                    recordedImages: { imageDigest: `sha256:${'d'.repeat(64)}` },
+                }),
+            );
+
+            expect(h.store.rows[0].appRender).toMatchObject({
+                image: { digest: `sha256:${'c'.repeat(64)}` },
+            });
+        });
     });
 
     /* ---------------------------------------------------------------------- *
