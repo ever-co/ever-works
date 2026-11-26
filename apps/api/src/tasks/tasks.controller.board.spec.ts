@@ -315,6 +315,10 @@ describe('TasksController — Task board routes', () => {
             ['-5', 0],
             ['abc', 0],
             ['120', 120],
+            ['1000000', 1_000_000],
+            ['1000001', 1_000_000],
+            ['99999999999999999999999', 1_000_000],
+            ['1e23', 1],
         ])('reads offset=%p as %p', async (raw, expected) => {
             const { controller, service } = make();
             await controller.boardColumn(auth, { column: 'done', offset: raw });

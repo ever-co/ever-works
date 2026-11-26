@@ -205,6 +205,23 @@ describe('the surfaces', () => {
 		expect(formatFleetUsageTokens(18_400_000)).toBe('18.4 M');
 	});
 
+	it('keeps the unit when a count rounds up to the next one', () => {
+		// Unchanged: values that do not round across a unit boundary.
+		expect(formatFleetUsageTokens(0)).toBe('0');
+		expect(formatFleetUsageTokens(999)).toBe('999');
+		expect(formatFleetUsageTokens(1000)).toBe('1 k');
+		expect(formatFleetUsageTokens(999_499)).toBe('999 k');
+		expect(formatFleetUsageTokens(1_000_000)).toBe('1 M');
+		expect(formatFleetUsageTokens(999_940_000)).toBe('999.9 M');
+		expect(formatFleetUsageTokens(1_000_000_000)).toBe('1 B');
+		expect(formatFleetUsageTokens(2_500_000_000)).toBe('2.5 B');
+		// Fixed: these used to read "1000 k" and "1000 M".
+		expect(formatFleetUsageTokens(999_500)).toBe('1 M');
+		expect(formatFleetUsageTokens(999_999)).toBe('1 M');
+		expect(formatFleetUsageTokens(999_960_000)).toBe('1 B');
+		expect(formatFleetUsageTokens(999_999_999)).toBe('1 B');
+	});
+
 	it('reads a stored session usage, dropping what it does not recognise', () => {
 		const usage = parseFleetSessionUsage({
 			byModel: {

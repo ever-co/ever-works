@@ -24,6 +24,8 @@ import { AuthService } from './auth.service';
 import {
     EXISTING_ACCOUNT_EMAIL_UNVERIFIED_CODE,
     EXISTING_ACCOUNT_EMAIL_UNVERIFIED_MESSAGE,
+    SOCIAL_EMAIL_AMBIGUOUS_CODE,
+    SOCIAL_EMAIL_AMBIGUOUS_MESSAGE,
 } from './social-link-errors';
 import type { UserRepository, AuthAccountRepository } from '@ever-works/agent/database';
 import type { EventEmitter2 } from '@nestjs/event-emitter';
@@ -41,6 +43,7 @@ describe('AuthService', () => {
             UserRepository,
             | 'findByEmail'
             | 'findByEmailForSocialAuth'
+            | 'findByEmailCaseInsensitiveForSocialAuth'
             | 'findByIdForSocialAuth'
             | 'findById'
             | 'findOne'
@@ -68,6 +71,7 @@ describe('AuthService', () => {
         userRepo = {
             findByEmail: jest.fn(),
             findByEmailForSocialAuth: jest.fn(),
+            findByEmailCaseInsensitiveForSocialAuth: jest.fn().mockResolvedValue([]),
             findByIdForSocialAuth: jest.fn(),
             findById: jest.fn(),
             findOne: jest.fn(),
@@ -251,6 +255,39 @@ describe('AuthService', () => {
             expect(userRepo.create).toHaveBeenCalledWith(
                 expect.objectContaining({ emailVerified: false }),
             );
+        });
+
+        it('treats a missing emailVerified flag as unverified (no UserConfirmedEvent)', async () => {
+            userRepo.findByEmailForSocialAuth.mockResolvedValue(null);
+            userRepo.create.mockResolvedValue({ id: 'u-new', email: 'x' } as any);
+            authAccountRepo.upsertProviderAccount.mockResolvedValue({} as any);
+            jest.spyOn(bcrypt, 'hash').mockResolvedValue('h' as never);
+
+            await service.validateSocialUser(socialUser({ emailVerified: undefined }) as any);
+
+            expect(emitter.emit).not.toHaveBeenCalled();
+            expect(userRepo.create).toHaveBeenCalledWith(
+                expect.objectContaining({ emailVerified: false }),
+            );
+        });
+
+        it('refuses to link into an existing user when the provider omits emailVerified', async () => {
+            authAccountRepo.findProviderAccountByAccountId.mockResolvedValue(null);
+            userRepo.findByEmailForSocialAuth.mockResolvedValue({
+                id: 'u-victim',
+                email: 'sa@b.co',
+                isActive: true,
+                emailVerified: true,
+            } as any);
+            authAccountRepo.findProviderAccount.mockResolvedValue(null);
+
+            await expect(
+                service.validateSocialUser(socialUser({ emailVerified: undefined }) as any),
+            ).rejects.toThrow(
+                'Unable to link this social account because the provider email is not verified',
+            );
+            expect(userRepo.updateForSocialAuth).not.toHaveBeenCalled();
+            expect(authAccountRepo.upsertProviderAccount).not.toHaveBeenCalled();
         });
 
         it('falls back to email-prefix when displayName/username missing', async () => {
@@ -525,6 +562,99 @@ describe('AuthService', () => {
                 );
                 expect(userRepo.updateForSocialAuth).not.toHaveBeenCalled();
                 expect(authAccountRepo.upsertProviderAccount).not.toHaveBeenCalled();
+            });
+
+            describe('an account stored in another case than the provider email (exact lookup misses)', () => {
+                const stored = (overrides: Record<string, unknown> = {}) => ({
+                    id: 'u-mixed',
+                    email: 'Sa@B.co',
+                    isActive: true,
+                    username: 'owner',
+                    avatar: 'old.png',
+                    emailVerified: true,
+                    ...overrides,
+                });
+
+                beforeEach(() => {
+                    authAccountRepo.findProviderAccountByAccountId.mockResolvedValue(null);
+                    userRepo.findByEmailForSocialAuth.mockResolvedValue(null);
+                });
+
+                it('joins the single case-variant VERIFIED user and creates nothing', async () => {
+                    userRepo.findByEmailCaseInsensitiveForSocialAuth.mockResolvedValue([
+                        stored(),
+                    ] as any);
+                    const updated = { id: 'u-mixed', emailVerified: true };
+                    userRepo.updateForSocialAuth.mockResolvedValue(updated as any);
+                    authAccountRepo.upsertProviderAccount.mockResolvedValue({} as any);
+
+                    const result = await service.validateSocialUser(socialUser() as any);
+
+                    expect(result).toBe(updated);
+                    expect(userRepo.findByEmailCaseInsensitiveForSocialAuth).toHaveBeenCalledWith(
+                        'sa@b.co',
+                    );
+                    expect(userRepo.create).not.toHaveBeenCalled();
+                    expect(userRepo.updateForSocialAuth).toHaveBeenCalledWith(
+                        'u-mixed',
+                        expect.any(Object),
+                    );
+                });
+
+                it('refuses a single case-variant UNVERIFIED user with the existing 409', async () => {
+                    userRepo.findByEmailCaseInsensitiveForSocialAuth.mockResolvedValue([
+                        stored({ emailVerified: false }),
+                    ] as any);
+
+                    const attempt = service.validateSocialUser(socialUser() as any);
+
+                    await expect(attempt).rejects.toBeInstanceOf(ConflictException);
+                    await expect(attempt).rejects.toMatchObject({
+                        status: 409,
+                        response: expect.objectContaining({
+                            code: EXISTING_ACCOUNT_EMAIL_UNVERIFIED_CODE,
+                            message: EXISTING_ACCOUNT_EMAIL_UNVERIFIED_MESSAGE,
+                        }),
+                    });
+                    expect(userRepo.create).not.toHaveBeenCalled();
+                    expect(userRepo.updateForSocialAuth).not.toHaveBeenCalled();
+                    expect(authAccountRepo.upsertProviderAccount).not.toHaveBeenCalled();
+                });
+
+                it('refuses two or more case variants with the ambiguity 409 and creates nothing', async () => {
+                    userRepo.findByEmailCaseInsensitiveForSocialAuth.mockResolvedValue([
+                        stored({ id: 'u-1', email: 'Sa@B.co' }),
+                        stored({ id: 'u-2', email: 'SA@b.co' }),
+                    ] as any);
+
+                    const attempt = service.validateSocialUser(socialUser() as any);
+
+                    await expect(attempt).rejects.toBeInstanceOf(ConflictException);
+                    await expect(attempt).rejects.toMatchObject({
+                        status: 409,
+                        response: expect.objectContaining({
+                            code: SOCIAL_EMAIL_AMBIGUOUS_CODE,
+                            message: SOCIAL_EMAIL_AMBIGUOUS_MESSAGE,
+                        }),
+                    });
+                    expect(userRepo.create).not.toHaveBeenCalled();
+                    expect(userRepo.updateForSocialAuth).not.toHaveBeenCalled();
+                    expect(authAccountRepo.upsertProviderAccount).not.toHaveBeenCalled();
+                    expect(emitter.emit).not.toHaveBeenCalled();
+                });
+
+                it('creates the user when no variant exists', async () => {
+                    userRepo.findByEmailCaseInsensitiveForSocialAuth.mockResolvedValue([]);
+                    userRepo.create.mockResolvedValue({ id: 'u-new' } as any);
+                    authAccountRepo.upsertProviderAccount.mockResolvedValue({} as any);
+                    jest.spyOn(bcrypt, 'hash').mockResolvedValue('h' as never);
+
+                    await service.validateSocialUser(socialUser() as any);
+
+                    expect(userRepo.create).toHaveBeenCalledWith(
+                        expect.objectContaining({ email: 'sa@b.co' }),
+                    );
+                });
             });
 
             it('still links a verified provider email into a VERIFIED existing user, as before', async () => {

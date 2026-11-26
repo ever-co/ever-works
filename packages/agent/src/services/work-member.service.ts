@@ -143,7 +143,11 @@ export class WorkMemberService {
             });
         }
 
-        const invitee = await this.userRepository.findByEmail(dto.email);
+        // Exact match first (existing behaviour); otherwise a case-insensitive match,
+        // used only when exactly one user has that address.
+        const invitee =
+            (await this.userRepository.findByEmail(dto.email)) ??
+            (await this.userRepository.findUniqueByEmailCaseInsensitive(dto.email));
         if (!invitee) {
             throw new NotFoundException({
                 status: 'error',
