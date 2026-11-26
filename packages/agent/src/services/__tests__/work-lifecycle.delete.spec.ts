@@ -32,11 +32,16 @@ import type { DeleteWorkDto } from '@src/items-generator/dto';
 const user = { id: 'owner-1', username: 'owner' } as User;
 
 interface Mocks {
-    workRepository: { delete: jest.Mock };
+    workRepository: {
+        delete: jest.Mock;
+        findByManagedSubdomain: jest.Mock;
+        findByDeployProvidersForUserOrSlug: jest.Mock;
+    };
     dataGenerator: { removeRepository: jest.Mock; cleanup: jest.Mock };
     markdownGenerator: { removeRepository: jest.Mock; cleanup: jest.Mock };
     websiteGenerator: { removeRepository: jest.Mock; cleanup: jest.Mock };
     everWorksDns: { removeWorkSubdomain: jest.Mock };
+    deployFacade: { prepareWorkDeploymentTeardown: jest.Mock };
 }
 
 function makeService(work: Record<string, unknown>): {
@@ -44,7 +49,11 @@ function makeService(work: Record<string, unknown>): {
     mocks: Mocks;
 } {
     const mocks: Mocks = {
-        workRepository: { delete: jest.fn().mockResolvedValue(undefined) },
+        workRepository: {
+            delete: jest.fn().mockResolvedValue(undefined),
+            findByManagedSubdomain: jest.fn().mockResolvedValue(null),
+            findByDeployProvidersForUserOrSlug: jest.fn().mockResolvedValue([]),
+        },
         dataGenerator: {
             removeRepository: jest.fn().mockResolvedValue(undefined),
             cleanup: jest.fn().mockResolvedValue(undefined),
@@ -58,6 +67,11 @@ function makeService(work: Record<string, unknown>): {
             cleanup: jest.fn().mockResolvedValue(undefined),
         },
         everWorksDns: { removeWorkSubdomain: jest.fn().mockResolvedValue(undefined) },
+        deployFacade: {
+            prepareWorkDeploymentTeardown: jest
+                .fn()
+                .mockResolvedValue({ status: 'skipped', reason: 'not_managed' }),
+        },
     };
     const ownership = { ensureIsOwner: jest.fn().mockResolvedValue({ work }) };
 
@@ -69,7 +83,7 @@ function makeService(work: Record<string, unknown>): {
         mocks.websiteGenerator as never,
         {} as never,
         ownership as never,
-        {} as never,
+        mocks.deployFacade as never,
         {} as never,
         {} as never,
         {} as never,
@@ -236,5 +250,328 @@ describe('WorkLifecycleService.deleteWork — other kinds keep their behaviour',
         expect(mocks.markdownGenerator.removeRepository).toHaveBeenCalledTimes(1);
         expect(mocks.websiteGenerator.removeRepository).not.toHaveBeenCalled();
         expect(result.deleted_repositories).toEqual(['acme/best-tools-data', 'acme/best-tools']);
+    });
+});
+
+/**
+ * A managed-hosting Work's site is served by its Ingress on the works cluster.
+ * Since the `ever.works` zone carries a proxied `*.ever.works` wildcard routed to
+ * that ingress, removing the Work's DNS record alone leaves the site public; the
+ * delete must also remove its Kubernetes objects. Best effort, like the DNS
+ * removal: nothing in the teardown may block or fail the delete.
+ */
+describe('WorkLifecycleService.deleteWork — managed hosting removes the cluster objects', () => {
+    function managedWork(
+        deployProvider: 'ever-works' | 'k8s' = 'ever-works',
+    ): Record<string, unknown> {
+        return { ...directoryWork(), id: 'w-managed', slug: 'best-tools', deployProvider };
+    }
+
+    function readyTeardown(run: jest.Mock) {
+        return {
+            status: 'ready',
+            namespace: 'ever-works-tenants-owner-1',
+            objectName: 'best-tools-website',
+            run,
+        };
+    }
+
+    const removedAll = {
+        location: 'ever-works-tenants-owner-1',
+        removed: [
+            { kind: 'Ingress', name: 'best-tools-website' },
+            { kind: 'Service', name: 'best-tools-website' },
+            { kind: 'Deployment', name: 'best-tools-website' },
+        ],
+        absent: [],
+        kept: [],
+        failed: [],
+    };
+
+    it.each(['ever-works', 'k8s'] as const)(
+        'a %s Work: resolves the target before the row goes, removes the DNS record after it, then the objects',
+        async (provider) => {
+            const { service, mocks } = makeService(managedWork(provider));
+            const order: string[] = [];
+            const run = jest.fn(async () => {
+                order.push('teardown');
+                return removedAll;
+            });
+            mocks.deployFacade.prepareWorkDeploymentTeardown.mockImplementation(async () => {
+                order.push('prepare');
+                return readyTeardown(run);
+            });
+            mocks.workRepository.delete.mockImplementation(async () => {
+                order.push('row-deleted');
+            });
+            mocks.everWorksDns.removeWorkSubdomain.mockImplementation(async () => {
+                order.push('dns');
+            });
+
+            const result = await service.deleteWork('w-managed', {}, user);
+
+            expect(result.status).toBe('success');
+            expect(mocks.deployFacade.prepareWorkDeploymentTeardown).toHaveBeenCalledWith({
+                userId: user.id,
+                workId: 'w-managed',
+            });
+            expect(run).toHaveBeenCalledTimes(1);
+            // The DNS step first: it does not wait on the cluster, which may be slow.
+            expect(order).toEqual(
+                provider === 'ever-works'
+                    ? ['prepare', 'row-deleted', 'dns', 'teardown']
+                    : ['prepare', 'row-deleted', 'teardown'],
+            );
+        },
+    );
+
+    it('does not hold the delete on a cluster that does not answer: the teardown goes on in the background', async () => {
+        const { service, mocks } = makeService(managedWork());
+        (service as unknown as { deploymentTeardownWaitMs: number }).deploymentTeardownWaitMs = 20;
+        const logger = (service as unknown as { logger: { warn: jest.Mock; log: jest.Mock } })
+            .logger;
+        const warn = jest.spyOn(logger, 'warn').mockImplementation(() => undefined);
+        const log = jest.spyOn(logger, 'log').mockImplementation(() => undefined);
+        let finish: (value: typeof removedAll) => void = () => undefined;
+        const run = jest.fn(
+            () =>
+                new Promise<typeof removedAll>((resolve) => {
+                    finish = resolve;
+                }),
+        );
+        mocks.deployFacade.prepareWorkDeploymentTeardown.mockResolvedValue(readyTeardown(run));
+
+        const result = await service.deleteWork('w-managed', {}, user);
+
+        expect(result.status).toBe('success');
+        expect(mocks.everWorksDns.removeWorkSubdomain).toHaveBeenCalledWith('best-tools');
+        expect(warn.mock.calls.map(([message]) => String(message))).toContainEqual(
+            expect.stringContaining('goes on in the background'),
+        );
+        expect(log.mock.calls.some(([message]) => String(message).includes('removed'))).toBe(false);
+
+        // When it ends, its outcome is still logged.
+        finish(removedAll);
+        await new Promise((resolve) => setImmediate(resolve));
+        expect(log.mock.calls.map(([message]) => String(message))).toContainEqual(
+            expect.stringContaining(
+                'removed Ingress/best-tools-website, Service/best-tools-website, Deployment/best-tools-website',
+            ),
+        );
+    });
+
+    it('logs a failed object by its reason code, never by its message', async () => {
+        const { service, mocks } = makeService(managedWork());
+        const logger = (service as unknown as { logger: { error: jest.Mock } }).logger;
+        const error = jest.spyOn(logger, 'error').mockImplementation(() => undefined);
+        const run = jest.fn().mockResolvedValue({
+            ...removedAll,
+            failed: [
+                {
+                    kind: 'Ingress',
+                    name: 'best-tools-website',
+                    error: 'ingresses is forbidden: User "system:serviceaccount:works:deployer"',
+                    code: 'UNAUTHORIZED',
+                },
+            ],
+        });
+        mocks.deployFacade.prepareWorkDeploymentTeardown.mockResolvedValue(readyTeardown(run));
+
+        await service.deleteWork('w-managed', {}, user);
+
+        const messages = error.mock.calls.map(([message]) => String(message));
+        expect(messages).toContainEqual(
+            expect.stringContaining('could not remove Ingress/best-tools-website (UNAUTHORIZED)'),
+        );
+        expect(messages.join('\n')).not.toContain('forbidden');
+    });
+
+    it('says where the Work was last deployed when that is not where the teardown looks', async () => {
+        const { service, mocks } = makeService(managedWork());
+        const logger = (service as unknown as { logger: { warn: jest.Mock } }).logger;
+        const warn = jest.spyOn(logger, 'warn').mockImplementation(() => undefined);
+        const run = jest.fn().mockResolvedValue(removedAll);
+        mocks.deployFacade.prepareWorkDeploymentTeardown.mockResolvedValue({
+            ...readyTeardown(run),
+            staleTarget: 'ever-works-tenants-owner-1/old-tools-website',
+        });
+
+        await service.deleteWork('w-managed', {}, user);
+
+        expect(warn.mock.calls.map(([message]) => String(message))).toContainEqual(
+            expect.stringContaining(
+                'last deployed as ever-works-tenants-owner-1/old-tools-website',
+            ),
+        );
+        expect(run).toHaveBeenCalledTimes(1);
+    });
+
+    it('a result that cannot even be logged does not fail the delete', async () => {
+        const { service, mocks } = makeService(managedWork());
+        const logger = (service as unknown as { logger: { log: jest.Mock } }).logger;
+        jest.spyOn(logger, 'log').mockImplementation(() => {
+            throw new Error('log sink down');
+        });
+        const run = jest.fn().mockResolvedValue(removedAll);
+        mocks.deployFacade.prepareWorkDeploymentTeardown.mockResolvedValue(readyTeardown(run));
+
+        await expect(service.deleteWork('w-managed', {}, user)).resolves.toMatchObject({
+            status: 'success',
+        });
+    });
+
+    it('a Vercel Work never asks for a cluster teardown', async () => {
+        const { service, mocks } = makeService(directoryWork());
+
+        await service.deleteWork('w-dir', {}, user);
+
+        expect(mocks.deployFacade.prepareWorkDeploymentTeardown).not.toHaveBeenCalled();
+    });
+
+    it('a skipped preparation removes nothing and the delete goes on', async () => {
+        const { service, mocks } = makeService(managedWork());
+        mocks.deployFacade.prepareWorkDeploymentTeardown.mockResolvedValue({
+            status: 'skipped',
+            reason: 'shared',
+            detail: 'Work w-other deploys to ever-works-tenants-owner-1/best-tools-website too',
+        });
+
+        const result = await service.deleteWork('w-managed', {}, user);
+
+        expect(result.status).toBe('success');
+        expect(mocks.workRepository.delete).toHaveBeenCalledWith('w-managed');
+        expect(mocks.everWorksDns.removeWorkSubdomain).toHaveBeenCalledWith('best-tools');
+    });
+
+    it('a preparation that throws does not block the delete', async () => {
+        const { service, mocks } = makeService(managedWork());
+        mocks.deployFacade.prepareWorkDeploymentTeardown.mockRejectedValue(new Error('boom'));
+
+        const result = await service.deleteWork('w-managed', {}, user);
+
+        expect(result.status).toBe('success');
+        expect(mocks.workRepository.delete).toHaveBeenCalledWith('w-managed');
+        expect(mocks.everWorksDns.removeWorkSubdomain).toHaveBeenCalledWith('best-tools');
+    });
+
+    it('a teardown that throws does not fail the delete, and the DNS record is still removed', async () => {
+        const { service, mocks } = makeService(managedWork());
+        const run = jest.fn().mockRejectedValue(new Error('cluster unreachable'));
+        mocks.deployFacade.prepareWorkDeploymentTeardown.mockResolvedValue(readyTeardown(run));
+
+        const result = await service.deleteWork('w-managed', {}, user);
+
+        expect(result.status).toBe('success');
+        expect(run).toHaveBeenCalledTimes(1);
+        expect(mocks.everWorksDns.removeWorkSubdomain).toHaveBeenCalledWith('best-tools');
+    });
+
+    it('a partial teardown (some objects kept or failed) still answers success', async () => {
+        const { service, mocks } = makeService(managedWork());
+        const run = jest.fn().mockResolvedValue({
+            ...removedAll,
+            removed: [{ kind: 'Service', name: 'best-tools-website' }],
+            kept: [{ kind: 'Ingress', name: 'best-tools-website', reason: 'other_manager' }],
+            failed: [{ kind: 'Deployment', name: 'best-tools-website', error: 'forbidden' }],
+        });
+        mocks.deployFacade.prepareWorkDeploymentTeardown.mockResolvedValue(readyTeardown(run));
+
+        const result = await service.deleteWork('w-managed', {}, user);
+
+        expect(result.status).toBe('success');
+    });
+
+    it('does not remove anything when the row delete itself fails', async () => {
+        const { service, mocks } = makeService(managedWork());
+        const run = jest.fn().mockResolvedValue(removedAll);
+        mocks.deployFacade.prepareWorkDeploymentTeardown.mockResolvedValue(readyTeardown(run));
+        mocks.workRepository.delete.mockRejectedValue(new Error('db down'));
+
+        await expect(service.deleteWork('w-managed', {}, user)).rejects.toBeDefined();
+
+        expect(run).not.toHaveBeenCalled();
+        expect(mocks.everWorksDns.removeWorkSubdomain).not.toHaveBeenCalled();
+    });
+});
+
+/**
+ * #3337 review M5: the `<slug>.<root>` record goes with an `ever-works` Work only
+ * when that Work holds the name. A slug is not unique across tenants, and since
+ * #3327 the DNS provider only guards against records off the managed target, so
+ * a record on it that serves another Work would otherwise be deleted too.
+ */
+describe('WorkLifecycleService.deleteWork — the slug DNS record goes only with the Work that holds it', () => {
+    function everWorksWork(managedSubdomain: string | null): Record<string, unknown> {
+        return {
+            ...directoryWork(),
+            id: 'w-managed',
+            slug: 'best-tools',
+            deployProvider: 'ever-works',
+            managedSubdomain,
+        };
+    }
+
+    it('removes it when the Work holds the managed subdomain claim on its slug', async () => {
+        const { service, mocks } = makeService(everWorksWork('best-tools'));
+
+        await service.deleteWork('w-managed', {}, user);
+
+        expect(mocks.workRepository.findByManagedSubdomain).toHaveBeenCalledWith('best-tools');
+        expect(mocks.workRepository.findByDeployProvidersForUserOrSlug).not.toHaveBeenCalled();
+        expect(mocks.everWorksDns.removeWorkSubdomain).toHaveBeenCalledWith('best-tools');
+    });
+
+    it('keeps it when ANOTHER Work holds the managed subdomain claim on that slug', async () => {
+        const { service, mocks } = makeService(everWorksWork(null));
+        mocks.workRepository.findByManagedSubdomain.mockResolvedValue({ id: 'w-other' });
+
+        const result = await service.deleteWork('w-managed', {}, user);
+
+        expect(result.status).toBe('success');
+        expect(mocks.everWorksDns.removeWorkSubdomain).not.toHaveBeenCalled();
+    });
+
+    it('removes it for a Work from before managed subdomains when no other ever-works Work has the slug', async () => {
+        const { service, mocks } = makeService(everWorksWork(null));
+
+        await service.deleteWork('w-managed', {}, user);
+
+        expect(mocks.workRepository.findByDeployProvidersForUserOrSlug).toHaveBeenCalledWith(
+            ['ever-works'],
+            '',
+            'best-tools',
+        );
+        expect(mocks.everWorksDns.removeWorkSubdomain).toHaveBeenCalledWith('best-tools');
+    });
+
+    it('keeps it for a Work from before managed subdomains when another ever-works Work has the same slug', async () => {
+        const { service, mocks } = makeService(everWorksWork(null));
+        mocks.workRepository.findByDeployProvidersForUserOrSlug.mockResolvedValue([
+            { id: 'w-other-tenant', slug: 'best-tools', deployProvider: 'ever-works' },
+        ]);
+
+        const result = await service.deleteWork('w-managed', {}, user);
+
+        expect(result.status).toBe('success');
+        expect(mocks.everWorksDns.removeWorkSubdomain).not.toHaveBeenCalled();
+    });
+
+    it('keeps it when the owner of the name cannot be checked, and the delete still succeeds', async () => {
+        const { service, mocks } = makeService(everWorksWork('best-tools'));
+        mocks.workRepository.findByManagedSubdomain.mockRejectedValue(new Error('db down'));
+
+        const result = await service.deleteWork('w-managed', {}, user);
+
+        expect(result.status).toBe('success');
+        expect(mocks.everWorksDns.removeWorkSubdomain).not.toHaveBeenCalled();
+    });
+
+    it('never looks at DNS ownership for a Work on another provider', async () => {
+        const { service, mocks } = makeService(directoryWork());
+
+        await service.deleteWork('w-dir', {}, user);
+
+        expect(mocks.workRepository.findByManagedSubdomain).not.toHaveBeenCalled();
+        expect(mocks.everWorksDns.removeWorkSubdomain).not.toHaveBeenCalled();
     });
 });

@@ -55,7 +55,11 @@ import { User } from '@src/entities/user.entity';
 import { WorkOwnershipService } from './work-ownership.service';
 import { rethrowAsNormalized } from './utils/error.utils';
 import { GenerateStatusType } from '@src/entities/types';
-import { DeployFacadeService } from '@src/facades/deploy.facade';
+import {
+    DeployFacadeService,
+    type WorkDeploymentTeardownPreparation,
+} from '@src/facades/deploy.facade';
+import type { WorkDeploymentTeardownResult } from '@ever-works/plugin';
 import {
     getDefaultWebsiteTemplateId,
     SwitchWebsiteTemplateResponseDto,
@@ -2994,6 +2998,10 @@ export class WorkLifecycleService {
                 };
             }
 
+            // Resolved while the row (and its Work-scoped plugin settings) still
+            // exists; run once the row is gone, below.
+            const deploymentTeardown = await this.prepareDeploymentTeardown(work, user);
+
             const workTombstone = this.domainEvents
                 ? await this.domainEvents
                       .transaction((manager) =>
@@ -3030,10 +3038,23 @@ export class WorkLifecycleService {
             // immediately reusable. Only applies when the work deployed to
             // `ever-works` — for other providers ensureWorkSubdomain was never
             // called so the DNS record won't exist. No-ops when Cloudflare env
-            // is not configured (dev).
-            if (work.deployProvider === 'ever-works') {
+            // is not configured (dev). Only when this Work holds the name: a
+            // slug is not unique across tenants, and a record on the managed
+            // target may serve another Work that claimed the same label.
+            // Before the cluster teardown below, which may wait on the cluster.
+            if (work.deployProvider === 'ever-works' && (await this.holdsSlugRecord(work))) {
                 await this.everWorksDns.removeWorkSubdomain(work.slug);
             }
+
+            // Remove the site's Ingress (and its own Service, Deployment and
+            // Secrets) from the platform-managed cluster. Removing the DNS record
+            // alone no longer takes the site down: the zone's `*.ever.works`
+            // wildcard routes every unrecorded name to the works ingress, so the
+            // Ingress rule is what still serves it. Best effort, like the DNS
+            // removal: a failure is logged and the delete still succeeds. The
+            // delete waits for it a bounded time only; past that it goes on in
+            // the background and logs its outcome when it ends.
+            await this.runDeploymentTeardown(work, deploymentTeardown);
 
             return {
                 status: 'success',
@@ -3048,6 +3069,190 @@ export class WorkLifecycleService {
             rethrowAsNormalized(error, this.logger, 'deleting work', {
                 slug: work?.slug || '',
             });
+        }
+    }
+
+    /**
+     * Prepare the removal of a deleted Work's runtime objects on a
+     * platform-managed cluster ({@link DeployFacadeService.prepareWorkDeploymentTeardown}).
+     * `null` when there is nothing to remove or it could not be resolved; never
+     * throws, so it cannot block the delete.
+     */
+    private async prepareDeploymentTeardown(
+        work: Work,
+        user: User,
+    ): Promise<Extract<WorkDeploymentTeardownPreparation, { status: 'ready' }> | null> {
+        // An App Work's workloads are the App runtime's to remove (`requestAppWorkRemoval`).
+        if (
+            isAppWorkKind(work.kind) ||
+            (work.deployProvider !== 'ever-works' && work.deployProvider !== 'k8s')
+        ) {
+            return null;
+        }
+        try {
+            const prepared = await this.deployFacade.prepareWorkDeploymentTeardown({
+                userId: user.id,
+                workId: work.id,
+            });
+            if (prepared.status === 'ready') {
+                return prepared;
+            }
+            if (prepared.reason !== 'not_managed') {
+                this.logger.warn(
+                    `Work ${work.id}: its cluster objects will not be removed on delete ` +
+                        `(${prepared.reason}${prepared.detail ? `: ${prepared.detail}` : ''})`,
+                );
+            }
+            return null;
+        } catch (error) {
+            this.logger.warn(
+                `Work ${work.id}: could not prepare the removal of its cluster objects: ${describeFailureCode(error)}`,
+            );
+            return null;
+        }
+    }
+
+    /**
+     * Whether a deleted `ever-works` Work owns the `<slug>.<root>` record its
+     * deploy ensured, so the delete may remove it. Read after the row is gone.
+     *
+     * - Another Work whose `managedSubdomain` is this slug holds the claim: keep.
+     * - This Work's own `managedSubdomain` is the slug: it held the claim, remove.
+     * - No claim on either side (a Work from before managed subdomains): remove
+     *   unless another `ever-works` Work still carries the same slug, since its
+     *   deploy ensures the very same record.
+     *
+     * A lookup that fails keeps the record: removing a name another Work may
+     * still serve is worse than leaving one stale record.
+     */
+    private async holdsSlugRecord(work: Work): Promise<boolean> {
+        const label = (work.slug ?? '').trim().toLowerCase();
+        if (!label) {
+            return false;
+        }
+        try {
+            const claimant = await this.workRepository.findByManagedSubdomain(label);
+            if (claimant && claimant.id !== work.id) {
+                this.logger.warn(
+                    `Work ${work.id}: kept the DNS record of ${label}; Work ${claimant.id} holds that subdomain`,
+                );
+                return false;
+            }
+            if ((work.managedSubdomain ?? '').trim().toLowerCase() === label) {
+                return true;
+            }
+            const sameSlug = await this.workRepository.findByDeployProvidersForUserOrSlug(
+                ['ever-works'],
+                '',
+                work.slug,
+            );
+            const other = sameSlug.find((candidate) => candidate.id !== work.id);
+            if (other) {
+                this.logger.warn(
+                    `Work ${work.id}: kept the DNS record of ${label}; Work ${other.id} deploys under the same slug`,
+                );
+                return false;
+            }
+            return true;
+        } catch (error) {
+            this.logger.warn(
+                `Work ${work.id}: kept the DNS record of ${label}; its owner could not be checked: ${describeFailureCode(error)}`,
+            );
+            return false;
+        }
+    }
+
+    /**
+     * How long a Work delete waits for its cluster teardown. The Kubernetes
+     * calls carry no timeout of their own, so an unreachable cluster would
+     * otherwise hold the request for many minutes, long after the proxy and the
+     * browser have given up on it (and the row is already gone, so a retry
+     * answers 404). Past this the teardown goes on in the background.
+     */
+    private readonly deploymentTeardownWaitMs = 20_000;
+
+    /**
+     * Run a prepared teardown. Logs what it did; never throws. Waits at most
+     * {@link deploymentTeardownWaitMs}: a teardown still running then is left to
+     * finish in the background, and its outcome is logged when it does.
+     */
+    private async runDeploymentTeardown(
+        work: Work,
+        teardown: Extract<WorkDeploymentTeardownPreparation, { status: 'ready' }> | null,
+    ): Promise<void> {
+        if (!teardown) {
+            return;
+        }
+        const target = `${teardown.namespace}/${teardown.objectName}`;
+        if (teardown.staleTarget) {
+            this.logger.warn(
+                `Work ${work.id}: it was last deployed as ${teardown.staleTarget}, not ${target}; ` +
+                    `only ${target} is removed, so check ${teardown.staleTarget} by hand`,
+            );
+        }
+        let outcome: Promise<void>;
+        try {
+            outcome = teardown
+                .run()
+                .then(
+                    (result) => this.logDeploymentTeardown(work, target, result),
+                    (error: unknown) =>
+                        this.logger.error(
+                            `Work ${work.id}: removing its cluster objects (${target}) failed: ${describeFailureCode(error)}`,
+                        ),
+                )
+                // Never rejects: it is awaited by the delete, or left to run on
+                // in the background where nothing would catch it.
+                .catch(() => undefined);
+        } catch (error) {
+            this.logger.error(
+                `Work ${work.id}: removing its cluster objects (${target}) failed: ${describeFailureCode(error)}`,
+            );
+            return;
+        }
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const waited = new Promise<'timeout'>((resolve) => {
+            timer = setTimeout(() => resolve('timeout'), this.deploymentTeardownWaitMs);
+            timer.unref?.();
+        });
+        try {
+            if ((await Promise.race([outcome.then(() => 'done' as const), waited])) === 'timeout') {
+                this.logger.warn(
+                    `Work ${work.id}: removing its cluster objects (${target}) takes longer than ` +
+                        `${Math.round(this.deploymentTeardownWaitMs / 1000)} s; it goes on in the background`,
+                );
+            }
+        } finally {
+            clearTimeout(timer);
+        }
+    }
+
+    /** Log a teardown result: object kinds and names, reason codes, never a message body. */
+    private logDeploymentTeardown(
+        work: Work,
+        target: string,
+        result: WorkDeploymentTeardownResult,
+    ): void {
+        const list = (objects: ReadonlyArray<{ kind: string; name: string }>) =>
+            objects.map((o) => `${o.kind}/${o.name}`).join(', ');
+        if (result.removed.length > 0) {
+            this.logger.log(`Work ${work.id}: removed ${list(result.removed)} from ${target}`);
+        }
+        if (result.kept.length > 0) {
+            this.logger.warn(
+                `Work ${work.id}: kept ${result.kept
+                    .map((o) => `${o.kind}/${o.name} (${o.reason})`)
+                    .join(
+                        ', ',
+                    )} in ${target}: not created by the platform's deploy under this name`,
+            );
+        }
+        if (result.failed.length > 0) {
+            this.logger.error(
+                `Work ${work.id}: could not remove ${result.failed
+                    .map((o) => `${o.kind}/${o.name} (${o.code || 'unknown'})`)
+                    .join(', ')} from ${target}`,
+            );
         }
     }
 

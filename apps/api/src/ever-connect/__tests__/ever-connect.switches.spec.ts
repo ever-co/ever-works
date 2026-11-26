@@ -12,6 +12,7 @@ import {
     isAppsWriteEnabled,
     isAppsWriteSwitchedOn,
     isBlueprintHandoffEnabled,
+    isEntitlementGatesEnabled,
     isEntitlementsEnabled,
     isHeartbeatEnabled,
     isLinkCodesEnabled,
@@ -22,6 +23,7 @@ const ALL_OFF = {
     linkCodes: false,
     heartbeat: false,
     entitlements: false,
+    entitlementGates: false,
     appSync: false,
     appsWrite: false,
     blueprintHandoff: false,
@@ -76,6 +78,33 @@ describe('Ever Connect — switches', () => {
             expect(isOn({ ...also, EVER_CONNECT_ENABLED: 'false', [name]: 'true' })).toBe(false);
         },
     );
+
+    it('EVER_CONNECT_ENTITLEMENT_GATES_ENABLED is off by default and needs the documents it reads', () => {
+        const name = 'EVER_CONNECT_ENTITLEMENT_GATES_ENABLED';
+        const documents = { EVER_CONNECT_ENABLED: 'true', EVER_CONNECT_ENTITLEMENTS_ENABLED: 'true' };
+        expect(isEntitlementGatesEnabled({})).toBe(false);
+        expect(isEntitlementGatesEnabled(documents)).toBe(false);
+        for (const value of ['1', 'yes', 'on', 'enabled', '', ' ']) {
+            expect(isEntitlementGatesEnabled({ ...documents, [name]: value })).toBe(false);
+        }
+        expect(isEntitlementGatesEnabled({ ...documents, [name]: 'true' })).toBe(true);
+        expect(isEntitlementGatesEnabled({ ...documents, [name]: ' TRUE ' })).toBe(true);
+        expect(everConnectFeatures({ ...documents, [name]: 'true' })).toEqual({
+            ...ALL_OFF,
+            entitlements: true,
+            entitlementGates: true,
+        });
+        // Without the documents, or without Ever Connect, the switch alone does nothing.
+        expect(isEntitlementGatesEnabled({ EVER_CONNECT_ENABLED: 'true', [name]: 'true' })).toBe(
+            false,
+        );
+        expect(
+            isEntitlementGatesEnabled({ EVER_CONNECT_ENTITLEMENTS_ENABLED: 'true', [name]: 'true' }),
+        ).toBe(false);
+        expect(everConnectFeatures({ EVER_CONNECT_ENABLED: 'true', [name]: 'true' })).toEqual(
+            ALL_OFF,
+        );
+    });
 
     it('the link and mirror modules are in the graph only with their switch', () => {
         expect(everConnectLinkModuleImports({})).toEqual([]);

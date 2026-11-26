@@ -142,6 +142,38 @@ export interface DeploymentLookupContext {
 }
 
 /**
+ * One object a Work-deployment teardown looked at.
+ */
+export interface WorkDeploymentTeardownObject {
+	/** Object kind, e.g. 'Ingress', 'Service', 'Deployment', 'Secret'. */
+	readonly kind: string;
+	/** Object name. */
+	readonly name: string;
+}
+
+/**
+ * What {@link IDeploymentPlugin.removeWorkDeployment} did. Secret-free.
+ */
+export interface WorkDeploymentTeardownResult {
+	/** Where the provider looked (a Kubernetes namespace, for example). */
+	readonly location?: string;
+	/** Objects the call deleted. */
+	readonly removed: readonly WorkDeploymentTeardownObject[];
+	/** Objects that were already gone. */
+	readonly absent: readonly WorkDeploymentTeardownObject[];
+	/** Objects left in place because the provider could not prove its own deploy created them under this name. */
+	readonly kept: readonly (WorkDeploymentTeardownObject & { readonly reason: string })[];
+	/**
+	 * Objects whose read or delete failed. `error` is scrubbed of credentials; `code`
+	 * is a fixed reason code, which is what a caller should log.
+	 */
+	readonly failed: readonly (WorkDeploymentTeardownObject & {
+		readonly error: string;
+		readonly code?: string;
+	})[];
+}
+
+/**
  * Deployment plugin interface
  * Capability: 'deployment'
  */
@@ -245,6 +277,25 @@ export interface IDeploymentPlugin extends IPlugin {
 		teamScope?: string,
 		context?: DeploymentLookupContext
 	): Promise<DeploymentDomain>;
+
+	/**
+	 * Remove the objects a website Work's deploy created, when the Work is deleted.
+	 *
+	 * Only the stateless objects the deploy created go (for Kubernetes: the
+	 * Ingress, Service, Deployment and the Secrets the deploy wrote). It never
+	 * deletes a namespace, a volume or a volume claim, and it leaves any object
+	 * it cannot prove the provider's own deploy created under this name. That
+	 * proof is per name, not per Work: the caller must first make sure no other
+	 * Work deploys to the same place. Idempotent: an object that is already gone
+	 * is reported in `absent`, not as an error.
+	 *
+	 * **Optional.** A provider without platform-held runtime objects omits it.
+	 */
+	removeWorkDeployment?(
+		projectName: string,
+		token: string,
+		context?: DeploymentLookupContext
+	): Promise<WorkDeploymentTeardownResult>;
 
 	/**
 	 * Workflow filenames to dispatch when deploying, in priority order.

@@ -9,7 +9,10 @@
 	"compatibility_date": "2026-11-01",
 	"workers_dev": false,
 	"preview_urls": false,
-	"observability": { "enabled": true },
+	// Workers Logs keeps only the hub's own console lines. Invocation logs are off: they would store every caller's IP
+	// (`cf-connecting-ip`, `x-real-ip`), location and request URL, and the owner allows logging zero-result query text
+	// only (2026-11-26). Cloudflare still attaches the request method, path and URL to each console line.
+	"observability": { "enabled": true, "logs": { "enabled": true, "invocation_logs": false } },
 	"vars": {
 		// The Directory Registry document (spec FR-1), kept in the catalog repo ever-works/directory-registry.
 		"REGISTRY_URL": "https://raw.githubusercontent.com/ever-works/directory-registry/main/registry.json",
