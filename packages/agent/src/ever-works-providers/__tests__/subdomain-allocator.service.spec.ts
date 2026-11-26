@@ -177,8 +177,10 @@ describe('SubdomainAllocator', () => {
         });
         const alloc = new SubdomainAllocator(repo, makeDnsService(probe));
 
-        await expect(alloc.allocate(makeWork(), probe)).rejects.toThrow(/exhausted/);
+        await expect(alloc.allocate(makeWork(), probe)).rejects.toThrow(/could not read the zone/);
         expect(repo.update).not.toHaveBeenCalled();
+        // Stops at the first candidate: no move to a `-<shortId>` label.
+        expect(probe.recordExists).toHaveBeenCalledTimes(1);
     });
 
     it('treats a provider-side recordExists collision as taken', async () => {

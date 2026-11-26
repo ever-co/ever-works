@@ -218,12 +218,13 @@ export class SubdomainAllocator {
                 // Fail closed: when the zone cannot be read, the candidate may
                 // belong to another host, and not every caller writes a record
                 // that would refuse it (a Cloudflare Workers deploy takes the
-                // hostname over without one). Treat it as taken; once every
-                // candidate fails, `allocate` throws and the caller retries later.
-                this.logger.warn(
-                    `SubdomainAllocator probe failed for ${candidate}.${rootDomain}, treating it as taken: ${(cause as Error).message}`,
+                // hostname over without one). Stop here instead of moving on to
+                // `-<shortId>` candidates: one transient error must not leave the
+                // Work with a suffixed label for good. The caller retries later
+                // (a k8s deploy falls back, a Workers deploy is refused).
+                throw new Error(
+                    `SubdomainAllocator could not read the zone for ${candidate}.${rootDomain}; try again: ${(cause as Error).message}`,
                 );
-                return false;
             }
         }
         return true;

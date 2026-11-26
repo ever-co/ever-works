@@ -1093,7 +1093,7 @@ describe('DeployService — plugin-driven dispatch + secrets', () => {
 
             expect(dnsService.ensureWorkSubdomain).toHaveBeenCalledWith('my-site');
             const settingsArg = getDeploymentSecrets.mock.calls[0][0];
-            expect(settingsArg.ingressHost).toBeUndefined();
+            expect(settingsArg.ingressHost).toBe('');
             expect(settingsArg.kubeconfig).toBe('apiVersion: v1');
         });
 
@@ -1114,9 +1114,46 @@ describe('DeployService — plugin-driven dispatch + secrets', () => {
 
                 await service.deploy('work-1', 'user-1', {});
 
-                expect(getDeploymentSecrets.mock.calls[0][0].ingressHost).toBeUndefined();
+                expect(getDeploymentSecrets.mock.calls[0][0].ingressHost).toBe('');
             },
         );
+
+        it("does not let the member's saved k8s ingressHost stand in for a refused ${slug}.ever.works", async () => {
+            const getDeploymentSecrets = jest.fn().mockResolvedValue({});
+            const { service, dnsService } = buildService({
+                deployProvider: 'ever-works',
+                plugin: {
+                    id: 'k8s',
+                    getWorkflowFilenames: () => ['deploy_k8s.yaml'],
+                    getDeploymentSecrets,
+                },
+                settings: { kubeconfig: 'apiVersion: v1', ingressHost: 'member-host.example.com' },
+            });
+            (dnsService.getProvider as jest.Mock).mockReturnValue({});
+            (dnsService.ensureWorkSubdomain as jest.Mock).mockResolvedValueOnce(false);
+
+            await service.deploy('work-1', 'user-1', {});
+
+            expect(getDeploymentSecrets.mock.calls[0][0].ingressHost).toBe('');
+        });
+
+        it('does not let the saved k8s ingressHost stand in for a refused reserved website host', async () => {
+            const getDeploymentSecrets = jest.fn().mockResolvedValue({});
+            const { service } = buildService({
+                deployProvider: 'k8s',
+                website: 'https://mcp.ever.works',
+                plugin: {
+                    id: 'k8s',
+                    getWorkflowFilenames: () => ['deploy_k8s.yaml'],
+                    getDeploymentSecrets,
+                },
+                settings: { kubeconfig: 'apiVersion: v1', ingressHost: 'auth.ever.works' },
+            });
+
+            await service.deploy('work-1', 'user-1', {});
+
+            expect(getDeploymentSecrets.mock.calls[0][0].ingressHost).toBe('');
+        });
 
         it('derives a per-Work k8s Ingress host from work.website (not the shared settings.ingressHost)', async () => {
             const getDeploymentSecrets = jest.fn().mockResolvedValue({});

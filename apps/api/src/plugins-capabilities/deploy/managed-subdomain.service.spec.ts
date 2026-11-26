@@ -369,7 +369,9 @@ describe('ManagedSubdomainService', () => {
                 managedSubdomain: 'old-name',
             });
             // The rolled-back label still resolves: its record was never removed.
-            expect(provider.removeRecord).not.toHaveBeenCalled();
+            expect(provider.removeRecord).not.toHaveBeenCalledWith({
+                host: 'old-name.ever.works',
+            });
             expect(zone.has('old-name.ever.works')).toBe(true);
         });
 
@@ -469,13 +471,50 @@ describe('ManagedSubdomainService', () => {
 
                 await expect(service.update('work-1', 'new-name')).rejects.toBeInstanceOf(expected);
 
-                expect(provider.removeRecord).not.toHaveBeenCalled();
+                expect(provider.removeRecord).not.toHaveBeenCalledWith({
+                    host: 'old-name.ever.works',
+                });
                 expect(zone.has('old-name.ever.works')).toBe(true);
                 expect(workRepository.update).toHaveBeenLastCalledWith(workBefore.id, {
                     managedSubdomain: 'old-name',
                 });
             },
         );
+
+        it('removes a new record that was created before the write timed out, then rolls back', async () => {
+            const workBefore = buildWork({ managedSubdomain: 'old-name' });
+            workRepository.findById.mockResolvedValue(workBefore);
+            // Cloudflare created the record, but the response never arrived.
+            provider.ensureRecord.mockImplementation(async ({ host }: { host: string }) => {
+                zone.add(host);
+                throw new Error('The operation was aborted due to timeout');
+            });
+
+            await expect(service.update('work-1', 'new-name')).rejects.toBeInstanceOf(
+                InternalServerErrorException,
+            );
+
+            expect(provider.removeRecord).toHaveBeenCalledWith({ host: 'new-name.ever.works' });
+            expect(zone.has('new-name.ever.works')).toBe(false);
+            // So a retry of the same name is not refused by its own leftover.
+            await expect(provider.recordExists('new-name.ever.works')).resolves.toBe(false);
+            expect(zone.has('old-name.ever.works')).toBe(true);
+            expect(workRepository.update).toHaveBeenLastCalledWith(workBefore.id, {
+                managedSubdomain: 'old-name',
+            });
+        });
+
+        it('does not try to remove the new name after a provider refusal (that record is not ours)', async () => {
+            workRepository.findById.mockResolvedValue(buildWork({ managedSubdomain: 'old-name' }));
+            provider.ensureRecord.mockRejectedValue(
+                new DnsRecordConflictError('new-name.ever.works', 'CNAME', 'other.example.net'),
+            );
+
+            await expect(service.update('work-1', 'new-name')).rejects.toBeInstanceOf(
+                ConflictException,
+            );
+            expect(provider.removeRecord).not.toHaveBeenCalled();
+        });
 
         it('keeps the old record when the claim loses a unique-index race (409)', async () => {
             workRepository.findById.mockResolvedValue(buildWork({ managedSubdomain: 'old-name' }));

@@ -1021,7 +1021,10 @@ export class DeployService {
                 this.logger.warn(
                     `Managed host ${ingressHost} for work ${work.id} is reserved or already in use in the zone; deploying without it`,
                 );
-                return settings;
+                // An explicit empty host, so the member's own saved k8s
+                // `ingressHost` (a user-scoped plugin setting) does not reach
+                // the shared cluster's Ingress in its place.
+                return { ...(settings ?? {}), ingressHost: '' };
             }
 
             return {
@@ -1044,7 +1047,9 @@ export class DeployService {
                 this.logger.warn(
                     `Work ${work.id} website host ${websiteHost} is reserved by the platform; deploying without it`,
                 );
-                return settings;
+                // Empty, not absent: the saved plugin `ingressHost` must not
+                // stand in for the refused host.
+                return { ...(settings ?? {}), ingressHost: '' };
             }
             if (websiteHost) {
                 return {

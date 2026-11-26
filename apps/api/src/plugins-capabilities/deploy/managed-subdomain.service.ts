@@ -232,6 +232,20 @@ export class ManagedSubdomainService {
             this.logger.error(
                 `ensureRecord failed for ${newFqdn} on work ${work.id}: ${(cause as Error).message}; rolling back persisted claim`,
             );
+            // A timeout or other transient error can come back after Cloudflare
+            // already created the record; left in place, it would make every
+            // retry of this name a 409. Best-effort removal (the provider only
+            // deletes a record on the managed target). Not after a refusal:
+            // that record belongs to something else.
+            if (!(cause instanceof DnsRecordConflictError)) {
+                try {
+                    await provider.removeRecord({ host: newFqdn });
+                } catch (cleanupErr) {
+                    this.logger.warn(
+                        `Failed to clean up ${newFqdn} after a failed rename of work ${work.id}: ${(cleanupErr as Error).message}`,
+                    );
+                }
+            }
             try {
                 await this.workRepository.update(work.id, {
                     managedSubdomain: currentSubdomain || null,
