@@ -21,6 +21,12 @@ export {
     type CloudflareDnsConfig,
     type DnsRecordSnapshot,
 } from './cloudflare-dns.provider';
+export {
+    DnsRecordConflictError,
+    RESERVED_SUBDOMAIN_LABELS,
+    isReservedSubdomainLabel,
+    sameDnsContent,
+} from './managed-subdomain-guard';
 export { SubdomainAllocator, type SubdomainAllocationResult } from './subdomain-allocator.service';
 export {
     EverWorksDbProvisionService,

@@ -33,6 +33,7 @@ jest.mock('@ever-works/agent/events', () => ({
 }));
 
 import { DeployService } from './deploy.service';
+import { DnsRecordConflictError } from '@ever-works/agent/ever-works-providers';
 
 /**
  * Tests focused on the capability-driven contract changes:
@@ -220,6 +221,7 @@ describe('DeployService — plugin-driven dispatch + secrets', () => {
         return {
             service,
             work,
+            workRepository,
             deployFacade,
             gitFacade,
             deploymentRepository,
@@ -1071,6 +1073,88 @@ describe('DeployService — plugin-driven dispatch + secrets', () => {
             void githubPlugin; // silence unused
         });
 
+        it('keeps ${slug}.ever.works off the Ingress when DNS refuses it (reserved or another host)', async () => {
+            const getDeploymentSecrets = jest.fn().mockResolvedValue({});
+            const { service, dnsService } = buildService({
+                deployProvider: 'ever-works',
+                plugin: {
+                    id: 'k8s',
+                    getWorkflowFilenames: () => ['deploy_k8s.yaml'],
+                    getDeploymentSecrets,
+                },
+                settings: { kubeconfig: 'apiVersion: v1' },
+            });
+            (dnsService.getProvider as jest.Mock).mockReturnValue({});
+            (dnsService.ensureWorkSubdomain as jest.Mock).mockResolvedValueOnce(false);
+
+            await expect(service.deploy('work-1', 'user-1', {})).resolves.toMatchObject({
+                dispatched: true,
+            });
+
+            expect(dnsService.ensureWorkSubdomain).toHaveBeenCalledWith('my-site');
+            const settingsArg = getDeploymentSecrets.mock.calls[0][0];
+            expect(settingsArg.ingressHost).toBe('');
+            expect(settingsArg.kubeconfig).toBe('apiVersion: v1');
+        });
+
+        it.each(['https://mcp.ever.works', 'https://ever.works', 'https://api-dev.ever.works/'])(
+            'keeps the platform apex or a reserved label from work.website (%s) off the k8s Ingress',
+            async (website) => {
+                const getDeploymentSecrets = jest.fn().mockResolvedValue({});
+                const { service } = buildService({
+                    deployProvider: 'k8s',
+                    website,
+                    plugin: {
+                        id: 'k8s',
+                        getWorkflowFilenames: () => ['deploy_k8s.yaml'],
+                        getDeploymentSecrets,
+                    },
+                    settings: { kubeconfig: 'apiVersion: v1' },
+                });
+
+                await service.deploy('work-1', 'user-1', {});
+
+                expect(getDeploymentSecrets.mock.calls[0][0].ingressHost).toBe('');
+            },
+        );
+
+        it("does not let the member's saved k8s ingressHost stand in for a refused ${slug}.ever.works", async () => {
+            const getDeploymentSecrets = jest.fn().mockResolvedValue({});
+            const { service, dnsService } = buildService({
+                deployProvider: 'ever-works',
+                plugin: {
+                    id: 'k8s',
+                    getWorkflowFilenames: () => ['deploy_k8s.yaml'],
+                    getDeploymentSecrets,
+                },
+                settings: { kubeconfig: 'apiVersion: v1', ingressHost: 'member-host.example.com' },
+            });
+            (dnsService.getProvider as jest.Mock).mockReturnValue({});
+            (dnsService.ensureWorkSubdomain as jest.Mock).mockResolvedValueOnce(false);
+
+            await service.deploy('work-1', 'user-1', {});
+
+            expect(getDeploymentSecrets.mock.calls[0][0].ingressHost).toBe('');
+        });
+
+        it('does not let the saved k8s ingressHost stand in for a refused reserved website host', async () => {
+            const getDeploymentSecrets = jest.fn().mockResolvedValue({});
+            const { service } = buildService({
+                deployProvider: 'k8s',
+                website: 'https://mcp.ever.works',
+                plugin: {
+                    id: 'k8s',
+                    getWorkflowFilenames: () => ['deploy_k8s.yaml'],
+                    getDeploymentSecrets,
+                },
+                settings: { kubeconfig: 'apiVersion: v1', ingressHost: 'auth.ever.works' },
+            });
+
+            await service.deploy('work-1', 'user-1', {});
+
+            expect(getDeploymentSecrets.mock.calls[0][0].ingressHost).toBe('');
+        });
+
         it('derives a per-Work k8s Ingress host from work.website (not the shared settings.ingressHost)', async () => {
             const getDeploymentSecrets = jest.fn().mockResolvedValue({});
             const { service, dnsService } = buildService({
@@ -1687,6 +1771,108 @@ describe('DeployService — plugin-driven dispatch + secrets', () => {
             }
         });
 
+        describe('EW-734 allocator + a record the zone holds for another host', () => {
+            const k8sPlugin = () => ({
+                id: 'k8s',
+                getWorkflowFilenames: () => ['deploy_k8s.yaml'],
+                getDeploymentSecrets,
+            });
+
+            beforeEach(() => {
+                process.env.K8S_MANAGED_SUBDOMAIN = 'true';
+                process.env.EVER_WORKS_DEPLOY_LB_HOSTNAME = 'lb.ever.works';
+            });
+            afterEach(() => {
+                delete process.env.K8S_MANAGED_SUBDOMAIN;
+                delete process.env.EVER_WORKS_DEPLOY_LB_HOSTNAME;
+            });
+
+            function setUp(ensureRecord: jest.Mock, allocated = false, subdomain = 'taken') {
+                const built = buildService({ plugin: k8sPlugin(), deployProvider: 'k8s' });
+                built.dnsService.getProvider.mockReturnValue({ ensureRecord });
+                built.subdomainAllocator.allocate.mockResolvedValueOnce({
+                    subdomain,
+                    fqdn: `${subdomain}.ever.works`,
+                    rootDomain: 'ever.works',
+                    allocated,
+                });
+                return built;
+            }
+
+            const conflict = () =>
+                new DnsRecordConflictError('taken.ever.works', 'CNAME', 'other-host.example.net');
+
+            it('releases a label this deploy just allocated when the provider refuses it', async () => {
+                const ensureRecord = jest.fn().mockRejectedValue(conflict());
+                const { service, githubPlugin, workRepository, work } = setUp(ensureRecord, true);
+
+                await service.deploy('work-1', 'user-1', {});
+
+                expect(workRepository.update).toHaveBeenCalledWith(work.id, {
+                    managedSubdomain: null,
+                });
+                const keys = captureCalls(githubPlugin).secrets.map((s: any) => s.key);
+                expect(keys).not.toContain('K8S_INGRESS_HOST');
+            });
+
+            it('keeps a label the Work already held when the provider refuses it (an LB move can make its own record look foreign)', async () => {
+                const ensureRecord = jest.fn().mockRejectedValue(conflict());
+                const { service, workRepository } = setUp(ensureRecord, false);
+
+                await service.deploy('work-1', 'user-1', {});
+
+                expect(workRepository.update).not.toHaveBeenCalledWith(expect.anything(), {
+                    managedSubdomain: null,
+                });
+            });
+
+            it('never routes a persisted reserved claim and sends no DNS write for it', async () => {
+                const ensureRecord = jest.fn().mockResolvedValue(undefined);
+                const { service, githubPlugin } = setUp(ensureRecord, false, 'mcp');
+
+                await service.deploy('work-1', 'user-1', {});
+
+                expect(ensureRecord).not.toHaveBeenCalled();
+                const keys = captureCalls(githubPlugin).secrets.map((s: any) => s.key);
+                expect(keys).not.toContain('K8S_INGRESS_HOST');
+            });
+
+            it('keeps the host off the Ingress when the provider refuses to repoint it', async () => {
+                const ensureRecord = jest
+                    .fn()
+                    .mockRejectedValue(
+                        new DnsRecordConflictError(
+                            'taken.ever.works',
+                            'CNAME',
+                            'other-host.example.net',
+                        ),
+                    );
+                const { service, githubPlugin } = setUp(ensureRecord);
+
+                await expect(service.deploy('work-1', 'user-1', {})).resolves.toMatchObject({
+                    dispatched: true,
+                });
+
+                expect(ensureRecord).toHaveBeenCalledWith(
+                    expect.objectContaining({ host: 'taken.ever.works', target: 'lb.ever.works' }),
+                );
+                const { secrets } = captureCalls(githubPlugin);
+                const keys = secrets.map((s: any) => s.key);
+                expect(keys).not.toContain('K8S_INGRESS_HOST');
+            });
+
+            it('still routes the host when DNS fails for another reason (logged, as before)', async () => {
+                const ensureRecord = jest.fn().mockRejectedValue(new Error('cf api down'));
+                const { service, githubPlugin } = setUp(ensureRecord);
+
+                await service.deploy('work-1', 'user-1', {});
+
+                const { secrets } = captureCalls(githubPlugin);
+                const byKey = Object.fromEntries(secrets.map((s: any) => [s.key, s.value]));
+                expect(byKey.K8S_INGRESS_HOST).toBe('taken.ever.works');
+            });
+        });
+
         it('falls back gracefully when the custom-domain lookup fails', async () => {
             const { service, githubPlugin, customDomainRepository } = buildService({
                 plugin: {
@@ -1930,6 +2116,21 @@ describe('DeployService — plugin-driven dispatch + secrets', () => {
             expect(dispatches.map((d: any) => d.workflow)).toEqual(['deploy_cloudflare.yaml']);
             // A Workers Custom Domain brings its own DNS record: no CNAME.
             expect(dnsService.ensureWorkSubdomain).not.toHaveBeenCalled();
+        });
+
+        it('refuses the deploy for a persisted reserved managed subdomain (the Worker would take the host)', async () => {
+            const plugin = cloudflarePlugin();
+            const { service, work, githubPlugin } = buildService({
+                plugin,
+                deployProvider: 'cloudflare',
+                token: 'cf-member-token',
+            });
+            (work as any).managedSubdomain = 'mcp';
+
+            await expect(service.deploy('work-1', 'user-1', {})).rejects.toThrow(/reserved/);
+
+            expect(plugin.getDeploymentSecrets).not.toHaveBeenCalled();
+            expect(captureCalls(githubPlugin).dispatches).toHaveLength(0);
         });
 
         it('reuses a persisted managed subdomain without allocating', async () => {

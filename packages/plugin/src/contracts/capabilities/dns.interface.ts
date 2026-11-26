@@ -82,10 +82,17 @@ export interface IDnsOperations {
 	 * Create or upsert a record mapping `host -> target`. Idempotent:
 	 * an existing matching record is returned as-is; a drifted record is
 	 * patched in place. Always returns the resulting record snapshot.
+	 * A provider for a zone it shares with other hosts may refuse to
+	 * repoint a record it does not manage and throw instead (the platform's
+	 * `CloudflareDnsProvider` throws `DnsRecordConflictError`).
 	 */
 	ensureRecord(input: DnsEnsureRecordInput): Promise<DnsRecordSnapshot>;
 
-	/** Remove a record. Idempotent — missing record is a no-op. */
+	/**
+	 * Remove a record. Idempotent — missing record is a no-op. A provider
+	 * for a zone it shares with other hosts may refuse to delete a record it
+	 * does not manage and throw instead (`DnsRecordConflictError`).
+	 */
 	removeRecord(input: DnsRemoveRecordInput): Promise<void>;
 
 	/**
