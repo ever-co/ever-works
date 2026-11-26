@@ -11382,7 +11382,7 @@
             "noOther": "Başka kuruluş yok",
             "createNew": "Kuruluş oluştur",
             "addNew": "Kuruluş ekle",
-            "loading": "Loading…",
+            "loading": "Yükleniyor…",
             "switchFailed": "Kuruluş değiştirilemedi. Yeniden deneyin.",
             "active": "Geçerli kuruluş"
         },

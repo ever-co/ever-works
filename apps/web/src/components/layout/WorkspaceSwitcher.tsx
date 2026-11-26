@@ -50,6 +50,15 @@ function pickLabel(org: OrganizationResponse): string {
  * colour plate derived from the name"): stable for a name, so the same
  * Organization always gets the same colour, in every Ever app that uses this rule.
  */
+/**
+ * The plate colour for a hue. 35 % lightness keeps the white initial at 4.5:1
+ * or more against every hue (WCAG AA for small text); 42 % fell below it for
+ * the yellows and greens.
+ */
+export function plateColor(hue: number): string {
+    return `hsl(${hue} 32% 35%)`;
+}
+
 export function plateHue(name: string): number {
     let hash = 0;
     for (const char of name) {
@@ -79,7 +88,7 @@ function OrgAvatar({ org, size = 'sm' }: { org: OrganizationResponse; size?: 'sm
                 'text-white font-semibold',
                 sizeClass,
             )}
-            style={{ backgroundColor: `hsl(${hue} 32% 42%)` }}
+            style={{ backgroundColor: plateColor(hue) }}
             data-testid="org-avatar"
             aria-hidden="true"
         >
@@ -118,6 +127,8 @@ export function WorkspaceSwitcher({ isCollapsed = false }: WorkspaceSwitcherProp
     const [pendingOrganizationSlug, setPendingOrganizationSlug] = useState<string | null>(null);
 
     const hasOrgs = organizations.length > 0;
+    // Where the person could switch to: every Organization but the one they are in.
+    const otherOrganizations = organizations.filter((org) => org.id !== activeOrganization?.id);
     // Pick the trigger label org — use the active one (from URL slug) if
     // resolved, otherwise fall back to the first org so the chip never
     // shows up empty when orgs exist.
@@ -237,7 +248,9 @@ export function WorkspaceSwitcher({ isCollapsed = false }: WorkspaceSwitcherProp
                                           : t('loading')}
                                 </span>
                                 {/* A2: one muted line under the name — the Organization's address. */}
-                                {triggerOrg && (
+                                {/* Only for the Organization the page is in: on a personal page the
+                                    trigger falls back to the first one, which is not "current". */}
+                                {triggerOrg && activeOrganization?.id === triggerOrg.id && (
                                     <span
                                         className="truncate text-xs text-text-muted dark:text-text-muted-dark"
                                         data-testid="workspace-switcher-address"
@@ -285,13 +298,13 @@ export function WorkspaceSwitcher({ isCollapsed = false }: WorkspaceSwitcherProp
                             );
                         })}
                     {/* A2: say so when there is nowhere else to switch to. */}
-                    {organizations.length === 1 && (
-                        <p
-                            className="px-2 py-1.5 text-sm text-text-muted dark:text-text-muted-dark"
-                            data-testid="workspace-switcher-no-other"
+                    {activeOrganization !== null && otherOrganizations.length === 0 && (
+                        <DropdownMenuItem
+                            disabled
+                            className="text-text-muted dark:text-text-muted-dark"
                         >
                             {t('noOther')}
-                        </p>
+                        </DropdownMenuItem>
                     )}
                     {hasOrgs && <DropdownMenuSeparator />}
                     {isLoading && !hasOrgs && (

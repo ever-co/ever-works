@@ -11382,7 +11382,7 @@
             "noOther": "ほかの組織はありません",
             "createNew": "組織を作成",
             "addNew": "組織を追加",
-            "loading": "Loading…",
+            "loading": "読み込み中…",
             "switchFailed": "組織を切り替えられませんでした。もう一度お試しください。",
             "active": "現在の組織"
         },

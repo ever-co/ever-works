@@ -11382,7 +11382,7 @@
             "noOther": "没有其他组织",
             "createNew": "创建组织",
             "addNew": "添加组织",
-            "loading": "Loading…",
+            "loading": "加载中…",
             "switchFailed": "无法切换组织。请重试。",
             "active": "当前组织"
         },
