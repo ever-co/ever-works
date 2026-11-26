@@ -1080,6 +1080,23 @@ describe('AppDeployRequestService (APW-06 T24)', () => {
             expect(h.store.rows[0].appRender).not.toHaveProperty('rollback');
         });
 
+        it('writes no image pin for a recorded digest that is not a sha256 digest', async () => {
+            const h = harness();
+
+            await h.service.request(
+                manual({
+                    trigger: 'domain-change',
+                    buildId: 'build-live',
+                    recordedImages: {
+                        imageReference: 'ghcr.io/example/app:1',
+                        imageDigest: 'latest',
+                    },
+                }),
+            );
+
+            expect(h.store.rows[0].appRender).not.toHaveProperty('image');
+        });
+
         it("a rollback's own recorded images win over a restart's", async () => {
             const h = harness();
 

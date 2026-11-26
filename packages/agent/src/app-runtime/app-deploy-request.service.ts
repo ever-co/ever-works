@@ -1459,13 +1459,15 @@ export function rowDraft(
         };
     }
 
-    if (pinned?.imageDigest) {
+    const digest = pinned?.imageDigest ? String(pinned.imageDigest).trim() : '';
+    if (/^sha256:[0-9a-f]{64}$/.test(digest)) {
         // §5.8: "A rollback redeploys the recorded `specCommitSha` and digest and **never**
         // re-resolves the tag" — the recorded pair is what the worker reads instead of the registry.
-        // A domain change's restart redeploys what is live by the same rule.
+        // A domain change's restart redeploys what is live by the same rule. Only a `sha256:`
+        // digest is written (the worker checks it again); anything else leaves the tag to resolve.
         render.image = {
-            reference: pinned.imageReference ? String(pinned.imageReference) : '',
-            digest: String(pinned.imageDigest),
+            reference: pinned?.imageReference ? String(pinned.imageReference) : '',
+            digest,
             resolvedFromTag: false,
         };
     }

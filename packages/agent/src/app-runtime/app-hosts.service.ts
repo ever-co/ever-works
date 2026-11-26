@@ -844,10 +844,10 @@ export class AppHostsService implements AppRenderHostSource {
                 trigger: 'domain-change',
                 buildId: currentBuildId,
                 // §5.8 — without a Build, the spec commit and the digests are the Deployment's
-                // handles: a restart redeploys the ones that are live and never re-resolves a tag
-                // (a Build names its own commit, so it is not repeated beside one).
+                // handles: a restart redeploys the ones that are live and never re-resolves a tag.
+                // A Build names its own commit and image, so neither is repeated beside one.
                 specCommitSha: currentBuildId ? null : current.specCommitSha,
-                ...(current.images ? { recordedImages: current.images } : {}),
+                ...(!currentBuildId && current.images ? { recordedImages: current.images } : {}),
             });
         } catch (error) {
             this.logger.warn(
@@ -1070,7 +1070,7 @@ export class AppHostsService implements AppRenderHostSource {
             this.logger.warn(
                 `Reading the current App Deployment of Work ${workId} failed (${messageOf(
                     error,
-                )}); the Deployment is requested without a Build.`,
+                )}); the Deployment is requested without its Build, spec commit or digests.`,
             );
 
             return nothing;

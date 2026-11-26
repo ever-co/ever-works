@@ -666,7 +666,15 @@ describe('AppHostsService.onPrimaryChanged (APW-06 T26, plan §8.2:1106-1118)', 
             id: 'deployment-10',
             buildId: 'build-4',
             commitSha: 'sha-build',
-            appRender: { specCommitSha: 'sha-build' },
+            // Even with digests on the row, a Build names its own commit and image.
+            appRender: {
+                specCommitSha: 'sha-build',
+                image: {
+                    reference: `ghcr.io/example/app@sha256:${'a'.repeat(64)}`,
+                    digest: `sha256:${'a'.repeat(64)}`,
+                },
+                componentImages: { web: `ghcr.io/example/web@sha256:${'b'.repeat(64)}` },
+            },
         });
 
         await h.service.onPrimaryChanged('work-1');
