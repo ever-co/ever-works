@@ -200,7 +200,8 @@ export class AppSyncService
         // A plan decides whether an organization's apps are listed on Ever Platform: with the
         // gates on, a link whose document no longer grants it is left out (a full send follows
         // within a day of it coming back).
-        // Closed when the gates are on and nothing can read the documents.
+        // `linksGranting` answers every link unread while the gates are off, and only the granted
+        // ones while they are on; closed when the gates are on and nothing can read the documents.
         const feature = entitlementFeatureOf(APP_SYNC_KEY);
         if (feature && this.entitlements) {
             consented = await this.entitlements.linksGranting(feature, consented);

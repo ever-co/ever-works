@@ -232,15 +232,17 @@ export class EverConnectEntitlementService
     ): Promise<Set<string>> {
         const given = new Set(platformLinkIds);
         if (!isEntitlementGatesEnabled()) return given;
-        const ids = [...given].filter((id) => LINK_ID.test(id));
+        // Each link's document by its subject, so a row maps back to its link without parsing.
+        const linkOf = new Map<string, string>();
+        for (const id of given) {
+            if (LINK_ID.test(id)) linkOf.set(linkEntitlementSubject(id), id);
+        }
         const granted = new Set<string>();
-        if (ids.length === 0) return granted;
-        const rows = await this.documents.find({
-            where: { subject: In(ids.map(linkEntitlementSubject)) },
-        });
+        if (linkOf.size === 0) return granted;
+        const rows = await this.documents.find({ where: { subject: In([...linkOf.keys()]) } });
         for (const row of rows) {
-            const id = row.subject.slice('link:'.length);
-            if (grantsFeature(this.viewOf(row, now), feature)) granted.add(id);
+            const id = linkOf.get(row.subject);
+            if (id && grantsFeature(this.viewOf(row, now), feature)) granted.add(id);
         }
         return granted;
     }
