@@ -1026,6 +1026,86 @@ describe('AccountImportService', () => {
                 ingressHost: 'shop.example.com',
             });
         });
+
+        it('drops one smuggled in the user and Work plugin secret bags, keeping the real secrets', async () => {
+            const { service, mocks } = makeService();
+            mocks.userRepository.findById.mockResolvedValue({ id: 'user-1', username: 'octocat' });
+            mocks.workRepository.findByOwnerAndSlug.mockResolvedValue(null);
+            mocks.workRepository.create.mockResolvedValue({ id: 'w-1', slug: 'a' });
+            mocks.pluginRepository.findByPluginId.mockResolvedValue({ id: 'p-k8s' });
+            const work = makeWork({
+                slug: 'a',
+                workPlugins: [
+                    {
+                        pluginId: 'k8s',
+                        enabled: true,
+                        activeCapabilities: [],
+                        settings: { replicas: 2 },
+                        secretSettings: {
+                            ingressHost: 'Login.Ever.Works',
+                            kubeconfig: 'apiVersion: v1',
+                        },
+                        priority: 0,
+                    },
+                ],
+            });
+            const payload = makePayload(
+                [work],
+                [
+                    {
+                        pluginId: 'k8s',
+                        enabled: true,
+                        autoEnableForWorks: false,
+                        settings: { clusterSource: 'k8s-works-shared' },
+                        secretSettings: { ingressHost: 'login.ever.works' },
+                    },
+                ],
+            );
+            payload.includesSecrets = true;
+
+            const result = await service.applyImport('user-1', payload, []);
+
+            const userUpsert = mocks.userPluginRepository.upsert.mock.calls[0][0];
+            expect(userUpsert.settings).toEqual({ clusterSource: 'k8s-works-shared' });
+            expect(userUpsert.secretSettings).toEqual({});
+            const workUpsert = mocks.workPluginRepository.upsert.mock.calls[0][0];
+            expect(workUpsert.settings).toEqual({ replicas: 2 });
+            expect(workUpsert.secretSettings).toEqual({ kubeconfig: 'apiVersion: v1' });
+            const dropped = result.warnings.filter((w) =>
+                w.includes("Hosts under ever.works can't be used as the default ingress host"),
+            );
+            expect(dropped).toHaveLength(2);
+            expect(dropped.every((w) => w.includes('the secret settings of'))).toBe(true);
+        });
+
+        it('keeps the secret bag as it is when it holds no platform host', async () => {
+            const { service, mocks } = makeService();
+            mocks.userRepository.findById.mockResolvedValue({ id: 'user-1', username: 'octocat' });
+            mocks.pluginRepository.findByPluginId.mockResolvedValue({ id: 'p-k8s' });
+            const payload = makePayload(
+                [],
+                [
+                    {
+                        pluginId: 'k8s',
+                        enabled: true,
+                        autoEnableForWorks: false,
+                        settings: {},
+                        secretSettings: {
+                            kubeconfig: 'apiVersion: v1',
+                            ingressHost: 'shop.example.com',
+                        },
+                    },
+                ],
+            );
+            payload.includesSecrets = true;
+
+            await service.applyImport('user-1', payload, []);
+
+            expect(mocks.userPluginRepository.upsert.mock.calls[0][0].secretSettings).toEqual({
+                kubeconfig: 'apiVersion: v1',
+                ingressHost: 'shop.example.com',
+            });
+        });
     });
 
     describe('applyImport — userPlugin import', () => {

@@ -600,8 +600,10 @@ export class PluginOperationsService {
         });
 
         // Security: a NEW k8s `ingressHost` under a platform root is refused before anything is
-        // written (coded 400); a value equal to the stored one passes.
+        // written (coded 400); a value equal to the stored one passes. The secret bag is judged
+        // too: it is written later, and a secret overrides the same key in `settings`.
         assertK8sIngressHostAllowed(pluginId, settings, userPlugin?.settings);
+        assertK8sIngressHostAllowed(pluginId, secretSettings, userPlugin?.settings);
 
         if (userPlugin) {
             // Update existing record
@@ -771,8 +773,10 @@ export class PluginOperationsService {
         const schema = registered.plugin.settingsSchema;
 
         // Security: a NEW k8s `ingressHost` under a platform root is refused before anything is
-        // written (coded 400); a value equal to the stored one passes.
+        // written (coded 400); a value equal to the stored one passes. The secret bag is judged
+        // too: it is written later, and a secret overrides the same key in `settings`.
         assertK8sIngressHostAllowed(pluginId, settings, userPlugin.settings);
+        assertK8sIngressHostAllowed(pluginId, secretSettings, userPlugin.settings);
 
         // Validate combined settings+secretSettings together against schema
         if (settings || secretSettings) {
@@ -1389,8 +1393,14 @@ export class PluginOperationsService {
 
         // Security: a NEW k8s `ingressHost` under a platform root is refused before anything is
         // written (coded 400); a value equal to the stored Work value, or to the inherited user
-        // value, passes.
+        // value, passes. The secret bag is judged too, as in the user path.
         assertK8sIngressHostAllowed(pluginId, settings, workPlugin.settings, userPlugin?.settings);
+        assertK8sIngressHostAllowed(
+            pluginId,
+            secretSettings,
+            workPlugin.settings,
+            userPlugin?.settings,
+        );
 
         // Validate combined settings against schema.
         // User settings serve as inherited base (mirrors resolved cascade).

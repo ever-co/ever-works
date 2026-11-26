@@ -597,7 +597,15 @@ export class AccountImportService {
                                 `Plugin "${up.pluginId}" has masked secret values. Replace "${MASKED_SECRET_PREFIX}..." values with real credentials in the JSON file and re-import.`,
                             );
                         } else {
-                            data.secretSettings = up.secretSettings;
+                            // The secret bag is judged too: a secret overrides the same key in
+                            // settings when the deploy resolves them, so a host smuggled in here
+                            // would reach the Ingress just the same.
+                            data.secretSettings = this.withoutPlatformIngressHost(
+                                up.pluginId,
+                                up.secretSettings,
+                                `the secret settings of plugin "${up.pluginId}"`,
+                                result,
+                            );
                         }
                     }
 
@@ -1088,7 +1096,13 @@ export class AccountImportService {
                             `Work plugin "${dp.pluginId}" has masked secret values. Replace "${MASKED_SECRET_PREFIX}..." values with real credentials in the JSON file and re-import.`,
                         );
                     } else {
-                        secretSettings = dp.secretSettings;
+                        // Judged like `settings` below: a secret overrides the same key there.
+                        secretSettings = this.withoutPlatformIngressHost(
+                            dp.pluginId,
+                            dp.secretSettings,
+                            `the secret settings of work plugin "${dp.pluginId}" of work "${dir.slug}"`,
+                            result,
+                        );
                     }
                 }
 
@@ -1124,6 +1138,14 @@ export class AccountImportService {
      * domain. The payload is the member's own file, and the settings are written as they are, so
      * the save-time refusal (`k8s-ingress-host.rule.ts`) is applied here too. The host is dropped
      * with a warning and every other setting is kept.
+     *
+     * Applied to BOTH bags, `settings` and `secretSettings`: when the deploy resolves a plugin's
+     * settings with secrets, a secret overrides the same key in `settings`
+     * (`PluginSettingsService.getResolvedSettings`), so an `ingressHost` in the secret bag would
+     * reach the Ingress as well. The secret bag is not otherwise filtered by the schema, because
+     * the platform itself stores secrets under keys the schema need not mark `x-secret` (the
+     * `secretKeys` option, a plugin's `context.updateSettings({ secretSettings })`), and such a
+     * filter could drop a real credential.
      */
     private withoutPlatformIngressHost(
         pluginId: string,

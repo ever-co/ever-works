@@ -3085,6 +3085,37 @@ describe('PluginOperationsService', () => {
             );
         });
 
+        it('refuses one sent in the secret bag before any write, on all three paths that take one', async () => {
+            jest.spyOn(userPluginRepository, 'findOne').mockResolvedValue(row({}));
+            jest.spyOn(workPluginRepository, 'findOne').mockResolvedValue(row({}));
+
+            await expectRefused(
+                service.enablePluginForUser(
+                    'k8s',
+                    'user-1',
+                    { replicas: 2 },
+                    { ingressHost: 'login.ever.works' },
+                ),
+            );
+            await expectRefused(
+                service.updateUserPluginSettings(
+                    'k8s',
+                    'user-1',
+                    { replicas: 2 },
+                    { ingressHost: 'login.ever.works' },
+                ),
+            );
+            await expectRefused(
+                service.updateWorkPluginSettings(
+                    'work-1',
+                    'k8s',
+                    'user-1',
+                    { replicas: 2 },
+                    { ingressHost: 'login.ever.works' },
+                ),
+            );
+        });
+
         it('lets an unchanged stored value through (same scope, or inherited from the user scope)', async () => {
             jest.spyOn(userPluginRepository, 'findOne').mockResolvedValue(
                 row({ ingressHost: 'compliance-automation.ever.works' }),
