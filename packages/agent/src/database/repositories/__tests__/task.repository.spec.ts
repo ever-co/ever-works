@@ -230,6 +230,44 @@ describe('TaskRepository.findDueScheduledTasks (SQLite)', () => {
         const ids = (await tasks.findDueScheduledTasks(50, NOW)).map((task) => task.id);
         expect(ids).toEqual([oneTime.id]);
     });
+
+    // A cancelled or finished Task keeps its `scheduledAt` (nothing clears it
+    // on those transitions), so the scan must not hand it to the dispatcher.
+    it('never returns a cancelled or done Task whose slot is due', async () => {
+        await dataSource.getRepository(Task).clear();
+        await makeTask({ scheduledAt: DUE, status: TaskStatus.CANCELLED });
+        await makeTask({ scheduledAt: DUE, status: TaskStatus.DONE });
+
+        expect(await tasks.findDueScheduledTasks(50, NOW)).toEqual([]);
+    });
+
+    it('still returns a due Task in every non-terminal status', async () => {
+        await dataSource.getRepository(Task).clear();
+        const open = [
+            TaskStatus.BACKLOG,
+            TaskStatus.TODO,
+            TaskStatus.IN_PROGRESS,
+            TaskStatus.IN_REVIEW,
+            TaskStatus.BLOCKED,
+        ];
+        const made = [];
+        for (const status of open) made.push(await makeTask({ scheduledAt: DUE, status }));
+
+        const ids = (await tasks.findDueScheduledTasks(50, NOW)).map((task) => task.id);
+        expect(ids.sort()).toEqual(made.map((task) => task.id).sort());
+    });
+
+    it('does not let a cancelled Task use up the scan limit ahead of a live one', async () => {
+        await dataSource.getRepository(Task).clear();
+        await makeTask({
+            scheduledAt: new Date('2026-11-11T07:00:00.000Z'),
+            status: TaskStatus.CANCELLED,
+        });
+        const live = await makeTask({ scheduledAt: DUE });
+
+        const ids = (await tasks.findDueScheduledTasks(1, NOW)).map((task) => task.id);
+        expect(ids).toEqual([live.id]);
+    });
 });
 
 describe('TaskRepository.wouldCreateCycle', () => {

@@ -115,6 +115,28 @@ describe('EmailController', () => {
         });
     });
 
+    describe('listMessages paging', () => {
+        const auth = { userId: 'user-1' } as any;
+
+        it.each([
+            ['defaults', undefined, undefined, 50, 0],
+            ['valid values', '20', '40', 20, 40],
+            ['limit over the cap', '5000', '0', 100, 0],
+            ['non-numeric values', 'abc', 'xyz', 50, 0],
+            ['negative values', '-5', '-10', 1, 0],
+            ['zero limit', '0', '0', 1, 0],
+            ['huge offset', '10', '99999999999999', 10, 1_000_000],
+        ])('%s', async (_name, limit, offset, expectedLimit, expectedOffset) => {
+            await controller.listMessages(auth, 'agent-1', limit as any, offset as any);
+            expect(service.listMessagesForAgent).toHaveBeenLastCalledWith(
+                'user-1',
+                'agent-1',
+                expectedLimit,
+                expectedOffset,
+            );
+        });
+    });
+
     it('createAddress delegates to the service', async () => {
         const auth = { userId: 'user-1' } as any;
         const body = {

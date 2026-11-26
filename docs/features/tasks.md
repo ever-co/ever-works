@@ -433,6 +433,8 @@ A time that is not in the future is refused twice over — _"Pick a time in the 
 
 A dispatcher runs every minute, scans the Tasks whose `scheduledAt` is due, claims each slot exactly once — so two workers can never double-fire it — and dispatches the Task through the same gated path a board **Run** uses. Agent resolution matches the move-to-In-progress fan-out: the Task's **Agent assignee** rows when it has any, otherwise the Task's own **Agent**. With neither, nothing runs and you get a `task_run_no_agent` notification instead of a silent skip.
 
+A **Cancelled** or **Done** Task is never dispatched: its slot is ignored when it comes due, so cancelling a scheduled Task really stops the run. The slot itself is left in place, so a Task you reopen after its time has passed is picked up on the next tick; use **Remove schedule** first if you do not want that.
+
 :::caution One-shot and recurring are mutually exclusive
 Scheduling a one-shot run on a recurring template is refused — _"This Task is a recurring template — stop the recurrence before scheduling a one-shot run."_ The panel says so before you try. Demote the recurrence first.
 :::
