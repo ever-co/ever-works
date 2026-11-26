@@ -24,8 +24,9 @@ application's source is not in this repository.
 - **Build:** `image`, the upstream's `ghcr.io/ever-co/ever-rec-api`, pinned by digest (the `prod` tag of 2026-11-26,
   which the upstream builds from `main`; linux/amd64 only).
 - **`api` component** (the public address until the portal joins): port 3000, uid 1000 (the image's `node`).
-  `/api/v1/hello` for the probes and the smoke check. The root filesystem stays writable: the server creates
-  `tmp_videos/` and `tmp_videos_fixed/` beside its build at start, and ffmpeg works in `/tmp` (scratch, no volume).
+  `/api/v1/hello` for the probes and the smoke check. A read-only root filesystem: the two scratch folders the server
+  works in (`tmp_videos/` and `tmp_videos_fixed/` under `/app/apps/api`) are 4 GiB volumes that are never backed up,
+  and ffmpeg's `/tmp` is the platform's own scratch directory. Volumes keep it at one replica.
 - **Addresses:** `API_BASE_URL`, `WEBSITE_URL` (the CORS origin) and `FIREBASE_REQ_URI` all follow the App's domain;
   a change restarts the App. With the portal in the App and forwarding `/api/v1`, all three stay that one address.
 - **Secrets:** `REC_JWT_SECRET` (48 random bytes, base64) and `TERMS_IP_SALT` (32 random bytes, hex) are generated
@@ -124,6 +125,7 @@ screenshot upload and a short recording through the portal.
 ## Unverified — resolve on the first verification run
 
 1. The API with a fresh Firebase project: start, sign-up and upload (item 3 above), and whether Firestore is required.
-2. uid 1000 writing the scratch folders beside `dist/`, and how much space video processing needs in the container.
+2. uid 1000 writing the two scratch volumes (the platform's `fsGroup`), that nothing else writes under `/app` with the
+   root read-only, and whether 4 GiB each is enough.
 3. Memory request and limit.
 4. Everything about the portal, once it can join.

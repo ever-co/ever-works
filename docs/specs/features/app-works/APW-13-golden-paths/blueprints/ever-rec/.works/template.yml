@@ -18,4 +18,6 @@ shape: metadata-only
 source:
     repo: ever-co/ever-rec # owner/name of the upstream project; never this repository
     defaultBranch: develop
-    refs: { branches: [develop] } # the images' `prod` tag is built from this project's `main`
+    # The App forks `develop`; the image works.yml pins is the upstream's own build of `main` (its
+    # `prod` tag), so the fork's branch and the running image are separate facts.
+    refs: { branches: [develop] }

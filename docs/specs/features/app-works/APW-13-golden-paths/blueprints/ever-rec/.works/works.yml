@@ -56,9 +56,12 @@ spec:
       # verified: the image's USER is `node`, a name; `node` is uid 1000 in node:alpine.
       runAsUser: 1000
       replicas: 1
-      # The server creates tmp_videos/ and tmp_videos_fixed/ beside dist/ at start, and ffmpeg
-      # works in /tmp: scratch space, so no volume. TODO(verify): size of that scratch.
-      writableRootFilesystem: true
+      # Read-only root: the two scratch folders the server works in (relative to its working
+      # directory) are volumes, never backed up, and /tmp (ffmpeg) is the renderer's own emptyDir.
+      # TODO(verify): nothing else writes under /app; 4Gi each, as Ever's own deployment.
+      volumes:
+        - { name: tmp-videos, path: /app/apps/api/tmp_videos, size: 4Gi, backup: false }
+        - { name: tmp-videos-fixed, path: /app/apps/api/tmp_videos_fixed, size: 4Gi, backup: false }
       probes:
         startup: { http: /api/v1/hello, periodSeconds: 5, failureThreshold: 60 }
         readiness: { http: /api/v1/hello } # verified: GET /api/v1/hello answers "Hello world"
@@ -104,7 +107,7 @@ spec:
         description: >-
           The private key of that service account key, the whole PEM block (line breaks may be
           written as \n).
-      validate: { pattern: 'BEGIN PRIVATE KEY' }
+      validate: { pattern: 'BEGIN (RSA )?PRIVATE KEY' } # PKCS#8 (Firebase's) or PKCS#1
     # The web app config of the same project (Project settings, Your apps, Web app).
     - name: FIREBASE_API_KEY
       secret: true
