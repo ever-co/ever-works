@@ -48,9 +48,17 @@
       while no directory is available (`available_count: 0`). Workers Logs invocation
       logs are off (they stored caller IPs and location), and `/data/search.json` writes no line for a search with
       results.
-- [ ] T-18 Rebuild the 15 older sites (`timetrack`, `mcpserver`, `vectordb`, `dir`, …; template `classic`). Their
-      website repos already hold template `f52bb1d6` (with the agent API, directory-web-template#1181), but the sites
-      were not rebuilt after that sync (timetrack: last `k8s-build` 2026-10-23), so `/data/directory.json` is still 404.
+- [x] T-18 Roll the template to the 15 older sites (`timetrack`, `mcpserver`, `vectordb`, `dir`, …; template `classic`,
+      deploy provider `k8s`), done 2026-11-26. Their website repos got template `f52bb1d6` (with the agent API,
+      directory-web-template#1181) on 2026-11-21, and the in-cluster `ci-builds` poller rebuilt `:prod` from it (GitHub
+      Actions is off on these repos, so GitHub shows no runs). The sites still served the old build because these Works
+      deploy server-side with the image pinned by digest (`DeployService.deployServerSideManaged`, `pinImageDigest`), and
+      neither the template poller nor a build redeploys them. Fix: one platform redeploy per Work
+      (`POST /api/deploy/works/:id`), plus a hand rebuild of `sustainable-fashion-website` `main`, whose 11-21 build had
+      failed. Every site now answers `/data/directory.json`, `/data/items.json`, `/data/items/{slug}.json`,
+      `/.well-known/mcp.json` and `OPTIONS /mcp`. `timetrack` names its canonical domain `https://timetrack.works`, so
+      its registry entry moved there (ever-works/directory-registry#1). Open: the platform reports `itemsCount: 6` for
+      Work `awesome-mcp-servers`, while the site lists 4,239 items.
 
 ## Phase 2
 
