@@ -805,7 +805,8 @@ export class DeployService {
                 });
             } catch (cause) {
                 if (cause instanceof DnsRecordConflictError) {
-                    this.logger.error(
+                    // An expected refusal, not a fault: warn, like the rename path.
+                    this.logger.warn(
                         `EW-734 k8s managed-subdomain ${allocation.fqdn} for work ${work.id} already exists in the zone for another host; not routing it to this work`,
                     );
                     return mergedAfterLegacy;
