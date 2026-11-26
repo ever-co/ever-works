@@ -78,8 +78,8 @@ import {
     clampAgentReviewApproversPerEntry,
     clampAgentReviewRunsPerTask,
 } from '../tasks-domain/task-agent-review';
-// Concrete file, not the utils barrel: `platform-host.ts` imports nothing, so
-// `platformRootDomains()` normalizes exactly as the guard compares.
+// Concrete file, not the utils barrel: `platform-host.ts` imports only `node:url`,
+// so `platformRootDomains()` normalizes exactly as the guard compares.
 import { normalizePlatformHost } from '../utils/platform-host';
 type AppType = 'cli' | 'api';
 

@@ -46,22 +46,18 @@ import {
 } from '@ever-works/agent/ever-works-providers';
 import { config } from '@ever-works/agent/config';
 import {
-    PLATFORM_DOMAIN_NOT_ALLOWED,
     isPlatformDomainNotAllowedError,
     matchPlatformRootDomain,
-    platformDomainRefusalMessage,
+    platformDomainNotAllowedBody,
 } from '@ever-works/agent/utils';
 
 /**
- * The 400 for a custom domain equal to or under one of the platform's root domains. It carries a
- * stable `code` beside the message, so a client can tell this refusal apart from a format error.
+ * The 400 for a custom domain equal to or under one of the platform's root domains. The body
+ * (`{ status, code: 'PLATFORM_DOMAIN_NOT_ALLOWED', message }`) is the shared one every route that
+ * refuses a platform host answers, so a client can tell this refusal apart from a format error.
  */
 function platformDomainNotAllowed(root: string): BadRequestException {
-    return new BadRequestException({
-        status: 'error',
-        code: PLATFORM_DOMAIN_NOT_ALLOWED,
-        message: platformDomainRefusalMessage(root),
-    });
+    return new BadRequestException(platformDomainNotAllowedBody(root));
 }
 
 /**

@@ -185,25 +185,25 @@ describePostgres('ExistingWebsiteLinkService PostgreSQL domain race', () => {
         controlLockHeld = true;
 
         const passive = createService(passiveDataSource, sameUrlWorkId);
-        const passiveLink = link(passive, sameUrlWorkId, 'https://ever.works');
+        const passiveLink = link(passive, sameUrlWorkId, 'https://example.com');
         await waitForPassiveInsertToBlock();
 
         const domainWriter = new WorkCustomDomainRepository(
             domainWriterDataSource.getRepository(WorkCustomDomain),
         );
-        const winner = await domainWriter.addDomain(sameUrlWorkId, 'Ever.Works', 'manual');
-        expect(winner).toMatchObject({ domain: 'ever.works', provider: 'manual' });
+        const winner = await domainWriter.addDomain(sameUrlWorkId, 'Example.Com', 'manual');
+        expect(winner).toMatchObject({ domain: 'example.com', provider: 'manual' });
 
         await releaseControlLock();
         await expect(passiveLink).resolves.toMatchObject({
             workId: sameUrlWorkId,
-            url: 'https://ever.works',
-            domain: 'ever.works',
+            url: 'https://example.com',
+            domain: 'example.com',
             created: false,
         });
         await expect(
             passiveDataSource.getRepository(Work).findOneByOrFail({ id: sameUrlWorkId }),
-        ).resolves.toMatchObject({ website: 'https://ever.works' });
+        ).resolves.toMatchObject({ website: 'https://example.com' });
         await expect(
             passiveDataSource.getRepository(WorkCustomDomain).countBy({ workId: sameUrlWorkId }),
         ).resolves.toBe(1);
@@ -213,7 +213,7 @@ describePostgres('ExistingWebsiteLinkService PostgreSQL domain race', () => {
         const first = createService(passiveDataSource, differentUrlWorkId);
         const second = createService(domainWriterDataSource, differentUrlWorkId);
         const results = await Promise.allSettled([
-            link(first, differentUrlWorkId, 'https://ever.works'),
+            link(first, differentUrlWorkId, 'https://example.com'),
             link(second, differentUrlWorkId, 'https://other.works'),
         ]);
 
@@ -227,7 +227,7 @@ describePostgres('ExistingWebsiteLinkService PostgreSQL domain race', () => {
         const stored = await passiveDataSource
             .getRepository(Work)
             .findOneByOrFail({ id: differentUrlWorkId });
-        expect(['https://ever.works', 'https://other.works']).toContain(stored.website);
+        expect(['https://example.com', 'https://other.works']).toContain(stored.website);
         await expect(
             passiveDataSource
                 .getRepository(WorkCustomDomain)

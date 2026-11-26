@@ -10,15 +10,20 @@
  * from "Add custom domain".
  *
  * This module is pure: the caller passes the roots, which come from
- * `config.everWorks.platformRootDomains()`. It reads no environment variables and imports nothing, so
- * the API controller, the deploy facade, the App domain service and the deploy service all share one rule.
+ * `config.everWorks.platformRootDomains()`. It reads no environment variables and imports only
+ * `node:url`'s `domainToASCII`, so every writer of a custom host shares one rule: the API routes, the
+ * deploy facade, the App domain service, the account import, the k8s `ingressHost` save paths and the
+ * deploy service.
  *
  * The rule:
  * - a host is platform-owned when it equals a root or ends in `.` + a root;
- * - the comparison ignores case, surrounding whitespace and leading or trailing dots;
+ * - the comparison ignores case, surrounding whitespace and leading or trailing dots, and runs on the
+ *   IDNA ASCII form (`login．ever．works` and `login。ever。works` are `login.ever.works`);
  * - a root that is unset, empty or only dots is skipped, so it can never match every host;
  * - it matches whole labels only: `evil-ever.works` and `ever.works.evil.com` are not under `ever.works`.
  */
+
+import { domainToASCII } from 'node:url';
 
 /** The stable error code a refused platform host carries, in the API's 400 body and on the error. */
 export const PLATFORM_DOMAIN_NOT_ALLOWED = 'PLATFORM_DOMAIN_NOT_ALLOWED';
@@ -26,11 +31,17 @@ export const PLATFORM_DOMAIN_NOT_ALLOWED = 'PLATFORM_DOMAIN_NOT_ALLOWED';
 /** One configured root domain. `null`, `undefined` and blank values are skipped. */
 export type PlatformRootDomain = string | null | undefined;
 
-/** Lowercased and trimmed, with leading and trailing dots removed. Anything that is not a string becomes `''`. */
+/**
+ * Trimmed, in its IDNA ASCII form (which also lowercases and maps fullwidth and ideographic dots to
+ * `.`), with leading and trailing dots removed. A value `domainToASCII` cannot convert (a space, a
+ * port, a scheme) is kept as it is, lowercased, rather than dropped, so it still matches the way it
+ * reads. Anything that is not a string becomes `''`.
+ */
 export function normalizePlatformHost(value: unknown): string {
     if (typeof value !== 'string') return '';
 
-    const text = value.trim().toLowerCase();
+    const trimmed = value.trim();
+    const text = (domainToASCII(trimmed) || trimmed).toLowerCase();
     // A loop, not `/^\.+|\.+$/`: the regex is quadratic on a long run of dots, and this helper also
     // sees input that never went through the DTO's format check.
     let start = 0;
@@ -69,6 +80,29 @@ export function isPlatformOwnedHost(host: unknown, roots: readonly PlatformRootD
 /** The member-facing sentence for a refused host. It names the root, which is public, and nothing else. */
 export function platformDomainRefusalMessage(root: string): string {
     return `Domains under ${root} can't be added as a custom domain. Use the managed subdomain setting instead.`;
+}
+
+/** The same refusal, worded for the k8s plugin's "Default ingress host" setting. */
+export function platformIngressHostRefusalMessage(root: string): string {
+    return `Hosts under ${root} can't be used as the default ingress host. Use the managed subdomain setting instead.`;
+}
+
+/** The body of every 400 that refuses a platform host. One shape for every route that answers it. */
+export interface PlatformDomainNotAllowedBody {
+    status: 'error';
+    code: typeof PLATFORM_DOMAIN_NOT_ALLOWED;
+    message: string;
+}
+
+/**
+ * The 400 body for a host under `root`: `{ status: 'error', code: 'PLATFORM_DOMAIN_NOT_ALLOWED', message }`.
+ * Callers wrap it in their framework's 400 (`new BadRequestException(body)`).
+ */
+export function platformDomainNotAllowedBody(
+    root: string,
+    message: string = platformDomainRefusalMessage(root),
+): PlatformDomainNotAllowedBody {
+    return { status: 'error', code: PLATFORM_DOMAIN_NOT_ALLOWED, message };
 }
 
 /** Thrown when a custom domain is under one of the platform's root domains. */

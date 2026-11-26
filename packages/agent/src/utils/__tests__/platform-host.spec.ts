@@ -9,7 +9,9 @@ import {
     isPlatformOwnedHost,
     matchPlatformRootDomain,
     normalizePlatformHost,
+    platformDomainNotAllowedBody,
     platformDomainRefusalMessage,
+    platformIngressHostRefusalMessage,
 } from '../platform-host';
 
 describe('platform-host — custom domains under the platform root domains', () => {
@@ -128,6 +130,52 @@ describe('platform-host — custom domains under the platform root domains', () 
             expect(isPlatformDomainNotAllowedError(new Error('boom'))).toBe(false);
             expect(isPlatformDomainNotAllowedError({ code: 'OTHER', root: 'x' })).toBe(false);
             expect(isPlatformDomainNotAllowedError(null)).toBe(false);
+        });
+    });
+
+    describe('IDNA normalization (review M2)', () => {
+        it('maps fullwidth and ideographic dots to ASCII before matching', () => {
+            expect(isPlatformOwnedHost('login．ever．works', roots)).toBe(true);
+            expect(isPlatformOwnedHost('login。ever。works', roots)).toBe(true);
+            expect(isPlatformOwnedHost('login．ever．works．', roots)).toBe(true);
+            expect(normalizePlatformHost('LOGIN。Ever。Works')).toBe('login.ever.works');
+        });
+
+        it('compares a Unicode label in its punycode form', () => {
+            expect(normalizePlatformHost('Bücher.Ever.Works')).toBe('xn--bcher-kva.ever.works');
+            expect(isPlatformOwnedHost('bücher.ever.works', roots)).toBe(true);
+            expect(isPlatformOwnedHost('xn--bcher-kva.ever.works', roots)).toBe(true);
+        });
+
+        it('keeps a value IDNA cannot convert, lowercased, instead of dropping it', () => {
+            expect(normalizePlatformHost('A B.Ever.Works')).toBe('a b.ever.works');
+            expect(isPlatformOwnedHost('a b.ever.works', roots)).toBe(true);
+            expect(normalizePlatformHost('Ever.Works:443')).toBe('ever.works:443');
+        });
+    });
+
+    describe('platformDomainNotAllowedBody', () => {
+        it('is the one coded 400 body, with the custom-domain sentence by default', () => {
+            expect(platformDomainNotAllowedBody('ever.works')).toEqual({
+                status: 'error',
+                code: PLATFORM_DOMAIN_NOT_ALLOWED,
+                message:
+                    "Domains under ever.works can't be added as a custom domain. Use the managed subdomain setting instead.",
+            });
+        });
+
+        it('takes the ingress-host sentence for the k8s setting', () => {
+            expect(
+                platformDomainNotAllowedBody(
+                    'ever.app',
+                    platformIngressHostRefusalMessage('ever.app'),
+                ),
+            ).toEqual({
+                status: 'error',
+                code: PLATFORM_DOMAIN_NOT_ALLOWED,
+                message:
+                    "Hosts under ever.app can't be used as the default ingress host. Use the managed subdomain setting instead.",
+            });
         });
     });
 
