@@ -934,8 +934,13 @@ export class WorkQueryService {
         // Any access level can view generation history
         const { work } = await this.ownershipService.ensureCanView(workId, user.id);
 
-        const limit = Math.min(Math.max(options.limit ?? 10, 1), 100);
-        const offset = Math.max(options.offset ?? 0, 0);
+        // Whole numbers with an upper bound on the offset: a value past the
+        // bigint range (`?offset=1e21`, `?offset=Infinity`) is written into the
+        // SQL as text and fails in the database (a 500 instead of an empty page).
+        const rawLimit = Number.isNaN(options.limit) ? undefined : options.limit;
+        const rawOffset = Number.isNaN(options.offset) ? undefined : options.offset;
+        const limit = Math.min(Math.max(Math.floor(rawLimit ?? 10), 1), 100);
+        const offset = Math.min(Math.max(Math.floor(rawOffset ?? 0), 0), Number.MAX_SAFE_INTEGER);
         const activityTypes = this.resolveHistoryActivityTypes(options.activityType);
 
         const [history, total] = await Promise.all([
