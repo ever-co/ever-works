@@ -41,8 +41,32 @@ const read = (id: string, file: string): string =>
     readFileSync(join(BLUEPRINTS, id, '.works', file), 'utf8');
 
 describe("the Ever products' App Blueprint drafts", () => {
-    it('includes Ever Traduora', () => {
-        expect(PRODUCT_BLUEPRINTS).toContain('ever-traduora');
+    it('includes Ever Traduora and Ever Teams', () => {
+        expect(PRODUCT_BLUEPRINTS).toEqual(expect.arrayContaining(['ever-teams', 'ever-traduora']));
+    });
+
+    describe('ever-teams', () => {
+        const spec = validateAppSpecDocument(read('ever-teams', 'works.yml'), {
+            mode: 'blueprint',
+        }).spec;
+        const env = (name: string) => (spec?.env ?? []).find((entry) => entry.name === name);
+
+        it('asks for the Gauzy API and keeps the browser on its own /api routes (proxy mode)', () => {
+            const api = env('GAUZY_API_SERVER_URL');
+            expect(api?.prompt?.description).toBeTruthy();
+            expect(api?.prompt?.required).not.toBe(false);
+            // Set, it would send the browser straight to the Gauzy API instead of this App's routes.
+            expect(env('NEXT_PUBLIC_GAUZY_API_SERVER_URL')).toBeUndefined();
+        });
+
+        it('takes the Gauzy API as an origin only, since the app appends /api itself', () => {
+            const pattern = new RegExp(env('GAUZY_API_SERVER_URL')?.validate?.pattern ?? '$^');
+            expect(pattern.test('https://gauzy.example.com')).toBe(true);
+            expect(pattern.test('http://gauzy.internal:3000')).toBe(true);
+            expect(pattern.test('https://gauzy.example.com/')).toBe(false);
+            expect(pattern.test('https://gauzy.example.com/api')).toBe(false);
+            expect(pattern.test('gauzy.example.com')).toBe(false);
+        });
     });
 
     describe.each(PRODUCT_BLUEPRINTS)('%s', (id) => {
