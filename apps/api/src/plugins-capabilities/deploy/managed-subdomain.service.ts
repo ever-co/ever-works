@@ -167,11 +167,15 @@ export class ManagedSubdomainService {
         // So a rename only re-claims the label; the next deploy publishes the
         // site at the new hostname, on a new `ew-<label>` Worker. That deploy
         // takes over whatever record holds the name, so the zone check matters
-        // just as much here. Without a configured provider there is no zone to
-        // probe, as for `SubdomainAllocator`.
+        // just as much here. The probe only reads the platform zone, so it does
+        // not need the LB target; with no zone configured at all there is
+        // nothing to probe, as for `SubdomainAllocator`. (A Work publishing to
+        // a member's own Cloudflare zone is still probed in the platform zone:
+        // a name taken there is refused, which fails safe.)
         if (this.isCloudflare(work)) {
-            if (provider) {
-                await this.assertHostnameFree(work, normalized, provider);
+            const probe = this.dnsService.getZoneProbe();
+            if (probe) {
+                await this.assertHostnameFree(work, normalized, probe);
             }
             return this.renameWithoutDns(work, currentSubdomain, normalized);
         }
@@ -274,7 +278,7 @@ export class ManagedSubdomainService {
 
     /**
      * 409 unless `<label>.<rootDomain>` is free in the DNS zone. Any existing
-     * A/CNAME record counts, even one aimed at the managed LB: the zone also
+     * record of any type counts, even one aimed at the managed LB: the zone also
      * holds the platform's own hosts, which may share that target, so its
      * content cannot prove which Work (if any) the record belongs to. Fails
      * closed: when the zone cannot be read the rename is refused (503) rather
@@ -283,7 +287,7 @@ export class ManagedSubdomainService {
     private async assertHostnameFree(
         work: Work,
         label: string,
-        provider: CloudflareDnsProvider,
+        provider: Pick<CloudflareDnsProvider, 'recordExists' | 'rootDomain'>,
     ): Promise<void> {
         const rootDomain = provider.rootDomain();
         const fqdn = `${label}.${rootDomain}`;

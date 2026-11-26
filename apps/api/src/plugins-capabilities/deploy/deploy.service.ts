@@ -36,6 +36,7 @@ import {
 } from '@ever-works/agent/services';
 import {
     DnsRecordConflictError,
+    isReservedSubdomainLabel,
     EverWorksDnsService,
     SubdomainAllocator,
     EverWorksDbProvisionService,
@@ -789,6 +790,14 @@ export class DeployService {
 
         try {
             const allocation = await this.subdomainAllocator.allocate(work);
+            // A claim persisted before reserved labels were enforced on every
+            // path is never routed (the allocator itself never picks one).
+            if (isReservedSubdomainLabel(allocation.subdomain)) {
+                this.logger.warn(
+                    `EW-734 k8s managed-subdomain ${allocation.fqdn} for work ${work.id} is a reserved platform label; not routing it`,
+                );
+                return mergedAfterLegacy;
+            }
             // Awaited (it used to be fire-and-forget) so a refusal can keep the
             // host off the Ingress: the provider never repoints a record that
             // the zone holds for something else (`DnsRecordConflictError`), and
@@ -809,6 +818,14 @@ export class DeployService {
                     this.logger.warn(
                         `EW-734 k8s managed-subdomain ${allocation.fqdn} for work ${work.id} already exists in the zone for another host; not routing it to this work`,
                     );
+                    // A label allocated by THIS deploy is released, so the Work
+                    // is not left holding (and the UI showing) another host's
+                    // name; the next deploy allocates again. A label it already
+                    // held is kept: after an LB move its own record can look
+                    // foreign, and dropping the claim would lose its name.
+                    if (allocation.allocated) {
+                        await this.releaseManagedSubdomain(work.id, allocation.subdomain);
+                    }
                     return mergedAfterLegacy;
                 }
                 this.logger.error(
@@ -885,6 +902,14 @@ export class DeployService {
                     'No unique ever.works subdomain could be allocated for this Work; the Cloudflare deploy was not started.',
                 );
             }
+        }
+        // The deploy publishes the Worker at `<label>.<zone>` and takes over any
+        // record there, so a reserved label (a claim persisted before they were
+        // enforced on every path) must not reach it.
+        if (isReservedSubdomainLabel(label)) {
+            throw new BadRequestException(
+                `The managed subdomain "${label}" is reserved by the platform. Pick another one (Deploy, Change subdomain) and deploy again.`,
+            );
         }
         const next: Record<string, unknown> = { ...(settings ?? {}), workSlug: work.slug };
         if (label) {
@@ -1012,6 +1037,15 @@ export class DeployService {
         // admission webhook rejects the collision. Derive it from `work.website`.
         if (work.deployProvider === 'k8s') {
             const websiteHost = this.deriveIngressHostFromWebsite(work);
+            if (websiteHost && this.isPlatformReservedHost(websiteHost)) {
+                // `work.website` is user-editable and is not a managed-subdomain
+                // claim, so it must not put the platform apex or a reserved
+                // label on this Work's Ingress.
+                this.logger.warn(
+                    `Work ${work.id} website host ${websiteHost} is reserved by the platform; deploying without it`,
+                );
+                return settings;
+            }
             if (websiteHost) {
                 return {
                     ...(settings ?? {}),
@@ -1021,6 +1055,34 @@ export class DeployService {
         }
 
         return settings;
+    }
+
+    /**
+     * `true` for the managed root domain itself or a reserved label directly
+     * under it (`mcp.ever.works`). Other names under the root stay allowed: the
+     * platform's own k8s Works take their host from `work.website`.
+     */
+    private isPlatformReservedHost(host: string): boolean {
+        const root = (process.env.EVER_WORKS_DOMAIN?.trim() || 'ever.works').toLowerCase();
+        const normalized = host.toLowerCase().replace(/\.$/, '');
+        if (normalized === root) return true;
+        if (!normalized.endsWith(`.${root}`)) return false;
+        const label = normalized.slice(0, -(root.length + 1));
+        return !label.includes('.') && isReservedSubdomainLabel(label);
+    }
+
+    /**
+     * Release a managed-subdomain claim this deploy just allocated. Best
+     * effort: a failure is logged and the deploy goes on without the host.
+     */
+    private async releaseManagedSubdomain(workId: string, label: string): Promise<void> {
+        try {
+            await this.workRepository.update(workId, { managedSubdomain: null });
+        } catch (cause) {
+            this.logger.error(
+                `Failed to release managed subdomain ${label} of work ${workId}: ${(cause as Error).message}`,
+            );
+        }
     }
 
     /**

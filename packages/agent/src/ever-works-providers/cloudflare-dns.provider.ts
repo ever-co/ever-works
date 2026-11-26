@@ -98,6 +98,14 @@ export interface DnsRecordSnapshot {
     content: string;
 }
 
+/** A record of any type as the zone lists it (TXT, MX, AAAA, ... included). */
+interface ZoneRecord {
+    id: string;
+    type: string;
+    name: string;
+    content: string;
+}
+
 export class CloudflareDnsError extends Error {
     constructor(
         message: string,
@@ -278,21 +286,15 @@ export class CloudflareDnsProvider implements IDnsOperations {
     }
 
     /**
-     * Uniqueness probe — `true` iff any CNAME, A or AAAA record exists for
-     * `host` in the managed zone, regardless of who owns it. Used by
+     * Uniqueness probe — `true` iff ANY record exists for `host` in the
+     * managed zone (CNAME, A, the `AAAA 100::` of a Workers custom domain or
+     * route, TXT, MX, HTTPS, ...), regardless of who owns it. Used by
      * `SubdomainAllocator` and the explicit rename to detect collisions
-     * before persisting a claim.
+     * before persisting a claim. One exact-name lookup, so a wildcard record
+     * never makes a name look taken.
      */
     async recordExists(host: string): Promise<boolean> {
-        const normalized = this.normalizeHost(host);
-        // CNAME first (the common case for managed subdomains), then A, then
-        // AAAA: a Workers custom domain or route appears in the zone only as
-        // a proxied `AAAA 100::` record. Exact-name lookups, so a wildcard
-        // record never makes a name look taken.
-        for (const type of ['CNAME', 'A', 'AAAA'] as const) {
-            if (await this.findRecord(normalized, type)) return true;
-        }
-        return false;
+        return (await this.findRecordsByName(this.normalizeHost(host))).length > 0;
     }
 
     /** Zone root domain managed by this provider (e.g. `'ever.works'`). */
@@ -349,28 +351,37 @@ export class CloudflareDnsProvider implements IDnsOperations {
     }
 
     /**
-     * Before creating a `type` record for `host`: a record of ANOTHER type for the same name
-     * (an A, or the `AAAA 100::` of a Workers custom domain, when writing a CNAME) is invisible to
-     * the same-type lookup, and the create would only fail at Cloudflare as a generic error that
-     * callers treat as transient. Surface it as the conflict it is. Skipped for a wholly managed
-     * zone, which keeps its previous behaviour.
+     * Before creating a `type` record for `host`: a record of ANOTHER type for the same name that
+     * cannot coexist with it (anything at all for a CNAME, e.g. an A, the `AAAA 100::` of a Workers
+     * custom domain, a TXT or an MX; a CNAME for an A) is invisible to the same-type lookup, and
+     * the create would only fail at Cloudflare as a generic error that callers treat as transient.
+     * Surface it as the conflict it is. Skipped for a wholly managed zone, which keeps its previous
+     * behaviour.
      */
     private async assertNoForeignRecordOfOtherType(
         host: string,
         type: DnsRecordType,
     ): Promise<void> {
         if (this.config.manageForeignRecords === true) return;
-        for (const other of ['CNAME', 'A', 'AAAA'] as const) {
-            if (other === type) continue;
-            const found = await this.findRecord(host, other);
-            if (found) this.assertManagedRecord(host, found);
+        for (const found of await this.findRecordsByName(host)) {
+            if (found.type === type) continue;
+            if (type === 'CNAME' || found.type === 'CNAME') this.assertManagedRecord(host, found);
         }
     }
 
-    /** `AAAA` is probed (`recordExists`) but never written by this provider. */
+    /** Every record named exactly `name`, of any type (no `type` filter). */
+    private async findRecordsByName(name: string): Promise<ZoneRecord[]> {
+        const url = new URL(`${this.baseUrl}/zones/${this.config.zoneId}/dns_records`);
+        url.searchParams.set('name', name);
+        const json = await this.request<{ result: ZoneRecord[] }>(url.toString(), {
+            method: 'GET',
+        });
+        return json.result ?? [];
+    }
+
     private async findRecord(
         name: string,
-        type: DnsRecordType | 'AAAA' = 'CNAME',
+        type: DnsRecordType = 'CNAME',
     ): Promise<DnsRecordSnapshot | null> {
         const url = new URL(`${this.baseUrl}/zones/${this.config.zoneId}/dns_records`);
         url.searchParams.set('name', name);
@@ -485,6 +496,7 @@ export class CloudflareDnsProvider implements IDnsOperations {
 export class EverWorksDnsService {
     private readonly logger = new Logger(EverWorksDnsService.name);
     private cachedProvider: CloudflareDnsProvider | null | undefined;
+    private cachedProbe: CloudflareDnsProvider | null | undefined;
 
     getProvider(): CloudflareDnsProvider | null {
         if (this.cachedProvider !== undefined) {
@@ -518,6 +530,28 @@ export class EverWorksDnsService {
             previousTargetHostnames,
         });
         return this.cachedProvider;
+    }
+
+    /**
+     * Read access to the platform zone for the "is this name taken?" probe.
+     * Needs only `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ZONE_ID`: unlike
+     * `getProvider()` it does not require `EVER_WORKS_DEPLOY_LB_HOSTNAME`, so
+     * a check that writes no record (the Cloudflare Workers rename) still runs
+     * where no LB target is configured. Only `recordExists` / `rootDomain` are
+     * meant to be called on it.
+     */
+    getZoneProbe(): Pick<CloudflareDnsProvider, 'recordExists' | 'rootDomain'> | null {
+        const provider = this.getProvider();
+        if (provider) return provider;
+        if (this.cachedProbe !== undefined) return this.cachedProbe;
+        const apiToken = process.env.CLOUDFLARE_API_TOKEN?.trim();
+        const zoneId = process.env.CLOUDFLARE_ZONE_ID?.trim();
+        const rootDomain = process.env.EVER_WORKS_DOMAIN?.trim() || 'ever.works';
+        this.cachedProbe =
+            apiToken && zoneId
+                ? new CloudflareDnsProvider({ apiToken, zoneId, rootDomain, targetHostname: '' })
+                : null;
+        return this.cachedProbe;
     }
 
     /** Compute the canonical ingress host for a given Work slug. */
@@ -578,5 +612,6 @@ export class EverWorksDnsService {
     /** Reset the cache — test-only hook so unit tests can re-read env. */
     resetCacheForTest(): void {
         this.cachedProvider = undefined;
+        this.cachedProbe = undefined;
     }
 }

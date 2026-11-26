@@ -29,9 +29,12 @@ describe('CloudflareDnsProvider (EW-617 G5)', () => {
             calls.push({ url, init });
             const method = (init.method ?? 'GET').toUpperCase();
             if (method === 'GET' && url.includes('/dns_records?')) {
-                const type = new URL(url).searchParams.get('type') ?? '';
+                // Like the real API: `type` filters; no `type` lists every record of the name.
+                const type = new URL(url).searchParams.get('type');
                 const result = opts.listByType
-                    ? (opts.listByType[type] ?? [])
+                    ? type
+                        ? (opts.listByType[type] ?? [])
+                        : Object.values(opts.listByType).flat()
                     : (opts.listResult ?? []);
                 return new Response(JSON.stringify({ success: true, result }), { status: 200 });
             }
@@ -101,15 +104,14 @@ describe('CloudflareDnsProvider (EW-617 G5)', () => {
 
         expect(result.name).toBe('ai-coding.ever.works');
         expect(result.content).toBe('k8s.lb.example');
-        // CNAME lookup, then the other types (a foreign A/AAAA would block the create), then POST.
-        expect(calls.map((c) => c.init.method)).toEqual(['GET', 'GET', 'GET', 'POST']);
+        // CNAME lookup, then every record of the name (anything else blocks a CNAME), then POST.
+        expect(calls.map((c) => c.init.method)).toEqual(['GET', 'GET', 'POST']);
         expect(calls[0].url).toContain('name=ai-coding.ever.works');
-        expect(calls.slice(0, 3).map((c) => new URL(c.url).searchParams.get('type'))).toEqual([
+        expect(calls.slice(0, 2).map((c) => new URL(c.url).searchParams.get('type'))).toEqual([
             'CNAME',
-            'A',
-            'AAAA',
+            null,
         ]);
-        const body = JSON.parse(calls[3].init.body as string);
+        const body = JSON.parse(calls[2].init.body as string);
         expect(body).toMatchObject({
             type: 'CNAME',
             name: 'ai-coding.ever.works',
@@ -301,32 +303,30 @@ describe('CloudflareDnsProvider (EW-617 G5)', () => {
             });
 
             await expect(provider.recordExists('crm.ever.works')).resolves.toBe(true);
-            expect(calls.map((c) => new URL(c.url).searchParams.get('type'))).toEqual([
-                'CNAME',
-                'A',
-                'AAAA',
-            ]);
+            // One exact-name lookup with no type filter.
+            expect(calls).toHaveLength(1);
+            expect(new URL(calls[0].url).searchParams.get('name')).toBe('crm.ever.works');
+            expect(new URL(calls[0].url).searchParams.has('type')).toBe(false);
         });
 
-        it('stops at the first record type found', async () => {
-            const { provider, calls } = buildProvider({
-                listByType: {
-                    CNAME: [
-                        { id: 'r', type: 'CNAME', name: 'x.ever.works', content: 'k8s.lb.example' },
-                    ],
-                },
+        it.each([
+            ['TXT', 'v=spf1 -all'],
+            ['MX', 'mx.example.net'],
+            ['HTTPS', '1 . alpn="h2"'],
+        ])('sees a host that has only a %s record', async (type, content) => {
+            const { provider } = buildProvider({
+                listByType: { [type]: [{ id: 'r', type, name: 'only.ever.works', content }] },
             });
 
-            await expect(provider.recordExists('x.ever.works')).resolves.toBe(true);
-            expect(calls).toHaveLength(1);
+            await expect(provider.recordExists('only.ever.works')).resolves.toBe(true);
         });
 
-        it('is false when no CNAME, A or AAAA record exists', async () => {
+        it('is false when the name has no record of any type', async () => {
             const { provider, calls } = buildProvider({ listByType: {} });
 
             await expect(provider.recordExists('free.ever.works')).resolves.toBe(false);
-            expect(calls).toHaveLength(3);
-            expect(calls.every((c) => (c.init.method ?? 'GET') === 'GET')).toBe(true);
+            expect(calls).toHaveLength(1);
+            expect(calls[0].init.method ?? 'GET').toBe('GET');
         });
     });
 
@@ -380,7 +380,40 @@ describe('CloudflareDnsProvider (EW-617 G5)', () => {
                 target: 'k8s.lb.example',
             });
 
-            expect(calls.map((c) => c.init.method)).toEqual(['GET', 'GET', 'GET', 'POST']);
+            expect(calls.map((c) => c.init.method)).toEqual(['GET', 'GET', 'POST']);
+        });
+
+        it('ensureRecord refuses a CNAME where the name already has only a TXT record', async () => {
+            const { provider, calls } = buildProvider({
+                listByType: {
+                    TXT: [{ id: 'r', type: 'TXT', name: 'txt.ever.works', content: 'v=spf1 -all' }],
+                },
+            });
+
+            await expect(
+                provider.ensureRecord({
+                    host: 'txt.ever.works',
+                    type: 'CNAME',
+                    target: 'k8s.lb.example',
+                }),
+            ).rejects.toMatchObject({ name: 'DnsRecordConflictError', existingType: 'TXT' });
+            expect(calls.every((c) => (c.init.method ?? 'GET') === 'GET')).toBe(true);
+        });
+
+        it('ensureRecord lets an A record be created next to a TXT (they coexist)', async () => {
+            const { provider, calls } = buildProvider({
+                listByType: {
+                    TXT: [{ id: 'r', type: 'TXT', name: 'site.ever.works', content: 'verify=1' }],
+                },
+            });
+
+            await provider.ensureRecord({
+                host: 'site.ever.works',
+                type: 'A',
+                target: '203.0.113.9',
+            });
+
+            expect(calls.map((c) => c.init.method)).toEqual(['GET', 'GET', 'POST']);
         });
 
         it('ensureRecord refuses a CNAME where the name already has a foreign AAAA (Workers domain)', async () => {
@@ -637,6 +670,28 @@ describe('EverWorksDnsService (EW-617 G5)', () => {
         });
 
         await expect(svc.ensureWorkSubdomain('ai-coding')).resolves.toBe(true);
+    });
+
+    it('getZoneProbe needs only the token and zone (no LB target)', () => {
+        process.env.CLOUDFLARE_API_TOKEN = 'tk';
+        process.env.CLOUDFLARE_ZONE_ID = 'zone1';
+
+        const svc = new EverWorksDnsService();
+        expect(svc.getProvider()).toBeNull();
+        const probe = svc.getZoneProbe();
+        expect(probe).toBeInstanceOf(CloudflareDnsProvider);
+        expect(probe!.rootDomain()).toBe('ever.works');
+    });
+
+    it('getZoneProbe is the provider itself when the LB target is configured, and null without a zone', () => {
+        const unconfigured = new EverWorksDnsService();
+        expect(unconfigured.getZoneProbe()).toBeNull();
+
+        process.env.CLOUDFLARE_API_TOKEN = 'tk';
+        process.env.CLOUDFLARE_ZONE_ID = 'zone1';
+        process.env.EVER_WORKS_DEPLOY_LB_HOSTNAME = 'k8s.lb';
+        const svc = new EverWorksDnsService();
+        expect(svc.getZoneProbe()).toBe(svc.getProvider());
     });
 
     it('reads earlier LB hostnames from EVER_WORKS_DEPLOY_LB_PREVIOUS_HOSTNAMES', () => {

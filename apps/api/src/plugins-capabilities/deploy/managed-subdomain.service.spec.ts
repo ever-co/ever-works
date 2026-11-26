@@ -39,7 +39,7 @@ describe('ManagedSubdomainService', () => {
         ensureRecord: jest.Mock;
         removeRecord: jest.Mock;
     };
-    let dnsService: { getProvider: jest.Mock };
+    let dnsService: { getProvider: jest.Mock; getZoneProbe: jest.Mock };
     let service: ManagedSubdomainService;
     /** Hostnames with an A/CNAME record in the fake zone the provider mock reads and writes. */
     let zone: Set<string>;
@@ -79,7 +79,10 @@ describe('ManagedSubdomainService', () => {
                 zone.delete(host);
             }),
         };
-        dnsService = { getProvider: jest.fn().mockReturnValue(provider) };
+        dnsService = {
+            getProvider: jest.fn().mockReturnValue(provider),
+            getZoneProbe: jest.fn().mockReturnValue(provider),
+        };
         service = new ManagedSubdomainService(
             workRepository as unknown as WorkRepository,
             dnsService as unknown as EverWorksDnsService,
@@ -520,8 +523,23 @@ describe('ManagedSubdomainService', () => {
             expect(workRepository.update).not.toHaveBeenCalled();
         });
 
-        it('renames without a zone probe when no DNS provider is configured', async () => {
+        it('still probes the zone when only the LB target is missing (the probe writes nothing)', async () => {
             dnsService.getProvider.mockReturnValue(null);
+            zone.add('existing-host.ever.works');
+            workRepository.findById.mockResolvedValue(
+                buildWork({ deployProvider: 'cloudflare', managedSubdomain: 'old-name' }),
+            );
+
+            await expect(service.update('work-1', 'existing-host')).rejects.toBeInstanceOf(
+                ConflictException,
+            );
+            expect(provider.recordExists).toHaveBeenCalledWith('existing-host.ever.works');
+            expect(workRepository.update).not.toHaveBeenCalled();
+        });
+
+        it('renames without a zone probe when no zone is configured at all', async () => {
+            dnsService.getProvider.mockReturnValue(null);
+            dnsService.getZoneProbe.mockReturnValue(null);
             const workBefore = buildWork({ deployProvider: 'cloudflare', managedSubdomain: null });
             workRepository.findById.mockResolvedValue(workBefore);
 

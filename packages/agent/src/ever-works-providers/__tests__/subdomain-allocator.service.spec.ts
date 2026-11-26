@@ -170,6 +170,17 @@ describe('SubdomainAllocator', () => {
         },
     );
 
+    it('fails closed when the zone probe errors: no claim is persisted', async () => {
+        const repo = makeRepo();
+        const probe = makeProbe(async () => {
+            throw new Error('429 rate limited');
+        });
+        const alloc = new SubdomainAllocator(repo, makeDnsService(probe));
+
+        await expect(alloc.allocate(makeWork(), probe)).rejects.toThrow(/exhausted/);
+        expect(repo.update).not.toHaveBeenCalled();
+    });
+
     it('treats a provider-side recordExists collision as taken', async () => {
         const repo = makeRepo();
         const probe = makeProbe(async (host) => host === 'ai-coding.ever.works');
