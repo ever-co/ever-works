@@ -27,8 +27,8 @@ no notion of a public or listed Work; and ADR-014 forbids keeping catalogs in th
    `https://directories.ever.works`. It is public, read-only and needs no account.
 2. **The list of directories is a catalog** (ADR-014): a Directory Registry v1 JSON document in its own repo
    (`ever-works/directory-registry`). It holds identity and opt-in only; names, descriptions and counts are read live
-   from each directory's `/data/directory.json`, which also proves the directory speaks Contract v1. A platform feed of
-   opted-in Works joins it in phase 2.
+   from each directory's `/data/directory.json`, which also proves the directory speaks Contract v1. It lists only our
+   own directories (owner, 2026-11-26), so no platform feed of other tenants' Works is planned.
 3. **Cross-directory search runs on a merged index** built from each directory's static read API, cached at the edge
    and in memory, with a directory-aware ranking that reuses the Contract v1 weights. The hub never fans a query out to
    every directory's `/mcp`.

@@ -231,6 +231,7 @@ describe("Ever Connect — an Organization's link over HTTP", () => {
                 linkCodes: false,
                 heartbeat: false,
                 entitlements: false,
+                entitlementGates: false,
                 appSync: false,
                 appsWrite: false,
                 blueprintHandoff: false,
@@ -436,6 +437,7 @@ describe("Ever Connect — an Organization's link over HTTP", () => {
                 entitlements: true,
                 appSync: true,
                 // Their own switches, which this installation did not set.
+                entitlementGates: false,
                 appsWrite: false,
                 blueprintHandoff: false,
             });

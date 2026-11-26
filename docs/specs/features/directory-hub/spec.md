@@ -18,14 +18,14 @@
 The owner approved phase 1 on 2026-11-21, which settles the public address and the catalog repo. The other rows are
 still recommended defaults.
 
-| Question                 | Recommended default                                                                                                                       | Alternatives kept open                                                              |
-| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| Where the hub runs       | One **Cloudflare Worker** (`apps/directory-hub`), next to the directory sites                                                             | Platform API / `apps/mcp`; a route in the ever.works website                        |
-| Public address           | **`https://directories.ever.works/mcp`** (`mcp.ever.works` is already the platform's authenticated MCP server)                            | `https://ever.works/mcp` through a Workers route on the apex (phase 2, same Worker) |
-| How it finds directories | A **Directory Registry** JSON document kept in its own catalog repo (ADR-014), each entry checked live against its `/data/directory.json` | Phase 2: the platform publishes opted-in Works; a "directory of directories" Work   |
-| How it searches          | A merged index built from each directory's **static read API** (`/data/*.json`), cached at the edge and in memory                         | Fan-out to every directory's `/mcp` per query (rejected: slow, N× load)             |
-| Tools                    | `list_directories`, `search_all`, `get_item`, `query_directory` (pass-through to one directory)                                           | Namespaced per-directory tools (rejected: hundreds of tools)                        |
-| Discovery                | Hub serves `llms.txt`, `/.well-known/mcp.json`, `/.well-known/api-catalog`, OpenAPI; **ever.works** points to the hub                     | Listing in the official MCP Registry and other catalogs (phase 3, owner's go)       |
+| Question                 | Recommended default                                                                                                                       | Alternatives kept open                                                                                     |
+| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| Where the hub runs       | One **Cloudflare Worker** (`apps/directory-hub`), next to the directory sites                                                             | Platform API / `apps/mcp`; a route in the ever.works website                                               |
+| Public address           | **`https://directories.ever.works/mcp`** (`mcp.ever.works` is already the platform's authenticated MCP server)                            | `https://ever.works/mcp` through a Workers route on the apex (phase 2, same Worker)                        |
+| How it finds directories | A **Directory Registry** JSON document kept in its own catalog repo (ADR-014), each entry checked live against its `/data/directory.json` | A "directory of directories" Work. (A platform feed of other tenants' Works: not wanted, owner 2026-11-26) |
+| How it searches          | A merged index built from each directory's **static read API** (`/data/*.json`), cached at the edge and in memory                         | Fan-out to every directory's `/mcp` per query (rejected: slow, N× load)                                    |
+| Tools                    | `list_directories`, `search_all`, `get_item`, `query_directory` (pass-through to one directory)                                           | Namespaced per-directory tools (rejected: hundreds of tools)                                               |
+| Discovery                | Hub serves `llms.txt`, `/.well-known/mcp.json`, `/.well-known/api-catalog`, OpenAPI; **ever.works** points to the hub                     | Listing in the official MCP Registry and other catalogs (phase 3, owner's go)                              |
 
 ---
 
@@ -153,7 +153,12 @@ agents where the hub is.
   phase 2 builds the index on a schedule (see [`plan.md`](./plan.md) §6).
 - **Cost**: runs on the Workers Paid plan the directory sites already use; data reads hit the directories' edge cache.
 - **Security & privacy**: public, read-only data; no secrets in the hub; strict size caps per document; untrusted
-  third-party text is returned as data; logs carry tool name, counts and timing, never query text with client IPs.
+  third-party text is returned as data; logs carry tool name, counts and timing. The text of a query is logged only
+  when it matched nothing (owner decision 2026-11-26). Workers Logs keeps only the hub's own lines: invocation logs are
+  off (`observability.logs.invocation_logs: false`), because they store each caller's IP (`cf-connecting-ip`,
+  `x-real-ip`), location and request URL. Cloudflare attaches the method, path and URL to every line the hub writes, so
+  `/data/search.json` writes a line only for a zero-result search. Lines age out with the Workers Logs retention and are
+  not exported.
 - **Observability**: one structured log line per tool call (tool, directories searched, unavailable count, result count,
   duration) visible in Workers Logs.
 - **Compatibility**: any directory that implements Contract v1 (minimal and full templates); MCP protocol revisions
@@ -178,7 +183,8 @@ agents where the hub is.
 - A human-facing website: `/` redirects to `/llms.txt`. A browsable "all directories" page would be frontend work under
   the design rule and is a separate decision.
 - Crawling hosts that are not in the registry, and listing Cloudflare zones or DNS to find directories.
-- Logging or analysing query text (an owner decision, §8).
+- No logging of the text of queries that matched something, and no analysis of callers (owner decision 2026-11-26:
+  zero-result queries only).
 
 ## 7. Acceptance Criteria
 
@@ -195,7 +201,7 @@ agents where the hub is.
       `/.well-known/api-catalog`, `/llms.txt` and `/robots.txt` answer with the documented shapes (tests).
 - [ ] After deploy (phase 1): MCP Inspector and Claude can connect to `https://directories.ever.works/mcp` and answer the
       two example questions from live directories.
-- [ ] After the ever.works change (phase 1): `https://ever.works/llms.txt` and `https://ever.works/.well-known/mcp.json`
+- [x] After the ever.works change (phase 1): `https://ever.works/llms.txt` and `https://ever.works/.well-known/mcp.json`
       name the hub.
 - [ ] All functional requirements have a passing unit test or a recorded live check.
 
@@ -204,10 +210,16 @@ agents where the hub is.
 - Resolved 2026-11-21 (owner approved phase 1): the address is `https://directories.ever.works`, and the registry
   lives in the catalog repo [`ever-works/directory-registry`](https://github.com/ever-works/directory-registry).
   `ever.works/mcp` through a Workers route on the apex stays a phase 2 option.
-- `[NEEDS CLARIFICATION: Works of other tenants: may they opt in to the hub (phase 2), and is the default off]`
-- `[NEEDS CLARIFICATION: the "MCP servers for databases" example needs a directory of MCP servers. The older Work awesome-mcp-servers (mcpserver.ever.works, 6 items) is one, but runs a build without Contract v1. Grow it and move it to a current template, or create a new one among the 100?]`
-- `[NEEDS CLARIFICATION: go-ahead to list the hub in the official MCP Registry and other public catalogs (phase 3)]`
-- `[NEEDS CLARIFICATION: may the hub log query text (without IPs) to learn what agents look for]`
+- Resolved 2026-11-26 (owner): the hub lists **only our own directories**, kept in the registry repo. Works of other
+  tenants do not join it, so the platform opt-in flag and feed (plan R2, task T-21) are dropped.
+- Resolved 2026-11-26 (owner): the MCP-servers directory already exists. `mcpserver.ever.works` (Work
+  `awesome-mcp-servers`) lists **4,232 items**; the platform API's `itemsCount` of 6 for that Work was wrong and misled
+  the 2026-11-21 notes. Like `timetrack` and 13 other older sites, it only needs a build of its current template
+  (`f52bb1d6`, which contains the agent API), so the hub can read it (task T-18).
+- Resolved 2026-11-26 (owner): **not yet** listed in the official MCP Registry or other catalogs; agents find the hub
+  through `ever.works/llms.txt` and `/.well-known/`.
+- Resolved 2026-11-26 (owner): the hub logs the text of **zero-result queries only** (`zero_result_query` in the
+  log entry of `search_all`, `list_directories` and `/data/search.json`), to show which directories are missing.
 
 ## 9. Constitution Gates
 

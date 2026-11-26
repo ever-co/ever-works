@@ -25,10 +25,12 @@ import {
     type EverConnectRoundParticipant,
 } from '../ever-connect-extensions';
 import { EverConnectIntegrationService } from '../ever-connect-integration.service';
+import { entitlementFeatureOf } from '../entitlements/entitlement-gates';
+import { EverConnectEntitlementService } from '../entitlements/ever-connect-entitlement.service';
 import { EVER_CONNECT_LEASE_HELD, type EverConnectRoundLease } from '../ever-connect-lease.service';
 import { withAppSyncLink } from '../ever-connect-link-header';
 import { EverConnectService } from '../ever-connect.service';
-import { isAppSyncEnabled } from '../ever-connect.switches';
+import { isAppSyncEnabled, isEntitlementGatesEnabled } from '../ever-connect.switches';
 import { describeFailure, platformFailure } from '../identity/platform-answer';
 import {
     type IntegrationHandler,
@@ -150,6 +152,7 @@ export class AppSyncService
         @Optional() private readonly registry?: IntegrationHandlerRegistry,
         @Optional() private readonly extensions?: EverConnectExtensions,
         @Optional() private readonly moduleRef?: ModuleRef,
+        @Optional() private readonly entitlements?: EverConnectEntitlementService,
     ) {}
 
     onModuleInit(): void {
@@ -171,8 +174,10 @@ export class AppSyncService
 
     /**
      * The links the mirror runs for, by Organization: an active link Ever
-     * Platform knows, with `app_sync` enabled at a current scope. Empty while
-     * the switch is off or the installation is not connected.
+     * Platform knows, with `app_sync` enabled at a current scope and, with
+     * `EVER_CONNECT_ENTITLEMENT_GATES_ENABLED`, a document that grants the
+     * `app_sync` feature. Empty while the switch is off or the installation is
+     * not connected.
      */
     async enabledLinks(): Promise<Map<string, EnabledLink>> {
         const out = new Map<string, EnabledLink>();
@@ -183,7 +188,7 @@ export class AppSyncService
         const states = await this.dataSource
             .getRepository(EverConnectIntegration)
             .find({ where: { integrationKey: APP_SYNC_KEY, enabled: true } });
-        const consented = new Set(
+        let consented = new Set(
             states
                 .filter(
                     (state) =>
@@ -191,6 +196,18 @@ export class AppSyncService
                 )
                 .map((state) => state.linkId),
         );
+        if (consented.size === 0) return out;
+        // A plan decides whether an organization's apps are listed on Ever Platform: with the
+        // gates on, a link whose document no longer grants it is left out (a full send follows
+        // within a day of it coming back).
+        // `linksGranting` answers every link unread while the gates are off, and only the granted
+        // ones while they are on; closed when the gates are on and nothing can read the documents.
+        const feature = entitlementFeatureOf(APP_SYNC_KEY);
+        if (feature && this.entitlements) {
+            consented = await this.entitlements.linksGranting(feature, consented);
+        } else if (feature && isEntitlementGatesEnabled()) {
+            consented = new Set();
+        }
         if (consented.size === 0) return out;
 
         const links = await this.dataSource

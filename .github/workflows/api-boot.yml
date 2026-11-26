@@ -15,6 +15,9 @@ name: API boot
 # Before the boot it also loads the built migrations through TypeORM's own loader
 # (`scripts/check-migrations-load.cjs`): the boot runs on `synchronize`, so it cannot
 # see a loader that silently finds no migration (prod from 2026-11-07, #3107).
+# After the boots it runs the unit suites no other pull request check runs, each only when
+# the change touches its code: the agent's App spec and App runtime suites, the k8s
+# plugin's suites and the API's Ever Connect suites (see "Decide which unit suites").
 on:
   pull_request:
     branches: [develop, stage, main]
@@ -47,7 +50,8 @@ jobs:
   boot:
     name: API boots on SQLite (/api/health 200)
     runs-on: ${{ vars.RUNNER_LINUX_X64_4 || 'ubuntu-latest' }}
-    timeout-minutes: 30
+    # 30 for the build and the boots, plus room for the unit suites when a change needs all three.
+    timeout-minutes: 45
     env:
       NODE_OPTIONS: --max-old-space-size=6144
     steps:
@@ -185,3 +189,65 @@ jobs:
           tail -n 150 "$RUNNER_TEMP/api-boot-apps-write.log"
           kill "$PID" || true
           exit 1
+
+      # No other pull request check runs these unit suites, and they are too slow to run on
+      # every change: run each one only when the change touches its code.
+      #   agent:   the agent's App spec and App runtime suites (Jest); the App Blueprint drafts
+      #            are validated by the App spec suite `product-blueprints.spec.ts`
+      #   k8s:     the k8s plugin's suites (Vitest) and its type-check
+      #   connect: the API's Ever Connect suites (Jest)
+      # The change is the diff from the pull request's base (a push: the commit before it, or
+      # the first parent). Fails SAFE: an event without a base (workflow_dispatch), a base that
+      # cannot be fetched, or a diff that fails or comes back empty runs every suite. Changing
+      # only this file runs none: touch a file under a suite's paths to exercise its step.
+      - name: Decide which unit suites this change needs
+        id: suites
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          set -u
+          all() {
+            echo "-> $1: running every suite."
+            { echo "agent=true"; echo "k8s=true"; echo "connect=true"; } >> "$GITHUB_OUTPUT"
+            exit 0
+          }
+          [ "$EVENT_NAME" = "workflow_dispatch" ] && all "manual run"
+          BASE="$BASE_SHA"
+          case "$BASE" in ''|0000000000000000000000000000000000000000) BASE="" ;; esac
+          if [ -z "$BASE" ]; then
+            [ "$EVENT_NAME" = "push" ] || all "no base commit for a $EVENT_NAME event"
+            BASE=$(git rev-parse -q --verify 'HEAD^1') || all "push without a parent commit"
+          fi
+          git cat-file -e "$BASE^{commit}" 2>/dev/null || git fetch -q --no-tags --depth=1 origin "$BASE" || true
+          git cat-file -e "$BASE^{commit}" 2>/dev/null || all "base $BASE cannot be fetched"
+          CHANGED=$(git diff --name-only "$BASE" HEAD) || all "git diff failed"
+          [ -n "$CHANGED" ] || all "empty diff"
+          echo "Changed files against $BASE:"; printf '%s\n' "$CHANGED" | sed 's/^/  /'
+          decide() {
+            if printf '%s\n' "$CHANGED" | grep -qE "$2"; then
+              echo "$1=true" >> "$GITHUB_OUTPUT"; echo "-> $1: run"
+            else
+              echo "$1=false" >> "$GITHUB_OUTPUT"; echo "-> $1: skip (no change under its paths)"
+            fi
+          }
+          decide agent '^packages/agent/(src/(app-runtime|works-config)/|jest\.config\.js$|package\.json$)|^docs/specs/features/app-works/APW-13-golden-paths/blueprints/'
+          decide k8s '^packages/plugins/k8s/'
+          decide connect '^apps/api/(src/ever-connect/|jest\.config\.js$|package\.json$)'
+
+      - name: 'Unit suites: agent App spec and App runtime (Jest)'
+        if: steps.suites.outputs.agent == 'true'
+        working-directory: packages/agent
+        run: npx jest --ci --maxWorkers=2 src/works-config/ src/app-runtime/
+
+      - name: 'Unit suites: k8s plugin (type-check, Vitest)'
+        if: steps.suites.outputs.k8s == 'true'
+        working-directory: packages/plugins/k8s
+        run: |
+          npx tsc --noEmit -p tsconfig.json
+          npx vitest run
+
+      - name: 'Unit suites: API Ever Connect (Jest)'
+        if: steps.suites.outputs.connect == 'true'
+        working-directory: apps/api
+        run: node node_modules/jest/bin/jest.js --ci --maxWorkers=2 src/ever-connect/
