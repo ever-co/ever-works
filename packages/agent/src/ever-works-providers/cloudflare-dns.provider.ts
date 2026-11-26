@@ -11,6 +11,7 @@ import {
     isReservedSubdomainLabel,
     sameDnsContent,
 } from './managed-subdomain-guard';
+import { isDnsWildcardEnabled } from './dns-wildcard';
 
 /**
  * EW-617 G5 — Cloudflare DNS provider for `*.ever.works`.
@@ -93,6 +94,13 @@ export interface CloudflareDnsConfig {
      * a target that hosts outside the managed Works also point at.
      */
     previousTargetHostnames?: readonly string[];
+    /**
+     * The zone has a proxied `*.<rootDomain>` record (and a matching tunnel/ingress rule) that already sends every name
+     * without a record of its own to `targetHostname` (`EVER_WORKS_DNS_WILDCARD`, see `dns-wildcard.ts`). Then a
+     * one-label host under `rootDomain` gets no NEW CNAME to `targetHostname`: every probe and conflict check still
+     * runs, and an existing managed record is still kept in sync.
+     */
+    wildcard?: boolean;
 }
 
 export interface DnsRecordSnapshot {
@@ -186,6 +194,12 @@ export class CloudflareDnsProvider implements IDnsOperations {
         }
 
         await this.assertNoForeignRecordOfOtherType(fqdn, 'CNAME');
+        if (this.servedByWildcard(fqdn)) {
+            this.logger.log(
+                `CloudflareDns ${fqdn} is served by the zone wildcard; no record created`,
+            );
+            return { id: '', type: 'CNAME', name: fqdn, content: target };
+        }
         const created = await this.createRecord({
             type: 'CNAME',
             name: fqdn,
@@ -263,6 +277,16 @@ export class CloudflareDnsProvider implements IDnsOperations {
             return updated;
         }
         await this.assertNoForeignRecordOfOtherType(host, input.type);
+        if (
+            input.type === 'CNAME' &&
+            sameDnsContent(input.target, this.config.targetHostname) &&
+            this.servedByWildcard(host)
+        ) {
+            this.logger.log(
+                `CloudflareDns ${host} is served by the zone wildcard; no record created`,
+            );
+            return { id: '', type: 'CNAME', name: host, content: input.target, proxied, ttl };
+        }
         const created = await this.createAnyRecord({
             type: input.type,
             name: host,
@@ -312,6 +336,19 @@ export class CloudflareDnsProvider implements IDnsOperations {
     /** Zone root domain managed by this provider (e.g. `'ever.works'`). */
     rootDomain(): string {
         return this.config.rootDomain;
+    }
+
+    /**
+     * Whether the zone's wildcard record answers `host` (`wildcard` config): exactly one label under `rootDomain`.
+     * Deeper names are excluded: Universal SSL covers one level only, and managed labels never contain a dot.
+     */
+    servedByWildcard(host: string): boolean {
+        if (this.config.wildcard !== true) return false;
+        const normalized = (host ?? '').trim().toLowerCase();
+        const suffix = `.${this.config.rootDomain.trim().toLowerCase()}`;
+        if (!normalized.endsWith(suffix)) return false;
+        const label = normalized.slice(0, -suffix.length);
+        return label.length > 0 && !label.includes('.');
     }
 
     // Internal helpers ------------------------------------------------------
@@ -558,6 +595,7 @@ export class EverWorksDnsService {
             rootDomain,
             targetHostname,
             previousTargetHostnames,
+            wildcard: isDnsWildcardEnabled(),
         });
         return this.cachedProvider;
     }

@@ -77,7 +77,9 @@ export class ManagedSubdomainService {
         let recordOk = false;
         if (subdomain && fqdn && provider) {
             try {
-                recordOk = await provider.recordExists(fqdn);
+                // With the zone wildcard (`EVER_WORKS_DNS_WILDCARD`) a Work has no record of its own: the
+                // wildcard answers its name, so there is nothing to probe.
+                recordOk = provider.servedByWildcard(fqdn) || (await provider.recordExists(fqdn));
             } catch (cause) {
                 // A probe failure is a transient health signal, not a hard
                 // error — log + fall through so the UI still renders.

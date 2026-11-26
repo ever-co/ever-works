@@ -28,6 +28,7 @@ export {
     sameDnsContent,
 } from './managed-subdomain-guard';
 export { SubdomainAllocator, type SubdomainAllocationResult } from './subdomain-allocator.service';
+export { DNS_WILDCARD_ENV_VAR, isDnsWildcardEnabled } from './dns-wildcard';
 export {
     EverWorksDbProvisionService,
     summarizeDbProvisionError,
