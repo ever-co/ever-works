@@ -11,7 +11,8 @@ import { ApiProperty } from '@nestjs/swagger';
  *   - `url` — `https://${fqdn}`, or `null`.
  *   - `recordOk` — `true` iff `provider.recordExists(fqdn)` resolved truthy,
  *     i.e. the DNS record exists in the managed zone (caller-visible health
- *     signal). Always `false` when `subdomain` is `null`.
+ *     signal), or the zone wildcard serves `fqdn` (`EVER_WORKS_DNS_WILDCARD`;
+ *     not for a Cloudflare Workers Work). Always `false` when `subdomain` is `null`.
  *   - `editable` — `true` when the caller can re-allocate; gated on
  *     `work.deployProvider ∈ {'ever-works','k8s'}` (the only providers that
  *     run through `applyManagedSubdomain`) AND, for k8s, on the
