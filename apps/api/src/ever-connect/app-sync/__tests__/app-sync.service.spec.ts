@@ -306,6 +306,15 @@ describe('AppSyncService', () => {
             expect((await rows()).map((row) => row.payload)).toEqual([{ workId: shop }]);
         });
 
+        it('nothing at all while the gates are on and nothing can read the documents', async () => {
+            process.env.EVER_CONNECT_ENTITLEMENTS_ENABLED = 'true';
+            process.env.EVER_CONNECT_ENTITLEMENT_GATES_ENABLED = 'true';
+            // `mirror` is built without the entitlement service: closed, not open.
+            await mirror.workChanged(await addWork(orgB, 'Shop'));
+            expect(await rows()).toEqual([]);
+            expect((await mirror.enabledLinks()).size).toBe(0);
+        });
+
         it('nothing while the installation is not connected, or its link is archived', async () => {
             await dataSource
                 .getRepository(EverConnectLink)

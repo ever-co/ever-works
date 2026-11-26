@@ -243,4 +243,26 @@ describe('EverConnectIntegrationService.linkStates — with the gates', () => {
         const states = await service(undefined).linkStates('marketplace_installs');
         expect(states.map((state) => state.enabled)).toEqual([true, true, false]);
     });
+
+    describe('with the gates on and nothing to read the documents', () => {
+        const savedEnv = { ...process.env };
+
+        beforeEach(() => {
+            process.env.EVER_CONNECT_ENABLED = 'true';
+            process.env.EVER_CONNECT_ENTITLEMENTS_ENABLED = 'true';
+            process.env.EVER_CONNECT_ENTITLEMENT_GATES_ENABLED = 'true';
+        });
+
+        afterEach(() => {
+            process.env = { ...savedEnv };
+        });
+
+        it('a gated integration is closed for every link; any other stays as reported', async () => {
+            const gated = await service(undefined).linkStates('marketplace_installs');
+            expect(gated.map((state) => state.enabled)).toEqual([false, false, false]);
+            expect(gated.map((state) => state.state)).toEqual(['enabled', 'enabled', 'disabled']);
+            const other = await service(undefined).linkStates('webhooks');
+            expect(other.map((state) => state.enabled)).toEqual([true, true, false]);
+        });
+    });
 });

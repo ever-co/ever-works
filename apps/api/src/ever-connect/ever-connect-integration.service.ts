@@ -10,6 +10,7 @@ import {
     EverConnectIntegrationChangedEvent,
 } from './ever-connect.events';
 import { EverConnectService } from './ever-connect.service';
+import { isEntitlementGatesEnabled } from './ever-connect.switches';
 import { entitlementFeatureOf } from './entitlements/entitlement-gates';
 import { EverConnectEntitlementService } from './entitlements/ever-connect-entitlement.service';
 import type {
@@ -121,13 +122,16 @@ export class EverConnectIntegrationService implements EverIdLoginIntegration {
             order: { linkId: 'ASC' },
         });
         const feature = entitlementFeatureOf(key);
-        const granted =
-            feature && this.entitlements
-                ? await this.entitlements.linksGranting(
-                      feature,
-                      rows.filter((row) => row.enabled).map((row) => row.linkId),
-                  )
-                : null;
+        let granted: Set<string> | null = null;
+        if (feature && this.entitlements) {
+            granted = await this.entitlements.linksGranting(
+                feature,
+                rows.filter((row) => row.enabled).map((row) => row.linkId),
+            );
+        } else if (feature && isEntitlementGatesEnabled()) {
+            // Closed when the gates are on and nothing can read the documents.
+            granted = new Set();
+        }
         return rows.map((row) => ({
             linkId: row.linkId,
             state: row.state,

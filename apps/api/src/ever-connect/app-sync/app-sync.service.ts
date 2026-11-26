@@ -30,7 +30,7 @@ import { EverConnectEntitlementService } from '../entitlements/ever-connect-enti
 import { EVER_CONNECT_LEASE_HELD, type EverConnectRoundLease } from '../ever-connect-lease.service';
 import { withAppSyncLink } from '../ever-connect-link-header';
 import { EverConnectService } from '../ever-connect.service';
-import { isAppSyncEnabled } from '../ever-connect.switches';
+import { isAppSyncEnabled, isEntitlementGatesEnabled } from '../ever-connect.switches';
 import { describeFailure, platformFailure } from '../identity/platform-answer';
 import {
     type IntegrationHandler,
@@ -200,11 +200,14 @@ export class AppSyncService
         // A plan decides whether an organization's apps are listed on Ever Platform: with the
         // gates on, a link whose document no longer grants it is left out (a full send follows
         // within a day of it coming back).
+        // Closed when the gates are on and nothing can read the documents.
         const feature = entitlementFeatureOf(APP_SYNC_KEY);
         if (feature && this.entitlements) {
             consented = await this.entitlements.linksGranting(feature, consented);
-            if (consented.size === 0) return out;
+        } else if (feature && isEntitlementGatesEnabled()) {
+            consented = new Set();
         }
+        if (consented.size === 0) return out;
 
         const links = await this.dataSource
             .getRepository(EverConnectLink)
