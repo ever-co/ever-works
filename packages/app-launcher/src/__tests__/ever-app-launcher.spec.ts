@@ -206,14 +206,30 @@ function keydown(target: EventTarget, key: string, shiftKey = false): void {
 
 let openSpy: ReturnType<typeof vi.fn>;
 
+/**
+ * The last click as the page saw it once the element had answered: a window
+ * listener runs after the tile's own (bubble phase), records whether the
+ * element stopped the anchor's navigation, and then stops it itself so the
+ * test page never navigates away.
+ */
+let lastClick: { defaultPrevented: boolean; href: string | null } | null = null;
+function recordClick(event: Event): void {
+	const anchor = event.composedPath().find((node): node is HTMLAnchorElement => node instanceof HTMLAnchorElement);
+	lastClick = { defaultPrevented: event.defaultPrevented, href: anchor?.getAttribute('href') ?? null };
+	event.preventDefault();
+}
+
 beforeEach(() => {
 	ResizeObserverStub.instances = [];
 	vi.stubGlobal('ResizeObserver', ResizeObserverStub);
 	openSpy = vi.fn(() => null);
 	vi.spyOn(window, 'open').mockImplementation(openSpy as unknown as typeof window.open);
+	lastClick = null;
+	window.addEventListener('click', recordClick);
 });
 
 afterEach(() => {
+	window.removeEventListener('click', recordClick);
 	document.body.innerHTML = '';
 	vi.restoreAllMocks();
 	vi.unstubAllGlobals();
@@ -276,6 +292,28 @@ describe('<ever-app-launcher>', () => {
 			expect(query<HTMLElement>(element, '.panel')?.hasAttribute('hidden')).toBe(false);
 		});
 
+		it('show() moves focus into the panel, show({ focus: false }) leaves it where it was', async () => {
+			const outside = document.createElement('input');
+			document.body.appendChild(outside);
+			const element = await mount({ data: FULL_PANEL });
+
+			outside.focus();
+			const opened = once<CustomEvent>(document, 'ever-app-launcher:open');
+			element.show({ focus: false });
+			await opened;
+			expect(query<HTMLElement>(element, '.panel')?.hasAttribute('hidden')).toBe(false);
+			expect(document.activeElement).toBe(outside);
+
+			element.hide();
+			await element.updateComplete;
+			await new Promise((resolve) => setTimeout(resolve, 0));
+			const reopened = once<CustomEvent>(document, 'ever-app-launcher:open');
+			element.show();
+			await reopened;
+			expect(document.activeElement).toBe(element);
+			outside.remove();
+		});
+
 		it('hide() closes the panel and dispatches :close', async () => {
 			const element = await mount({ data: FULL_PANEL });
 			await open(element);
@@ -315,7 +353,10 @@ describe('<ever-app-launcher>', () => {
 			for (const heading of queryAll<HTMLElement>(element, '.section-heading')) {
 				expect(heading.compareDocumentPosition(manage as Node) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 			}
-			expect(panel.textContent).toContain('Opens in a new tab. You may need to sign in.');
+			// Every tile opens in this tab (owner, 2026-11-26), so the footer no
+			// longer says "Opens in a new tab".
+			expect(panel.textContent).toContain('You may need to sign in.');
+			expect(panel.textContent).not.toContain('new tab');
 		});
 
 		it('omits the Pinned row when nothing is pinned', async () => {
@@ -355,21 +396,48 @@ describe('<ever-app-launcher>', () => {
 			expect(query<HTMLElement>(element, '.grid')?.style.gridTemplateColumns).toContain('repeat(2');
 		});
 
-		it('feeds the column count to the keyboard model', async () => {
-			const element = await mount({ data: FULL_PANEL });
+		it('feeds the column count to the keyboard model of the Your apps grid', async () => {
+			const extra = item({ ...CAL, key: 'work:extra', name: 'Extra', order: 3 });
+			// Tiles: [Ever Works (row), Cal, Umami, Docs, Extra] — one row, then a grid of four.
+			const element = await mount({ data: response([EVER_WORKS, CAL, UMAMI, DOCS, extra]) });
 			await open(element);
 			const observer = ResizeObserverStub.latest();
+			const panel = query<HTMLElement>(element, '.panel') as EventTarget;
 
 			observer.emit(1280);
 			await element.updateComplete;
-			keydown(query<HTMLElement>(element, '.panel') as EventTarget, 'ArrowDown');
-			expect(focused(element)).toBe(tiles(element)[3]);
+			keydown(panel, 'Home');
+			keydown(panel, 'ArrowDown');
+			expect(focused(element), 'the row above steps into the grid').toBe(tiles(element)[1]);
+			keydown(panel, 'ArrowDown');
+			expect(focused(element), '3 columns').toBe(tiles(element)[4]);
 
 			observer.emit(340);
 			await element.updateComplete;
-			keydown(query<HTMLElement>(element, '.panel') as EventTarget, 'Home');
-			keydown(query<HTMLElement>(element, '.panel') as EventTarget, 'ArrowDown');
+			keydown(panel, 'Home');
+			keydown(panel, 'ArrowDown');
+			keydown(panel, 'ArrowDown');
+			expect(focused(element), '2 columns').toBe(tiles(element)[3]);
+		});
+
+		it('moves one Ever apps row per arrow, whatever the column count', async () => {
+			const element = await mount({ data: FULL_PANEL });
+			await open(element);
+			ResizeObserverStub.latest().emit(1280);
+			await element.updateComplete;
+			const panel = query<HTMLElement>(element, '.panel') as EventTarget;
+
+			// [Cal (pinned), Ever Works, Ever Gauzy, Ever Teams (rows), Umami, Docs]
+			keydown(panel, 'ArrowDown');
+			expect(focused(element)).toBe(tiles(element)[1]);
+			keydown(panel, 'ArrowDown');
 			expect(focused(element)).toBe(tiles(element)[2]);
+			keydown(panel, 'ArrowDown');
+			expect(focused(element)).toBe(tiles(element)[3]);
+			keydown(panel, 'ArrowDown');
+			expect(focused(element), 'from the last row into Your apps').toBe(tiles(element)[4]);
+			keydown(panel, 'ArrowUp');
+			expect(focused(element), 'and back to the last row').toBe(tiles(element)[3]);
 		});
 
 		it('ignores a zero-width report so the first paint is never 2 columns by accident', async () => {
@@ -411,7 +479,7 @@ describe('<ever-app-launcher>', () => {
 	});
 
 	describe('tiles (FR-30, FR-41, ACC-11-23)', () => {
-		it('renders menu items as anchors that open a new tab with no opener and no referrer', async () => {
+		it('renders menu items as plain anchors that open in the same tab, with no referrer', async () => {
 			const element = await mount({ data: FULL_PANEL });
 			await open(element);
 
@@ -420,9 +488,13 @@ describe('<ever-app-launcher>', () => {
 			);
 			expect(cal).toBeTruthy();
 			expect(cal?.getAttribute('role')).toBe('menuitem');
-			expect(cal?.getAttribute('target')).toBe('_blank');
-			expect(cal?.getAttribute('rel')).toBe('noopener noreferrer');
+			// Same tab (owner, 2026-11-26): no `target`, no `rel` on any tile.
+			expect(cal?.hasAttribute('target')).toBe(false);
+			expect(cal?.hasAttribute('rel')).toBe(false);
 			expect(cal?.getAttribute('referrerpolicy')).toBe('no-referrer');
+			for (const anchor of queryAll<HTMLAnchorElement>(element, '.panel a')) {
+				expect(anchor.hasAttribute('target'), anchor.dataset.key ?? anchor.className).toBe(false);
+			}
 			expect(cal?.getAttribute('href')).toBe('https://cal.example.com');
 		});
 
@@ -459,7 +531,7 @@ describe('<ever-app-launcher>', () => {
 			);
 			expect(current?.tagName).not.toBe('A');
 			expect(current?.hasAttribute('href')).toBe(false);
-			expect(current?.getAttribute('aria-current')).toBe('true');
+			expect(current?.getAttribute('aria-current')).toBe('page');
 
 			// Enter closes the panel instead of opening a tab (spec §6.6).
 			const closed = once(element, 'ever-app-launcher:close');
@@ -547,15 +619,16 @@ describe('<ever-app-launcher>', () => {
 	});
 
 	describe('activation (FR-30, ACC-11-23, ACC-11-40)', () => {
-		it('opens the stored address exactly, in a new tab, with no opener and no referrer', async () => {
+		it('lets the anchor open the stored address exactly, in the same tab (owner, 2026-11-26)', async () => {
 			const element = await mount({ data: FULL_PANEL });
 			await open(element);
 
 			const cal = queryAll<HTMLElement>(element, '.tile').find((tile) => tile.dataset.key === 'work:cal');
 			cal?.click();
 
-			expect(openSpy).toHaveBeenCalledTimes(1);
-			expect(openSpy).toHaveBeenCalledWith('https://cal.example.com', '_blank', 'noopener,noreferrer');
+			// The element did not stop the link's own navigation, and opened no window.
+			expect(lastClick).toEqual({ defaultPrevented: false, href: 'https://cal.example.com' });
+			expect(openSpy).not.toHaveBeenCalled();
 		});
 
 		it('dispatches a cancellable item-activate carrying key, kind, url, position and pinned', async () => {
@@ -597,9 +670,189 @@ describe('<ever-app-launcher>', () => {
 			const cal = queryAll<HTMLElement>(element, '.tile').find((tile) => tile.dataset.key === 'work:cal');
 			cal?.click();
 
+			expect(lastClick?.defaultPrevented, 'the link navigation is stopped').toBe(true);
 			expect(openSpy).not.toHaveBeenCalled();
 			// The panel stays open: a cancelled activation is not a close.
 			expect(query<HTMLElement>(element, '.panel')?.hasAttribute('hidden')).toBe(false);
+		});
+	});
+
+	describe('Ever apps rows (in-app switcher brief S3, S4)', () => {
+		it('draws each Ever app as a row: logo tile, name and one line, never the host', async () => {
+			const platform = item({
+				key: 'platform:app-ever-co',
+				name: 'Ever Platform',
+				description: 'One account for every Ever app',
+				url: 'https://app.ever.co',
+				host: 'app.ever.co'
+			});
+			const element = await mount({ data: response([EVER_WORKS, platform, CAL]) });
+			await open(element);
+
+			const row = tiles(element).find((tile) => tile.dataset.key === 'platform:app-ever-co');
+			expect(row?.classList.contains('row')).toBe(true);
+			expect(row?.querySelector('.tile-icon')).not.toBeNull();
+			expect(row?.querySelector('.tile-name')?.textContent?.trim()).toBe('Ever Platform');
+			expect(row?.querySelector('.tile-line')?.textContent?.trim()).toBe('One account for every Ever app');
+			expect(row?.textContent).not.toContain('app.ever.co');
+			// A Work keeps its grid tile and its host.
+			const cal = tiles(element).find((tile) => tile.dataset.key === 'work:cal');
+			expect(cal?.classList.contains('row')).toBe(false);
+			expect(cal?.querySelector('.tile-line')?.textContent?.trim()).toBe('cal.example.com');
+		});
+
+		it('keeps the chip next to the name and the line under it', async () => {
+			const teams = item({ ...TEAMS, description: 'Work and project management' });
+			const element = await mount({ data: response([EVER_WORKS, teams]) });
+			await open(element);
+			const row = tiles(element).find((tile) => tile.dataset.key === 'platform:ever-teams');
+			expect(row?.querySelector('.tile-title .chip')?.textContent?.trim()).toBe('Beta');
+			expect(row?.querySelector('.tile-line')?.textContent?.trim()).toBe('Work and project management');
+			expect(row?.textContent).not.toContain('example.com');
+		});
+
+		it('shows no host for an Ever app that has no line', async () => {
+			const element = await mount({ data: response([EVER_WORKS, GAUZY]) });
+			await open(element);
+			const row = tiles(element).find((tile) => tile.dataset.key === 'platform:ever-gauzy');
+			expect(row?.querySelector('.tile-line')).toBeNull();
+			expect(row?.textContent).not.toContain('example.com');
+		});
+
+		it('styles the logo tile white in both themes, with a hairline ring', () => {
+			expect(EVER_APP_LAUNCHER_STYLES).toContain('--ever-app-launcher-row-height: 48px');
+			expect(EVER_APP_LAUNCHER_STYLES).toMatch(
+				/\.row \.tile-icon,\s*\.add-app \.tile-icon \{[^}]*background: #ffffff;[^}]*box-shadow: inset 0 0 0 1px/
+			);
+		});
+	});
+
+	describe('+ Add (in-app switcher brief S7)', () => {
+		const ADD_URL = 'https://app-dev.ever.co/apps?add=app';
+
+		it('renders no row without an address', async () => {
+			const element = await mount({ data: FULL_PANEL });
+			await open(element);
+			expect(query<HTMLElement>(element, '.add-app')).toBeNull();
+		});
+
+		it('renders no row for an address FR-32 refuses', async () => {
+			const element = await mount({ data: FULL_PANEL, addAppUrl: 'javascript:alert(1)' });
+			await open(element);
+			expect(query<HTMLElement>(element, '.add-app')).toBeNull();
+		});
+
+		it('is the last row of Ever apps: a same-tab link with its label and accessible name', async () => {
+			const element = await mount({ data: FULL_PANEL, addAppUrl: ADD_URL });
+			await open(element);
+
+			const add = query<HTMLAnchorElement>(element, '.add-app');
+			expect(add).not.toBeNull();
+			expect(add?.getAttribute('href')).toBe(ADD_URL);
+			expect(add?.hasAttribute('target')).toBe(false);
+			expect(add?.hasAttribute('rel')).toBe(false);
+			expect(add?.getAttribute('role')).toBe('menuitem');
+			expect(add?.textContent?.trim()).toBe('Add');
+			// WCAG 2.5.3: the accessible name is the visible word; the long label is the tooltip.
+			expect(add?.hasAttribute('aria-label')).toBe(false);
+			expect(add?.getAttribute('title')).toBe('Add your own apps in Ever Platform');
+
+			// Inside Ever apps, after its last row and before Your apps.
+			expect(add?.closest('.section')?.getAttribute('data-section')).toBe('platforms');
+			const rows = tiles(element).filter((tile) => tile.dataset.section === 'platforms');
+			const lastRow = rows.at(-1) as HTMLElement;
+			expect(lastRow.compareDocumentPosition(add as Node) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+			const works = query<HTMLElement>(element, '.section[data-section="works"]') as HTMLElement;
+			expect((add as Node).compareDocumentPosition(works) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+			add?.click();
+			expect(lastClick).toEqual({ defaultPrevented: false, href: ADD_URL });
+			expect(openSpy).not.toHaveBeenCalled();
+		});
+
+		it('takes its label and name from the host strings (FR-42)', async () => {
+			const element = await mount({
+				data: FULL_PANEL,
+				addAppUrl: ADD_URL,
+				strings: { addApp: 'Ajouter', addAppLabel: 'Ajoutez vos propres apps dans Ever Platform' }
+			});
+			await open(element);
+			const add = query<HTMLElement>(element, '.add-app');
+			expect(add?.textContent?.trim()).toBe('Ajouter');
+			expect(add?.getAttribute('title')).toBe('Ajoutez vos propres apps dans Ever Platform');
+		});
+
+		it('is a Tab stop between the grid and Manage apps, and the arrows skip it', async () => {
+			const element = await mount({ data: FULL_PANEL, addAppUrl: ADD_URL });
+			await open(element);
+			const panel = query<HTMLElement>(element, '.panel') as EventTarget;
+
+			keydown(panel, 'Tab');
+			expect(focused(element)).toBe(query<HTMLElement>(element, '.add-app'));
+
+			keydown(panel, 'Shift', false);
+			keydown(panel, 'Home');
+			keydown(panel, 'End');
+			expect(focused(element)).toBe(tiles(element).at(-1));
+		});
+
+		it('steps back to the last Ever apps row with ArrowUp and on to Your apps with ArrowDown', async () => {
+			// [Cal (pinned), Ever Works, Ever Gauzy, Ever Teams (rows), + Add, Umami, Docs]
+			const element = await mount({ data: FULL_PANEL, addAppUrl: ADD_URL });
+			await open(element);
+			const add = query<HTMLElement>(element, '.add-app') as HTMLElement;
+
+			add.focus();
+			keydown(add, 'ArrowUp');
+			expect(focused(element), 'the last Ever apps row').toBe(tiles(element)[3]);
+
+			add.focus();
+			keydown(add, 'ArrowDown');
+			expect(focused(element), 'the first Your apps tile').toBe(tiles(element)[4]);
+		});
+	});
+
+	describe('same tab, every way a link opens (owner, 2026-11-26)', () => {
+		it('sends a middle click through the cancellable item-activate too (ACC-11-40)', async () => {
+			const element = await mount({ data: FULL_PANEL });
+			await open(element);
+			const activations: string[] = [];
+			element.addEventListener('ever-app-launcher:item-activate', (event) => {
+				activations.push((event as CustomEvent).detail.key);
+				event.preventDefault();
+			});
+			const cal = tiles(element).find((tile) => tile.dataset.key === 'work:cal') as HTMLElement;
+
+			const middle = new MouseEvent('auxclick', { button: 1, bubbles: true, composed: true, cancelable: true });
+			cal.dispatchEvent(middle);
+			expect(activations).toEqual(['work:cal']);
+			expect(middle.defaultPrevented, 'a cancelled activation stops the new tab as well').toBe(true);
+
+			// A right click (button 2) opens a context menu, not the app: no report.
+			cal.dispatchEvent(new MouseEvent('auxclick', { button: 2, bubbles: true, composed: true }));
+			expect(activations).toHaveLength(1);
+		});
+
+		it('closes the panel when Back restores the page from the back-forward cache', async () => {
+			const element = await mount({ data: FULL_PANEL });
+			await open(element);
+			const closed = once(element, 'ever-app-launcher:close');
+			window.dispatchEvent(Object.assign(new Event('pageshow'), { persisted: true }));
+			await closed;
+			expect(query<HTMLElement>(element, '.panel')?.hasAttribute('hidden')).toBe(true);
+		});
+
+		it('keeps a fresh load (not from the cache) as it is', async () => {
+			const element = await mount({ data: FULL_PANEL });
+			await open(element);
+			window.dispatchEvent(Object.assign(new Event('pageshow'), { persisted: false }));
+			await element.updateComplete;
+			expect(query<HTMLElement>(element, '.panel')?.hasAttribute('hidden')).toBe(false);
+		});
+
+		it('aligns row text to the start edge, so right-to-left rows keep text beside the icon', () => {
+			expect(EVER_APP_LAUNCHER_STYLES).toContain('text-align: start;');
+			expect(EVER_APP_LAUNCHER_STYLES).not.toContain('text-align: left;');
 		});
 	});
 
@@ -934,6 +1187,50 @@ describe('<ever-app-launcher>', () => {
 			expect(query<HTMLElement>(element, '.panel-title')?.textContent?.trim()).toBe('App-Starter');
 			// Everything the host did not override keeps the English default.
 			expect(shadow(element).textContent).toContain('Pinned');
+		});
+
+		it('reflects the theme the host sets as a property, so the themed rules apply', async () => {
+			// The `:host([theme=…])` rules read the ATTRIBUTE; hosts set the property
+			// (plan §6.2). Without reflection the panel never left its light palette.
+			const element = await mount({ theme: 'dark' });
+			expect(element.getAttribute('theme')).toBe('dark');
+			element.theme = 'light';
+			await element.updateComplete;
+			expect(element.getAttribute('theme')).toBe('light');
+			expect(EVER_APP_LAUNCHER_STYLES).toContain(":host([theme='dark'])");
+		});
+
+		it('opens the panel on the side the host asks for, from 640 px up only', async () => {
+			const element = await mount();
+			expect(element.getAttribute('panel-position')).toBe('bottom-end');
+			element.panelPosition = 'bottom-start';
+			await element.updateComplete;
+			expect(element.getAttribute('panel-position')).toBe('bottom-start');
+			for (const position of ['bottom-start', 'right-start', 'right-end']) {
+				expect(EVER_APP_LAUNCHER_STYLES).toContain(`:host([panel-position='${position}']) .panel`);
+			}
+			expect(EVER_APP_LAUNCHER_STYLES).toContain('@media (min-width: 640px)');
+			// Logical sides: in a right-to-left page the sidebar and the rail are on the right.
+			expect(EVER_APP_LAUNCHER_STYLES).toContain('inset-inline-start: calc(100% + 8px)');
+			expect(EVER_APP_LAUNCHER_STYLES).not.toMatch(/left: calc\(100% \+ 8px\)/);
+		});
+
+		it('gives each section heading a whole row of the tile grid', () => {
+			// Sections are `display: contents`; without this the heading takes a
+			// tile's cell and pushes the tiles out of line.
+			expect(EVER_APP_LAUNCHER_STYLES).toMatch(/\.section-heading,[^{]*\{\s*grid-column: 1 \/ -1;/);
+		});
+
+		it('lets the host put its own mark in the trigger, keeping the grid as the fallback', async () => {
+			const element = await mount();
+			const slot = query<HTMLSlotElement>(element, '.trigger slot[name="trigger-icon"]');
+			expect(slot).not.toBeNull();
+			// The fallback content is the 2×2 grid.
+			expect(slot?.querySelectorAll('rect').length).toBe(4);
+			const mark = document.createElement('span');
+			mark.slot = 'trigger-icon';
+			element.appendChild(mark);
+			expect(slot?.assignedElements()).toEqual([mark]);
 		});
 
 		it('renders nothing but the control before it is opened', async () => {

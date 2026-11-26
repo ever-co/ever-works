@@ -942,7 +942,7 @@
                 "created": "המשימה נוצרה",
                 "minLength": "התיאור חייב להכיל לפחות 10 תווים.",
                 "error": "לא ניתן היה ליצור את המשימה. נסו שוב.",
-                "chatUnavailable": "הצ׳אט אינו זמין כרגע — השתמשו ב״יצירה ידנית״."
+                "chatUnavailable": "Ever SI אינו זמין כרגע — השתמשו ב״יצירה ידנית״."
             },
             "buildOnApp": {
                 "product": "מוצר",
@@ -3003,7 +3003,13 @@
                 "showingCount": "מציג 200 מתוך {count}",
                 "saving": "שומר…",
                 "saved": "נשמר",
-                "saveFailed": "לא ניתן לשמור. נסה שוב."
+                "saveFailed": "לא ניתן לשמור. נסה שוב.",
+                "placementTitle": "מיקום",
+                "placementDescription": "המקום של הגישה לאפליקציות Ever האחרות. חל על דפדפן זה בלבד.",
+                "placementSidebar": "סרגל צד",
+                "placementHeader": "סרגל עליון",
+                "placementRail": "פס שמאלי",
+                "placementSaveFailed": "הדפדפן הזה לא שמר את הבחירה. נסה שוב."
             },
             "githubApp": {
                 "title": "התקנות GitHub App",
@@ -6948,7 +6954,7 @@
                         "empty": "Select a document on the left to view or edit it. Drag a file anywhere to upload."
                     },
                     "ai": {
-                        "title": "AI assistant",
+                        "title": "סוכן סביבת העבודה",
                         "empty": "Conversation with the workspace agent will appear here. Use @kb:path to ground replies."
                     }
                 },
@@ -9688,7 +9694,7 @@
         },
         "sidebar": {
             "menu": "תפריט",
-            "aiChat": "צ'אט AI",
+            "aiChat": "Ever SI",
             "newWork": "עבודה חדשה",
             "new": "חדש",
             "activityIndicator": "מייצר עבודה",
@@ -9760,11 +9766,13 @@
             }
         },
         "aiChat": {
-            "title": "עוזר AI",
-            "panelTitle": "צ'אט",
+            "title": "Ever SI",
+            "panelTitle": "Ever SI",
             "subtitle": "צור עבודות בשפה טבעית",
-            "welcomeTitle": "ברוך בואך לעוזר AI 👋",
-            "welcomeSubtitle": "העוזר המופעל על ידי AI שלך. שאל אותי כל דבר על יצירת עבודות, יצירת תוכן או ארגון הנתונים שלך.",
+            "welcomeTitle": "Ever SI",
+            "welcomeSubtitle": "אפשר לשאול על יצירת Works, יצירת תוכן או ארגון הנתונים שלך.",
+            "disclosure": "השיחה שלך היא עם עוזר ה-SI של Ever. הוא עלול לטעות. אנחנו שומרים את השיחה הזו עד שתמחק אותה.",
+            "disclosureTemporary": "השיחה שלך היא עם עוזר ה-SI של Ever. הוא עלול לטעות. השיחה הזו נמחקת יחד עם החשבון הזמני הזה.",
             "welcomeMessage": "שלום! אני יכול לעזור לך ליצור עבודות בשפה טבעית. שאל משהו כמו \"צור עבודה לכלי AI\" או תאר מה אתה צריך.",
             "capabilities": {
                 "workCreation": "יצירת עבודות",
@@ -9774,20 +9782,21 @@
                 "contentGeneration": "יצירת תוכן",
                 "contentGenerationDesc": "צור תיאורים, קטגוריות ומטא נתונים",
                 "smartSuggestions": "הצעות חכמות",
-                "smartSuggestionsDesc": "קבל המלצות מופעלות AI לפרויקטים שלך"
+                "smartSuggestionsDesc": "המלצות לפרויקטים שלך"
             },
             "newChat": "צ'אט חדש",
             "history": "היסטוריה",
             "loadingConversation": "טוען שיחה…",
-            "inputPlaceholder": "שאל אותי כל דבר...",
+            "inputPlaceholder": "שאל את Ever SI",
             "sendButton": "שלח",
             "stopGenerating": "עצור יצירה",
             "sendHint": "Enter לשליחה · Shift+Enter לשורה חדשה",
-            "closeChat": "סגור צ'אט",
-            "collapseChat": "צמצם צ'אט",
-            "resizeChat": "גרור לשינוי גודל הצ'אט",
-            "expandChat": "הרחב צ'אט",
-            "providersError": "נכשל בטעינת ספקי AI. הצ'אט עלול לא לעבוד כראוי.",
+            "closeChat": "סגירת Ever SI",
+            "collapseChat": "כיווץ Ever SI",
+            "resizeChat": "גרירה לשינוי הגודל של Ever SI",
+            "expandChat": "הרחבת Ever SI",
+            "openPanel": "פתיחת Ever SI",
+            "providersError": "לא ניתן היה לטעון את ספקי ה-AI. ייתכן ש-Ever SI לא יענה כראוי.",
             "providerNotConfigured": "ספק זה לא מוגדר. הגדר אותו בתוספים.",
             "editMessage": "ערוך הודעה",
             "saveEdit": "שמור ושלח",
@@ -9806,7 +9815,7 @@
             "configureDeployProvider": "הגדר ספק פריסה",
             "deployConfigured": "ספק פריסה מוגדר ({provider})",
             "opened": "נפתח",
-            "historyEmpty": "עדיין אין שיחות. התחל צ'אט כדי לראות את ההיסטוריה כאן.",
+            "historyEmpty": "אין עדיין שיחות. שאל את Ever SI משהו כדי להתחיל שיחה.",
             "historyUntitled": "שיחה ללא כותרת",
             "historyToday": "היום",
             "historyYesterday": "אתמול",
@@ -9865,6 +9874,16 @@
                 "stateFailed": "{step}: failed",
                 "statePending": "{step}: not started",
                 "pollingStopped": "Stopped checking for updates. Open the Task to see where it stands."
+            },
+            "panel": {
+                "assistant": "Ever SI",
+                "close": "סגירת Ever SI"
+            },
+            "secretOnce": {
+                "copy": "העתקה",
+                "copied": "הועתק",
+                "copyNow": "העתיקו עכשיו: הוא מוצג רק כאן, פעם אחת. הוא לא נשמר בשיחה הזו ו-Ever SI לא יכול לראות אותו.",
+                "shownOnce": "סוד הוצג פעם אחת כשזה רץ. הוא לא נשמר בשיחה; צרו חדש בהגדרות אם הוא כבר לא אצלכם."
             }
         },
         "plugins": {
@@ -10919,7 +10938,7 @@
         "appLauncher": {
             "controlLabel": "משגר האפליקציות",
             "controlTooltip": "Ever apps והאפליקציות שלך",
-            "panelTitle": "משגר האפליקציות",
+            "panelTitle": "אפליקציות",
             "sectionPinned": "מוצמדים",
             "sectionPlatforms": "Ever apps",
             "sectionWorks": "האפליקציות שלך",
@@ -10929,7 +10948,7 @@
             "chipDeploying": "מפריס",
             "chipLastDeployFailed": "הפריסה האחרונה נכשלה",
             "viewAll": "הצג הכל ({count})",
-            "footerHelper": "נפתח בכרטיסייה חדשה. ייתכן שתצטרך להתחבר.",
+            "footerHelper": "ייתכן שתצטרך להתחבר.",
             "manageLink": "ניהול אפליקציות",
             "emptyWorks": "אפליקציות שתפרוס יופיעו כאן.",
             "emptyWorksCreateApp": "צור עבודת אפליקציה",
@@ -10941,13 +10960,39 @@
             "controlUnavailable": "App Launcher אינו זמין כעת.",
             "emptyActionFailed": "לא ניתן היה לפתוח את העמוד. נסה שוב.",
             "signInPrompt": "התחבר עם Ever ID כדי לראות את האפליקציות שלך כאן.",
-            "signIn": "התחבר"
+            "signIn": "התחבר",
+            "railLabel": "אפליקציות",
+            "railCurrentApp": "{app}, אתה כאן",
+            "railSoonApp": "{app}, בקרוב",
+            "addApp": "הוספה",
+            "addAppLabel": "הוסף אפליקציות משלך ב-Ever Platform",
+            "linePlatform": "חשבון אחד לכל אפליקציות Ever",
+            "lineWorks": "סוכני AI שמנהלים את העסק שלך",
+            "lineTeams": "ניהול עבודה ופרויקטים",
+            "lineGauzy": "ERP, CRM ומשאבי אנוש באפליקציה אחת",
+            "lineRec": "צילום והקלטת מסך",
+            "lineTraduora": "ניהול תרגומים לצוותים",
+            "lineDemand": "מסחר ושווקים לפי דרישה",
+            "lineTech": "מהנדסים וסוכנים מופעלים להעסקה"
         },
         "signOut": {
             "title": "להתנתק מ-Ever Works?",
             "alsoSignOutEverId": "להתנתק גם מ-Ever ID",
             "cancel": "ביטול",
             "confirm": "התנתקות"
+        },
+        "commandPalette": {
+            "commands": {
+                "openChat": "פתיחת Ever SI",
+                "closeChat": "סגירת Ever SI"
+            },
+            "commandAliases": {
+                "openChat": "ever si, si, צ'אט, עוזר, chat, assistant, ask ai",
+                "closeChat": "ever si, si, הסתרת צ'אט, hide chat, chat, assistant"
+            },
+            "noResults": {
+                "askChat": "לשאול את Ever SI על „{query}”"
+            }
         }
     },
     "layout": {
@@ -11314,8 +11359,10 @@
         },
         "switcher": {
             "heading": "Switch Organization",
-            "createNew": "Create Organization",
-            "loading": "Loading…"
+            "createNew": "יצירת ארגון",
+            "loading": "Loading…",
+            "switchFailed": "לא ניתן היה להחליף ארגון. נסה שוב.",
+            "active": "הארגון הנוכחי"
         },
         "create": {
             "visionToggle": "Add company vision (optional)",

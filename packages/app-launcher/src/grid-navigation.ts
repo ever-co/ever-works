@@ -93,6 +93,87 @@ export function nextGridIndex(input: GridNavigationInput): number | null {
 }
 
 /**
+ * One section of the panel, as the keyboard sees it: how many tiles it holds and
+ * how many sit side by side. **Ever apps** is a list of rows (`columns: 1`);
+ * **Pinned** and **Your apps** are tile grids.
+ */
+export interface NavigationSection {
+	count: number;
+	columns: number;
+}
+
+/** {@link nextSectionedIndex}'s input: the key, the focused tile and the sections in DOM order. */
+export interface SectionedNavigationInput {
+	key: string;
+	/** The focused tile's index in the panel's flat order; normalised like {@link nextGridIndex}'s. */
+	index: number;
+	sections: readonly NavigationSection[];
+}
+
+/**
+ * {@link nextGridIndex} for a panel whose sections each start on a new line and
+ * may lay out differently (a list of rows above a tile grid).
+ *
+ * `ArrowLeft` / `ArrowRight` / `Home` / `End` move through the flat order, as in
+ * one grid. `ArrowDown` / `ArrowUp` move one visual line inside a section and,
+ * from its last / first line, to the nearest tile of the next / previous
+ * non-empty section, keeping the column where that section has one. Past the
+ * last line of the panel `ArrowDown` lands on the last tile, and past the first
+ * `ArrowUp` on the first — the edges {@link nextGridIndex} has.
+ */
+export function nextSectionedIndex(input: SectionedNavigationInput): number | null {
+	const sections = input.sections
+		.map((section) => ({
+			count: Math.max(0, toFiniteInteger(section.count)),
+			columns: Math.max(1, toFiniteInteger(section.columns))
+		}))
+		.filter((section) => section.count > 0);
+	const count = sections.reduce((sum, section) => sum + section.count, 0);
+	if (count <= 0) return null;
+	const { key } = input;
+	if (!isGridNavigationKey(key)) return null;
+
+	const last = count - 1;
+	const current = Math.min(Math.max(toFiniteInteger(input.index), 0), last);
+
+	if (key === 'Home') return 0;
+	if (key === 'End') return last;
+	if (key === 'ArrowLeft') return Math.max(current - 1, 0);
+	if (key === 'ArrowRight') return Math.min(current + 1, last);
+
+	// The section that holds `current`, and where each section starts.
+	const starts: number[] = [];
+	let at = 0;
+	for (const section of sections) {
+		starts.push(at);
+		at += section.count;
+	}
+	let sectionIndex = 0;
+	while (sectionIndex < sections.length - 1 && current >= starts[sectionIndex + 1]) sectionIndex += 1;
+
+	const section = sections[sectionIndex];
+	const start = starts[sectionIndex];
+	const local = current - start;
+	const column = local % section.columns;
+	const line = Math.floor(local / section.columns);
+	const lastLine = Math.floor((section.count - 1) / section.columns);
+
+	if (key === 'ArrowDown') {
+		if (line < lastLine) return start + Math.min(local + section.columns, section.count - 1);
+		const next = sections[sectionIndex + 1];
+		if (next === undefined) return last;
+		return starts[sectionIndex + 1] + Math.min(column, next.columns - 1, next.count - 1);
+	}
+
+	if (line > 0) return start + local - section.columns;
+	const previous = sections[sectionIndex - 1];
+	if (previous === undefined) return 0;
+	const previousStart = starts[sectionIndex - 1];
+	const previousLastLineStart = Math.floor((previous.count - 1) / previous.columns) * previous.columns;
+	return previousStart + Math.min(previousLastLineStart + column, previous.count - 1);
+}
+
+/**
  * The index of the next tile whose name starts with `key`, wrapping past the end
  * of the grid, or `null` when no other tile matches.
  *

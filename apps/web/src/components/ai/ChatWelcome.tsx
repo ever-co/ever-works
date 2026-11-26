@@ -1,8 +1,9 @@
 'use client';
 
 import { useTranslations } from 'next-intl';
-import { Sparkles, FolderSearch, Globe, Lightbulb } from 'lucide-react';
+import { PenLine, FolderSearch, Globe, Lightbulb } from 'lucide-react';
 import { cn } from '@/lib/utils/cn';
+import { useChatRetention } from '@/lib/ai/chat-disclosure';
 
 interface ChatWelcomeProps {
     onSuggestion: (text: string) => void;
@@ -24,7 +25,7 @@ const capabilities: Array<{
 }> = [
     { icon: FolderSearch, title: 'workCreation', description: 'workCreationDesc' },
     { icon: Globe, title: 'webResearch', description: 'webResearchDesc' },
-    { icon: Sparkles, title: 'contentGeneration', description: 'contentGenerationDesc' },
+    { icon: PenLine, title: 'contentGeneration', description: 'contentGenerationDesc' },
     { icon: Lightbulb, title: 'smartSuggestions', description: 'smartSuggestionsDesc' },
 ];
 
@@ -32,15 +33,25 @@ export function ChatWelcome({ onSuggestion }: ChatWelcomeProps) {
     const t = useTranslations('dashboard.aiChat');
     const tc = useTranslations('dashboard.aiChat.capabilities');
     const ts = useTranslations('dashboard.aiChat.suggestions');
+    // The disclosure says what is true for this account: kept until deleted, or
+    // deleted with a temporary account / demo workspace.
+    const retention = useChatRetention();
 
     return (
         <div className="flex flex-col h-full px-5 py-6 overflow-y-auto max-w-150 mx-auto">
             <div className="mb-6">
-                <h2 className="text-lg font-semibold text-text dark:text-white tracking-tight">
+                <h2 className="text-lg font-medium text-text dark:text-white">
                     {t('welcomeTitle')}
                 </h2>
                 <p className="mt-1 text-xs text-text-muted dark:text-text-muted-dark leading-relaxed">
                     {t('welcomeSubtitle')}
+                </p>
+                {/* Shared Ever shell, A7: the disclosure line, on the first screen of every conversation. */}
+                <p
+                    data-testid="ever-si-disclosure"
+                    className="mt-3 text-[11px] text-text-muted dark:text-text-muted-dark leading-relaxed"
+                >
+                    {retention === 'temporary' ? t('disclosureTemporary') : t('disclosure')}
                 </p>
             </div>
 
@@ -60,7 +71,7 @@ export function ChatWelcome({ onSuggestion }: ChatWelcomeProps) {
                                 'hover:bg-surface-tertiary/60 dark:hover:bg-white/8',
                                 'hover:text-text dark:hover:text-white',
                                 'hover:border-primary/20 dark:hover:border-white/15',
-                                'transition-all duration-150 cursor-pointer',
+                                'transition-colors duration-150 cursor-pointer',
                             )}
                         >
                             {text}
@@ -76,7 +87,7 @@ export function ChatWelcome({ onSuggestion }: ChatWelcomeProps) {
                         'bg-primary/5 dark:bg-primary/10',
                         'text-primary dark:text-primary-400',
                         'hover:bg-primary/10 dark:hover:bg-primary/20',
-                        'transition-all duration-150 cursor-pointer',
+                        'transition-colors duration-150 cursor-pointer',
                     )}
                 >
                     {t('feelingLucky')}
@@ -106,7 +117,7 @@ export function ChatWelcome({ onSuggestion }: ChatWelcomeProps) {
                             <p className="text-[11px] font-semibold text-text dark:text-white/90 leading-tight">
                                 {tc(cap.title)}
                             </p>
-                            <p className="mt-0.5 text-[10px] text-text-muted dark:text-text-muted-dark leading-snug">
+                            <p className="mt-0.5 text-[11px] text-text-muted dark:text-text-muted-dark leading-snug">
                                 {tc(cap.description)}
                             </p>
                         </div>

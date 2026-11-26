@@ -1105,7 +1105,7 @@ test('[FR-63 · ACC-11-47] the filter narrows the eligible set before the cap, a
 // ACC-E2E-12 — the panel, the tile href, the opened tab and the request log
 // ---------------------------------------------------------------------------
 
-test('[ACC-E2E-12 · FR-30–FR-32] every tile href equals the item url exactly, and the opened tab has no opener, no referrer and no credential in any request URL', async ({
+test('[ACC-E2E-12 · FR-30–FR-32] every tile href equals the item url exactly, opens in the same tab with no referrer, and no request URL carries a credential', async ({
     browser,
     request,
 }) => {
@@ -1130,8 +1130,9 @@ test('[ACC-E2E-12 · FR-30–FR-32] every tile href equals the item url exactly,
         await page.goto('/en', { waitUntil: 'domcontentloaded' });
         await expect(
             page.getByTestId('app-launcher-control'),
-            'FR-54: the header control is mounted because the installation switch is on — the ' +
-                'web resolves the same switch from GET /api/config',
+            'FR-54: the launcher control is mounted because the installation switch is on — the ' +
+                'web resolves the same switch from GET /api/config (by default it is the Ever mark ' +
+                'at the top of the sidebar, shared Ever shell A3)',
         ).toBeAttached({ timeout: 30_000 });
         await expect(
             page.getByTestId('app-launcher-unavailable'),
@@ -1148,13 +1149,22 @@ test('[ACC-E2E-12 · FR-30–FR-32] every tile href equals the item url exactly,
             timeout: 30_000,
         });
 
-        // The Ever platforms: all seven tiles, with Ever Demand as an inert Soon tile — no link,
-        // so it can never be activated (FR-9).
+        // The Ever platforms: all seven rows, with Ever Demand as an inert Soon row — no link,
+        // so it can never be activated (FR-9). In-app switcher brief S3 (2026-11-26): each is a
+        // row (logo, name, one line) and never shows its host.
         if (USES_FIXTURE_CATALOG) {
+            const platformRows = page.locator(
+                'ever-app-launcher .tile.row[data-section="platforms"]',
+            );
             await expect(
-                page.locator('ever-app-launcher .tile[data-section="platforms"]'),
-                'the seven Ever platforms are tiles in the panel',
+                platformRows,
+                'the seven Ever platforms are rows in the panel',
             ).toHaveCount(LANE_PLATFORM_KEYS.length);
+            for (const text of await platformRows.allTextContents()) {
+                expect(text, 'an Ever app row shows no host name').not.toMatch(
+                    /\b[a-z0-9-]+\.[a-z]{2,}\b/,
+                );
+            }
             const soonTile = page.locator(`ever-app-launcher .tile[data-key="${LANE_SOON_KEY}"]`);
             await expect(soonTile, 'Ever Demand is listed').toBeVisible();
             await expect(soonTile, 'a Soon tile is inert').toHaveAttribute('aria-disabled', 'true');
@@ -1169,16 +1179,20 @@ test('[ACC-E2E-12 · FR-30–FR-32] every tile href equals the item url exactly,
         await expect(tileLink).toContainText(seeded.name);
         await expect(tileLink).toContainText(item.host as string);
 
-        // FR-30–FR-32, on the element the browser actually opens: the exact stored URL, a new
-        // tab, and the two attributes that strip the opener and the referrer.
+        // FR-30–FR-32, on the element the browser actually opens: the exact stored URL, and the
+        // attribute that strips the referrer. Same tab (owner, 2026-11-26): no `target`, no
+        // `rel` — a plain link, so Ctrl/Cmd/middle-click still opens a new tab.
         await expect(
             tileLink,
             'the tile href IS the item’s url — nothing added, nothing lost',
         ).toHaveAttribute('href', item.url as string);
-        await expect(tileLink).toHaveAttribute('target', '_blank');
-        await expect(tileLink).toHaveAttribute('rel', /noopener/);
-        await expect(tileLink).toHaveAttribute('rel', /noreferrer/);
+        await expect(tileLink).not.toHaveAttribute('target');
+        await expect(tileLink).not.toHaveAttribute('rel');
         await expect(tileLink).toHaveAttribute('referrerpolicy', 'no-referrer');
+        await expect(
+            page.locator('ever-app-launcher a[target]'),
+            'no link in the panel opens another tab',
+        ).toHaveCount(0);
 
         // Activate it. The address is a host this lane has no DNS for, so the navigation is
         // intercepted and answered locally — the *request* is what the case is about, and it
@@ -1196,25 +1210,29 @@ test('[ACC-E2E-12 · FR-30–FR-32] every tile href equals the item url exactly,
             },
         );
 
-        const [popup] = await Promise.all([context.waitForEvent('page'), tileLink.click()]);
-        await popup.waitForLoadState('domcontentloaded');
+        // Same tab: the click navigates this page, and no other page or popup ever opens.
+        const opened: unknown[] = [];
+        context.on('page', (extra) => opened.push(extra));
+        page.on('popup', (extra) => opened.push(extra));
+        await Promise.all([page.waitForURL(item.url as string), tileLink.click()]);
+        await page.waitForLoadState('domcontentloaded');
 
         expect(
             navigation.request?.url() ?? null,
-            'the tab was opened at exactly the item’s url (no query, fragment or userinfo)',
+            'this tab went to exactly the item’s url (no query, fragment or userinfo)',
         ).toBe(item.url);
+        expect(opened, 'no new tab or popup was opened').toHaveLength(0);
         expect(
             navigation.request?.headers()['referer'] ?? null,
-            'FR-30: the opened tab sends no referrer',
+            'FR-30: the navigation sends no referrer',
         ).toBeNull();
         expect(
-            await popup.evaluate(() => window.opener === null),
-            'FR-30: the opened tab holds no opener reference',
-        ).toBe(true);
-        expect(
-            await popup.evaluate(() => document.referrer),
+            await page.evaluate(() => document.referrer),
             'FR-30: and the document reports no referrer',
         ).toBe('');
+
+        // Back to the app, where the request-log controls below run.
+        await page.goBack({ waitUntil: 'domcontentloaded' });
 
         // FR-31, over the network log the browser actually produced. The control comes first:
         // a planted credential must be seen AND caught, or this scan is decoration.

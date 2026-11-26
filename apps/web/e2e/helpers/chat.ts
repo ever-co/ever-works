@@ -7,9 +7,10 @@ import { API_BASE, authedHeaders } from './api';
  * UI (apps/web/src/components/ai/ChatInput.tsx + layout-client.tsx):
  *   - The chat side-panel is opened server-side by the `chat-panel-open=1`
  *     cookie (read in the dashboard layout → `initialChatOpen`). We set that
- *     cookie + reload as the deterministic open primitive (the collapsed
- *     expand button is an icon-only <button> with no accessible name).
- *   - Composer: a <textarea> with placeholder "Ask me anything…"; Enter submits.
+ *     cookie + reload as the deterministic open primitive. (The handle on the
+ *     sidebar edge, `data-testid="ever-si-handle"`, is named "Open Ever SI", and
+ *     the sidebar entry `data-testid="sidebar-ever-si"` toggles the panel too.)
+ *   - Composer: a <textarea> with placeholder "Ask Ever SI"; Enter submits.
  *   - Send button: <button aria-label="Send"> (submit). Stop button while
  *     streaming: aria-label "Stop generating".
  *   - Messages render as bubbles; assistant bubbles align left (justify-start),
@@ -33,7 +34,7 @@ import { API_BASE, authedHeaders } from './api';
  * environment they run in — never to skip the round-trip.
  */
 
-export const CHAT_COMPOSER_PLACEHOLDER = 'Ask me anything...';
+export const CHAT_COMPOSER_PLACEHOLDER = 'Ask Ever SI';
 
 export function chatComposer(page: Page): Locator {
     return page.getByPlaceholder(CHAT_COMPOSER_PLACEHOLDER);

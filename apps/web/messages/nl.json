@@ -904,7 +904,7 @@
                 "created": "Missie aangemaakt",
                 "minLength": "De beschrijving moet minstens 10 tekens bevatten.",
                 "error": "Kon de missie niet aanmaken. Probeer het opnieuw.",
-                "chatUnavailable": "Chat is momenteel niet beschikbaar — gebruik \"Handmatig aanmaken\"."
+                "chatUnavailable": "Ever SI is momenteel niet beschikbaar — gebruik \"Handmatig aanmaken\"."
             },
             "buildOnApp": {
                 "product": "Product",
@@ -2929,7 +2929,13 @@
                 "showingCount": "200 van {count} weergegeven",
                 "saving": "Opslaan…",
                 "saved": "Opgeslagen",
-                "saveFailed": "Opslaan mislukt. Probeer het opnieuw."
+                "saveFailed": "Opslaan mislukt. Probeer het opnieuw.",
+                "placementTitle": "Positie",
+                "placementDescription": "Waar de toegang tot de andere Ever-apps staat. Geldt alleen voor deze browser.",
+                "placementSidebar": "Zijbalk",
+                "placementHeader": "Bovenbalk",
+                "placementRail": "Linkerbalk",
+                "placementSaveFailed": "Deze browser heeft de keuze niet bewaard. Probeer het opnieuw."
             },
             "githubApp": {
                 "title": "GitHub App-installaties",
@@ -6874,7 +6880,7 @@
                         "empty": "Select a document on the left to view or edit it. Drag a file anywhere to upload."
                     },
                     "ai": {
-                        "title": "AI assistant",
+                        "title": "Werkruimte-agent",
                         "empty": "Conversation with the workspace agent will appear here. Use @kb:path to ground replies."
                     }
                 },
@@ -9615,7 +9621,7 @@
         },
         "sidebar": {
             "menu": "Menu",
-            "aiChat": "AI-chat",
+            "aiChat": "Ever SI",
             "newWork": "Nieuwe werk",
             "new": "Nieuw",
             "activityIndicator": "Werk genereren",
@@ -9687,11 +9693,13 @@
             }
         },
         "aiChat": {
-            "title": "AI-assistent",
-            "panelTitle": "Chat",
+            "title": "Ever SI",
+            "panelTitle": "Ever SI",
             "subtitle": "Maak werken met natuurlijke taal",
-            "welcomeTitle": "Welkom bij AI-assistent 👋",
-            "welcomeSubtitle": "Je AI-aangedreven assistent. Vraag me alles over het maken van werken, genereren van inhoud of organiseren van je gegevens.",
+            "welcomeTitle": "Ever SI",
+            "welcomeSubtitle": "Vraag naar het maken van Works, het genereren van inhoud of het ordenen van je gegevens.",
+            "disclosure": "Je chat met de SI-assistent van Ever. Die kan fouten maken. We bewaren dit gesprek tot je het verwijdert.",
+            "disclosureTemporary": "Je chat met de SI-assistent van Ever. Die kan fouten maken. Dit gesprek wordt samen met dit tijdelijke account verwijderd.",
             "welcomeMessage": "Hoi! Ik kan je helpen werken te maken met natuurlijke taal. Vraag iets als \"Maak een werk voor AI-tools\" of beschrijf wat je nodig hebt.",
             "capabilities": {
                 "workCreation": "Werk-aanmaak",
@@ -9701,20 +9709,21 @@
                 "contentGeneration": "Inhoudgeneratie",
                 "contentGenerationDesc": "Genereer beschrijvingen, categorieën en metadata",
                 "smartSuggestions": "Slimme suggesties",
-                "smartSuggestionsDesc": "Krijg AI-aangedreven aanbevelingen voor je projecten"
+                "smartSuggestionsDesc": "Aanbevelingen voor je projecten"
             },
             "newChat": "Nieuwe chat",
             "history": "Geschiedenis",
             "loadingConversation": "Gesprek laden…",
-            "inputPlaceholder": "Vraag me alles…",
+            "inputPlaceholder": "Vraag het Ever SI",
             "sendButton": "Verzenden",
             "stopGenerating": "Genereren stoppen",
             "sendHint": "Enter om te verzenden · Shift+Enter voor nieuwe regel",
-            "closeChat": "Chat sluiten",
-            "collapseChat": "Chat inklappen",
-            "resizeChat": "Sleep om chatgrootte aan te passen",
-            "expandChat": "Chat uitklappen",
-            "providersError": "AI-providers laden mislukt. Chat werkt mogelijk niet correct.",
+            "closeChat": "Ever SI sluiten",
+            "collapseChat": "Ever SI inklappen",
+            "resizeChat": "Sleep om Ever SI te vergroten of te verkleinen",
+            "expandChat": "Ever SI verbreden",
+            "openPanel": "Ever SI openen",
+            "providersError": "De AI-providers konden niet worden geladen. Ever SI antwoordt mogelijk niet goed.",
             "providerNotConfigured": "Deze provider is niet geconfigureerd. Stel het in onder Plugins.",
             "editMessage": "Bericht bewerken",
             "saveEdit": "Opslaan en verzenden",
@@ -9733,7 +9742,7 @@
             "configureDeployProvider": "Implementatie-provider configureren",
             "deployConfigured": "Implementatie-provider geconfigureerd ({provider})",
             "opened": "Geopend",
-            "historyEmpty": "Nog geen gesprekken. Start een chat om je geschiedenis hier te zien.",
+            "historyEmpty": "Nog geen gesprekken. Vraag Ever SI iets om er een te beginnen.",
             "historyUntitled": "Naamloos gesprek",
             "historyToday": "Vandaag",
             "historyYesterday": "Gisteren",
@@ -9792,6 +9801,16 @@
                 "stateFailed": "{step}: failed",
                 "statePending": "{step}: not started",
                 "pollingStopped": "Stopped checking for updates. Open the Task to see where it stands."
+            },
+            "panel": {
+                "assistant": "Ever SI",
+                "close": "Ever SI sluiten"
+            },
+            "secretOnce": {
+                "copy": "Kopiëren",
+                "copied": "Gekopieerd",
+                "copyNow": "Kopieer hem nu: hij wordt alleen hier en maar één keer getoond. Hij wordt niet in dit gesprek bewaard en Ever SI kan hem niet zien.",
+                "shownOnce": "Bij het uitvoeren werd eenmaal een geheim getoond. Het wordt niet in het gesprek bewaard; maak een nieuw aan in Instellingen als je het niet meer hebt."
             }
         },
         "plugins": {
@@ -10920,7 +10939,7 @@
         "appLauncher": {
             "controlLabel": "App-launcher",
             "controlTooltip": "Ever apps en je apps",
-            "panelTitle": "App-launcher",
+            "panelTitle": "Apps",
             "sectionPinned": "Vastgezet",
             "sectionPlatforms": "Ever apps",
             "sectionWorks": "Jouw apps",
@@ -10930,7 +10949,7 @@
             "chipDeploying": "Wordt uitgerold",
             "chipLastDeployFailed": "Laatste uitrol mislukt",
             "viewAll": "Alle {count} bekijken",
-            "footerHelper": "Opent in een nieuw tabblad. Mogelijk moet je inloggen.",
+            "footerHelper": "Mogelijk moet je inloggen.",
             "manageLink": "Apps beheren",
             "emptyWorks": "Apps die je uitrolt verschijnen hier.",
             "emptyWorksCreateApp": "Een app-werk maken",
@@ -10942,13 +10961,39 @@
             "controlUnavailable": "App Launcher is momenteel niet beschikbaar.",
             "emptyActionFailed": "Die pagina kon niet worden geopend. Probeer het opnieuw.",
             "signInPrompt": "Log in met Ever ID om je apps hier te zien.",
-            "signIn": "Inloggen"
+            "signIn": "Inloggen",
+            "railLabel": "Apps",
+            "railCurrentApp": "{app}, je bent hier",
+            "railSoonApp": "{app}, binnenkort",
+            "addApp": "Toevoegen",
+            "addAppLabel": "Voeg je eigen apps toe in Ever Platform",
+            "linePlatform": "Eén account voor elke Ever-app",
+            "lineWorks": "AI-agents die je bedrijf runnen",
+            "lineTeams": "Werk- en projectbeheer",
+            "lineGauzy": "ERP, CRM en HR in één app",
+            "lineRec": "Schermafbeeldingen en schermopnames",
+            "lineTraduora": "Vertaalbeheer voor teams",
+            "lineDemand": "Commerce en on-demand marktplaatsen",
+            "lineTech": "Engineers en beheerde agents om in te huren"
         },
         "signOut": {
             "title": "Afmelden bij Ever Works?",
             "alsoSignOutEverId": "Ook afmelden bij Ever ID",
             "cancel": "Annuleren",
             "confirm": "Afmelden"
+        },
+        "commandPalette": {
+            "commands": {
+                "openChat": "Ever SI openen",
+                "closeChat": "Ever SI sluiten"
+            },
+            "commandAliases": {
+                "openChat": "ever si, si, chat, assistent, chat, assistant, ask ai",
+                "closeChat": "ever si, si, chat verbergen, hide chat, chat, assistant"
+            },
+            "noResults": {
+                "askChat": "Vraag Ever SI naar ‘{query}’"
+            }
         }
     },
     "layout": {
@@ -11315,8 +11360,10 @@
         },
         "switcher": {
             "heading": "Switch Organization",
-            "createNew": "Create Organization",
-            "loading": "Loading…"
+            "createNew": "Organisatie maken",
+            "loading": "Loading…",
+            "switchFailed": "Kon niet van organisatie wisselen. Probeer het opnieuw.",
+            "active": "Huidige organisatie"
         },
         "create": {
             "visionToggle": "Add company vision (optional)",

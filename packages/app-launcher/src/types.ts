@@ -145,6 +145,17 @@ export interface AppLauncherListResponse {
 export type LauncherTheme = 'light' | 'dark' | 'auto';
 
 /**
+ * The `panel-position` attribute: which side of the trigger the panel opens on
+ * (`bottom` / `right`) and which edge it lines up with (`start` / `end`).
+ */
+export type LauncherPanelPosition = 'bottom-end' | 'bottom-start' | 'right-start' | 'right-end';
+
+/** `show()`'s options: `focus: false` opens the panel without moving focus (a hover). */
+export interface LauncherShowOptions {
+	focus?: boolean;
+}
+
+/**
  * Which half of the panel failed (`loading`/`error` in plan §6.2): the platform
  * catalog read or the person's apps read. The two render differently — spec
  * §6.2 keeps **Ever apps** on screen when **Your apps** failed.
@@ -191,7 +202,10 @@ export interface LauncherStrings {
 	chipLastDeployFailed: string;
 	/** Overflow line of **Your apps** (FR-4). `{count}` is `meta.worksTotal`. */
 	viewAll: string;
-	/** Footer helper (spec §6.1). */
+	/**
+	 * Footer helper (spec §6.1). Every tile opens in the same tab (owner,
+	 * 2026-11-26), so the line only says what the next app may ask for.
+	 */
 	footerHelper: string;
 	/** Footer link label (FR-2). */
 	manageLink: string;
@@ -213,12 +227,20 @@ export interface LauncherStrings {
 	signIn: string;
 	/** P2's footer link label (spec §6.5). */
 	manageInEverWorks: string;
+	/**
+	 * Visible label of the **+ Add** row, the last row of **Ever apps** (in-app
+	 * switcher brief S7). The row renders only when the host sets `addAppUrl`.
+	 */
+	addApp: string;
+	/** The **+ Add** row's accessible name and tooltip (S7). */
+	addAppLabel: string;
 }
 
 /**
  * `ever-app-launcher:item-activate` — plan §6.2's `{ key, kind, url, position,
- * pinned }`. Cancelable: a host that calls `preventDefault()` gets no tab
- * (ACC-11-40). `url` is the stored address, never a decorated one (FR-31).
+ * pinned }`. Cancelable: a host that calls `preventDefault()` stops the
+ * navigation (ACC-11-40). `url` is the stored address, never a decorated one
+ * (FR-31).
  */
 export interface LauncherItemActivateDetail {
 	/** `platform:<catalogId>` or `work:<uuid>` (contracts). */

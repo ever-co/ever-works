@@ -400,7 +400,7 @@ describe('WorkLifecycleService.deleteWork — managed hosting removes the cluste
 
         expect(warn.mock.calls.map(([message]) => String(message))).toContainEqual(
             expect.stringContaining(
-                'last deployed as ever-works-tenants-owner-1/old-tools-website',
+                'its cached deploy target is ever-works-tenants-owner-1/old-tools-website',
             ),
         );
         expect(run).toHaveBeenCalledTimes(1);
@@ -418,6 +418,67 @@ describe('WorkLifecycleService.deleteWork — managed hosting removes the cluste
         await expect(service.deleteWork('w-managed', {}, user)).resolves.toMatchObject({
             status: 'success',
         });
+    });
+
+    it.each([
+        [
+            'the stale-target warning',
+            { staleTarget: 'ever-works-tenants-owner-1/old-tools-website' },
+            0,
+        ],
+        ['the timeout warning', {}, 20],
+    ])('a logger that throws on %s does not fail the delete', async (_label, extra, waitMs) => {
+        const { service, mocks } = makeService(managedWork());
+        if (waitMs) {
+            (service as unknown as { deploymentTeardownWaitMs: number }).deploymentTeardownWaitMs =
+                waitMs;
+        }
+        const logger = (service as unknown as { logger: { warn: jest.Mock } }).logger;
+        const warn = jest.spyOn(logger, 'warn').mockImplementation(() => {
+            throw new Error('log sink down');
+        });
+        // A teardown that never ends, for the timeout case; an immediate one otherwise.
+        const run = waitMs
+            ? jest.fn(() => new Promise<typeof removedAll>(() => undefined))
+            : jest.fn().mockResolvedValue(removedAll);
+        mocks.deployFacade.prepareWorkDeploymentTeardown.mockResolvedValue({
+            ...readyTeardown(run),
+            ...extra,
+        });
+
+        await expect(service.deleteWork('w-managed', {}, user)).resolves.toMatchObject({
+            status: 'success',
+        });
+        // The warning was attempted, and the teardown still ran.
+        expect(warn).toHaveBeenCalled();
+        expect(run).toHaveBeenCalledTimes(1);
+    });
+
+    it('says so when nothing was left to remove', async () => {
+        const { service, mocks } = makeService(managedWork());
+        const logger = (service as unknown as { logger: { log: jest.Mock } }).logger;
+        const log = jest.spyOn(logger, 'log').mockImplementation(() => undefined);
+        const run = jest.fn().mockResolvedValue({
+            location: 'ever-works-tenants-owner-1',
+            removed: [],
+            absent: [
+                { kind: 'Ingress', name: 'best-tools-website' },
+                { kind: 'Service', name: 'best-tools-website' },
+            ],
+            kept: [],
+            failed: [],
+        });
+        mocks.deployFacade.prepareWorkDeploymentTeardown.mockResolvedValue(readyTeardown(run));
+
+        await service.deleteWork('w-managed', {}, user);
+
+        const lines = log.mock.calls
+            .map(([message]) => String(message))
+            .filter((message) => message.includes('ever-works-tenants-owner-1/best-tools-website'));
+        expect(lines).toEqual([
+            'Work w-managed: nothing was left in ever-works-tenants-owner-1/best-tools-website to remove ' +
+                '(Ingress/best-tools-website, Service/best-tools-website already gone)',
+        ]);
     });
 
     it('a Vercel Work never asks for a cluster teardown', async () => {
@@ -441,6 +502,24 @@ describe('WorkLifecycleService.deleteWork — managed hosting removes the cluste
         expect(result.status).toBe('success');
         expect(mocks.workRepository.delete).toHaveBeenCalledWith('w-managed');
         expect(mocks.everWorksDns.removeWorkSubdomain).toHaveBeenCalledWith('best-tools');
+    });
+
+    it('a skipped preparation whose warning cannot be logged does not block the delete (review n5)', async () => {
+        const { service, mocks } = makeService(managedWork());
+        const logger = (service as unknown as { logger: { warn: jest.Mock } }).logger;
+        jest.spyOn(logger, 'warn').mockImplementation(() => {
+            throw new Error('log sink down');
+        });
+        mocks.deployFacade.prepareWorkDeploymentTeardown.mockResolvedValue({
+            status: 'skipped',
+            reason: 'not_cluster_owner',
+            detail: 'EVER_WORKS_K8S_WORKS_CLUSTER_OWNER is not true in this environment',
+        });
+
+        await expect(service.deleteWork('w-managed', {}, user)).resolves.toMatchObject({
+            status: 'success',
+        });
+        expect(mocks.workRepository.delete).toHaveBeenCalledWith('w-managed');
     });
 
     it('a preparation that throws does not block the delete', async () => {
@@ -519,6 +598,22 @@ describe('WorkLifecycleService.deleteWork — the slug DNS record goes only with
         expect(mocks.workRepository.findByManagedSubdomain).toHaveBeenCalledWith('best-tools');
         expect(mocks.workRepository.findByDeployProvidersForUserOrSlug).not.toHaveBeenCalled();
         expect(mocks.everWorksDns.removeWorkSubdomain).toHaveBeenCalledWith('best-tools');
+    });
+
+    it('a logger that throws on a kept-record warning does not fail the delete (review n5)', async () => {
+        const { service, mocks } = makeService(everWorksWork(null));
+        mocks.workRepository.findByManagedSubdomain.mockResolvedValue({ id: 'w-other' });
+        const logger = (service as unknown as { logger: { warn: jest.Mock } }).logger;
+        const warn = jest.spyOn(logger, 'warn').mockImplementation(() => {
+            throw new Error('log sink down');
+        });
+
+        await expect(service.deleteWork('w-managed', {}, user)).resolves.toMatchObject({
+            status: 'success',
+        });
+        expect(warn).toHaveBeenCalled();
+        // The record is still kept: the claim decided it, not the log line.
+        expect(mocks.everWorksDns.removeWorkSubdomain).not.toHaveBeenCalled();
     });
 
     it('keeps it when ANOTHER Work holds the managed subdomain claim on that slug', async () => {

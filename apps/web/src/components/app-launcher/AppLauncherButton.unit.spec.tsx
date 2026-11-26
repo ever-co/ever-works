@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { APP_LAUNCHER_CLIENT_CACHE_MS, type AppLauncherListResponse } from '@ever-works/contracts';
 import { ROUTES } from '@/lib/constants';
@@ -33,6 +33,17 @@ const fetchMock = vi.hoisted(() => vi.fn());
 const pathname = vi.hoisted(() => ({ value: '/' }));
 /** Flipped by the chunk-load failure case: the element's import rejects. */
 const elementImport = vi.hoisted(() => ({ fail: false }));
+/** The app's own theme toggle (`useTheme`), which the panel follows. */
+const appTheme = vi.hoisted(() => ({ isDark: false }));
+
+vi.mock('@/lib/hooks/use-theme', () => ({
+    useTheme: () => ({
+        theme: appTheme.isDark ? 'dark' : 'light',
+        isDark: appTheme.isDark,
+        mounted: true,
+        toggleTheme: vi.fn(),
+    }),
+}));
 
 vi.mock('next-intl', () => ({
     useTranslations: (namespace: string) => (key: string, values?: Record<string, unknown>) =>
@@ -69,18 +80,25 @@ vi.mock('@ever-works/app-launcher', () => ({
     },
 }));
 
-import { AppLauncherButton, resetAppLauncherCache } from './AppLauncherButton';
+import {
+    AppLauncherButton,
+    HOVER_OPEN_DELAY_MS,
+    resetAppLauncherCache,
+    type AppLauncherButtonProps,
+} from './AppLauncherButton';
 import { AppLauncherProvider, useAppLauncher } from './AppLauncherProvider';
 
 /** What the control sets on the element it creates (plan §6.2 host surface). */
 interface LauncherStub extends HTMLElement {
     data: AppLauncherListResponse | null;
+    addAppUrl: string | null;
     strings: Record<string, string>;
     appWorksAvailable?: boolean;
     loading: boolean;
     error: 'catalog' | 'apps' | null;
     current: string;
     theme: 'light' | 'dark' | 'auto';
+    panelPosition: string;
     show: ReturnType<typeof vi.fn>;
     hide: ReturnType<typeof vi.fn>;
 }
@@ -196,10 +214,10 @@ function visit(path: string): void {
     window.history.pushState({}, '', path);
 }
 
-async function mount(extra?: ReactNode) {
+async function mount(extra?: ReactNode, props?: AppLauncherButtonProps) {
     const utils = render(
         <AppLauncherProvider>
-            <AppLauncherButton />
+            <AppLauncherButton {...props} />
             {extra}
         </AppLauncherProvider>,
     );
@@ -242,6 +260,7 @@ beforeEach(() => {
     captureMock.mockReset();
     fetchMock.mockReset();
     elementImport.fail = false;
+    appTheme.isDark = false;
     captured.paletteOpener = undefined;
     clock = 1_700_000_000_000;
     vi.spyOn(Date, 'now').mockImplementation(() => clock);
@@ -271,7 +290,9 @@ describe('AppLauncherButton (plan §6.4)', () => {
         expect(element.loading).toBe(false);
         expect(element.error).toBeNull();
         expect(element.current).toBe('');
-        expect(element.theme).toBe('auto');
+        // The app's theme, not `auto` (the operating system's): see the A4 case below.
+        expect(element.theme).toBe('light');
+        expect(element.panelPosition).toBe('bottom-end');
         expect(element.strings.controlLabel).toBe('dashboard.appLauncher.controlLabel');
         expect(element.strings.controlTooltip).toBe('dashboard.appLauncher.controlTooltip');
         expect(element.strings.manageLink).toBe('dashboard.appLauncher.manageLink');
@@ -284,6 +305,50 @@ describe('AppLauncherButton (plan §6.4)', () => {
         expect(element.strings.viewAll).toBe('dashboard.appLauncher.viewAll:0');
         // Nothing is fetched until the panel is opened (FR-5 / FR-6).
         expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it('translates each Ever app line and leads + Add to this environment’s Ever Platform (S3, S7)', async () => {
+        fetchMock.mockImplementation(async () => {
+            const payload = appsPayload('personal');
+            return {
+                ok: true,
+                status: 200,
+                json: async () => ({
+                    ...payload,
+                    items: [
+                        {
+                            ...payload.items[1],
+                            key: 'platform:app-ever-co',
+                            name: 'Ever Platform',
+                            description: 'One account for every Ever app',
+                            url: 'https://app-dev.ever.co',
+                            host: 'app-dev.ever.co',
+                        },
+                        ...payload.items,
+                    ],
+                }),
+            };
+        });
+        const { element } = await mount();
+        expect(element.addAppUrl).toBeNull();
+        expect(element.strings.addApp).toBe('dashboard.appLauncher.addApp');
+        expect(element.strings.addAppLabel).toBe('dashboard.appLauncher.addAppLabel');
+
+        await openPanel(element);
+        await waitFor(() => expect(element.data).not.toBeNull());
+        expect(element.addAppUrl).toBe('https://app-dev.ever.co/apps?add=app');
+        const platform = element.data?.items.find((entry) => entry.key === 'platform:app-ever-co');
+        expect(platform?.description).toBe('dashboard.appLauncher.linePlatform');
+        // An entry with no translated line keeps the catalog's own.
+        const docs = element.data?.items.find((entry) => entry.key === 'platform:docs-personal');
+        expect(docs?.description).toBeUndefined();
+    });
+
+    it('draws no + Add when the list has no Ever Platform address (S7, S8)', async () => {
+        const { element } = await mount();
+        await openPanel(element);
+        await waitFor(() => expect(element.data).not.toBeNull());
+        expect(element.addAppUrl).toBeNull();
     });
 
     it('renders a second open within 5 minutes from the cache with no fetch, and refetches past the TTL (ACC-11-03)', async () => {
@@ -598,5 +663,142 @@ describe('AppLauncherButton chunk-load failure', () => {
         expect(control).toHaveAttribute('title', 'dashboard.appLauncher.controlUnavailable');
         expect(view.container.querySelector('ever-app-launcher')).toBeNull();
         expect(fetchMock).not.toHaveBeenCalled();
+    });
+});
+
+describe('AppLauncherButton positions and theme (shared Ever shell, A3/A4)', () => {
+    it("follows the app's theme toggle, not the operating system's", async () => {
+        appTheme.isDark = true;
+        const { element, rerender } = await mount();
+        expect(element.theme).toBe('dark');
+
+        appTheme.isDark = false;
+        rerender(
+            <AppLauncherProvider>
+                <AppLauncherButton />
+            </AppLauncherProvider>,
+        );
+        await waitFor(() => expect(element.theme).toBe('light'));
+    });
+
+    it('draws the Ever mark in the trigger slot in the sidebar, opens below-left, and reports source sidebar', async () => {
+        visit('/org/acme/dashboard');
+        const { element, getByTestId } = await mount(undefined, { variant: 'sidebar' });
+
+        expect(element.panelPosition).toBe('bottom-start');
+        expect(element.style.getPropertyValue('--ever-app-launcher-trigger-size')).toBe('32px');
+        const slot = element.querySelector('[slot="trigger-icon"]');
+        expect(slot).not.toBeNull();
+        await waitFor(() =>
+            expect(slot?.querySelector('[data-testid="ever-mark"]')).not.toBeNull(),
+        );
+        expect(getByTestId('app-launcher-control').getAttribute('data-variant')).toBe('sidebar');
+
+        await openPanel(element);
+        expect(captureMock).toHaveBeenCalledWith(
+            expect.objectContaining({
+                name: 'app_launcher_opened',
+                properties: expect.objectContaining({ source: 'sidebar' }),
+            }),
+        );
+    });
+
+    it('opens the panel to the right when a collapsed sidebar asks for it', async () => {
+        const { element } = await mount(undefined, {
+            variant: 'sidebar',
+            panelPosition: 'right-start',
+        });
+        expect(element.panelPosition).toBe('right-start');
+    });
+
+    it('opens the sidebar mark on a mouse hover after the hover delay, and not on touch', async () => {
+        const { element, getByTestId } = await mount(undefined, { variant: 'sidebar' });
+        const control = getByTestId('app-launcher-control');
+
+        fireEvent.pointerOver(control, { pointerType: 'touch' });
+        await new Promise((resolve) => setTimeout(resolve, HOVER_OPEN_DELAY_MS + 60));
+        expect(element.show).not.toHaveBeenCalled();
+        fireEvent.pointerOut(control, { pointerType: 'touch' });
+
+        fireEvent.pointerOver(control, { pointerType: 'mouse' });
+        expect(element.show).not.toHaveBeenCalled();
+        await waitFor(() => expect(element.show).toHaveBeenCalledTimes(1));
+    });
+
+    it('opens on hover without moving focus, and closes when the pointer leaves', async () => {
+        const { element, getByTestId } = await mount(undefined, { variant: 'sidebar' });
+        const control = getByTestId('app-launcher-control');
+
+        fireEvent.pointerOver(control, { pointerType: 'mouse' });
+        await waitFor(() => expect(element.show).toHaveBeenCalledWith({ focus: false }));
+        await openPanel(element);
+
+        fireEvent.pointerOut(control, { pointerType: 'mouse' });
+        await waitFor(() => expect(element.hide).toHaveBeenCalledTimes(1));
+    });
+
+    it('keeps a hover-opened panel open when the mark is then clicked, and leaving no longer closes it', async () => {
+        const { element, getByTestId } = await mount(undefined, { variant: 'sidebar' });
+        const control = getByTestId('app-launcher-control');
+        // The element's own trigger toggles the panel; a click it receives would shut it.
+        const trigger = document.createElement('button');
+        trigger.className = 'trigger';
+        const triggerToggle = vi.fn();
+        trigger.addEventListener('click', triggerToggle);
+        element.appendChild(trigger);
+
+        fireEvent.pointerOver(control, { pointerType: 'mouse' });
+        await waitFor(() => expect(element.show).toHaveBeenCalledTimes(1));
+        await openPanel(element);
+
+        fireEvent.click(trigger);
+        expect(triggerToggle).not.toHaveBeenCalled();
+
+        fireEvent.pointerOut(control, { pointerType: 'mouse' });
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        expect(element.hide).not.toHaveBeenCalled();
+    });
+
+    it('opens the sidebar drawer first when the palette opens a mark that is off-screen', async () => {
+        const revealSidebar = vi.fn();
+        const utils = render(
+            <AppLauncherProvider revealSidebar={revealSidebar}>
+                <AppLauncherButton variant="sidebar" />
+                <PaletteProbe />
+            </AppLauncherProvider>,
+        );
+        const element = (await waitFor(() => {
+            const found = utils.container.querySelector('ever-app-launcher');
+            if (found === null) throw new Error('not mounted yet');
+            return found;
+        })) as LauncherStub;
+        element.show = vi.fn();
+        element.getBoundingClientRect = () =>
+            ({ left: -300, right: -260, width: 40, top: 0, bottom: 40, height: 40 }) as DOMRect;
+        await waitFor(() => expect(captured.paletteOpener).toBeTypeOf('function'));
+
+        act(() => captured.paletteOpener?.());
+        expect(revealSidebar).toHaveBeenCalledTimes(1);
+        expect(element.show).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not open the header control on hover', async () => {
+        const { element, getByTestId } = await mount();
+        fireEvent.pointerOver(getByTestId('app-launcher-control'), { pointerType: 'mouse' });
+        await new Promise((resolve) => setTimeout(resolve, HOVER_OPEN_DELAY_MS + 60));
+        expect(element.show).not.toHaveBeenCalled();
+    });
+
+    it('keeps the grid at the foot of the rail, opens to the right, and reports source rail', async () => {
+        const { element } = await mount(undefined, { variant: 'rail' });
+        expect(element.panelPosition).toBe('right-end');
+        expect(element.querySelector('[slot="trigger-icon"]')).toBeNull();
+        await openPanel(element);
+        expect(captureMock).toHaveBeenCalledWith(
+            expect.objectContaining({
+                name: 'app_launcher_opened',
+                properties: expect.objectContaining({ source: 'rail' }),
+            }),
+        );
     });
 });

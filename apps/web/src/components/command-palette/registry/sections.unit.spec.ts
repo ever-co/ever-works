@@ -270,7 +270,7 @@ describe('buildPaletteSections', () => {
             'createTask',
             'openHelp',
         ]);
-        expect(sections[0].rows[0].title).toBe('Ask the AI chat panel about “zzzqqq”');
+        expect(sections[0].rows[0].title).toBe('Ask Ever SI about “zzzqqq”');
     });
 
     it('shows no fallback while the query is still loading', () => {

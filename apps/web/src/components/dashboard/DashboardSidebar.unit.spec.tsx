@@ -256,3 +256,57 @@ describe('DashboardSidebar — Help entries in the profile menu (AW-25)', () => 
         open.mockRestore();
     });
 });
+
+describe('DashboardSidebar — Ever SI (shared Ever shell, A7)', () => {
+    it('puts "Ever SI" right after Home, as a button that toggles the panel', () => {
+        const onOpenChat = vi.fn();
+        const { container, rerender } = render(
+            <DashboardSidebar
+                user={user}
+                isOpen
+                onToggle={() => {}}
+                onOpenChat={onOpenChat}
+                chatOpen={false}
+            />,
+        );
+        const items = Array.from(container.querySelectorAll('nav li'));
+        expect(items[0]?.textContent?.trim()).toBe('navigation.dashboard');
+        const everSi = screen.getByTestId('sidebar-ever-si');
+        expect(items[1]?.contains(everSi)).toBe(true);
+        expect(everSi.tagName).toBe('BUTTON');
+        expect(everSi).toHaveTextContent('aiChat');
+        expect(everSi).toHaveAttribute('aria-pressed', 'false');
+
+        fireEvent.click(everSi);
+        expect(onOpenChat).toHaveBeenCalledTimes(1);
+
+        rerender(
+            <DashboardSidebar
+                user={user}
+                isOpen
+                onToggle={() => {}}
+                onOpenChat={onOpenChat}
+                chatOpen
+            />,
+        );
+        expect(screen.getByTestId('sidebar-ever-si')).toHaveAttribute('aria-pressed', 'true');
+    });
+
+    it('has a name when the sidebar is collapsed to icons', () => {
+        render(
+            <DashboardSidebar
+                user={user}
+                isOpen
+                onToggle={() => {}}
+                onOpenChat={vi.fn()}
+                isCollapsed
+            />,
+        );
+        expect(screen.getByRole('button', { name: 'aiChat' })).toBeInTheDocument();
+    });
+
+    it('is absent when the shell has no panel to open', () => {
+        renderSidebar();
+        expect(screen.queryByTestId('sidebar-ever-si')).toBeNull();
+    });
+});

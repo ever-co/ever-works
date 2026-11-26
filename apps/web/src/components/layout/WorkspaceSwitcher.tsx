@@ -15,7 +15,6 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { useOrganizations } from '@/lib/hooks/use-organizations';
 import { useActiveScope } from '@/lib/hooks/use-active-scope';
-import { FaviconEverWorkImage, LogoEverWorkImage } from '../logos';
 import { CreateOrganizationModal } from '../organizations/CreateOrganizationModal';
 import type { WorkConfig } from '@/lib/api';
 import type { OrganizationResponse } from '@ever-works/contracts/api';
@@ -23,9 +22,12 @@ import { browserApiFetch } from '@/lib/api/browser-api';
 import { navigateToWorkspaceDashboard } from '@/lib/workspace-navigation';
 
 interface WorkspaceSwitcherProps {
-    /** Site config passed through to the inline logo / favicon. */
+    /**
+     * Site config. Kept for callers: the trigger no longer draws the favicon or
+     * the wordmark — the Ever mark beside it is the sidebar's one logo (A2).
+     */
     config?: WorkConfig | null;
-    /** Tailwind class for the inline wordmark image. */
+    /** Kept for callers; the wordmark it styled is gone (see `config`). */
     logoClassName?: string;
     /**
      * Collapsed sidebar variant — renders only the icon trigger (no
@@ -94,13 +96,9 @@ function OrgAvatar({ org, size = 'sm' }: { org: OrganizationResponse; size?: 'sm
  * site URL (localhost:3000 in dev) and silently swallowed clicks
  * instead of opening the org switcher.
  */
-export function WorkspaceSwitcher({
-    config,
-    logoClassName,
-    isCollapsed = false,
-}: WorkspaceSwitcherProps) {
+export function WorkspaceSwitcher({ isCollapsed = false }: WorkspaceSwitcherProps) {
     const t = useTranslations('organizations.switcher');
-    const { organizations, isLoading } = useOrganizations();
+    const { organizations, isLoading, error } = useOrganizations();
     const { activeOrganization } = useActiveScope();
     const [isCreateOpen, setIsCreateOpen] = useState(false);
     const [pendingOrganizationSlug, setPendingOrganizationSlug] = useState<string | null>(null);
@@ -134,7 +132,7 @@ export function WorkspaceSwitcher({
             }
             navigateToWorkspaceDashboard({ kind: 'organization', slug: org.slug });
         } catch {
-            toast.error('Could not switch Organization. Please try again.');
+            toast.error(t('switchFailed'));
         } finally {
             setPendingOrganizationSlug(null);
         }
@@ -144,13 +142,53 @@ export function WorkspaceSwitcher({
         setIsCreateOpen(true);
     };
 
-    // Leading icon: the active org's avatar when one exists, otherwise
-    // the spinning Ever Works favicon. Same 24px footprint in both
-    // states so the row height doesn't shift when the user picks an org.
+    // Shared Ever shell, A2: with no Organization yet the trigger IS the way
+    // to make one — it reads "Create organization" and opens the create dialog
+    // directly, instead of a menu holding a single entry. (The Ever mark beside
+    // the switcher is the sidebar's logo, so the trigger no longer draws one.)
+    // Only a read that SUCCEEDED and found none: a failed read keeps the menu,
+    // or a person with Organizations would be shown only "Create organization".
+    if (!hasOrgs && !isLoading && error === null) {
+        return (
+            <>
+                <button
+                    type="button"
+                    onClick={handleCreateOrg}
+                    aria-label={isCollapsed ? t('createNew') : undefined}
+                    data-testid="workspace-switcher-create"
+                    className={cn(
+                        'flex items-center gap-1.5 rounded-md transition-colors cursor-pointer',
+                        'text-sm font-medium text-text dark:text-text-dark',
+                        'hover:bg-surface-tertiary/50 dark:hover:bg-card-primary-dark',
+                        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40',
+                        isCollapsed ? 'justify-center p-1' : 'w-full px-1.5 py-1',
+                    )}
+                >
+                    <span className="inline-flex size-6 shrink-0 items-center justify-center rounded-md border border-dashed border-border-secondary dark:border-border-secondary-dark">
+                        <Plus
+                            className="size-4 text-text-muted dark:text-text-muted-dark"
+                            strokeWidth={1.5}
+                            aria-hidden="true"
+                        />
+                    </span>
+                    {!isCollapsed && (
+                        <span className="min-w-0 flex-1 truncate text-left">{t('createNew')}</span>
+                    )}
+                </button>
+                <CreateOrganizationModal open={isCreateOpen} onOpenChange={setIsCreateOpen} />
+            </>
+        );
+    }
+
+    // Leading icon: the active Organization's tile. While the list loads, a
+    // quiet placeholder of the same 24 px, so the row does not shift.
     const leadingIcon = triggerOrg ? (
         <OrgAvatar org={triggerOrg} size="md" />
     ) : (
-        <FaviconEverWorkImage config={config} className="w-6 h-6 max-h-none shrink-0" />
+        <span
+            aria-hidden="true"
+            className="size-6 shrink-0 rounded-md bg-surface-tertiary dark:bg-surface-tertiary-dark"
+        />
     );
 
     return (
@@ -175,17 +213,15 @@ export function WorkspaceSwitcher({
                         )}
                     >
                         {leadingIcon}
-                        {!isCollapsed &&
-                            (triggerOrg ? (
-                                <span className="flex-1 min-w-0 text-left text-sm font-medium text-text dark:text-text-dark truncate">
-                                    {pickLabel(triggerOrg)}
-                                </span>
-                            ) : (
-                                <LogoEverWorkImage
-                                    config={config}
-                                    className={cn('flex-1 min-w-0', logoClassName)}
-                                />
-                            ))}
+                        {!isCollapsed && (
+                            <span className="flex-1 min-w-0 text-left text-sm font-medium text-text dark:text-text-dark truncate">
+                                {triggerOrg
+                                    ? pickLabel(triggerOrg)
+                                    : error !== null
+                                      ? t('heading')
+                                      : t('loading')}
+                            </span>
+                        )}
                         {!isCollapsed && (
                             <ChevronsUpDown
                                 className="w-4 h-4 shrink-0 text-text-muted dark:text-text-muted-dark"
@@ -216,7 +252,7 @@ export function WorkspaceSwitcher({
                                             <Check
                                                 className="w-4 h-4 shrink-0 text-text-muted dark:text-text-muted-dark"
                                                 strokeWidth={1.5}
-                                                aria-label="Active organization"
+                                                aria-label={t('active')}
                                             />
                                         )}
                                     </div>

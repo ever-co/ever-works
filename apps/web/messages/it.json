@@ -896,7 +896,7 @@
                 "created": "Missione creata",
                 "minLength": "La descrizione deve contenere almeno 10 caratteri.",
                 "error": "Impossibile creare la missione. Riprova.",
-                "chatUnavailable": "La chat non è disponibile — usa «Crea manualmente»."
+                "chatUnavailable": "Ever SI non è disponibile — usa «Crea manualmente»."
             },
             "buildOnApp": {
                 "product": "Prodotto",
@@ -2929,7 +2929,13 @@
                 "showingCount": "Visualizzati 200 di {count}",
                 "saving": "Salvataggio…",
                 "saved": "Salvato",
-                "saveFailed": "Impossibile salvare. Riprova."
+                "saveFailed": "Impossibile salvare. Riprova.",
+                "placementTitle": "Posizione",
+                "placementDescription": "Dove si trova l'accesso alle altre app Ever. Vale solo per questo browser.",
+                "placementSidebar": "Barra laterale",
+                "placementHeader": "Barra superiore",
+                "placementRail": "Barra a sinistra",
+                "placementSaveFailed": "Questo browser non ha salvato la scelta. Riprova."
             },
             "githubApp": {
                 "title": "Installazioni GitHub App",
@@ -6874,7 +6880,7 @@
                         "empty": "Select a document on the left to view or edit it. Drag a file anywhere to upload."
                     },
                     "ai": {
-                        "title": "AI assistant",
+                        "title": "Agente dell'area di lavoro",
                         "empty": "Conversation with the workspace agent will appear here. Use @kb:path to ground replies."
                     }
                 },
@@ -9615,7 +9621,7 @@
         },
         "sidebar": {
             "menu": "Menu",
-            "aiChat": "Chat AI",
+            "aiChat": "Ever SI",
             "newWork": "Nuova Lavori",
             "new": "Nuovo",
             "activityIndicator": "Generazione lavori",
@@ -9687,11 +9693,13 @@
             }
         },
         "aiChat": {
-            "title": "Assistente AI",
-            "panelTitle": "Chat",
+            "title": "Ever SI",
+            "panelTitle": "Ever SI",
             "subtitle": "Crea lavori con linguaggio naturale",
-            "welcomeTitle": "Benvenuto nell'Assistente AI 👋",
-            "welcomeSubtitle": "Il tuo assistente alimentato da AI. Chiedimi qualsiasi cosa sulla creazione di lavori, generazione di contenuti o organizzazione dei tuoi dati.",
+            "welcomeTitle": "Ever SI",
+            "welcomeSubtitle": "Chiedi come creare Works, generare contenuti o organizzare i tuoi dati.",
+            "disclosure": "Stai chattando con l'assistente SI di Ever. Può commettere errori. Conserviamo questa conversazione finché non la elimini.",
+            "disclosureTemporary": "Stai chattando con l'assistente SI di Ever. Può commettere errori. Questa conversazione viene eliminata insieme a questo account temporaneo.",
             "welcomeMessage": "Ciao! Posso aiutarti a creare lavori usando linguaggio naturale. Chiedi qualcosa come \"Crea una lavori per tool AI\" o descrivi ciò di cui hai bisogno.",
             "capabilities": {
                 "workCreation": "Creazione Lavori",
@@ -9701,20 +9709,21 @@
                 "contentGeneration": "Generazione Contenuti",
                 "contentGenerationDesc": "Genera descrizioni, categorie e metadati",
                 "smartSuggestions": "Suggerimenti Intelligenti",
-                "smartSuggestionsDesc": "Ottieni raccomandazioni alimentate da AI per i tuoi progetti"
+                "smartSuggestionsDesc": "Consigli per i tuoi progetti"
             },
             "newChat": "Nuova chat",
             "history": "Cronologia",
             "loadingConversation": "Caricamento conversazione…",
-            "inputPlaceholder": "Chiedimi qualsiasi cosa...",
+            "inputPlaceholder": "Chiedi a Ever SI",
             "sendButton": "Invia",
             "stopGenerating": "Ferma generazione",
             "sendHint": "Invio per inviare · Shift+Invio per nuova riga",
-            "closeChat": "Chiudi chat",
-            "collapseChat": "Comprimi chat",
-            "resizeChat": "Trascina per ridimensionare la chat",
-            "expandChat": "Espandi chat",
-            "providersError": "Caricamento provider AI fallito. La chat potrebbe non funzionare correttamente.",
+            "closeChat": "Chiudi Ever SI",
+            "collapseChat": "Comprimi Ever SI",
+            "resizeChat": "Trascina per ridimensionare Ever SI",
+            "expandChat": "Allarga Ever SI",
+            "openPanel": "Apri Ever SI",
+            "providersError": "Impossibile caricare i provider di IA. Ever SI potrebbe non rispondere correttamente.",
             "providerNotConfigured": "Questo provider non è configurato. Configuralo in Plugin.",
             "editMessage": "Modifica messaggio",
             "saveEdit": "Salva & Invia",
@@ -9733,7 +9742,7 @@
             "configureDeployProvider": "Configura Provider Deploy",
             "deployConfigured": "Provider Deploy configurato ({provider})",
             "opened": "Aperto",
-            "historyEmpty": "Nessuna conversazione ancora. Inizia una chat per vedere la tua cronologia qui.",
+            "historyEmpty": "Ancora nessuna conversazione. Chiedi qualcosa a Ever SI per iniziarne una.",
             "historyUntitled": "Conversazione senza titolo",
             "historyToday": "Oggi",
             "historyYesterday": "Ieri",
@@ -9792,6 +9801,16 @@
                 "stateFailed": "{step}: failed",
                 "statePending": "{step}: not started",
                 "pollingStopped": "Stopped checking for updates. Open the Task to see where it stands."
+            },
+            "panel": {
+                "assistant": "Ever SI",
+                "close": "Chiudi Ever SI"
+            },
+            "secretOnce": {
+                "copy": "Copia",
+                "copied": "Copiato",
+                "copyNow": "Copialo ora: viene mostrato solo qui, una volta. Non è salvato in questa conversazione e Ever SI non può vederlo.",
+                "shownOnce": "Un segreto è stato mostrato una volta durante l'esecuzione. Non è conservato nella conversazione; creane uno nuovo nelle Impostazioni se non lo hai più."
             }
         },
         "plugins": {
@@ -10920,7 +10939,7 @@
         "appLauncher": {
             "controlLabel": "Avvio app",
             "controlTooltip": "Ever apps e le tue app",
-            "panelTitle": "Avvio app",
+            "panelTitle": "App",
             "sectionPinned": "Fissato",
             "sectionPlatforms": "Ever apps",
             "sectionWorks": "Le tue app",
@@ -10930,7 +10949,7 @@
             "chipDeploying": "Distribuzione in corso",
             "chipLastDeployFailed": "Ultima distribuzione non riuscita",
             "viewAll": "Visualizza tutte ({count})",
-            "footerHelper": "Si apre in una nuova scheda. Potrebbe essere necessario accedere.",
+            "footerHelper": "Potrebbe essere necessario accedere.",
             "manageLink": "Gestisci app",
             "emptyWorks": "Le app che distribuisci compaiono qui.",
             "emptyWorksCreateApp": "Crea un lavoro App",
@@ -10942,13 +10961,39 @@
             "controlUnavailable": "App Launcher non è disponibile in questo momento.",
             "emptyActionFailed": "Impossibile aprire la pagina. Riprova.",
             "signInPrompt": "Accedi con Ever ID per vedere le tue app qui.",
-            "signIn": "Accedi"
+            "signIn": "Accedi",
+            "railLabel": "App",
+            "railCurrentApp": "{app}, sei qui",
+            "railSoonApp": "{app}, prossimamente",
+            "addApp": "Aggiungi",
+            "addAppLabel": "Aggiungi le tue app in Ever Platform",
+            "linePlatform": "Un solo account per ogni app Ever",
+            "lineWorks": "Agenti IA che gestiscono la tua attività",
+            "lineTeams": "Gestione del lavoro e dei progetti",
+            "lineGauzy": "ERP, CRM e HR in un’unica app",
+            "lineRec": "Cattura e registrazione dello schermo",
+            "lineTraduora": "Gestione delle traduzioni per i team",
+            "lineDemand": "Commercio e marketplace on demand",
+            "lineTech": "Ingegneri e agenti gestiti su incarico"
         },
         "signOut": {
             "title": "Uscire da Ever Works?",
             "alsoSignOutEverId": "Esci anche da Ever ID",
             "cancel": "Annulla",
             "confirm": "Esci"
+        },
+        "commandPalette": {
+            "commands": {
+                "openChat": "Apri Ever SI",
+                "closeChat": "Chiudi Ever SI"
+            },
+            "commandAliases": {
+                "openChat": "ever si, si, chat, assistente, chat, assistant, ask ai",
+                "closeChat": "ever si, si, nascondi chat, hide chat, chat, assistant"
+            },
+            "noResults": {
+                "askChat": "Chiedi a Ever SI di “{query}”"
+            }
         }
     },
     "layout": {
@@ -11315,8 +11360,10 @@
         },
         "switcher": {
             "heading": "Switch Organization",
-            "createNew": "Create Organization",
-            "loading": "Loading…"
+            "createNew": "Crea organizzazione",
+            "loading": "Loading…",
+            "switchFailed": "Impossibile cambiare organizzazione. Riprova.",
+            "active": "Organizzazione attuale"
         },
         "create": {
             "visionToggle": "Add company vision (optional)",

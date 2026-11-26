@@ -40,6 +40,7 @@ import type {
 	PluginManifest,
 	ValidationError,
 	ValidationResult,
+	WorkDeploymentRef,
 	WorkDeploymentTeardownObject,
 	WorkDeploymentTeardownResult
 } from '@ever-works/plugin';
@@ -52,6 +53,7 @@ import type { K8sPluginErrorCode } from './errors.js';
 import { KubernetesApiService } from './k8s-api.service.js';
 import type { LiveDeployment } from './k8s-api.service.js';
 import { defaultIngressStrategyRegistry, IngressStrategyRegistry } from './ingress/strategy.registry.js';
+import type { IngressStrategy } from './ingress/strategy.js';
 import { defaultRegistryProviderRegistry, RegistryProviderRegistry } from './registries/provider.registry.js';
 import { mapDeploymentToStatus } from './status.mapper.js';
 import {
@@ -1560,7 +1562,7 @@ export class KubernetesPlugin implements IPlugin, IDeploymentPlugin {
 		const body = {
 			apiVersion: 'networking.k8s.io/v1',
 			kind: 'Ingress',
-			metadata: { name, namespace },
+			metadata: websiteIngressMetadata(name, namespace, existing, patched.spec, strategy, settings),
 			spec: patched.spec
 		};
 		await this.api.applyIngress(kubeconfig, body, settings.kubeContext);
@@ -1593,7 +1595,7 @@ export class KubernetesPlugin implements IPlugin, IDeploymentPlugin {
 		const body = {
 			apiVersion: 'networking.k8s.io/v1',
 			kind: 'Ingress',
-			metadata: { name, namespace },
+			metadata: websiteIngressMetadata(name, namespace, existing, patched.spec, strategy, settings),
 			spec: patched.spec
 		};
 		await this.api.applyIngress(kubeconfig, body, settings.kubeContext);
@@ -1735,6 +1737,33 @@ export class KubernetesPlugin implements IPlugin, IDeploymentPlugin {
 		}
 
 		return { location: namespace, removed, absent, kept, failed };
+	}
+
+	/**
+	 * The website deployments {@link deploy} created on the cluster the kubeconfig reaches:
+	 * every namespace's Ingresses whose labels prove this plugin's website deploy created them
+	 * under their name (the same proof {@link removeWorkDeployment} asks for), as
+	 * `{ location: namespace, name }`, sorted. App Work objects never carry those labels.
+	 *
+	 * Read-only: a report of what no Work accounts for is built from it, and nothing is removed
+	 * because of it. A failed list throws a `K8sPluginError` whose message is scrubbed of the
+	 * kubeconfig's credentials.
+	 */
+	async listWorkDeployments(kubeconfig: string, context?: DeploymentLookupContext): Promise<WorkDeploymentRef[]> {
+		const settings = await this.loadEffectiveDeploymentSettings(context);
+		this.assertMemberKubeconfigAccepted(kubeconfig, settings.clusterSource);
+		let ingresses: Awaited<ReturnType<KubernetesApiService['listManagedIngresses']>>;
+		try {
+			ingresses = await this.api.listManagedIngresses(kubeconfig, settings.kubeContext);
+		} catch (err) {
+			const scrubbed = scrubError(err, this.runtimeScrubPatterns({ kubeconfig }));
+			throw new K8sPluginError(scrubbed.code, scrubbed.message, err);
+		}
+		return ingresses
+			.filter((ingress) => ingress.namespace && ingress.name)
+			.filter((ingress) => workObjectOwnershipGap(ingress.labels, ingress.name) === null)
+			.map((ingress) => ({ location: ingress.namespace, name: ingress.name }))
+			.sort((a, b) => `${a.location}/${a.name}`.localeCompare(`${b.location}/${b.name}`));
 	}
 
 	// Optional contract methods for the deploy service ----------------------
@@ -2395,6 +2424,61 @@ const TEARDOWN_REFUSED_NAMESPACES: ReadonlySet<string> = new Set([
 function isTeardownRefusedNamespace(namespace: string): boolean {
 	const normalized = namespace.trim().toLowerCase();
 	return TEARDOWN_REFUSED_NAMESPACES.has(normalized) || normalized.startsWith('kube-');
+}
+
+/** The labels `deploy()` stamps on every website object (`COMMON_LABELS` in the manifest renderer). */
+const DEPLOY_LABEL_KEYS = [
+	'ever-works.io/managed',
+	'ever-works.io/work-id',
+	'app.kubernetes.io/name',
+	'app.kubernetes.io/managed-by'
+] as const;
+
+/**
+ * The metadata for an apply that changes only a website Ingress's hosts (`addDomain`, `removeDomain`).
+ *
+ * Under server-side apply, a field this field manager applied before and now leaves out is removed. The
+ * deploy applies the Ingress with its labels and annotations under the same manager, so an apply of
+ * `spec` alone would strip both: the labels the Work-delete teardown and the orphan report rely on, and
+ * the ingress-controller and TLS-issuer annotations. So, for an Ingress whose labels show the deploy made it
+ * (`ever-works.io/managed=true` and this plugin as `app.kubernetes.io/managed-by`), the deploy's own labels
+ * are carried over from the live object (their `work-id` value is the raw repository name, which is not
+ * known here), and the annotations are worked out for the new host list, as `deploy()` works them out.
+ *
+ * Any other Ingress at that name (one a member made by hand on their own cluster, say) gets only `name` and
+ * `namespace`, as before: forcing the deploy's annotations onto it would overwrite its own values for
+ * the same keys (`ssl-redirect`, `proxy-body-size`).
+ */
+function websiteIngressMetadata(
+	name: string,
+	namespace: string,
+	live: unknown,
+	spec: Record<string, unknown>,
+	strategy: IngressStrategy,
+	settings: { tlsIssuer?: string; ingressClass?: string }
+): Record<string, unknown> {
+	const liveLabels = (live as { metadata?: { labels?: Record<string, string> } } | null)?.metadata?.labels ?? {};
+	const deployMade =
+		liveLabels['ever-works.io/managed'] === 'true' && liveLabels['app.kubernetes.io/managed-by'] === FIELD_MANAGER;
+	if (!deployMade) {
+		return { name, namespace };
+	}
+	const labels: Record<string, string> = {};
+	for (const key of DEPLOY_LABEL_KEYS) {
+		if (typeof liveLabels[key] === 'string') labels[key] = liveLabels[key];
+	}
+	const rules = (spec.rules ?? []) as Array<{ host?: string }>;
+	const annotations = strategy.annotations({
+		hosts: rules.map((rule) => rule.host).filter((host): host is string => Boolean(host)),
+		tlsIssuer: settings.tlsIssuer,
+		className: (spec.ingressClassName as string | undefined) ?? settings.ingressClass
+	});
+	return {
+		name,
+		namespace,
+		...(Object.keys(labels).length > 0 ? { labels } : {}),
+		...(Object.keys(annotations).length > 0 ? { annotations } : {})
+	};
 }
 
 /**

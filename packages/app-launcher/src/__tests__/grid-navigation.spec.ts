@@ -7,6 +7,7 @@ import {
 	isGridNavigationKey,
 	isTypeaheadKey,
 	nextGridIndex,
+	nextSectionedIndex,
 	typeaheadIndex
 } from '../grid-navigation.js';
 
@@ -198,6 +199,65 @@ describe('grid-navigation', () => {
 		it('has nowhere to go on a single tile', () => {
 			expect(typeaheadIndex(['Cal'], 0, 'c')).toBeNull();
 			expect(typeaheadIndex(['Cal'], 0, 'z')).toBeNull();
+		});
+	});
+	describe('nextSectionedIndex (Ever apps rows between two grids)', () => {
+		// Pinned: 2 tiles in a 3-wide grid · Ever apps: 3 rows · Your apps: 5 tiles in a 3-wide grid.
+		// Flat:   0 1 | 2 3 4 | 5 6 7 / 8 9
+		const sections = [
+			{ count: 2, columns: 3 },
+			{ count: 3, columns: 1 },
+			{ count: 5, columns: 3 }
+		];
+		const move = (key: string, index: number) => nextSectionedIndex({ key, index, sections });
+
+		it('moves one row at a time through a list section', () => {
+			expect(move('ArrowDown', 2)).toBe(3);
+			expect(move('ArrowDown', 3)).toBe(4);
+			expect(move('ArrowUp', 4)).toBe(3);
+		});
+
+		it('steps from a grid into the next section, keeping the column where it can', () => {
+			expect(move('ArrowDown', 1)).toBe(2);
+			expect(move('ArrowDown', 4)).toBe(5);
+			expect(move('ArrowUp', 7)).toBe(4);
+			expect(move('ArrowUp', 2)).toBe(0);
+		});
+
+		it('moves by the column count inside a grid, clamping to its last tile', () => {
+			expect(move('ArrowDown', 5)).toBe(8);
+			expect(move('ArrowDown', 7)).toBe(9);
+			expect(move('ArrowUp', 9)).toBe(6);
+		});
+
+		it('stops at the panel edges like nextGridIndex', () => {
+			expect(move('ArrowDown', 9)).toBe(9);
+			expect(move('ArrowDown', 8)).toBe(9);
+			expect(move('ArrowUp', 0)).toBe(0);
+			expect(move('ArrowUp', 1)).toBe(0);
+		});
+
+		it('keeps Left, Right, Home and End on the flat order', () => {
+			expect(move('ArrowRight', 1)).toBe(2);
+			expect(move('ArrowLeft', 2)).toBe(1);
+			expect(move('Home', 6)).toBe(0);
+			expect(move('End', 0)).toBe(9);
+		});
+
+		it('skips empty sections and answers null when there is nothing to move in', () => {
+			expect(
+				nextSectionedIndex({
+					key: 'ArrowDown',
+					index: 0,
+					sections: [
+						{ count: 0, columns: 3 },
+						{ count: 1, columns: 1 },
+						{ count: 2, columns: 3 }
+					]
+				})
+			).toBe(1);
+			expect(nextSectionedIndex({ key: 'ArrowDown', index: 0, sections: [{ count: 0, columns: 3 }] })).toBeNull();
+			expect(move('Enter', 0)).toBeNull();
 		});
 	});
 });

@@ -15,6 +15,8 @@ import {
     saveAppLauncherPreferencesAction,
 } from '@/app/actions/settings/app-launcher';
 import { foldText } from '@/components/command-palette/registry/local-match';
+import { resetAppLauncherCache } from '@/lib/app-launcher/app-launcher-cache';
+import { AppLauncherPlacementTiles } from './AppLauncherPlacementTiles';
 import { useWorkspaceScope } from '@/lib/hooks/use-workspace-scope';
 
 /**
@@ -434,6 +436,9 @@ export function AppLauncherSettings({
                 setItems(result.data.items);
             }
             itemsRef.current = rows;
+            // The panel and the left rail read a five-minute client cache; drop
+            // it so they show this arrangement on their next read, not the old one.
+            resetAppLauncherCache();
             setSaveState('saved');
         } catch {
             restore();
@@ -547,6 +552,8 @@ export function AppLauncherSettings({
     if (loadFailed) {
         return (
             <div data-testid="app-launcher-settings">
+                {/* Shared Ever shell, A3: the position comes first; it is per browser, so it works without the list. */}
+                <AppLauncherPlacementTiles className="mb-6 border-b border-border pb-6 dark:border-border-dark" />
                 <p className="text-sm text-text-muted dark:text-text-muted-dark">{t('intro')}</p>
                 <p
                     role="alert"
@@ -561,6 +568,7 @@ export function AppLauncherSettings({
 
     return (
         <div data-testid="app-launcher-settings" className="space-y-4">
+            <AppLauncherPlacementTiles className="mb-6 border-b border-border pb-6 dark:border-border-dark" />
             <p className="text-sm text-text-muted dark:text-text-muted-dark">{t('intro')}</p>
 
             <div className="flex flex-wrap items-center justify-between gap-3">
