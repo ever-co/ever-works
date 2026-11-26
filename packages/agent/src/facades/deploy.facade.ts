@@ -162,7 +162,7 @@ export type PlatformDeployCluster = 'ever-works' | 'k8s-works' | 'k8s-works-shar
 export interface WorkDeploymentOrphanReport {
     /** Why nothing was listed, when nothing was. */
     readonly skipped?: 'unsupported' | 'no_cluster' | 'works_unreadable';
-    /** With `works_unreadable`: the lookup's reason code. */
+    /** With `works_unreadable`, or a `no_cluster` whose lookup failed: the reason code. */
     readonly detail?: string;
     /** One entry per distinct credential (names that share one are listed together). */
     readonly clusters: ReadonlyArray<{
@@ -187,6 +187,14 @@ export interface WorkDeploymentOrphanReport {
      * one of their object names is not called an orphan, wherever it is.
      */
     readonly unresolvedWorks: number;
+}
+
+/** One distinct platform cluster credential, and the names that share it. Holds a secret: never log it. */
+interface PlatformClusterCredential {
+    readonly names: PlatformDeployCluster[];
+    readonly kubeconfig: string;
+    /** The cluster source a `k8s` deploy names it by (none for the managed `ever-works` one). */
+    readonly clusterSource?: 'k8s-works' | 'k8s-works-shared';
 }
 
 /** What the Works account for, for {@link WorkDeploymentOrphanReport}. */
@@ -1587,7 +1595,14 @@ export class DeployFacadeService implements IDeployFacade {
         }
         const listWorkDeployments = plugin.listWorkDeployments.bind(plugin);
 
-        const clusters = await this.platformDeployClusters();
+        let clusters: PlatformClusterCredential[];
+        try {
+            clusters = await this.platformDeployClusters();
+        } catch (error) {
+            // The managed kubeconfig lookup is meant not to throw; if it does,
+            // there is no credential to list with.
+            return nothing('no_cluster', teardownFailureCode(error));
+        }
         if (clusters.length === 0) {
             return nothing('no_cluster');
         }
@@ -1636,13 +1651,7 @@ export class DeployFacadeService implements IDeployFacade {
      * `ever-works` one may BE the shared cluster's: Path B), with the cluster
      * source a `k8s` deploy names it by.
      */
-    private async platformDeployClusters(): Promise<
-        Array<{
-            names: PlatformDeployCluster[];
-            kubeconfig: string;
-            clusterSource?: 'k8s-works' | 'k8s-works-shared';
-        }>
-    > {
+    private async platformDeployClusters(): Promise<PlatformClusterCredential[]> {
         const sources: Array<{
             name: PlatformDeployCluster;
             kubeconfig: string | null | undefined;
@@ -1660,11 +1669,7 @@ export class DeployFacadeService implements IDeployFacade {
             },
             { name: 'ever-works', kubeconfig: await this.resolveEverWorksManagedKubeconfig() },
         ];
-        const clusters: Array<{
-            names: PlatformDeployCluster[];
-            kubeconfig: string;
-            clusterSource?: 'k8s-works' | 'k8s-works-shared';
-        }> = [];
+        const clusters: PlatformClusterCredential[] = [];
         for (const source of sources) {
             const kubeconfig = source.kubeconfig?.trim();
             if (!kubeconfig) continue;

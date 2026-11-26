@@ -125,6 +125,18 @@ describe('WorkDeploymentOrphanReportCronService', () => {
             'Orphaned website deployment report skipped: the Works could not be loaded (ECONNREFUSED)',
         ]);
 
+        const lookupFailed = makeService({
+            skipped: 'no_cluster',
+            detail: 'EACCES',
+            clusters: [],
+            orphans: [],
+            unresolvedWorks: 0,
+        });
+        await lookupFailed.service.runReport();
+        expect(lookupFailed.lines.warn).toEqual([
+            'Orphaned website deployment report skipped: no_cluster (EACCES)',
+        ]);
+
         const noCluster = makeService({
             skipped: 'no_cluster',
             clusters: [],

@@ -62,6 +62,13 @@ export class WorkDeploymentOrphanReportCronService {
             );
             return;
         }
+        if (report.skipped && report.detail) {
+            // A lookup failed (for `no_cluster`, the platform credential lookup itself).
+            this.logger.warn(
+                `Orphaned website deployment report skipped: ${report.skipped} (${report.detail})`,
+            );
+            return;
+        }
         if (report.skipped) {
             this.logger.debug(`Orphaned website deployment report skipped: ${report.skipped}`);
             return;

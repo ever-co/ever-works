@@ -100,7 +100,14 @@ function createService(args: {
         undefined,
         everWorksDeployProvider as any,
     );
-    return { service, listWorkDeployments, removeWorkDeployment, workRepository, settingsService };
+    return {
+        service,
+        listWorkDeployments,
+        removeWorkDeployment,
+        workRepository,
+        settingsService,
+        everWorksDeployProvider,
+    };
 }
 
 describe('DeployFacadeService.reportOrphanedWorkDeployments', () => {
@@ -308,6 +315,27 @@ describe('DeployFacadeService.reportOrphanedWorkDeployments', () => {
 
         await expect(service.reportOrphanedWorkDeployments()).resolves.toMatchObject({
             skipped: 'no_cluster',
+        });
+        expect(listWorkDeployments).not.toHaveBeenCalled();
+    });
+
+    it('never throws when looking up the platform credentials fails, and keeps only the reason code', async () => {
+        process.env.EVER_WORKS_K8S_WORKS_KUBECONFIG = INTERNAL_KUBECONFIG;
+        const { service, everWorksDeployProvider, listWorkDeployments } = createService({});
+        everWorksDeployProvider.isEnabled.mockImplementation(() => {
+            throw Object.assign(new Error('bad env at /etc/kubeconfig token=abc123'), {
+                code: 'EACCES',
+            });
+        });
+
+        const report = await service.reportOrphanedWorkDeployments();
+
+        expect(report).toEqual({
+            skipped: 'no_cluster',
+            detail: 'EACCES',
+            clusters: [],
+            orphans: [],
+            unresolvedWorks: 0,
         });
         expect(listWorkDeployments).not.toHaveBeenCalled();
     });
