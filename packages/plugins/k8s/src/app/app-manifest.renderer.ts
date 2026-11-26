@@ -1008,7 +1008,7 @@ function container(
 ): Record<string, unknown> {
 	const containerSpec: Record<string, unknown> = {
 		name: componentObjectName(component.name),
-		image: String(input?.image?.reference ?? ''),
+		image: componentImage(input, component),
 		// §4.3: a digest-pinned reference makes `Always` pointless.
 		imagePullPolicy: 'IfNotPresent'
 	};
@@ -1235,6 +1235,17 @@ function securityInput(input: AppRenderInput, component: AppComponentInput) {
 export function componentRunAsUser(component: AppComponentInput): number | undefined {
 	const value = (component as { runAsUser?: unknown })?.runAsUser;
 	return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+/**
+ * The image a component's container (and a command Job on that component) runs: its own
+ * `image` — APW-03 `schema.md` §10 `components[].image`, which the render input carries only for a
+ * published-image App — else the App's `image.reference`. A component without one renders exactly
+ * as before.
+ */
+export function componentImage(input: AppRenderInput, component: AppComponentInput | null | undefined): string {
+	const own = normaliseText((component as { image?: unknown } | null | undefined)?.image);
+	return own ?? String(input?.image?.reference ?? '');
 }
 
 function securityComponent(component: AppComponentInput): AppSecurityComponent {

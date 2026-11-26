@@ -329,6 +329,23 @@ describe('T6 — ACC-06-07: pod identity and service links', () => {
 		expect(podSpecOf(deploymentIn(plan, 'admin')).securityContext.runAsUser).toBe(10001);
 		expect(podSpecOf(deploymentIn(plan, 'web')).securityContext.runAsUser).toBeUndefined();
 	});
+
+	it('runs a component’s own image when it names one, and the App’s image otherwise (schema §10 components[].image)', () => {
+		const input = fixture(TWO_WEB);
+		const own = `registry.example.com/example-org/admin@sha256:${'c'.repeat(64)}`;
+		const withOwn = {
+			...input,
+			components: input.components.map((component) =>
+				component.name === 'admin' ? { ...component, image: own } : component
+			)
+		} as AppRenderInput;
+
+		const plan = planAppRender(withOwn);
+		expect(containerOf(deploymentIn(plan, 'admin')).image).toBe(own);
+		expect(containerOf(deploymentIn(plan, 'web')).image).toBe(input.image.reference);
+		// Without one, the render is the same as before the field existed.
+		expect(containerOf(deploymentIn(planAppRender(input), 'admin')).image).toBe(input.image.reference);
+	});
 });
 
 // --- T6: "the pod template's ever-works.io/env-checksum changes when one env value changes and

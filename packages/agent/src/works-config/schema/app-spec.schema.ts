@@ -717,6 +717,14 @@ export const appSpecVolumeSchema = z.strictObject({
  * whose `USER` is a **name** cannot satisfy `runAsNonRoot`, and without this
  * field the App would be undeployable on both targets. It is passed through
  * verbatim, never derived, and omitting it renders no field at all.
+ *
+ * `image` (2026-11-26) lets a published-image App run a **different** image per
+ * component — a product that ships its API and its web interface as two images.
+ * It is honoured with `build.strategy: image` only (a Build produces one image,
+ * so `dockerfile` and `auto` components keep running it), `build.image` stays
+ * required and is the image of every component that names none, and a
+ * tag-only reference is R19's warning exactly as for `build.image`. Omitting
+ * it renders the same pod as before.
  */
 export const appSpecComponentSchema = z.strictObject({
     name: name.describe('A DNS-label name, unique among components (§10:194, R4). Required.'),
@@ -738,6 +746,12 @@ export const appSpecComponentSchema = z.strictObject({
     target: dockerTarget
         .optional()
         .describe('Dockerfile stage override (§10:198); default: `build.target`.'),
+    image: imageRef
+        .optional()
+        .describe(
+            'The prebuilt image this component runs, only with `strategy: image` (§10:198a); ' +
+                'default: `build.image`. A tag-only reference warns (R19).',
+        ),
     port: z
         .number()
         .int()

@@ -81,6 +81,8 @@ interface DeployCall {
     deploymentId: string;
     credential: string;
     phases: string[];
+    /** The components the plugin was handed (their images, once §5.8 resolved them). */
+    components?: unknown;
 }
 
 /** The plugin §5.6 step 4 calls — and the only thing that can end a run. */
@@ -101,7 +103,7 @@ class FakePlugin {
     phases: string[] = [];
 
     async deployApp(
-        input: { deploymentId: string },
+        input: { deploymentId: string; components?: unknown },
         credential: string,
         hooks: {
             onPhase: (phase: string, detail?: Record<string, unknown>) => Promise<void>;
@@ -112,7 +114,12 @@ class FakePlugin {
             }) => Promise<{ checks: unknown[]; passed: boolean }>;
         },
     ): Promise<Record<string, unknown>> {
-        this.calls.push({ deploymentId: input.deploymentId, credential, phases: [...this.phases] });
+        this.calls.push({
+            deploymentId: input.deploymentId,
+            credential,
+            phases: [...this.phases],
+            components: input.components,
+        });
         if (this.throwWith) throw this.throwWith;
 
         for (const phase of this.phases) {
@@ -990,6 +997,76 @@ describe('AppDeployOrchestrator.run — the image strategy (APW-06 T25, ACC-06-5
             digest: 'sha256:deadbeef',
             resolvedFromTag: true,
         });
+    });
+
+    it('resolves each distinct component image once too, and renders the digests (schema §10 components[].image)', async () => {
+        const h = harness({ strategy: 'image' });
+        h.builderAnswer.input = {
+            ...h.builderAnswer.input,
+            image: { reference: 'ghcr.io/acme/api:1.2.3' },
+            components: [
+                { name: 'api', role: 'web', port: 3000 },
+                { name: 'web', role: 'web', port: 4200, image: 'ghcr.io/acme/web:1.2.3' },
+                { name: 'worker', role: 'worker', image: 'ghcr.io/acme/web:1.2.3' },
+            ],
+        };
+        const digests: Record<string, string> = {
+            'ghcr.io/acme/api:1.2.3': 'ghcr.io/acme/api@sha256:aaaa',
+            'ghcr.io/acme/web:1.2.3': 'ghcr.io/acme/web@sha256:bbbb',
+        };
+        h.images.resolve = async (input) => {
+            h.images.calls.push(input);
+            return {
+                status: 'resolved',
+                reference: digests[input.reference],
+                digest: digests[input.reference].split('@')[1],
+                resolvedFromTag: true,
+            };
+        };
+
+        const result = await h.orchestrator.run(REQUEST);
+
+        expect(result.state).toBe('READY');
+        expect(h.images.calls.map((call) => call.reference)).toEqual([
+            'ghcr.io/acme/api:1.2.3',
+            'ghcr.io/acme/web:1.2.3',
+        ]);
+        expect(h.plugin.calls[0].components).toEqual([
+            { name: 'api', role: 'web', port: 3000 },
+            { name: 'web', role: 'web', port: 4200, image: 'ghcr.io/acme/web@sha256:bbbb' },
+            { name: 'worker', role: 'worker', image: 'ghcr.io/acme/web@sha256:bbbb' },
+        ]);
+        // One `image_not_pinned` for the App's tag, one for the component tag.
+        expect(result.warnings.map((warning) => warning.code)).toEqual([
+            APP_DEPLOY_WARNING_IMAGE_NOT_PINNED,
+            APP_DEPLOY_WARNING_IMAGE_NOT_PINNED,
+        ]);
+    });
+
+    it('ends ERROR with the refusal of a component image, before the plugin is called', async () => {
+        const h = harness({ strategy: 'image' });
+        h.builderAnswer.input = {
+            ...h.builderAnswer.input,
+            components: [{ name: 'web', role: 'web', port: 4200, image: 'ghcr.io/acme/web:gone' }],
+        };
+        h.images.resolve = async (input) => {
+            h.images.calls.push(input);
+            return input.reference === 'ghcr.io/acme/web:gone'
+                ? { status: 'refused', code: 'image_not_found', message: 'the registry answered 404' }
+                : {
+                      status: 'resolved',
+                      reference: 'ghcr.io/acme/app@sha256:abc',
+                      digest: 'sha256:abc',
+                      resolvedFromTag: true,
+                  };
+        };
+
+        const result = await h.orchestrator.run(REQUEST);
+
+        expect(result.state).toBe('ERROR');
+        expect(result.code).toBe('image_not_found');
+        expect(result.reason).toBe('Component web: the registry answered 404');
+        expect(h.plugin.calls).toEqual([]);
     });
 
     it('never resolves an image for a Build-backed strategy', async () => {

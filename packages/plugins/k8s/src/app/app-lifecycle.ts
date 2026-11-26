@@ -745,7 +745,16 @@ export class AppLifecycle {
 		}
 
 		const deployments = await liveComponentDeployments(this.api, credential, ref, context);
-		const live = deployments[0] ?? null;
+		const requestedImage = normalise(job?.image);
+		// A published-image App may run a different image per component (APW-03 schema §10
+		// `components[].image`): the run takes the component that runs the requested image, and
+		// the first one otherwise — every component runs the same image when none names its own.
+		const live =
+			(requestedImage
+				? deployments.find((deployment) => String(liveContainers(deployment)[0]?.image ?? '') === requestedImage)
+				: undefined) ??
+			deployments[0] ??
+			null;
 		if (!live) {
 			throw lifecycleError(
 				APP_LIFECYCLE_CODES.no_live_version,
@@ -755,7 +764,6 @@ export class AppLifecycle {
 		}
 
 		const liveImage = String(liveContainers(live)[0]?.image ?? '');
-		const requestedImage = normalise(job?.image);
 		if (requestedImage && requestedImage !== liveImage) {
 			throw lifecycleError(
 				APP_LIFECYCLE_CODES.job_image_moved,
