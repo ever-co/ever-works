@@ -4786,6 +4786,13 @@
                 "themeSystem": "النظام",
                 "languageTitle": "اللغة",
                 "languageDescription": "اللغة التي يستخدمها Ever Works في هذا المتصفح."
+            },
+            "groups": {
+                "account": "الحساب",
+                "organization": "المؤسسة",
+                "product": "Ever Works",
+                "integrations": "التكاملات",
+                "plugins": "الإضافات"
             }
         },
         "stats": {
@@ -11369,8 +11376,11 @@
             }
         },
         "switcher": {
-            "heading": "Switch Organization",
+            "heading": "تبديل المؤسسة",
+            "label": "المؤسسات",
+            "noOther": "لا توجد مؤسسة أخرى",
             "createNew": "إنشاء مؤسسة",
+            "addNew": "إضافة مؤسسة",
             "loading": "Loading…",
             "switchFailed": "تعذّر تبديل المؤسسة. حاول مرة أخرى.",
             "active": "المؤسسة الحالية"

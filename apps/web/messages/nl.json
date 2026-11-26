@@ -4712,6 +4712,13 @@
                 "themeSystem": "Systeem",
                 "languageTitle": "Taal",
                 "languageDescription": "De taal die Ever Works in deze browser gebruikt."
+            },
+            "groups": {
+                "account": "Account",
+                "organization": "Organisatie",
+                "product": "Ever Works",
+                "integrations": "Integraties",
+                "plugins": "Plug-ins"
             }
         },
         "stats": {
@@ -11370,8 +11377,11 @@
             }
         },
         "switcher": {
-            "heading": "Switch Organization",
+            "heading": "Van organisatie wisselen",
+            "label": "Organisaties",
+            "noOther": "Geen andere organisatie",
             "createNew": "Organisatie maken",
+            "addNew": "Organisatie toevoegen",
             "loading": "Loading…",
             "switchFailed": "Kon niet van organisatie wisselen. Probeer het opnieuw.",
             "active": "Huidige organisatie"

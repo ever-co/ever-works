@@ -4786,6 +4786,13 @@
                 "themeSystem": "מערכת",
                 "languageTitle": "שפה",
                 "languageDescription": "השפה ש-Ever Works משתמש בה בדפדפן הזה."
+            },
+            "groups": {
+                "account": "חשבון",
+                "organization": "ארגון",
+                "product": "Ever Works",
+                "integrations": "שילובים",
+                "plugins": "תוספים"
             }
         },
         "stats": {
@@ -11369,8 +11376,11 @@
             }
         },
         "switcher": {
-            "heading": "Switch Organization",
+            "heading": "החלפת ארגון",
+            "label": "ארגונים",
+            "noOther": "אין ארגון אחר",
             "createNew": "יצירת ארגון",
+            "addNew": "הוספת ארגון",
             "loading": "Loading…",
             "switchFailed": "לא ניתן היה להחליף ארגון. נסה שוב.",
             "active": "הארגון הנוכחי"

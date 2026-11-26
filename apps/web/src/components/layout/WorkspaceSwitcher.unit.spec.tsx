@@ -48,7 +48,7 @@ vi.mock('../organizations/CreateOrganizationModal', () => ({
         open ? <div data-testid="create-organization-modal" /> : null,
 }));
 
-import { WorkspaceSwitcher } from './WorkspaceSwitcher';
+import { plateHue, WorkspaceSwitcher } from './WorkspaceSwitcher';
 import {
     __resetOrganizationsStoreForTests,
     __seedOrganizationsStoreForTests,
@@ -132,7 +132,7 @@ describe('WorkspaceSwitcher — EW-660 Phase 8', () => {
         const trigger = screen.getAllByRole('button')[0];
         expect(trigger).toHaveTextContent('organizations.switcher.heading');
         fireEvent.click(trigger);
-        expect(screen.getByText('organizations.switcher.createNew')).toBeInTheDocument();
+        expect(screen.getByText('organizations.switcher.addNew')).toBeInTheDocument();
     });
 
     /**
@@ -196,13 +196,39 @@ describe('WorkspaceSwitcher — EW-660 Phase 8', () => {
         expect(screen.getAllByText('Globex LLC').length).toBeGreaterThanOrEqual(1);
         expect(screen.getAllByText('Initech').length).toBeGreaterThanOrEqual(1);
 
-        expect(screen.getByText('organizations.switcher.createNew')).toBeInTheDocument();
+        expect(screen.getByText('organizations.switcher.addNew')).toBeInTheDocument();
     });
 
     /**
      * Falls back to the org's slug when `displayName` is null — slug is
      * NOT NULL on the DB row, so this is the right fallback shape.
      */
+    it('shows the name, the address line, a name-derived tile, and "No other organization" with one (A2)', () => {
+        __seedOrganizationsStoreForTests({
+            data: [makeOrg({ id: 'o-1', slug: 'acme-robotics', displayName: 'Acme Robotics' })],
+            isLoading: false,
+            error: null,
+        });
+
+        render(<WorkspaceSwitcher />);
+
+        expect(screen.getByText('Acme Robotics')).toBeInTheDocument();
+        expect(screen.getByTestId('workspace-switcher-address')).toHaveTextContent('acme-robotics');
+        const tile = screen.getAllByTestId('org-avatar')[0];
+        expect(tile.style.backgroundColor).not.toBe('');
+        fireEvent.click(screen.getAllByRole('button')[0]);
+        expect(screen.getByText('organizations.switcher.label')).toBeInTheDocument();
+        expect(screen.getByTestId('workspace-switcher-no-other')).toHaveTextContent(
+            'organizations.switcher.noOther',
+        );
+        expect(screen.getByText('organizations.switcher.addNew')).toBeInTheDocument();
+    });
+
+    it('derives the same tile colour from the same name', () => {
+        expect(plateHue('Acme Robotics')).toBe(plateHue('Acme Robotics'));
+        expect(plateHue('Acme Robotics')).not.toBe(plateHue('Northwind Labs'));
+    });
+
     it('uses the org slug as the trigger label when displayName is null', () => {
         const org = makeOrg({ displayName: null, slug: 'fallback-org' });
         __seedOrganizationsStoreForTests({
@@ -258,7 +284,7 @@ describe('WorkspaceSwitcher — EW-660 Phase 8', () => {
         fireEvent.click(trigger);
         // After opening, the org list row + create row both show.
         expect(screen.getAllByText('Acme Inc').length).toBeGreaterThanOrEqual(1);
-        expect(screen.getByText('organizations.switcher.createNew')).toBeInTheDocument();
+        expect(screen.getByText('organizations.switcher.addNew')).toBeInTheDocument();
     });
 
     it('persists from the current tab scope before navigating to the canonical dashboard', async () => {

@@ -4712,6 +4712,13 @@
                 "themeSystem": "Sistem",
                 "languageTitle": "Bahasa",
                 "languageDescription": "Bahasa yang digunakan Ever Works di browser ini."
+            },
+            "groups": {
+                "account": "Akun",
+                "organization": "Organisasi",
+                "product": "Ever Works",
+                "integrations": "Integrasi",
+                "plugins": "Plugin"
             }
         },
         "stats": {
@@ -11370,8 +11377,11 @@
             }
         },
         "switcher": {
-            "heading": "Switch Organization",
+            "heading": "Ganti organisasi",
+            "label": "Organisasi",
+            "noOther": "Tidak ada organisasi lain",
             "createNew": "Buat organisasi",
+            "addNew": "Tambah organisasi",
             "loading": "Loading…",
             "switchFailed": "Tidak dapat beralih organisasi. Coba lagi.",
             "active": "Organisasi saat ini"
