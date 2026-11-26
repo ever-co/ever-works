@@ -287,6 +287,38 @@ describe('CloudflareDnsProvider (EW-617 G5)', () => {
         expect(calls.map((c) => c.init.method)).toEqual(['GET']);
     });
 
+    it.each(['mcp.ever.works', 'api-dev.ever.works', 'lb.ever.works'])(
+        'host-keyed ensureRecord/removeRecord refuse the reserved host %s without calling Cloudflare',
+        async (host) => {
+            const { provider, calls } = buildProvider();
+            await expect(
+                provider.ensureRecord({ host, type: 'CNAME', target: 'k8s.lb.example' }),
+            ).rejects.toThrow(/reserved/);
+            await expect(provider.removeRecord({ host })).rejects.toThrow(/reserved/);
+            expect(calls).toHaveLength(0);
+        },
+    );
+
+    it('still manages a deeper name whose first label happens to be reserved', async () => {
+        const { provider, calls } = buildProvider({ listResult: [] });
+
+        await provider.ensureRecord({
+            host: 'mcp.tenant.ever.works',
+            type: 'CNAME',
+            target: 'k8s.lb.example',
+        });
+
+        expect(calls.some((c) => (c.init.method ?? '').toUpperCase() === 'POST')).toBe(true);
+    });
+
+    it('bounds every Cloudflare call with a timeout signal', async () => {
+        const { provider, calls } = buildProvider({ listResult: [] });
+
+        await provider.recordExists('free.ever.works');
+
+        expect(calls[0].init.signal).toBeInstanceOf(AbortSignal);
+    });
+
     describe('recordExists', () => {
         it('sees a host that has only an AAAA record (Workers custom domain / route)', async () => {
             const { provider, calls } = buildProvider({

@@ -449,6 +449,46 @@ describe('ManagedSubdomainService', () => {
             });
         });
 
+        it.each([
+            [
+                'a provider refusal (409)',
+                () => new DnsRecordConflictError('n.ever.works', 'CNAME', 'x.example.net'),
+                ConflictException,
+            ],
+            [
+                'a Cloudflare error (500)',
+                () => new Error('cf api down'),
+                InternalServerErrorException,
+            ],
+        ])(
+            'keeps the old record when the new write fails after persist: %s',
+            async (_label, makeError, expected) => {
+                const workBefore = buildWork({ managedSubdomain: 'old-name' });
+                workRepository.findById.mockResolvedValue(workBefore);
+                provider.ensureRecord.mockRejectedValue(makeError());
+
+                await expect(service.update('work-1', 'new-name')).rejects.toBeInstanceOf(expected);
+
+                expect(provider.removeRecord).not.toHaveBeenCalled();
+                expect(zone.has('old-name.ever.works')).toBe(true);
+                expect(workRepository.update).toHaveBeenLastCalledWith(workBefore.id, {
+                    managedSubdomain: 'old-name',
+                });
+            },
+        );
+
+        it('keeps the old record when the claim loses a unique-index race (409)', async () => {
+            workRepository.findById.mockResolvedValue(buildWork({ managedSubdomain: 'old-name' }));
+            workRepository.update.mockRejectedValue({ code: '23505' });
+
+            await expect(service.update('work-1', 'race-loser')).rejects.toBeInstanceOf(
+                ConflictException,
+            );
+            expect(provider.ensureRecord).not.toHaveBeenCalled();
+            expect(provider.removeRecord).not.toHaveBeenCalled();
+            expect(zone.has('old-name.ever.works')).toBe(true);
+        });
+
         it('never deletes the old record when the old label is a reserved platform name', async () => {
             // A claim persisted before reserved names were enforced on this path.
             zone.add('mcp.ever.works');

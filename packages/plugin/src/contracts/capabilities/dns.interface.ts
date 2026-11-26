@@ -88,7 +88,11 @@ export interface IDnsOperations {
 	 */
 	ensureRecord(input: DnsEnsureRecordInput): Promise<DnsRecordSnapshot>;
 
-	/** Remove a record. Idempotent — missing record is a no-op. */
+	/**
+	 * Remove a record. Idempotent — missing record is a no-op. A provider
+	 * for a zone it shares with other hosts may refuse to delete a record it
+	 * does not manage and throw instead (`DnsRecordConflictError`).
+	 */
 	removeRecord(input: DnsRemoveRecordInput): Promise<void>;
 
 	/**

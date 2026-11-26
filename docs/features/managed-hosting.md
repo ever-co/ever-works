@@ -60,7 +60,7 @@ For Works on the `k8s` provider the platform can allocate the same kind of addre
 
 The allocator persists the claim only; the deploy path creates the DNS record — and it refuses to allocate at all when the DNS provider or the load-balancer target is missing, so you never end up with a claimed name that resolves to nothing.
 
-Deleting a Work on the `ever-works` provider tears its CNAME down, which frees the name for reuse.
+Deleting a Work on the `ever-works` provider tears its CNAME down, which frees the name for reuse. The record is removed only when it still points at the load-balancer target and the slug is not a reserved platform label; a record pointing anywhere else is left in place for an operator.
 
 ### The Site URL / Subdomain card
 
