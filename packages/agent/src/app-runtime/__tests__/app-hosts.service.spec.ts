@@ -553,6 +553,109 @@ describe('AppHostsService.onPrimaryChanged (APW-06 T26, plan §8.2:1106-1118)', 
         expect(result.publishedPrimary).toBe('old.example.com');
     });
 
+    it('a `restart` without a Build redeploys the live spec commit and its recorded digests (§5.8)', async () => {
+        const h = harness();
+        h.states.row = {
+            target: 'your-cluster',
+            currentDeploymentId: 'deployment-8',
+            targetSettings: { tls: 'cert-manager', primaryDomain: 'old.example.com' },
+        };
+        h.deployments.rows.set('deployment-8', {
+            id: 'deployment-8',
+            buildId: null,
+            commitSha: 'sha-live',
+            appRender: {
+                specCommitSha: 'sha-live',
+                image: {
+                    reference: `ghcr.io/example/app@sha256:${'a'.repeat(64)}`,
+                    digest: `sha256:${'a'.repeat(64)}`,
+                },
+                componentImages: { web: `ghcr.io/example/web@sha256:${'b'.repeat(64)}` },
+            },
+        });
+
+        const result = await h.service.onPrimaryChanged('work-1', { userId: 'user-1' });
+
+        expect(result.status).toBe('restart-requested');
+        // Never a re-resolved tag: the request names what is live, and the row pins to it.
+        expect(h.deploys.calls).toEqual([
+            {
+                workId: 'work-1',
+                userId: 'user-1',
+                trigger: 'domain-change',
+                buildId: null,
+                specCommitSha: 'sha-live',
+                recordedImages: {
+                    imageReference: `ghcr.io/example/app@sha256:${'a'.repeat(64)}`,
+                    imageDigest: `sha256:${'a'.repeat(64)}`,
+                    componentImages: { web: `ghcr.io/example/web@sha256:${'b'.repeat(64)}` },
+                },
+            },
+        ]);
+    });
+
+    it('a `restart` carries no tag and no malformed digest from the live Deployment', async () => {
+        const h = harness();
+        h.states.row = {
+            target: 'your-cluster',
+            currentDeploymentId: 'deployment-9',
+            targetSettings: { tls: 'cert-manager', primaryDomain: 'old.example.com' },
+        };
+        h.deployments.rows.set('deployment-9', {
+            id: 'deployment-9',
+            buildId: null,
+            commitSha: 'sha-row',
+            appRender: {
+                image: { reference: 'ghcr.io/example/app:latest', digest: 'latest' },
+                componentImages: {
+                    web: 'ghcr.io/example/web:latest',
+                    worker: `ghcr.io/example/worker@sha256:${'c'.repeat(64)}`,
+                },
+            },
+        });
+
+        await h.service.onPrimaryChanged('work-1');
+
+        // The row's own commit stands in for a missing `appRender.specCommitSha`; only the one
+        // digest-pinned component survives, and an App image without a digest is not pinned.
+        expect(h.deploys.calls[0]).toMatchObject({
+            buildId: null,
+            specCommitSha: 'sha-row',
+            recordedImages: {
+                imageReference: null,
+                imageDigest: null,
+                componentImages: { worker: `ghcr.io/example/worker@sha256:${'c'.repeat(64)}` },
+            },
+        });
+    });
+
+    it('a `restart` of a Build carries no spec commit and no images beside it', async () => {
+        const h = harness();
+        h.states.row = {
+            target: 'your-cluster',
+            currentDeploymentId: 'deployment-10',
+            targetSettings: { tls: 'cert-manager', primaryDomain: 'old.example.com' },
+        };
+        h.deployments.rows.set('deployment-10', {
+            id: 'deployment-10',
+            buildId: 'build-4',
+            commitSha: 'sha-build',
+            appRender: { specCommitSha: 'sha-build' },
+        });
+
+        await h.service.onPrimaryChanged('work-1');
+
+        expect(h.deploys.calls).toEqual([
+            {
+                workId: 'work-1',
+                userId: null,
+                trigger: 'domain-change',
+                buildId: 'build-4',
+                specCommitSha: null,
+            },
+        ]);
+    });
+
     it('reads the policy from the App spec when the caller names none (§8.2:1110)', async () => {
         const h = harness();
         h.specs.snapshot = {

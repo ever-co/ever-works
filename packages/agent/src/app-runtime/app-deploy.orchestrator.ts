@@ -493,7 +493,8 @@ export interface AppDeployOrchestratorDeploymentStore extends AppDeployDeploymen
     /**
      * §5.8 / FR-34 — the images this Deployment's own row already records: a rollback's request
      * writes the digests of the Deployment it returns to (`appRender.image.digest`,
-     * `appRender.componentImages`), and the run must deploy those rather than re-resolve a tag.
+     * `appRender.componentImages`), a domain change's restart those of the live one (§8.2), and
+     * the run must deploy those rather than re-resolve a tag.
      * Unbound, or a row it cannot read, means "nothing recorded" — the spec's references are
      * resolved as for any Deployment.
      */
@@ -1188,7 +1189,8 @@ export class AppDeployOrchestrator {
             !text(state?.clusterFingerprint) || state?.clusterFingerprint !== fingerprint;
         // Security (sec/app-works-gates) — from the Deployment's own row, never the job payload.
         const requester = await this.readRequester(context);
-        // §5.8 / FR-34 — a rollback redeploys the recorded digests and never re-resolves a tag.
+        // §5.8 / FR-34 — a rollback (and a domain change's restart) redeploys the recorded digests
+        // and never re-resolves a tag.
         const recorded = await this.readRecordedImages(context);
 
         try {
