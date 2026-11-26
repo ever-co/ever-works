@@ -1,0 +1,28 @@
+{
+	"$comment": "sanitiseSlug(input) === expected. Read by packages/plugins/k8s/src/__tests__/sanitise-slug.spec.ts (the plugin) and packages/agent/src/facades/__tests__/deploy.facade.work-teardown.spec.ts (the agent copy, normaliseObjectName). Change it together with sanitiseSlug.",
+	"cases": [
+		["awesome-time-tracking-website", "awesome-time-tracking-website"],
+		["My Project!!", "my-project"],
+		["--a--b--", "a-b"],
+		["___", ""],
+		["-", ""],
+		["", ""],
+		["a - b", "a-b"],
+		["  spaced  ", "spaced"],
+		["Ünïcode Name", "n-code-name"],
+		["Awesome_Memes-Website", "awesome-memes-website"],
+		["repo.with.dots", "repo-with-dots"],
+		[
+			"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+		],
+		[
+			"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-b",
+			"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-"
+		],
+		[
+			"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!!b",
+			"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-"
+		]
+	]
+}
