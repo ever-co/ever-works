@@ -936,6 +936,41 @@ describe('<ever-app-launcher>', () => {
 			expect(shadow(element).textContent).toContain('Pinned');
 		});
 
+		it('reflects the theme the host sets as a property, so the themed rules apply', async () => {
+			// The `:host([theme=…])` rules read the ATTRIBUTE; hosts set the property
+			// (plan §6.2). Without reflection the panel never left its light palette.
+			const element = await mount({ theme: 'dark' });
+			expect(element.getAttribute('theme')).toBe('dark');
+			element.theme = 'light';
+			await element.updateComplete;
+			expect(element.getAttribute('theme')).toBe('light');
+			expect(EVER_APP_LAUNCHER_STYLES).toContain(":host([theme='dark'])");
+		});
+
+		it('opens the panel on the side the host asks for, from 640 px up only', async () => {
+			const element = await mount();
+			expect(element.getAttribute('panel-position')).toBe('bottom-end');
+			element.panelPosition = 'bottom-start';
+			await element.updateComplete;
+			expect(element.getAttribute('panel-position')).toBe('bottom-start');
+			for (const position of ['bottom-start', 'right-start', 'right-end']) {
+				expect(EVER_APP_LAUNCHER_STYLES).toContain(`:host([panel-position='${position}']) .panel`);
+			}
+			expect(EVER_APP_LAUNCHER_STYLES).toContain('@media (min-width: 640px)');
+		});
+
+		it('lets the host put its own mark in the trigger, keeping the grid as the fallback', async () => {
+			const element = await mount();
+			const slot = query<HTMLSlotElement>(element, '.trigger slot[name="trigger-icon"]');
+			expect(slot).not.toBeNull();
+			// The fallback content is the 2×2 grid.
+			expect(slot?.querySelectorAll('rect').length).toBe(4);
+			const mark = document.createElement('span');
+			mark.slot = 'trigger-icon';
+			element.appendChild(mark);
+			expect(slot?.assignedElements()).toEqual([mark]);
+		});
+
 		it('renders nothing but the control before it is opened', async () => {
 			const element = await mount({ data: FULL_PANEL });
 			expect(query<HTMLElement>(element, '.trigger')).not.toBeNull();

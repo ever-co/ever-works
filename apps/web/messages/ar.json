@@ -3003,7 +3003,13 @@
                 "showingCount": "عرض 200 من {count}",
                 "saving": "جارٍ الحفظ…",
                 "saved": "تم الحفظ",
-                "saveFailed": "تعذّر الحفظ. حاول مرة أخرى."
+                "saveFailed": "تعذّر الحفظ. حاول مرة أخرى.",
+                "placementTitle": "الموضع",
+                "placementDescription": "مكان الوصول إلى تطبيقات Ever الأخرى. يُطبَّق على هذا المتصفح فقط.",
+                "placementSidebar": "الشريط الجانبي",
+                "placementHeader": "الشريط العلوي",
+                "placementRail": "الشريط الأيسر",
+                "placementSaveFailed": "لم يحفظ هذا المتصفح الاختيار. حاول مرة أخرى."
             },
             "githubApp": {
                 "title": "تثبيتات تطبيق GitHub",
@@ -10919,7 +10925,7 @@
         "appLauncher": {
             "controlLabel": "مشغّل التطبيقات",
             "controlTooltip": "Ever apps وتطبيقاتك",
-            "panelTitle": "مشغّل التطبيقات",
+            "panelTitle": "التطبيقات",
             "sectionPinned": "مثبتة",
             "sectionPlatforms": "Ever apps",
             "sectionWorks": "تطبيقاتك",
@@ -10941,7 +10947,11 @@
             "controlUnavailable": "App Launcher غير متاح الآن.",
             "emptyActionFailed": "تعذر فتح هذه الصفحة. حاول مرة أخرى.",
             "signInPrompt": "سجّل الدخول باستخدام Ever ID لرؤية تطبيقاتك هنا.",
-            "signIn": "تسجيل الدخول"
+            "signIn": "تسجيل الدخول",
+            "railLabel": "التطبيقات",
+            "railCurrentApp": "{app}، أنت هنا",
+            "railSoonApp": "{app}، قريبًا",
+            "railOpensInNewTab": "{app} (يُفتح في علامة تبويب جديدة)"
         },
         "signOut": {
             "title": "هل تريد تسجيل الخروج من Ever Works؟",
@@ -11314,8 +11324,10 @@
         },
         "switcher": {
             "heading": "Switch Organization",
-            "createNew": "Create Organization",
-            "loading": "Loading…"
+            "createNew": "إنشاء مؤسسة",
+            "loading": "Loading…",
+            "switchFailed": "تعذّر تبديل المؤسسة. حاول مرة أخرى.",
+            "active": "المؤسسة الحالية"
         },
         "create": {
             "visionToggle": "Add company vision (optional)",

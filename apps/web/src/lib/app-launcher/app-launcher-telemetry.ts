@@ -19,8 +19,12 @@ import posthog from 'posthog-js';
  * rather than a review question (ACC-11-32).
  */
 
-/** Where the element was opened from. */
-export type AppLauncherOpenSource = 'header' | 'palette';
+/**
+ * Where the element was opened from: the control in the top bar, the Ever mark
+ * in the sidebar, the control at the foot of the left rail (the three positions
+ * of the shared Ever shell, A3), or the command palette.
+ */
+export type AppLauncherOpenSource = 'header' | 'sidebar' | 'rail' | 'palette';
 
 /**
  * What an opened tile was. `work` and `platform` are the two kinds the list

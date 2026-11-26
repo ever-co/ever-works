@@ -34,12 +34,13 @@ import { css, unsafeCSS } from 'lit';
 export const EVER_APP_LAUNCHER_STYLES = `
 :host {
 	--ever-app-launcher-bg: #ffffff;
-	--ever-app-launcher-fg: #16181d;
-	--ever-app-launcher-muted: #5b6472;
+	--ever-app-launcher-fg: #18181b;
+	--ever-app-launcher-muted: #71717a;
 	--ever-app-launcher-accent: #2563eb;
-	--ever-app-launcher-border: #e3e6eb;
-	--ever-app-launcher-hover: #f1f3f7;
+	--ever-app-launcher-border: #e4e4e7;
+	--ever-app-launcher-hover: #f4f4f5;
 	--ever-app-launcher-radius: 10px;
+	--ever-app-launcher-trigger-size: 36px;
 	--ever-app-launcher-font: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
 	--ever-app-launcher-tile-height: 88px;
 	display: inline-block;
@@ -49,22 +50,22 @@ export const EVER_APP_LAUNCHER_STYLES = `
 }
 
 :host([theme='dark']) {
-	--ever-app-launcher-bg: #16181d;
-	--ever-app-launcher-fg: #f5f7fa;
-	--ever-app-launcher-muted: #9aa4b2;
+	--ever-app-launcher-bg: #18181b;
+	--ever-app-launcher-fg: #fafafa;
+	--ever-app-launcher-muted: #a1a1aa;
 	--ever-app-launcher-accent: #7aa2ff;
-	--ever-app-launcher-border: #2c313a;
-	--ever-app-launcher-hover: #232830;
+	--ever-app-launcher-border: #27272a;
+	--ever-app-launcher-hover: #27272a;
 }
 
 @media (prefers-color-scheme: dark) {
 	:host([theme='auto']) {
-		--ever-app-launcher-bg: #16181d;
-		--ever-app-launcher-fg: #f5f7fa;
-		--ever-app-launcher-muted: #9aa4b2;
+		--ever-app-launcher-bg: #18181b;
+		--ever-app-launcher-fg: #fafafa;
+		--ever-app-launcher-muted: #a1a1aa;
 		--ever-app-launcher-accent: #7aa2ff;
-		--ever-app-launcher-border: #2c313a;
-		--ever-app-launcher-hover: #232830;
+		--ever-app-launcher-border: #27272a;
+		--ever-app-launcher-hover: #27272a;
 	}
 }
 
@@ -72,8 +73,8 @@ export const EVER_APP_LAUNCHER_STYLES = `
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
-	width: 36px;
-	height: 36px;
+	width: var(--ever-app-launcher-trigger-size);
+	height: var(--ever-app-launcher-trigger-size);
 	padding: 0;
 	border: 1px solid transparent;
 	border-radius: var(--ever-app-launcher-radius);
@@ -93,7 +94,8 @@ export const EVER_APP_LAUNCHER_STYLES = `
 }
 
 .trigger-icon,
-.trigger-icon svg {
+.trigger-icon svg,
+.trigger-icon ::slotted(*) {
 	display: block;
 	width: 20px;
 	height: 20px;
@@ -123,11 +125,32 @@ export const EVER_APP_LAUNCHER_STYLES = `
 	display: none;
 }
 
+/* panel-position: only from 640 px up. Below that the panel is a bottom sheet
+   (the media query at the end of this sheet), whatever the host asked for. */
+@media (min-width: 640px) {
+	:host([panel-position='bottom-start']) .panel {
+		right: auto;
+		left: 0;
+	}
+
+	:host([panel-position='right-start']) .panel {
+		top: 0;
+		right: auto;
+		left: calc(100% + 8px);
+	}
+
+	:host([panel-position='right-end']) .panel {
+		top: auto;
+		right: auto;
+		bottom: 0;
+		left: calc(100% + 8px);
+	}
+}
+
 .panel-title {
 	margin: 0;
 	font-size: 13px;
-	font-weight: 700;
-	letter-spacing: 0.02em;
+	font-weight: 600;
 }
 
 .grid {
@@ -142,10 +165,8 @@ export const EVER_APP_LAUNCHER_STYLES = `
 
 .section-heading {
 	margin: 4px 0 0;
-	font-size: 11px;
-	font-weight: 700;
-	letter-spacing: 0.06em;
-	text-transform: uppercase;
+	font-size: 12px;
+	font-weight: 500;
 	color: var(--ever-app-launcher-muted);
 }
 
@@ -197,7 +218,7 @@ export const EVER_APP_LAUNCHER_STYLES = `
 	border-radius: 8px;
 	background: var(--ever-app-launcher-hover);
 	font-size: 13px;
-	font-weight: 700;
+	font-weight: 600;
 }
 
 .tile-icon img {
@@ -236,7 +257,7 @@ export const EVER_APP_LAUNCHER_STYLES = `
 	background: var(--ever-app-launcher-hover);
 	color: var(--ever-app-launcher-muted);
 	font-size: 11px;
-	font-weight: 600;
+	font-weight: 500;
 	white-space: nowrap;
 }
 
@@ -284,7 +305,7 @@ export const EVER_APP_LAUNCHER_STYLES = `
 	color: var(--ever-app-launcher-accent);
 	font: inherit;
 	font-size: 12px;
-	font-weight: 600;
+	font-weight: 500;
 	cursor: pointer;
 }
 

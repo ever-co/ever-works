@@ -3003,7 +3003,13 @@
                 "showingCount": "מציג 200 מתוך {count}",
                 "saving": "שומר…",
                 "saved": "נשמר",
-                "saveFailed": "לא ניתן לשמור. נסה שוב."
+                "saveFailed": "לא ניתן לשמור. נסה שוב.",
+                "placementTitle": "מיקום",
+                "placementDescription": "המקום של הגישה לאפליקציות Ever האחרות. חל על דפדפן זה בלבד.",
+                "placementSidebar": "סרגל צד",
+                "placementHeader": "סרגל עליון",
+                "placementRail": "פס שמאלי",
+                "placementSaveFailed": "הדפדפן הזה לא שמר את הבחירה. נסה שוב."
             },
             "githubApp": {
                 "title": "התקנות GitHub App",
@@ -10919,7 +10925,7 @@
         "appLauncher": {
             "controlLabel": "משגר האפליקציות",
             "controlTooltip": "Ever apps והאפליקציות שלך",
-            "panelTitle": "משגר האפליקציות",
+            "panelTitle": "אפליקציות",
             "sectionPinned": "מוצמדים",
             "sectionPlatforms": "Ever apps",
             "sectionWorks": "האפליקציות שלך",
@@ -10941,7 +10947,11 @@
             "controlUnavailable": "App Launcher אינו זמין כעת.",
             "emptyActionFailed": "לא ניתן היה לפתוח את העמוד. נסה שוב.",
             "signInPrompt": "התחבר עם Ever ID כדי לראות את האפליקציות שלך כאן.",
-            "signIn": "התחבר"
+            "signIn": "התחבר",
+            "railLabel": "אפליקציות",
+            "railCurrentApp": "{app}, אתה כאן",
+            "railSoonApp": "{app}, בקרוב",
+            "railOpensInNewTab": "{app} (נפתח בכרטיסייה חדשה)"
         },
         "signOut": {
             "title": "להתנתק מ-Ever Works?",
@@ -11314,8 +11324,10 @@
         },
         "switcher": {
             "heading": "Switch Organization",
-            "createNew": "Create Organization",
-            "loading": "Loading…"
+            "createNew": "יצירת ארגון",
+            "loading": "Loading…",
+            "switchFailed": "לא ניתן היה להחליף ארגון. נסה שוב.",
+            "active": "הארגון הנוכחי"
         },
         "create": {
             "visionToggle": "Add company vision (optional)",

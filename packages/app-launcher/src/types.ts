@@ -145,6 +145,12 @@ export interface AppLauncherListResponse {
 export type LauncherTheme = 'light' | 'dark' | 'auto';
 
 /**
+ * The `panel-position` attribute: which side of the trigger the panel opens on
+ * (`bottom` / `right`) and which edge it lines up with (`start` / `end`).
+ */
+export type LauncherPanelPosition = 'bottom-end' | 'bottom-start' | 'right-start' | 'right-end';
+
+/**
  * Which half of the panel failed (`loading`/`error` in plan §6.2): the platform
  * catalog read or the person's apps read. The two render differently — spec
  * §6.2 keeps **Ever apps** on screen when **Your apps** failed.

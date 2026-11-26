@@ -2929,7 +2929,13 @@
                 "showingCount": "Показано 200 з {count}",
                 "saving": "Збереження…",
                 "saved": "Збережено",
-                "saveFailed": "Не вдалося зберегти. Спробуйте ще раз."
+                "saveFailed": "Не вдалося зберегти. Спробуйте ще раз.",
+                "placementTitle": "Розташування",
+                "placementDescription": "Де розташований перехід до інших застосунків Ever. Діє лише в цьому браузері.",
+                "placementSidebar": "Бічна панель",
+                "placementHeader": "Верхня панель",
+                "placementRail": "Ліва смуга",
+                "placementSaveFailed": "Цей браузер не зберіг вибір. Спробуйте ще раз."
             },
             "githubApp": {
                 "title": "Інсталяції GitHub App",
@@ -10920,7 +10926,7 @@
         "appLauncher": {
             "controlLabel": "Запуск застосунків",
             "controlTooltip": "Ever apps і ваші застосунки",
-            "panelTitle": "Запуск застосунків",
+            "panelTitle": "Застосунки",
             "sectionPinned": "Закріплені",
             "sectionPlatforms": "Ever apps",
             "sectionWorks": "Ваші застосунки",
@@ -10942,7 +10948,11 @@
             "controlUnavailable": "App Launcher наразі недоступний.",
             "emptyActionFailed": "Не вдалося відкрити цю сторінку. Спробуйте ще раз.",
             "signInPrompt": "Увійдіть з Ever ID, щоб побачити тут свої застосунки.",
-            "signIn": "Увійти"
+            "signIn": "Увійти",
+            "railLabel": "Застосунки",
+            "railCurrentApp": "{app}, ви тут",
+            "railSoonApp": "{app}, незабаром",
+            "railOpensInNewTab": "{app} (відкриється в новій вкладці)"
         },
         "signOut": {
             "title": "Вийти з Ever Works?",
@@ -11315,8 +11325,10 @@
         },
         "switcher": {
             "heading": "Switch Organization",
-            "createNew": "Create Organization",
-            "loading": "Loading…"
+            "createNew": "Створити організацію",
+            "loading": "Loading…",
+            "switchFailed": "Не вдалося змінити організацію. Спробуйте ще раз.",
+            "active": "Поточна організація"
         },
         "create": {
             "visionToggle": "Add company vision (optional)",

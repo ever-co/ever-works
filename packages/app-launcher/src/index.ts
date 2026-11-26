@@ -60,6 +60,7 @@ export type {
 	LauncherErrorSection,
 	LauncherItemActivateDetail,
 	LauncherManageDetail,
+	LauncherPanelPosition,
 	LauncherRetryDetail,
 	LauncherRetrySection,
 	LauncherSignInDetail,

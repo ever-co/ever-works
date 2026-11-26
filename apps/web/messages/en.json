@@ -4859,7 +4859,13 @@
                 "showingCount": "Showing 200 of {count}",
                 "saving": "Saving…",
                 "saved": "Saved",
-                "saveFailed": "Couldn't save. Try again."
+                "saveFailed": "Couldn't save. Try again.",
+                "placementTitle": "Position",
+                "placementDescription": "Where the shortcut to the other Ever apps sits. Applies to this browser only.",
+                "placementSidebar": "Sidebar",
+                "placementHeader": "Top bar",
+                "placementRail": "Left rail",
+                "placementSaveFailed": "This browser didn't keep the choice. Try again."
             },
             "githubApp": {
                 "title": "GitHub App Installations",
@@ -13414,7 +13420,7 @@
         "appLauncher": {
             "controlLabel": "App Launcher",
             "controlTooltip": "Ever apps and your apps",
-            "panelTitle": "App Launcher",
+            "panelTitle": "Apps",
             "sectionPinned": "Pinned",
             "sectionPlatforms": "Ever apps",
             "sectionWorks": "Your apps",
@@ -13436,7 +13442,11 @@
             "controlUnavailable": "App Launcher is unavailable right now.",
             "emptyActionFailed": "Couldn't open that page. Try again.",
             "signInPrompt": "Sign in with Ever ID to see your apps here.",
-            "signIn": "Sign in"
+            "signIn": "Sign in",
+            "railLabel": "Apps",
+            "railCurrentApp": "{app}, you're here",
+            "railSoonApp": "{app}, soon",
+            "railOpensInNewTab": "{app} (opens in a new tab)"
         },
         "signOut": {
             "title": "Sign out of Ever Works?",
@@ -13992,8 +14002,10 @@
         },
         "switcher": {
             "heading": "Switch Organization",
-            "createNew": "Create Organization",
-            "loading": "Loading…"
+            "createNew": "Create organization",
+            "loading": "Loading…",
+            "switchFailed": "Couldn't switch organization. Try again.",
+            "active": "Current organization"
         },
         "create": {
             "visionToggle": "Add company vision (optional)",

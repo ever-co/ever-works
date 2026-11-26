@@ -63,6 +63,7 @@ import {
     DropdownMenuLabel,
 } from '@/components/ui/dropdown-menu';
 import { WorkspaceSwitcher } from '../layout/WorkspaceSwitcher';
+import { SidebarAppLauncher } from '../app-launcher/SidebarAppLauncher';
 import { useWorkDetail } from '../works/detail/WorkDetailContext';
 import { ChatPanelExpandButton } from '@/components/ai/ChatPanel';
 import { SidebarActivityIndicator } from './SidebarActivityIndicator';
@@ -90,6 +91,13 @@ interface DashboardSidebarProps {
     onInteraction?: () => void;
     /** EW-617: the signed-in account is a temporary (anonymous) one; sign-out asks to save it first. */
     temporaryAccount?: boolean;
+    /**
+     * APW-11 — whether the App Launcher exists for this installation and person
+     * (resolved once by the dashboard layout). The Ever mark at the top of the
+     * sidebar opens it when the person keeps it in the sidebar (shared Ever
+     * shell, A2/A3); without it the mark is a plain mark.
+     */
+    appLauncherEnabled?: boolean;
 }
 
 function ConditionalTooltip({
@@ -121,6 +129,7 @@ export function DashboardSidebar({
     onOpenChat,
     onInteraction,
     temporaryAccount = false,
+    appLauncherEnabled = false,
 }: DashboardSidebarProps) {
     const pathname = usePathname();
     const router = useRouter();
@@ -283,8 +292,8 @@ export function DashboardSidebar({
                 {/* Logo + controls */}
                 <div
                     className={cn(
-                        'h-15 flex items-center shrink-0',
-                        isCollapsed ? 'justify-center px-2' : 'px-4',
+                        'flex items-center shrink-0',
+                        isCollapsed ? 'justify-center px-2 py-2' : 'h-15 px-4',
                     )}
                 >
                     <div className="w-full relative">
@@ -299,13 +308,29 @@ export function DashboardSidebar({
                             the same popover with org list + "Create
                             Organization".
                         */}
+                        {/*
+                            Shared Ever shell, A2: the Ever mark, then the
+                            organization switcher. The mark opens the App
+                            Launcher when the person keeps it in the sidebar.
+                            Collapsed, the two stack in the icon column.
+                        */}
                         <div
                             className={cn(
-                                'flex items-center',
-                                isCollapsed ? 'justify-center ml-2' : 'pr-6',
+                                'flex items-center gap-1',
+                                isCollapsed ? 'flex-col justify-center' : 'pr-6',
                             )}
                         >
-                            <WorkspaceSwitcher config={config} isCollapsed={isCollapsed} />
+                            <SidebarAppLauncher
+                                launcherEnabled={appLauncherEnabled}
+                                isCollapsed={isCollapsed}
+                            />
+                            <div
+                                className={cn(
+                                    isCollapsed ? 'flex justify-center' : 'min-w-0 flex-1',
+                                )}
+                            >
+                                <WorkspaceSwitcher config={config} isCollapsed={isCollapsed} />
+                            </div>
                         </div>
                         <div
                             className={cn(

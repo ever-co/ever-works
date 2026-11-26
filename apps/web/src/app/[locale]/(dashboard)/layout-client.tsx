@@ -14,6 +14,8 @@ import { HelpCenterProvider } from '@/components/help/HelpCenterProvider';
 import { captureHelpEvent, helpRouteGroup, type HelpOpenSource } from '@/lib/help/help-telemetry';
 import { CommandPalette } from '@/components/command-palette/CommandPalette';
 import { AppLauncherProvider } from '@/components/app-launcher/AppLauncherProvider';
+import { AppLauncherRail } from '@/components/app-launcher/AppLauncherRail';
+import { useShowsAppLauncherRail } from '@/components/app-launcher/SidebarAppLauncher';
 import {
     CommandPaletteProvider,
     useCommandPalette,
@@ -53,6 +55,9 @@ import type { SaveAccountStripProps } from '@/lib/anonymous/types';
 import { JobRuntimeDegradedBanner } from '@/components/dashboard/JobRuntimeDegradedBanner';
 import { ScrollTopOnNavigate } from '@/components/dashboard/ScrollTopOnNavigate';
 import { FleetHubFlagProvider } from '@/components/fleet/FleetHubFlagProvider';
+
+/** The left rail's width in px (`w-12`), for the chat panel's width sums. */
+const APP_LAUNCHER_RAIL_WIDTH = 48;
 
 interface DashboardLayoutClientProps {
     user: AuthUser;
@@ -179,6 +184,10 @@ export function DashboardLayoutClient({
     // Owns the resizable width and its localStorage round-trip (EW-817).
     const [chatWidth, setChatWidth] = useChatPanelWidth(isChatExpanded);
     const chatRef = useRef<HTMLDivElement | null>(null);
+    // Shared Ever shell, A3: the App Launcher as a rail left of the sidebar,
+    // when the person picked it and the viewport is desktop-wide.
+    const showsAppLauncherRail = useShowsAppLauncherRail(appLauncherEnabled);
+    const railWidth = showsAppLauncherRail ? APP_LAUNCHER_RAIL_WIDTH : 0;
 
     // Server-authoritative onboarding state; mutated optimistically by the
     // wizard's own server-action calls and by close/dismiss handlers below.
@@ -279,7 +288,7 @@ export function DashboardLayoutClient({
         if (typeof window === 'undefined') return undefined;
 
         const ww = window.innerWidth;
-        const sidebarWidth = sidebarCollapsed ? 64 : 240;
+        const sidebarWidth = (sidebarCollapsed ? 64 : 240) + railWidth;
         const controlsWidth = chatOpen ? 48 : 0; // space for the control stack
 
         // available width for main = viewport - sidebar - chat - controls - some gap
@@ -301,7 +310,7 @@ export function DashboardLayoutClient({
 
         // If there's little room left, collapse main to zero for focused chat
         return { width: 0, flex: '0 0 0', transition: 'width 200ms ease' };
-    }, [isChatExpanded, sidebarCollapsed, chatWidth, chatOpen]);
+    }, [isChatExpanded, sidebarCollapsed, chatWidth, chatOpen, railWidth]);
 
     useEffect(() => {
         setMainStyle(computeMainStyle());
@@ -459,7 +468,7 @@ export function DashboardLayoutClient({
 
     const handleExpand = useCallback(() => {
         // expand chat to fill available space (viewport minus sidebar and controls)
-        const sidebarWidth = sidebarCollapsed ? 64 : 240;
+        const sidebarWidth = (sidebarCollapsed ? 64 : 240) + railWidth;
         const controlsWidth = 48; // width reserved for the control stack
         const available = Math.max(320, window.innerWidth - sidebarWidth - controlsWidth - 48);
         prevWidthRef.current = chatWidth;
@@ -467,7 +476,7 @@ export function DashboardLayoutClient({
         // Open chat without resetting expanded state
         setChatOpen(true, false);
         setIsChatExpanded(true);
-    }, [chatWidth, setChatOpen, setChatWidth, sidebarCollapsed]);
+    }, [chatWidth, setChatOpen, setChatWidth, sidebarCollapsed, railWidth]);
 
     const startDrag = useCallback(
         (e: React.PointerEvent<Element>) => {
@@ -569,6 +578,8 @@ export function DashboardLayoutClient({
                                     />
                                 )}
 
+                                {showsAppLauncherRail && <AppLauncherRail />}
+
                                 {/* Navigation sidebar */}
                                 <DashboardSidebar
                                     user={user}
@@ -582,6 +593,7 @@ export function DashboardLayoutClient({
                                     onOpenChat={toggleChat}
                                     onInteraction={ensureResizableMode}
                                     temporaryAccount={saveAccountStrip !== null}
+                                    appLauncherEnabled={appLauncherEnabled}
                                 />
 
                                 {/* AI Chat panel — side panel on desktop, full-screen overlay on mobile */}
