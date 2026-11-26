@@ -699,6 +699,46 @@ describe('WorkRepository', () => {
         });
     });
 
+    describe('findByDeployProvidersForUserOrSlug', () => {
+        it('ORs the owner and the slug, each limited to the providers, with the user relation', async () => {
+            const rows = [{ id: 'w1' } as Work];
+            repository.find.mockResolvedValueOnce(rows);
+
+            await expect(
+                service.findByDeployProvidersForUserOrSlug(['ever-works', 'k8s'], 'u1', 'memes'),
+            ).resolves.toBe(rows);
+
+            expect(repository.find).toHaveBeenCalledWith({
+                where: [
+                    { userId: 'u1', deployProvider: In(['ever-works', 'k8s']) },
+                    { slug: 'memes', deployProvider: In(['ever-works', 'k8s']) },
+                ],
+                relations: ['user'],
+            });
+        });
+
+        it('drops an empty owner, so a slug-only lookup never matches every Work of nobody', async () => {
+            repository.find.mockResolvedValueOnce([]);
+
+            await service.findByDeployProvidersForUserOrSlug(['ever-works'], '', 'memes');
+
+            expect(repository.find).toHaveBeenCalledWith({
+                where: [{ slug: 'memes', deployProvider: In(['ever-works']) }],
+                relations: ['user'],
+            });
+        });
+
+        it('answers [] without a query for no providers, or for neither an owner nor a slug', async () => {
+            await expect(
+                service.findByDeployProvidersForUserOrSlug([], 'u1', 'memes'),
+            ).resolves.toEqual([]);
+            await expect(
+                service.findByDeployProvidersForUserOrSlug(['k8s'], '', ''),
+            ).resolves.toEqual([]);
+            expect(repository.find).not.toHaveBeenCalled();
+        });
+    });
+
     describe('updateLastPullRequest', () => {
         it('merges the new lastPullRequest fields onto the existing fields (so a `data` PR update does not erase the `main` PR)', async () => {
             repository.findOne
