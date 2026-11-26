@@ -30,6 +30,7 @@ import { assertNotPlatformHost } from '../utils/platform-host';
 import type { Work } from '../entities/work.entity';
 import type { User } from '../entities/user.entity';
 import {
+    DeploymentContextResolutionError,
     PLATFORM_MANAGED_KUBECONFIG_SENTINEL,
     coerceDeploymentClusterSource,
     isReservedDeployNamespace,
@@ -161,6 +162,9 @@ function isAppKind(work: Work): boolean {
  * together.
  * The teardown itself re-derives the name inside the plugin; this copy only
  * decides which other Works could share it.
+ *
+ * TODO: move `sanitiseSlug` into `@ever-works/plugin` (which both packages
+ * already depend on) and import it in both places, retiring this copy.
  */
 export function normaliseObjectName(input: string): string {
     const collapsed = (input ?? '')
@@ -1249,6 +1253,17 @@ export class DeployFacadeService implements IDeployFacade {
                 run: () => removeWorkDeployment(projectName, credential, context),
             };
         } catch (error) {
+            // An explicit reserved namespace is refused by the resolver itself;
+            // it is the same "no usable namespace" case as the check above.
+            if (
+                error instanceof DeploymentContextResolutionError &&
+                error.code === 'RESERVED_NAMESPACE'
+            ) {
+                return { status: 'skipped', reason: 'no_namespace' };
+            }
+            // `detail` is for the server log only (`deleteWork` logs it as a
+            // warning); no response carries it. The messages reaching it are the
+            // platform's own resolution errors, never a credential.
             return {
                 status: 'skipped',
                 reason: 'unresolved',

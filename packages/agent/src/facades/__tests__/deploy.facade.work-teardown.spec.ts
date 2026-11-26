@@ -229,6 +229,20 @@ describe('DeployFacadeService.prepareWorkDeploymentTeardown', () => {
         expect(removeWorkDeployment.mock.calls[0][1]).toBe(INTERNAL_KUBECONFIG);
     });
 
+    it('skips an explicit reserved namespace as no_namespace, not as an unresolved error', async () => {
+        process.env.EVER_WORKS_K8S_WORKS_KUBECONFIG = INTERNAL_KUBECONFIG;
+        const { service, removeWorkDeployment } = createService({
+            work: work({ deployProvider: 'k8s' }),
+            settingsByWork: { 'work-1': { clusterSource: 'k8s-works', namespace: 'kube-system' } },
+            resolvedSecrets: { clusterSource: { value: 'k8s-works' } },
+        });
+
+        await expect(
+            service.prepareWorkDeploymentTeardown({ userId: 'user-1', workId: 'work-1' }),
+        ).resolves.toEqual({ status: 'skipped', reason: 'no_namespace' });
+        expect(removeWorkDeployment).not.toHaveBeenCalled();
+    });
+
     it('skips a k8s Work on the member’s own cluster without resolving any credential', async () => {
         const { service, registry } = createService({
             work: work({ deployProvider: 'k8s' }),
