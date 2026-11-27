@@ -78,16 +78,15 @@ function written(api: DeployApi) {
 async function deployWith(options: Record<string, unknown>) {
 	const api = makeDeployApi();
 	const plugin = new KubernetesPlugin({ api: api as unknown as KubernetesApiService });
-	await plugin.onLoad(
-		createMockContext({
-			kubeconfig: VALID,
-			namespace: NS,
-			ingressHost: 'memes.ever.works',
-			ingressClass: 'nginx',
-			// A private image, so the pull Secret is written too.
-			registry: { kind: 'github', visibility: 'private' }
-		})
-	);
+	const context = createMockContext({
+		kubeconfig: VALID,
+		namespace: NS,
+		ingressHost: 'memes.ever.works',
+		ingressClass: 'nginx',
+		// A private image, so the pull Secret is written too.
+		registry: { kind: 'github', visibility: 'private' }
+	});
+	await plugin.onLoad(context);
 	const result = await plugin.deploy(
 		{
 			projectName: SLUG,
@@ -103,7 +102,7 @@ async function deployWith(options: Record<string, unknown>) {
 		},
 		VALID
 	);
-	return { api, result };
+	return { api, result, warn: context.logger.warn as unknown as ReturnType<typeof vi.fn> };
 }
 
 describe('deploy() labels every object with the Work and the environment', () => {
@@ -172,6 +171,29 @@ describe('deploy() labels every object with the Work and the environment', () =>
 		for (const body of Object.values(written(notALabel.api))) {
 			expect(body.metadata.labels).not.toHaveProperty(WORK_UUID_LABEL);
 			expect(body.metadata.labels[ENVIRONMENT_LABEL]).toBe('dev');
+		}
+	});
+});
+
+describe('deploy() says so when a given label value is dropped', () => {
+	it('warns once, naming the label keys and never the values, and still deploys', async () => {
+		const badUuid = 'not-a-uuid-SECRETISH value!';
+		const { result, warn } = await deployWith({ workUuid: badUuid, environment: 'dev' });
+
+		expect(result.status).toBe('deploying');
+		const labelWarnings = warn.mock.calls.filter((call) => String(call[0]).includes(WORK_UUID_LABEL));
+		expect(warn.mock.calls).toHaveLength(1);
+		expect(labelWarnings).toHaveLength(1);
+		const text = String(warn.mock.calls[0]?.[0]);
+		expect(text).not.toContain(badUuid);
+		expect(text).not.toContain('SECRETISH');
+		expect(text).not.toContain(ENVIRONMENT_LABEL);
+	});
+
+	it('does not warn when a value is absent, blank or valid', async () => {
+		for (const options of [{}, { workUuid: '  ', environment: '' }, { workUuid: WORK_UUID, environment: 'prod' }]) {
+			const { warn } = await deployWith(options);
+			expect(warn).not.toHaveBeenCalled();
 		}
 	});
 });

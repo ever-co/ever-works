@@ -94,6 +94,7 @@ describe('DeployService — plugin-driven dispatch + secrets', () => {
         };
 
         const deployFacade = {
+            refreshKubernetesDeployTarget: jest.fn().mockResolvedValue(false),
             getPluginAndTokenAndSettings: jest.fn().mockResolvedValue({
                 plugin: overrides.plugin,
                 token: overrides.token ?? 'kubeconfig:::yaml',

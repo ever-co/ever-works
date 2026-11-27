@@ -103,6 +103,7 @@ describe.skip('EW-616 deploy pipeline — real KubernetesPlugin + real matrix + 
                 : kubeconfig || '');
 
         const deployFacade = {
+            refreshKubernetesDeployTarget: jest.fn().mockResolvedValue(false),
             getPluginAndTokenAndSettings: jest.fn().mockResolvedValue({
                 plugin: k8sPlugin,
                 token: facadeToken,
