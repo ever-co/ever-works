@@ -7,13 +7,19 @@
 
 import { handleRequest, jsonResponse, type Env } from './app';
 import { DirectoryLoader } from './loader';
+import { routeServedFetch } from './routing';
 
 let isolateLoader: { key: string; loader: DirectoryLoader } | undefined;
 
 function loaderFor(env: Env): DirectoryLoader {
 	// One loader per isolate, so the in-memory cache survives between requests.
 	if (!isolateLoader || isolateLoader.key !== env.REGISTRY_URL) {
-		isolateLoader = { key: env.REGISTRY_URL, loader: new DirectoryLoader({ registryUrl: env.REGISTRY_URL }) };
+		// Route-served directories go through their service binding; see routing.ts.
+		const fetchFn = routeServedFetch(env, (input, init) => fetch(input, init));
+		isolateLoader = {
+			key: env.REGISTRY_URL,
+			loader: new DirectoryLoader({ registryUrl: env.REGISTRY_URL, fetch: fetchFn })
+		};
 	}
 	return isolateLoader.loader;
 }

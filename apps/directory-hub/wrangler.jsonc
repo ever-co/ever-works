@@ -16,8 +16,14 @@
 	"vars": {
 		// The Directory Registry document (spec FR-1), kept in the catalog repo ever-works/directory-registry.
 		"REGISTRY_URL": "https://raw.githubusercontent.com/ever-works/directory-registry/main/registry.json",
-		"HUB_URL": "https://directories.ever.works"
+		"HUB_URL": "https://directories.ever.works",
+		// Route-served directories (src/routing.ts): host -> the service binding below that reaches its Worker.
+		"ROUTE_SERVED": { "rmm.ever.works": "DIR_RMM" }
 	},
+	// A same-zone fetch() reaches directories on Workers Custom Domains, but skips Workers on routes (Cloudflare 522).
+	// The zone is at its limit of 100 Custom Domains, so directories past it are route-served and need one binding
+	// each, plus a ROUTE_SERVED entry above.
+	"services": [{ "binding": "DIR_RMM", "service": "ew-rmm" }],
 	// A Workers Custom Domain (not a route): the directories are Workers on custom domains of the same zone, and
 	// same-zone fetch() to a custom domain reaches the target Worker without a service binding.
 	"routes": [{ "pattern": "directories.ever.works", "custom_domain": true }]

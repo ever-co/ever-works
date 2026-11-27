@@ -68,7 +68,19 @@ A Contract v1 `items.json` whose items' `website` are directory origins works as
 
 Live at `https://directories.ever.works` since 2026-11-21 (Workers Custom Domain, set in `wrangler.jsonc`). The
 registry is [`ever-works/directory-registry`](https://github.com/ever-works/directory-registry); to add a directory,
-open a pull request there. No hub deploy is needed.
+open a pull request there. No hub deploy is needed, unless the directory is route-served:
+
+- **Route-served directories.** A directory Worker on a Workers route (not a Workers Custom Domain) cannot be reached
+  by a same-zone `fetch()`; the hub gets Cloudflare 522. The ever.works zone is at Cloudflare's limit of 100 Custom
+  Domains, so new directories past it are route-served. For each one, add a service binding and a `ROUTE_SERVED`
+  entry in `wrangler.jsonc`, then deploy the hub:
+
+    ```jsonc
+    "vars": { "ROUTE_SERVED": { "rmm.ever.works": "DIR_RMM", "new.ever.works": "DIR_NEW" } },
+    "services": [{ "binding": "DIR_RMM", "service": "ew-rmm" }, { "binding": "DIR_NEW", "service": "ew-new" }]
+    ```
+
+    List the zone's routes with `GET /zones/<zone>/workers/routes`; hosts on a route have no Custom Domain.
 
 Every deploy needs a board claim (workspace `MAINTENANCE.md`). Use one of:
 
