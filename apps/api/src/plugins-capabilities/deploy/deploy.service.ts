@@ -1682,8 +1682,12 @@ export class DeployService {
      */
     private async refreshDeployTarget(work: Work, deploymentId: string | undefined): Promise<void> {
         try {
+            // Named in the log, so objects left at the old target can be found and removed by hand.
+            const previous = work.deployProjectId?.trim() || 'none';
             if (await this.deployFacade.refreshKubernetesDeployTarget(work, deploymentId)) {
-                this.logger.log(`Work ${work.id}: cached deploy target is now ${deploymentId}`);
+                this.logger.log(
+                    `Work ${work.id}: cached deploy target is now ${deploymentId} (was ${previous}; objects left there are not removed)`,
+                );
             }
         } catch (error: unknown) {
             this.logger.warn(

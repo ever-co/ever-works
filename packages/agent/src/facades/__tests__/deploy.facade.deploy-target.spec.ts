@@ -56,6 +56,21 @@ describe('DeployFacadeService.refreshKubernetesDeployTarget', () => {
         },
     );
 
+    it('never replaces another provider id, so a Work moving back off Kubernetes keeps it', async () => {
+        const { service, workRepository } = createService();
+        const target = work({ deployProvider: 'ever-works', deployProjectId: 'prj_vercel123' });
+
+        await expect(
+            service.refreshKubernetesDeployTarget(
+                target,
+                'ever-works-tenants-user-1/memes-website',
+            ),
+        ).resolves.toBe(false);
+
+        expect(workRepository.update).not.toHaveBeenCalled();
+        expect(target.deployProjectId).toBe('prj_vercel123');
+    });
+
     it('stores the first target of a Work that has none cached yet', async () => {
         const { service, workRepository } = createService();
 

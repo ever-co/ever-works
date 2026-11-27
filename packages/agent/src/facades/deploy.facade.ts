@@ -1370,7 +1370,13 @@ export class DeployFacadeService implements IDeployFacade {
             return false;
         }
         const target = kubernetesDeploymentId(deploymentId);
-        if (!target || (work.deployProjectId ?? '').trim() === target) {
+        const cached = (work.deployProjectId ?? '').trim();
+        if (!target || cached === target) {
+            return false;
+        }
+        // Another provider's id (a Vercel `prj_…`, say) stays: a Work that moves
+        // back to that provider needs it for its domain and status calls.
+        if (cached && !kubernetesDeploymentId(cached)) {
             return false;
         }
         await this.workRepository.update(work.id, { deployProjectId: target });
