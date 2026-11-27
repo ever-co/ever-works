@@ -2,7 +2,7 @@
  * The client-side address guard — the "belt and braces" re-check of plan §6.3,
  * run on every tile immediately before its tab opens.
  *
- * Spec: FR-30 (new tab, no opener, no referrer), FR-31 (nothing is ever added to
+ * Spec: FR-30 (no referrer; same tab since 2026-11-26), FR-31 (nothing is ever added to
  * an opened address) and FR-32 (only `https`; `http://localhost` and
  * `http://127.0.0.1` additionally on a local development installation). The
  * acceptance criteria that read this module are ACC-11-08 and ACC-11-23.

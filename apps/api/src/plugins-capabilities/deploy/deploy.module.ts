@@ -6,6 +6,7 @@ import { WebsiteGeneratorModule } from '@ever-works/agent/generators';
 import { WorkModule } from '@ever-works/agent/services';
 import { AuthModule } from '../../auth/auth.module';
 import { ActivityLogModule } from '@ever-works/agent/activity-log';
+import { DistributedTaskLockService } from '@ever-works/agent/cache';
 import {
     EverWorksDnsService,
     EverWorksK8sDeployProvider,
@@ -15,6 +16,7 @@ import {
 import { DeployController } from './deploy.controller';
 import { DeployService } from './deploy.service';
 import { DeploymentVerifierService } from './tasks/deployment-verifier.service';
+import { WorkDeploymentOrphanReportCronService } from './tasks/work-deployment-orphan-report-cron.service';
 import { ManagedSubdomainService } from './managed-subdomain.service';
 import { SiteGitTokenController } from './site-git-token.controller';
 import { SiteGitTokenService } from './site-git-token.service';
@@ -40,6 +42,11 @@ import { SiteGitTokenService } from './site-git-token.service';
         // broker behind `POST /api/sites/:workId/git-token`).
         SiteGitTokenService,
         DeploymentVerifierService,
+        // The daily REPORT of website deployments no Work accounts for (what a
+        // skipped or failed Work-delete teardown left running). Logs only;
+        // one replica per day under the task lock.
+        WorkDeploymentOrphanReportCronService,
+        DistributedTaskLockService,
         EverWorksDnsService,
         // Task 10 / Path A — dedicated managed-deploy provider, registered so
         // it is part of the deploy module's DI graph (it was registered

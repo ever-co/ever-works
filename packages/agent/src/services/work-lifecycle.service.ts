@@ -3098,15 +3098,19 @@ export class WorkLifecycleService {
                 return prepared;
             }
             if (prepared.reason !== 'not_managed') {
-                this.logger.warn(
-                    `Work ${work.id}: its cluster objects will not be removed on delete ` +
-                        `(${prepared.reason}${prepared.detail ? `: ${prepared.detail}` : ''})`,
+                this.logQuietly(() =>
+                    this.logger.warn(
+                        `Work ${work.id}: its cluster objects will not be removed on delete ` +
+                            `(${prepared.reason}${prepared.detail ? `: ${prepared.detail}` : ''})`,
+                    ),
                 );
             }
             return null;
         } catch (error) {
-            this.logger.warn(
-                `Work ${work.id}: could not prepare the removal of its cluster objects: ${describeFailureCode(error)}`,
+            this.logQuietly(() =>
+                this.logger.warn(
+                    `Work ${work.id}: could not prepare the removal of its cluster objects: ${describeFailureCode(error)}`,
+                ),
             );
             return null;
         }
@@ -3133,8 +3137,10 @@ export class WorkLifecycleService {
         try {
             const claimant = await this.workRepository.findByManagedSubdomain(label);
             if (claimant && claimant.id !== work.id) {
-                this.logger.warn(
-                    `Work ${work.id}: kept the DNS record of ${label}; Work ${claimant.id} holds that subdomain`,
+                this.logQuietly(() =>
+                    this.logger.warn(
+                        `Work ${work.id}: kept the DNS record of ${label}; Work ${claimant.id} holds that subdomain`,
+                    ),
                 );
                 return false;
             }
@@ -3148,15 +3154,19 @@ export class WorkLifecycleService {
             );
             const other = sameSlug.find((candidate) => candidate.id !== work.id);
             if (other) {
-                this.logger.warn(
-                    `Work ${work.id}: kept the DNS record of ${label}; Work ${other.id} deploys under the same slug`,
+                this.logQuietly(() =>
+                    this.logger.warn(
+                        `Work ${work.id}: kept the DNS record of ${label}; Work ${other.id} deploys under the same slug`,
+                    ),
                 );
                 return false;
             }
             return true;
         } catch (error) {
-            this.logger.warn(
-                `Work ${work.id}: kept the DNS record of ${label}; its owner could not be checked: ${describeFailureCode(error)}`,
+            this.logQuietly(() =>
+                this.logger.warn(
+                    `Work ${work.id}: kept the DNS record of ${label}; its owner could not be checked: ${describeFailureCode(error)}`,
+                ),
             );
             return false;
         }
@@ -3184,10 +3194,13 @@ export class WorkLifecycleService {
             return;
         }
         const target = `${teardown.namespace}/${teardown.objectName}`;
-        if (teardown.staleTarget) {
-            this.logger.warn(
-                `Work ${work.id}: it was last deployed as ${teardown.staleTarget}, not ${target}; ` +
-                    `only ${target} is removed, so check ${teardown.staleTarget} by hand`,
+        const staleTarget = teardown.staleTarget;
+        if (staleTarget) {
+            this.logQuietly(() =>
+                this.logger.warn(
+                    `Work ${work.id}: its cached deploy target is ${staleTarget}, not ${target}; ` +
+                        `only ${target} is removed, so check ${staleTarget} by hand`,
+                ),
             );
         }
         let outcome: Promise<void>;
@@ -3205,8 +3218,10 @@ export class WorkLifecycleService {
                 // in the background where nothing would catch it.
                 .catch(() => undefined);
         } catch (error) {
-            this.logger.error(
-                `Work ${work.id}: removing its cluster objects (${target}) failed: ${describeFailureCode(error)}`,
+            this.logQuietly(() =>
+                this.logger.error(
+                    `Work ${work.id}: removing its cluster objects (${target}) failed: ${describeFailureCode(error)}`,
+                ),
             );
             return;
         }
@@ -3217,13 +3232,28 @@ export class WorkLifecycleService {
         });
         try {
             if ((await Promise.race([outcome.then(() => 'done' as const), waited])) === 'timeout') {
-                this.logger.warn(
-                    `Work ${work.id}: removing its cluster objects (${target}) takes longer than ` +
-                        `${Math.round(this.deploymentTeardownWaitMs / 1000)} s; it goes on in the background`,
+                this.logQuietly(() =>
+                    this.logger.warn(
+                        `Work ${work.id}: removing its cluster objects (${target}) takes longer than ` +
+                            `${Math.round(this.deploymentTeardownWaitMs / 1000)} s; it goes on in the background`,
+                    ),
                 );
             }
         } finally {
             clearTimeout(timer);
+        }
+    }
+
+    /**
+     * A log line the Work delete must survive: the row is already gone when the
+     * teardown runs, so a logger that throws (a failing transport, say) must not
+     * turn a finished delete into an error answer.
+     */
+    private logQuietly(write: () => void): void {
+        try {
+            write();
+        } catch {
+            // Nothing to fall back to: the line is lost, the delete stands.
         }
     }
 
@@ -3235,6 +3265,15 @@ export class WorkLifecycleService {
     ): void {
         const list = (objects: ReadonlyArray<{ kind: string; name: string }>) =>
             objects.map((o) => `${o.kind}/${o.name}`).join(', ');
+        if (result.removed.length === 0 && result.kept.length === 0 && result.failed.length === 0) {
+            // Every object was already gone: say so, or the delete leaves no
+            // trace that the teardown ran at all.
+            this.logger.log(
+                `Work ${work.id}: nothing was left in ${target} to remove` +
+                    (result.absent.length > 0 ? ` (${list(result.absent)} already gone)` : ''),
+            );
+            return;
+        }
         if (result.removed.length > 0) {
             this.logger.log(`Work ${work.id}: removed ${list(result.removed)} from ${target}`);
         }

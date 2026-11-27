@@ -896,7 +896,7 @@
                 "created": "Đã tạo nhiệm vụ",
                 "minLength": "Mô tả phải có ít nhất 10 ký tự.",
                 "error": "Không thể tạo nhiệm vụ. Vui lòng thử lại.",
-                "chatUnavailable": "Trò chuyện hiện không khả dụng — hãy dùng \"Tạo thủ công\"."
+                "chatUnavailable": "Ever SI hiện không khả dụng — hãy dùng \"Tạo thủ công\"."
             },
             "buildOnApp": {
                 "product": "Sản phẩm",
@@ -2929,7 +2929,13 @@
                 "showingCount": "Đang hiển thị 200 trong {count}",
                 "saving": "Đang lưu…",
                 "saved": "Đã lưu",
-                "saveFailed": "Không thể lưu. Hãy thử lại."
+                "saveFailed": "Không thể lưu. Hãy thử lại.",
+                "placementTitle": "Vị trí",
+                "placementDescription": "Vị trí lối tắt đến các ứng dụng Ever khác. Chỉ áp dụng cho trình duyệt này.",
+                "placementSidebar": "Thanh bên",
+                "placementHeader": "Thanh trên cùng",
+                "placementRail": "Thanh bên trái",
+                "placementSaveFailed": "Trình duyệt này không lưu lựa chọn. Hãy thử lại."
             },
             "githubApp": {
                 "title": "Cài đặt Ứng dụng GitHub",
@@ -6874,7 +6880,7 @@
                         "empty": "Select a document on the left to view or edit it. Drag a file anywhere to upload."
                     },
                     "ai": {
-                        "title": "AI assistant",
+                        "title": "Tác tử không gian làm việc",
                         "empty": "Conversation with the workspace agent will appear here. Use @kb:path to ground replies."
                     }
                 },
@@ -9615,7 +9621,7 @@
         },
         "sidebar": {
             "menu": "Menu",
-            "aiChat": "Trò chuyện AI",
+            "aiChat": "Ever SI",
             "newWork": "Công việc Mới",
             "new": "Mới",
             "activityIndicator": "Đang tạo công việc",
@@ -9687,11 +9693,13 @@
             }
         },
         "aiChat": {
-            "title": "Trợ lý AI",
-            "panelTitle": "Trò chuyện",
+            "title": "Ever SI",
+            "panelTitle": "Ever SI",
             "subtitle": "Tạo công việc bằng ngôn ngữ tự nhiên",
-            "welcomeTitle": "Chào mừng đến với Trợ lý AI 👋",
-            "welcomeSubtitle": "Trợ lý được hỗ trợ bởi AI của bạn. Hỏi tôi bất cứ điều gì về việc tạo công việc, tạo nội dung hoặc tổ chức dữ liệu của bạn.",
+            "welcomeTitle": "Ever SI",
+            "welcomeSubtitle": "Hỏi về việc tạo Works, tạo nội dung hoặc sắp xếp dữ liệu của bạn.",
+            "disclosure": "Bạn đang trò chuyện với trợ lý SI của Ever. Trợ lý có thể mắc lỗi. Chúng tôi lưu cuộc trò chuyện này cho đến khi bạn xóa.",
+            "disclosureTemporary": "Bạn đang trò chuyện với trợ lý SI của Ever. Trợ lý có thể mắc lỗi. Cuộc trò chuyện này bị xóa cùng tài khoản tạm thời này.",
             "welcomeMessage": "Chào! Tôi có thể giúp bạn tạo công việc bằng ngôn ngữ tự nhiên. Hỏi điều gì đó như \"Tạo công việc cho công cụ AI\" hoặc mô tả những gì bạn cần.",
             "capabilities": {
                 "workCreation": "Tạo Công việc",
@@ -9701,20 +9709,21 @@
                 "contentGeneration": "Tạo Nội dung",
                 "contentGenerationDesc": "Tạo mô tả, danh mục và siêu dữ liệu",
                 "smartSuggestions": "Gợi ý Thông minh",
-                "smartSuggestionsDesc": "Nhận khuyến nghị được hỗ trợ bởi AI cho dự án của bạn"
+                "smartSuggestionsDesc": "Gợi ý cho các dự án của bạn"
             },
             "newChat": "Trò chuyện mới",
             "history": "Lịch sử",
             "loadingConversation": "Đang tải cuộc trò chuyện…",
-            "inputPlaceholder": "Hỏi tôi bất cứ điều gì...",
+            "inputPlaceholder": "Hỏi Ever SI",
             "sendButton": "Gửi",
             "stopGenerating": "Dừng tạo",
             "sendHint": "Enter để gửi · Shift+Enter để xuống dòng mới",
-            "closeChat": "Đóng trò chuyện",
-            "collapseChat": "Thu gọn trò chuyện",
-            "resizeChat": "Kéo để thay đổi kích thước trò chuyện",
-            "expandChat": "Mở rộng trò chuyện",
-            "providersError": "Không tải được nhà cung cấp AI. Trò chuyện có thể không hoạt động đúng.",
+            "closeChat": "Đóng Ever SI",
+            "collapseChat": "Thu gọn Ever SI",
+            "resizeChat": "Kéo để đổi kích thước Ever SI",
+            "expandChat": "Mở rộng Ever SI",
+            "openPanel": "Mở Ever SI",
+            "providersError": "Không thể tải các nhà cung cấp AI. Ever SI có thể trả lời không chính xác.",
             "providerNotConfigured": "Nhà cung cấp này chưa được cấu hình. Thiết lập trong Plugin.",
             "editMessage": "Chỉnh sửa tin nhắn",
             "saveEdit": "Lưu & Gửi",
@@ -9733,7 +9742,7 @@
             "configureDeployProvider": "Cấu hình Nhà cung cấp Triển khai",
             "deployConfigured": "Nhà cung cấp triển khai đã cấu hình ({provider})",
             "opened": "Đã mở",
-            "historyEmpty": "Chưa có cuộc trò chuyện nào. Bắt đầu trò chuyện để xem lịch sử ở đây.",
+            "historyEmpty": "Chưa có cuộc trò chuyện nào. Hãy hỏi Ever SI để bắt đầu.",
             "historyUntitled": "Cuộc trò chuyện không có tiêu đề",
             "historyToday": "Hôm nay",
             "historyYesterday": "Hôm qua",
@@ -9792,6 +9801,16 @@
                 "stateFailed": "{step}: failed",
                 "statePending": "{step}: not started",
                 "pollingStopped": "Stopped checking for updates. Open the Task to see where it stands."
+            },
+            "panel": {
+                "assistant": "Ever SI",
+                "close": "Đóng Ever SI"
+            },
+            "secretOnce": {
+                "copy": "Sao chép",
+                "copied": "Đã sao chép",
+                "copyNow": "Hãy sao chép ngay: chỉ hiển thị ở đây, một lần. Không được lưu trong cuộc trò chuyện này và Ever SI không thể thấy.",
+                "shownOnce": "Một bí mật đã được hiển thị một lần khi chạy. Nó không được giữ trong cuộc trò chuyện; hãy tạo cái mới trong Cài đặt nếu bạn không còn nó."
             }
         },
         "plugins": {
@@ -10920,7 +10939,7 @@
         "appLauncher": {
             "controlLabel": "Trình khởi chạy ứng dụng",
             "controlTooltip": "Ever apps và ứng dụng của bạn",
-            "panelTitle": "Trình khởi chạy ứng dụng",
+            "panelTitle": "Ứng dụng",
             "sectionPinned": "Đã ghim",
             "sectionPlatforms": "Ever apps",
             "sectionWorks": "Ứng dụng của bạn",
@@ -10930,7 +10949,7 @@
             "chipDeploying": "Đang triển khai",
             "chipLastDeployFailed": "Triển khai lần cuối thất bại",
             "viewAll": "Xem tất cả ({count})",
-            "footerHelper": "Mở trong tab mới. Bạn có thể cần đăng nhập.",
+            "footerHelper": "Bạn có thể cần đăng nhập.",
             "manageLink": "Quản lý ứng dụng",
             "emptyWorks": "Ứng dụng bạn triển khai sẽ xuất hiện ở đây.",
             "emptyWorksCreateApp": "Tạo Công việc Ứng dụng",
@@ -10942,13 +10961,39 @@
             "controlUnavailable": "App Launcher hiện không khả dụng.",
             "emptyActionFailed": "Không thể mở trang đó. Thử lại.",
             "signInPrompt": "Đăng nhập bằng Ever ID để xem ứng dụng của bạn tại đây.",
-            "signIn": "Đăng nhập"
+            "signIn": "Đăng nhập",
+            "railLabel": "Ứng dụng",
+            "railCurrentApp": "{app}, bạn đang ở đây",
+            "railSoonApp": "{app}, sắp ra mắt",
+            "addApp": "Thêm",
+            "addAppLabel": "Thêm ứng dụng của riêng bạn trong Ever Platform",
+            "linePlatform": "Một tài khoản cho mọi ứng dụng Ever",
+            "lineWorks": "Tác tử AI vận hành doanh nghiệp của bạn",
+            "lineTeams": "Quản lý công việc và dự án",
+            "lineGauzy": "ERP, CRM và nhân sự trong một ứng dụng",
+            "lineRec": "Chụp và ghi màn hình",
+            "lineTraduora": "Quản lý bản dịch cho nhóm",
+            "lineDemand": "Thương mại và chợ trực tuyến theo nhu cầu",
+            "lineTech": "Kỹ sư và tác tử được vận hành sẵn để thuê"
         },
         "signOut": {
             "title": "Đăng xuất khỏi Ever Works?",
             "alsoSignOutEverId": "Đăng xuất cả khỏi Ever ID",
             "cancel": "Hủy",
             "confirm": "Đăng xuất"
+        },
+        "commandPalette": {
+            "commands": {
+                "openChat": "Mở Ever SI",
+                "closeChat": "Đóng Ever SI"
+            },
+            "commandAliases": {
+                "openChat": "ever si, si, trò chuyện, trợ lý, chat, assistant, ask ai",
+                "closeChat": "ever si, si, ẩn trò chuyện, hide chat, chat, assistant"
+            },
+            "noResults": {
+                "askChat": "Hỏi Ever SI về “{query}”"
+            }
         }
     },
     "layout": {
@@ -11315,8 +11360,10 @@
         },
         "switcher": {
             "heading": "Switch Organization",
-            "createNew": "Create Organization",
-            "loading": "Loading…"
+            "createNew": "Tạo tổ chức",
+            "loading": "Loading…",
+            "switchFailed": "Không thể chuyển tổ chức. Hãy thử lại.",
+            "active": "Tổ chức hiện tại"
         },
         "create": {
             "visionToggle": "Add company vision (optional)",

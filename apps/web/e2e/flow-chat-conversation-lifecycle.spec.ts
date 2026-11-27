@@ -39,7 +39,8 @@ import { loadSeededTestUser } from './helpers/seeded-test-user';
  * of pre-existing rows) and cleans up its created row afterward.
  */
 
-const HISTORY_EMPTY = 'No conversations yet. Start a chat to see your history here.';
+/** The History panel's empty state, by test id: its copy names Ever SI and may change again. */
+const HISTORY_EMPTY_TESTID = 'chat-history-empty';
 
 interface ConversationRow {
     id: string;
@@ -396,7 +397,7 @@ test.describe('Chat conversation lifecycle — in-panel history UI (seeded user)
             // pre-hydration. Retry the open until the History view (its back-arrow
             // header + our row, or the empty state) actually renders.
             const titleRow = page.getByText(uniqueTitle, { exact: false }).first();
-            const emptyState = page.getByText(HISTORY_EMPTY, { exact: false });
+            const emptyState = page.getByTestId(HISTORY_EMPTY_TESTID);
 
             await expect(async () => {
                 await historyButton.click({ timeout: 5_000 }).catch(() => {});

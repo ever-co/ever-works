@@ -896,7 +896,7 @@
                 "created": "สร้างภารกิจแล้ว",
                 "minLength": "คำอธิบายต้องมีอย่างน้อย 10 ตัวอักษร",
                 "error": "ไม่สามารถสร้างภารกิจได้ กรุณาลองใหม่อีกครั้ง",
-                "chatUnavailable": "แชทไม่พร้อมใช้งานขณะนี้ — ใช้ \"สร้างด้วยตนเอง\" แทน"
+                "chatUnavailable": "Ever SI ไม่พร้อมใช้งานขณะนี้ — ใช้ \"สร้างด้วยตนเอง\" แทน"
             },
             "buildOnApp": {
                 "product": "ผลิตภัณฑ์",
@@ -2929,7 +2929,13 @@
                 "showingCount": "แสดง 200 จาก {count}",
                 "saving": "กำลังบันทึก…",
                 "saved": "บันทึกแล้ว",
-                "saveFailed": "บันทึกไม่สำเร็จ ลองอีกครั้ง"
+                "saveFailed": "บันทึกไม่สำเร็จ ลองอีกครั้ง",
+                "placementTitle": "ตำแหน่ง",
+                "placementDescription": "ตำแหน่งของทางลัดไปยังแอป Ever อื่น ๆ ใช้กับเบราว์เซอร์นี้เท่านั้น",
+                "placementSidebar": "แถบด้านข้าง",
+                "placementHeader": "แถบด้านบน",
+                "placementRail": "แถบด้านซ้าย",
+                "placementSaveFailed": "เบราว์เซอร์นี้ไม่ได้บันทึกตัวเลือก ลองอีกครั้ง"
             },
             "githubApp": {
                 "title": "การติดตั้ง GitHub App",
@@ -6874,7 +6880,7 @@
                         "empty": "Select a document on the left to view or edit it. Drag a file anywhere to upload."
                     },
                     "ai": {
-                        "title": "AI assistant",
+                        "title": "เอเจนต์ของพื้นที่ทำงาน",
                         "empty": "Conversation with the workspace agent will appear here. Use @kb:path to ground replies."
                     }
                 },
@@ -9615,7 +9621,7 @@
         },
         "sidebar": {
             "menu": "เมนู",
-            "aiChat": "แชท AI",
+            "aiChat": "Ever SI",
             "newWork": "งานใหม่",
             "new": "ใหม่",
             "activityIndicator": "กำลังสร้างงาน",
@@ -9687,11 +9693,13 @@
             }
         },
         "aiChat": {
-            "title": "ผู้ช่วย AI",
-            "panelTitle": "แชท",
+            "title": "Ever SI",
+            "panelTitle": "Ever SI",
             "subtitle": "สร้างงานด้วยภาษาธรรมชาติ",
-            "welcomeTitle": "ยินดีต้อนรับสู่ผู้ช่วย AI 👋",
-            "welcomeSubtitle": "ผู้ช่วยที่ขับเคลื่อนด้วย AI ของคุณ ถามฉันเกี่ยวกับการสร้างงาน การสร้างเนื้อหา หรือการจัดระเบียบข้อมูลของคุณได้เลย",
+            "welcomeTitle": "Ever SI",
+            "welcomeSubtitle": "ถามเกี่ยวกับการสร้าง Works การสร้างเนื้อหา หรือการจัดระเบียบข้อมูลของคุณ",
+            "disclosure": "คุณกำลังแชตกับผู้ช่วย SI ของ Ever ผู้ช่วยอาจผิดพลาดได้ เราเก็บบทสนทนานี้ไว้จนกว่าคุณจะลบ",
+            "disclosureTemporary": "คุณกำลังแชตกับผู้ช่วย SI ของ Ever ผู้ช่วยอาจผิดพลาดได้ บทสนทนานี้จะถูกลบพร้อมกับบัญชีชั่วคราวนี้",
             "welcomeMessage": "สวัสดี! ฉันสามารถช่วยคุณสร้างงานโดยใช้ภาษาธรรมชาติ ถามบางอย่างเช่น \"สร้างงานสำหรับเครื่องมือ AI\" หรืออธิบายสิ่งที่คุณต้องการ",
             "capabilities": {
                 "workCreation": "การสร้างงาน",
@@ -9701,20 +9709,21 @@
                 "contentGeneration": "การสร้างเนื้อหา",
                 "contentGenerationDesc": "สร้างคำอธิบาย หมวดหมู่ และเมตาข้อมูล",
                 "smartSuggestions": "คำแนะนำอัจฉริยะ",
-                "smartSuggestionsDesc": "รับคำแนะนำที่ขับเคลื่อนด้วย AI สำหรับโครงการของคุณ"
+                "smartSuggestionsDesc": "คำแนะนำสำหรับโปรเจกต์ของคุณ"
             },
             "newChat": "แชทใหม่",
             "history": "ประวัติ",
             "loadingConversation": "กำลังโหลดการสนทนา…",
-            "inputPlaceholder": "ถามฉันอะไรก็ได้...",
+            "inputPlaceholder": "ถาม Ever SI",
             "sendButton": "ส่ง",
             "stopGenerating": "หยุดการสร้าง",
             "sendHint": "Enter เพื่อส่ง · Shift+Enter สำหรับบรรทัดใหม่",
-            "closeChat": "ปิดแชท",
-            "collapseChat": "ยุบแชท",
-            "resizeChat": "ลากเพื่อปรับขนาดแชท",
-            "expandChat": "ขยายแชท",
-            "providersError": "โหลดผู้ให้บริการ AI ล้มเหลว แชทอาจทำงานไม่ถูกต้อง",
+            "closeChat": "ปิด Ever SI",
+            "collapseChat": "ย่อ Ever SI",
+            "resizeChat": "ลากเพื่อปรับขนาด Ever SI",
+            "expandChat": "ขยาย Ever SI",
+            "openPanel": "เปิด Ever SI",
+            "providersError": "โหลดผู้ให้บริการ AI ไม่ได้ Ever SI อาจตอบได้ไม่ถูกต้อง",
             "providerNotConfigured": "ผู้ให้บริการนี้ยังไม่ได้กำหนดค่า ตั้งค่าในปลั๊กอิน",
             "editMessage": "แก้ไขข้อความ",
             "saveEdit": "บันทึกและส่ง",
@@ -9733,7 +9742,7 @@
             "configureDeployProvider": "กำหนดค่าผู้ให้บริการการปรับใช้",
             "deployConfigured": "กำหนดค่าผู้ให้บริการการปรับใช้แล้ว ({provider})",
             "opened": "เปิด",
-            "historyEmpty": "ยังไม่มีสนทนา เริ่มแชทเพื่อดูประวัติที่นี่",
+            "historyEmpty": "ยังไม่มีบทสนทนา ถาม Ever SI เพื่อเริ่มบทสนทนา",
             "historyUntitled": "สนทนาที่ไม่มีชื่อ",
             "historyToday": "วันนี้",
             "historyYesterday": "เมื่อวาน",
@@ -9792,6 +9801,16 @@
                 "stateFailed": "{step}: failed",
                 "statePending": "{step}: not started",
                 "pollingStopped": "Stopped checking for updates. Open the Task to see where it stands."
+            },
+            "panel": {
+                "assistant": "Ever SI",
+                "close": "ปิด Ever SI"
+            },
+            "secretOnce": {
+                "copy": "คัดลอก",
+                "copied": "คัดลอกแล้ว",
+                "copyNow": "คัดลอกตอนนี้: จะแสดงที่นี่เพียงครั้งเดียว ไม่ได้บันทึกในบทสนทนานี้ และ Ever SI มองไม่เห็น",
+                "shownOnce": "มีการแสดงข้อมูลลับหนึ่งครั้งเมื่อทำงานนี้ ข้อมูลนี้ไม่ได้เก็บไว้ในบทสนทนา สร้างใหม่ได้ในการตั้งค่าหากไม่มีแล้ว"
             }
         },
         "plugins": {
@@ -10920,7 +10939,7 @@
         "appLauncher": {
             "controlLabel": "ตัวเรียกใช้แอป",
             "controlTooltip": "Ever apps และแอปของคุณ",
-            "panelTitle": "ตัวเรียกใช้แอป",
+            "panelTitle": "แอป",
             "sectionPinned": "ปักหมุด",
             "sectionPlatforms": "Ever apps",
             "sectionWorks": "แอปของคุณ",
@@ -10930,7 +10949,7 @@
             "chipDeploying": "กำลังปรับใช้",
             "chipLastDeployFailed": "การปรับใช้ครั้งล่าสุดล้มเหลว",
             "viewAll": "ดูทั้งหมด ({count})",
-            "footerHelper": "เปิดในแท็บใหม่ คุณอาจต้องลงชื่อเข้าใช้",
+            "footerHelper": "คุณอาจต้องลงชื่อเข้าใช้",
             "manageLink": "จัดการแอป",
             "emptyWorks": "แอปที่คุณปรับใช้จะแสดงที่นี่",
             "emptyWorksCreateApp": "สร้างงานแอป",
@@ -10942,13 +10961,39 @@
             "controlUnavailable": "App Launcher ไม่พร้อมใช้งานในขณะนี้",
             "emptyActionFailed": "ไม่สามารถเปิดหน้านั้นได้ ลองอีกครั้ง",
             "signInPrompt": "ลงชื่อเข้าใช้ด้วย Ever ID เพื่อดูแอปของคุณที่นี่",
-            "signIn": "ลงชื่อเข้าใช้"
+            "signIn": "ลงชื่อเข้าใช้",
+            "railLabel": "แอป",
+            "railCurrentApp": "{app} คุณอยู่ที่นี่",
+            "railSoonApp": "{app} เร็ว ๆ นี้",
+            "addApp": "เพิ่ม",
+            "addAppLabel": "เพิ่มแอปของคุณเองใน Ever Platform",
+            "linePlatform": "บัญชีเดียวสำหรับทุกแอป Ever",
+            "lineWorks": "เอเจนต์ AI ที่ดูแลธุรกิจของคุณ",
+            "lineTeams": "การจัดการงานและโปรเจกต์",
+            "lineGauzy": "ERP, CRM และ HR ในแอปเดียว",
+            "lineRec": "จับภาพและบันทึกหน้าจอ",
+            "lineTraduora": "การจัดการงานแปลสำหรับทีม",
+            "lineDemand": "การค้าและมาร์เก็ตเพลสแบบออนดีมานด์",
+            "lineTech": "วิศวกรและเอเจนต์ที่ดูแลให้ พร้อมจ้างงาน"
         },
         "signOut": {
             "title": "ออกจากระบบ Ever Works หรือไม่",
             "alsoSignOutEverId": "ออกจากระบบ Ever ID ด้วย",
             "cancel": "ยกเลิก",
             "confirm": "ออกจากระบบ"
+        },
+        "commandPalette": {
+            "commands": {
+                "openChat": "เปิด Ever SI",
+                "closeChat": "ปิด Ever SI"
+            },
+            "commandAliases": {
+                "openChat": "ever si, si, แชต, ผู้ช่วย, chat, assistant, ask ai",
+                "closeChat": "ever si, si, ซ่อนแชต, hide chat, chat, assistant"
+            },
+            "noResults": {
+                "askChat": "ถาม Ever SI เกี่ยวกับ “{query}”"
+            }
         }
     },
     "layout": {
@@ -11315,8 +11360,10 @@
         },
         "switcher": {
             "heading": "Switch Organization",
-            "createNew": "Create Organization",
-            "loading": "Loading…"
+            "createNew": "สร้างองค์กร",
+            "loading": "Loading…",
+            "switchFailed": "สลับองค์กรไม่ได้ ลองอีกครั้ง",
+            "active": "องค์กรปัจจุบัน"
         },
         "create": {
             "visionToggle": "Add company vision (optional)",

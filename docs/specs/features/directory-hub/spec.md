@@ -214,8 +214,8 @@ agents where the hub is.
   tenants do not join it, so the platform opt-in flag and feed (plan R2, task T-21) are dropped.
 - Resolved 2026-11-26 (owner): the MCP-servers directory already exists. `mcpserver.ever.works` (Work
   `awesome-mcp-servers`) lists **4,232 items**; the platform API's `itemsCount` of 6 for that Work was wrong and misled
-  the 2026-11-21 notes. Like `timetrack` and 13 other older sites, it only needs a build of its current template
-  (`f52bb1d6`, which contains the agent API), so the hub can read it (task T-18).
+  the 2026-11-21 notes. Like `timetrack` and 13 other older sites, it only needed a redeploy onto its current template
+  (`f52bb1d6`, which contains the agent API). Done 2026-11-26 (task T-18): the hub reads it, 4,239 items.
 - Resolved 2026-11-26 (owner): **not yet** listed in the official MCP Registry or other catalogs; agents find the hub
   through `ever.works/llms.txt` and `/.well-known/`.
 - Resolved 2026-11-26 (owner): the hub logs the text of **zero-result queries only** (`zero_result_query` in the

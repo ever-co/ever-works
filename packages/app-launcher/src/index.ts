@@ -39,6 +39,7 @@ export {
 	isGridNavigationKey,
 	isTypeaheadKey,
 	nextGridIndex,
+	nextSectionedIndex,
 	typeaheadIndex
 } from './grid-navigation.js';
 
@@ -60,8 +61,10 @@ export type {
 	LauncherErrorSection,
 	LauncherItemActivateDetail,
 	LauncherManageDetail,
+	LauncherPanelPosition,
 	LauncherRetryDetail,
 	LauncherRetrySection,
+	LauncherShowOptions,
 	LauncherSignInDetail,
 	LauncherStrings,
 	LauncherTheme

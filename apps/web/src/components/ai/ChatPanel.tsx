@@ -15,7 +15,7 @@ const borderToggleClass = cn(
     'text-text-muted dark:text-text-muted-dark',
     'hover:text-text dark:hover:text-white',
     'hover:border-border-secondary dark:hover:border-white/20',
-    'shadow-sm hover:shadow transition-all cursor-pointer',
+    'shadow-sm hover:shadow transition-[color,border-color,box-shadow] cursor-pointer',
 );
 
 interface ChatPanelProps {
@@ -69,7 +69,9 @@ export function ChatPanelExpandButton({ onClick }: { onClick: () => void }) {
         <button
             type="button"
             onClick={onClick}
-            aria-label={t('expandChat')}
+            aria-label={t('openPanel')}
+            title={t('openPanel')}
+            data-testid="ever-si-handle"
             className={borderToggleClass}
         >
             <Bot className="w-3.5 h-3.5" aria-hidden="true" />

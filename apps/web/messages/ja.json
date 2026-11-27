@@ -904,7 +904,7 @@
                 "created": "ミッションを作成しました",
                 "minLength": "説明は 10 文字以上で入力してください。",
                 "error": "ミッションを作成できませんでした。もう一度お試しください。",
-                "chatUnavailable": "チャットは現在利用できません。「手動で作成」をご利用ください。"
+                "chatUnavailable": "Ever SI は現在利用できません。「手動で作成」をご利用ください。"
             },
             "buildOnApp": {
                 "product": "プロダクト",
@@ -2929,7 +2929,13 @@
                 "showingCount": "{count} 件中 200 件を表示",
                 "saving": "保存中…",
                 "saved": "保存しました",
-                "saveFailed": "保存できませんでした。もう一度お試しください。"
+                "saveFailed": "保存できませんでした。もう一度お試しください。",
+                "placementTitle": "表示位置",
+                "placementDescription": "ほかの Ever アプリへのショートカットの位置。このブラウザーにのみ適用されます。",
+                "placementSidebar": "サイドバー",
+                "placementHeader": "トップバー",
+                "placementRail": "左レール",
+                "placementSaveFailed": "このブラウザーに選択を保存できませんでした。もう一度お試しください。"
             },
             "githubApp": {
                 "title": "GitHub App インストール",
@@ -6874,7 +6880,7 @@
                         "empty": "Select a document on the left to view or edit it. Drag a file anywhere to upload."
                     },
                     "ai": {
-                        "title": "AI assistant",
+                        "title": "ワークスペースエージェント",
                         "empty": "Conversation with the workspace agent will appear here. Use @kb:path to ground replies."
                     }
                 },
@@ -9615,7 +9621,7 @@
         },
         "sidebar": {
             "menu": "メニュー",
-            "aiChat": "AI チャット",
+            "aiChat": "Ever SI",
             "newWork": "新規ワーク",
             "new": "新規",
             "activityIndicator": "ワーク生成中",
@@ -9687,11 +9693,13 @@
             }
         },
         "aiChat": {
-            "title": "AI アシスタント",
-            "panelTitle": "チャット",
+            "title": "Ever SI",
+            "panelTitle": "Ever SI",
             "subtitle": "自然言語でワークを作成",
-            "welcomeTitle": "AI アシスタントへようこそ 👋",
-            "welcomeSubtitle": "AI 駆動のアシスタントです。ワークの作成、コンテンツ生成、データの整理について何でもお尋ねください。",
+            "welcomeTitle": "Ever SI",
+            "welcomeSubtitle": "Works の作成、コンテンツの生成、データの整理について質問できます。",
+            "disclosure": "Ever の SI アシスタントとチャットしています。誤りを含むことがあります。この会話は削除するまで保存されます。",
+            "disclosureTemporary": "Ever の SI アシスタントとチャットしています。誤りを含むことがあります。この会話は一時アカウントと一緒に削除されます。",
             "welcomeMessage": "こんにちは！自然言語を使ってワークを作成するお手伝いをします。「AI ツールのワークを作成」などのように尋ねたり、必要なものを説明してください。",
             "capabilities": {
                 "workCreation": "ワーク作成",
@@ -9701,20 +9709,21 @@
                 "contentGeneration": "コンテンツ生成",
                 "contentGenerationDesc": "説明、カテゴリ、メタデータを生成",
                 "smartSuggestions": "スマート提案",
-                "smartSuggestionsDesc": "プロジェクト向けの AI 駆動の推奨事項を取得"
+                "smartSuggestionsDesc": "プロジェクトへのおすすめ"
             },
             "newChat": "新規チャット",
             "history": "履歴",
             "loadingConversation": "会話の読み込み中…",
-            "inputPlaceholder": "何でもお尋ねください...",
+            "inputPlaceholder": "Ever SI に質問",
             "sendButton": "送信",
             "stopGenerating": "生成を停止",
             "sendHint": "Enter で送信 · Shift+Enter で改行",
-            "closeChat": "チャットを閉じる",
-            "collapseChat": "チャットを折りたたみ",
-            "resizeChat": "ドラッグしてチャットのサイズを変更",
-            "expandChat": "チャットを展開",
-            "providersError": "AI プロバイダーの読み込みに失敗しました。チャットが正しく動作しない可能性があります。",
+            "closeChat": "Ever SI を閉じる",
+            "collapseChat": "Ever SI を折りたたむ",
+            "resizeChat": "ドラッグして Ever SI のサイズを変更",
+            "expandChat": "Ever SI を広げる",
+            "openPanel": "Ever SI を開く",
+            "providersError": "AI プロバイダーを読み込めませんでした。Ever SI が正しく応答しない可能性があります。",
             "providerNotConfigured": "このプロバイダーは設定されていません。プラグインで設定してください。",
             "editMessage": "メッセージを編集",
             "saveEdit": "保存して送信",
@@ -9733,7 +9742,7 @@
             "configureDeployProvider": "デプロイプロバイダーを設定",
             "deployConfigured": "デプロイプロバイダー設定済み ({provider})",
             "opened": "開いた",
-            "historyEmpty": "まだ会話がありません。チャットを始めて履歴を表示してください。",
+            "historyEmpty": "まだ会話はありません。Ever SI に質問して会話を始めましょう。",
             "historyUntitled": "無題の会話",
             "historyToday": "今日",
             "historyYesterday": "昨日",
@@ -9792,6 +9801,16 @@
                 "stateFailed": "{step}: failed",
                 "statePending": "{step}: not started",
                 "pollingStopped": "Stopped checking for updates. Open the Task to see where it stands."
+            },
+            "panel": {
+                "assistant": "Ever SI",
+                "close": "Ever SI を閉じる"
+            },
+            "secretOnce": {
+                "copy": "コピー",
+                "copied": "コピーしました",
+                "copyNow": "今すぐコピーしてください。ここに一度だけ表示されます。この会話には保存されず、Ever SI も見ることはできません。",
+                "shownOnce": "実行時にシークレットが一度だけ表示されました。会話には保存されません。手元にない場合は設定で新しく作成してください。"
             }
         },
         "plugins": {
@@ -10920,7 +10939,7 @@
         "appLauncher": {
             "controlLabel": "アプリランチャー",
             "controlTooltip": "Ever apps とあなたのアプリ",
-            "panelTitle": "アプリランチャー",
+            "panelTitle": "アプリ",
             "sectionPinned": "ピン留め",
             "sectionPlatforms": "Ever apps",
             "sectionWorks": "あなたのアプリ",
@@ -10930,7 +10949,7 @@
             "chipDeploying": "デプロイ中",
             "chipLastDeployFailed": "前回のデプロイに失敗しました",
             "viewAll": "すべて表示 ({count})",
-            "footerHelper": "新しいタブで開きます。サインインが必要な場合があります。",
+            "footerHelper": "サインインが必要な場合があります。",
             "manageLink": "アプリを管理",
             "emptyWorks": "デプロイしたアプリがここに表示されます。",
             "emptyWorksCreateApp": "アプリワークを作成",
@@ -10942,13 +10961,39 @@
             "controlUnavailable": "App Launcher は現在利用できません。",
             "emptyActionFailed": "そのページを開けませんでした。もう一度お試しください。",
             "signInPrompt": "Ever ID でサインインすると、ここにアプリが表示されます。",
-            "signIn": "サインイン"
+            "signIn": "サインイン",
+            "railLabel": "アプリ",
+            "railCurrentApp": "{app}（現在表示中）",
+            "railSoonApp": "{app}（近日公開）",
+            "addApp": "追加",
+            "addAppLabel": "Ever Platform に独自のアプリを追加",
+            "linePlatform": "すべての Ever アプリに使える 1 つのアカウント",
+            "lineWorks": "ビジネスを動かす AI エージェント",
+            "lineTeams": "業務とプロジェクトの管理",
+            "lineGauzy": "ERP・CRM・HR をひとつのアプリで",
+            "lineRec": "画面キャプチャと録画",
+            "lineTraduora": "チーム向けの翻訳管理",
+            "lineDemand": "コマースとオンデマンド マーケットプレイス",
+            "lineTech": "エンジニアと運用付き AI エージェントに依頼"
         },
         "signOut": {
             "title": "Ever Works からサインアウトしますか？",
             "alsoSignOutEverId": "Ever ID からもサインアウトする",
             "cancel": "キャンセル",
             "confirm": "サインアウト"
+        },
+        "commandPalette": {
+            "commands": {
+                "openChat": "Ever SI を開く",
+                "closeChat": "Ever SI を閉じる"
+            },
+            "commandAliases": {
+                "openChat": "ever si, si, チャット, アシスタント, chat, assistant, ask ai",
+                "closeChat": "ever si, si, チャットを隠す, hide chat, chat, assistant"
+            },
+            "noResults": {
+                "askChat": "「{query}」について Ever SI に質問"
+            }
         }
     },
     "layout": {
@@ -11315,8 +11360,10 @@
         },
         "switcher": {
             "heading": "Switch Organization",
-            "createNew": "Create Organization",
-            "loading": "Loading…"
+            "createNew": "組織を作成",
+            "loading": "Loading…",
+            "switchFailed": "組織を切り替えられませんでした。もう一度お試しください。",
+            "active": "現在の組織"
         },
         "create": {
             "visionToggle": "Add company vision (optional)",

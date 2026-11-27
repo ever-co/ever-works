@@ -896,7 +896,7 @@
                 "created": "Mission 已创建",
                 "minLength": "描述至少需要 10 个字符。",
                 "error": "无法创建 Mission，请重试。",
-                "chatUnavailable": "聊天当前不可用——请改用“手动创建”。"
+                "chatUnavailable": "Ever SI 当前不可用——请改用“手动创建”。"
             },
             "buildOnApp": {
                 "product": "产品",
@@ -2929,7 +2929,13 @@
                 "showingCount": "显示 200 项，共 {count} 项",
                 "saving": "保存中…",
                 "saved": "已保存",
-                "saveFailed": "无法保存。请重试。"
+                "saveFailed": "无法保存。请重试。",
+                "placementTitle": "位置",
+                "placementDescription": "前往其他 Ever 应用的入口所在位置。仅对此浏览器生效。",
+                "placementSidebar": "侧边栏",
+                "placementHeader": "顶部栏",
+                "placementRail": "左侧栏",
+                "placementSaveFailed": "此浏览器未能保存该选择。请重试。"
             },
             "githubApp": {
                 "title": "GitHub App 安装",
@@ -6874,7 +6880,7 @@
                         "empty": "Select a document on the left to view or edit it. Drag a file anywhere to upload."
                     },
                     "ai": {
-                        "title": "AI assistant",
+                        "title": "工作区智能体",
                         "empty": "Conversation with the workspace agent will appear here. Use @kb:path to ground replies."
                     }
                 },
@@ -9615,7 +9621,7 @@
         },
         "sidebar": {
             "menu": "菜单",
-            "aiChat": "AI 聊天",
+            "aiChat": "Ever SI",
             "newWork": "新建作品",
             "new": "新建",
             "activityIndicator": "作品生成中",
@@ -9687,11 +9693,13 @@
             }
         },
         "aiChat": {
-            "title": "AI 助手",
-            "panelTitle": "聊天",
+            "title": "Ever SI",
+            "panelTitle": "Ever SI",
             "subtitle": "使用自然语言创建作品",
-            "welcomeTitle": "欢迎使用 AI 助手 👋",
-            "welcomeSubtitle": "您的 AI 驱动助手。询问我有关创建作品、生成内容或组织数据的任何问题。",
+            "welcomeTitle": "Ever SI",
+            "welcomeSubtitle": "可以询问如何创建 Works、生成内容或整理你的数据。",
+            "disclosure": "你正在与 Ever 的 SI 助手聊天。它可能会出错。我们会保留此对话，直到你将其删除。",
+            "disclosureTemporary": "你正在与 Ever 的 SI 助手聊天。它可能会出错。此对话会随此临时账户一起删除。",
             "welcomeMessage": "嗨！我可以使用自然语言帮助您创建作品。例如询问“为 AI 工具创建一个作品”或描述您的需求。",
             "capabilities": {
                 "workCreation": "作品创建",
@@ -9701,20 +9709,21 @@
                 "contentGeneration": "内容生成",
                 "contentGenerationDesc": "生成描述、类别和元数据",
                 "smartSuggestions": "智能建议",
-                "smartSuggestionsDesc": "获取项目 AI 驱动的推荐"
+                "smartSuggestionsDesc": "针对你的项目的建议"
             },
             "newChat": "新建聊天",
             "history": "历史记录",
             "loadingConversation": "加载对话中…",
-            "inputPlaceholder": "问我任何问题...",
+            "inputPlaceholder": "向 Ever SI 提问",
             "sendButton": "发送",
             "stopGenerating": "停止生成",
             "sendHint": "Enter 发送 · Shift+Enter 新行",
-            "closeChat": "关闭聊天",
-            "collapseChat": "折叠聊天",
-            "resizeChat": "拖动调整聊天大小",
-            "expandChat": "展开聊天",
-            "providersError": "加载 AI 提供商失败。聊天可能无法正常工作。",
+            "closeChat": "关闭 Ever SI",
+            "collapseChat": "收起 Ever SI",
+            "resizeChat": "拖动以调整 Ever SI 的大小",
+            "expandChat": "加宽 Ever SI",
+            "openPanel": "打开 Ever SI",
+            "providersError": "无法加载 AI 提供方。Ever SI 可能无法正确回答。",
             "providerNotConfigured": "此提供商未配置。请在插件中设置。",
             "editMessage": "编辑消息",
             "saveEdit": "保存并提交",
@@ -9733,7 +9742,7 @@
             "configureDeployProvider": "配置部署提供商",
             "deployConfigured": "部署提供商已配置 ({provider})",
             "opened": "已打开",
-            "historyEmpty": "还没有对话。开始聊天以在此处查看您的历史记录。",
+            "historyEmpty": "还没有对话。向 Ever SI 提个问题即可开始。",
             "historyUntitled": "未命名对话",
             "historyToday": "今天",
             "historyYesterday": "昨天",
@@ -9792,6 +9801,16 @@
                 "stateFailed": "{step}: failed",
                 "statePending": "{step}: not started",
                 "pollingStopped": "Stopped checking for updates. Open the Task to see where it stands."
+            },
+            "panel": {
+                "assistant": "Ever SI",
+                "close": "关闭 Ever SI"
+            },
+            "secretOnce": {
+                "copy": "复制",
+                "copied": "已复制",
+                "copyNow": "请立即复制：它只在这里显示一次。它不会保存在此对话中，Ever SI 也看不到它。",
+                "shownOnce": "运行时显示过一次密钥。它不会保存在对话中；如果你已不再持有，请在设置中新建一个。"
             }
         },
         "plugins": {
@@ -10920,7 +10939,7 @@
         "appLauncher": {
             "controlLabel": "应用启动器",
             "controlTooltip": "Ever apps 和你的应用",
-            "panelTitle": "应用启动器",
+            "panelTitle": "应用",
             "sectionPinned": "已固定",
             "sectionPlatforms": "Ever apps",
             "sectionWorks": "你的应用",
@@ -10930,7 +10949,7 @@
             "chipDeploying": "部署中",
             "chipLastDeployFailed": "上次部署失败",
             "viewAll": "查看全部 ({count})",
-            "footerHelper": "在新标签页中打开。你可能需要登录。",
+            "footerHelper": "你可能需要登录。",
             "manageLink": "管理应用",
             "emptyWorks": "你部署的应用会显示在这里。",
             "emptyWorksCreateApp": "创建应用作品",
@@ -10942,13 +10961,39 @@
             "controlUnavailable": "App Launcher 目前不可用。",
             "emptyActionFailed": "无法打开该页面。请重试。",
             "signInPrompt": "使用 Ever ID 登录以在此查看你的应用。",
-            "signIn": "登录"
+            "signIn": "登录",
+            "railLabel": "应用",
+            "railCurrentApp": "{app}，你在这里",
+            "railSoonApp": "{app}，即将推出",
+            "addApp": "添加",
+            "addAppLabel": "在 Ever Platform 中添加你自己的应用",
+            "linePlatform": "一个账户，畅用所有 Ever 应用",
+            "lineWorks": "替你经营业务的 AI 智能体",
+            "lineTeams": "工作与项目管理",
+            "lineGauzy": "ERP、CRM 和人力资源，一个应用搞定",
+            "lineRec": "屏幕截图与录制",
+            "lineTraduora": "面向团队的翻译管理",
+            "lineDemand": "电商与按需服务市场",
+            "lineTech": "可雇用的工程师与托管智能体"
         },
         "signOut": {
             "title": "退出 Ever Works？",
             "alsoSignOutEverId": "同时退出 Ever ID",
             "cancel": "取消",
             "confirm": "退出登录"
+        },
+        "commandPalette": {
+            "commands": {
+                "openChat": "打开 Ever SI",
+                "closeChat": "关闭 Ever SI"
+            },
+            "commandAliases": {
+                "openChat": "ever si, si, 聊天, 助手, chat, assistant, ask ai",
+                "closeChat": "ever si, si, 隐藏聊天, hide chat, chat, assistant"
+            },
+            "noResults": {
+                "askChat": "向 Ever SI 询问“{query}”"
+            }
         }
     },
     "layout": {
@@ -11315,8 +11360,10 @@
         },
         "switcher": {
             "heading": "Switch Organization",
-            "createNew": "Create Organization",
-            "loading": "Loading…"
+            "createNew": "创建组织",
+            "loading": "Loading…",
+            "switchFailed": "无法切换组织。请重试。",
+            "active": "当前组织"
         },
         "create": {
             "visionToggle": "Add company vision (optional)",

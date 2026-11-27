@@ -38,6 +38,14 @@ export interface AppLauncherContextValue {
      * value is what the palette command will call.
      */
     registerOpenAppLauncher: (open: (() => void) | null) => void;
+    /**
+     * Open the sidebar drawer, when the shell has one. The App Launcher's mark
+     * sits in the sidebar (shared Ever shell, A3); below the `xl` breakpoint the
+     * sidebar is a drawer, and the palette opening the launcher while the drawer
+     * is closed must show the drawer first. Optional, and not part of the
+     * palette's two-member contract above: only the launcher control calls it.
+     */
+    revealSidebar?: () => void;
 }
 
 /**
@@ -50,7 +58,13 @@ const AppLauncherContext = createContext<AppLauncherContextValue>({
     registerOpenAppLauncher: () => undefined,
 });
 
-export function AppLauncherProvider({ children }: { children: ReactNode }) {
+export function AppLauncherProvider({
+    children,
+    revealSidebar,
+}: {
+    children: ReactNode;
+    revealSidebar?: () => void;
+}) {
     const [registered, setRegistered] = useState<(() => void) | undefined>(undefined);
 
     const registerOpenAppLauncher = useCallback((open: (() => void) | null) => {
@@ -61,8 +75,8 @@ export function AppLauncherProvider({ children }: { children: ReactNode }) {
     }, []);
 
     const value = useMemo<AppLauncherContextValue>(
-        () => ({ openAppLauncher: registered, registerOpenAppLauncher }),
-        [registered, registerOpenAppLauncher],
+        () => ({ openAppLauncher: registered, registerOpenAppLauncher, revealSidebar }),
+        [registered, registerOpenAppLauncher, revealSidebar],
     );
 
     return <AppLauncherContext.Provider value={value}>{children}</AppLauncherContext.Provider>;
