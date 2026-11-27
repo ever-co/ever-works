@@ -113,6 +113,7 @@ function makeService(
 } {
     const findById = jest.fn(async () => ({ id: WORK_ID, slug: 'demo', kind }));
     const deployFacade = {
+        refreshKubernetesDeployTarget: jest.fn().mockResolvedValue(false),
         // If the App branch ever stops short-circuiting, this is what a test
         // sees instead of a confusing downstream failure.
         getPluginAndTokenAndSettings: jest.fn(async () => {

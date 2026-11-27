@@ -48,6 +48,23 @@ function identityLabels(identity: DeployIdentity | undefined): Record<string, st
 	return labels;
 }
 
+/**
+ * The label KEYS whose value `identity` gave but Kubernetes would refuse (so {@link identityLabels}
+ * leaves them out). Keys only, never the values: a caller logs these to say why an object went
+ * out without a label. A value that is absent or blank was not given, so it is not listed.
+ */
+export function invalidIdentityLabelKeys(identity: DeployIdentity | undefined): string[] {
+	const keys: string[] = [];
+	for (const [key, raw] of [
+		[WORK_UUID_LABEL, identity?.workUuid],
+		[ENVIRONMENT_LABEL, identity?.environment]
+	] as const) {
+		const value = typeof raw === 'string' ? raw.trim() : raw === undefined || raw === null ? '' : null;
+		if (value === null || (value !== '' && !LABEL_VALUE_PATTERN.test(value))) keys.push(key);
+	}
+	return keys;
+}
+
 const COMMON_LABELS = (workId: string, slug: string, identity?: DeployIdentity): Record<string, string> => ({
 	'ever-works.io/managed': 'true',
 	'ever-works.io/work-id': workId,

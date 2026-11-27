@@ -20,7 +20,7 @@ const VALID = readFileSync(resolve(__dirname, 'fixtures/kubeconfig-valid.yml'), 
 const NS = 'ever-works-tenants-user-1';
 const SLUG = 'awesome-memes-website';
 
-type Live = { metadata?: { labels?: Record<string, string>; uid?: string } } | null;
+type Live = { metadata?: { labels?: Record<string, string>; uid?: string; resourceVersion?: string } } | null;
 
 function ownedLabels(slug = SLUG, workId = slug): Record<string, string> {
 	return {
@@ -46,7 +46,8 @@ function makeApi(objects: Record<string, Live>, overrides: Partial<Record<string
 			_name: string,
 			_propagationPolicy?: string,
 			_context?: string,
-			_preconditionUid?: string
+			_preconditionUid?: string,
+			_preconditionResourceVersion?: string
 		): Promise<void> => undefined
 	);
 	const api = { readObject, deleteObject, ...overrides } as unknown as KubernetesApiService;
@@ -304,6 +305,43 @@ describe('KubernetesPlugin.removeWorkDeployment', () => {
 		// An object read without a uid is deleted without a precondition.
 		const serviceCall = deleteObject.mock.calls.find((call) => call[2] === 'Service');
 		expect(serviceCall?.[7]).toBeUndefined();
+	});
+
+	it('also sends the resourceVersion it read, so an object changed since the read is not deleted', async () => {
+		const objects = allOwned();
+		objects[`Ingress/${SLUG}`] = {
+			metadata: { labels: ownedLabels(), uid: 'uid-ingress', resourceVersion: '4711' }
+		};
+		const { api, deleteObject } = makeApi(objects);
+		const plugin = new KubernetesPlugin({ api });
+
+		await plugin.removeWorkDeployment(SLUG, VALID, CONTEXT);
+
+		const ingressCall = deleteObject.mock.calls.find((call) => call[2] === 'Ingress');
+		expect(ingressCall?.[5]).toBe('Background');
+		expect(ingressCall?.[7]).toBe('uid-ingress');
+		expect(ingressCall?.[8]).toBe('4711');
+	});
+
+	it('reports a concurrently re-applied object (409 on the resourceVersion) as failed, does not throw, and goes on', async () => {
+		const objects = allOwned();
+		objects[`Service/${SLUG}`] = {
+			metadata: { labels: ownedLabels(), uid: 'uid-svc', resourceVersion: '10' }
+		};
+		const { api, deleteObject } = makeApi(objects);
+		deleteObject.mockImplementation(async (_kc, _v, kind) => {
+			if (kind === 'Service')
+				throw new K8sPluginError('APPLY_FAILED', "The Service 'x' was replaced or changed after it was read.");
+		});
+		const plugin = new KubernetesPlugin({ api });
+
+		const result = await plugin.removeWorkDeployment(SLUG, VALID, CONTEXT);
+
+		expect(result.failed.map((o) => `${o.kind}/${o.name}`)).toEqual([`Service/${SLUG}`]);
+		expect(result.failed[0]?.code).toBe('APPLY_FAILED');
+		expect(result.failed[0]?.error).toContain('changed after it was read');
+		expect(result.removed.map((o) => o.kind)).toEqual(['Ingress', 'Deployment', 'Secret', 'Secret']);
+		expect(deleteObject).toHaveBeenCalledTimes(5);
 	});
 
 	it('reports an object replaced since the read (409 on the precondition) as failed, and goes on', async () => {

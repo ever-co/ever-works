@@ -793,6 +793,10 @@ export class KubernetesApiService {
 	 * @param preconditionUid when set, the API server deletes the object only
 	 * while its `metadata.uid` is still this one (409 Conflict otherwise), so an
 	 * object replaced after the caller read it is not deleted in its place.
+	 * @param preconditionResourceVersion when set, likewise for `metadata.resourceVersion`: an
+	 * object changed after the caller read it (a concurrent re-apply that relabelled it) is
+	 * not deleted on the strength of labels that were checked before the change. The 409 is
+	 * rethrown as a `K8sPluginError` saying so.
 	 */
 	async deleteObject(
 		kubeconfigYaml: string,
@@ -802,12 +806,17 @@ export class KubernetesApiService {
 		name: string,
 		propagationPolicy?: string,
 		contextOverride?: string,
-		preconditionUid?: string
+		preconditionUid?: string,
+		preconditionResourceVersion?: string
 	): Promise<void> {
 		const client = this.factory.createKubeConfig(kubeconfigYaml, contextOverride);
 		const objects = this.factory.objectApi(client);
+		const preconditions: { uid?: string; resourceVersion?: string } = {
+			...(preconditionUid ? { uid: preconditionUid } : {}),
+			...(preconditionResourceVersion ? { resourceVersion: preconditionResourceVersion } : {})
+		};
 		try {
-			if (preconditionUid) {
+			if (Object.keys(preconditions).length > 0) {
 				await objects.delete(
 					objectRef(apiVersion, kind, namespace, name),
 					undefined, // pretty
@@ -815,7 +824,7 @@ export class KubernetesApiService {
 					undefined, // gracePeriodSeconds
 					undefined, // orphanDependents
 					propagationPolicy,
-					{ preconditions: { uid: preconditionUid } } // body: V1DeleteOptions
+					{ preconditions } // body: V1DeleteOptions
 				);
 				return;
 			}
@@ -829,6 +838,13 @@ export class KubernetesApiService {
 			);
 		} catch (err) {
 			if (isNotFound(err)) return;
+			if (Object.keys(preconditions).length > 0 && isStatusCode(err, 409)) {
+				throw new K8sPluginError(
+					'APPLY_FAILED',
+					`The ${kind} '${name}' was replaced or changed after it was read (a concurrent deploy); it was not deleted.`,
+					err
+				);
+			}
 			const scrubbed = scrubError(err);
 			throw new K8sPluginError(scrubbed.code, scrubbed.message, err);
 		}
