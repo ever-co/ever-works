@@ -62,8 +62,10 @@ import {
 	buildImagePullSecret,
 	buildIngress,
 	buildService,
+	ENVIRONMENT_LABEL,
 	FIELD_MANAGER,
-	pullSecretNameFor
+	pullSecretNameFor,
+	WORK_UUID_LABEL
 } from './manifest.renderer.js';
 import { parseKubeconfig } from './kubeconfig.parser.js';
 // APW-07 T19 — the in-cluster App dependencies. The plugin is the wiring: it publishes the descriptors and
@@ -397,6 +399,14 @@ interface DeployOptions {
 	pinImageDigest?: boolean;
 	/** Full commit SHA — used only as a pod annotation to force a rollout, never as the image tag. */
 	revision?: string;
+	/**
+	 * The deploying Work's id (UUID) and the platform environment (`prod`, `stage`, `dev`), stamped
+	 * on every object and on the pod template as `ever-works.io/work-uuid` and
+	 * `ever-works.io/environment` (see `DeploymentLookupContext`). The Work-delete teardown keeps an
+	 * object they name for another Work or environment. Unset (an older caller): no label, as before.
+	 */
+	workUuid?: string;
+	environment?: string;
 }
 
 const REGISTRY_SCHEMA: JsonSchema = {
@@ -1249,6 +1259,9 @@ export class KubernetesPlugin implements IPlugin, IDeploymentPlugin {
 		// repo name for the image ref while manifests keep the slug.
 		const imageName = sanitiseSlug(opts.imageName ?? config.projectName);
 		const createdAt = new Date().toISOString();
+		// Who deploys, labelled on all five objects: the Work and the environment (dev, stage and
+		// prod share one cluster). The renderer drops a value that is not a valid label value.
+		const identity = { workUuid: opts.workUuid, environment: opts.environment };
 
 		const provider = this.registries.resolve(registry.kind);
 		const registryCtx: RegistryDeployContext = {
@@ -1312,7 +1325,8 @@ export class KubernetesPlugin implements IPlugin, IDeploymentPlugin {
 					username: pullCreds.username,
 					password,
 					workId: config.projectName,
-					workSlug: slug
+					workSlug: slug,
+					...identity
 				});
 				await this.api.applyImagePullSecret(kubeconfig, secret, settings.kubeContext);
 			}
@@ -1329,6 +1343,7 @@ export class KubernetesPlugin implements IPlugin, IDeploymentPlugin {
 					namespace,
 					workId: config.projectName,
 					workSlug: slug,
+					...identity,
 					env: opts.runtimeEnv
 				});
 				await this.api.applySecret(kubeconfig, runtimeEnvSecret, settings.kubeContext);
@@ -1337,6 +1352,7 @@ export class KubernetesPlugin implements IPlugin, IDeploymentPlugin {
 			const renderInputs = {
 				workId: config.projectName,
 				workSlug: slug,
+				...identity,
 				namespace,
 				image: deployImage,
 				replicas,
@@ -1653,8 +1669,17 @@ export class KubernetesPlugin implements IPlugin, IDeploymentPlugin {
 	 * labels prove this plugin's website deploy created it under this name
 	 * (`ever-works.io/managed`, `app.kubernetes.io/managed-by`, `app.kubernetes.io/name`
 	 * and `ever-works.io/work-id`), and only while its uid is still the one that was read;
-	 * anything else under that name is reported in `kept` and left alone. The labels do
+	 * anything else under that name is reported in `kept` and left alone. Those labels do
 	 * not identify the Work itself, so the caller makes sure no other Work deploys there.
+	 *
+	 * A deploy since the Work and environment labels exist also stamps
+	 * `ever-works.io/work-uuid` and `ever-works.io/environment`, and they only make this
+	 * stricter: an object whose `work-uuid` is not `context.workUuid` is kept
+	 * (`other_work_uuid`), one whose `environment` is not `context.environment` is kept
+	 * (`other_environment`), and one that carries either label while the caller gave no
+	 * value to compare it with is kept too (`work_uuid_unverified`,
+	 * `environment_unverified`). An object without them, deployed before, is judged by the
+	 * four labels above exactly as before.
 	 *
 	 * It never deletes the namespace (other Works of the tenant live there), a
 	 * PersistentVolumeClaim or any other object. Idempotent: a missing object is `absent`.
@@ -1700,6 +1725,7 @@ export class KubernetesPlugin implements IPlugin, IDeploymentPlugin {
 		const kept: Array<WorkDeploymentTeardownObject & { reason: string }> = [];
 		const failed: Array<WorkDeploymentTeardownObject & { error: string; code: string }> = [];
 		const scrubPatterns = this.runtimeScrubPatterns({ kubeconfig });
+		const expected = { workUuid: context?.workUuid, environment: context?.environment };
 
 		for (const target of targets) {
 			const ref = { kind: target.kind, name: target.name };
@@ -1711,7 +1737,9 @@ export class KubernetesPlugin implements IPlugin, IDeploymentPlugin {
 					absent.push(ref);
 					continue;
 				}
-				const notOwnedBecause = workObjectOwnershipGap(live.metadata?.labels, slug);
+				const notOwnedBecause =
+					workObjectOwnershipGap(live.metadata?.labels, slug) ??
+					deployIdentityGap(live.metadata?.labels, expected);
 				if (notOwnedBecause) {
 					kept.push({ ...ref, reason: notOwnedBecause });
 					continue;
@@ -1743,7 +1771,9 @@ export class KubernetesPlugin implements IPlugin, IDeploymentPlugin {
 	 * The website deployments {@link deploy} created on the cluster the kubeconfig reaches:
 	 * every namespace's Ingresses whose labels prove this plugin's website deploy created them
 	 * under their name (the same proof {@link removeWorkDeployment} asks for), as
-	 * `{ location: namespace, name }`, sorted. App Work objects never carry those labels.
+	 * `{ location: namespace, name }`, sorted, plus `environment` when the Ingress carries
+	 * `ever-works.io/environment` (so a report run in one environment can leave another
+	 * environment's deployments out). App Work objects never carry those labels.
 	 *
 	 * Read-only: a report of what no Work accounts for is built from it, and nothing is removed
 	 * because of it. A failed list throws a `K8sPluginError` whose message is scrubbed of the
@@ -1762,7 +1792,14 @@ export class KubernetesPlugin implements IPlugin, IDeploymentPlugin {
 		return ingresses
 			.filter((ingress) => ingress.namespace && ingress.name)
 			.filter((ingress) => workObjectOwnershipGap(ingress.labels, ingress.name) === null)
-			.map((ingress) => ({ location: ingress.namespace, name: ingress.name }))
+			.map((ingress): WorkDeploymentRef => {
+				const environment = ingress.labels?.[ENVIRONMENT_LABEL];
+				return {
+					location: ingress.namespace,
+					name: ingress.name,
+					...(typeof environment === 'string' ? { environment } : {})
+				};
+			})
 			.sort((a, b) => `${a.location}/${a.name}`.localeCompare(`${b.location}/${b.name}`));
 	}
 
@@ -2426,12 +2463,18 @@ function isTeardownRefusedNamespace(namespace: string): boolean {
 	return TEARDOWN_REFUSED_NAMESPACES.has(normalized) || normalized.startsWith('kube-');
 }
 
-/** The labels `deploy()` stamps on every website object (`COMMON_LABELS` in the manifest renderer). */
+/**
+ * The labels `deploy()` stamps on every website object (`COMMON_LABELS` in the manifest renderer).
+ * The Work and environment labels are on objects deployed since they exist, and are carried only
+ * when the live object has them.
+ */
 const DEPLOY_LABEL_KEYS = [
 	'ever-works.io/managed',
 	'ever-works.io/work-id',
 	'app.kubernetes.io/name',
-	'app.kubernetes.io/managed-by'
+	'app.kubernetes.io/managed-by',
+	WORK_UUID_LABEL,
+	ENVIRONMENT_LABEL
 ] as const;
 
 /**
@@ -2443,7 +2486,9 @@ const DEPLOY_LABEL_KEYS = [
  * the ingress-controller and TLS-issuer annotations. So, for an Ingress whose labels show the deploy made it
  * (`ever-works.io/managed=true` and this plugin as `app.kubernetes.io/managed-by`), the deploy's own labels
  * are carried over from the live object (their `work-id` value is the raw repository name, which is not
- * known here), and the annotations are worked out for the new host list, as `deploy()` works them out.
+ * known here; the `work-uuid` and `environment` values are whatever the last deploy stamped, and a
+ * custom-domain change must not strip what the teardown checks), and the annotations are worked out for
+ * the new host list, as `deploy()` works them out.
  *
  * Any other Ingress at that name (one a member made by hand on their own cluster, say) gets only `name` and
  * `namespace`, as before: forcing the deploy's annotations onto it would overwrite its own values for
@@ -2495,6 +2540,31 @@ function workObjectOwnershipGap(labels: Record<string, string> | undefined, slug
 	if (labels['app.kubernetes.io/name'] !== slug) return 'other_name';
 	const workId = labels['ever-works.io/work-id'];
 	if (typeof workId !== 'string' || sanitiseSlug(workId) !== slug) return 'other_work';
+	return null;
+}
+
+/**
+ * Why a live object that {@link workObjectOwnershipGap} accepts is still not the deleted Work's in this
+ * environment, or `null`. Only the Work and environment labels are read, and only when the object has
+ * them: an object deployed before they existed carries neither and is `null` here, so it is judged
+ * exactly as before. A label present with no value from the caller to compare it with keeps the object
+ * (`*_unverified`): the rule only ever gets stricter. UUIDs and environment names compare case-blind.
+ */
+function deployIdentityGap(
+	labels: Record<string, string> | undefined,
+	expected: { workUuid?: string; environment?: string }
+): string | null {
+	const checks: Array<[label: string, value: string | undefined, other: string, unverified: string]> = [
+		[WORK_UUID_LABEL, expected.workUuid, 'other_work_uuid', 'work_uuid_unverified'],
+		[ENVIRONMENT_LABEL, expected.environment, 'other_environment', 'environment_unverified']
+	];
+	for (const [label, value, other, unverified] of checks) {
+		const actual = labels?.[label];
+		if (typeof actual !== 'string') continue;
+		const want = typeof value === 'string' ? value.trim().toLowerCase() : '';
+		if (!want) return unverified;
+		if (actual.trim().toLowerCase() !== want) return other;
+	}
 	return null;
 }
 

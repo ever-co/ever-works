@@ -26,6 +26,7 @@ import { endonym } from './LanguagePreference';
 beforeEach(() => {
     window.localStorage.clear();
     replaceMock.mockReset();
+    window.history.replaceState({}, '', '/settings/preferences');
     vi.stubGlobal(
         'matchMedia',
         vi.fn((query: string) => ({
@@ -85,6 +86,25 @@ describe('PreferencesSettings', () => {
         ).toBe(endonym('de'));
         fireEvent.change(select, { target: { value: 'fr' } });
         expect(replaceMock).toHaveBeenCalledWith('/settings/preferences', { locale: 'fr' });
+    });
+
+    it('keeps the query string when the language changes', () => {
+        window.history.replaceState({}, '', '/settings/preferences?tab=billing&tag=a&tag=b');
+        render(<PreferencesSettings appLauncherEnabled={false} />);
+        fireEvent.change(screen.getByTestId('language-preference'), { target: { value: 'fr' } });
+        expect(replaceMock).toHaveBeenCalledWith(
+            { pathname: '/settings/preferences', query: { tab: 'billing', tag: ['a', 'b'] } },
+            { locale: 'fr' },
+        );
+    });
+
+    it('shows the same keyboard focus outline as the theme tiles', () => {
+        render(<PreferencesSettings appLauncherEnabled={false} />);
+        const classes = screen.getByTestId('language-preference').className;
+        expect(classes).toContain('focus-visible:outline-2');
+        expect(classes).toContain('focus-visible:outline-offset-2');
+        expect(classes).toContain('focus-visible:outline-primary');
+        expect(classes).not.toContain('ring-primary/30');
     });
 
     it('names a language in that language, capitalised', () => {
