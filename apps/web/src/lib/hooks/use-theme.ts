@@ -93,9 +93,11 @@ export function useTheme(): UseThemeReturn {
         const handleStorageChange = (event: StorageEvent) => {
             if (event.key !== THEME_STORAGE_KEY) return;
             if (event.newValue === 'light' || event.newValue === 'dark') {
+                memoryPreference = event.newValue;
                 setTheme(event.newValue);
             } else if (event.newValue == null) {
                 // Another tab picked System: follow the device again.
+                memoryPreference = 'system';
                 setTheme(systemTheme());
             }
         };
@@ -121,6 +123,8 @@ export function useTheme(): UseThemeReturn {
     const toggleTheme = (newTheme?: Theme) => {
         const targetTheme: Theme = newTheme || (theme === 'dark' ? 'light' : 'dark');
         setTheme(targetTheme);
+        // Keep the preference the tiles read in step, for storage that refuses writes.
+        memoryPreference = targetTheme;
         try {
             localStorage.setItem(THEME_STORAGE_KEY, targetTheme);
         } catch {
@@ -169,7 +173,9 @@ const THEME_PREFERENCE_EVENT = 'ever-works:theme-preference-change';
 export function readThemePreference(): ThemePreference {
     if (typeof window === 'undefined') return 'system';
     try {
-        return asTheme(window.localStorage.getItem(THEME_STORAGE_KEY)) ?? 'system';
+        // Nothing stored but a fixed pick in memory: storage refused the write and the
+        // page is on that theme, so the tiles must say so.
+        return asTheme(window.localStorage.getItem(THEME_STORAGE_KEY)) ?? memoryPreference;
     } catch {
         return memoryPreference;
     }
