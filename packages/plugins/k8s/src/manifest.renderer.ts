@@ -15,13 +15,53 @@ function nonRootId(value: number | undefined): number | undefined {
 	return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : undefined;
 }
 
-const COMMON_LABELS = (workId: string, slug: string): Record<string, string> => ({
+/** The id (UUID) of the Work whose deploy wrote the object. */
+export const WORK_UUID_LABEL = 'ever-works.io/work-uuid';
+/** The platform environment (`prod`, `stage`, `dev`) whose deploy wrote the object. */
+export const ENVIRONMENT_LABEL = 'ever-works.io/environment';
+
+/** Who deployed an object: the Work and the environment. Both optional (older callers pass neither). */
+export interface DeployIdentity {
+	workUuid?: string;
+	environment?: string;
+}
+
+/** Kubernetes' label-value syntax: at most 63 characters, alphanumeric at both ends, `-_.` inside. */
+const LABEL_VALUE_PATTERN = /^[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?$/;
+
+/**
+ * The Work and environment labels for `identity`. A value Kubernetes would refuse as a label
+ * value is left out rather than failing the deploy: the teardown then judges that object as it
+ * judges one from before these labels existed.
+ */
+function identityLabels(identity: DeployIdentity | undefined): Record<string, string> {
+	const labels: Record<string, string> = {};
+	// `deploy()` reads these from untyped options, so a non-string is possible.
+	const workUuid = typeof identity?.workUuid === 'string' ? identity.workUuid.trim() : '';
+	if (workUuid && LABEL_VALUE_PATTERN.test(workUuid)) {
+		labels[WORK_UUID_LABEL] = workUuid;
+	}
+	const environment = typeof identity?.environment === 'string' ? identity.environment.trim() : '';
+	if (environment && LABEL_VALUE_PATTERN.test(environment)) {
+		labels[ENVIRONMENT_LABEL] = environment;
+	}
+	return labels;
+}
+
+const COMMON_LABELS = (workId: string, slug: string, identity?: DeployIdentity): Record<string, string> => ({
 	'ever-works.io/managed': 'true',
 	'ever-works.io/work-id': workId,
 	'app.kubernetes.io/name': slug,
-	'app.kubernetes.io/managed-by': FIELD_MANAGER
+	'app.kubernetes.io/managed-by': FIELD_MANAGER,
+	...identityLabels(identity)
 });
 
+/**
+ * The Deployment's and the Service's selector. Its key set is fixed on purpose and is NOT
+ * built from `COMMON_LABELS`: a Deployment's `spec.selector` is immutable (a changed one fails
+ * every later apply), and a Service with another selector stops matching the running pods. The
+ * Work and environment labels go on the objects and the pod template, never in here.
+ */
 const SELECTOR_LABELS = (slug: string): Record<string, string> => ({
 	'app.kubernetes.io/name': slug
 });
@@ -30,7 +70,7 @@ const SELECTOR_LABELS = (slug: string): Record<string, string> => ({
  * Build the Deployment manifest for a work.
  */
 export function buildDeployment(input: ManifestRenderInputs): Record<string, unknown> {
-	const labels = COMMON_LABELS(input.workId, input.workSlug);
+	const labels = COMMON_LABELS(input.workId, input.workSlug, input);
 	const selector = SELECTOR_LABELS(input.workSlug);
 
 	// Every site gets the parts that are safe for a process that starts as root: no SA token,
@@ -217,20 +257,22 @@ export function buildDeployment(input: ManifestRenderInputs): Record<string, unk
  * runtime value ever lands in the website repo. `stringData` so the values
  * are written verbatim (the API server base64-encodes on persist).
  */
-export function buildRuntimeEnvSecret(input: {
-	name: string;
-	namespace: string;
-	workId: string;
-	workSlug: string;
-	env: Record<string, string>;
-}): Record<string, unknown> {
+export function buildRuntimeEnvSecret(
+	input: {
+		name: string;
+		namespace: string;
+		workId: string;
+		workSlug: string;
+		env: Record<string, string>;
+	} & DeployIdentity
+): Record<string, unknown> {
 	return {
 		apiVersion: 'v1',
 		kind: 'Secret',
 		metadata: {
 			name: input.name,
 			namespace: input.namespace,
-			labels: COMMON_LABELS(input.workId, input.workSlug)
+			labels: COMMON_LABELS(input.workId, input.workSlug, input)
 		},
 		type: 'Opaque',
 		stringData: input.env
@@ -241,7 +283,7 @@ export function buildRuntimeEnvSecret(input: {
  * Build the Service manifest. Always ClusterIP on port 80 → containerPort.
  */
 export function buildService(input: ManifestRenderInputs): Record<string, unknown> {
-	const labels = COMMON_LABELS(input.workId, input.workSlug);
+	const labels = COMMON_LABELS(input.workId, input.workSlug, input);
 	const selector = SELECTOR_LABELS(input.workSlug);
 	return {
 		apiVersion: 'v1',
@@ -261,7 +303,7 @@ export function buildService(input: ManifestRenderInputs): Record<string, unknow
 export function buildIngress(input: ManifestRenderInputs, strategy: IngressStrategy): Record<string, unknown> | null {
 	if (input.hosts.length === 0) return null;
 
-	const labels = COMMON_LABELS(input.workId, input.workSlug);
+	const labels = COMMON_LABELS(input.workId, input.workSlug, input);
 	const annotations = strategy.annotations({
 		hosts: input.hosts,
 		tlsIssuer: input.tlsIssuer,
@@ -311,15 +353,17 @@ export function buildIngress(input: ManifestRenderInputs, strategy: IngressStrat
 /**
  * Build a `kubernetes.io/dockerconfigjson` Secret used as imagePullSecret.
  */
-export function buildImagePullSecret(args: {
-	name: string;
-	namespace: string;
-	server: string;
-	username: string;
-	password: string;
-	workId: string;
-	workSlug: string;
-}): Record<string, unknown> {
+export function buildImagePullSecret(
+	args: {
+		name: string;
+		namespace: string;
+		server: string;
+		username: string;
+		password: string;
+		workId: string;
+		workSlug: string;
+	} & DeployIdentity
+): Record<string, unknown> {
 	const auth = Buffer.from(`${args.username}:${args.password}`).toString('base64');
 	const dockerConfig = {
 		auths: {
@@ -339,7 +383,7 @@ export function buildImagePullSecret(args: {
 		metadata: {
 			name: args.name,
 			namespace: args.namespace,
-			labels: COMMON_LABELS(args.workId, args.workSlug)
+			labels: COMMON_LABELS(args.workId, args.workSlug, args)
 		},
 		data: {
 			'.dockerconfigjson': dockerConfigJson

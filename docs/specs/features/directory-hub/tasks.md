@@ -60,6 +60,11 @@
       its registry entry moved there (ever-works/directory-registry#1). Open: the platform reports `itemsCount: 6` for
       Work `awesome-mcp-servers`, while the site lists 4,239 items.
 
+- [x] T-19 Route-served directories (2026-11-27): `rmm.ever.works` is on a Workers route (`ew-rmm`), because the zone is at
+      Cloudflare's limit of 100 Custom Domains, so a same-zone `fetch()` got 522. The hub now reaches it through a service
+      binding (`src/routing.ts`). Every later route-served directory needs one `services` binding plus a `ROUTE_SERVED`
+      entry in `wrangler.jsonc` and a hub deploy.
+
 ## Phase 2
 
 - [ ] T-20 Contract v1.1: optional `network: { name, url, mcp }` in `DirectoryInfo`, an `llms.txt` line and a card field,

@@ -144,9 +144,11 @@ export type WorkDeploymentTeardownPreparation =
           /**
            * The Work's cached `deployProjectId` (`namespace/name`) when it names
            * another place than `namespace/objectName`. It is set when the
-           * platform first looks the deployment up and is not rewritten, so a
-           * rename or a move since then shows here. Objects there are NOT
-           * removed, so the caller can say where to look.
+           * platform first looks the deployment up and refreshed after each
+           * server-side Kubernetes deploy that applied the objects
+           * ({@link DeployFacadeService.refreshKubernetesDeployTarget}), so a
+           * rename or a move since the last such deploy shows here. Objects
+           * there are NOT removed, so the caller can say where to look.
            */
           readonly staleTarget?: string;
           /** Removes the objects. Holds the cluster credential: never log or serialise the closure's inputs. */
@@ -185,6 +187,13 @@ export interface WorkDeploymentOrphanReport {
         readonly listed: number;
         /** The list's reason code, when it failed. */
         readonly failed?: string;
+        /**
+         * Of `listed`, how many another environment's deploy labelled
+         * (`ever-works.io/environment` is not this environment's
+         * `EVER_WORKS_K8S_WORKS_NAMESPACE_SUFFIX`). They are left out of
+         * `orphans`: this environment cannot see that one's Works. Absent when none.
+         */
+        readonly otherEnvironment?: number;
     }>;
     /**
      * Deployments whose `namespace/name` is no Work's deploy target and no
@@ -1340,6 +1349,42 @@ export class DeployFacadeService implements IDeployFacade {
     }
 
     /**
+     * Refresh a Work's cached deploy target (`deployProjectId`) after a
+     * Kubernetes deploy applied its objects: `deploymentId` is the plugin's
+     * answer, `namespace/name` (the format {@link kubernetesDeploymentId}
+     * reads). Without this the field kept the first target ever looked up, so
+     * after a rename or a move the Work-delete teardown, its sharer check and
+     * the orphan report all reasoned about where the objects once were.
+     *
+     * Written only for a `k8s` / `ever-works` Work, only when `deploymentId`
+     * is a valid `namespace/name`, and only when it differs from what is
+     * cached; another provider's id is never touched. Updates `work` in place
+     * too. Answers whether it wrote. A failed write throws: the caller decides
+     * whether that fails anything (the deploy itself has already succeeded).
+     */
+    async refreshKubernetesDeployTarget(
+        work: Pick<Work, 'id' | 'deployProvider' | 'deployProjectId'>,
+        deploymentId: string | null | undefined,
+    ): Promise<boolean> {
+        if (!isKubernetesFamilyProvider(work.deployProvider)) {
+            return false;
+        }
+        const target = kubernetesDeploymentId(deploymentId);
+        const cached = (work.deployProjectId ?? '').trim();
+        if (!target || cached === target) {
+            return false;
+        }
+        // Another provider's id (a Vercel `prj_…`, say) stays: a Work that moves
+        // back to that provider needs it for its domain and status calls.
+        if (cached && !kubernetesDeploymentId(cached)) {
+            return false;
+        }
+        await this.workRepository.update(work.id, { deployProjectId: target });
+        work.deployProjectId = target;
+        return true;
+    }
+
+    /**
      * Prepare the removal of a website Work's platform-held runtime objects
      * (Ingress, Service, Deployment, the Secrets the deploy wrote) for when the
      * Work is deleted.
@@ -1356,8 +1401,14 @@ export class DeployFacadeService implements IDeployFacade {
      * platform holds none) is theirs to clean up, and the platform's view of it
      * may be stale. It is also skipped when another Work deploys, or may deploy,
      * to the same namespace and object name, since those objects then serve that
-     * Work too: the objects' labels name the website repository, not the Work,
-     * so this check is what tells two Works apart.
+     * Work too: the objects' older labels name the website repository, not the
+     * Work, so this check is what tells two Works apart.
+     *
+     * The plugin is also handed the Work's id and this environment's
+     * `EVER_WORKS_K8S_WORKS_NAMESPACE_SUFFIX` (`workUuid`, `environment`): an
+     * object a deploy since those labels exist stamped for another Work or
+     * another environment is kept as well. Objects from before carry neither
+     * label and are judged as before.
      *
      * That check reads only this environment's database, so the whole
      * teardown runs only where `EVER_WORKS_K8S_WORKS_CLUSTER_OWNER=true`
@@ -1468,7 +1519,13 @@ export class DeployFacadeService implements IDeployFacade {
             // sanitises it the same way, so its object names are `objectName`.
             const projectName = work.getWebsiteRepo();
             const credential = effective.token;
-            const context = effective.lookupContext;
+            // Who is deleting, compared with the Work and environment labels the
+            // deploy stamps (`deployServerSideManaged` passes the same values).
+            const context: DeploymentLookupContext = {
+                ...effective.lookupContext,
+                workUuid: work.id,
+                environment: config.everWorks.deploy.getK8sWorksNamespaceSuffix(),
+            };
             const cachedTarget = kubernetesDeploymentId(work.deployProjectId);
             return {
                 status: 'ready',
@@ -1515,8 +1572,10 @@ export class DeployFacadeService implements IDeployFacade {
      * A Work whose cached `deployProjectId` is `namespace/objectName` is a
      * sharer outright (`why: 'cached_target'`), whatever its website
      * repository, provider or settings say now. That field is set when the
-     * platform first looks the deployment up and is not rewritten, so it names
-     * where that Work's objects were, not necessarily where they are.
+     * platform first looks the deployment up and refreshed after each
+     * server-side Kubernetes deploy that applied the objects, so it names where
+     * that Work's last such deploy put them, not necessarily where they are now
+     * (a Work moved to another provider keeps the last one).
      *
      * Otherwise only Works whose website repository gives the same object name
      * count. Each Kubernetes-family candidate's namespace is worked out with its
@@ -1615,6 +1674,13 @@ export class DeployFacadeService implements IDeployFacade {
      * target on another cluster; never the reverse. A deployment that two
      * credentials both list is named once, with both.
      *
+     * A deployment whose `ever-works.io/environment` label names another
+     * environment than this one's `EVER_WORKS_K8S_WORKS_NAMESPACE_SUFFIX` is
+     * left out and counted in the cluster's `otherEnvironment`: dev, stage and
+     * prod share the cluster, and this database holds only this environment's
+     * Works. One without the label (deployed before it existed) is judged as
+     * before.
+     *
      * Reading a `k8s` Work's settings may let the settings service tidy that
      * Work's stored plugin settings once (`normalizeWorkDefaultShadows`), as a
      * deploy or a teardown does; nothing else is written.
@@ -1668,6 +1734,7 @@ export class DeployFacadeService implements IDeployFacade {
             return nothing('works_unreadable', teardownFailureCode(error));
         }
 
+        const environment = config.everWorks.deploy.getK8sWorksNamespaceSuffix();
         const listed: Array<WorkDeploymentOrphanReport['clusters'][number]> = [];
         const orphans = new Map<string, { namespace: string; name: string; clusters: string[] }>();
         for (const cluster of clusters) {
@@ -1680,8 +1747,18 @@ export class DeployFacadeService implements IDeployFacade {
                         kubeContextOverride: null,
                     }),
                 );
-                listed.push({ names: cluster.names, listed: refs.length });
-                for (const ref of refs) {
+                const ours = refs.filter(
+                    (ref) =>
+                        typeof ref.environment !== 'string' ||
+                        ref.environment.trim().toLowerCase() === environment,
+                );
+                const otherEnvironment = refs.length - ours.length;
+                listed.push({
+                    names: cluster.names,
+                    listed: refs.length,
+                    ...(otherEnvironment > 0 ? { otherEnvironment } : {}),
+                });
+                for (const ref of ours) {
                     const key = `${ref.location}/${ref.name}`;
                     if (known.targets.has(key)) continue;
                     if (known.unresolvedNames.has(ref.name)) continue;
@@ -2051,6 +2128,8 @@ export class DeployFacadeService implements IDeployFacade {
     /**
      * Resolve the deployment projectId for a work.
      * Uses the cached deployProjectId when available to avoid redundant API calls.
+     * This is where it is first written; a server-side Kubernetes deploy keeps it
+     * current afterwards ({@link refreshKubernetesDeployTarget}).
      */
     private async resolveProjectId(
         plugin: IDeploymentPlugin,

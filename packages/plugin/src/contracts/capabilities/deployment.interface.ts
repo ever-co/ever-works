@@ -139,6 +139,22 @@ export interface DeploymentLookupContext {
 	 * use that kubeconfig's operator-controlled current context.
 	 */
 	readonly kubeContextOverride?: string | null;
+	/**
+	 * The id (UUID) of the Work the operation is for. A provider may label what its
+	 * deploy creates with it and, in {@link IDeploymentPlugin.removeWorkDeployment},
+	 * keep an object whose label names another Work. A deploy passes the same value
+	 * in `DeploymentConfig.options.workUuid`. Optional: older callers omit it.
+	 */
+	readonly workUuid?: string;
+	/**
+	 * The platform environment the operation runs in (`prod`, `stage`, `dev`: the same
+	 * suffix slug-derived `k8s-works` namespaces end in). Several environments may share
+	 * one cluster and one credential, so a provider may label what its deploy creates
+	 * with it and, in {@link IDeploymentPlugin.removeWorkDeployment}, keep an object
+	 * whose label names another environment. A deploy passes the same value in
+	 * `DeploymentConfig.options.environment`. Optional: older callers omit it.
+	 */
+	readonly environment?: string;
 }
 
 /**
@@ -161,7 +177,10 @@ export interface WorkDeploymentTeardownResult {
 	readonly removed: readonly WorkDeploymentTeardownObject[];
 	/** Objects that were already gone. */
 	readonly absent: readonly WorkDeploymentTeardownObject[];
-	/** Objects left in place because the provider could not prove its own deploy created them under this name. */
+	/**
+	 * Objects left in place because the provider could not prove its own deploy created
+	 * them under this name, for this Work and this environment. `reason` is a fixed code.
+	 */
 	readonly kept: readonly (WorkDeploymentTeardownObject & { readonly reason: string })[];
 	/**
 	 * Objects whose read or delete failed. `error` is scrubbed of credentials; `code`
@@ -182,6 +201,11 @@ export interface WorkDeploymentRef {
 	readonly location: string;
 	/** Its name (for Kubernetes, the Ingress name, which is also its Service's and Deployment's). */
 	readonly name: string;
+	/**
+	 * The environment whose deploy created it (see {@link DeploymentLookupContext.environment}),
+	 * when its labels name one. Deployments from before the label have none.
+	 */
+	readonly environment?: string;
 }
 
 /**
@@ -297,8 +321,11 @@ export interface IDeploymentPlugin extends IPlugin {
 	 * deletes a namespace, a volume or a volume claim, and it leaves any object
 	 * it cannot prove the provider's own deploy created under this name. That
 	 * proof is per name, not per Work: the caller must first make sure no other
-	 * Work deploys to the same place. Idempotent: an object that is already gone
-	 * is reported in `absent`, not as an error.
+	 * Work deploys to the same place. When the caller passes
+	 * `context.workUuid` / `context.environment`, an object whose labels name
+	 * another Work or another environment is kept too; an object from before
+	 * those labels is judged by its name alone. Idempotent: an object that is
+	 * already gone is reported in `absent`, not as an error.
 	 *
 	 * **Optional.** A provider without platform-held runtime objects omits it.
 	 */
