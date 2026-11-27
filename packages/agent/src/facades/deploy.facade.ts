@@ -1398,10 +1398,12 @@ export class DeployFacadeService implements IDeployFacade {
                 return { status: 'skipped', reason: 'not_managed' };
             }
             // The platform's clusters may be shared by several environments
-            // (dev, stage and prod list the same `k8s-works` credential, and a
-            // slug-derived namespace ends in `-prod` in all of them). The sharer
-            // check below sees only this database, so it decides only in the
-            // environment that owns the clusters.
+            // (dev, stage and prod list the same `k8s-works` credential; a
+            // slug-derived namespace ends in that environment's
+            // `EVER_WORKS_K8S_WORKS_NAMESPACE_SUFFIX`, but an explicit namespace
+            // can still name another environment's). The sharer check below
+            // sees only this database, so it decides only in the environment
+            // that owns the clusters.
             if (!config.everWorks.deploy.isClusterOwner()) {
                 return {
                     status: 'skipped',

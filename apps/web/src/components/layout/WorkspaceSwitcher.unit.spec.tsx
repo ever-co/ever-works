@@ -48,7 +48,34 @@ vi.mock('../organizations/CreateOrganizationModal', () => ({
         open ? <div data-testid="create-organization-modal" /> : null,
 }));
 
-import { WorkspaceSwitcher } from './WorkspaceSwitcher';
+import { plateColor, plateHue, WorkspaceSwitcher } from './WorkspaceSwitcher';
+
+/** `hsl(h s% l%)` → [r, g, b] in 0..255. */
+function hslToRgb(css: string): [number, number, number] {
+    const [h, sPct, lPct] = css.match(/[\d.]+/g)!.map(Number);
+    const sat = sPct / 100;
+    const light = lPct / 100;
+    const k = (n: number) => (n + h / 30) % 12;
+    const a = sat * Math.min(light, 1 - light);
+    const f = (n: number) => light - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
+    return [f(0), f(8), f(4)].map((v) => Math.round(v * 255)) as [number, number, number];
+}
+
+function hslToCss(hue: number): string {
+    const [r, g, b] = hslToRgb(plateColor(hue));
+    return `rgb(${r}, ${g}, ${b})`;
+}
+
+/** WCAG contrast of white text on the colour. */
+function contrastWithWhite(css: string): number {
+    const channel = (v: number) => {
+        const c = v / 255;
+        return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+    };
+    const [r, g, b] = hslToRgb(css);
+    const luminance = 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b);
+    return 1.05 / (luminance + 0.05);
+}
 import {
     __resetOrganizationsStoreForTests,
     __seedOrganizationsStoreForTests,
@@ -132,7 +159,7 @@ describe('WorkspaceSwitcher — EW-660 Phase 8', () => {
         const trigger = screen.getAllByRole('button')[0];
         expect(trigger).toHaveTextContent('organizations.switcher.heading');
         fireEvent.click(trigger);
-        expect(screen.getByText('organizations.switcher.createNew')).toBeInTheDocument();
+        expect(screen.getByText('organizations.switcher.addNew')).toBeInTheDocument();
     });
 
     /**
@@ -196,13 +223,58 @@ describe('WorkspaceSwitcher — EW-660 Phase 8', () => {
         expect(screen.getAllByText('Globex LLC').length).toBeGreaterThanOrEqual(1);
         expect(screen.getAllByText('Initech').length).toBeGreaterThanOrEqual(1);
 
-        expect(screen.getByText('organizations.switcher.createNew')).toBeInTheDocument();
+        expect(screen.getByText('organizations.switcher.addNew')).toBeInTheDocument();
     });
 
     /**
      * Falls back to the org's slug when `displayName` is null — slug is
      * NOT NULL on the DB row, so this is the right fallback shape.
      */
+    it('in the only Organization: name, address line, tile, "No other organization" and "Add organization" (A2)', () => {
+        pathnameMock.mockReturnValue('/org/acme-robotics/dashboard');
+        __seedOrganizationsStoreForTests({
+            data: [makeOrg({ id: 'o-1', slug: 'acme-robotics', displayName: 'Acme Robotics' })],
+            isLoading: false,
+            error: null,
+        });
+
+        render(<WorkspaceSwitcher />);
+
+        expect(screen.getByText('Acme Robotics')).toBeInTheDocument();
+        expect(screen.getByTestId('workspace-switcher-address')).toHaveTextContent('acme-robotics');
+        expect(screen.getAllByTestId('org-avatar')[0].style.backgroundColor).toBe(
+            // jsdom serialises hsl() as rgb()
+            hslToCss(plateHue('Acme Robotics')),
+        );
+        fireEvent.click(screen.getAllByRole('button')[0]);
+        expect(screen.getByText('organizations.switcher.label')).toBeInTheDocument();
+        expect(screen.getByText('organizations.switcher.noOther')).toBeInTheDocument();
+        expect(screen.getByText('organizations.switcher.addNew')).toBeInTheDocument();
+    });
+
+    it('on a personal page, offers the Organization to switch to and claims no address or "No other"', () => {
+        pathnameMock.mockReturnValue('/dashboard');
+        __seedOrganizationsStoreForTests({
+            data: [makeOrg({ id: 'o-1', slug: 'acme-robotics', displayName: 'Acme Robotics' })],
+            isLoading: false,
+            error: null,
+        });
+
+        render(<WorkspaceSwitcher />);
+
+        expect(screen.queryByTestId('workspace-switcher-address')).toBeNull();
+        fireEvent.click(screen.getAllByRole('button')[0]);
+        expect(screen.queryByText('organizations.switcher.noOther')).toBeNull();
+    });
+
+    it('derives the same tile colour from the same name, readable for every hue (white text, 4.5:1)', () => {
+        expect(plateHue('Acme Robotics')).toBe(plateHue('Acme Robotics'));
+        expect(plateHue('Acme Robotics')).not.toBe(plateHue('Northwind Labs'));
+        for (let hue = 0; hue < 360; hue += 1) {
+            expect(contrastWithWhite(plateColor(hue)), `hue ${hue}`).toBeGreaterThanOrEqual(4.5);
+        }
+    });
+
     it('uses the org slug as the trigger label when displayName is null', () => {
         const org = makeOrg({ displayName: null, slug: 'fallback-org' });
         __seedOrganizationsStoreForTests({
@@ -258,7 +330,7 @@ describe('WorkspaceSwitcher — EW-660 Phase 8', () => {
         fireEvent.click(trigger);
         // After opening, the org list row + create row both show.
         expect(screen.getAllByText('Acme Inc').length).toBeGreaterThanOrEqual(1);
-        expect(screen.getByText('organizations.switcher.createNew')).toBeInTheDocument();
+        expect(screen.getByText('organizations.switcher.addNew')).toBeInTheDocument();
     });
 
     it('persists from the current tab scope before navigating to the canonical dashboard', async () => {

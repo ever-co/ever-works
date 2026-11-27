@@ -2957,6 +2957,7 @@
             "subtitle": "إدارة إعدادات حسابك والتفضيلات",
             "tabs": {
                 "profile": "الملف الشخصي",
+                "preferences": "التفضيلات",
                 "organization": "Organization",
                 "security": "الأمان",
                 "apiKeys": "مفاتيح API",
@@ -4776,6 +4777,22 @@
                     "linked": "The organization is linked.",
                     "whatIsSent": "Linking sends the code, this account's ID and the organization's short name (its slug). No other name, e-mail address or content is sent."
                 }
+            },
+            "preferences": {
+                "themeTitle": "المظهر",
+                "themeDescription": "فاتح أو داكن أو مثل هذا الجهاز. الأيقونة في الشريط العلوي تبدّل بين الفاتح والداكن.",
+                "themeLight": "فاتح",
+                "themeDark": "داكن",
+                "themeSystem": "النظام",
+                "languageTitle": "اللغة",
+                "languageDescription": "اللغة التي يستخدمها Ever Works في هذا المتصفح."
+            },
+            "groups": {
+                "account": "الحساب",
+                "organization": "المؤسسة",
+                "product": "Ever Works",
+                "integrations": "التكاملات",
+                "plugins": "الإضافات"
             }
         },
         "stats": {
@@ -9723,6 +9740,7 @@
             },
             "profileMenu": {
                 "accountSettings": "إعدادات الحساب",
+                "preferences": "التفضيلات",
                 "helpDocs": "المساعدة والوثائق",
                 "support": "الدعم",
                 "keyboardShortcuts": "اختصارات لوحة المفاتيح",
@@ -11358,9 +11376,12 @@
             }
         },
         "switcher": {
-            "heading": "Switch Organization",
+            "heading": "تبديل المؤسسة",
+            "label": "المؤسسات",
+            "noOther": "لا توجد مؤسسة أخرى",
             "createNew": "إنشاء مؤسسة",
-            "loading": "Loading…",
+            "addNew": "إضافة مؤسسة",
+            "loading": "جارٍ التحميل…",
             "switchFailed": "تعذّر تبديل المؤسسة. حاول مرة أخرى.",
             "active": "المؤسسة الحالية"
         },
