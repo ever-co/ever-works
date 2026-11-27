@@ -14043,8 +14043,7 @@
             "createNew": "Create organization",
             "addNew": "Add organization",
             "loading": "Loading…",
-            "switchFailed": "Couldn't switch organization. Try again.",
-            "active": "Current organization"
+            "switchFailed": "Couldn't switch organization. Try again."
         },
         "create": {
             "visionToggle": "Add company vision (optional)",

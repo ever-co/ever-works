@@ -11383,8 +11383,7 @@
             "createNew": "Crea organizzazione",
             "addNew": "Aggiungi organizzazione",
             "loading": "Caricamento…",
-            "switchFailed": "Impossibile cambiare organizzazione. Riprova.",
-            "active": "Organizzazione attuale"
+            "switchFailed": "Impossibile cambiare organizzazione. Riprova."
         },
         "create": {
             "visionToggle": "Add company vision (optional)",

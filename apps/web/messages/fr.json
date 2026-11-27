@@ -11382,8 +11382,7 @@
             "createNew": "Créer une organisation",
             "addNew": "Ajouter une organisation",
             "loading": "Chargement…",
-            "switchFailed": "Impossible de changer d'organisation. Réessayez.",
-            "active": "Organisation actuelle"
+            "switchFailed": "Impossible de changer d'organisation. Réessayez."
         },
         "create": {
             "visionToggle": "Add company vision (optional)",
