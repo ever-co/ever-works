@@ -26,9 +26,11 @@ vi.mock('@/i18n/navigation', () => ({
     useRouter: () => ({ push: routerPushMock }),
 }));
 
-const { navigateToWorkspaceDashboardMock } = vi.hoisted(() => ({
+const { navigateToWorkspaceDashboardMock, toastErrorMock } = vi.hoisted(() => ({
     navigateToWorkspaceDashboardMock: vi.fn(),
+    toastErrorMock: vi.fn(),
 }));
+vi.mock('sonner', () => ({ toast: { error: toastErrorMock } }));
 vi.mock('@/lib/workspace-navigation', () => ({
     navigateToWorkspaceDashboard: navigateToWorkspaceDashboardMock,
 }));
@@ -105,6 +107,7 @@ describe('WorkspaceSwitcher — EW-660 Phase 8', () => {
         __resetOrganizationsStoreForTests();
         routerPushMock.mockReset();
         navigateToWorkspaceDashboardMock.mockReset();
+        toastErrorMock.mockReset();
         pathnameMock.mockReset().mockReturnValue('/dashboard');
         vi.stubGlobal(
             'fetch',
@@ -158,6 +161,8 @@ describe('WorkspaceSwitcher — EW-660 Phase 8', () => {
         expect(screen.queryByTestId('workspace-switcher-create')).toBeNull();
         const trigger = screen.getAllByRole('button')[0];
         expect(trigger).toHaveTextContent('organizations.switcher.heading');
+        // No Organization to show: the trigger is named outright.
+        expect(trigger).toHaveAccessibleName('organizations.switcher.heading');
         fireEvent.click(trigger);
         expect(screen.getByText('organizations.switcher.addNew')).toBeInTheDocument();
     });
@@ -395,5 +400,98 @@ describe('WorkspaceSwitcher — EW-660 Phase 8', () => {
             }),
         );
         expect(routerPushMock).not.toHaveBeenCalled();
+    });
+    /** Two Organizations, the page in the first: the shape the switch tests share. */
+    function renderInYoWithEverToo() {
+        const yo = makeOrg({ id: 'o-yo', slug: 'yo-inc', displayName: 'Yo Incorporated' });
+        const ever = makeOrg({ id: 'o-ever', slug: 'ever', displayName: 'Ever' });
+        pathnameMock.mockReturnValue('/org/yo-inc/dashboard');
+        window.history.replaceState({}, '', '/org/yo-inc/dashboard');
+        __seedOrganizationsStoreForTests({ data: [yo, ever], isLoading: false, error: null });
+        render(<WorkspaceSwitcher />);
+    }
+
+    function answerTheSwitchWith(response: Partial<Response>) {
+        vi.mocked(fetch).mockImplementation((_input, init) =>
+            Promise.resolve(
+                (init?.method === 'POST'
+                    ? response
+                    : {
+                          ok: true,
+                          status: 200,
+                          json: async () => ({
+                              tenantId: 't-1',
+                              organizationId: 'o-yo',
+                              organizationSlug: 'yo-inc',
+                          }),
+                      }) as Response,
+            ),
+        );
+    }
+
+    it('says the switch failed, and stays, when the API refuses it', async () => {
+        answerTheSwitchWith({ ok: false, status: 403, json: async () => ({}) });
+        renderInYoWithEverToo();
+
+        fireEvent.click(screen.getByRole('button', { name: /^Yo Incorporated/ }));
+        fireEvent.click(screen.getByText('Ever'));
+
+        await waitFor(() =>
+            expect(toastErrorMock).toHaveBeenCalledWith('organizations.switcher.switchFailed'),
+        );
+        expect(navigateToWorkspaceDashboardMock).not.toHaveBeenCalled();
+    });
+
+    it('says the switch failed, and stays, when the API saved another Organization', async () => {
+        answerTheSwitchWith({
+            ok: true,
+            status: 200,
+            json: async () => ({
+                tenantId: 't-1',
+                organizationId: 'o-yo',
+                organizationSlug: 'yo-inc',
+            }),
+        });
+        renderInYoWithEverToo();
+
+        fireEvent.click(screen.getByRole('button', { name: /^Yo Incorporated/ }));
+        fireEvent.click(screen.getByText('Ever'));
+
+        await waitFor(() =>
+            expect(toastErrorMock).toHaveBeenCalledWith('organizations.switcher.switchFailed'),
+        );
+        expect(navigateToWorkspaceDashboardMock).not.toHaveBeenCalled();
+    });
+
+    it('opens from the keyboard', async () => {
+        renderInYoWithEverToo();
+
+        const trigger = screen.getByRole('button', { name: /^Yo Incorporated/ });
+        trigger.focus();
+        fireEvent.keyDown(trigger, { key: 'Enter' });
+
+        expect(await screen.findByText('organizations.switcher.addNew')).toBeInTheDocument();
+    });
+
+    it('names the trigger by the Organization it shows, then what it does (WCAG 2.5.3)', () => {
+        renderInYoWithEverToo();
+
+        const trigger = screen.getByRole('button', { name: /^Yo Incorporated/ });
+        expect(trigger).not.toHaveAttribute('aria-label');
+        expect(trigger).toHaveAccessibleName(
+            'Yo Incorporated yo-inc organizations.switcher.heading',
+        );
+    });
+
+    it('marks the current Organization for assistive technology, not only with the check mark', () => {
+        renderInYoWithEverToo();
+
+        fireEvent.click(screen.getByRole('button', { name: /^Yo Incorporated/ }));
+        const current = screen
+            .getAllByRole('menuitem')
+            .filter((item) => item.getAttribute('aria-current') === 'true');
+        expect(current).toHaveLength(1);
+        expect(current[0]).toHaveTextContent('Yo Incorporated');
+        expect(screen.getByRole('menuitem', { name: 'Ever' })).not.toHaveAttribute('aria-current');
     });
 });

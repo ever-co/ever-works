@@ -11382,8 +11382,7 @@
             "createNew": "יצירת ארגון",
             "addNew": "הוספת ארגון",
             "loading": "טוען…",
-            "switchFailed": "לא ניתן היה להחליף ארגון. נסה שוב.",
-            "active": "הארגון הנוכחי"
+            "switchFailed": "לא ניתן היה להחליף ארגון. נסה שוב."
         },
         "create": {
             "visionToggle": "Add company vision (optional)",
