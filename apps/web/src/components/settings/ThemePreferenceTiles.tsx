@@ -24,7 +24,10 @@ const PALETTES = {
     dark: { page: '#09090b', panel: '#18181b', line: '#27272a', ink: '#fafafa' },
 } as const;
 
-function WindowSketch({ palette, x }: { palette: (typeof PALETTES)['light']; x: number }) {
+/** Either palette: `as const` makes each a different literal type, so name the union, not `light`. */
+type Palette = (typeof PALETTES)[keyof typeof PALETTES];
+
+function WindowSketch({ palette, x }: { palette: Palette; x: number }) {
     return (
         <g transform={`translate(${x} 0)`}>
             <rect width={120} height={72} fill={palette.page} />
