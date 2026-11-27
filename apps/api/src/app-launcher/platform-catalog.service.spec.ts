@@ -542,6 +542,40 @@ describe('APW-11 T8 — PlatformCatalogService', () => {
 
             expect(messagesContaining(logger.warn, 'mutable ref')).toHaveLength(1);
         });
+
+        it('reads the index AND every icon from a branch ref, e.g. a develop-only catalog', async () => {
+            // The develop environment can follow a catalog branch ahead of main
+            // (in-app switcher brief, 2026-11-26): the index and its icons must
+            // come from that same ref, or a new entry's icon would 404 on main.
+            const logger = spyOnLogger();
+            const { service, server, cache } = makeHarness({
+                env: { EVER_WORKS_PLATFORM_CATALOG_REF: 'develop' },
+            });
+            const result = await service.read('develop');
+
+            expect(server.urls[0]).toBe(
+                `${CATALOG_BASE}/ever-works/platforms/develop/platforms.json`,
+            );
+            const iconUrls = server.urls.filter((url) => url.includes('/icons/'));
+            expect(iconUrls.length).toBeGreaterThan(0);
+            for (const url of iconUrls) {
+                expect(url.startsWith(`${CATALOG_BASE}/ever-works/platforms/develop/icons/`)).toBe(
+                    true,
+                );
+            }
+            expect(result.platforms.length).toBeGreaterThan(0);
+            expect(result.platforms.every((platform) => platform.iconDataUri)).toBe(true);
+            // Its own cache entries, never main's.
+            expect(cache.keys()).toEqual(
+                expect.arrayContaining([
+                    'platform-catalog:develop',
+                    'platform-catalog:develop:last-good',
+                ]),
+            );
+            expect(cache.keys().some((key) => key.startsWith('platform-catalog:main'))).toBe(false);
+            // A branch is mutable: the supply-chain warning fires once, and the read still serves.
+            expect(messagesContaining(logger.warn, 'mutable ref')).toHaveLength(1);
+        });
     });
 
     describe('validation — the fixture cases, one at a time (FR-9…FR-11, ACC-11-08)', () => {
