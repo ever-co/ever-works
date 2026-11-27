@@ -1634,6 +1634,14 @@ export class DeployService {
                         // unscoped, so getSettings() resolves admin -> env ->
                         // schema default and silently discards what the Work set.
                         settingsOverride: deploySettings,
+                        // Labelled on every object the plugin writes
+                        // (`ever-works.io/work-uuid`, `ever-works.io/environment`).
+                        // dev, stage and prod share the cluster, and two Works can
+                        // deploy one repository: the Work-delete teardown
+                        // (`prepareWorkDeploymentTeardown`, same two values) keeps
+                        // what these name for another Work or environment.
+                        workUuid: work.id,
+                        environment: config.everWorks.deploy.getK8sWorksNamespaceSuffix(),
                     },
                 },
                 kubeconfig,
@@ -1653,6 +1661,7 @@ export class DeployService {
                     hosts[0] ? `, host ${hosts[0]}` : ''
                 })`,
             );
+            await this.refreshDeployTarget(work, result?.id);
             return true;
         } catch (error: unknown) {
             const message = error instanceof Error ? error.message : String(error);
@@ -1661,6 +1670,27 @@ export class DeployService {
             });
             this.logger.error(`Server-side deploy threw for work ${work.id}: ${message}`);
             return false;
+        }
+    }
+
+    /**
+     * Keep the Work's cached deploy target (`deployProjectId`) on the
+     * `namespace/name` this deploy just applied, so the Work-delete teardown,
+     * its sharer check and the orphan report reason about where the objects
+     * are now, not where they first were. Best effort: the objects are already
+     * applied, so a failed write is logged and the deploy still succeeds.
+     */
+    private async refreshDeployTarget(work: Work, deploymentId: string | undefined): Promise<void> {
+        try {
+            if (await this.deployFacade.refreshKubernetesDeployTarget(work, deploymentId)) {
+                this.logger.log(`Work ${work.id}: cached deploy target is now ${deploymentId}`);
+            }
+        } catch (error: unknown) {
+            this.logger.warn(
+                `Work ${work.id}: could not refresh its cached deploy target: ${
+                    error instanceof Error ? error.name : 'unknown'
+                }`,
+            );
         }
     }
 

@@ -118,6 +118,7 @@ describe('DeployService — server-side deploy for managed cluster tiers', () =>
             getOtherPluginSettings: jest
                 .fn()
                 .mockResolvedValue(overrides.githubPluginSettings ?? {}),
+            refreshKubernetesDeployTarget: jest.fn().mockResolvedValue(true),
         };
 
         const gitFacade = {
@@ -635,6 +636,111 @@ describe('DeployService — server-side deploy for managed cluster tiers', () =>
             'ERROR',
             expect.objectContaining({ lastError: 'boom' }),
         );
+    });
+
+    describe('who deployed: the Work and environment labels, and the cached deploy target', () => {
+        const savedSuffix = process.env.EVER_WORKS_K8S_WORKS_NAMESPACE_SUFFIX;
+        afterEach(() => {
+            if (savedSuffix === undefined) delete process.env.EVER_WORKS_K8S_WORKS_NAMESPACE_SUFFIX;
+            else process.env.EVER_WORKS_K8S_WORKS_NAMESPACE_SUFFIX = savedSuffix;
+        });
+
+        it('hands the plugin the Work id and this environment to label every object with', async () => {
+            delete process.env.EVER_WORKS_K8S_WORKS_NAMESPACE_SUFFIX;
+            const plugin = managedPlugin();
+            const { service } = buildService({
+                plugin,
+                settings: { clusterSource: 'k8s-works-shared' },
+            });
+
+            await service.deploy('work-1', 'user-1');
+
+            const [config] = plugin.deploy.mock.calls[0];
+            // `prod` when EVER_WORKS_K8S_WORKS_NAMESPACE_SUFFIX is unset: the
+            // value the Work-delete teardown compares the label with.
+            expect(config.options.workUuid).toBe('work-1');
+            expect(config.options.environment).toBe('prod');
+        });
+
+        it('names the environment by EVER_WORKS_K8S_WORKS_NAMESPACE_SUFFIX', async () => {
+            process.env.EVER_WORKS_K8S_WORKS_NAMESPACE_SUFFIX = 'dev';
+            const plugin = managedPlugin();
+            const { service } = buildService({
+                plugin,
+                settings: { clusterSource: 'k8s-works-shared' },
+            });
+
+            await service.deploy('work-1', 'user-1');
+
+            expect(plugin.deploy.mock.calls[0][0].options.environment).toBe('dev');
+        });
+
+        it('refreshes the cached deploy target with the namespace/name the deploy applied', async () => {
+            const plugin = managedPlugin();
+            plugin.deploy.mockResolvedValue({
+                status: 'deploying',
+                id: 'ever-works-tenants-user-1/acme-site',
+                createdAt: 't',
+            });
+            const { service, deployFacade, work } = buildService({
+                plugin,
+                settings: { clusterSource: 'k8s-works-shared' },
+            });
+
+            await expect(service.deploy('work-1', 'user-1')).resolves.toMatchObject({
+                dispatched: true,
+            });
+
+            expect(deployFacade.refreshKubernetesDeployTarget).toHaveBeenCalledTimes(1);
+            expect(deployFacade.refreshKubernetesDeployTarget).toHaveBeenCalledWith(
+                work,
+                'ever-works-tenants-user-1/acme-site',
+            );
+        });
+
+        it('leaves the cached deploy target alone when the deploy failed', async () => {
+            const plugin = managedPlugin();
+            plugin.deploy.mockResolvedValue({
+                status: 'error',
+                error: 'boom',
+                id: 'ever-works-tenants-user-1/acme-site',
+                createdAt: 't',
+            });
+            const { service, deployFacade } = buildService({
+                plugin,
+                settings: { clusterSource: 'k8s-works-shared' },
+            });
+
+            await service.deploy('work-1', 'user-1');
+
+            expect(deployFacade.refreshKubernetesDeployTarget).not.toHaveBeenCalled();
+        });
+
+        it('does not fail an applied deploy when the cache cannot be written', async () => {
+            const plugin = managedPlugin();
+            const { service, deployFacade, deploymentRepository } = buildService({
+                plugin,
+                settings: { clusterSource: 'k8s-works-shared' },
+            });
+            deployFacade.refreshKubernetesDeployTarget.mockRejectedValue(new Error('db down'));
+
+            await expect(service.deploy('work-1', 'user-1')).resolves.toMatchObject({
+                dispatched: true,
+            });
+            expect(deploymentRepository.markTerminal).not.toHaveBeenCalled();
+        });
+
+        it('custom-kubeconfig (workflow dispatch) → nothing is refreshed here', async () => {
+            const plugin = managedPlugin();
+            const { service, deployFacade } = buildService({
+                plugin,
+                settings: { clusterSource: 'custom-kubeconfig' },
+            });
+
+            await service.deploy('work-1', 'user-1');
+
+            expect(deployFacade.refreshKubernetesDeployTarget).not.toHaveBeenCalled();
+        });
     });
 
     it('custom-kubeconfig → workflow dispatch unchanged, plugin.deploy never called', async () => {

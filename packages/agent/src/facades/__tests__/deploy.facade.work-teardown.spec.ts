@@ -238,6 +238,38 @@ describe('DeployFacadeService.prepareWorkDeploymentTeardown', () => {
         });
     });
 
+    it('hands the plugin the deleted Work’s id and this environment, so it keeps objects labelled for another', async () => {
+        const { service, removeWorkDeployment } = createService({ work: work() });
+
+        const prepared = await service.prepareWorkDeploymentTeardown({
+            userId: 'user-1',
+            workId: 'work-1',
+        });
+
+        if (prepared.status !== 'ready') throw new Error('expected ready');
+        await prepared.run();
+        const [, , context] = removeWorkDeployment.mock.calls[0];
+        // `prod` when EVER_WORKS_K8S_WORKS_NAMESPACE_SUFFIX is unset, as the deploy stamps it.
+        expect(context).toMatchObject({ workUuid: 'work-1', environment: 'prod' });
+    });
+
+    it('names the environment by EVER_WORKS_K8S_WORKS_NAMESPACE_SUFFIX, the value the deploy stamps', async () => {
+        process.env.EVER_WORKS_K8S_WORKS_NAMESPACE_SUFFIX = 'stage';
+        const { service, removeWorkDeployment } = createService({ work: work() });
+
+        const prepared = await service.prepareWorkDeploymentTeardown({
+            userId: 'user-1',
+            workId: 'work-1',
+        });
+
+        if (prepared.status !== 'ready') throw new Error('expected ready');
+        await prepared.run();
+        expect(removeWorkDeployment.mock.calls[0][2]).toMatchObject({
+            workUuid: 'work-1',
+            environment: 'stage',
+        });
+    });
+
     it('reports the sanitised object name but hands the plugin the raw website repository, as deploy() did', async () => {
         const { service, removeWorkDeployment } = createService({
             work: work({ websiteRepo: 'Awesome_Memes-Website' }),

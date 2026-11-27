@@ -3281,9 +3281,7 @@ export class WorkLifecycleService {
             this.logger.warn(
                 `Work ${work.id}: kept ${result.kept
                     .map((o) => `${o.kind}/${o.name} (${o.reason})`)
-                    .join(
-                        ', ',
-                    )} in ${target}: not created by the platform's deploy under this name`,
+                    .join(', ')} in ${target}: not provably this Work's deploy in this environment`,
             );
         }
         if (result.failed.length > 0) {

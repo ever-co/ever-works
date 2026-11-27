@@ -104,6 +104,24 @@ describe('WorkDeploymentOrphanReportCronService', () => {
         ]);
     });
 
+    it('says how many deployments it left out as another environment’s', async () => {
+        const { service, lines } = makeService({
+            clusters: [
+                { names: ['k8s-works'], listed: 4, otherEnvironment: 2 },
+                { names: ['ever-works'], listed: 1, otherEnvironment: 1 },
+            ],
+            orphans: [],
+            unresolvedWorks: 0,
+        });
+
+        await service.runReport();
+
+        expect(lines.warn).toEqual([]);
+        expect(lines.log).toEqual([
+            "Orphaned website deployment report: 5 website deployment(s) on 2 cluster(s), 0 orphaned, 3 left out as another environment's",
+        ]);
+    });
+
     it('warns about a cluster it could not list, by reason code', async () => {
         const { service, lines } = makeService({
             clusters: [

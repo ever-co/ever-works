@@ -120,9 +120,16 @@ export class WorkDeploymentOrphanReportCronService {
 
         const listed = report.clusters.reduce((sum, cluster) => sum + cluster.listed, 0);
         const failed = report.clusters.filter((cluster) => cluster.failed).length;
+        const otherEnvironment = report.clusters.reduce(
+            (sum, cluster) => sum + (cluster.otherEnvironment ?? 0),
+            0,
+        );
         const summary =
             `Orphaned website deployment report: ${listed} website deployment(s) on ` +
             `${report.clusters.length} cluster(s), ${report.orphans.length} orphaned` +
+            (otherEnvironment > 0
+                ? `, ${otherEnvironment} left out as another environment's`
+                : '') +
             (failed > 0 ? `, ${failed} cluster(s) could not be listed` : '') +
             (report.unresolvedWorks > 0
                 ? `, ${report.unresolvedWorks} Work(s) whose target could not be worked out`
