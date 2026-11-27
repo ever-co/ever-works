@@ -11383,8 +11383,7 @@
             "createNew": "संगठन बनाएँ",
             "addNew": "संगठन जोड़ें",
             "loading": "लोड हो रहा है…",
-            "switchFailed": "संगठन नहीं बदला जा सका। फिर से कोशिश करें।",
-            "active": "वर्तमान संगठन"
+            "switchFailed": "संगठन नहीं बदला जा सका। फिर से कोशिश करें।"
         },
         "create": {
             "visionToggle": "Add company vision (optional)",

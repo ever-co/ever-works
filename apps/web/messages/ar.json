@@ -11382,8 +11382,7 @@
             "createNew": "إنشاء مؤسسة",
             "addNew": "إضافة مؤسسة",
             "loading": "جارٍ التحميل…",
-            "switchFailed": "تعذّر تبديل المؤسسة. حاول مرة أخرى.",
-            "active": "المؤسسة الحالية"
+            "switchFailed": "تعذّر تبديل المؤسسة. حاول مرة أخرى."
         },
         "create": {
             "visionToggle": "Add company vision (optional)",

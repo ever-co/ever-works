@@ -11383,8 +11383,7 @@
             "createNew": "Kuruluş oluştur",
             "addNew": "Kuruluş ekle",
             "loading": "Yükleniyor…",
-            "switchFailed": "Kuruluş değiştirilemedi. Yeniden deneyin.",
-            "active": "Geçerli kuruluş"
+            "switchFailed": "Kuruluş değiştirilemedi. Yeniden deneyin."
         },
         "create": {
             "visionToggle": "Add company vision (optional)",

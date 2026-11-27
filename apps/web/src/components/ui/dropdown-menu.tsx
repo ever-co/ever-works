@@ -117,6 +117,8 @@ interface DropdownMenuItemProps {
     disabled?: boolean;
     className?: string;
     asChild?: boolean;
+    /** Marks the item that is the current one (the Organization you are in, the page you are on). */
+    'aria-current'?: 'true' | 'page' | 'location';
 }
 
 export function DropdownMenuItem({
@@ -125,6 +127,7 @@ export function DropdownMenuItem({
     disabled,
     className,
     asChild,
+    'aria-current': ariaCurrent,
 }: DropdownMenuItemProps) {
     return (
         <MenuItem disabled={disabled}>
@@ -145,18 +148,25 @@ export function DropdownMenuItem({
                         className?: string;
                         onClick?: () => void;
                         'aria-disabled'?: boolean;
+                        'aria-current'?: DropdownMenuItemProps['aria-current'];
                         tabIndex?: number;
                     }>;
                     return React.cloneElement(child, {
                         className: cn(itemClassName, child.props.className),
                         onClick: child.props.onClick ?? onClick,
                         'aria-disabled': itemDisabled || undefined,
+                        'aria-current': child.props['aria-current'] ?? ariaCurrent,
                         tabIndex: itemDisabled ? -1 : child.props.tabIndex,
                     });
                 }
 
                 return (
-                    <button onClick={onClick} disabled={itemDisabled} className={itemClassName}>
+                    <button
+                        onClick={onClick}
+                        disabled={itemDisabled}
+                        className={itemClassName}
+                        aria-current={ariaCurrent}
+                    >
                         {children}
                     </button>
                 );

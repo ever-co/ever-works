@@ -11383,8 +11383,7 @@
             "createNew": "สร้างองค์กร",
             "addNew": "เพิ่มองค์กร",
             "loading": "กำลังโหลด…",
-            "switchFailed": "สลับองค์กรไม่ได้ ลองอีกครั้ง",
-            "active": "องค์กรปัจจุบัน"
+            "switchFailed": "สลับองค์กรไม่ได้ ลองอีกครั้ง"
         },
         "create": {
             "visionToggle": "Add company vision (optional)",

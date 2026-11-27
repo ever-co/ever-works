@@ -11383,8 +11383,7 @@
             "createNew": "Buat organisasi",
             "addNew": "Tambah organisasi",
             "loading": "Memuat…",
-            "switchFailed": "Tidak dapat beralih organisasi. Coba lagi.",
-            "active": "Organisasi saat ini"
+            "switchFailed": "Tidak dapat beralih organisasi. Coba lagi."
         },
         "create": {
             "visionToggle": "Add company vision (optional)",
