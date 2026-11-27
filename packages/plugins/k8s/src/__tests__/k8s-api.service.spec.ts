@@ -843,6 +843,48 @@ describe('KubernetesApiService.deleteObject', () => {
 		);
 	});
 
+	it('sends uid and resourceVersion preconditions together, and names a 409 on them', async () => {
+		const { factory, objectApi } = makeFactory({
+			objectApi: () =>
+				({
+					delete: vi.fn(async () => {
+						throw httpError(409, 'Operation cannot be fulfilled: Precondition failed');
+					})
+				}) as never
+		});
+		void objectApi;
+		const svc = new KubernetesApiService(factory);
+
+		await expect(
+			svc.deleteObject(VALID, 'v1', 'Service', 'ns', 'site-a', 'Background', undefined, 'uid-1', 'rv-9')
+		).rejects.toMatchObject({
+			code: 'APPLY_FAILED',
+			message: expect.stringContaining('changed after it was read')
+		});
+
+		const ok = makeFactory();
+		await new KubernetesApiService(ok.factory).deleteObject(
+			VALID,
+			'v1',
+			'Service',
+			'ns',
+			'site-a',
+			'Background',
+			undefined,
+			'uid-1',
+			'rv-9'
+		);
+		expect(ok.objectApi.delete).toHaveBeenCalledWith(
+			expect.anything(),
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			'Background',
+			{ preconditions: { uid: 'uid-1', resourceVersion: 'rv-9' } }
+		);
+	});
+
 	it('treats a 404 as success — the object is already gone', async () => {
 		const { factory } = makeFactory({
 			objectApi: () =>
