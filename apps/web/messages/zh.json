@@ -4712,6 +4712,13 @@
                 "themeSystem": "跟随系统",
                 "languageTitle": "语言",
                 "languageDescription": "Ever Works 在此浏览器中使用的语言。"
+            },
+            "groups": {
+                "account": "账户",
+                "organization": "组织",
+                "product": "Ever Works",
+                "integrations": "集成",
+                "plugins": "插件"
             }
         },
         "stats": {
@@ -11370,9 +11377,12 @@
             }
         },
         "switcher": {
-            "heading": "Switch Organization",
+            "heading": "切换组织",
+            "label": "组织",
+            "noOther": "没有其他组织",
             "createNew": "创建组织",
-            "loading": "Loading…",
+            "addNew": "添加组织",
+            "loading": "加载中…",
             "switchFailed": "无法切换组织。请重试。",
             "active": "当前组织"
         },

@@ -4712,6 +4712,13 @@
                 "themeSystem": "Системна",
                 "languageTitle": "Мова",
                 "languageDescription": "Мова, якою Ever Works працює в цьому браузері."
+            },
+            "groups": {
+                "account": "Обліковий запис",
+                "organization": "Організація",
+                "product": "Ever Works",
+                "integrations": "Інтеграції",
+                "plugins": "Плагіни"
             }
         },
         "stats": {
@@ -11370,9 +11377,12 @@
             }
         },
         "switcher": {
-            "heading": "Switch Organization",
+            "heading": "Змінити організацію",
+            "label": "Організації",
+            "noOther": "Інших організацій немає",
             "createNew": "Створити організацію",
-            "loading": "Loading…",
+            "addNew": "Додати організацію",
+            "loading": "Завантаження…",
             "switchFailed": "Не вдалося змінити організацію. Спробуйте ще раз.",
             "active": "Поточна організація"
         },

@@ -4712,6 +4712,13 @@
                 "themeSystem": "सिस्टम",
                 "languageTitle": "भाषा",
                 "languageDescription": "वह भाषा जिसमें Ever Works इस ब्राउज़र में चलता है।"
+            },
+            "groups": {
+                "account": "खाता",
+                "organization": "संगठन",
+                "product": "Ever Works",
+                "integrations": "इंटीग्रेशन",
+                "plugins": "प्लगइन"
             }
         },
         "stats": {
@@ -11370,9 +11377,12 @@
             }
         },
         "switcher": {
-            "heading": "Switch Organization",
+            "heading": "संगठन बदलें",
+            "label": "संगठन",
+            "noOther": "कोई अन्य संगठन नहीं",
             "createNew": "संगठन बनाएँ",
-            "loading": "Loading…",
+            "addNew": "संगठन जोड़ें",
+            "loading": "लोड हो रहा है…",
             "switchFailed": "संगठन नहीं बदला जा सका। फिर से कोशिश करें।",
             "active": "वर्तमान संगठन"
         },

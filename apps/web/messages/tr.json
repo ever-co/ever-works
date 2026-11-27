@@ -4712,6 +4712,13 @@
                 "themeSystem": "Sistem",
                 "languageTitle": "Dil",
                 "languageDescription": "Ever Works'ün bu tarayıcıda kullandığı dil."
+            },
+            "groups": {
+                "account": "Hesap",
+                "organization": "Kuruluş",
+                "product": "Ever Works",
+                "integrations": "Entegrasyonlar",
+                "plugins": "Eklentiler"
             }
         },
         "stats": {
@@ -11370,9 +11377,12 @@
             }
         },
         "switcher": {
-            "heading": "Switch Organization",
+            "heading": "Kuruluş değiştir",
+            "label": "Kuruluşlar",
+            "noOther": "Başka kuruluş yok",
             "createNew": "Kuruluş oluştur",
-            "loading": "Loading…",
+            "addNew": "Kuruluş ekle",
+            "loading": "Yükleniyor…",
             "switchFailed": "Kuruluş değiştirilemedi. Yeniden deneyin.",
             "active": "Geçerli kuruluş"
         },

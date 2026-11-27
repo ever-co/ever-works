@@ -4712,6 +4712,13 @@
                 "themeSystem": "Hệ thống",
                 "languageTitle": "Ngôn ngữ",
                 "languageDescription": "Ngôn ngữ Ever Works dùng trong trình duyệt này."
+            },
+            "groups": {
+                "account": "Tài khoản",
+                "organization": "Tổ chức",
+                "product": "Ever Works",
+                "integrations": "Tích hợp",
+                "plugins": "Plugin"
             }
         },
         "stats": {
@@ -11370,9 +11377,12 @@
             }
         },
         "switcher": {
-            "heading": "Switch Organization",
+            "heading": "Chuyển tổ chức",
+            "label": "Tổ chức",
+            "noOther": "Không có tổ chức khác",
             "createNew": "Tạo tổ chức",
-            "loading": "Loading…",
+            "addNew": "Thêm tổ chức",
+            "loading": "Đang tải…",
             "switchFailed": "Không thể chuyển tổ chức. Hãy thử lại.",
             "active": "Tổ chức hiện tại"
         },

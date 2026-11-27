@@ -4712,6 +4712,13 @@
                 "themeSystem": "Sistema",
                 "languageTitle": "Idioma",
                 "languageDescription": "O idioma que o Ever Works usa neste navegador."
+            },
+            "groups": {
+                "account": "Conta",
+                "organization": "Organização",
+                "product": "Ever Works",
+                "integrations": "Integrações",
+                "plugins": "Plugins"
             }
         },
         "stats": {
@@ -11370,9 +11377,12 @@
             }
         },
         "switcher": {
-            "heading": "Switch Organization",
+            "heading": "Trocar de organização",
+            "label": "Organizações",
+            "noOther": "Nenhuma outra organização",
             "createNew": "Criar organização",
-            "loading": "Loading…",
+            "addNew": "Adicionar organização",
+            "loading": "Carregando…",
             "switchFailed": "Não foi possível trocar de organização. Tente novamente.",
             "active": "Organização atual"
         },

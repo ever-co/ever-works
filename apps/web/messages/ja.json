@@ -4712,6 +4712,13 @@
                 "themeSystem": "システム",
                 "languageTitle": "言語",
                 "languageDescription": "このブラウザーで Ever Works が使う言語。"
+            },
+            "groups": {
+                "account": "アカウント",
+                "organization": "組織",
+                "product": "Ever Works",
+                "integrations": "連携",
+                "plugins": "プラグイン"
             }
         },
         "stats": {
@@ -11370,9 +11377,12 @@
             }
         },
         "switcher": {
-            "heading": "Switch Organization",
+            "heading": "組織を切り替え",
+            "label": "組織",
+            "noOther": "ほかの組織はありません",
             "createNew": "組織を作成",
-            "loading": "Loading…",
+            "addNew": "組織を追加",
+            "loading": "読み込み中…",
             "switchFailed": "組織を切り替えられませんでした。もう一度お試しください。",
             "active": "現在の組織"
         },
