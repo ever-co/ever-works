@@ -11383,8 +11383,7 @@
             "createNew": "組織を作成",
             "addNew": "組織を追加",
             "loading": "読み込み中…",
-            "switchFailed": "組織を切り替えられませんでした。もう一度お試しください。",
-            "active": "現在の組織"
+            "switchFailed": "組織を切り替えられませんでした。もう一度お試しください。"
         },
         "create": {
             "visionToggle": "Add company vision (optional)",

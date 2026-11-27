@@ -11383,8 +11383,7 @@
             "createNew": "Organisatie maken",
             "addNew": "Organisatie toevoegen",
             "loading": "Laden…",
-            "switchFailed": "Kon niet van organisatie wisselen. Probeer het opnieuw.",
-            "active": "Huidige organisatie"
+            "switchFailed": "Kon niet van organisatie wisselen. Probeer het opnieuw."
         },
         "create": {
             "visionToggle": "Add company vision (optional)",

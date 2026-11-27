@@ -46,11 +46,6 @@ function pickLabel(org: OrganizationResponse): string {
 }
 
 /**
- * The hue of an Organization's plate (shared Ever shell, A2: "initials on a
- * colour plate derived from the name"): stable for a name, so the same
- * Organization always gets the same colour, in every Ever app that uses this rule.
- */
-/**
  * The plate colour for a hue. 35 % lightness keeps the white initial at 4.5:1
  * or more against every hue (WCAG AA for small text); 42 % fell below it for
  * the yellows and greens.
@@ -59,6 +54,11 @@ export function plateColor(hue: number): string {
     return `hsl(${hue} 32% 35%)`;
 }
 
+/**
+ * The hue of an Organization's plate (shared Ever shell, A2: "initials on a
+ * colour plate derived from the name"): stable for a name, so the same
+ * Organization always gets the same colour, in every Ever app that uses this rule.
+ */
 export function plateHue(name: string): number {
     let hash = 0;
     for (const char of name) {
@@ -229,7 +229,11 @@ export function WorkspaceSwitcher({ isCollapsed = false }: WorkspaceSwitcherProp
                         // beneath it. Expanded keeps the chip layout.
                         isCollapsed ? 'flex justify-center p-1' : 'w-full px-1.5 py-1',
                     )}
-                    aria-label={t('heading')}
+                    // WCAG 2.5.3 (label in name): where the name shows, the button's
+                    // name starts with it (the visible text, then "Switch organization",
+                    // screen-reader only). An `aria-label` would replace the visible text.
+                    // The collapsed trigger shows no text, so it is named outright.
+                    aria-label={isCollapsed || !triggerOrg ? t('heading') : undefined}
                 >
                     <div
                         className={cn(
@@ -250,6 +254,8 @@ export function WorkspaceSwitcher({ isCollapsed = false }: WorkspaceSwitcherProp
                                 {/* A2: one muted line under the name — the Organization's address. */}
                                 {/* Only for the Organization the page is in: on a personal page the
                                     trigger falls back to the first one, which is not "current". */}
+                                {/* The spaces keep the parts apart in the button's name; a
+                                    flex column does not render them. */}{' '}
                                 {triggerOrg && activeOrganization?.id === triggerOrg.id && (
                                     <span
                                         className="truncate text-xs text-text-muted dark:text-text-muted-dark"
@@ -257,7 +263,8 @@ export function WorkspaceSwitcher({ isCollapsed = false }: WorkspaceSwitcherProp
                                     >
                                         {triggerOrg.slug}
                                     </span>
-                                )}
+                                )}{' '}
+                                {triggerOrg && <span className="sr-only">{t('heading')}</span>}
                             </span>
                         )}
                         {!isCollapsed && (
@@ -280,6 +287,9 @@ export function WorkspaceSwitcher({ isCollapsed = false }: WorkspaceSwitcherProp
                                     onClick={() => handleSelectOrg(org)}
                                     className="cursor-pointer"
                                     disabled={pendingOrganizationSlug !== null}
+                                    // The current row says so to assistive technology too, not
+                                    // only with the check mark.
+                                    aria-current={isActive ? 'true' : undefined}
                                 >
                                     <div className="flex items-center gap-2 w-full">
                                         <OrgAvatar org={org} size="xs" />
@@ -290,7 +300,7 @@ export function WorkspaceSwitcher({ isCollapsed = false }: WorkspaceSwitcherProp
                                             <Check
                                                 className="w-4 h-4 shrink-0 text-text-muted dark:text-text-muted-dark"
                                                 strokeWidth={1.5}
-                                                aria-label={t('active')}
+                                                aria-hidden="true"
                                             />
                                         )}
                                     </div>

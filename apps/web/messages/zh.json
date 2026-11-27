@@ -11383,8 +11383,7 @@
             "createNew": "创建组织",
             "addNew": "添加组织",
             "loading": "加载中…",
-            "switchFailed": "无法切换组织。请重试。",
-            "active": "当前组织"
+            "switchFailed": "无法切换组织。请重试。"
         },
         "create": {
             "visionToggle": "Add company vision (optional)",

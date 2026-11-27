@@ -11383,8 +11383,7 @@
             "createNew": "Tạo tổ chức",
             "addNew": "Thêm tổ chức",
             "loading": "Đang tải…",
-            "switchFailed": "Không thể chuyển tổ chức. Hãy thử lại.",
-            "active": "Tổ chức hiện tại"
+            "switchFailed": "Không thể chuyển tổ chức. Hãy thử lại."
         },
         "create": {
             "visionToggle": "Add company vision (optional)",
