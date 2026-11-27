@@ -179,6 +179,17 @@ export interface IngressClassDescriptor {
 export interface ManifestRenderInputs {
 	workId: string;
 	workSlug: string;
+	/**
+	 * The deploying Work's id (UUID), stamped as `ever-works.io/work-uuid` on every object and
+	 * on the pod template. `workId` above is the website repository name, which two Works can
+	 * share. Unset (an older caller): no label.
+	 */
+	workUuid?: string;
+	/**
+	 * The platform environment that deploys (`prod`, `stage`, `dev`), stamped as
+	 * `ever-works.io/environment` the same way. Unset: no label.
+	 */
+	environment?: string;
 	namespace: string;
 	image: string;
 	replicas: number;

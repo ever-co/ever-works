@@ -40,7 +40,10 @@ function work(fixture: {
 function createService(args: {
     works?: Array<Record<string, unknown>>;
     /** What each kubeconfig's list answers (an Error rejects). */
-    listings?: Record<string, Array<{ location: string; name: string }> | Error>;
+    listings?: Record<
+        string,
+        Array<{ location: string; name: string; environment?: string }> | Error
+    >;
     settingsByWork?: Record<string, Record<string, unknown>>;
     pluginOverrides?: Record<string, unknown>;
     managedKubeconfig?: string | null;
@@ -294,6 +297,75 @@ describe('DeployFacadeService.reportOrphanedWorkDeployments', () => {
         expect(report.orphans).toEqual([
             { cluster: 'k8s-works', namespace: 'ever-works-chairs-prod', name: 'chairs-website' },
         ]);
+    });
+
+    it('leaves out, and counts apart, the deployments another environment’s deploy labelled', async () => {
+        // dev, stage and prod share the cluster: a dev site is not prod's orphan.
+        const { service } = createService({
+            works: [],
+            listings: {
+                [MANAGED_KUBECONFIG]: [
+                    {
+                        location: 'ever-works-tenants-user-9',
+                        name: 'dev-website',
+                        environment: 'dev',
+                    },
+                    {
+                        location: 'ever-works-tenants-user-9',
+                        name: 'stage-website',
+                        environment: 'stage',
+                    },
+                    {
+                        location: 'ever-works-tenants-user-9',
+                        name: 'prod-website',
+                        environment: 'prod',
+                    },
+                    { location: 'ever-works-tenants-user-9', name: 'legacy-website' },
+                ],
+            },
+        });
+
+        const report = await service.reportOrphanedWorkDeployments();
+
+        expect(report.clusters).toEqual([
+            { names: ['ever-works'], listed: 4, otherEnvironment: 2 },
+        ]);
+        // This environment's own, and one deployed before the label, are judged as before.
+        expect(report.orphans).toEqual([
+            { cluster: 'ever-works', namespace: 'ever-works-tenants-user-9', name: 'prod-website' },
+            {
+                cluster: 'ever-works',
+                namespace: 'ever-works-tenants-user-9',
+                name: 'legacy-website',
+            },
+        ]);
+    });
+
+    it('compares the environment label with EVER_WORKS_K8S_WORKS_NAMESPACE_SUFFIX', async () => {
+        process.env.EVER_WORKS_K8S_WORKS_NAMESPACE_SUFFIX = 'stage';
+        const { service } = createService({
+            listings: {
+                [MANAGED_KUBECONFIG]: [
+                    {
+                        location: 'ever-works-tenants-user-9',
+                        name: 'stage-website',
+                        environment: 'stage',
+                    },
+                    {
+                        location: 'ever-works-tenants-user-9',
+                        name: 'prod-website',
+                        environment: 'prod',
+                    },
+                ],
+            },
+        });
+
+        const report = await service.reportOrphanedWorkDeployments();
+
+        expect(report.clusters).toEqual([
+            { names: ['ever-works'], listed: 2, otherEnvironment: 1 },
+        ]);
+        expect(report.orphans.map((orphan) => orphan.name)).toEqual(['stage-website']);
     });
 
     it('reads no settings for an ever-works Work: its namespace is its owner’s tenant namespace', async () => {
