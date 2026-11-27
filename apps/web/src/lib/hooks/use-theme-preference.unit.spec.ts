@@ -75,6 +75,30 @@ describe('theme preference', () => {
         expect(preference.result.current).toBe('system');
     });
 
+    it('tells the tiles the applied theme when storage reads but refuses writes', () => {
+        vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+            throw new Error('QuotaExceededError');
+        });
+        setThemePreference('dark');
+        expect(document.documentElement.classList.contains('dark')).toBe(true);
+        expect(readThemePreference()).toBe('dark');
+        setThemePreference('system');
+        expect(readThemePreference()).toBe('system');
+    });
+
+    it('keeps the tiles in step with the top-bar toggle when storage refuses writes', () => {
+        vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+            throw new Error('QuotaExceededError');
+        });
+        const preference = renderHook(() => useThemePreference());
+        const header = renderHook(() => useTheme());
+        act(() => header.result.current.toggleTheme());
+        expect(document.documentElement.classList.contains('dark')).toBe(true);
+        expect(preference.result.current).toBe('dark');
+        act(() => header.result.current.toggleTheme());
+        expect(preference.result.current).toBe('light');
+    });
+
     it('follows the device again when another tab picks System', () => {
         stubDevice(true);
         window.localStorage.setItem('theme', 'light');
