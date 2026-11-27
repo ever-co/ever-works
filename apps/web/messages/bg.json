@@ -2957,6 +2957,7 @@
             "subtitle": "Управлявайте настройките и предпочитанията на профила си",
             "tabs": {
                 "profile": "Профил",
+                "preferences": "Предпочитания",
                 "organization": "Organization",
                 "security": "Сигурност",
                 "apiKeys": "API ключове",
@@ -4776,6 +4777,15 @@
                     "linked": "The organization is linked.",
                     "whatIsSent": "Linking sends the code, this account's ID and the organization's short name (its slug). No other name, e-mail address or content is sent."
                 }
+            },
+            "preferences": {
+                "themeTitle": "Тема",
+                "themeDescription": "Светла, тъмна или като на това устройство. Иконата в горната лента превключва между светла и тъмна.",
+                "themeLight": "Светла",
+                "themeDark": "Тъмна",
+                "themeSystem": "Системна",
+                "languageTitle": "Език",
+                "languageDescription": "Езикът, който Ever Works използва в този браузър."
             }
         },
         "stats": {
@@ -9723,6 +9733,7 @@
             },
             "profileMenu": {
                 "accountSettings": "Настройки на акаунт",
+                "preferences": "Предпочитания",
                 "helpDocs": "Помощ & Документация",
                 "support": "Поддръжка",
                 "keyboardShortcuts": "Клавишни комбинации",

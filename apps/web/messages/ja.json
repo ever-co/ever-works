@@ -2883,6 +2883,7 @@
             "subtitle": "アカウント設定と環境設定を管理",
             "tabs": {
                 "profile": "プロフィール",
+                "preferences": "環境設定",
                 "organization": "Organization",
                 "security": "セキュリティ",
                 "apiKeys": "API キー",
@@ -4702,6 +4703,15 @@
                     "linked": "The organization is linked.",
                     "whatIsSent": "Linking sends the code, this account's ID and the organization's short name (its slug). No other name, e-mail address or content is sent."
                 }
+            },
+            "preferences": {
+                "themeTitle": "テーマ",
+                "themeDescription": "ライト、ダーク、またはこのデバイスと同じ。トップバーのアイコンでライトとダークを切り替えられます。",
+                "themeLight": "ライト",
+                "themeDark": "ダーク",
+                "themeSystem": "システム",
+                "languageTitle": "言語",
+                "languageDescription": "このブラウザーで Ever Works が使う言語。"
             }
         },
         "stats": {
@@ -9650,6 +9660,7 @@
             },
             "profileMenu": {
                 "accountSettings": "アカウント設定",
+                "preferences": "環境設定",
                 "helpDocs": "ヘルプとドキュメント",
                 "support": "サポート",
                 "keyboardShortcuts": "キーボードショートカット",

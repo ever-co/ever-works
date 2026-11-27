@@ -2883,6 +2883,7 @@
             "subtitle": "Керуйте налаштуваннями та уподобаннями вашого облікового запису",
             "tabs": {
                 "profile": "Профіль",
+                "preferences": "Уподобання",
                 "organization": "Organization",
                 "security": "Безпека",
                 "apiKeys": "Ключі API",
@@ -4702,6 +4703,15 @@
                     "linked": "The organization is linked.",
                     "whatIsSent": "Linking sends the code, this account's ID and the organization's short name (its slug). No other name, e-mail address or content is sent."
                 }
+            },
+            "preferences": {
+                "themeTitle": "Тема",
+                "themeDescription": "Світла, темна або як на цьому пристрої. Значок на верхній панелі перемикає світлу й темну.",
+                "themeLight": "Світла",
+                "themeDark": "Темна",
+                "themeSystem": "Системна",
+                "languageTitle": "Мова",
+                "languageDescription": "Мова, якою Ever Works працює в цьому браузері."
             }
         },
         "stats": {
@@ -9650,6 +9660,7 @@
             },
             "profileMenu": {
                 "accountSettings": "Налаштування облікового запису",
+                "preferences": "Уподобання",
                 "helpDocs": "Довідка та документація",
                 "support": "Підтримка",
                 "keyboardShortcuts": "Гарячі клавіші",

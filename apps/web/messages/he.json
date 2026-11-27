@@ -2957,6 +2957,7 @@
             "subtitle": "נהל את הגדרות החשבון וההעדפות שלך",
             "tabs": {
                 "profile": "פרופיל",
+                "preferences": "העדפות",
                 "organization": "Organization",
                 "security": "אבטחה",
                 "apiKeys": "מפתחות API",
@@ -4776,6 +4777,15 @@
                     "linked": "The organization is linked.",
                     "whatIsSent": "Linking sends the code, this account's ID and the organization's short name (its slug). No other name, e-mail address or content is sent."
                 }
+            },
+            "preferences": {
+                "themeTitle": "ערכת נושא",
+                "themeDescription": "בהיר, כהה או כמו המכשיר הזה. הסמל בסרגל העליון מחליף בין בהיר לכהה.",
+                "themeLight": "בהיר",
+                "themeDark": "כהה",
+                "themeSystem": "מערכת",
+                "languageTitle": "שפה",
+                "languageDescription": "השפה ש-Ever Works משתמש בה בדפדפן הזה."
             }
         },
         "stats": {
@@ -9723,6 +9733,7 @@
             },
             "profileMenu": {
                 "accountSettings": "הגדרות חשבון",
+                "preferences": "העדפות",
                 "helpDocs": "עזרה ומסמכים",
                 "support": "תמיכה",
                 "keyboardShortcuts": "קיצורי מקלדת",

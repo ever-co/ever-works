@@ -14,7 +14,9 @@ export const themeInitScript = `
         prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
     } catch (_) {}
     try {
-        if (theme === 'dark' || (!theme && prefersDark)) {
+        // Only 'light' and 'dark' are fixed themes; anything else (nothing
+        // stored = System) follows the device.
+        if (theme === 'dark' || (theme !== 'light' && prefersDark)) {
             document.documentElement.classList.add('dark');
         } else {
             document.documentElement.classList.remove('dark');

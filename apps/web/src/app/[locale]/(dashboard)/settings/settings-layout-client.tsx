@@ -4,6 +4,7 @@ import { usePathname } from '@/i18n/navigation';
 import { cn } from '@/lib/utils/cn';
 import {
     User,
+    SlidersHorizontal,
     Lock,
     Key,
     AlertTriangle,
@@ -97,6 +98,14 @@ export function SettingsLayoutClient({
         () =>
             [
                 { id: 'profile', label: t('tabs.profile'), icon: User, href: baseSettingsPath },
+                // Shared Ever shell, A9: Preferences right after Profile — theme,
+                // App Launcher position and language, in that order.
+                {
+                    id: 'preferences',
+                    label: t('tabs.preferences'),
+                    icon: SlidersHorizontal,
+                    href: ROUTES.DASHBOARD_SETTINGS_PREFERENCES,
+                },
                 {
                     id: 'organization',
                     label: t('tabs.organization'),

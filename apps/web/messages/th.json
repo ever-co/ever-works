@@ -2883,6 +2883,7 @@
             "subtitle": "จัดการการตั้งค่าบัญชีและความชอบของคุณ",
             "tabs": {
                 "profile": "โปรไฟล์",
+                "preferences": "การตั้งค่าส่วนตัว",
                 "organization": "Organization",
                 "security": "ความปลอดภัย",
                 "apiKeys": "คีย์ API",
@@ -4702,6 +4703,15 @@
                     "linked": "The organization is linked.",
                     "whatIsSent": "Linking sends the code, this account's ID and the organization's short name (its slug). No other name, e-mail address or content is sent."
                 }
+            },
+            "preferences": {
+                "themeTitle": "ธีม",
+                "themeDescription": "สว่าง มืด หรือเหมือนอุปกรณ์นี้ ไอคอนในแถบด้านบนสลับระหว่างสว่างกับมืด",
+                "themeLight": "สว่าง",
+                "themeDark": "มืด",
+                "themeSystem": "ระบบ",
+                "languageTitle": "ภาษา",
+                "languageDescription": "ภาษาที่ Ever Works ใช้ในเบราว์เซอร์นี้"
             }
         },
         "stats": {
@@ -9650,6 +9660,7 @@
             },
             "profileMenu": {
                 "accountSettings": "การตั้งค่าบัญชี",
+                "preferences": "การตั้งค่าส่วนตัว",
                 "helpDocs": "ช่วยเหลือและเอกสาร",
                 "support": "สนับสนุน",
                 "keyboardShortcuts": "ทางลัดคีย์บอร์ด",

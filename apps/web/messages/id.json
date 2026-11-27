@@ -2883,6 +2883,7 @@
             "subtitle": "Kelola pengaturan dan preferensi akun Anda",
             "tabs": {
                 "profile": "Profil",
+                "preferences": "Preferensi",
                 "organization": "Organization",
                 "security": "Keamanan",
                 "apiKeys": "Kunci API",
@@ -4702,6 +4703,15 @@
                     "linked": "The organization is linked.",
                     "whatIsSent": "Linking sends the code, this account's ID and the organization's short name (its slug). No other name, e-mail address or content is sent."
                 }
+            },
+            "preferences": {
+                "themeTitle": "Tema",
+                "themeDescription": "Terang, gelap, atau sama dengan perangkat ini. Ikon di bilah atas beralih antara terang dan gelap.",
+                "themeLight": "Terang",
+                "themeDark": "Gelap",
+                "themeSystem": "Sistem",
+                "languageTitle": "Bahasa",
+                "languageDescription": "Bahasa yang digunakan Ever Works di browser ini."
             }
         },
         "stats": {
@@ -9650,6 +9660,7 @@
             },
             "profileMenu": {
                 "accountSettings": "Pengaturan Akun",
+                "preferences": "Preferensi",
                 "helpDocs": "Bantuan & Dokumen",
                 "support": "Dukungan",
                 "keyboardShortcuts": "Pintasan Keyboard",

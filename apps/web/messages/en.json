@@ -4812,6 +4812,7 @@
             "subtitle": "Manage your account settings and preferences",
             "tabs": {
                 "profile": "Profile",
+                "preferences": "Preferences",
                 "organization": "Organization",
                 "security": "Security",
                 "apiKeys": "API Keys",
@@ -6852,6 +6853,15 @@
                 "confirmDelete": "Delete the webhook to {url}? This cannot be undone.",
                 "confirmIntegrationOwned": "An integration (such as Ever Gauzy) created this subscription: it will stop receiving these events.",
                 "secretFor": "For {url}"
+            },
+            "preferences": {
+                "themeTitle": "Theme",
+                "themeDescription": "Light, dark, or the same as this device. The icon in the top bar switches between light and dark.",
+                "themeLight": "Light",
+                "themeDark": "Dark",
+                "themeSystem": "System",
+                "languageTitle": "Language",
+                "languageDescription": "The language Ever Works uses in this browser."
             }
         },
         "stats": {
@@ -12184,6 +12194,7 @@
             },
             "profileMenu": {
                 "accountSettings": "Account Settings",
+                "preferences": "Preferences",
                 "helpDocs": "Help & Docs",
                 "docsSite": "Documentation site",
                 "support": "Support",
