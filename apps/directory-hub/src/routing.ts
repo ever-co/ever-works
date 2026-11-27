@@ -23,6 +23,25 @@ function isServiceBinding(value: unknown): value is ServiceBinding {
 }
 
 /**
+ * `ROUTE_SERVED` as a plain object. Wrangler passes an object `vars` value as parsed JSON, but a value set as text
+ * (the dashboard, `wrangler deploy --var`) arrives as a string, so JSON text is parsed too. Anything that is not a
+ * JSON object, including text that does not parse, means no route-served hosts.
+ */
+function routeServedMap(value: unknown): Record<string, unknown> | undefined {
+	let map = value;
+	if (typeof map === 'string') {
+		try {
+			map = JSON.parse(map);
+		} catch {
+			return undefined;
+		}
+	}
+	return map !== null && typeof map === 'object' && !Array.isArray(map)
+		? (map as Record<string, unknown>)
+		: undefined;
+}
+
+/**
  * The route-served hosts and their bindings. Entries whose binding is missing are left out, so those hosts are fetched
  * normally (and then show as unavailable with their real reason).
  *
@@ -30,9 +49,9 @@ function isServiceBinding(value: unknown): value is ServiceBinding {
  */
 export function routeServedHosts(env: Record<string, unknown>): Map<string, ServiceBinding> {
 	const hosts = new Map<string, ServiceBinding>();
-	const map = env['ROUTE_SERVED'];
-	if (map === null || typeof map !== 'object' || Array.isArray(map)) return hosts;
-	for (const [host, name] of Object.entries(map as Record<string, unknown>)) {
+	const map = routeServedMap(env['ROUTE_SERVED']);
+	if (!map) return hosts;
+	for (const [host, name] of Object.entries(map)) {
 		const binding = typeof name === 'string' ? env[name] : undefined;
 		if (isServiceBinding(binding)) hosts.set(host.trim().toLowerCase(), binding);
 	}
