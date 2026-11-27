@@ -7,11 +7,6 @@ import { fireEvent, render, screen } from '@testing-library/react';
  */
 
 const replaceMock = vi.hoisted(() => vi.fn());
-const searchState = vi.hoisted(() => ({ value: '' }));
-
-vi.mock('next/navigation', () => ({
-    useSearchParams: () => new URLSearchParams(searchState.value),
-}));
 
 vi.mock('next-intl', () => ({
     useTranslations: (namespace: string) => (key: string) => `${namespace}.${key}`,
@@ -31,7 +26,7 @@ import { endonym } from './LanguagePreference';
 beforeEach(() => {
     window.localStorage.clear();
     replaceMock.mockReset();
-    searchState.value = '';
+    window.history.replaceState({}, '', '/settings/preferences');
     vi.stubGlobal(
         'matchMedia',
         vi.fn((query: string) => ({
@@ -94,7 +89,7 @@ describe('PreferencesSettings', () => {
     });
 
     it('keeps the query string when the language changes', () => {
-        searchState.value = 'tab=billing&tag=a&tag=b';
+        window.history.replaceState({}, '', '/settings/preferences?tab=billing&tag=a&tag=b');
         render(<PreferencesSettings appLauncherEnabled={false} />);
         fireEvent.change(screen.getByTestId('language-preference'), { target: { value: 'fr' } });
         expect(replaceMock).toHaveBeenCalledWith(

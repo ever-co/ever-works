@@ -1,7 +1,6 @@
 'use client';
 
 import { useId, useTransition } from 'react';
-import { useSearchParams } from 'next/navigation';
 import { useLocale, useTranslations } from 'next-intl';
 import { usePathname, useRouter } from '@/i18n/navigation';
 import { LOCALES } from '@/lib/constants';
@@ -38,7 +37,11 @@ const ENDONYMS: Record<Locale, string> = {
     zh: '中文',
 };
 
-/** The current query string as the object next-intl's router takes; repeated keys stay arrays. */
+/**
+ * The current query string as the object next-intl's router takes; repeated keys stay arrays. Read from
+ * `window.location` when the language changes, not with `useSearchParams()`, which would need a Suspense
+ * boundary wherever this renders in a statically built page.
+ */
 function queryOf(params: URLSearchParams | null): Record<string, string | string[]> {
     const query: Record<string, string | string[]> = {};
     params?.forEach((value, key) => {
@@ -64,7 +67,6 @@ export function LanguagePreference({ className }: { className?: string }) {
     const locale = useLocale() as Locale;
     const router = useRouter();
     const pathname = usePathname();
-    const searchParams = useSearchParams();
     const [isPending, startTransition] = useTransition();
     const id = useId();
 
@@ -81,7 +83,7 @@ export function LanguagePreference({ className }: { className?: string }) {
                 onChange={(event) => {
                     const next = event.target.value as Locale;
                     // Changing the language must not drop the query string (filters, tabs).
-                    const query = queryOf(searchParams);
+                    const query = queryOf(new URLSearchParams(window.location.search));
                     const href = Object.keys(query).length > 0 ? { pathname, query } : pathname;
                     startTransition(() => router.replace(href, { locale: next }));
                 }}
