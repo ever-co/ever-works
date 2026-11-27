@@ -2883,6 +2883,7 @@
             "subtitle": "Gerencie as configurações e preferências da sua conta",
             "tabs": {
                 "profile": "Perfil",
+                "preferences": "Preferências",
                 "organization": "Organization",
                 "security": "Segurança",
                 "apiKeys": "Chaves de API",
@@ -4702,6 +4703,22 @@
                     "linked": "The organization is linked.",
                     "whatIsSent": "Linking sends the code, this account's ID and the organization's short name (its slug). No other name, e-mail address or content is sent."
                 }
+            },
+            "preferences": {
+                "themeTitle": "Tema",
+                "themeDescription": "Claro, escuro ou igual a este dispositivo. O ícone da barra superior alterna entre claro e escuro.",
+                "themeLight": "Claro",
+                "themeDark": "Escuro",
+                "themeSystem": "Sistema",
+                "languageTitle": "Idioma",
+                "languageDescription": "O idioma que o Ever Works usa neste navegador."
+            },
+            "groups": {
+                "account": "Conta",
+                "organization": "Organização",
+                "product": "Ever Works",
+                "integrations": "Integrações",
+                "plugins": "Plugins"
             }
         },
         "stats": {
@@ -9650,6 +9667,7 @@
             },
             "profileMenu": {
                 "accountSettings": "Configurações da Conta",
+                "preferences": "Preferências",
                 "helpDocs": "Ajuda e Documentos",
                 "support": "Suporte",
                 "keyboardShortcuts": "Atalhos de Teclado",
@@ -11359,9 +11377,12 @@
             }
         },
         "switcher": {
-            "heading": "Switch Organization",
+            "heading": "Trocar de organização",
+            "label": "Organizações",
+            "noOther": "Nenhuma outra organização",
             "createNew": "Criar organização",
-            "loading": "Loading…",
+            "addNew": "Adicionar organização",
+            "loading": "Carregando…",
             "switchFailed": "Não foi possível trocar de organização. Tente novamente.",
             "active": "Organização atual"
         },

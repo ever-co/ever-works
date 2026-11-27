@@ -4,6 +4,7 @@ import { usePathname } from '@/i18n/navigation';
 import { cn } from '@/lib/utils/cn';
 import {
     User,
+    SlidersHorizontal,
     Lock,
     Key,
     AlertTriangle,
@@ -73,6 +74,62 @@ interface StaticTab {
     href: string;
 }
 
+/**
+ * Shared Ever shell, A9 — the settings pages in groups: **Account** first
+ * (Profile, Preferences, Notifications, then the person's other settings), then
+ * the **Organization**, then the product's own groups. Grouping only orders and
+ * labels the tabs declared below (and their gates); it never drops one: a tab no
+ * group names is shown at the end of the product group.
+ */
+type SettingsGroupId = 'account' | 'organization' | 'product' | 'integrations';
+
+export const SETTINGS_GROUPS: ReadonlyArray<{ id: SettingsGroupId; tabs: readonly string[] }> = [
+    {
+        id: 'account',
+        // App Launcher stays directly after Notifications (APW-11 plan §7).
+        tabs: [
+            'profile',
+            'preferences',
+            'notifications',
+            'app-launcher',
+            'security',
+            'api-keys',
+            'data',
+        ],
+    },
+    { id: 'organization', tabs: ['organization', 'billing', 'usage'] },
+    {
+        id: 'product',
+        tabs: [
+            'work-agent',
+            'repositories',
+            'github-app',
+            'fleet',
+            'job-runtime',
+            'environments',
+            'connections',
+            'agent-plugins',
+            'digest',
+            'ever-platform',
+        ],
+    },
+    { id: 'integrations', tabs: ['channels', 'emails', 'webhooks', 'ever-gauzy'] },
+];
+
+/** The visible tabs, in groups and in each group's order; unnamed tabs join the product group. */
+export function groupSettingsTabs<T extends { id: string }>(
+    tabs: readonly T[],
+): Array<{ id: SettingsGroupId; tabs: T[] }> {
+    const named = new Set(SETTINGS_GROUPS.flatMap((group) => group.tabs));
+    return SETTINGS_GROUPS.map((group) => {
+        const inGroup = group.tabs
+            .map((id) => tabs.find((tab) => tab.id === id))
+            .filter((tab): tab is T => tab !== undefined);
+        if (group.id === 'product') inGroup.push(...tabs.filter((tab) => !named.has(tab.id)));
+        return { id: group.id, tabs: inGroup };
+    }).filter((group) => group.tabs.length > 0);
+}
+
 export function SettingsLayoutClient({
     children,
     settingsMenu,
@@ -97,6 +154,14 @@ export function SettingsLayoutClient({
         () =>
             [
                 { id: 'profile', label: t('tabs.profile'), icon: User, href: baseSettingsPath },
+                // Shared Ever shell, A9: Preferences right after Profile — theme,
+                // App Launcher position and language, in that order.
+                {
+                    id: 'preferences',
+                    label: t('tabs.preferences'),
+                    icon: SlidersHorizontal,
+                    href: ROUTES.DASHBOARD_SETTINGS_PREFERENCES,
+                },
                 {
                     id: 'organization',
                     label: t('tabs.organization'),
@@ -363,19 +428,41 @@ export function SettingsLayoutClient({
                 {/* Sidebar Navigation */}
                 <div className="@3xl/main:w-64 flex-shrink-0">
                     <nav className="space-y-1">
-                        {/* Static tabs at top */}
-                        {staticTabs.map(renderStaticTab)}
+                        {/* Static tabs, in the groups of A9 */}
+                        {groupSettingsTabs(staticTabs).map((group, index) => (
+                            <div
+                                key={group.id}
+                                role="group"
+                                aria-labelledby={`settings-group-${group.id}`}
+                                data-testid={`settings-group-${group.id}`}
+                                className={cn('space-y-1', index > 0 && 'pt-5')}
+                            >
+                                <p
+                                    id={`settings-group-${group.id}`}
+                                    className="px-4 pb-1 text-xs font-medium text-text-muted dark:text-text-muted-dark"
+                                >
+                                    {t(`groups.${group.id}`)}
+                                </p>
+                                {group.tabs.map(renderStaticTab)}
+                            </div>
+                        ))}
 
                         {/* Dynamic plugin category tabs */}
                         {settingsMenu?.categories && settingsMenu.categories.length > 0 && (
-                            <>
-                                <div className="pt-4 pb-2 px-4">
-                                    <span className="text-xs font-medium text-text-muted dark:text-text-muted-dark/70 uppercase tracking-wider">
-                                        Plugins
-                                    </span>
-                                </div>
+                            <div
+                                role="group"
+                                aria-labelledby="settings-group-plugins"
+                                data-testid="settings-group-plugins"
+                                className="space-y-1 pt-5"
+                            >
+                                <p
+                                    id="settings-group-plugins"
+                                    className="px-4 pb-1 text-xs font-medium text-text-muted dark:text-text-muted-dark"
+                                >
+                                    {t('groups.plugins')}
+                                </p>
                                 {settingsMenu.categories.map(renderCategoryNav)}
-                            </>
+                            </div>
                         )}
 
                         {/* Danger zone at bottom */}

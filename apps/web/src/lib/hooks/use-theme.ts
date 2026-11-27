@@ -1,9 +1,19 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useSyncExternalStore } from 'react';
 import { useMounted } from './use-mounted';
 
 export type Theme = 'light' | 'dark';
+
+/**
+ * What the person picked (shared Ever shell, A4): a fixed theme, or `system`,
+ * which follows the device. `system` is the absence of a stored theme — the
+ * same rule `theme-init.ts` and `useTheme` have always applied — so nothing
+ * stored before this choice existed changes meaning.
+ */
+export type ThemePreference = Theme | 'system';
+
+export const THEME_PREFERENCES: ReadonlyArray<ThemePreference> = ['light', 'dark', 'system'];
 
 interface UseThemeReturn {
     theme: Theme;
@@ -55,9 +65,9 @@ export function useTheme(): UseThemeReturn {
         // fall back to a sensible default.
         let storedTheme: Theme | null = null;
         try {
-            storedTheme = localStorage.getItem(THEME_STORAGE_KEY) as Theme | null;
+            storedTheme = asTheme(localStorage.getItem(THEME_STORAGE_KEY));
         } catch {
-            storedTheme = null;
+            storedTheme = memoryPreference === 'system' ? null : memoryPreference;
         }
         let prefersDark = false;
         try {
@@ -75,21 +85,18 @@ export function useTheme(): UseThemeReturn {
     useEffect(() => {
         const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
         const handleSystemThemeChange = (event: MediaQueryListEvent) => {
-            let storedTheme: Theme | null = null;
-            try {
-                storedTheme = localStorage.getItem(THEME_STORAGE_KEY) as Theme | null;
-            } catch {
-                storedTheme = null;
-            }
-            if (!storedTheme) {
+            if (readThemePreference() === 'system') {
                 setTheme(event.matches ? 'dark' : 'light');
             }
         };
 
         const handleStorageChange = (event: StorageEvent) => {
-            if (event.key !== THEME_STORAGE_KEY || event.newValue == null) return;
+            if (event.key !== THEME_STORAGE_KEY) return;
             if (event.newValue === 'light' || event.newValue === 'dark') {
                 setTheme(event.newValue);
+            } else if (event.newValue == null) {
+                // Another tab picked System: follow the device again.
+                setTheme(systemTheme());
             }
         };
 
@@ -133,4 +140,81 @@ export function useTheme(): UseThemeReturn {
         toggleTheme,
         mounted,
     };
+}
+
+/** The device's theme, `light` when it cannot be read. */
+function systemTheme(): Theme {
+    try {
+        return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    } catch {
+        return 'light';
+    }
+}
+
+/** `light` or `dark`; anything else stored under the key is not a fixed theme. */
+function asTheme(value: string | null): Theme | null {
+    return value === 'light' || value === 'dark' ? value : null;
+}
+
+/**
+ * The last pick of this page, for a browser whose storage refuses to keep it
+ * (private modes, locked-down profiles): the tiles must agree with the page.
+ */
+let memoryPreference: ThemePreference = 'system';
+
+/** Same-tab broadcast of a preference change (a `system` pick stores nothing). */
+const THEME_PREFERENCE_EVENT = 'ever-works:theme-preference-change';
+
+/** The stored choice: `light`, `dark`, or `system` when nothing is stored. */
+export function readThemePreference(): ThemePreference {
+    if (typeof window === 'undefined') return 'system';
+    try {
+        return asTheme(window.localStorage.getItem(THEME_STORAGE_KEY)) ?? 'system';
+    } catch {
+        return memoryPreference;
+    }
+}
+
+/**
+ * Apply and keep a choice. `system` removes the stored theme, so the page
+ * follows the device from now on (and on the next load, through the inline
+ * init script). Every `useTheme()` in this tab hears the resolved theme, the
+ * other tabs hear the storage change.
+ */
+export function setThemePreference(preference: ThemePreference): void {
+    const resolved: Theme = preference === 'system' ? systemTheme() : preference;
+    memoryPreference = preference;
+    try {
+        if (preference === 'system') window.localStorage.removeItem(THEME_STORAGE_KEY);
+        else window.localStorage.setItem(THEME_STORAGE_KEY, preference);
+    } catch {
+        // Storage refused: the page still switches for this visit.
+    }
+    applyTheme(resolved);
+    try {
+        window.dispatchEvent(new CustomEvent(THEME_CHANGE_EVENT, { detail: resolved }));
+        window.dispatchEvent(new Event(THEME_PREFERENCE_EVENT));
+    } catch {
+        // CustomEvent unavailable — the DOM is already updated.
+    }
+}
+
+function subscribePreference(onChange: () => void): () => void {
+    const onStorage = (event: StorageEvent) => {
+        if (event.key === null || event.key === THEME_STORAGE_KEY) onChange();
+    };
+    window.addEventListener('storage', onStorage);
+    window.addEventListener(THEME_PREFERENCE_EVENT, onChange);
+    // The header toggle stores an explicit theme through `toggleTheme`.
+    window.addEventListener(THEME_CHANGE_EVENT, onChange);
+    return () => {
+        window.removeEventListener('storage', onStorage);
+        window.removeEventListener(THEME_PREFERENCE_EVENT, onChange);
+        window.removeEventListener(THEME_CHANGE_EVENT, onChange);
+    };
+}
+
+/** The person's theme choice, kept current. `system` on the server. */
+export function useThemePreference(): ThemePreference {
+    return useSyncExternalStore(subscribePreference, readThemePreference, () => 'system');
 }

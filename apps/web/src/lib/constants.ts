@@ -346,6 +346,11 @@ export const ROUTES = {
      * arrives with T16, which is why nothing renders this path yet.
      */
     DASHBOARD_SETTINGS_APP_LAUNCHER: '/settings/app-launcher',
+    /**
+     * Shared Ever shell, A9 — Preferences: theme (A4), App Launcher position
+     * (A3) and language (A5), in that order.
+     */
+    DASHBOARD_SETTINGS_PREFERENCES: '/settings/preferences',
     DASHBOARD_SETTINGS_JOB_RUNTIME: '/settings/job-runtime',
     // Agent Plugins (EW-772) — packages in the open cross-vendor format.
     // Sits beside Connections: both are about capabilities the platform

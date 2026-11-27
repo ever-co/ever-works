@@ -77,7 +77,7 @@ export function AppLauncherPlacementTiles({ className }: { className?: string })
                             <span
                                 className={cn(
                                     'relative block overflow-hidden rounded-lg transition-shadow',
-                                    'peer-focus-visible:ring-[3px] peer-focus-visible:ring-primary/30',
+                                    'peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-primary',
                                     isPicked
                                         ? 'ring-2 ring-primary'
                                         : 'ring-1 ring-border dark:ring-border-dark',

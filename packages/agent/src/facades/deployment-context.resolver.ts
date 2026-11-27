@@ -1,4 +1,5 @@
 import type { DeploymentLookupContext, SettingSource } from '@ever-works/plugin';
+import { config } from '../config';
 import { buildEverWorksTenantNamespace } from '../ever-works-providers/ever-works-k8s-deploy.provider';
 
 export const PLATFORM_MANAGED_KUBECONFIG_SENTINEL = '__ever-works-platform-managed-kubeconfig__';
@@ -257,6 +258,47 @@ export function everWorksTenantNamespaceBase(env: NodeJS.ProcessEnv = process.en
     return env.EVER_WORKS_DEPLOY_NAMESPACE?.trim() || 'ever-works-tenants';
 }
 
+const K8S_WORKS_NAMESPACE_PREFIX = 'ever-works-';
+/** The most of the slug a derived `k8s-works` namespace keeps. */
+const K8S_WORKS_NAMESPACE_SLUG_MAX = 40;
+/** Kubernetes' cap on a namespace name (an RFC 1123 label). */
+const KUBERNETES_NAMESPACE_MAX = 63;
+
+/**
+ * The namespace a `k8s` Work on `k8s-works` with no explicit namespace deploys
+ * to: `ever-works-<slug>-<suffix>`, the suffix being
+ * `EVER_WORKS_K8S_WORKS_NAMESPACE_SUFFIX` (`prod` when unset, see
+ * `config.everWorks.deploy.getK8sWorksNamespaceSuffix`). dev, stage and prod
+ * share that cluster, so each environment's suffix keeps its Works apart.
+ *
+ * The slug (or, without one, the Work id) is lowercased, anything outside
+ * `[a-z0-9-]` becomes a dash, outer dashes go, and it is cut to 40 characters;
+ * a suffix longer than 11 cuts it further, to `63 - 12 - suffix.length`, so the
+ * name stays within 63. With `prod` the name is exactly what it always was.
+ * `undefined` when nothing is left of the slug, or the name is reserved.
+ *
+ * The one copy of this rule: the deploy, the Work-delete teardown, its sharer
+ * check and the orphan report all reach it through
+ * {@link resolveKubernetesDeployNamespace}.
+ */
+export function deriveK8sWorksNamespace(
+    slugOrWorkId: string,
+    env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+    const suffix = config.everWorks.deploy.getK8sWorksNamespaceSuffix(env);
+    const slugMax = Math.min(
+        K8S_WORKS_NAMESPACE_SLUG_MAX,
+        KUBERNETES_NAMESPACE_MAX - K8S_WORKS_NAMESPACE_PREFIX.length - 1 - suffix.length,
+    );
+    const slug = slugOrWorkId
+        .toLowerCase()
+        .replace(/[^a-z0-9-]+/g, '-')
+        .replace(/^-+|(?<!-)-+$/g, '')
+        .slice(0, slugMax);
+    const derived = slug ? `${K8S_WORKS_NAMESPACE_PREFIX}${slug}-${suffix}` : '';
+    return derived && !isReservedDeployNamespace(derived) ? derived : undefined;
+}
+
 /**
  * The namespace a Kubernetes-family deploy (`k8s` or the managed `ever-works`)
  * of this Work targets, or `undefined` when the plugin's own setting applies.
@@ -296,13 +338,7 @@ export function resolveKubernetesDeployNamespace(
         return requestedNamespace;
     }
     if (clusterSource === 'k8s-works') {
-        const slug = (input.workSlug || input.workId)
-            .toLowerCase()
-            .replace(/[^a-z0-9-]+/g, '-')
-            .replace(/^-+|(?<!-)-+$/g, '')
-            .slice(0, 40);
-        const derived = slug ? `ever-works-${slug}-prod` : '';
-        return derived && !isReservedDeployNamespace(derived) ? derived : undefined;
+        return deriveK8sWorksNamespace(input.workSlug || input.workId, input.env ?? process.env);
     }
     if (requestedNamespace) {
         // The Kubernetes plugin's documented custom-cluster default is the

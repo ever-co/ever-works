@@ -116,12 +116,14 @@ describe('DeployFacadeService.reportOrphanedWorkDeployments', () => {
         shared: process.env.EVER_WORKS_K8S_WORKS_SHARED_KUBECONFIG,
         base: process.env.EVER_WORKS_DEPLOY_NAMESPACE,
         owner: process.env.EVER_WORKS_K8S_WORKS_CLUSTER_OWNER,
+        suffix: process.env.EVER_WORKS_K8S_WORKS_NAMESPACE_SUFFIX,
     };
 
     beforeEach(() => {
         delete process.env.EVER_WORKS_K8S_WORKS_KUBECONFIG;
         delete process.env.EVER_WORKS_K8S_WORKS_SHARED_KUBECONFIG;
         delete process.env.EVER_WORKS_DEPLOY_NAMESPACE;
+        delete process.env.EVER_WORKS_K8S_WORKS_NAMESPACE_SUFFIX;
         process.env.EVER_WORKS_K8S_WORKS_CLUSTER_OWNER = 'true';
     });
 
@@ -134,6 +136,7 @@ describe('DeployFacadeService.reportOrphanedWorkDeployments', () => {
         restore('EVER_WORKS_K8S_WORKS_SHARED_KUBECONFIG', saved.shared);
         restore('EVER_WORKS_DEPLOY_NAMESPACE', saved.base);
         restore('EVER_WORKS_K8S_WORKS_CLUSTER_OWNER', saved.owner);
+        restore('EVER_WORKS_K8S_WORKS_NAMESPACE_SUFFIX', saved.suffix);
     });
 
     it.each([
@@ -261,6 +264,35 @@ describe('DeployFacadeService.reportOrphanedWorkDeployments', () => {
 
         expect(report.orphans).toEqual([
             { cluster: 'k8s-works', namespace: 'ever-works-gone-prod', name: 'gone-website' },
+        ]);
+    });
+
+    it('derives a k8s-works Work’s namespace with EVER_WORKS_K8S_WORKS_NAMESPACE_SUFFIX, as the deploy does', async () => {
+        process.env.EVER_WORKS_K8S_WORKS_KUBECONFIG = INTERNAL_KUBECONFIG;
+        process.env.EVER_WORKS_K8S_WORKS_NAMESPACE_SUFFIX = 'stage';
+        const { service } = createService({
+            managedKubeconfig: null,
+            works: [
+                work({
+                    id: 'w-derived',
+                    slug: 'chairs',
+                    deployProvider: 'k8s',
+                    websiteRepo: 'chairs-website',
+                }),
+            ],
+            settingsByWork: { 'w-derived': { clusterSource: 'k8s-works' } },
+            listings: {
+                [INTERNAL_KUBECONFIG]: [
+                    { location: 'ever-works-chairs-stage', name: 'chairs-website' },
+                    { location: 'ever-works-chairs-prod', name: 'chairs-website' },
+                ],
+            },
+        });
+
+        const report = await service.reportOrphanedWorkDeployments();
+
+        expect(report.orphans).toEqual([
+            { cluster: 'k8s-works', namespace: 'ever-works-chairs-prod', name: 'chairs-website' },
         ]);
     });
 
