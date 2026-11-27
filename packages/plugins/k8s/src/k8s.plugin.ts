@@ -58,6 +58,7 @@ import { defaultRegistryProviderRegistry, RegistryProviderRegistry } from './reg
 import { mapDeploymentToStatus } from './status.mapper.js';
 import {
 	buildDeployment,
+	invalidIdentityLabelKeys,
 	buildRuntimeEnvSecret,
 	buildImagePullSecret,
 	buildIngress,
@@ -1262,6 +1263,14 @@ export class KubernetesPlugin implements IPlugin, IDeploymentPlugin {
 		// Who deploys, labelled on all five objects: the Work and the environment (dev, stage and
 		// prod share one cluster). The renderer drops a value that is not a valid label value.
 		const identity = { workUuid: opts.workUuid, environment: opts.environment };
+		// A value that was given but is not a valid label value is dropped from the labels; say so
+		// once, by label key only (the value is never logged).
+		const droppedLabelKeys = invalidIdentityLabelKeys(identity);
+		if (droppedLabelKeys.length > 0) {
+			this.context?.logger?.warn?.(
+				`Deploy of '${slug}': a given value is not a valid Kubernetes label value, so these labels were left off: ${droppedLabelKeys.join(', ')}.`
+			);
+		}
 
 		const provider = this.registries.resolve(registry.kind);
 		const registryCtx: RegistryDeployContext = {
@@ -1731,7 +1740,7 @@ export class KubernetesPlugin implements IPlugin, IDeploymentPlugin {
 			const ref = { kind: target.kind, name: target.name };
 			try {
 				const live = await this.api.readObject<{
-					metadata?: { labels?: Record<string, string>; uid?: string };
+					metadata?: { labels?: Record<string, string>; uid?: string; resourceVersion?: string };
 				}>(kubeconfig, target.apiVersion, target.kind, namespace, target.name, settings.kubeContext);
 				if (!live) {
 					absent.push(ref);
@@ -1744,8 +1753,9 @@ export class KubernetesPlugin implements IPlugin, IDeploymentPlugin {
 					kept.push({ ...ref, reason: notOwnedBecause });
 					continue;
 				}
-				// The uid precondition: if the object was replaced after the read
-				// (a redeploy in between), the API server refuses (409) instead of
+				// The uid and resourceVersion preconditions: if the object was replaced
+				// or changed after the read (a redeploy or a concurrent re-apply that
+				// relabelled it in between), the API server refuses (409) instead of
 				// deleting an object whose labels were never checked.
 				await this.api.deleteObject(
 					kubeconfig,
@@ -1755,7 +1765,8 @@ export class KubernetesPlugin implements IPlugin, IDeploymentPlugin {
 					target.name,
 					'Background',
 					settings.kubeContext,
-					live.metadata?.uid || undefined
+					live.metadata?.uid || undefined,
+					live.metadata?.resourceVersion || undefined
 				);
 				removed.push(ref);
 			} catch (err) {
