@@ -31,6 +31,10 @@ export interface Env {
 	REGISTRY_URL: string;
 	/** Public origin of the hub; defaults to the request's origin */
 	HUB_URL?: string;
+	/** Route-served directory hosts and the service binding of each (`routing.ts`), e.g. `{ "rmm.ever.works": "DIR_RMM" }` */
+	ROUTE_SERVED?: Record<string, string>;
+	/** The service bindings named in `ROUTE_SERVED` */
+	[binding: string]: unknown;
 }
 
 export interface HandlerOptions {
