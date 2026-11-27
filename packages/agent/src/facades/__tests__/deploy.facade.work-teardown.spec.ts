@@ -129,12 +129,14 @@ describe('DeployFacadeService.prepareWorkDeploymentTeardown', () => {
         shared: process.env.EVER_WORKS_K8S_WORKS_SHARED_KUBECONFIG,
         base: process.env.EVER_WORKS_DEPLOY_NAMESPACE,
         owner: process.env.EVER_WORKS_K8S_WORKS_CLUSTER_OWNER,
+        suffix: process.env.EVER_WORKS_K8S_WORKS_NAMESPACE_SUFFIX,
     };
 
     beforeEach(() => {
         delete process.env.EVER_WORKS_K8S_WORKS_KUBECONFIG;
         delete process.env.EVER_WORKS_K8S_WORKS_SHARED_KUBECONFIG;
         delete process.env.EVER_WORKS_DEPLOY_NAMESPACE;
+        delete process.env.EVER_WORKS_K8S_WORKS_NAMESPACE_SUFFIX;
         // This environment owns the clusters, unless a test says otherwise.
         process.env.EVER_WORKS_K8S_WORKS_CLUSTER_OWNER = 'true';
     });
@@ -148,6 +150,7 @@ describe('DeployFacadeService.prepareWorkDeploymentTeardown', () => {
         restore('EVER_WORKS_K8S_WORKS_SHARED_KUBECONFIG', saved.shared);
         restore('EVER_WORKS_DEPLOY_NAMESPACE', saved.base);
         restore('EVER_WORKS_K8S_WORKS_CLUSTER_OWNER', saved.owner);
+        restore('EVER_WORKS_K8S_WORKS_NAMESPACE_SUFFIX', saved.suffix);
     });
 
     describe('only in the environment that owns the platform clusters', () => {
@@ -990,6 +993,98 @@ describe('DeployFacadeService.prepareWorkDeploymentTeardown', () => {
             expect(prepared).toMatchObject({ status: 'skipped', reason: 'shared' });
             expect((prepared as { detail?: string }).detail).toContain('63-character name cap');
             expect(removeWorkDeployment).not.toHaveBeenCalled();
+        });
+    });
+
+    describe('EVER_WORKS_K8S_WORKS_NAMESPACE_SUFFIX: the teardown and its sharer check use the deploy’s suffix', () => {
+        beforeEach(() => {
+            process.env.EVER_WORKS_K8S_WORKS_KUBECONFIG = INTERNAL_KUBECONFIG;
+            process.env.EVER_WORKS_K8S_WORKS_NAMESPACE_SUFFIX = 'stage';
+        });
+
+        it('prepares a k8s-works Work in ever-works-<slug>-<suffix>, and looks for sharers there', async () => {
+            const { service, workRepository } = createService({
+                work: work({
+                    deployProvider: 'k8s',
+                    slug: 'chairs',
+                    websiteRepo: 'awesome-chairs-website',
+                }),
+                settingsByWork: { 'work-1': { clusterSource: 'k8s-works' } },
+                resolvedSecrets: { clusterSource: { value: 'k8s-works' } },
+            });
+
+            await expect(
+                service.prepareWorkDeploymentTeardown({ userId: 'user-1', workId: 'work-1' }),
+            ).resolves.toMatchObject({
+                status: 'ready',
+                namespace: 'ever-works-chairs-stage',
+                objectName: 'awesome-chairs-website',
+            });
+            expect(workRepository.findDeploymentSharerCandidates).toHaveBeenCalledWith(
+                'user-1',
+                'chairs',
+                expect.objectContaining({
+                    deployProjectId: 'ever-works-chairs-stage/awesome-chairs-website',
+                }),
+            );
+        });
+
+        it('is blocked by a Work whose slug-derived namespace, with the same suffix, is this one', async () => {
+            // Two slugs that share the 40 characters the namespace keeps.
+            const stem = 'a-very-long-directory-name-for-the-prefix'.slice(0, 40);
+            const { service, removeWorkDeployment } = createService({
+                work: work({ id: 'work-1', slug: `${stem}-one`, deployProvider: 'k8s' }),
+                settingsByWork: {
+                    'work-1': { clusterSource: 'k8s-works' },
+                    'work-2': { clusterSource: 'k8s-works' },
+                },
+                resolvedSecrets: { clusterSource: { value: 'k8s-works' } },
+                candidates: [
+                    work({
+                        id: 'work-2',
+                        userId: 'user-2',
+                        slug: `${stem}-two`,
+                        deployProvider: 'k8s',
+                    }),
+                ],
+            });
+
+            await expect(
+                service.prepareWorkDeploymentTeardown({ userId: 'user-1', workId: 'work-1' }),
+            ).resolves.toEqual({
+                status: 'skipped',
+                reason: 'shared',
+                detail: `Work work-2 deploys to ever-works-${stem}-stage/awesome-memes-website too`,
+            });
+            expect(removeWorkDeployment).not.toHaveBeenCalled();
+        });
+
+        it('is not blocked by a Work that names the -prod namespace of the same slug', async () => {
+            const { service } = createService({
+                work: work({
+                    deployProvider: 'k8s',
+                    slug: 'chairs',
+                    websiteRepo: 'awesome-chairs-website',
+                }),
+                settingsByWork: {
+                    'work-1': { clusterSource: 'k8s-works' },
+                    'work-2': { clusterSource: 'k8s-works', namespace: 'ever-works-chairs-prod' },
+                },
+                resolvedSecrets: { clusterSource: { value: 'k8s-works' } },
+                candidates: [
+                    work({
+                        id: 'work-2',
+                        userId: 'user-2',
+                        slug: 'chairs-copy',
+                        deployProvider: 'k8s',
+                        websiteRepo: 'awesome-chairs-website',
+                    }),
+                ],
+            });
+
+            await expect(
+                service.prepareWorkDeploymentTeardown({ userId: 'user-1', workId: 'work-1' }),
+            ).resolves.toMatchObject({ status: 'ready', namespace: 'ever-works-chairs-stage' });
         });
     });
 });

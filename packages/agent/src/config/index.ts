@@ -1867,14 +1867,35 @@ export const config = {
              * cluster, so they hold only then: removing a deleted Work's objects
              * from those clusters (its "does another Work share them?" check sees
              * only this database), and the daily orphaned website deployment
-             * report. dev, stage and prod can share one cluster, and the
-             * slug-derived `k8s-works` namespace ends in `-prod` everywhere, so
-             * turn it on only in the environment that owns the clusters.
+             * report. dev, stage and prod can share one cluster, and each lists
+             * the whole cluster while seeing only its own Works (a slug-derived
+             * `k8s-works` namespace differs per environment only once each sets
+             * {@link getK8sWorksNamespaceSuffix}; an explicit namespace never
+             * does), so turn it on only in the environment that owns the clusters.
              */
             isClusterOwner() {
                 return (
                     process.env.EVER_WORKS_K8S_WORKS_CLUSTER_OWNER?.trim().toLowerCase() === 'true'
                 );
+            },
+            /**
+             * `EVER_WORKS_K8S_WORKS_NAMESPACE_SUFFIX`: the last label of the
+             * namespace a `k8s` Work on `k8s-works` with no explicit namespace
+             * deploys to, `ever-works-<slug>-<suffix>`. dev, stage and prod share
+             * that cluster and its credential, so each sets its own (`dev`,
+             * `stage`) and a dev Work cannot deploy over a prod Work's objects.
+             *
+             * Unset, it is `prod`, so prod's existing namespaces stay exactly
+             * what they are. The value is trimmed and lowercased, and must be a
+             * DNS-1123 label fragment of 1 to 16 characters; anything else
+             * (blank included) is `prod` too, with one warning per value, never a
+             * silent repair into some other name.
+             *
+             * Takes the env to read, so the deployment-context resolver can pass
+             * its `input.env`.
+             */
+            getK8sWorksNamespaceSuffix(env: NodeJS.ProcessEnv = process.env): string {
+                return k8sWorksNamespaceSuffix(env[K8S_WORKS_NAMESPACE_SUFFIX_ENV]);
             },
             getKubeconfig() {
                 return process.env.EVER_WORKS_DEPLOY_KUBECONFIG || '';
@@ -3312,4 +3333,45 @@ function isCidrEntry(entry: string): boolean {
 function stripBrackets(value: string): string {
     const text = value.trim();
     return text.startsWith('[') && text.endsWith(']') ? text.slice(1, -1) : text;
+}
+
+const K8S_WORKS_NAMESPACE_SUFFIX_ENV = 'EVER_WORKS_K8S_WORKS_NAMESPACE_SUFFIX';
+
+/** The suffix when the variable is unset or unusable: prod's existing namespaces end in it. */
+const K8S_WORKS_NAMESPACE_SUFFIX_DEFAULT = 'prod';
+
+/**
+ * A DNS-1123 label fragment of 1 to 16 characters: lowercase letters, digits and
+ * inner dashes. 16 is the cap so `ever-works-<slug>-<suffix>` fits Kubernetes'
+ * 63-character namespace name (the resolver shortens the slug past 11).
+ */
+const K8S_WORKS_NAMESPACE_SUFFIX_PATTERN = /^[a-z0-9]([a-z0-9-]{0,14}[a-z0-9])?$/;
+
+const deployConfigLogger = new Logger('EverWorksDeployConfig');
+
+/**
+ * The unusable suffix values already warned about in this process. The getter
+ * runs on every deploy and for every Work the teardown's sharer check and the
+ * orphan report look at, so it warns once per value, not once per call.
+ */
+const warnedK8sWorksNamespaceSuffixes = new Set<string>();
+
+/** {@link config.everWorks.deploy.getK8sWorksNamespaceSuffix} on a raw env value. */
+function k8sWorksNamespaceSuffix(raw: string | undefined): string {
+    if (raw === undefined) {
+        return K8S_WORKS_NAMESPACE_SUFFIX_DEFAULT;
+    }
+    const suffix = raw.trim().toLowerCase();
+    if (K8S_WORKS_NAMESPACE_SUFFIX_PATTERN.test(suffix)) {
+        return suffix;
+    }
+    if (!warnedK8sWorksNamespaceSuffixes.has(raw)) {
+        warnedK8sWorksNamespaceSuffixes.add(raw);
+        deployConfigLogger.warn(
+            `Ignoring ${K8S_WORKS_NAMESPACE_SUFFIX_ENV}=${JSON.stringify(raw)}: it is not 1 to 16 ` +
+                `lowercase letters, digits or inner dashes, so slug-derived k8s-works namespaces ` +
+                `end in -${K8S_WORKS_NAMESPACE_SUFFIX_DEFAULT}.`,
+        );
+    }
+    return K8S_WORKS_NAMESPACE_SUFFIX_DEFAULT;
 }
