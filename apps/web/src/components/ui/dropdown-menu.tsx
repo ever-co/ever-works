@@ -118,7 +118,7 @@ interface DropdownMenuItemProps {
     className?: string;
     asChild?: boolean;
     /** Marks the item that is the current one (the Organization you are in, the page you are on). */
-    'aria-current'?: 'true' | 'page' | 'location';
+    'aria-current'?: React.AriaAttributes['aria-current'];
 }
 
 export function DropdownMenuItem({

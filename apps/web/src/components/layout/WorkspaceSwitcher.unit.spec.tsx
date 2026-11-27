@@ -161,6 +161,8 @@ describe('WorkspaceSwitcher — EW-660 Phase 8', () => {
         expect(screen.queryByTestId('workspace-switcher-create')).toBeNull();
         const trigger = screen.getAllByRole('button')[0];
         expect(trigger).toHaveTextContent('organizations.switcher.heading');
+        // No Organization to show: the trigger is named outright.
+        expect(trigger).toHaveAccessibleName('organizations.switcher.heading');
         fireEvent.click(trigger);
         expect(screen.getByText('organizations.switcher.addNew')).toBeInTheDocument();
     });
@@ -431,7 +433,7 @@ describe('WorkspaceSwitcher — EW-660 Phase 8', () => {
         answerTheSwitchWith({ ok: false, status: 403, json: async () => ({}) });
         renderInYoWithEverToo();
 
-        fireEvent.click(screen.getAllByRole('button')[0]);
+        fireEvent.click(screen.getByRole('button', { name: /^Yo Incorporated/ }));
         fireEvent.click(screen.getByText('Ever'));
 
         await waitFor(() =>
@@ -452,7 +454,7 @@ describe('WorkspaceSwitcher — EW-660 Phase 8', () => {
         });
         renderInYoWithEverToo();
 
-        fireEvent.click(screen.getAllByRole('button')[0]);
+        fireEvent.click(screen.getByRole('button', { name: /^Yo Incorporated/ }));
         fireEvent.click(screen.getByText('Ever'));
 
         await waitFor(() =>
@@ -464,7 +466,7 @@ describe('WorkspaceSwitcher — EW-660 Phase 8', () => {
     it('opens from the keyboard', async () => {
         renderInYoWithEverToo();
 
-        const trigger = screen.getAllByRole('button')[0];
+        const trigger = screen.getByRole('button', { name: /^Yo Incorporated/ });
         trigger.focus();
         fireEvent.keyDown(trigger, { key: 'Enter' });
 
@@ -474,7 +476,7 @@ describe('WorkspaceSwitcher — EW-660 Phase 8', () => {
     it('names the trigger by the Organization it shows, then what it does (WCAG 2.5.3)', () => {
         renderInYoWithEverToo();
 
-        const trigger = screen.getAllByRole('button')[0];
+        const trigger = screen.getByRole('button', { name: /^Yo Incorporated/ });
         expect(trigger).not.toHaveAttribute('aria-label');
         expect(trigger).toHaveAccessibleName(
             'Yo Incorporated yo-inc organizations.switcher.heading',
@@ -484,7 +486,7 @@ describe('WorkspaceSwitcher — EW-660 Phase 8', () => {
     it('marks the current Organization for assistive technology, not only with the check mark', () => {
         renderInYoWithEverToo();
 
-        fireEvent.click(screen.getAllByRole('button')[0]);
+        fireEvent.click(screen.getByRole('button', { name: /^Yo Incorporated/ }));
         const current = screen
             .getAllByRole('menuitem')
             .filter((item) => item.getAttribute('aria-current') === 'true');
