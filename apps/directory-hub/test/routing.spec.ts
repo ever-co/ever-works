@@ -35,6 +35,17 @@ describe('route-served directories', () => {
 		expect(routeServedHosts({ ROUTE_SERVED: ['rmm.ever.works'] })).toEqual(new Map());
 	});
 
+	it('also reads ROUTE_SERVED given as JSON text, and ignores text that is not a JSON object', () => {
+		// wrangler passes an object `vars` value as parsed JSON, but a value set as text (dashboard, `--var`) is a string.
+		const rmm = binding();
+		const fromText = routeServedHosts({ ROUTE_SERVED: '{"rmm.ever.works":"DIR_RMM"}', DIR_RMM: rmm });
+		expect([...fromText.keys()]).toEqual(['rmm.ever.works']);
+		expect(fromText.get('rmm.ever.works')).toBe(rmm);
+		for (const text of ['', 'not json', '["rmm.ever.works"]', 'null', '"DIR_RMM"', '42']) {
+			expect(routeServedHosts({ ROUTE_SERVED: text, DIR_RMM: rmm })).toEqual(new Map());
+		}
+	});
+
 	it('sends route-served hosts to their binding without the cf options, everything else to the fallback', async () => {
 		const rmm = binding();
 		const seen: string[] = [];
