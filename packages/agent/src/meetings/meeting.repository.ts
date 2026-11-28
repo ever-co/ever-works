@@ -27,6 +27,19 @@ export function computeMeetingDedupeKey(
     return hash.digest('hex');
 }
 
+/** Upper bound for the list `offset` so it always fits a Postgres integer. */
+const MAX_MEETING_OFFSET = 1_000_000;
+
+/**
+ * Coerce a possibly missing / non-finite / fractional page value to an
+ * integer inside `[min, max]` (±Infinity clamps to the nearest bound);
+ * `fallback` when it is missing or NaN.
+ */
+function clampInt(value: number | undefined, fallback: number, min: number, max: number): number {
+    const n = typeof value === 'number' && !Number.isNaN(value) ? Math.trunc(value) : fallback;
+    return Math.min(Math.max(n, min), max);
+}
+
 export interface CreateMeetingData {
     userId: string;
     organizationId?: string | null;
@@ -120,8 +133,8 @@ export class MeetingRepository {
 
         return qb
             .orderBy('meeting.startedAt', 'DESC')
-            .take(Math.min(Math.max(filters.limit ?? 20, 1), 100))
-            .skip(Math.max(filters.offset ?? 0, 0))
+            .take(clampInt(filters.limit, 20, 1, 100))
+            .skip(clampInt(filters.offset, 0, 0, MAX_MEETING_OFFSET))
             .getMany();
     }
 
