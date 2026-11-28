@@ -143,4 +143,31 @@ describe('MeetingRepository', () => {
         await repository.findByUser('user-1', { limit: -3 });
         expect(queryBuilder.take).toHaveBeenCalledWith(1);
     });
+
+    it('findByUser bounds the offset so a huge value cannot overflow the SQL integer', async () => {
+        await repository.findByUser('user-1', { offset: 1e30 });
+        expect(queryBuilder.skip).toHaveBeenLastCalledWith(1_000_000);
+
+        await repository.findByUser('user-1', { offset: Infinity });
+        expect(queryBuilder.skip).toHaveBeenLastCalledWith(1_000_000);
+    });
+
+    it('findByUser keeps normal paging values and defaults unchanged', async () => {
+        await repository.findByUser('user-1', { limit: 25, offset: 50 });
+        expect(queryBuilder.take).toHaveBeenLastCalledWith(25);
+        expect(queryBuilder.skip).toHaveBeenLastCalledWith(50);
+
+        await repository.findByUser('user-1', {});
+        expect(queryBuilder.take).toHaveBeenLastCalledWith(20);
+        expect(queryBuilder.skip).toHaveBeenLastCalledWith(0);
+
+        await repository.findByUser('user-1', { offset: -4 });
+        expect(queryBuilder.skip).toHaveBeenLastCalledWith(0);
+    });
+
+    it('findByUser truncates fractional paging values to integers', async () => {
+        await repository.findByUser('user-1', { limit: 5.7, offset: 2.9 });
+        expect(queryBuilder.take).toHaveBeenLastCalledWith(5);
+        expect(queryBuilder.skip).toHaveBeenLastCalledWith(2);
+    });
 });
