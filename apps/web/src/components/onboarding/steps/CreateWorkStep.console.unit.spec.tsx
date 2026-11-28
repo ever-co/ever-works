@@ -207,4 +207,19 @@ describe('CreateWorkStep — the generation console', () => {
 
         await waitFor(() => expect(onLeave).toHaveBeenCalledTimes(1));
     });
+
+    it('names the Work kind picked on the home page', () => {
+        render(
+            <CreateWorkStep
+                onLeave={vi.fn()}
+                prompt="AI robots directory"
+                kindLabel="Directory website"
+                onQuickCreate={vi.fn()}
+            />,
+        );
+
+        expect(screen.getByTestId('onboarding-work-kind').textContent).toContain(
+            'Directory website',
+        );
+    });
 });

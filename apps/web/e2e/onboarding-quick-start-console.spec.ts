@@ -55,6 +55,7 @@ test.describe('Onboarding — prompt-first quick start from the ever.works home 
         await expect(page.getByText(/Step \d+ of \d+/)).toHaveCount(0);
         await expect(page.getByRole('button', { name: 'Your Git Storage' })).toHaveCount(0);
         await expect(page.getByTestId('onboarding-prompt-input')).toHaveValue(PROMPT);
+        await expect(page.getByTestId('onboarding-work-kind')).toContainText('Directory website');
         await expect(page.getByTestId('onboarding-quick-start-defaults')).toContainText('AI');
         // The hand-off is consumed: no `#type=directory-website` left behind.
         await expect(page).toHaveURL(/\/onboarding$/);
