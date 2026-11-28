@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useReducer, useRef } from 'react';
+import type { HandoffWorkKind } from './prompt-handoff';
 import {
     ONBOARDING_DEFAULT_STATE,
     type OnboardingAiChoice,
@@ -97,12 +98,12 @@ interface FlowReducerState {
      * they picked there. Not persisted: a reload opens the full wizard, with
      * the prompt kept in the saved state.
      */
-    readonly quickStart?: { readonly kind?: string };
+    readonly quickStart?: { readonly kind?: HandoffWorkKind };
     /**
      * The Work kind of the home-page chip, kept when the visitor leaves the
      * quick start for the full wizard so "Generate now" there still uses it.
      */
-    readonly handoffKind?: string;
+    readonly handoffKind?: HandoffWorkKind;
 }
 
 type FlowAction =
@@ -121,7 +122,7 @@ type FlowAction =
     | { type: 'setPluginsReviewed'; value: boolean }
     | { type: 'mergeServerState'; value: OnboardingWizardStateV2 }
     | { type: 'refresh' }
-    | { type: 'startQuickStart'; prompt: string; kind?: string }
+    | { type: 'startQuickStart'; prompt: string; kind?: HandoffWorkKind }
     | { type: 'customizeSetup' };
 
 function reduce(state: FlowReducerState, action: FlowAction): FlowReducerState {
@@ -258,7 +259,14 @@ function reduce(state: FlowReducerState, action: FlowAction): FlowReducerState {
             // "Generate now".
             const { quickStart: _left, ...rest } = state;
             void _left;
-            return { ...rest, stepIndex: 0, history: [], state: { ...state.state, lastStep: 0 } };
+            // The chip's kind is kept on purpose, so "Generate now" at the end of the wizard still sends it.
+            return {
+                ...rest,
+                handoffKind: state.handoffKind,
+                stepIndex: 0,
+                history: [],
+                state: { ...state.state, lastStep: 0 },
+            };
         }
         default:
             return state;
@@ -305,10 +313,10 @@ export interface UseOnboardingFlowResult {
     readonly jumpTo: (index: number) => void;
     readonly finish: (options?: { dismissed?: boolean; close?: boolean }) => void;
     /** Set while on the prompt-first quick start; see `FlowReducerState.quickStart`. */
-    readonly quickStart?: { readonly kind?: string };
+    readonly quickStart?: { readonly kind?: HandoffWorkKind };
     /** See `FlowReducerState.handoffKind`. */
-    readonly handoffKind?: string;
-    readonly startQuickStart: (prompt: string, kind?: string) => void;
+    readonly handoffKind?: HandoffWorkKind;
+    readonly startQuickStart: (prompt: string, kind?: HandoffWorkKind) => void;
     readonly customizeSetup: () => void;
     readonly notePlannedClick: (
         bucket: 'ai' | 'storage' | 'db' | 'deploy' | 'desktop',
@@ -486,7 +494,7 @@ export function useOnboardingFlow({
     );
 
     const startQuickStart = useCallback(
-        (prompt: string, kind?: string) => {
+        (prompt: string, kind?: HandoffWorkKind) => {
             trackEvent('onboarding_quick_start_entered', { kind: kind ?? null });
             dispatch({ type: 'startQuickStart', prompt, kind });
         },

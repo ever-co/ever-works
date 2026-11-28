@@ -38,7 +38,7 @@ import type { OAuthConnectionInfo } from '@/lib/api/plugins-capabilities/oauth';
 import type { GitProviderConnectionInfo } from '@/lib/api/plugins-capabilities/git-providers';
 import type { PluginDeviceAuthStatus } from '@/lib/api/plugins-capabilities/device-auth';
 import { quickCreateSlugFromPrompt } from '@/lib/works/work-slug.shared';
-import { readPromptHandoff, workKindLabel, type HandoffWorkKind } from './prompt-handoff';
+import { readPromptHandoff, workKindLabel } from './prompt-handoff';
 import type { StartedWork } from './generation-console';
 import { SaveAccountStrip } from '@/components/anonymous/SaveAccountStrip';
 import { useAnonymousAccount } from '@/lib/anonymous/anonymous-account-context';
@@ -240,7 +240,7 @@ export function EverWorksOnboardingWizard({
         }
     };
 
-    const handoffKind = flow.handoffKind as HandoffWorkKind | undefined;
+    const handoffKind = flow.handoffKind;
 
     // EW-617 G4: anonymous + claimed users alike can one-click finish. The
     // endpoint reads provider defaults from onboarding state.
